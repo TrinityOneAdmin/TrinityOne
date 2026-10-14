@@ -155,13 +155,10 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
   ] : [
-    { ic: 'pen', label: 'Note', fn: onNote },
     { ic: 'bookmark', label: bookmarked ? 'Saved' : 'Bookmark', fn: ctx._bm, active: bookmarked },
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
     ...(hasNote ? [{ ic: 'pen', label: 'Share note', fn: ctx._shareNote }] : []),
-    { ic: 'link', label: 'Cross-refs', fn: onCross },
-    { ic: 'comment', label: 'Commentary', fn: onCommentary },
   ];
   return (
     <BottomSheet open={open} onClose={onClose} passthrough>
@@ -196,10 +193,10 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
         {acts.map(a => (
           <button key={a.label} onClick={a.fn} style={{
             border: '1px solid var(--line)', background: a.active ? 'var(--clay-soft)' : 'var(--surface-2)',
-            borderRadius: 16, padding: '14px 6px', cursor: 'pointer', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: 7, color: a.active ? 'var(--clay-ink)' : 'var(--ink)',
+            borderRadius: 16, padding: '10.5px 4.5px', cursor: 'pointer', display: 'flex',
+            flexDirection: 'column', alignItems: 'center', gap: 5, color: a.active ? 'var(--clay-ink)' : 'var(--ink)',
           }}>
-            <Icon name={a.ic} size={21} fill={a.active} /><span style={{ fontSize: 12, fontWeight: 600 }}>{a.label}</span>
+            <Icon name={a.ic} size={15.75} fill={a.active} /><span style={{ fontSize: 9, fontWeight: 600 }}>{a.label}</span>
           </button>
         ))}
       </div>
@@ -786,7 +783,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
               <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
                 <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', color: 'var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="note" size={24} /></div>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No notes here yet</div>
-                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap a verse → <b>Note</b> to jot a thought. Your notes for {label} gather here.</p>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap <b>New note</b> to jot a thought. Your notes for {label} gather here.</p>
               </div>
             )}
             </React.Fragment>

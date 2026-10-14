@@ -482,7 +482,7 @@ test('a rolled passage is never offered the per-verse actions', () => {
   const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
   R.tapVerse(51);
   assert.equal(R.cardCount(), 'Verse selected');
-  assert.ok(R.actionLabels().includes('Note'), 'fixture: one verse should get the per-verse actions');
+  assert.ok(R.actionLabels().includes('Bookmark'), 'fixture: one verse should get the per-verse actions');
 
   R.pressTitled('Add the next verse');
   assert.equal(R.cardCount(), '2 verses selected',
@@ -589,4 +589,26 @@ test('the + stacks across TWO chapter lines, and the − unwinds them one at a t
   R.pressTitled('Remove the last verse');
   assert.equal(R.selectionLabel(), 'John 1:2-3', 'and the second line unwinds the same way');
   assert.equal(R.chapterHeading(), 'Chapter 1', 'back where the reader started');
+});
+
+// ═══ 2026-10-14 — THE VERSE CARD LOSES NOTE / CROSS-REFS / COMMENTARY, AND ITS TILES SHRINK 25% ══════════════
+// Owner: cross-references and commentary live in the Study panel now, so the card carries only Bookmark /
+// Copy / Share (+ "Share note" when the verse has one). Tiles were icon 21, padding 14px 6px, gap 7, label
+// 12px; they are now x0.75 (15.75, 10.5px 4.5px, 5, 9px). Read off the REAL ReadScreen's real card.
+test('the verse card offers only Bookmark / Copy / Share, and those tiles are 25% smaller', () => {
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(5);
+  assert.deepEqual(R.actionLabels(), ['Bookmark', 'Copy', 'Share'],
+    'the card should carry exactly Bookmark / Copy / Share; found ' + JSON.stringify(R.actionLabels()));
+  const tiles = find(R.tree(), x => x.type === 'button' && x.props && x.props.style && x.props.style.borderRadius === 16);
+  assert.equal(tiles.length, 3);
+  for (const b of tiles) {
+    assert.equal(b.props.style.padding, '10.5px 4.5px', 'tile padding is not 0.75 x 14px 6px');
+    assert.equal(b.props.style.gap, 5, 'tile gap is not ~0.75 x 7');
+    const label = find(b, x => x.type === 'span' && x.props && x.props.style && x.props.style.fontSize != null)[0];
+    assert.equal(label.props.style.fontSize, 9, 'tile label is not 0.75 x 12px');
+    const icon = find(b, x => x.type === 'svg')[0];
+    assert.ok(icon, 'no icon drawn in the tile');
+    assert.equal(Number(icon.props.width), 15.75, 'tile icon is not 0.75 x 21');
+  }
 });

@@ -138,14 +138,15 @@ function reader(opts = {}) {
 // ═══ ITEM 36 ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 test('36: a note saved on a verse through the verse card is listed in the Study panel', () => {
-  // the exact sim repro: select John 1:51, Note, type, Save; then NOTES > My notes
+  // 2026-10-14: the verse card no longer has a Note tile (owner), so the note is made from the panel's
+  // "New note" for verse 51 — the same key the card used to write.
   const R = reader();
-  R.tapVerse(51);
-  R.pressTile('Note');
-  R.typeInto(x => x.type === 'textarea', 'Heaven open - a note only Grace should read');
-  R.press(/^Save$/);
-  assert.deepEqual(Object.keys(R.store), ['43.1.51'], 'the verse card should have written one note under the canonical key');
   R.openNotesPanel();
+  R.press(/New note/);
+  R.typeInto(x => x.type === 'input' && x.props.inputMode === 'numeric', '51');
+  R.typeInto(x => x.type === 'textarea', 'Heaven open - a note only Grace should read');
+  R.press(/^Save note$/);
+  assert.deepEqual(Object.keys(R.store), ['43.1.51'], 'the verse card should have written one note under the canonical key');
   const t = R.panelText();
   assert.match(t, /Heaven open - a note only Grace should read/, 'the note made on John 1:51 is not in the panel: ' + t);
   assert.match(t, /John 1:51/, 'the panel should name the verse as a person reads it, not as a code: ' + t);
@@ -164,11 +165,7 @@ test('36: a note saved from the panel is written under the verse card\'s key, an
     'the panel wrote its note under a key the verse card never reads: ' + JSON.stringify(Object.keys(R.store)));
   assert.ok(R.hasNoteMark(7), 'the verse the note was made on shows no note mark');
   assert.match(R.panelText(), /Panel note on seven/);
-  // and the verse card's own editor opens on it
-  R.tapVerse(7);
-  R.pressTile('Note');
-  const ta = find(R.tree(), x => x.type === 'textarea')[0];
-  assert.equal(ta.props.value, 'Panel note on seven', 'the verse card does not offer the note made in the panel');
+  // (the verse card's own note editor was removed from the card 2026-10-14; nothing more to read here)
 });
 
 test('36: a note an older build saved as "John 1:1" is still listed, still on its verse, and is folded in when edited', () => {
@@ -176,15 +173,7 @@ test('36: a note an older build saved as "John 1:1" is still listed, still on it
   assert.ok(R.hasNoteMark(1), 'an older-format note does not show on its verse');
   R.openNotesPanel();
   assert.match(R.panelText(), /Old panel note/);
-  // edit it from the verse card
-  R.tapVerse(1);
-  R.pressTile('Note');
-  const ta = find(R.tree(), x => x.type === 'textarea')[0];
-  assert.equal(ta.props.value, 'Old panel note', 'the verse card does not open on the older-format note');
-  R.typeInto(x => x.type === 'textarea', 'Edited once');
-  R.press(/^Save$/);
-  assert.deepEqual(R.store, { '43.1.1': 'Edited once' },
-    'after the edit exactly one note should remain, under the canonical key. Store: ' + JSON.stringify(R.store));
+  // (editing from the verse card was removed from the card 2026-10-14)
 });
 
 test('36: a verse with a note under BOTH spellings shows both texts, and nothing is lost on the next save', () => {
@@ -193,12 +182,7 @@ test('36: a verse with a note under BOTH spellings shows both texts, and nothing
   const t = R.panelText();
   assert.match(t, /Card note/); assert.match(t, /Panel note/, 'the second note is hidden behind the first: ' + t);
   assert.match(t, /My notes · 1/, 'one verse, one entry');
-  R.tapVerse(3); R.pressTile('Note');
-  const ta = find(R.tree(), x => x.type === 'textarea')[0];
-  assert.match(ta.props.value, /Card note[\s\S]*Panel note/, 'the editor should open on both texts so saving cannot lose one');
-  R.press(/^Save$/);
-  assert.deepEqual(Object.keys(R.store), ['43.1.3']);
-  assert.match(R.store['43.1.3'], /Card note[\s\S]*Panel note/);
+  // (editing from the verse card was removed from the card 2026-10-14)
 });
 
 test('36: the panel lists only THIS chapter\'s notes, in verse order', () => {
