@@ -5765,6 +5765,12 @@ function DashVersePrompt() {
   var maxChap = bookEntry ? bookEntry[1] : 0;
   var chapList = [];
   for (var i = 1; i <= maxChap; i++) chapList.push(i);
+  // verses that exist in the chosen chapter (VP_BOOKS.verses: one comma list of verse counts per book)
+  var verseList = [];
+  if (bookEntry && chap) {
+    var nVerses = Number(String(VP_BOOKS.verses[VP_BOOKS.indexOf(bookEntry)] || '').split(',')[Number(chap) - 1]) || 0;
+    for (var vi = 1; vi <= nVerses; vi++) verseList.push(vi);
+  }
 
   var assembled = '';
   if (book && chap) {
@@ -5835,8 +5841,7 @@ function DashVersePrompt() {
   };
 
   var selStyle = { height: 42, padding: '0 10px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
-  var numStyle = Object.assign({}, selStyle, { width: 72, textAlign: 'center' });
-
+  
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       {vp && vp.ref ? (function() {
@@ -5883,7 +5888,7 @@ function DashVersePrompt() {
       })() : null}
 
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', flex: 1, minHeight: 0, alignItems: 'flex-start' }}>
-      <Panel title="Add a passage" style={{ flex: '1 1 280px', maxWidth: '50%', minWidth: 280 }}>
+      <Panel title="Add a passage" style={{ flex: '1 1 100%', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Pick a verse or range. Add multiple passages, then push them all to the church at once.</div>
         {bibleVersions.length > 1 ? <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TRANSLATION</div>
@@ -5907,13 +5912,19 @@ function DashVersePrompt() {
               {chapList.map(function(c) { return <option key={c} value={String(c)}>{c}</option>; })}
             </select>
           </div> : null}
-          {chap ? <div style={{ flex: '0 0 72px' }}>
+          {chap ? <div style={{ flex: '0 0 118px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>FROM</div>
-            <input type="number" min="1" value={fromV} onChange={function(e) { setFrom(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="v" style={numStyle} aria-label="From verse" />
+            <select value={fromV} onChange={function(e) { setFrom(e.target.value); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="From verse">
+              <option value="">Whole chapter</option>
+              {verseList.map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
+            </select>
           </div> : null}
-          {fromV ? <div style={{ flex: '0 0 72px' }}>
+          {fromV ? <div style={{ flex: '0 0 80px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TO</div>
-            <input type="number" min={Number(fromV) + 1} value={toV} onChange={function(e) { setTo(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="v" style={numStyle} aria-label="To verse (optional)" />
+            <select value={toV} onChange={function(e) { setTo(e.target.value); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="To verse (optional)">
+              <option value="">{'\u2014'}</option>
+              {verseList.filter(function(v) { return v >= Number(fromV); }).map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
+            </select>
           </div> : null}
         </div>
         {assembled ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
@@ -5933,7 +5944,7 @@ function DashVersePrompt() {
         })() : null}
       </Panel>
 
-      {refs.length > 0 ? <Panel title={'Passages to send \u00b7 ' + refs.length}>
+      {refs.length > 0 ? <Panel title={'Passages to send \u00b7 ' + refs.length} style={{ flex: '1 1 100%', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
           {refs.map(function(r, i) {
             var hasSched = r.date && r.time;
@@ -5961,7 +5972,7 @@ function DashVersePrompt() {
         </div>
       </Panel> : null}
 
-      {pvRefs.length > 0 ? <div style={{ flex: '1 1 100%', maxWidth: 420 }}>
+      {pvRefs.length > 0 ? <div style={{ flex: '1 1 100%', width: '100%', boxSizing: 'border-box' }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.3px' }}>MEMBER PREVIEW</div>
           <div style={{ borderRadius: 22, overflow: 'hidden', background: 'linear-gradient(155deg, #6b8f71 0%, #3d5a40 100%)', padding: '20px 20px 16px', color: '#fff', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,.15)' }}>
             <div style={{ position: 'absolute', inset: 0, opacity: .4, background: 'radial-gradient(circle at 80% 15%, rgba(255,255,255,.3), transparent 45%)', pointerEvents: 'none' }} />
@@ -5984,7 +5995,7 @@ function DashVersePrompt() {
           </div>
         </div> : null}
 
-      {refs.length === 0 && !assembled ? <div style={{ flex: '1 1 280px', maxWidth: '50%', minWidth: 280, padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13.5 }}>Pick a book and chapter above, then add it to the list.</div> : null}
+      {refs.length === 0 && !assembled ? <div style={{ flex: '1 1 100%', padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13.5 }}>Pick a book and chapter above, then add it to the list.</div> : null}
       </div>
     </div>
   );
