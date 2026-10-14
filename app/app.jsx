@@ -148,6 +148,17 @@ function lsSet(key, val){ if(!lsCanWrite(key)) return; try{ localStorage.setItem
 // cannot open; and a saved place is only trusted back if that book is still installed in the translation
 // that loads, else the reader starts where it always did. A verse is kept when the reader arrived at one.
 const READ_LOC_KEY = (version) => 'trinityone.readLoc.' + String(version || '');
+// The last few places read, most recent first, one per book+chapter, capped at 5 — the "Keep reading" list on
+// Today. Pure: takes the stored list and the new place, returns the new list. Anything malformed is dropped.
+const READ_HISTORY_MAX = 5;
+const READ_HISTORY_KEY = (version) => 'trinityone.readHistory.' + String(version || '');
+function pushReadHistory(list, loc) {
+  const ok = (e) => e && Number.isInteger(Number(e.book)) && Number.isInteger(Number(e.chap)) && Number(e.chap) >= 1;
+  if (!ok(loc)) return Array.isArray(list) ? list : [];
+  const entry = loc.verse ? { book: Number(loc.book), chap: Number(loc.chap), verse: loc.verse } : { book: Number(loc.book), chap: Number(loc.chap) };
+  const rest = (Array.isArray(list) ? list : []).filter(e => ok(e) && !(Number(e.book) === entry.book && Number(e.chap) === entry.chap));
+  return [entry].concat(rest).slice(0, READ_HISTORY_MAX);
+}
 function resolveStartLoc(saved, books, maxChapter, fallback) {
   const s = saved && typeof saved === 'object' ? saved : null;
   if (!s) return fallback;
@@ -444,6 +455,7 @@ function App() {
   useAE(() => {
     if (!loc || !Bible.activeVersion) return;
     lsSet(READ_LOC_KEY(Bible.activeVersion), loc.verse ? { book: loc.book, chap: loc.chap, verse: loc.verse } : { book: loc.book, chap: loc.chap });
+    lsSet(READ_HISTORY_KEY(Bible.activeVersion), pushReadHistory(lsGet(READ_HISTORY_KEY(Bible.activeVersion), []), loc));
   }, [loc, Bible.activeVersion]);
   // deep-links: ?group=<id> opens a chat room, ?plan=<id> opens a plan
   useAE(() => {

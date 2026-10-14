@@ -2278,6 +2278,13 @@ function TodayScreen({ ctx }) {
   const contChap = loc ? loc.chap : 1;
   const contMax = loc ? Bible.maxChapter(loc.book) : 1;
   const contPct = contMax ? contChap / contMax : 0;
+  // Keep reading: up to 4 EARLIER places (the live one is the main row), from the history app.jsx writes.
+  const [histOpen, setHistOpen] = React.useState(false);
+  const histOthers = (() => {
+    let h = []; try { h = lsGet('trinityone.readHistory.' + String(Bible.activeVersion || ''), []); } catch (e) {}
+    if (!Array.isArray(h)) return [];
+    return h.filter(e => e && Bible.bookName(e.book) && !(loc && Number(e.book) === Number(loc.book) && Number(e.chap) === Number(loc.chap))).slice(0, 4);
+  })();
 
   // active reading plan — from real persisted progress
   const started = D.PLANS.filter(p => (ctx.planProgress[p.id] || []).length > 0);
@@ -2622,7 +2629,25 @@ function TodayScreen({ ctx }) {
         <div style={{ width: 38, height: 38, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <Icon name="book" size={18} color="#fff" />
         </div>
+        {histOthers.length ? (
+          <button type="button" aria-label={histOpen ? 'Hide earlier places' : 'Show earlier places'} aria-expanded={histOpen}
+            onClick={(e) => { e.stopPropagation(); setHistOpen(!histOpen); }}
+            style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer' }}>
+            <Icon name={histOpen ? 'chevU' : 'chevD'} size={16} />
+          </button>
+        ) : null}
       </div>
+      {histOpen && histOthers.length ? (
+        <div style={{ marginTop: -14, marginBottom: 22, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {histOthers.map(e => (
+            <button type="button" key={e.book + ':' + e.chap} onClick={() => ctx.gotoRef(e.book, e.chap, e.verse)}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minHeight: 44, padding: '8px 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5, fontWeight: 600, cursor: 'pointer', textAlign: 'left' }}>
+              <span>{Bible.bookName(e.book)} {e.chap}</span>
+              <Icon name="play" size={13} color="var(--clay)" />
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {/* Plan + (real) devotional cards */}
       <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel>
