@@ -100,6 +100,7 @@ function console_(relayList, churchSk, churchPub, localSkewSec, fetchImpl) {
     stmt(SHIP, 'var SKEW_CAP_SEC =', 'SKEW_CAP_SEC'),
     fnBody(SHIP, 'function clockLooksWrong', 'clockLooksWrong'),
     fnBody(SHIP, 'function _pickSkew', '_pickSkew'),
+    fnBody(SHIP, 'function _skewSecFrom', '_skewSecFrom'),
     fnBody(SHIP, 'async function measureRelaySkew', 'measureRelaySkew'),
     fnBody(SHIP, 'function relaySkewState', 'relaySkewState'),
     // stage 4 split the three refusals and the clamp out of _credNow so a DOCUMENT's stamp can use the same

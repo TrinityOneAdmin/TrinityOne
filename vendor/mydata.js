@@ -5194,6 +5194,10 @@
       D_TO_KEY[SYNC[k].d] = k;
     });
     var pool = new SimplePool();
+    var _connects = 0;
+    pool.onRelayConnectionSuccess = function() {
+      _connects++;
+    };
     var sk = null, pub = null, ck = null;
     var _pullAuthed = false;
     var _onPullAuth = null;
@@ -5213,8 +5217,33 @@
     var timers = {};
     var onChange = function() {
     };
+    var _deferred = false;
+    var _reconciled = false;
+    var _pulling = null;
+    function sharedPull() {
+      if (!_pulling) _pulling = pull().then(function(r) {
+        _pulling = null;
+        return r;
+      }, function(e) {
+        _pulling = null;
+        throw e;
+      });
+      return _pulling;
+    }
+    function reconcileThen(then) {
+      sharedPull().then(function() {
+        if (_reconciled) then();
+      }, function() {
+      });
+    }
     function relays() {
-      return window.Fellowship && window.Fellowship.relays || ["ws://127.0.0.1:7447"];
+      try {
+        var f = window.Fellowship;
+        var r = f && f.churchOwnProvedRelays && f.churchOwnProvedRelays();
+        return Array.isArray(r) ? r : [];
+      } catch (e) {
+        return [];
+      }
     }
     function tombKey(key) {
       return "tomb/" + key;
@@ -5253,8 +5282,20 @@
       var tombAt = cache.getDoc(tombAtKey(key)) || {};
       var payload = Array.isArray(doc) ? { items: doc, deleted: cache.getDoc(tombKey(key)) || [], deletedAt: Object.keys(tombAt).length ? tombAt : void 0 } : { settings: doc };
       var evt = finalizeEvent2({ kind: KIND, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SYNC[key].d]], content: encode(key, payload) }, sk);
+      var targets = relays();
+      if (!targets.length) {
+        _deferred = true;
+        return;
+      }
+      if (!_reconciled) {
+        _deferred = true;
+        reconcileThen(function() {
+          publish(key);
+        });
+        return;
+      }
       try {
-        Promise.any(pool.publish(relays(), evt)).catch(function() {
+        Promise.any(pool.publish(targets, evt)).catch(function() {
         });
       } catch (e) {
       }
@@ -5307,13 +5348,20 @@
       return false;
     }
     function pull() {
+      var targets = relays();
+      if (!targets.length) {
+        _deferred = true;
+        return Promise.resolve({ touched: false, inconclusive: true });
+      }
       return new Promise(function(resolve) {
         var touched = false, done = false, eosed = false, evCount = 0, closed = false, idleT = null;
         _pullAuthed = false;
+        var connects0 = _connects;
         var finish = function() {
           if (done) return;
           done = true;
           _onPullAuth = null;
+          if ((eosed || evCount > 0) && _connects > connects0) _reconciled = true;
           if (touched) onChange();
           resolve({ touched, inconclusive: _pullAuthed && evCount === 0 });
         };
@@ -5335,7 +5383,7 @@
         _onPullAuth = function() {
           if (eosed) scheduleClose(4e3);
         };
-        var sub = pool.subscribeMany(relays(), [{ kinds: [KIND], authors: [pub], "#d": Object.keys(D_TO_KEY) }], {
+        var sub = pool.subscribeMany(targets, [{ kinds: [KIND], authors: [pub], "#d": Object.keys(D_TO_KEY) }], {
           onevent: function(e) {
             evCount++;
             var dTag = (e.tags.find(function(t) {
@@ -5366,6 +5414,12 @@
     }
     return {
       kind: "nostr",
+      // True once, if a sync was skipped for want of a proved relay; the caller re-runs startSync.
+      takeDeferred: function() {
+        var d = _deferred;
+        _deferred = false;
+        return d;
+      },
       getDoc: function(key) {
         return cache.getDoc(key);
       },
@@ -5419,8 +5473,9 @@
           if (!mnemonic) return false;
           sk = privateKeyFromSeedWords(mnemonic);
           pub = getPublicKey2(sk);
+          _reconciled = false;
           ck = v2.utils.getConversationKey(sk, pub);
-          return pull().then(function(r) {
+          return sharedPull().then(function(r) {
             if (!(r && r.inconclusive)) {
               Object.keys(SYNC).forEach(function(k) {
                 if (cache.getDoc(k) != null) schedulePublish(k);
@@ -5620,6 +5675,9 @@
       });
       window.addEventListener("trinity-admitted", function() {
         kick();
+      });
+      window.addEventListener("trinity-relays-verified", function() {
+        if (backend.takeDeferred && backend.takeDeferred()) kick();
       });
     } else {
       api.ready = Promise.resolve(false);

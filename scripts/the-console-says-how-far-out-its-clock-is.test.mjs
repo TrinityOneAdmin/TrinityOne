@@ -95,6 +95,7 @@ function engine(relayList) {
     stmt(SHIP, 'var SKEW_CAP_SEC =', 'SKEW_CAP_SEC'),
     fnBody(SHIP, 'function clockLooksWrong', 'clockLooksWrong'),
     fnBody(SHIP, 'function _pickSkew', '_pickSkew'),
+    fnBody(SHIP, 'function _skewSecFrom', '_skewSecFrom'),
     fnBody(SHIP, 'async function measureRelaySkew', 'measureRelaySkew'),
     fnBody(SHIP, 'function relaySkewState', 'relaySkewState'),
   ].join('\n');
@@ -290,6 +291,11 @@ async function panel(skewState) {
     SkPill: ({ children }) => ({ type: 'span', props: {}, kids: [children] }),
     Panel: () => null,
     relayRejectionActive: false, clearRelayRejection: () => {}, relaysThatRefused: () => [],
+    // MEASURED, not assumed: the card drops a refusal whose relay has left the relay list
+    // (dropRefusalsNotListed), from an effect. Without this name the effect throws ReferenceError — and
+    // flush() above swallows effect errors, so the throw is INVISIBLE and every test here stays green with
+    // that effect dead. A no-op is right: this file is about the clock line, and no refusal is recorded.
+    dropRefusalsNotListed: () => {},
     useRelayBackupState: () => ({ status: [{ url: ROW, status: 'on', ms: 20, member: true }], backup: null }),
     location: { host: 'console.example' },
     document: { visibilityState: 'visible' },

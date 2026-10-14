@@ -65,6 +65,10 @@ function NostrBackend(cache) {
   Object.keys(SYNC).forEach(function (k) { D_TO_KEY[SYNC[k].d] = k; });
 
   var pool = new SimplePool();
+  // The pool reports EOSE for a relay it could NOT connect to (it closes the sub, and a close counts as EOSE),
+  // so "EOSE seen" alone would call an offline phone reconciled. A real connection is the discriminator.
+  var _connects = 0;
+  pool.onRelayConnectionSuccess = function () { _connects++; };
   var sk = null, pub = null, ck = null;
   // REVIEW-2026-07-20 B2 (data loss): this backend owns its OWN SimplePool, separate from Fellowship's, and
   // never set an auth handler — so it could not answer a NIP-42 challenge. That was harmless while these
@@ -88,7 +92,30 @@ function NostrBackend(cache) {
   var timers = {};
   var onChange = function () {};
 
-  function relays() { return (window.Fellowship && window.Fellowship.relays) || ['ws://127.0.0.1:7447']; }
+  // ADMISSION (RELAY-ADMISSION.md, CLAUDE.md rule 10): these marks say WHICH ROOMS a member reads, so they go
+  // only to relays that PROVED they run our software. That is Fellowship.churchRelays() -- the same gated set
+  // the member's own wallet backup uses -- NOT the raw candidate list `Fellowship.relays`, and NOT the old
+  // hardcoded ws://127.0.0.1:7447 fallback (a relay nobody had proved, and not even a real one on a phone).
+  // May be EMPTY (nothing proved yet: cold boot, or no verified relay). Then nothing is dialled: publish()
+  // does nothing (local stays authoritative) and pull() reports INCONCLUSIVE, so startSync does not push over
+  // a remote copy it never read. `_deferred` remembers it, and 'trinity-relays-verified' re-runs the sync.
+  var _deferred = false;
+  // True once a pull in THIS session (for this identity) actually reached a proved relay and saw it finish
+  // (EOSE or events). Reset at every startSync. publish() refuses to run before it.
+  var _reconciled = false;
+  var _pulling = null;
+  // ONE pull at a time: startSync and a publish that finds itself unreconciled share it.
+  function sharedPull() {
+    if (!_pulling) _pulling = pull().then(function (r) { _pulling = null; return r; }, function (e) { _pulling = null; throw e; });
+    return _pulling;
+  }
+  function reconcileThen(then) {
+    sharedPull().then(function () { if (_reconciled) then(); }, function () {});
+  }
+  function relays() {
+    try { var f = window.Fellowship; var r = f && f.churchOwnProvedRelays && f.churchOwnProvedRelays(); return Array.isArray(r) ? r : []; }
+    catch (e) { return []; }
+  }
   function tombKey(key) { return 'tomb/' + key; }
   function tombAtKey(key) { return 'tombat/' + key; }
   function idset(arr) { var s = new Set(); (arr || []).forEach(function (it) { if (it && it.id != null) s.add(it.id); }); return s; }
@@ -117,7 +144,19 @@ function NostrBackend(cache) {
     var tombAt = cache.getDoc(tombAtKey(key)) || {};
     var payload = Array.isArray(doc) ? { items: doc, deleted: cache.getDoc(tombKey(key)) || [], deletedAt: Object.keys(tombAt).length ? tombAt : undefined } : { settings: doc };
     var evt = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['d', SYNC[key].d]], content: encode(key, payload) }, sk);
-    try { Promise.any(pool.publish(relays(), evt)).catch(function () {}); } catch (e) { /* offline: local stays authoritative */ }
+    var targets = relays();
+    if (!targets.length) { _deferred = true; return; }   // nothing proved yet: dial nobody, keep the local copy
+    // NEVER REPLACE THE RELAY'S COPY FROM A LOCAL STATE THAT HAS NOT BEEN RECONCILED THIS SESSION. A map doc
+    // (chatseen) is one replaceable event: publishing {one room} wipes every other room's read state on every
+    // device. The locked boot empties chatseen on the assumption that startSync restores it, but the boot pull
+    // is skipped when no relay was proved yet, and the retry event is not guaranteed. So the write itself checks:
+    // reconcile first (join the pull in flight, or start one), then publish the merged result.
+    if (!_reconciled) {
+      _deferred = true;
+      reconcileThen(function () { publish(key); });
+      return;
+    }
+    try { Promise.any(pool.publish(targets, evt)).catch(function () {}); } catch (e) { /* offline: local stays authoritative */ }
   }
 
   // merge a remote payload into the local cache; returns true if local changed
@@ -179,17 +218,20 @@ function NostrBackend(cache) {
   }
 
   function pull() {
+    var targets = relays();
+    if (!targets.length) { _deferred = true; return Promise.resolve({ touched: false, inconclusive: true }); }
     return new Promise(function (resolve) {
       var touched = false, done = false, eosed = false, evCount = 0, closed = false, idleT = null;
       _pullAuthed = false;
+      var connects0 = _connects;
       // Resolve a RESULT, not just `touched`: `inconclusive` = we answered a challenge but received nothing,
       // which under default-deny can mean the replay was still in flight rather than the remote being empty.
-      var finish = function () { if (done) return; done = true; _onPullAuth = null; if (touched) onChange(); resolve({ touched: touched, inconclusive: _pullAuthed && evCount === 0 }); };
+      var finish = function () { if (done) return; done = true; _onPullAuth = null; if ((eosed || evCount > 0) && _connects > connects0) _reconciled = true; if (touched) onChange(); resolve({ touched: touched, inconclusive: _pullAuthed && evCount === 0 }); };
       var closeNow = function () { if (closed) return; closed = true; clearTimeout(idleT); try { sub.close(); } catch (e) {} finish(); };
       var scheduleClose = function (ms) { if (closed) return; clearTimeout(idleT); idleT = setTimeout(closeNow, ms); };
       // A challenge that lands AFTER the first (unauth) EOSE means the replay is coming — hold the sub open.
       _onPullAuth = function () { if (eosed) scheduleClose(4000); };
-      var sub = pool.subscribeMany(relays(), [{ kinds: [KIND], authors: [pub], '#d': Object.keys(D_TO_KEY) }], {
+      var sub = pool.subscribeMany(targets, [{ kinds: [KIND], authors: [pub], '#d': Object.keys(D_TO_KEY) }], {
         onevent: function (e) {
           evCount++;
           var dTag = (e.tags.find(function (t) { return t[0] === 'd'; }) || [])[1];
@@ -218,6 +260,8 @@ function NostrBackend(cache) {
 
   return {
     kind: 'nostr',
+    // True once, if a sync was skipped for want of a proved relay; the caller re-runs startSync.
+    takeDeferred: function () { var d = _deferred; _deferred = false; return d; },
     getDoc: function (key) { return cache.getDoc(key); },
     putDoc: function (key, value) {
       if (SYNC[key] && Array.isArray(value)) {
@@ -260,8 +304,9 @@ function NostrBackend(cache) {
         if (!mnemonic) return false; // no persistent identity (e.g. web ephemeral) -> local only
         sk = privateKeyFromSeedWords(mnemonic);
         pub = getPublicKey(sk);
+        _reconciled = false;   // a new identity (or a re-kick) has reconciled nothing yet
         ck = nip44.utils.getConversationKey(sk, pub);
-        return pull().then(function (r) {
+        return sharedPull().then(function (r) {
           // The local→remote migration push (encrypt legacy cleartext / seed a fresh relay). Skip it when
           // the pull was INCONCLUSIVE — we authenticated but received nothing, which under default-deny can
           // mean the replay was still in flight, not that the remote is empty. Republishing the local view
@@ -396,6 +441,8 @@ function MyDataStore(backend) {
     // restarted. Someone journalling while they wait is exactly someone with something on their mind, so the
     // window mattered. Admission is the moment the refusal stops being true; retry then, not at next boot.
     window.addEventListener('trinity-admitted', function () { kick(); });
+    // The gate proves relays AFTER boot. A sync skipped because none was proved yet re-runs when one is.
+    window.addEventListener('trinity-relays-verified', function () { if (backend.takeDeferred && backend.takeDeferred()) kick(); });
   } else {
     api.ready = Promise.resolve(false);
   }

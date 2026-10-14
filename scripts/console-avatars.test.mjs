@@ -11,6 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const DATA = readFileSync(new URL('../app/stew-data.jsx', import.meta.url), 'utf8');
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
@@ -95,11 +96,15 @@ test('the console passes it where it draws a member', () => {
   const sites = [...DASH.matchAll(/av=\{m\.av\}/g)];
   assert.ok(sites.length >= 3, 'expected the members list, pending joins and the picker; found ' + sites.length);
   // the one that matters most: deciding whether to approve someone
-  // Anchor on the list HEADER, not on 'pendingJoins.map' — whose first occurrence is a Set() built 6800
-  // characters earlier, so the window landed nowhere near the render and failed against correct code.
-  const at = DASH.indexOf('Requests to join');
-  assert.notEqual(at, -1, 'the pending-joins list moved — re-anchor this test');
-  assert.match(DASH.slice(at, at + 2500), /av=\{m\.av\}/,
+  // Anchor on the ROW BODY itself. Not 'pendingJoins.map' — whose first occurrence is a Set() built 6800
+  // characters earlier — and no longer the list HEADER either: the join row was lifted out into `joinRow`
+  // (2026-10-13, so a test could press Approve), which put the badge ~110 lines ABOVE the header and left
+  // this window landing nowhere near the render. `const joinRow` IS the row, so it cannot drift again.
+  const at = DASH.indexOf('const joinRow');
+  assert.notEqual(at, -1, 'the join row moved — re-anchor this test');
+  // fnBody() reads to the real closing brace, so this cannot silently stop covering joinRow the way a
+  // fixed 3400-char window did once the row gained its own Approve path (scripts/test-windows.test.mjs).
+  assert.match(fnBody(DASH, 'const joinRow'), /av=\{m\.av\}/,
     'join requests still show a faceless badge, which is the screen where a steward approves a stranger');
 });
 

@@ -23,12 +23,13 @@ const CHURCH = 'c'.repeat(64);
 const DELEGATE = 'd'.repeat(64), OTHER_STEW = 'e'.repeat(64);
 const M1 = 'a'.repeat(64), M2 = 'b'.repeat(64), BLOCKED = '9'.repeat(64);
 
-function setup({ setStewardsResult = true, careResult = true, delegateIsMember = false } = {}) {
+function setup({ setStewardsResult = true, careResult = true, delegateIsMember = false, outcome = 'unknown' } = {}) {
   const calls = { setStewards: [], care: [], media: [], name: [], groupKey: [], publishGroup: [] };
   const steward = {
     pubkey: CHURCH, actingChurch: '',
     joinPolicyFresh: () => false, listIsFresh: () => true,   // an open-join church whose lists have been read (round 3a's shared filter)
     setStewards: (list) => { calls.setStewards.push(list); return Promise.resolve(setStewardsResult); },
+    stewardRemovalOutcome: () => Promise.resolve(outcome),   // only asked when setStewards answered false
     rotateCareKey: (m, s) => { calls.care.push({ m, s }); return Promise.resolve(careResult); },
     rotateMediaKey: (m, s) => { calls.media.push({ m, s }); return Promise.resolve(true); },
     ensureNameKeyForMembers: (m, s, o) => { calls.name.push({ m, s, o }); return Promise.resolve({ rotated: true }); },
@@ -116,11 +117,11 @@ test('a delegate who is ALSO a member is told they keep member access, and is st
 });
 
 test('a removal the relay did not accept rotates NOTHING and says they are still a steward', async () => {
-  const s = setup({ setStewardsResult: false });
+  const s = setup({ setStewardsResult: false, outcome: 'not-landed' });
   const r = await removeDelegate(s);
   assert.equal(s.calls.care.length + s.calls.media.length + s.calls.name.length + s.calls.groupKey.length, 0,
     'keys were rotated for a removal that never landed — re-keying around a steward the relay still honours locks out the wrong person');
-  assert.match(r.said, /Couldn’t remove Tom Ridley[^.]*STILL a steward and nothing was re-keyed/, 'the owner is told nothing: ' + r.said.slice(0, 300));
+  assert.match(r.said, /Couldn’t remove Tom Ridley[^.]*still lists them as a steward, and nothing was re-keyed/, 'the owner is told nothing: ' + r.said.slice(0, 300));
 });
 
 test('a key that would not rotate is named, not reported as success', async () => {

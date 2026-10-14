@@ -287,6 +287,46 @@ const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (l
 // yesterday, and a kids check-in roll that emptied mid-service). Fine for timestamps/filenames only.
 const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const CAREKEY_D = 'trinityone/carekey:';
+// ── HAS THIS SERVICE ALREADY HAPPENED? (owner, 2026-10-13; reference/DOMAIN.md "A SERVICE EARLIER TODAY
+// COUNTS AS PAST") ──────────────────────────────
+// `sv.date < today` on its own treats a 9am service as upcoming until midnight, so anything that clears
+// "upcoming" work from it erases the record of who served AND tells those people they are no longer needed.
+// The owner ruled that out: a service that has already finished today keeps its record.
+//
+// THE CLOCK BASIS IS THE LOCAL DEVICE CLOCK — the local calendar day (what `_todayISO` above and
+// `window.todayISO` give) and the local wall clock. NEVER `new Date().toISOString().slice(0,10)`: that is the
+// UTC day, and app/recur.jsx:76-81 documents it as the wrong answer for a calendar date (east of Greenwich it
+// reads as yesterday for part of every evening).
+//
+// AND IT FAILS SAFE. With no readable clock `_localNow().day` is '' and `_svcHasHappened` calls EVERY dated
+// service already-happened: no record is rewritten and nobody is told. The opposite mistake is the
+// unrecoverable one — the record is gone and the people who served have been told they were not needed.
+function _localNow() {
+  try {
+    const d = new Date(), p = (n) => String(n).padStart(2, '0');
+    return { day: d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()), hm: p(d.getHours()) + ':' + p(d.getMinutes()) };
+  } catch (e) { return { day: '', hm: '23:59' }; }
+}
+// A service with NO READABLE DATE answers false here, and every caller skips it separately: "has not happened"
+// is not "is upcoming", and an undated service is never guessed at.
+function _svcHasHappened(sv, today, nowHM) {
+  if (!sv || !sv.date) return false;
+  if (!today) return true;                            // no clock to compare against: keep every record
+  if (sv.date !== today) return sv.date < today;
+  const t = String(sv.time || '');
+  if (!/^\d{1,2}:\d{2}$/.test(t)) return false;        // dated today, no readable time: still upcoming, as before
+  // A service AT this minute counts as happened: it has begun, so its rota is a record and the people on it are
+  // serving, not waiting to be stood down.
+  return (t.length === 4 ? '0' + t : t) <= String(nowHM || '99:99');
+}
+// The one sentence a steward sees when they try to delete the care team (the owner's exact words, 2026-10-13).
+// Exported on the Steward object below so both screens say it without a second copy of the copy.
+const CARE_TEAM_UNDELETABLE = 'Every church needs a care team; edit its members instead.';
+// WHICH TEAM IS THE CARE TEAM, asked of the care module rather than only of the caller, so the refusal in
+// removeTeam cannot be walked around by a caller that simply does not pass it. '' while the care module has not
+// read the setting yet — then only the caller's `careTeamId` decides, which is what both screens pass.
+const _careTeamNow = () => { try { const SM = window.StewardMeals; const v = SM && SM.careTeamId && SM.careTeamId(); return String(v || ''); } catch (e) { return ''; } };
+
 
 // SEAL ONE COPY PER MEMBER, WITHOUT FREEZING THE SCREEN.
 //
@@ -1235,8 +1275,10 @@ const _latestGuardNotice = new Map();   // "<signer>|<d-tag>" -> newest notice s
 async function _guardTryOn(urls, ev) {
   let rs = [];
   try {
-    rs = await Promise.allSettled(pool.publish(urls, ev).map(p => p.then(v => {
+    rs = await Promise.allSettled(pool.publish(urls, ev).map((p, i) => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      // THIS ONE RELAY ACKNOWLEDGED THE WRITE (an unreachable one resolves with the string above and never gets here)
+      try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: urls[i] } })); } catch (x) {}
       return v;
     })));
   } catch (e) { return { missed: urls.slice(), refused: urls.map(url => ({ url, error: String((e && e.message) || e || '') })) }; }
@@ -1837,6 +1879,16 @@ function _pickSkew(list) {
   if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
   return a[(a.length - 1) >> 1];
 }
+// THE ONE PLACE A SKEW IS ROUNDED. A relay stamps WHOLE seconds (its `created_at` is floor of its clock), but
+// our local reading is fractional. local_fractional - relay_floor therefore overstates the true skew by the
+// relay's lost fraction (uniform 0..1, plus a little latency). Math.round turned that into +1 about half
+// the time, and since a stamp is `now() - skew`, an over-stated skew stamps ONE SECOND EARLY - measured on
+// 151 of 300 samples with two clocks in agreement. On a same-second tie the lowest event id wins, so an early
+// stamp makes a genuinely newer write look older. Math.floor errs the other way: it can under-state the skew
+// by at most a second (a stamp at worst 1s late, which is inside every future gate), and it never stamps early.
+// A SLOW console measures a NEGATIVE skew; floor rounds that further negative, pushing the stamp forward -
+// the same safe direction. Both measurement sites use this, so the sign convention above is untouched.
+function _skewSecFrom(relaySec) { return Math.floor(Date.now() / 1000 - relaySec); }
 // Best effort, always. Never throws, never blocks a write, and returns the last known figure when nothing
 // answers — a church on a thin pipe is the first audience, not the edge case.
 async function measureRelaySkew(preferUrl) {
@@ -1864,7 +1916,7 @@ async function measureRelaySkew(preferUrl) {
       let proof = null;
       try { proof = await verifyRelayIdentity(url); } catch (e) { proof = null; }
       if (proof && Number(proof.at) > 0) {
-        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - Number(proof.at)), at: Date.now(), proven: true });
+        _skewByRelay.set(url, { sec: _skewSecFrom(Number(proof.at)), at: Date.now(), proven: true });
         continue;
       }
       // FALLBACK, AND IT IS MARKED AS ONE. A relay too old to carry `at` on its proof can still be read from
@@ -1878,7 +1930,7 @@ async function measureRelaySkew(preferUrl) {
         if (!r.ok) continue;
         const j = await r.json();
         if (!j || typeof j.now !== 'number') continue;   // too old to say — ask the next
-        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - j.now), at: Date.now(), proven: false });
+        _skewByRelay.set(url, { sec: _skewSecFrom(j.now), at: Date.now(), proven: false });
       } catch (e) { /* unreachable or not JSON — try the next */ }
     }
     const all = [..._skewByRelay.values()];
@@ -3924,10 +3976,20 @@ function makeStayOpen(deps) {
   const { secure, isNative, lsRemove, now, readBlob, deriveBits, pubOf } = deps;
   let replayed = false;   // the record is replayed ONCE per launch: a lock later in the session really locks
   const purgeLegacy = () => { try { lsRemove(STAY_LEGACY_LS); } catch (e) {} };
+  // → TRUE only when the record is verifiably GONE (read back, like save() reads back a write). It used to
+  // return nothing and swallow a failed removal, so save(pin, false) - the steward UNTICKING the box, which on
+  // a seized phone is the whole point - answered "done" over a record that was still in the Keystore and still
+  // opening the church. The callers that fire-and-forget this ignore the answer, exactly as before.
   const clear = async () => {
     purgeLegacy();
-    if (!isNative()) return;
-    try { const { S } = await secure(); await S.remove(STAY_SS); } catch (e) { console.warn('[steward] stay-open clear failed', e); }
+    if (!isNative()) return true;
+    try {
+      const { S } = await secure(); await S.remove(STAY_SS);
+      const back = await S.get(STAY_SS);
+      if (back == null) return true;
+      console.warn('[steward] stay-open clear did not remove the record');
+      return false;
+    } catch (e) { console.warn('[steward] stay-open clear failed', e); return false; }
   };
   const blobOf = async () => {
     try { const raw = await readBlob(); const b = raw ? JSON.parse(raw) : null; return b && b.ct && b.iv && b.salt ? b : null; }
@@ -3972,7 +4034,7 @@ function makeStayOpen(deps) {
     // the result is what was asked for (a write is read back).
     async save(pin, on) {
       replayed = true;   // the steward typed the PIN this launch; nothing left to replay
-      if (!on || !isNative()) { await clear(); return !on; }
+      if (!on || !isNative()) { const gone = await clear(); return !on && gone; }
       const blob = await blobOf();
       if (!blob) return false;
       try {
@@ -4080,8 +4142,10 @@ async function publish(evt, opts) {
     return false;
   }
   try {
-    await Promise.any(pool.publish(_targets, evt).map(p => p.then(v => {
+    await Promise.any(pool.publish(_targets, evt).map((p, i) => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      // THIS ONE RELAY ACKNOWLEDGED THE WRITE — Promise.any only says "some relay did", so say which, per relay.
+      try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: _targets[i] } })); } catch (x) {}
       return v;
     })));
   }
@@ -4358,8 +4422,10 @@ async function _publishToRelays(evt, urls) {
   try { for (const u of targets) { const r = pool.relays && pool.relays.get(u); if (r && r.publishTimeout < 12000) r.publishTimeout = 12000; } } catch (e) {}
   let rs = [];
   try {
-    rs = await Promise.allSettled(pool.publish(targets, evt).map(p => p.then(v => {
+    rs = await Promise.allSettled(pool.publish(targets, evt).map((p, i) => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      // THIS ONE RELAY ACKNOWLEDGED THE WRITE (an unreachable one resolves with the string above and never gets here)
+      try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: targets[i] } })); } catch (x) {}
       return v;
     })));
   } catch (e) { try { _noteSpread(evt, [], targets.slice()); } catch (x) {} return false; }
@@ -4522,6 +4588,11 @@ async function _waitForRegistration() {
   _regGate = null;   // latched: whichever way that went, nothing waits on registration again this session
 }
 const _lastStamp = new Map();   // d-tag -> the created_at we last published for it
+// d-tag -> the newest created_at a RELAY HAS ACTUALLY DELIVERED to us for it. Written ONLY by _noteSeenStamp (so only from
+// _subAddr's onevent). It is deliberately NOT _lastStamp: _lastStamp is also bumped by _monotonic at event CREATION, for
+// our own write attempts, before the write is sent and whether or not it lands. "Has another party changed this?"
+// (rotaChangedSince) must be answered from this map; a failed write of our own must never read as somebody else's change.
+const _seenStamp = new Map();
 const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
 // ── A COPY WE CANNOT OPEN IS NOT AN EMPTY DOCUMENT (the roster wipe, 2026-10-12) ─────────────────────────
 // A console that opens before the church name key arrives sees every sealed calendar document as `_locked`.
@@ -4540,7 +4611,10 @@ function _saveFailed(why) { _lastSaveFail = why; return null; }
 // A version we RECEIVED counts as a stamp we must beat. Two consoles signing with one church key both stamp
 // `now()`, and a tie is refused by the relay ("a newer version of this is already stored"); feeding what we
 // saw into `_lastStamp` makes our next write of that document land one second past it. Called by _subAddr.
-function _noteSeenStamp(d, ts) { if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts); }
+function _noteSeenStamp(d, ts) {
+  if (d && ts > 0 && (_seenStamp.get(d) || 0) < ts) _seenStamp.set(d, ts);
+  if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts);
+}
 // ⚠ WHICH RELAYS TOOK THE WRITE — the one question `_publishToRelays`'s return value cannot answer.
 //
 // THAT RULE IS UNTOUCHED BY THIS. `_publishToRelays` still answers `evt` only when EVERY targeted relay
@@ -9208,7 +9282,7 @@ window.Steward = {
       () => { tok.genuine = true; tok.at = Date.now(); state.approval = approval; onPolicy(approval); _keysReadSignal('joinpolicy'); });
     return () => { tok.live = false; _joinPolicyStates.delete(state); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
-  setJoinPolicy(approval) {   // turn approval-to-join on/off
+  setJoinPolicy(approval, opts) {   // turn approval-to-join on/off. `opts` is publish()'s (ensureJoinPolicy passes background:true)
     if (!sk) return Promise.resolve(null);
     // feChurch, NOT a bare finalizeEvent. "Rules & privacy" has no owner lock, so a delegated steward with
     // the Members capability can press this — and the relay ACCEPTS their write and starts enforcing it at
@@ -9218,7 +9292,7 @@ window.Steward = {
     // copy matches neither. So the switch on screen stayed OFF while the relay enforced ON; pressing it again
     // only set it on again, and a delegated console could never turn it back off. Members arriving with a
     // join link were held pending indefinitely with nothing on screen saying so.
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + pub], ['t', NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + pub], ['t', NET]], content: JSON.stringify({ approval: !!approval }) }, sk), opts);
   },
   // AUDIT-2026-07-28 F10. A new church published its join policy at wizard step 0 — before the relay had been
   // told the church exists. accept() refuses any kind-30078 write from a key that is not a configured church
@@ -9245,20 +9319,42 @@ window.Steward = {
   async ensureJoinPolicy() {
     if (!sk) return { ok: false, reason: 'no key' };
     const cp = pub;
-    const read = await new Promise((resolve) => {
-      let best = null, eosed = false, done = false;
-      const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve({ best, eosed }); };
+    // One read, used twice: before the write (any copy at all means a choice was made) and after a refusal
+    // (is the relay's COUNTING state already what we wanted?). `counted` is the newest copy subscribeJoinPolicy
+    // would act on — the church's, or a rostered steward's — and nothing else; `best` is the newest of any.
+    const readPolicy = () => new Promise((resolve) => {
+      let best = null, counted = null, eosed = false, done = false;
+      const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve({ best, counted, eosed }); };
       // Both shapes subscribeJoinPolicy uses: the church's own doc, and one a rostered steward wrote for it.
       const sub = pool.subscribeMany(relays(), [
         { kinds: [30078], authors: [cp], '#d': [JOINPOLICY_D + cp] },
         { kinds: [30078], '#church': [cp], '#d': [JOINPOLICY_D + cp] },
-      ], { onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; }, oneose() { eosed = true; finish(); } });
+      ], { onevent(e) {
+        if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+        if (!_authFuture(e) && (e.pubkey === cp || _careRoster.has(e.pubkey)) && (!counted || (e.created_at || 0) > (counted.created_at || 0))) counted = e;
+      }, oneose() { eosed = true; finish(); } });
       setTimeout(finish, 5000);
     });
+    const read = await readPolicy();
     if (!read.eosed) return { ok: false, reason: 'the relay did not answer' };
     if (read.best) return { ok: true, already: true };
-    const r = await window.Steward.setJoinPolicy(true);
+    // background: the steward did not press anything, so a refusal must not raise the "change wasn't saved" banner
+    // by itself (publishErrorMessage); the genuine case is announced below, once we have looked again.
+    const r = await window.Steward.setJoinPolicy(true, { background: true });
     if (r) return { ok: true, published: true };
+    // A REFUSAL IS NOT YET A PROBLEM. A delegated steward may simply not be allowed to write this document, or
+    // the first read may have been empty because the relay had not finished answering — and either way the
+    // policy we wanted may already be in force. Look again, and judge by the copy that COUNTS (the church's or
+    // a rostered steward's, newest), not merely the newest one present. Only if the relay does not already say
+    // "approval on" does the alarm below fire, unchanged.
+    try {
+      const again = await readPolicy();
+      const c = again.counted;
+      if (c && !(c.tags || []).some(t => t[0] === 'deleted') && c.content) {
+        let on = false; try { on = !!JSON.parse(c.content).approval; } catch (e) { on = false; }
+        if (on) return { ok: true, already: true, afterRefusal: true };
+      }
+    } catch (e) {}
     // Refused. Say so — a church silently left open to anyone holding the join link is the thing this
     // whole document exists to prevent, and the console has a mounted banner for exactly this.
     try {
@@ -9520,13 +9616,34 @@ window.Steward = {
     // The seat may be the CHILD (an entry keyed by them) or a PARENT (named in some child's list). Both break.
     const g = o.guardians || {};
     let nextG = null;
+    // THE CHILDREN WHOSE OWN ANSWER JUST CHANGED. Collected, not inferred later, because the member's sealed
+    // clearance is the ONLY place a child's phone can learn who its parents are and this is the only moment we
+    // know which children those are. See the re-seal at (4) below for why that matters.
+    const relinkedChildren = [];
     if ((g[oldH] || []).length) { nextG = { ...g }; nextG[newH] = [...new Set([...low(g[newH]), ...low(g[oldH])])]; }
+    // WHY THE PUSH IS NOT INSIDE THE `newH === -1` BRANCH. MED, audit 2026-10-13.
+    //
+    // It was, and that made the whole fix survive only a FIRST attempt. A run that got past setGuardians (so
+    // the new key is already on the child's list) and was then refused at setReseats or setAdmitted throws —
+    // including by the same-second NIP-01 tie this function's own note above says refuses roughly half of two
+    // writes in one second, with `w()` giving exactly ONE retry. The steward presses Reconnect again. Run 2
+    // sees the new key already on the link, so the old condition collected NOTHING, `relinkedChildren` was
+    // empty, and the child was never told — the exact gap this code exists to close, surviving a retry.
+    // Measured (case D): with g[child] = [oldKey, newKey], setGuardians was not called and refreshClearances
+    // got [newH] only.
+    //
+    // So the MAP WRITE stays conditional on the link actually changing (nothing republishes a document that
+    // needs no change), and the RE-SEAL is collected for every child this parent is on either way. A re-seal
+    // the child already has is idempotent — refreshClearances de-dupes per member and skips on
+    // read-before-write — while a re-seal missed is a child who cannot reach their parent.
     for (const childK of Object.keys(g)) {
       const parents = low(g[childK]);
-      if (parents.indexOf(oldH) !== -1 && parents.indexOf(newH) === -1) {
+      if (parents.indexOf(oldH) === -1) continue;
+      if (parents.indexOf(newH) === -1) {
         nextG = nextG || { ...g };
         nextG[childK] = [...new Set([...low(nextG[childK] || parents), newH])];
       }
+      relinkedChildren.push(String(childK || '').toLowerCase());
     }
     // COPY closed entries to the new key (both as child and as parent) — and KEEP the old ones. A parent's link
     // request names the child's key as it was when the request was made, and stays on the relay; the Confirm list
@@ -9581,11 +9698,63 @@ window.Steward = {
     // re-seal actually buys is the member's OWN phone knowing its answer without waiting for a back-fill — so
     // a failure is worth naming, not worth undoing. `failed` counts members whose write was not acknowledged;
     // `unverified` means we could not read back to find out, which is not the same as success.
+    //
+    // AND THE CHILDREN AT THE OTHER END OF THE LINK — `relinkedChildren`, not just `[newH]`. GAP (b), 2026-10-13.
+    //
+    // This argument said `[newH]` and nothing else, so when a PARENT was re-seated the only phone told was the
+    // parent's own. The child's phone was never told, and it had no other way to find out:
+    //   · its answer is `myGuardians` in src/fellowship.src.js, read ONLY from `clr.guardians` inside its own
+    //     sealed `clearance:<child>` document — the one re-issued here;
+    //   · the church's `guardians:` map is owner/safeguarding-steward only at the relay (gateway.mjs, the
+    //     MINORS_D/GUARDIANS_D read gate), so a child is never served it and that fallback is permanently {};
+    //   · a `guardnotice:` is d-tagged and p-tagged to a PARENT and its payload is `children` — a child is
+    //     never a recipient, and the handler writes `trinityone.family` and never touches myGuardians;
+    //   · the `reseat:` doc DOES reach the child, but `_superseded()` is consulted by four lists and
+    //     `myGuardians` is not one of them, so it maps nothing from the old parent key to the new one;
+    //   · and the docs-hub cache replays the STALE clearance on every boot.
+    // So the child went on naming the dead parent key until a steward happened to reopen the Members tab and
+    // DashMembers' whole-roster back-fill happened to re-run.
+    //
+    // WHICH DIRECTION WAS ACTUALLY BROKEN, corrected 2026-10-13 (CLAUDE.md rule 4). cbdb85a's message and the
+    // first version of this note said "a parent could not message their own child". That is NOT what was
+    // measured. Running the real canDMPeer (app/app.jsx) for the PARENT's phone: `guardians` is {}, `minors`
+    // is [] and `myGuardians` is [] on a parent's device, so the trailing guardian check cannot fire — and the
+    // relay permits the send anyway, because `guardianLinkedIn` reads the church map that setGuardians had
+    // already updated. The parent -> child direction was never blocked, before or after.
+    //
+    // What was genuinely broken, and is what this re-seal fixes, is THE CHILD'S PHONE. Its only answer is the
+    // sealed clearance, so on the child's screen the re-seated parent is filtered OUT of the chat people list
+    // (app/screens-chat.jsx:1822) and the child cannot reply (:2047). One direction, at screen level: the
+    // child could not reach their parent, and docs/security/SAFEGUARDING.md:161 promises they can.
+    //
+    // Fails CLOSED, deliberately: the new clearance names BOTH keys, because nextG keeps the old pair (see the
+    // note on that above — "the old key stays ON the safeguarding lists; that half fails closed, and a key
+    // nobody holds costs nothing"). A STOLEN old phone is handled by `blockOld` at (1), not here.
+    // TWO PHONES, TWO ANSWERS. MED, introduced by cbdb85a and corrected 2026-10-13.
+    //
+    // One call for [newH, ...relinkedChildren] returned ONE aggregate, so `failed:['clearance']` could mean
+    // the re-seated member's own phone or a child's, and the screen could not tell. Measured (case G): with
+    // only the CHILD's re-seal failing, this returned failed:['clearance'] — and ReseatModal printed "their
+    // new phone has not confirmed it yet", about the wrong phone, with nothing naming the child who now
+    // cannot reach their parent. Before relinkedChildren existed that sentence was true, because [newH] was
+    // the only entry; it became a lie the moment a second kind of member shared the result.
+    //
+    // Two calls, not one flag: these are different members' `clearance:<pub>` documents, so there is no
+    // same-second tie between them, and `refreshClearances` serialises its own batches anyway.
     const failed = [];
     let clr = null;
     try { clr = await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g); }
     catch (e) { clr = null; }
     if (!clr || clr.failed > 0 || clr.unverified) failed.push('clearance');
+    // THE CHILDREN AT THE OTHER END OF THE LINK, counted separately so the screen can say whose phone it is.
+    const kidsToTell = relinkedChildren.filter((x, i, a) => x && x !== newH && a.indexOf(x) === i);
+    let childrenNotTold = 0;
+    if (kidsToTell.length) {
+      let kclr = null;
+      try { kclr = await window.Steward.refreshClearances(kidsToTell, nextMins, nextAppr, nextG || g); }
+      catch (e) { kclr = null; }
+      if (!kclr || kclr.failed > 0 || kclr.unverified) { failed.push('childclearance'); childrenNotTold = kidsToTell.length; }
+    }
 
     // (5) THE TEAMS AND THE ROTA. Reported, never fatal, for the same reason as (4): the seat has moved.
     //
@@ -9650,6 +9819,10 @@ window.Steward = {
       minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG,
       blockedOld: !!o.blockOld,   // only reachable if the block LANDED — a refusal threw above
       teamsMoved, rotasMoved: slotsMoved,
+      // How many children were re-sealed, and how many of those phones did NOT confirm. ReseatModal needs
+      // both: `failed` carries 'childclearance' so the sentence can be written at all, and the count is what
+      // makes it singular or plural. Zero children is zero in both, so the sentence never appears.
+      childrenToldOf: kidsToTell.length, childrenNotTold,
       failed,
     };
   },
@@ -9810,6 +9983,35 @@ window.Steward = {
     }
 
     return _landed('steward roster', _skewGate(() => publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk))));
+  },
+  // DID A REMOVAL LAND? setStewards() answers false when no relay ACKNOWLEDGED the write, and that is not the same as
+  // "no relay applied it": the OK can be lost with the socket (the app backgrounded mid-write). So read each relay's
+  // newest church-signed roster and say what is TRUE, in three words and never a guess:
+  //   'landed'     the newest roster any relay holds no longer lists them;
+  //   'not-landed' EVERY relay answered, and every one still lists them;
+  //   'unknown'    anything else (a relay silent, nothing found). Callers must not claim either way.
+  // Callers: DashStewardsPanel.remove (app/stew-dashboard.jsx), the only one.
+  async stewardRemovalOutcome(pk) {
+    const want = String(pk || '').toLowerCase();
+    if (!want || !pub) return 'unknown';
+    const urls = relays();
+    if (!urls.length) return 'unknown';
+    const d = STEWARDS_D + pub;
+    const reads = await Promise.all(urls.map(u => _newestByD([{ kinds: [30078], authors: [pub], '#d': [d] }], 6000, [u], pub, (e) => e.pubkey === pub && !_authFuture(e))
+      .then(r => ({ complete: r.complete, top: (r.byD.get(d) || {}).top || null }), () => ({ complete: false, top: null }))));
+    let newest = null;
+    for (const r of reads) if (r.top && _beatsDoc(r.top, newest)) newest = r.top;
+    if (!newest) return 'unknown';
+    let listed = [];
+    if (!(newest.tags || []).some(t => t[0] === 'deleted') && newest.content) { try { listed = ((JSON.parse(newest.content) || {}).pubkeys || []); } catch (e) { return 'unknown'; } }
+    const has = (l) => l.map(x => String(x).toLowerCase()).includes(want);
+    if (!has(listed)) return 'landed';
+    const everyoneStillListsThem = reads.every(r => {
+      if (!r.complete || !r.top) return false;
+      if ((r.top.tags || []).some(t => t[0] === 'deleted') || !r.top.content) return false;
+      try { return has((JSON.parse(r.top.content) || {}).pubkeys || []); } catch (e) { return false; }
+    });
+    return everyoneStillListsThem ? 'not-landed' : 'unknown';
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).
@@ -10435,8 +10637,13 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [VERSE_PROMPT_D] }, { kinds: [30078], '#church': [pub], '#d': [VERSE_PROMPT_D] }], {
       onevent(e) {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
-        if (current && current.ts >= e.created_at) return;
-        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at }; cb(current); } catch {}
+        // NEVER let an OLDER copy overwrite a newer one. On an exact same-second tie the RELAY keeps the lowest
+        // event id (its replaceable-event rule), so do the same here: a tie between two DIFFERENT events (two
+        // stewards, one second) resolves to the copy the relay holds, not to whichever arrived first. The same
+        // event arriving again from a second relay has an equal id and is skipped, as before. Our own writes
+        // never tie with each other: feChurch() -> _monotonic() already bumps a same-document write to last+1.
+        if (current && (current.ts > e.created_at || (current.ts === e.created_at && String(current.id || '') <= String(e.id || '')))) return;
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at, id: e.id }; cb(current); } catch {}
       },
       oneose() { cb(current); },
     });
@@ -10576,6 +10783,115 @@ window.Steward = {
       // modal still closed and the rota still DM'd everyone assigned. Every caller already treats null as
       // "not saved", so surfacing it here closes the common case with the guards that already exist.
       .then((ok) => (ok ? { id: teamId, roles, people, pods } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));
+  },
+  // ---- REMOVING A TEAM (owner, 2026-10-12; reference/DOMAIN.md "DELETE A ROSTER / ROTA TEAM") ----
+  // removeRoster is the tombstone only; removeTeam below is the whole operation and the only thing the screens call.
+  removeRoster(teamId) {
+    if (!sk || !teamId) return Promise.resolve(null);
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET], ['deleted', '1']], content: '' }));
+  },
+  // THE WHOLE OPERATION, in an order that fails safe:
+  //   0. REFUSE THE CARE TEAM outright (owner, 2026-10-13), and refuse before touching anything if the team, or
+  //      any UPCOMING rota that might hold its slots, is one this console cannot read (_locked). A locked roster
+  //      shows EMPTY on screen; deleting a team the steward cannot see is the roster wipe again.
+  //   1. UPCOMING rotas (a service still to happen — see _svcHasHappened) lose this team's slots, each checked for
+  //      freshness in the second before it is written. PAST services are never touched: they are the record of who
+  //      served. A service with no readable date is left alone, not guessed at.
+  //   2. Only if every rota landed: the roster tombstone, then the group tombstone.
+  //   3. Only if the group is gone: tell each person who was on an upcoming slot they are no longer needed.
+  // Any failure before 3 stops there and returns { ok:false } with nothing sent to anyone; running it again is safe
+  // (a rota that no longer holds the slots is skipped, a tombstone is idempotent). EVERY failure answer carries
+  // `rotasCleared` — how many upcoming rotas were already rewritten before it stopped — because the screens must
+  // not tell a steward "nothing happened" over people who are already off next Sunday's rota.
+  // `ctx` is what the console has READ: { rosters, rotas, services, requests, today, nowHM, careTeamId, teamName }.
+  async removeTeam(teamId, ctx) {
+    _lastSaveFail = '';
+    const c = ctx || {};
+    if (!sk || !teamId) return { ok: false, reason: 'nokey' };
+    // 0a. THE CARE TEAM IS NEVER DELETED (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE DELETED").
+    // Both screens refuse to offer the control, and this is the same refusal somewhere a screen cannot be the only
+    // thing between a steward and the loss — a guard that lives only in two screens is one copy-paste from gone.
+    // WHAT WOULD BE LOST, so the edge cases can be judged: a team carries TWO lists. Tombstoning the care team's
+    // ROSTER makes the relay drop it (scripts/gateway.mjs:3678), so careAdmin() is false for everyone and nobody can
+    // manage — or even see — open care needs. And `careteam:<churchpub>`, the pubkey list members' phones SEAL a new
+    // "ask for help" to (src/fellowship.src.js:695, :7184), is not written by this function at all, so new asks for
+    // help would stay sealed to the removed people's keys and be readable from an older or non-enforcing relay —
+    // the measured shape at src/fellowship.src.js:906-912.
+    const careId = String(c.careTeamId || _careTeamNow() || '');
+    if (careId && teamId === careId) return { ok: false, reason: 'care', message: CARE_TEAM_UNDELETABLE };
+    const rosters = c.rosters || [], rotas = c.rotas || [], services = c.services || [], requests = c.requests || [];
+    // THE LOCAL CLOCK, never the UTC day (see _localNow): `new Date().toISOString().slice(0,10)` was the fallback
+    // here and app/recur.jsx:76-81 documents it as the wrong answer for a calendar date. The screens pass
+    // `today` = window.todayISO() and `nowHM` = the local wall clock; this fallback is for a caller that passes
+    // neither, and with no readable clock it makes every dated service count as already happened.
+    const lnow = _localNow();
+    const today = c.today || lnow.day;
+    const nowHM = /^\d{2}:\d{2}$/.test(String(c.nowHM || '')) ? String(c.nowHM) : lnow.hm;
+    const ros = rosters.find(r => r && (r.team === teamId || r.id === teamId));
+    if ((ros && ros._locked) || _addrLocked(ROSTER_D + teamId)) return { ok: false, reason: 'locked' };
+    const pfx = teamId + '::';
+    const jobs = [];
+    for (const ro of rotas) {
+      if (!ro) continue;
+      const sid = ro.service || ro.id; if (!sid) continue;
+      const sv = services.find(x => x && x.id === sid);
+      // PAST / UNDATED / UNKNOWN FIRST, _locked SECOND, AND THE ORDER IS THE FIX. Run the refusal over every rota
+      // and ONE old unreadable rota — or one whose service this console holds no document for — refuses team
+      // deletion for the whole church, possibly for ever, with advice ("try again in a moment") that can never
+      // come true. Only a rota this operation is about to REWRITE may refuse it; a locked PAST rota is not
+      // rewritten, so it has no say.
+      if (!sv || !sv.date || _svcHasHappened(sv, today, nowHM)) continue;
+      if (ro._locked || sv._locked || _addrLocked(ROTA_D + sid)) return { ok: false, reason: 'locked' };
+      const assign = ro.assign || {};
+      const keys = Object.keys(assign).filter(k => k.startsWith(pfx));
+      if (!keys.length) continue;
+      const next = { ...assign }; keys.forEach(k => { delete next[k]; });
+      jobs.push({ sid, sv, ro, keys, next, assign });
+    }
+    const failedRotas = [];
+    let cleared = 0;
+    for (const j of jobs) {
+      // FRESHNESS, IMMEDIATELY BEFORE THE WRITE. `ctx.rotas` is the copy the console read, and writing it back
+      // silently erased a co-steward's addition to a DIFFERENT team on the same rota (measured). `_lastStamp` holds
+      // the newest created_at this console has SEEN for a d-tag (_noteSeenStamp, from the subscription), and it is
+      // updated the moment the event arrives — before any re-render reaches `ctx`. A rota that has moved stops the
+      // operation: nothing is tombstoned, nobody is told, and running the removal again reads the new copy.
+      // NO RETRY, DELIBERATELY: _monotonic bumps _lastStamp at event CREATION, unconditionally, so the same check
+      // made after our own write is true by construction and a retry of this shape cannot terminate. One attempt.
+      // KNOWN COST OF READING _lastStamp: it also carries this console's OWN last write of that rota, so a removal
+      // run before the relay has echoed that write back into `ctx` reports 'stale' rather than overwriting it.
+      // That is the safe direction, and a second run (with the echo in hand) completes.
+      if ((_lastStamp.get(ROTA_D + j.sid) || 0) > (j.ro.ts || 0)) return { ok: false, reason: 'stale', staleRotas: [j.sid], rotasCleared: cleared };
+      const r = await window.Steward.publishRota({ service: j.sid, published: !!j.ro.published, assign: j.next });
+      if (r) cleared++; else failedRotas.push(j.sid);
+    }
+    if (failedRotas.length) return { ok: false, reason: 'rota', failedRotas, rotasCleared: cleared };
+    if (!(await window.Steward.removeRoster(teamId))) return { ok: false, reason: 'roster', rotasCleared: cleared };
+    if (!(await window.Steward.removeGroup(teamId))) return { ok: false, reason: 'group', rotasCleared: cleared };
+    // 3. NOW, and only now, tell people. One notice per person per slot; the request document for that slot is
+    // reused when there is one, so the card they were asked on is the one that changes.
+    let told = 0, toldFailed = 0;
+    for (const j of jobs) for (const k of j.keys) {
+      const a = j.assign[k]; if (!a || !a.pub) continue;
+      const roleId = k.slice(pfx.length);
+      const old = requests.find(q => q && !q._locked && q.serviceId === j.sid && q.teamId === teamId && q.roleId === roleId && q.memberPub === a.pub);
+      const n = await window.Steward.sendServingCancel({ id: old && old.id, memberPub: a.pub, serviceId: j.sid, teamId, roleId, role: (old && old.role) || '', teamName: c.teamName || (old && old.teamName) || 'Team', date: j.sv.date, time: j.sv.time, service: j.sv.name });
+      if (n) told++; else toldFailed++;
+    }
+    return { ok: true, rotasCleared: cleared, told, toldFailed };
+  },
+  // The copy for the refusal above, so both screens say the owner's words without a second copy of them.
+  CARE_TEAM_UNDELETABLE,
+  // "you are no longer needed": the request document for a slot, replaced (same d-tag) by one saying the slot is gone.
+  // Additive: `cancelled:true` is ignored by an older member app, which would keep showing its old request.
+  async sendServingCancel(req) {
+    if (!sk || !req || !req.memberPub) return null;
+    const id = req.id || ('req' + Date.now().toString(36) + (++_reqSeq).toString(36) + Math.random().toString(36).slice(2, 7));
+    const doc = { serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: 'hand', accent: 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: 'Your church', cancelled: true, note: 'You are no longer needed on ' + (req.teamName || 'this team') + (req.date ? ' on ' + req.date : '') + '.' };
+    const content = await _sealChurchDocReady(doc);
+    if (content == null) return null;
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
+      .then((ok) => (ok ? { id, ...doc, memberPub: req.memberPub } : null));
   },
   subscribeRosters(onRosters) { return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters,
     // a locked roster is still THIS team's roster: found by `team`, with empty lists so no screen trips over it — and
@@ -11560,6 +11876,13 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }), po)
       .then((ok) => (ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));   // false = reached no relay; see publishService
   },
+  // HAS A RELAY DELIVERED A NEWER COPY OF THIS ROTA THAN `ts`? Answered from `_seenStamp`, which only _noteSeenStamp
+  // (events a relay delivered, via _subAddr) writes. It must NOT read `_lastStamp`: _monotonic bumps that for our OWN
+  // write attempts at creation time, so after one refused write it would exceed the screen's `ts` for ever (no echo can
+  // refresh `ts`, nothing landed) and every later Block press would be skipped as "someone else changed it".
+  // Our own successful write is echoed back through the same subscription, which raises this map and the screen's rotas together.
+  // A missing `ts` counts as older than anything. Callers: takeOffEveryTeam (stew-dashboard.jsx) only.
+  rotaChangedSince(serviceId, ts) { return (_seenStamp.get(ROTA_D + serviceId) || 0) > (Number(ts) || 0); },
   removeRota(serviceId) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + serviceId], ['t', NET], ['deleted', '1']], content: '' }));

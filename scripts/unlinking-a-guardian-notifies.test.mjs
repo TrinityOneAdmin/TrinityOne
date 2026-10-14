@@ -44,7 +44,7 @@ const KID = 'kid-pubkey', MUM = 'mum-pubkey', DAD = 'dad-pubkey', OTHER_KID = 'o
 async function runUnlink(guardians, childPub, parentPub) {
   const body = fnBody(SRC, 'const unlinkParent = async (childPub, parentPub) => {', 'unlinkParent');
   const calls = { guardians: [], reseal: [], notified: [] };
-  const sg = { minors: [KID, OTHER_KID], approved: ['cleared-pubkey'] };
+  const sg = { minors: [KID, OTHER_KID], approved: ['cleared-pubkey'], minorsKnown: true };   // WARM: toggleMinor refuses a cold whole-list replace (FIX 1, 2026-10-13)
   const win = { Steward: {
     setGuardians: (g) => { calls.guardians.push(g); return true; },
     notifyGuardianRemoved: (parent, child) => { calls.notified.push([parent, child]); },

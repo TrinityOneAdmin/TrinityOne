@@ -39,6 +39,10 @@ async function runToggle({ marking, kidPhotosAllowed, alreadySuppressed, cleared
   const body = slice('const toggleMinor = async (pk) => {', '\n  };') + '\n  };';
   const calls = { minors: [], approved: [], nophoto: [], reseal: [], notice: [], ckRevoked: [] };
   const sg = {
+    // minorsKnown: toggleMinor refuses a whole-list setMinors until the church's list of children has
+    // actually arrived (FIX 1, 2026-10-13). This fixture is a WARM console; the cold case has its own file,
+    // scripts/a-cold-console-cannot-empty-the-list-of-children.test.mjs.
+    minorsKnown: true,
     minors: marking ? [] : [pk],
     approved: cleared ? [pk] : [],
     nophoto: alreadySuppressed ? [pk] : [],

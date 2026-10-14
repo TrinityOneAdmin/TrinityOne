@@ -261,9 +261,19 @@ function noteRelayRejection(refused) {
   // relay as Live, because a relay answers a socket and refuses a write for entirely different reasons.
   // Stored as its own key so an older console (which reads only the timestamp) is unaffected.
   try {
-    const list = (Array.isArray(refused) ? refused : []).filter(r => r && r.url)
+    // A relay we could not REACH has not refused anything: nostr-tools reports an unreachable relay as a
+    // "connection failure: ..." string, which publish() turns into an error, so it arrives here beside the
+    // genuine refusals. Naming it would put "Refused our last change" on a box that was merely offline.
+    const list = (Array.isArray(refused) ? refused : []).filter(r => r && r.url && !/^connection failure/i.test(String(r.error || '')))
       .map(r => ({ url: String(r.url), error: String(r.error || '').slice(0, 300), at: Date.now() }));
+    // AND WHEN NOTHING GENUINE WAS REFUSED, FORGET WHOEVER WAS NAMED LAST. If the filter above empties the
+    // list — every entry was an unreachable relay — this wrote no key and left the PREVIOUS list in place, so
+    // the new alarm put "Refused our last change" on a relay that had nothing to do with it. The timestamp on
+    // the line above still has to be written: "a relay refused us" with no url is a real state, and an older
+    // publish path calls this with no list at all (asserted in the-relay-row-says-which-one-refused). So this
+    // does NOT remove the alarm-with-no-pill case — it only stops the alarm naming the wrong relay.
     if (list.length) localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(list));
+    else try { localStorage.removeItem(window.REG_REFUSED_LS); } catch (e) {}
   } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-rejected')); } catch (e) {}
 }
@@ -277,6 +287,58 @@ function clearRelayRejection() {
   try { localStorage.removeItem(window.REG_NEEDED_LS); } catch (e) {}
   try { localStorage.removeItem(window.REG_REFUSED_LS); } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-cleared')); } catch (e) {}
+}
+// ONE RELAY TOOK A WRITE, so its refusal is over. The engine says which relay (steward-relay-accepted, fired
+// per relay from the same place that sees its acknowledgement), and this runs at module level - not inside the
+// Relays page - so a write made while that page is closed clears it too. The list is per relay but the flag
+// is global, so they move together: drop this relay's entry, and drop the flag only when none remain.
+function relayUrlKey(u) { return String(u || '').trim().toLowerCase().replace(/\/+$/, ''); }
+function clearRelayRefusal(url) {
+  const k = relayUrlKey(url);
+  if (!k) return;
+  let list;
+  try { list = JSON.parse(localStorage.getItem(window.REG_REFUSED_LS) || '[]'); } catch (e) { return; }
+  if (!Array.isArray(list) || !list.some(r => r && relayUrlKey(r.url) === k)) return;   // it never refused us: nothing to do
+  const rest = list.filter(r => !(r && relayUrlKey(r.url) === k));
+  if (!rest.length) { clearRelayRejection(); return; }
+  try { localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(rest)); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('steward-relay-refusal-changed')); } catch (e) {}
+}
+try {
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('steward-relay-accepted', (e) => { try { clearRelayRefusal(e && e.detail && e.detail.url); } catch (x) {} });
+  }
+} catch (e) {}
+// A REFUSAL WHOSE RELAY IS NO LONGER ONE OF OURS. "Refused our last change" is cleared only by THAT relay
+// taking a write (above), so a refusing relay the steward then REMOVES — the obvious reaction to the warning
+// — or one whose tunnel address churns (reference/RELAY-ADMISSION.md root 3) is never written to again, and
+// nothing can ever match it. The alarm and its fix-it control then stand for the full 7-day TTL with NO pill on
+// any row to say which relay they are about, and that control is a relay admin-token field: it is "not
+// something to leave sitting on screen" (DashRelaysCard). A relay we no longer send anything to cannot be
+// refusing anything, so its refusal goes with it. Measured on the rendered Relays page: before this, a refusal
+// recorded against a relay the steward then removed had NO exit but the 7-day timer, and no write anywhere
+// could clear it — clearRelayRefusal() bails when the accepting url is not in the stored list.
+//
+// A REMOVED-THEN-RE-ADDED RELAY DOES NOT INHERIT ITS OLD REFUSAL. Owner-confirmed, intended: the next refused
+// write records it again, and until one happens there is nothing true to show.
+//
+// `urls` MUST BE A LOADED LIST. An empty or not-yet-probed one means "we do not know yet", never "every relay
+// is gone", so this refuses to act on one — otherwise every cold boot would discard a real refusal before the
+// relay health check had answered. The CALLER decides when the list has loaded; this refuses only the empty
+// case, and that one line is what makes the whole function safe.
+function dropRefusalsNotListed(urls) {
+  const keys = new Set((Array.isArray(urls) ? urls : []).map(relayUrlKey).filter(Boolean));
+  if (!keys.size) return;                                        // list not loaded: nothing is known to be gone
+  let list;
+  try { list = JSON.parse(localStorage.getItem(window.REG_REFUSED_LS) || '[]'); } catch (e) { return; }
+  if (!Array.isArray(list) || !list.length) return;
+  const rest = list.filter(r => r && keys.has(relayUrlKey(r.url)));
+  if (rest.length === list.length) return;                       // every refusal still names a listed relay
+  if (!rest.length) { clearRelayRejection(); return; }
+  // Same bookkeeping as clearRelayRefusal(): the list is per relay and the flag is global, so they move
+  // together — drop these entries, and drop the flag only when none remain.
+  try { localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(rest)); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('steward-relay-refusal-changed')); } catch (e) {}
 }
 // The flag says "a relay refused our posts". It's stale once posts are landing again — the steward may well
 // have fixed it another way (restored the key, the operator added the church) without touching the in-console
@@ -4230,7 +4292,8 @@ function CategoriesModal({ cats, groups, onClose }) {
 }
 
 function DashGroups() {
-  const all = window.useStewardGroups();   // groups AND teams (teams are chat channels too)
+  const trs = window.useTeamRemoval ? window.useTeamRemoval() : { gone: new Set(), pending: null };   // a team being removed leaves this list at once; Undo brings it back
+  const all = window.useStewardGroups().filter(g => !(g.kind === 'team' && (trs.gone.has(g.id) || (trs.pending && trs.pending.id === g.id))));   // groups AND teams (teams are chat channels too)
   const realCount = useRealMemberCount();   // "who can see this" must not count blocked or pending people
   const rosters = window.useStewardRosters();
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -4386,6 +4449,7 @@ function DashGroups() {
           </div>
         </div>
       ) : null}
+      {window.TeamRemovalHost ? <window.TeamRemovalHost /> : null}
       {undo ? (
         <div style={{ position: 'absolute', left: '50%', bottom: 18, transform: 'translateX(-50%)', zIndex: 90, display: 'flex', alignItems: 'center', gap: 14, background: 'var(--ink)', color: 'var(--paper)', padding: '11px 14px 11px 18px', borderRadius: 14, boxShadow: 'var(--shadow-lg)', fontSize: 13.5, fontWeight: 600 }}>
           Removed “{undo.name}”
@@ -4424,9 +4488,16 @@ function DashGroups() {
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
           </React.Fragment>
         )}
-        renderAside={(it) => (
-          <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-        )} />
+        renderAside={(it) => {
+          // THE CARE TEAM IS NOT OFFERED FOR DELETION (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE
+          // DELETED"), here as on the Rota page: disabled, with the reason in the tooltip and in the label a
+          // screen reader reads, rather than a confirm dialog that cannot complete. `careTeamId` comes from the
+          // shared removal flow (useTeamRemoval), and TeamRemoval.ask and Steward.removeTeam refuse it as well.
+          const noCare = it.kind === 'team' && !!trs.careTeamId && it.id === trs.careTeamId;
+          return (
+          <button onClick={() => (it.kind === 'team' && window.TeamRemoval ? window.TeamRemoval.ask(it) : setPendingDelete(it))} disabled={noCare} title={noCare ? (trs.careWhy || '') : (it.kind === 'team' ? 'Remove team' : 'Remove group')} aria-label={(it.kind === 'team' ? 'Remove team ' : 'Remove group ') + (it.name || '') + (noCare ? ' — ' + (trs.careWhy || '') : '')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: noCare ? 'default' : 'pointer', opacity: noCare ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+          );
+        }} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {catsOpen ? <CategoriesModal cats={cats} groups={all} onClose={() => setCatsOpen(false)} /> : null}
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
@@ -4810,17 +4881,34 @@ function DashRelaysCard() {
   // relay's admin token hands over full control of that relay, so it is not something to leave sitting
   // on screen inviting a steward to go and find one.
   const [regNeeded, setRegNeeded] = React.useState(relayRejectionActive);
+  const [refusalTick, setRefusalTick] = React.useState(0);   // bumps when one relay's refusal clears but others remain
   React.useEffect(() => {
-    const onRejected = () => setRegNeeded(true);
-    // A write landing (steward-publish-ok) means the relay is accepting our posts again — so whatever the
-    // steward did to fix it (in-console token, restored key, operator added the church), clear the alarm.
-    const onOk = () => { clearRelayRejection(); setRegNeeded(false); };
+    // A SECOND REFUSAL, ON A DIFFERENT RELAY, WHILE THIS PAGE IS OPEN. setRegNeeded(true) is a no-op when the
+    // alarm is already up, so nothing in the refusedSet memo below moved and the pill stayed on the relay that
+    // refused FIRST — until the 30-second health probe happened to hand the card a fresh array. The tick is
+    // what that memo watches for a refusal CHANGING, so bump it here too.
+    const onRejected = () => { setRegNeeded(true); setRefusalTick(n => n + 1); };
+    // A relay taking a write clears THAT relay's refusal (clearRelayRefusal, module level, fires
+    // steward-relay-cleared when the last one goes). It used to clear everything on any steward-publish-ok -
+    // but that fires when ANY relay accepted, so relay B saying yes wiped the pill on relay A still refusing,
+    // and only while this page happened to be open.
     const onCleared = () => setRegNeeded(false);
+    const onChanged = () => setRefusalTick(n => n + 1);
     window.addEventListener('steward-relay-rejected', onRejected);
-    window.addEventListener('steward-publish-ok', onOk);
     window.addEventListener('steward-relay-cleared', onCleared);
-    return () => { window.removeEventListener('steward-relay-rejected', onRejected); window.removeEventListener('steward-publish-ok', onOk); window.removeEventListener('steward-relay-cleared', onCleared); };
+    window.addEventListener('steward-relay-refusal-changed', onChanged);
+    return () => { window.removeEventListener('steward-relay-rejected', onRejected); window.removeEventListener('steward-relay-cleared', onCleared); window.removeEventListener('steward-relay-refusal-changed', onChanged); };
   }, []);
+  // THE REFUSING RELAY IS NO LONGER IN THE LIST. Driven by the relay list rather than by a render: `status` is
+  // one entry per relaysRaw() (src/steward.src.js relayStatus), which is never empty for a real church — the
+  // canonical pool is appended unconditionally there, and that comment calls it the never-empty guard — so an
+  // empty `status` is "still checking", which is exactly what this card already calls `checking` below, and
+  // dropRefusalsNotListed leaves a real refusal alone for it. `status` is also the CANDIDATE list, not the
+  // publish set, so a relay the network gate has not proved yet is still on it and keeps its refusal.
+  // Keyed on the ADDRESSES, so the 30-second health re-probe (a fresh array each time) does not re-run it.
+  // Declared AFTER the listener effect above so those listeners are already subscribed when this raises one.
+  const listedRelayKeys = status.map(r => (r && r.url) || '').join(' ');
+  React.useEffect(() => { dropRefusalsNotListed(status.map(r => r && r.url)); }, [listedRelayKeys]);
   // WHICH RELAY REFUSED, keyed the way both sides store it. Recomputed when the alarm flips or the health
   // check returns, which is exactly when it can change. Compared with trailing slashes and case removed:
   // the pool keys relays by its own normaliser and a raw string compare has missed silently three times.
@@ -4835,12 +4923,18 @@ function DashRelaysCard() {
   // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
   const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
+  // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
+  // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
+  // covers a refusal arriving as well as one clearing (see onRejected), and `status` is the repaint when the
+  // health check returns; setRegNeeded(true) covers neither, because it is a no-op when the alarm is already
+  // up. Before the tick was bumped on arrival, a second refusal left the pill on the relay that refused first
+  // until the next 30-second probe; keying this on the addresses would have made that permanent.
   const refusedSet = React.useMemo(() => {
-    const key = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
+    const key = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');   // same normaliser as relayUrlKey(), inline so this card needs no other global
     const m = new Map();
     for (const r of relaysThatRefused()) m.set(key(r.url), r.error || '');
     return m;
-  }, [regNeeded, status]);
+  }, [regNeeded, status, refusalTick]);
   const [regToken, setRegToken] = React.useState('');
   const [regMsg, setRegMsg] = React.useState('');
   const [regBusy, setRegBusy] = React.useState(false);
@@ -4889,8 +4983,8 @@ function DashRelaysCard() {
           {status.map(r => {
             const self = host && r.url.includes(host);
             const up = r.status === 'on';
-            const refused = refusedSet.has(String(r.url || '').toLowerCase().replace(/\/+$/, ''));
-            const refusedWhy = refused ? refusedSet.get(String(r.url || '').toLowerCase().replace(/\/+$/, '')) : '';
+            const refused = refusedSet.has(String(r.url || '').trim().toLowerCase().replace(/\/+$/, ''));
+            const refusedWhy = refused ? refusedSet.get(String(r.url || '').trim().toLowerCase().replace(/\/+$/, '')) : '';
             return (
               <div key={r.url} title={refusedWhy ? 'This relay refused our last change and said: ' + refusedWhy : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
@@ -5611,7 +5705,22 @@ function DashVersePrompt() {
       : (vp.ref || '');
     return ref ? ref.split('; ').filter(Boolean) : [];
   };
-  var pvRefs = dvpLiveRefs(vp, Math.floor(Date.now() / 1000));
+  // ONE READING of the clock per render, shared by the preview, the status card and the timer below.
+  var vpNow = Math.floor(Date.now() / 1000);
+  // THE NEXT MOMENT THE CARD CHANGES: the earliest scheduled time still in the future. Without a timer nothing
+  // re-rendered when that second arrived, so "Scheduled" stayed on screen after the passage had gone live to
+  // members. No schedule pending -> null -> no timer at all. `tick` is a dependency so a timer clamped short
+  // (setTimeout cannot wait longer than ~24 days) re-arms itself when it fires early.
+  var vpTickState = _s(0), vpTick = vpTickState[0], setVpTick = vpTickState[1];
+  var vpNextDue = null;
+  (vp && Array.isArray(vp.schedule) ? vp.schedule : []).forEach(function(s) { if (s.at > vpNow && (vpNextDue === null || s.at < vpNextDue)) vpNextDue = s.at; });
+  _e(function() {
+    if (vpNextDue === null) return;
+    // +250ms so the timer lands just AFTER the second, never just before it (an early wake would read "still future")
+    var id = setTimeout(function() { setVpTick(function(t) { return t + 1; }); }, Math.min((vpNextDue - Math.floor(Date.now() / 1000)) * 1000 + 250, 2147000000));
+    return function() { clearTimeout(id); };
+  }, [vpNextDue, vpTick]);
+  var pvRefs = dvpLiveRefs(vp, vpNow);
   var pvSafeIdx = pvIdx < pvRefs.length ? pvIdx : 0;
   var pvRef = pvRefs[pvSafeIdx] || '';
   var pvText = pvRef ? resolveText(pvRef) : null;
@@ -5683,7 +5792,11 @@ function DashVersePrompt() {
     mergedSchedule.forEach(function(s) { if (allRefParts.join('; ').indexOf(s.ref) === -1) allRefParts.push(s.ref); });
     var combined = allRefParts.join('; ');
     var hasSchedule = mergedSchedule.length > 0;
-    window.Steward.publishVersePrompt(combined, '', hasSchedule ? mergedSchedule : undefined).then(function() {
+    window.Steward.publishVersePrompt(combined, '', hasSchedule ? mergedSchedule : undefined).then(function(sent) {
+      // Show what we just wrote without waiting for the relay to echo it back (clear() does the same with
+      // setVp(null)). Only a real, stamped result counts - a blocked publish resolves with no timestamp - and
+      // never over a copy that is already newer, so this cannot let an older write replace a newer one.
+      if (sent && typeof sent.ts === 'number') setVp(function(prev) { return prev && typeof prev.ts === 'number' && prev.ts > sent.ts ? prev : sent; });
       var label = hasSchedule ? 'Scheduled' : 'Sent to church';
       setRefs([]); setBook(''); setChap(''); setFrom(''); setTo('');
       setMsg(label); setTimeout(function() { setMsg(''); }, 4000);
@@ -5706,7 +5819,7 @@ function DashVersePrompt() {
       {vp && vp.ref ? (function() {
         var vpSch = Array.isArray(vp.schedule) ? vp.schedule : [];
         var vpVerses = vp.ref.split('; ').filter(Boolean);
-        var nowSec = Math.floor(Date.now() / 1000);
+        var nowSec = vpNow;
         var allLive = vpSch.length === 0 || vpSch.every(function(s) { return s.at <= nowSec; });
         var allFuture = vpSch.length > 0 && vpSch.every(function(s) { return s.at > nowSec; });
         var statusLabel = allFuture ? 'Scheduled' : allLive ? 'Live now' : 'Partially live';
@@ -6372,8 +6485,35 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   const newPub = window.Steward && window.Steward.parseMemberKey ? window.Steward.parseMemberKey(text) : null;
   const same = newPub && newPub === member;
 
+  // CAN THIS CONSOLE SEE THE PARENT LINKS AT ALL? MED, audit 2026-10-13.
+  //
+  // `useStewardGuardians()` is a subscription with NO loaded flag and a default of { links: {} }, so an empty
+  // map means "not arrived yet" and "this church has confirmed no links" alike. Measured (case E): handed
+  // guardians:{}, reseatMember writes no guardian map and re-seals [newH] only — so a re-seat pressed before
+  // the document lands leaves the parent link on the DEAD key and the child's phone is never told. That is
+  // GAP (b) again, by a different door. Nothing is wiped (nextG stays null, so setGuardians is never called);
+  // what is lost is the carry-across.
+  //
+  // So gate it the way the clearance back-fill gates itself — on the evidence that an ABSENT safeguarding
+  // document is honestly absent: `minorsKnown`, meaning the relay has told us everything it holds while we
+  // were authenticated to read the owner-only docs, which the guardian map rides the same subscription as
+  // (subscribeSafeguard: "the guardian map rides here rather than on its own subscription"). Only when the map
+  // we hold is EMPTY: a non-empty map has provably arrived, and gating on a document the console already has
+  // would be refusing for nothing.
+  //
+  // AND NOT ON A DELEGATED CONSOLE. The relay serves minors:/guardians: to the church key (or a safeguarding
+  // steward) alone, so a steward holding only `members` — whose Reconnect the relay does accept, and for whom
+  // the button that opens this modal is deliberately offered — can NEVER satisfy minorsKnown. Gating them
+  // would delete a shipped capability rather than close a hole. Their case is unchanged, and listed.
   const confirm = async () => {
     if (!newPub || same || busy) return;
+    // Read at the moment of the PRESS, not at render: the document can land between the modal opening and the
+    // steward pasting the code, and this is also what keeps `confirm` sliceable on its own for its test.
+    if (!window.Steward.actingChurch && Object.keys(guardiansNow).length === 0 && sgNow.minorsKnown !== true) {
+      setErr('This console hasn’t received your church’s parent and child links yet. '
+        + 'Reconnecting now could leave a child unable to reach their parent — wait a moment and try again.');
+      return;
+    }
     setBusy(true); setErr('');
     try {
       // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
@@ -6414,6 +6554,14 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             res.guardiansCarried ? 'parent link' : null,
           ].filter(Boolean).reduce((a, s, i, arr) => i === 0 ? s : (i === arr.length - 1 ? a + ' and ' + s : a + ', ' + s), '')}</b> moved across with
           them{res.failed && res.failed.includes('clearance') ? ', though their new phone has not confirmed it yet — it should pick it up shortly' : ', and their new phone has been told'}. </React.Fragment> : null}
+          {/* WHOSE PHONE DID NOT CONFIRM. MED, audit 2026-10-13. cbdb85a widened the clearance re-seal to the
+              CHILDREN at the other end of a moved parent link, but both phones shared one failed:['clearance']
+              — so a CHILD's failure printed the sentence above, which is about the member's own new phone,
+              and the one person who could no longer reach their parent went unmentioned. reseatMember reports
+              them separately now ('childclearance', plus a count), so this says plainly whose phone it is. */}
+          {res && res.failed && res.failed.includes('childclearance') ? <b>{res.childrenNotTold === 1
+            ? 'Their child’s phone has not been told about the new key yet, so the two of them can’t message each other until it has — open Members to send it again. '
+            : 'The phones of ' + res.childrenNotTold + ' of their children have not been told about the new key yet, so they can’t message each other until they have — open Members to send it again. '}</b> : null}
           {res && (res.teamsMoved || res.rotasMoved) ? <React.Fragment>They are still on {res.teamsMoved ? (res.teamsMoved === 1 ? 'their serving team' : 'their ' + res.teamsMoved + ' serving teams') : ''}{res.teamsMoved && res.rotasMoved ? ' and in ' : ''}{res.rotasMoved ? (res.rotasMoved === 1 ? 'the rota they were on' : 'the ' + res.rotasMoved + ' rotas they were on') : ''}, under the new key. </React.Fragment> : null}
           {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
           One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
@@ -6789,9 +6937,17 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
     const keys = Object.keys(assign).filter(k => assign[k] && isHim(assign[k].pub));
     if (!keys.length) continue;
     const next = { ...assign }; keys.forEach(k => { delete next[k]; });
-    jobs.push(Promise.resolve(S.publishRota({ service: ro.service, published: !!ro.published, assign: next }))
-      .then((ok) => { if (ok == null || ok === false) failed.push('a future rota'); })
-      .catch(() => { failed.push('a future rota'); }));
+    // FRESHNESS (concurrent-save guard): `ro` is the copy this console read EARLIER. The relay keeps only the newest
+    // copy, so rewriting from an older one erases whatever another steward (or this steward's other screen) saved
+    // since. Checked at write time against the newest stamp the engine has seen; a changed rota is skipped and named,
+    // never overwritten. ONE attempt, no retry: publishRota stamps the rota (_monotonic) before it writes, so after a
+    // failed attempt this same check would read our own stamp as "someone else changed it" - and, with no relay echo to
+    // refresh ro.ts, would skip every later Block on this rota. A failed write is reported as a failed save instead.
+    jobs.push((async () => {
+      if (S.rotaChangedSince && S.rotaChangedSince(ro.service, ro.ts)) { failed.push('a future rota someone else changed a moment ago'); return; }
+      const ok = await S.publishRota({ service: ro.service, published: !!ro.published, assign: next });
+      if (ok == null || ok === false) failed.push('a future rota (the save failed \u2014 try again)');
+    })().catch(() => { failed.push('a future rota (the save failed \u2014 try again)'); }));
   }
   return Promise.all(jobs).then(() => [...new Set(failed)]);
 }
@@ -6982,6 +7138,48 @@ function DashMembers() {
   // (toggleMinor, approveGuardian, declineGuardian, linkParent, unlinkParent): a church switch during the
   // guardians/minors write must not send this church's list as another (see guardNoticeScope).
   const toggleMinor = async (pk) => {
+    // THE LIST OF CHILDREN MUST BE REAL BEFORE IT IS REPLACED. HIGH, audit 2026-10-13.
+    //
+    // setMinors is a WHOLE-LIST replace and the two lines below build that list out of `sg.minors`. On a
+    // console whose `minors:` document has not arrived, `sg.minors` is [] — so the first press of "Child",
+    // of the phone sheet's "Mark as child", or of the join queue's "Approve as a child" published a list with
+    // ONE key on it and took EVERY OTHER CHILD IN THE CHURCH off it. Measured by rendering the real joinRow
+    // and pressing the real control:
+    //     WARM (list arrived):      setMinors [['childAlice','childBen','joinerpubkey']]
+    //     COLD (minors not known):  setMinors [['joinerpubkey']]
+    //
+    // THE HARM IS TO THE OTHER CHILDREN, not to the one being marked. Their keys leave `minors:`, so
+    // minorOf() is false for them at the relay and safeguardAllows() lets any member open a private message
+    // with them — and the whole-roster back-fill above then seals {minor:false} to each of their phones from
+    // the same emptied list, which their apps trust OVER the list fallback.
+    //
+    // REACHABLE ON A COLD CONSOLE, not a theoretical window. The join queue is gated on `mRosterLoaded` —
+    // the MEMBER roster — while `minors:` is served only to a NIP-42-authenticated reader and so can arrive
+    // materially later; the queue is the top panel of the Members tab, and that control's whole purpose is to
+    // be pressed at once. The members-list "Child" button reaches the same replace by the same route.
+    //
+    // `minorsKnown`, not `loaded`. This is the exact question subscribeSafeguard wrote minorsKnown for —
+    // "has the relay told us everything it has, WHILE WE WERE AUTHENTICATED to read the owner-only minors
+    // doc" — and it is the gate ClearPersonModal already holds its own list behind. `loaded` is
+    // sawMinors && sawEose, which stays permanently FALSE for a church that has never marked a child, so
+    // gating on that would make the first child in every church unmarkable.
+    //
+    // And NOT minorsKnown && relayAuthed(), which the back-fill above uses. That back-fill writes to every
+    // member on the roster off a possibly-empty list, so it needs auth to be live at the moment it runs.
+    // Here, minorsKnown true via `sawMinors` means we HOLD the church-signed document; refusing a steward's
+    // mark because the socket has since dropped would be a refusal with no safety behind it, and a child a
+    // steward cannot mark is an ADULT to the relay. relayAuthed() is already inside minorsKnown's own other
+    // branch, where it is the thing that matters.
+    //
+    // This never blocks a legitimate UN-marking: `minors` is only ever assigned in the MINORS_D branch, which
+    // sets sawMinors, so a non-empty `sg.minors` implies minorsKnown — and `unmarking` can only be true when
+    // `pk` is already on that non-empty list. Fails CLOSED: the hook's own default carries no minorsKnown at
+    // all, so a console with no subscription refuses rather than guesses.
+    if (sg.minorsKnown !== true) {
+      setMinorNotice({ pk, tone: 'fail', text: 'Nothing was changed — this console hasn’t received your church’s '
+        + 'list of children yet, and saving now would take every other child off it. Try again in a moment.' });
+      return null;
+    }
     const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
@@ -7012,6 +7210,20 @@ function DashMembers() {
     // the protection lands before the tidy-up, and the relay now ignores a child's guardian entry at decision
     // time, so the gap between the two writes is not a route. A removal the relay refuses is REPORTED, never
     // painted as done — the same standard unlinkParent holds itself to.
+    //
+    // THIS IS THE BRANCH THAT MAKES A MIS-TAP EXPENSIVE, and it is why the notice below says so. It removes
+    // them as guardian of EVERY one of their children, writes a `closed` pair for each, and notifies them;
+    // un-marking restores none of it, and the `closed` pair suppresses their own re-request. Audit 2026-10-13.
+    //
+    // NO CONFIRM STEP, decided here rather than left open. This control is the PROTECTIVE direction, and
+    // friction on it is paid by children: a steward who gives up on marking somebody leaves a child the relay
+    // treats as an adult, which is the fail-OPEN outcome this code exists to prevent. The mis-tap costs an
+    // ADULT their guardian role and a no-photo entry — both repairable by hand, neither a safeguarding
+    // failure — and the steward is told at once, on the row they pressed, with every child named. The
+    // owner's standing preference is a label plus a tooltip over paragraphs, and two Approve-ish controls
+    // already share the join row, so a dialog there would land on the wrong one as often as not. What was
+    // actually wrong was the CLAIM that it was "one tap to undo"; that claim is gone, and the notice below is
+    // honest about what un-marking will not put back.
     let unlinkedFrom = [], nextG = null;
     if (!unmarking && parentSet.has(pk)) {
       nextG = {};
@@ -7081,7 +7293,7 @@ function DashMembers() {
     setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
       ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
       : (unlinkedFrom.length
-        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian.' }
+        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian. Un-marking them will not put those links back.' }
         : null));
     // With the new map when a link was removed: the unlinked children's sealed clearances are the only place
     // their phones learn who their confirmed parents are now.
@@ -7185,7 +7397,43 @@ function DashMembers() {
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
   const [reseatFor, setReseatFor] = React.useState(null);   // member who lost their 12 words and is back on a new key
-  const narrow = useStewNarrow();                           // the phone's one-row member card (memberRow) + its ⋯ sheet
+  // MEMBERS SWITCHES AT 1366, NOT THE DASHBOARD'S SHARED 760 (owner's choice, 2026-10-14).
+  //
+  // WHY 1366 AND NOT THE WIDTH WHERE THE ROW WRAPS. The desktop row survives on one line down to 1240, so
+  // 1240 looks like the switch point — and it is wrong. The IDENTITY LINE dies well before the row wraps.
+  // Measured headless on "Persephone Wilde" / "@persephonewilde", whose row is 52px at every width here:
+  //
+  //     1440   name block 302px   @handle 118px    whole
+  //     1366   name block 246.5px @handle  88.6px  whole
+  //     1280   name block 182px   @handle  24.1px  "@p…"      <- the console's own width
+  //     1240   name block 152px   @handle   0px    GONE
+  //
+  // In that band the controls still fit beside the name, so they take their width FIRST and what is left
+  // goes to the name block; below 1240 the controls wrap and hand the whole width back. Since 1e57878 a
+  // member who has a name shows no raw npub, so a collapsed handle leaves a cut-off identity on the screen
+  // carrying Child, Clear-for-youth and Block. 1366 is the lowest width where the handle is still whole.
+  //
+  // The phone card is 56px on ONE line with name AND handle whole at every width below this, so under 1366
+  // it is not a fallback for the desktop row — it is the better of the two. What it costs is real and was
+  // chosen with the numbers in hand: Child, Clear for youth, Reconnect and Block move into the ⋯ sheet.
+  // Chat stays on the row.
+  //
+  // It also retires the two-column panel below 1366, and with it the only thing wrong with it: the
+  // private-messages column is 137.5px at 900, where a conversation name overflows its card and runs under
+  // the chat icon (screenshots, 2026-10-14). The narrow branch does not draw that column at all — it folds
+  // private messages into a collapsible strip above the list — so the defect is unreachable, not patched.
+  //
+  // `useStewNarrow` has NINE callers: IdentitySwitcher (:154), StatCard (:3173), Panel (:3206),
+  // DashOverview, DashDevotionals, BulkUploadModal, THIS one, DashCheckin, DashSettings. Only this one
+  // passes an argument; the other eight keep the 760 default, so nothing else on the console changes shape.
+  // Panel is the one that nests: at 1280 its header keeps the desktop arrangement while the list below is
+  // the phone card. That is the header pill's position only, and it is correct for a wide window.
+  const narrow = useStewNarrow(1366);                       // the phone's one-row member card (memberRow) + its ⋯ sheet
+  // THE JOIN-REQUEST CARD KEEPS THE OLD 760 (owner, 2026-10-13, at 2649e2c: "one line at console width").
+  // It is a different shape from the member row — avatar, name, Approve, decline — and it still fits on one
+  // line at 1280 where the five-control member row does not. Folding it into `narrow` above put it back to
+  // two rows at 1280 and turned that fix's own test red; this keeps the two decisions independent.
+  const joinNarrow = useStewNarrow();                       // the two-row join card (phones only)
   const [moreFor, setMoreFor] = React.useState(null);       // whose ⋯ sheet (StewMemberSheet) is open, by pubkey
   const [bulkOpen, setBulkOpen] = React.useState(false);   // bulk-invite (print join slips) — bring a congregation across
   // safeguarding (child marking, youth clearance, parent links) is OWNER-ONLY at the relay — a delegated
@@ -7263,11 +7511,61 @@ function DashMembers() {
   // exists — so the throw left the click handler UNCAUGHT and the row said nothing (device round 2026-10-01,
   // Oppo: Uncaught Error … at admitMember). Still called at once (not a tick later, which every other write here
   // is too); the catch below says which failure it was.
-  const admitMember = (pk) => (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
-    .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
-      + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
-    .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
-      + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
+  // SAFEGUARDING BEFORE ADMISSION (`asChild`), the rule reseatMember has held since 2026-08-02 and which the
+  // ordinary join queue never had. Its comment states the harm plainly: "If the child marking will not save,
+  // the alternative to stopping is a child in the church whom no list names as a child — and safeguardAllows()
+  // then lets any adult DM them."
+  //
+  // Why the queue needed its own door rather than "mark them afterwards". A person waiting to join is filtered
+  // OUT of both member lists (activeM / inactiveM both carry `!pendingSet.has(m.pubkey)`), so "Mark as a child"
+  // DOES NOT EXIST for them. The safe order was not merely unusual, it was unreachable: a steward who already
+  // knew a joiner was 13 had to admit them as an adult and then go and correct it. In between, the relay's
+  // safeguardAllows() lets any member open a private message with them (`minors:<churchpub>` is the only
+  // document it reads), their own phone has no sealed clearance and falls back to that same list — which the
+  // relay refuses to serve an ordinary member, so absence READS AS ADULTHOOD — and the whole-roster back-fill
+  // above can seal {minor:false} to the key inside the window, which their phone then trusts OVER the fallback.
+  // A young person arriving on their own device off an invite is a route the owner established on 2026-08-30
+  // (reference/DOMAIN.md: "a young person can arrive by SEVERAL routes, not one"), not an edge case.
+  //
+  // NOT A POLICY. Plain Approve is unchanged and still admits; the software does not decide who is a child
+  // ("TrinityOne does not decide who is a child; it decides what follows from that mark"). This only gives the
+  // steward who already knows a way to say so first.
+  //
+  // IT FAILS CLOSED, BUT IT IS NOT "ONE TAP TO UNDO". This comment and c247462's message both said a mis-tap
+  // "is one tap to undo on the members list". That is false, measured twice over, and is corrected here
+  // because a false claim in the permanent record is worse than the bug it describes (CLAUDE.md rule 4):
+  //   · toggleMinor also adds them to the NO-PHOTO list, and un-marking deliberately LEAVES them there
+  //     (owner, reference/DOMAIN.md 2026-10-12: "marking someone as a child adds them to the no-photo list;
+  //     UN-marking them leaves them there and a steward removes it by hand"). The undo is a different
+  //     control, `toggleNoPhoto`, itself conditionally rendered.
+  //   · if the mis-tapped person is a CONFIRMED GUARDIAN, toggleMinor removes them as guardian of every one
+  //     of their children, writes a `closed` pair for each and notifies them. Un-marking restores none of it,
+  //     and the `closed` pair suppresses their own re-request. Reachable from THIS queue, because
+  //     approveGuardian does not require the parent to be admitted first.
+  // So what still holds, and all that is claimed: a mis-tap marks an adult as a child, which is the safe way
+  // to be wrong and is repairable by hand on the members list, and a mark the relay REFUSES admits nobody at
+  // all. No confirm step — the reasoning is on the guardian branch of toggleMinor.
+  //
+  // THROUGH toggleMinor, not around it, so this cannot drift from the marking every other screen uses: it is
+  // the audited path that also suppresses an existing photograph (confirmed on the phone 2026-08-27 — the
+  // relay cannot rewrite a kind-0 somebody already signed), ends any guardian role, withdraws a check-in
+  // clearance, re-seals the member's own phone, and names the person in its own refusal notice. `minorsSet`
+  // is checked first because toggleMinor is a TOGGLE: pressing it for somebody already marked would UNMARK
+  // them, which on this control would be the exact inversion of what it promises.
+  const admitMember = async (pk, asChild) => {
+    if (asChild && !minorsSet.has(pk)) {
+      let marked = null;
+      try { marked = await toggleMinor(pk); } catch (e) { marked = null; }
+      // toggleMinor has already set the failure notice, naming them. Stop: nothing has been admitted, the row
+      // is still in the queue, and the steward can press again.
+      if (!marked) return null;
+    }
+    return (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
+      .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
+        + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
+      .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
+        + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
+  };
   // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
   // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
   // eighteen round trips for a single decision.
@@ -7537,26 +7835,44 @@ function DashMembers() {
       );
     }
     return (
-      <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+      <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 12px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
+        {/* ONE ROW (owner spec, 2026-10-13): avatar · name · the controls · copy + Block. The name block's
+            flex-BASIS is what decides the wrap, because flex line-breaking uses each item's hypothetical size and
+            every other block on this row is flexShrink: 0. At 90px it let all four onto one line and then handed
+            the name whatever was left — 104.5px of the 620px column the old 2fr grid gave it, which ellipsised
+            "Persephone Wilde" and collapsed the @handle to 0px (measured 2026-10-13, headless at 1280x900, with
+            the whole-name test's fixture). At 150px, with the 3fr column this panel's grid now gives the list
+            (697.5px, 671.5px inside its padding and border), an adult row is ONE line, 52px, with the whole
+            name — and it is the @handle that
+            gives way (38.1px of its 132px). A CHILD row cannot be one line at this width whatever the floor is:
+            its controls (458.2px) plus copy + Block (111.3px) plus the avatar and the gaps need 785.5px, so copy
+            + Block drop to a second line and the row is 87px. Plain flex-wrap and px values only (no var() in
+            anything that carries the layout). */}
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', minWidth: 0 }}>
           <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {/* THE NAME WINS THE WIDTH FIGHT. At 360px the name shrank to "R…" while the handle beside it
-                showed in full (audit 2026-09-19 §E, full/portrait/07-members.png): the name was the only
-                flex item allowed to shrink. Now the name never shrinks below its own text (capped at the row
-                so a very long name still ellipsises), and it is the HANDLE that gives way — its text is in a
-                span of its own because text-overflow does not apply to an inline-flex box, only to a block
-                whose children are text. The row clips so the handle's gap cannot poke past the card. */}
+          <div style={{ flex: '1 1 150px', minWidth: 150 }}>
+            {/* THE NAME WINS THE WIDTH FIGHT — and the floor on the block ABOVE is what wins it, not this span.
+                At 360px the name shrank to "R…" while the handle beside it showed in full (audit 2026-09-19 §E,
+                full/portrait/07-members.png): the name was the only flex item allowed to shrink. Inside this
+                block that is fixed — the name is flexShrink: 0 and the HANDLE gives way, its text in a span of
+                its own because text-overflow does not apply to an inline-flex box, only to a block whose
+                children are text, and the row clips so the handle's gap cannot poke past the card. What this
+                span CANNOT do is win width the block was never given: with a 90px basis the block measured
+                104.5px and the name ellipsised anyway, on the screen carrying Child and Clear for youth. A name
+                longer than the block it sits in still ellipsises (maxWidth: 100%) — that part is deliberate. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' }}>
               <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '100%' }}>{label}</span>
               {nameHandle(m)
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 1, minWidth: 0 }} title={m.nip05 || m.npub}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>@{nameHandle(m)}</span> <Icon name="check" size={11} stroke={3} color="var(--sage)" style={{ flexShrink: 0 }} /></span>
-                : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }} title={m.npub}>{shortNpub(m.npub)}</span>}
+                : (!named
+                    /* No nicename AND no name: the short npub is the ONLY thing telling two Anonymous rows apart, so it stays. */
+                    ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }} title={m.npub}>{shortNpub(m.npub)}</span>
+                    : null)}
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
+            {m.count > 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{`${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}`}</div> : null}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, order: 3 }}>
             <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
               <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
             {confirmBlock === m.pubkey
@@ -7566,21 +7882,23 @@ function DashMembers() {
                 </React.Fragment>
               : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="shield" size={15} color="currentColor" />Block</button>}
           </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', paddingLeft: 48 }}>
-          {inactive ? <SkPill tint="ink">inactive</SkPill> : (m.count === 0 ? <SkPill tint="ink">joined</SkPill> : null)}
-          {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
-          {minorsSet.has(m.pubkey) ? <SkPill tint="clay">child</SkPill> : null}
-          {approvedSet.has(m.pubkey) ? <SkPill tint="gold">cleared for youth</SkPill> : null}
-          {(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="sage">parent: {guardians[m.pubkey].map(p => nameByPub[p] || 'linked').join(', ')}</SkPill> : null}
-          {minorsSet.has(m.pubkey) && !(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="ink">no guardian</SkPill> : null}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: '0 1 auto', minWidth: 0, order: 2 }}>
+          {inactive ? <SkPill tint="ink">inactive</SkPill> : null}
+          {/* The Child / Cleared buttons below already say "Child ✓" / "Cleared ✓", so the pills would say it twice on
+              a row that has to stay one line. A delegated steward has NO such buttons (they write minors:/approved:,
+              reserved to the church key), so for them the pill is the only place the fact appears and it stays. */}
+          {delegated && minorsSet.has(m.pubkey) ? <SkPill tint="clay">child</SkPill> : null}
+          {delegated && approvedSet.has(m.pubkey) ? <SkPill tint="gold">cleared for youth</SkPill> : null}
+          {/* A CHILD'S GUARDIAN STATE ("parent: …" / "no guardian") IS NOT ON THE ROW. It made a child's row wrap to a
+              second line (137px, then 157px against an adult's 52px). It is in the More sheet's header, where
+              memberFacts() draws it, and the Link parent / Parents action sits beneath it. */}
           {parentSet.has(m.pubkey) ? <SkPill tint="sage">parent account</SkPill> : null}
           {/* Only data an older console wrote, or a re-seat carried across, can produce this now — which is
               exactly why it must be visible: the row is the only place a steward learns of a historic link.
               Unmark and re-mark them to clear it, or unlink them from the child's row. */}
           {minorsSet.has(m.pubkey) && parentSet.has(m.pubkey) ? <SkPill tint="clay">child · still listed as a guardian</SkPill> : null}
-          <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="chat" size={15} color="currentColor" /> Chat</button>
+          <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            Chat</button>
           {/* WHAT EACH CONTROL ACTUALLY NEEDS, rather than "are you the owner". One `!delegated` wrapper used to
               hide all five of these from every delegated steward, including the two the relay would have
               accepted: Reconnect is granted by `members` (gateway.mjs, RESEAT_D) and photo suppression by
@@ -7588,32 +7906,42 @@ function DashMembers() {
               re-seat people who lost their words — the capability's own description says so — and the button
               was not on their screen. The other three write minors:/approved:/guardians:, which the relay
               really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
-          {minorNotice && minorNotice.pk === m.pubkey ? (
-            <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+          {!delegated ? (<React.Fragment>
+          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
+          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member') + (approvedSet.has(m.pubkey) ? '' : ' — this also lets them message a child privately')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
+          </React.Fragment>) : null}
+          {stewCapState('members').allowed ? (
+          <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            Reconnect</button>
+          ) : null}
+          {stewCapState('safeguarding').allowed && photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
+            /* "Photo" + a small switch: ON = this member's photo is shown, OFF = a steward has turned it off. Same
+               handler as before (toggleNoPhoto); the tooltip still says in full what a tap does. The switch is drawn
+               with plain px/colour values and NO var() in its geometry. */
+            <button role="switch" aria-checked={nophotoSet.has(m.pubkey) ? 'false' : 'true'} aria-label={nophotoSet.has(m.pubkey) ? 'Photo: off' : 'Photo: on'} onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Photos are on. Tap to turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              Photo
+              <span aria-hidden="true" data-switch={nophotoSet.has(m.pubkey) ? 'off' : 'on'} style={{ position: 'relative', display: 'inline-block', width: 26, height: 14, borderRadius: 7, flexShrink: 0, background: nophotoSet.has(m.pubkey) ? '#b9b3a8' : '#4f8a5b' }}>
+                <span style={{ position: 'absolute', top: 2, left: nophotoSet.has(m.pubkey) ? 2 : 14, width: 10, height: 10, borderRadius: 5, background: '#fff' }} />
+              </span></button>
+          ) : null}
+          {/* PARENT CONTROLS LIVE HERE. "Link parent" / "Parents" is an action in this sheet for a child
+              (memberActions, same handler), and the sheet's header carries "parent: …" / "no guardian". Children only: an adult's
+              sheet holds nothing their row does not already offer. */}
+          {minorsSet.has(m.pubkey) ? (
+            <button onClick={() => setMoreFor(m.pubkey)} aria-label={'More for ' + label} aria-haspopup="dialog" aria-expanded={moreFor === m.pubkey ? 'true' : 'false'} title="More: parent / guardian" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', fontFamily: 'var(--font-ui)' }}>
+              <Icon name="dots" size={15} color="currentColor" /></button>
+          ) : null}
+        </div>
+        </div>
+        {minorNotice && minorNotice.pk === m.pubkey ? (
+            <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
               background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
               border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
               {minorNotice.text}
             </div>
           ) : null}
-          {!delegated ? (<React.Fragment>
-          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
-          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member') + (approvedSet.has(m.pubkey) ? '' : ' — this also lets them message a child privately')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="shield" size={14} color="currentColor" /> {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
-          {minorsSet.has(m.pubkey) ? (
-            <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-              <Icon name="users" size={14} color="currentColor" /> {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
-          ) : null}
-          </React.Fragment>) : null}
-          {stewCapState('members').allowed ? (
-          <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="swap" size={14} color="currentColor" /> Reconnect</button>
-          ) : null}
-          {stewCapState('safeguarding').allowed && photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
-            <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-              <Icon name="refresh" size={14} color="currentColor" /> {nophotoSet.has(m.pubkey) ? 'Photos off ✓' : 'Turn off photo'}</button>
-          ) : null}
-        </div>
       </div>
     );
   };
@@ -7670,9 +7998,88 @@ function DashMembers() {
     </div>
   ) : null;
 
+  // ONE WAITING PERSON'S ROW, lifted out of the render so a test can draw it and press its controls.
+  // Named, like memberRow, for exactly that reason: scripts/test-slice.mjs refuses a call-shaped anchor
+  // (`pendingJoins.map(m => {`), so while this lived inline NOTHING could reach the Approve button - and
+  // the join queue is the one screen where admission happens. CLAUDE.md rule 1.
+  const joinRow = (m) => {
+              const named = !!m.name; const label = named ? m.name : 'Anonymous';
+              const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+              return (
+                <div key={m.pubkey} data-join-card="" style={joinNarrow
+                  ? { display: 'flex', flexDirection: 'column', gap: 10, padding: '11px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }
+                  : { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', padding: '7px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                  {/* ONE LINE ON THE CONSOLE (owner 2026-10-13), TWO ROWS ON A PHONE. Same switch as the member row beside it
+                      `joinNarrow`, under 760px: wide = avatar, name, Approve and the decline all on one line; narrow =
+                      the person on a row of their own, as below. NOT the same switch as the member row any more —
+                      that one is `narrow`, which turns over at 1366 (see its note at the top of DashMembers). This
+                      card is the narrower shape and still fits on one line at 1280, where the member row does not. */}
+                  {/* THE PERSON GETS A ROW OF THEIR OWN. The name used to share one line with the badge, Approve and the
+                      decline button, so on a 360px phone it was squeezed into ~100px and a real name broke mid-word.
+                      Plain flex and overflow-wrap only (no gap-dependent grid, no var() in padding): Android WebViews
+                      have dropped fancier layout before. */}
+                  <div data-join-person="" style={{ display: 'flex', alignItems: joinNarrow ? 'flex-start' : 'center', gap: 10, ...(joinNarrow ? null : { flex: '1 1 150px', minWidth: 0 }) }}>
+                    <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={joinNarrow ? 32 : 36} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{label}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
+                    </div>
+                  </div>
+                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, ...(joinNarrow ? null : { flexShrink: 0 }) }}>
+                  {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
+                      a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
+                      compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
+                      44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
+                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(joinNarrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
+                  {/* THE SAFE ORDER, MADE REACHABLE. A waiting person is filtered out of both member lists, so
+                      "Mark as a child" does not exist for them: until this control a steward who already knew a
+                      joiner was 13 had to let them in as an adult and then go and correct it, and in between the
+                      relay let any member DM them. See admitMember. OWNER-ONLY, like the marking itself — the
+                      relay rejects a delegated steward's safeguarding write, so offering it would silently no-op.
+                      Short label, consequence in the accessible name and the tooltip, per the house rule on
+                      instructional copy. */}
+                  {!delegated ? <button onClick={() => admitMember(m.pubkey, true)}
+                    aria-label={'Approve as a child: ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — marks them as a child FIRST, then lets them in. Only cleared adults and their own parents can then message them privately'}
+                    title="Mark them as a child, then let them in — so safeguarding applies from the moment they are in the church, not from whenever someone remembers"
+                    style={{ border: '1px solid color-mix(in oklab, var(--clay) 40%, var(--line))', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, ...(joinNarrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}>
+                    <Icon name="shield" size={14} color="currentColor" /> As a child</button> : null}
+                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
+                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
+                      church's keys — irreversible, from the screen a steward is fastest on. The members
+                      list has asked "are you sure" for this same action all along; the join queue never
+                      did. Audit 2026-09-02 #5.
+                      `confirmBlock` is shared with the members list, so opening one closes the other —
+                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
+                  {confirmBlock === m.pubkey
+                    ? <React.Fragment>
+                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
+                      </React.Fragment>
+                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
+                  </div>
+                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
+                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
+                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
+                  {minorNotice && minorNotice.pk === m.pubkey ? (
+                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
+                      {minorNotice.text}
+                    </div>
+                  ) : null}
+                </div>
+              );
+  };
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={narrow ? {} : { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
+      {/* 3fr, NOT 2fr (owner, 2026-10-13). The ratio is load-bearing, not taste: at 1280x900 the member row
+          needs 671.5px of content to put the avatar, the whole name, the controls and copy + Block on one line,
+          and 2fr gave it 594px — which cut "Persephone Wilde" to 104.5px and the @handle to 0px. 3fr gives
+          697.5px and a 52px row. The second track is FIXED, never conditional on dmConvos: a track that
+          collapses when a private message arrives would resize the list under the steward's cursor, mid-click,
+          on the screen whose buttons write minors:/approved: and block people. What it costs is measured: the
+          private-messages panel goes 310px -> 232.5px at 1280 and 183.3px -> 137.5px at 900. */}
+      <div style={narrow ? {} : { display: 'grid', gridTemplateColumns: '3fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
       <div className="no-scrollbar" style={narrow ? {} : { overflowY: 'auto', minHeight: 0 }}>
       {stewardRosterPanel}
       {narrow ? dmPanel : null}
@@ -7721,47 +8128,7 @@ function DashMembers() {
                 requests had the whole page pushed down — the members list, the safeguarding note and everything
                 below it were shoved off-screen behind a wall of Approve buttons. ~4 rows visible, rest scroll. */}
             <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 268, overflowY: 'auto', overscrollBehavior: 'contain' }}>
-            {pendingJoins.map(m => {
-              const named = !!m.name; const label = named ? m.name : 'Anonymous';
-              const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
-              return (
-                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
-                  </div>
-                  {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
-                      a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
-                      compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
-                      44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
-                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
-                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
-                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
-                      church's keys — irreversible, from the screen a steward is fastest on. The members
-                      list has asked "are you sure" for this same action all along; the join queue never
-                      did. Audit 2026-09-02 #5.
-                      `confirmBlock` is shared with the members list, so opening one closes the other —
-                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
-                  {confirmBlock === m.pubkey
-                    ? <React.Fragment>
-                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
-                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
-                      </React.Fragment>
-                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
-                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
-                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
-                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
-                  {minorNotice && minorNotice.pk === m.pubkey ? (
-                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
-                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
-                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
-                      {minorNotice.text}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+            {pendingJoins.map(joinRow)}
             </div>
           </div>
         ) : null}
@@ -9509,10 +9876,18 @@ function DashStewardsPanel({ church }) {
     const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
     const isBlocked = (p) => blockedSet.has(String(p || '').toLowerCase());
     const alsoMember = !!(byPub.get(pk) && byPub.get(pk).joined);
-    wrote.then((ok) => {
+    // "NO OK" IS NOT "REFUSED". The relay's OK can be lost with the socket (the app was in the background when Revoke
+    // was pressed) while the roster was written. So a false answer is checked against what the relays actually hold,
+    // and the re-key follows THAT: landed -> re-key; definitely not -> say so; cannot tell -> say that, change nothing.
+    const settle = (ok) => {
+      if (ok) return Promise.resolve('landed');
+      return Promise.resolve().then(() => window.Steward.stewardRemovalOutcome(pk)).catch(() => 'unknown');
+    };
+    wrote.then(settle).then((outcome) => {
       // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
-      // the relay still honours would only lock out the wrong person.
-      if (!ok) { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — the relay didn’t accept it, so they are STILL a steward and nothing was re-keyed. Try again.' }); return null; }
+      // the relay still honours would only lock out the wrong person. One we cannot confirm rotates nothing either.
+      if (outcome === 'not-landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
+      if (outcome !== 'landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
       const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
       const known = spKr.approved(everyone);
       const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients
@@ -9612,11 +9987,11 @@ function DashStewardsPanel({ church }) {
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', marginBottom: 7 }}>Requests to steward · {pending.length}</div>
         {pending.map(r => (
           <div key={r.pubkey} style={{ padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 7 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 11 }}>
               <SkBadge initials={niceName(r.pubkey).split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={32} radius={10} accent={SK_TINT.gold.fg} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{niceName(r.pubkey)}</div>
-                {r.name ? <div style={{ fontSize: 11.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>claims to be “{r.name}”</div> : null}
+              <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{niceName(r.pubkey)}</div>
+                {r.name ? <div style={{ fontSize: 11.5, color: 'var(--ink-2)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>claims to be “{r.name}”</div> : null}
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to steward</div>
               </div>
               {approving === r.pubkey ? null : <React.Fragment>

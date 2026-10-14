@@ -87,6 +87,7 @@ function console_({ ring = [], store = openStore(':memory:'), clock = { s: T }, 
     ${fn('function _tombstoneTargets(e)')}
     ${fn('function _forgetById(versions, byId, id, by, ts, trusted, opts)')}
     ${st('var _lastStamp = ')}
+    ${st('var _seenStamp = ')}
     ${st('var _lockedAddr = ')}
     ${fn('function _addrLocked(d)')}
     ${st('var _lastSaveFail = ')}

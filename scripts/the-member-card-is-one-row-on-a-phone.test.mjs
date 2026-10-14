@@ -51,7 +51,11 @@ import { requireFreePort } from './test-ports.mjs';
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const PORT = 8870, CDP = 9370;   // 88xx: 8868 batch-a, 8869/8871 taken; 93xx taken: 9350-9358, 9360-9364, 9366-9369, 9371, 9381, 9412
 const ROOT = new URL('..', import.meta.url).pathname;
-const VW = 360, VH = 730, LW = 730, LH = 328, DW = 1280, DH = 900;
+// DW = 1440, NOT 1280 (2026-10-14). Test 5 below guards that the DESKTOP row is unchanged, and the
+// desktop row now starts at 1366: the owner moved Members to the one-line phone card below that,
+// because at 1280 the desktop row's @handle was squeezed to 24.1px and to 0px by 1240. At 1280 this
+// test was asserting the old decision and went red on the new one. DW is used ONLY by test 5.
+const VW = 360, VH = 730, LW = 730, LH = 328, DW = 1440, DH = 900;
 const PIN = 'cedar-harbour-lamp-42';
 const FLOOR = 44;       // the codebase's touch floor
 const ROW_MAX = 72;     // the row budget: an avatar (36) with the card's padding and a 44px control beside it
@@ -392,19 +396,24 @@ test('4. pressing ⋯ on an adult opens their sheet with the card\'s actions; "M
 // ── 5. the desktop row is the row it was ──────────────────────────────────────────────────────────────────
 // Recorded at 1280x900 on 74eade2, before the change, from this harness: the accessible names of every
 // control on the row, in order, and its pills. The phone row must not have reached the desktop.
+// UPDATED 2026-10-13 (member-row compaction, deliberately): no 'joined' / 'child' / 'cleared for youth' pills (the Child ✓ /
+// Cleared ✓ buttons already say it; delegated stewards, who have no such buttons, keep the pills), and the photo
+// control is 'Photo: off' (a switch, aria-label) instead of 'Photos off ✓'. Controls and their ORDER are unchanged.
+// UPDATED again 2026-10-13 (parent controls to More, owner's decision): a CHILD's row loses 'Link parent' and the 'no guardian' pill
+// and gains 'More for <name>' (the existing sheet, which holds Link parent / Parents and states the guardian). Adults are unchanged.
 const DESKTOP = {
-  [PEOPLE.adult.name]:   { tags: ['joined'], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Persephone Wilde', 'Clear for youth work: Persephone Wilde — this also lets them message a child privately', 'Reconnect'] },
-  [PEOPLE.child.name]:   { tags: ['joined', 'child', 'no guardian'], buttons: ['Copy npub', 'Block', 'Chat', 'Unmark as a child: Ivy Whitlock', 'Clear for youth work: Ivy Whitlock — this also lets them message a child privately', 'Link parent', 'Reconnect', 'Photos off ✓'] },
-  [PEOPLE.cleared.name]: { tags: ['cleared for youth'], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Ruth Whitlock', 'Remove youth clearance from Ruth Whitlock', 'Reconnect'] },
+  [PEOPLE.adult.name]:   { tags: [], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Persephone Wilde', 'Clear for youth work: Persephone Wilde — this also lets them message a child privately', 'Reconnect'] },
+  [PEOPLE.child.name]:   { tags: [], more: true, buttons: ['Copy npub', 'Block', 'Chat', 'Unmark as a child: Ivy Whitlock', 'Clear for youth work: Ivy Whitlock — this also lets them message a child privately', 'Reconnect', 'Photo: off', 'More for Ivy Whitlock'] },
+  [PEOPLE.cleared.name]: { tags: [], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Ruth Whitlock', 'Remove youth clearance from Ruth Whitlock', 'Reconnect'] },
 };
-test('5. at 1280 wide the member row is the desktop card it was: the same controls in the same order, the same pills, no ⋯', SKIP, async () => {
+test('5. at 1440 wide the member row is the desktop card it was: the same controls in the same order, the same pills, no ⋯', SKIP, async () => {
   await setSize(DW, DH);
   try {
     for (const [name, want] of Object.entries(DESKTOP)) {
       const m = await rowOf(name);
       assert.deepEqual(m.buttons.map(b => b.label), want.buttons, `the desktop row for ${name} changed`);
       assert.deepEqual(m.tags, want.tags, `the desktop pills for ${name} changed`);
-      assert.equal(has(m, /^More for /).length, 0, `the phone's ⋯ reached the desktop row for ${name}`);
+      assert.equal(has(m, /^More for /).length, want.more ? 1 : 0, `the phone's ⋯ is wrong on the desktop row for ${name} (only a child's row carries one)`);
     }
     console.log(`    desktop rows unchanged for ${Object.keys(DESKTOP).length} members`);
   } finally { await setSize(VW, VH); }

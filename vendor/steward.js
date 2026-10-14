@@ -15350,6 +15350,32 @@ zoo`.split("\n");
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   };
   var CAREKEY_D = "trinityone/carekey:";
+  function _localNow() {
+    try {
+      const d = /* @__PURE__ */ new Date(), p = (n) => String(n).padStart(2, "0");
+      return { day: d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()), hm: p(d.getHours()) + ":" + p(d.getMinutes()) };
+    } catch (e) {
+      return { day: "", hm: "23:59" };
+    }
+  }
+  function _svcHasHappened(sv, today, nowHM) {
+    if (!sv || !sv.date) return false;
+    if (!today) return true;
+    if (sv.date !== today) return sv.date < today;
+    const t = String(sv.time || "");
+    if (!/^\d{1,2}:\d{2}$/.test(t)) return false;
+    return (t.length === 4 ? "0" + t : t) <= String(nowHM || "99:99");
+  }
+  var CARE_TEAM_UNDELETABLE = "Every church needs a care team; edit its members instead.";
+  var _careTeamNow = () => {
+    try {
+      const SM = window.StewardMeals;
+      const v = SM && SM.careTeamId && SM.careTeamId();
+      return String(v || "");
+    } catch (e) {
+      return "";
+    }
+  };
   var _sealEachFailed = [];
   async function _sealEach(payload, targets, sealTo, onProgress) {
     const keys = {};
@@ -15818,8 +15844,12 @@ zoo`.split("\n");
   async function _guardTryOn(urls, ev) {
     let rs = [];
     try {
-      rs = await Promise.allSettled(pool.publish(urls, ev).map((p) => p.then((v) => {
+      rs = await Promise.allSettled(pool.publish(urls, ev).map((p, i3) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        try {
+          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: urls[i3] } }));
+        } catch (x) {
+        }
         return v;
       })));
     } catch (e) {
@@ -16357,6 +16387,9 @@ zoo`.split("\n");
     if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
     return a[a.length - 1 >> 1];
   }
+  function _skewSecFrom(relaySec) {
+    return Math.floor(Date.now() / 1e3 - relaySec);
+  }
   async function measureRelaySkew(preferUrl) {
     if (_skewMeasuring) return _skewFlight || _relaySkewSec;
     _skewMeasuring = true;
@@ -16387,7 +16420,7 @@ zoo`.split("\n");
           proof = null;
         }
         if (proof && Number(proof.at) > 0) {
-          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - Number(proof.at)), at: Date.now(), proven: true });
+          _skewByRelay.set(url, { sec: _skewSecFrom(Number(proof.at)), at: Date.now(), proven: true });
           continue;
         }
         const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
@@ -16397,7 +16430,7 @@ zoo`.split("\n");
           if (!r.ok) continue;
           const j = await r.json();
           if (!j || typeof j.now !== "number") continue;
-          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - j.now), at: Date.now(), proven: false });
+          _skewByRelay.set(url, { sec: _skewSecFrom(j.now), at: Date.now(), proven: false });
         } catch (e) {
         }
       }
@@ -18077,12 +18110,17 @@ zoo`.split("\n");
     };
     const clear = async () => {
       purgeLegacy();
-      if (!isNative()) return;
+      if (!isNative()) return true;
       try {
         const { S } = await secure();
         await S.remove(STAY_SS);
+        const back = await S.get(STAY_SS);
+        if (back == null) return true;
+        console.warn("[steward] stay-open clear did not remove the record");
+        return false;
       } catch (e) {
         console.warn("[steward] stay-open clear failed", e);
+        return false;
       }
     };
     const blobOf = async () => {
@@ -18151,8 +18189,8 @@ zoo`.split("\n");
       async save(pin, on) {
         replayed = true;
         if (!on || !isNative()) {
-          await clear();
-          return !on;
+          const gone = await clear();
+          return !on && gone;
         }
         const blob = await blobOf();
         if (!blob) return false;
@@ -18217,8 +18255,12 @@ zoo`.split("\n");
       return false;
     }
     try {
-      await Promise.any(pool.publish(_targets, evt).map((p) => p.then((v) => {
+      await Promise.any(pool.publish(_targets, evt).map((p, i3) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        try {
+          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: _targets[i3] } }));
+        } catch (x) {
+        }
         return v;
       })));
     } catch (e) {
@@ -18377,8 +18419,12 @@ zoo`.split("\n");
     }
     let rs = [];
     try {
-      rs = await Promise.allSettled(pool.publish(targets, evt).map((p) => p.then((v) => {
+      rs = await Promise.allSettled(pool.publish(targets, evt).map((p, i3) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        try {
+          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: targets[i3] } }));
+        } catch (x) {
+        }
         return v;
       })));
     } catch (e) {
@@ -18508,6 +18554,7 @@ zoo`.split("\n");
     _regGate = null;
   }
   var _lastStamp = /* @__PURE__ */ new Map();
+  var _seenStamp = /* @__PURE__ */ new Map();
   var _lastOk = /* @__PURE__ */ new Map();
   var _lockedAddr = /* @__PURE__ */ new Set();
   function _addrLocked(d) {
@@ -18519,6 +18566,7 @@ zoo`.split("\n");
     return null;
   }
   function _noteSeenStamp(d, ts) {
+    if (d && ts > 0 && (_seenStamp.get(d) || 0) < ts) _seenStamp.set(d, ts);
     if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts);
   }
   var _lastSpread = /* @__PURE__ */ new Map();
@@ -22769,9 +22817,9 @@ zoo`.split("\n");
         }
       };
     },
-    setJoinPolicy(approval) {
+    setJoinPolicy(approval, opts) {
       if (!sk) return Promise.resolve(null);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk), opts);
     },
     // AUDIT-2026-07-28 F10. A new church published its join policy at wizard step 0 — before the relay had been
     // told the church exists. accept() refuses any kind-30078 write from a key that is not a configured church
@@ -22798,8 +22846,8 @@ zoo`.split("\n");
     async ensureJoinPolicy() {
       if (!sk) return { ok: false, reason: "no key" };
       const cp = pub;
-      const read = await new Promise((resolve) => {
-        let best = null, eosed = false, done = false;
+      const readPolicy = () => new Promise((resolve) => {
+        let best = null, counted = null, eosed = false, done = false;
         const finish = () => {
           if (done) return;
           done = true;
@@ -22807,23 +22855,39 @@ zoo`.split("\n");
             sub.close();
           } catch (e) {
           }
-          resolve({ best, eosed });
+          resolve({ best, counted, eosed });
         };
         const sub = pool.subscribeMany(relays(), [
           { kinds: [30078], authors: [cp], "#d": [JOINPOLICY_D + cp] },
           { kinds: [30078], "#church": [cp], "#d": [JOINPOLICY_D + cp] }
         ], { onevent(e) {
           if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+          if (!_authFuture(e) && (e.pubkey === cp || _careRoster.has(e.pubkey)) && (!counted || (e.created_at || 0) > (counted.created_at || 0))) counted = e;
         }, oneose() {
           eosed = true;
           finish();
         } });
         setTimeout(finish, 5e3);
       });
+      const read = await readPolicy();
       if (!read.eosed) return { ok: false, reason: "the relay did not answer" };
       if (read.best) return { ok: true, already: true };
-      const r = await window.Steward.setJoinPolicy(true);
+      const r = await window.Steward.setJoinPolicy(true, { background: true });
       if (r) return { ok: true, published: true };
+      try {
+        const again = await readPolicy();
+        const c = again.counted;
+        if (c && !(c.tags || []).some((t) => t[0] === "deleted") && c.content) {
+          let on = false;
+          try {
+            on = !!JSON.parse(c.content).approval;
+          } catch (e) {
+            on = false;
+          }
+          if (on) return { ok: true, already: true, afterRefusal: true };
+        }
+      } catch (e) {
+      }
       try {
         window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
           what: "join policy",
@@ -23095,16 +23159,19 @@ zoo`.split("\n");
       }
       const g = o.guardians || {};
       let nextG = null;
+      const relinkedChildren = [];
       if ((g[oldH] || []).length) {
         nextG = { ...g };
         nextG[newH] = [.../* @__PURE__ */ new Set([...low(g[newH]), ...low(g[oldH])])];
       }
       for (const childK of Object.keys(g)) {
         const parents = low(g[childK]);
-        if (parents.indexOf(oldH) !== -1 && parents.indexOf(newH) === -1) {
+        if (parents.indexOf(oldH) === -1) continue;
+        if (parents.indexOf(newH) === -1) {
           nextG = nextG || { ...g };
           nextG[childK] = [.../* @__PURE__ */ new Set([...low(nextG[childK] || parents), newH])];
         }
+        relinkedChildren.push(String(childK || "").toLowerCase());
       }
       const gc = o.guardiansClosed || {};
       let nextGC = null;
@@ -23140,6 +23207,20 @@ zoo`.split("\n");
         clr = null;
       }
       if (!clr || clr.failed > 0 || clr.unverified) failed.push("clearance");
+      const kidsToTell = relinkedChildren.filter((x, i3, a) => x && x !== newH && a.indexOf(x) === i3);
+      let childrenNotTold = 0;
+      if (kidsToTell.length) {
+        let kclr = null;
+        try {
+          kclr = await window.Steward.refreshClearances(kidsToTell, nextMins, nextAppr, nextG || g);
+        } catch (e) {
+          kclr = null;
+        }
+        if (!kclr || kclr.failed > 0 || kclr.unverified) {
+          failed.push("childclearance");
+          childrenNotTold = kidsToTell.length;
+        }
+      }
       const isOld = (x) => !!x && String(x.pub || "").toLowerCase() === oldH;
       let teamsMoved = 0, slotsMoved = 0, careTeamPeople = null;
       for (const r of Array.isArray(o.rosters) ? o.rosters : []) {
@@ -23200,6 +23281,11 @@ zoo`.split("\n");
         // only reachable if the block LANDED — a refusal threw above
         teamsMoved,
         rotasMoved: slotsMoved,
+        // How many children were re-sealed, and how many of those phones did NOT confirm. ReseatModal needs
+        // both: `failed` carries 'childclearance' so the sentence can be written at all, and the count is what
+        // makes it singular or plural. Zero children is zero in both, so the sentence never appears.
+        childrenToldOf: kidsToTell.length,
+        childrenNotTold,
         failed
       };
     },
@@ -23341,6 +23427,44 @@ zoo`.split("\n");
         doc.n = _stewardNamesCt;
       }
       return _landed("steward roster", _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk))));
+    },
+    // DID A REMOVAL LAND? setStewards() answers false when no relay ACKNOWLEDGED the write, and that is not the same as
+    // "no relay applied it": the OK can be lost with the socket (the app backgrounded mid-write). So read each relay's
+    // newest church-signed roster and say what is TRUE, in three words and never a guess:
+    //   'landed'     the newest roster any relay holds no longer lists them;
+    //   'not-landed' EVERY relay answered, and every one still lists them;
+    //   'unknown'    anything else (a relay silent, nothing found). Callers must not claim either way.
+    // Callers: DashStewardsPanel.remove (app/stew-dashboard.jsx), the only one.
+    async stewardRemovalOutcome(pk) {
+      const want = String(pk || "").toLowerCase();
+      if (!want || !pub) return "unknown";
+      const urls = relays();
+      if (!urls.length) return "unknown";
+      const d = STEWARDS_D + pub;
+      const reads = await Promise.all(urls.map((u) => _newestByD([{ kinds: [30078], authors: [pub], "#d": [d] }], 6e3, [u], pub, (e) => e.pubkey === pub && !_authFuture(e)).then((r) => ({ complete: r.complete, top: (r.byD.get(d) || {}).top || null }), () => ({ complete: false, top: null }))));
+      let newest = null;
+      for (const r of reads) if (r.top && _beatsDoc(r.top, newest)) newest = r.top;
+      if (!newest) return "unknown";
+      let listed = [];
+      if (!(newest.tags || []).some((t) => t[0] === "deleted") && newest.content) {
+        try {
+          listed = (JSON.parse(newest.content) || {}).pubkeys || [];
+        } catch (e) {
+          return "unknown";
+        }
+      }
+      const has = (l) => l.map((x) => String(x).toLowerCase()).includes(want);
+      if (!has(listed)) return "landed";
+      const everyoneStillListsThem = reads.every((r) => {
+        if (!r.complete || !r.top) return false;
+        if ((r.top.tags || []).some((t) => t[0] === "deleted") || !r.top.content) return false;
+        try {
+          return has((JSON.parse(r.top.content) || {}).pubkeys || []);
+        } catch (e) {
+          return false;
+        }
+      });
+      return everyoneStillListsThem ? "not-landed" : "unknown";
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
     // steward, which is every steward that existed before this feature).
@@ -24004,10 +24128,10 @@ zoo`.split("\n");
             }
             return;
           }
-          if (current && current.ts >= e.created_at) return;
+          if (current && (current.ts > e.created_at || current.ts === e.created_at && String(current.id || "") <= String(e.id || ""))) return;
           try {
             const j = JSON.parse(e.content);
-            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at };
+            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at, id: e.id };
             cb(current);
           } catch {
           }
@@ -24178,6 +24302,91 @@ zoo`.split("\n");
       const content = JSON.stringify({ pubs: people.map((p) => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
       const po = {};
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content }), po).then((ok) => ok ? { id: teamId, roles, people, pods } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
+    },
+    // ---- REMOVING A TEAM (owner, 2026-10-12; reference/DOMAIN.md "DELETE A ROSTER / ROTA TEAM") ----
+    // removeRoster is the tombstone only; removeTeam below is the whole operation and the only thing the screens call.
+    removeRoster(teamId) {
+      if (!sk || !teamId) return Promise.resolve(null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    // THE WHOLE OPERATION, in an order that fails safe:
+    //   0. REFUSE THE CARE TEAM outright (owner, 2026-10-13), and refuse before touching anything if the team, or
+    //      any UPCOMING rota that might hold its slots, is one this console cannot read (_locked). A locked roster
+    //      shows EMPTY on screen; deleting a team the steward cannot see is the roster wipe again.
+    //   1. UPCOMING rotas (a service still to happen — see _svcHasHappened) lose this team's slots, each checked for
+    //      freshness in the second before it is written. PAST services are never touched: they are the record of who
+    //      served. A service with no readable date is left alone, not guessed at.
+    //   2. Only if every rota landed: the roster tombstone, then the group tombstone.
+    //   3. Only if the group is gone: tell each person who was on an upcoming slot they are no longer needed.
+    // Any failure before 3 stops there and returns { ok:false } with nothing sent to anyone; running it again is safe
+    // (a rota that no longer holds the slots is skipped, a tombstone is idempotent). EVERY failure answer carries
+    // `rotasCleared` — how many upcoming rotas were already rewritten before it stopped — because the screens must
+    // not tell a steward "nothing happened" over people who are already off next Sunday's rota.
+    // `ctx` is what the console has READ: { rosters, rotas, services, requests, today, nowHM, careTeamId, teamName }.
+    async removeTeam(teamId, ctx) {
+      _lastSaveFail = "";
+      const c = ctx || {};
+      if (!sk || !teamId) return { ok: false, reason: "nokey" };
+      const careId = String(c.careTeamId || _careTeamNow() || "");
+      if (careId && teamId === careId) return { ok: false, reason: "care", message: CARE_TEAM_UNDELETABLE };
+      const rosters = c.rosters || [], rotas = c.rotas || [], services = c.services || [], requests = c.requests || [];
+      const lnow = _localNow();
+      const today = c.today || lnow.day;
+      const nowHM = /^\d{2}:\d{2}$/.test(String(c.nowHM || "")) ? String(c.nowHM) : lnow.hm;
+      const ros = rosters.find((r) => r && (r.team === teamId || r.id === teamId));
+      if (ros && ros._locked || _addrLocked(ROSTER_D + teamId)) return { ok: false, reason: "locked" };
+      const pfx = teamId + "::";
+      const jobs = [];
+      for (const ro of rotas) {
+        if (!ro) continue;
+        const sid = ro.service || ro.id;
+        if (!sid) continue;
+        const sv = services.find((x) => x && x.id === sid);
+        if (!sv || !sv.date || _svcHasHappened(sv, today, nowHM)) continue;
+        if (ro._locked || sv._locked || _addrLocked(ROTA_D + sid)) return { ok: false, reason: "locked" };
+        const assign = ro.assign || {};
+        const keys = Object.keys(assign).filter((k) => k.startsWith(pfx));
+        if (!keys.length) continue;
+        const next = { ...assign };
+        keys.forEach((k) => {
+          delete next[k];
+        });
+        jobs.push({ sid, sv, ro, keys, next, assign });
+      }
+      const failedRotas = [];
+      let cleared = 0;
+      for (const j of jobs) {
+        if ((_lastStamp.get(ROTA_D + j.sid) || 0) > (j.ro.ts || 0)) return { ok: false, reason: "stale", staleRotas: [j.sid], rotasCleared: cleared };
+        const r = await window.Steward.publishRota({ service: j.sid, published: !!j.ro.published, assign: j.next });
+        if (r) cleared++;
+        else failedRotas.push(j.sid);
+      }
+      if (failedRotas.length) return { ok: false, reason: "rota", failedRotas, rotasCleared: cleared };
+      if (!await window.Steward.removeRoster(teamId)) return { ok: false, reason: "roster", rotasCleared: cleared };
+      if (!await window.Steward.removeGroup(teamId)) return { ok: false, reason: "group", rotasCleared: cleared };
+      let told = 0, toldFailed = 0;
+      for (const j of jobs) for (const k of j.keys) {
+        const a = j.assign[k];
+        if (!a || !a.pub) continue;
+        const roleId = k.slice(pfx.length);
+        const old = requests.find((q) => q && !q._locked && q.serviceId === j.sid && q.teamId === teamId && q.roleId === roleId && q.memberPub === a.pub);
+        const n = await window.Steward.sendServingCancel({ id: old && old.id, memberPub: a.pub, serviceId: j.sid, teamId, roleId, role: old && old.role || "", teamName: c.teamName || old && old.teamName || "Team", date: j.sv.date, time: j.sv.time, service: j.sv.name });
+        if (n) told++;
+        else toldFailed++;
+      }
+      return { ok: true, rotasCleared: cleared, told, toldFailed };
+    },
+    // The copy for the refusal above, so both screens say the owner's words without a second copy of them.
+    CARE_TEAM_UNDELETABLE,
+    // "you are no longer needed": the request document for a slot, replaced (same d-tag) by one saying the slot is gone.
+    // Additive: `cancelled:true` is ignored by an older member app, which would keep showing its old request.
+    async sendServingCancel(req) {
+      if (!sk || !req || !req.memberPub) return null;
+      const id = req.id || "req" + Date.now().toString(36) + (++_reqSeq).toString(36) + Math.random().toString(36).slice(2, 7);
+      const doc = { serviceId: req.serviceId || "", teamId: req.teamId || "", roleId: req.roleId || "", role: req.role || "", teamName: req.teamName || "", icon: "hand", accent: "var(--clay)", date: req.date || "", time: req.time || "", service: req.service || "", from: "Your church", cancelled: true, note: "You are no longer needed on " + (req.teamName || "this team") + (req.date ? " on " + req.date : "") + "." };
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then((ok) => ok ? { id, ...doc, memberPub: req.memberPub } : null);
     },
     subscribeRosters(onRosters) {
       return this._subAddr(
@@ -25095,6 +25304,15 @@ zoo`.split("\n");
       if (_addrLocked(ROTA_D + rota.service)) return _saveFailed("locked");
       const po = {};
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content }), po).then((ok) => ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
+    },
+    // HAS A RELAY DELIVERED A NEWER COPY OF THIS ROTA THAN `ts`? Answered from `_seenStamp`, which only _noteSeenStamp
+    // (events a relay delivered, via _subAddr) writes. It must NOT read `_lastStamp`: _monotonic bumps that for our OWN
+    // write attempts at creation time, so after one refused write it would exceed the screen's `ts` for ever (no echo can
+    // refresh `ts`, nothing landed) and every later Block press would be skipped as "someone else changed it".
+    // Our own successful write is echoed back through the same subscription, which raises this map and the screen's rotas together.
+    // A missing `ts` counts as older than anything. Callers: takeOffEveryTeam (stew-dashboard.jsx) only.
+    rotaChangedSince(serviceId, ts) {
+      return (_seenStamp.get(ROTA_D + serviceId) || 0) > (Number(ts) || 0);
     },
     removeRota(serviceId) {
       if (!sk) return Promise.resolve(null);
