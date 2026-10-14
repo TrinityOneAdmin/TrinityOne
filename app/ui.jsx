@@ -428,17 +428,24 @@ function Chip({ children, active, onClick, accent = 'var(--clay)' }) {
   );
 }
 
-function SectionLabel({ children, action, onAction }) {
+function SectionLabel({ children, action, onAction, collapsed, onToggle }) {
+  // onToggle (optional) adds a fold chevron: down when open, up when folded. Callers that pass none are unchanged.
+  const label = typeof children === 'string' ? children : 'section';
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', margin: '0 0 12px' }}>
       <h2 style={{
         margin: 0, fontFamily: 'var(--font-display)', fontWeight: 700,
         fontSize: 19, color: 'var(--ink)', letterSpacing: '-.2px',
       }}>{children}</h2>
-      {action ? <button onClick={onAction} style={{
-        border: 'none', background: 'none', color: 'var(--clay)', fontWeight: 600,
-        fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)',
-      }}>{action}</button> : null}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {action ? <button onClick={onAction} style={{
+          border: 'none', background: 'none', color: 'var(--clay)', fontWeight: 600,
+          fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)',
+        }}>{action}</button> : null}
+        {onToggle ? <button onClick={onToggle} aria-expanded={!collapsed} aria-label={(collapsed ? 'Expand ' : 'Collapse ') + label} style={{
+          border: 'none', background: 'none', cursor: 'pointer', padding: 4, color: 'var(--ink-3)', display: 'flex',
+        }}><Icon name={collapsed ? 'chevU' : 'chevD'} size={18} color="currentColor" /></button> : null}
+      </span>
     </div>
   );
 }
