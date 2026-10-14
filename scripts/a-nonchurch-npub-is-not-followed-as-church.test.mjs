@@ -35,8 +35,8 @@ test('ENGINE: checkChurch is in the shipped bundle', () => {
 
 // Build a callable followChurch from the app source. Closure variables are replaced with the stubs passed in.
 function liftFollowChurch(appSrc) {
-  const body = fnBody(appSrc, 'const followChurch = (raw) =>', 'followChurch');
-  // followChurch is an arrow: `const followChurch = (raw) => { ... }` — the fnBody includes the full
+  const body = fnBody(appSrc, 'const followChurch = (raw, opts) =>', 'followChurch');
+  // followChurch is an arrow: `const followChurch = (raw, opts) => { ... }` — the fnBody includes the full
   // declaration. We need to extract just the function body and wrap it so the closure variables are injectable.
   return body;
 }

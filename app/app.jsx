@@ -890,13 +890,19 @@ function App() {
   // that followed it. The relay refuses those, but the phone still signed and queued the request and retried it.
   // The heartbeat stays out of a church while it is in here. Sim item 20, 2026-10-02.
   const unconfirmedChurches = React.useRef(new Set());
-  const followChurch = (raw) => {
+  const followChurch = (raw, opts) => {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
     const npub = m[0];
-    // RE-FOLLOW-LOOP GUARD: a church that has confirmed a block of this key is not re-followed (it would only be
-    // refused again and bounce this phone between onboarding and the block). See _isBlockedChurch in the engine.
-    if (window.Fellowship && window.Fellowship.isBlockedChurch && window.Fellowship.isBlockedChurch(npub)) { toast('That church has removed you, so it can’t be followed again from this phone. Speak to a steward.', { error: true }); return false; }
+    // RE-FOLLOW GUARD (manual retry): a church that confirmed a block of this key stays recorded so an AUTOMATIC
+    // re-follow (opts.auto) can't bounce this phone between onboarding and the block. A DELIBERATE follow — the
+    // Follow sheet, an invite link the member opened, onboarding (none pass opts.auto) — is the member choosing to
+    // rejoin: clear the note and let it through. If they are still blocked the relay refuses and the reset fires
+    // again, a user-driven cycle, not a loop. See _isBlockedChurch / _forgetBlockedChurch in the engine.
+    if (window.Fellowship && window.Fellowship.isBlockedChurch && window.Fellowship.isBlockedChurch(npub)) {
+      if (opts && opts.auto) { toast('That church has removed you, so it can’t be followed again from this phone. Speak to a steward.', { error: true }); return false; }
+      try { window.Fellowship.forgetBlockedChurch && window.Fellowship.forgetBlockedChurch(npub); } catch (e) {}
+    }
     // NETWORKS SWITCH: a code that is a network this phone already knows (a stored entry tagged kind 'network') is refused.
     // An unknown network npub is not recognisable here; it falls to checkChurch below, which finds no church for it.
     if (window.NETWORKS_ENABLED !== true && churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast('Networks aren’t available yet'); return false; }

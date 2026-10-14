@@ -9392,7 +9392,6 @@
     }
   }
   var BLOCKED_CHURCHES_KEY = "trinityone.blockedchurches";
-  var BLOCKED_CHURCH_TTL_MS = 30 * 24 * 3600 * 1e3;
   function _blockedChurchMap() {
     try {
       const o = JSON.parse(localStorage.getItem(BLOCKED_CHURCHES_KEY) || "{}");
@@ -9412,8 +9411,16 @@
   function _isBlockedChurch(npubOrHex) {
     const cp = toPub(npubOrHex);
     if (!cp) return false;
-    const at = Number(_blockedChurchMap()[String(cp).toLowerCase()] || 0);
-    return !!at && Date.now() - at < BLOCKED_CHURCH_TTL_MS;
+    return !!Number(_blockedChurchMap()[String(cp).toLowerCase()] || 0);
+  }
+  function _forgetBlockedChurch(npubOrHex) {
+    const cp = (toPub(npubOrHex) || String(npubOrHex || "")).toLowerCase();
+    try {
+      const m = _blockedChurchMap();
+      delete m[cp];
+      localStorage.setItem(BLOCKED_CHURCHES_KEY, JSON.stringify(m));
+    } catch (e) {
+    }
   }
   async function _checkIfBlocked() {
     if (_amBlocked || _amBlockedChecking || !pub) return;
@@ -10041,6 +10048,9 @@
     },
     isBlockedChurch(npubOrHex) {
       return _isBlockedChurch(npubOrHex);
+    },
+    forgetBlockedChurch(npubOrHex) {
+      return _forgetBlockedChurch(npubOrHex);
     },
     refetchChurchDocs,
     // force church-doc hubs to re-fetch on app resume (updates without a full restart)

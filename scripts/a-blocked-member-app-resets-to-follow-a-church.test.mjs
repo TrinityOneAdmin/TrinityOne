@@ -12,13 +12,15 @@
 //   APP     — the REAL App() from app/app.jsx (app-screens.mjs loads every script index.html lists). The engine's
 //             subscribeAmBlocked callback is captured and fired; the church must leave the list, the active church
 //             must move off it, the follow-a-church sheet must open, and the engine must be told to move on.
-//   GUARD   — the REAL followChurch from that App refuses a church the guard holds.
+//   GUARD   — the REAL followChurch from that App. Manual retry (owner 2026-10-14): a DELIBERATE follow of a
+//             blocked church clears the note and follows it (one-tap rejoin); only an AUTOMATIC re-follow
+//             (opts.auto) is refused. No timer.
 // Rule 3: nothing here matches text in app/*.jsx.
 //
 // Users of the shared code (rule 2): subscribeAmBlocked had ONE consumer (App, whose dead-end overlay this replaces);
 // _checkIfBlocked is called from _publishAny and _outboxFlush on a "blocked" refusal (unchanged). followChurch's
-// callers (the follow sheet, deep links, onboarding) all pass through the new guard — it only refuses a church the
-// phone has itself recorded as blocking it.
+// callers (the follow sheet, deep links, onboarding) pass no opts.auto, so each is a deliberate rejoin that clears
+// the note; the note refuses only a programmatic re-follow that marks itself opts.auto.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -37,7 +39,7 @@ function engine({ events = [], store = {} } = {}) {
   const win = { Fellowship: { churchPub: CP } };
   const pool = { querySync: async () => events };
   const f = new Function('pub', 'pool', 'churchRelays', 'toPub', 'window', 'localStorage',
-    body + '\nreturn { check: _checkIfBlocked, amBlocked: () => _amBlocked, isBlockedChurch: _isBlockedChurch, subs: _blockedSubs, notify: _notifyBlocked };')
+    body + '\nreturn { check: _checkIfBlocked, amBlocked: () => _amBlocked, isBlockedChurch: _isBlockedChurch, forgetBlocked: _forgetBlockedChurch, subs: _blockedSubs, notify: _notifyBlocked };')
     (ME, pool, () => ['wss://r'], (x) => (/^[0-9a-f]{64}$/i.test(String(x)) ? String(x).toLowerCase() : null), win, localStorage);
   const fired = [];
   f.subs.add((flag, cp) => fired.push([flag, cp]));
@@ -70,12 +72,16 @@ test('ENGINE: nothing short of confirmation flips it — no document, a list not
   }
 });
 
-test('GUARD: an entry older than 30 days has lapsed, so a member a church later unblocks is not locked out for ever', () => {
-  const old = engine({ store: { 'trinityone.blockedchurches': JSON.stringify({ [CP]: Date.now() - 31 * 24 * 3600 * 1000 }) } });
-  assert.equal(old.isBlockedChurch(CP), false);
-  const fresh = engine({ store: { 'trinityone.blockedchurches': JSON.stringify({ [CP]: Date.now() - 24 * 3600 * 1000 }) } });
-  assert.equal(fresh.isBlockedChurch(CP), true, 'control: a day-old entry must still refuse');
-  assert.equal(fresh.isBlockedChurch(OTHER), false, 'the guard is per church');
+test('GUARD: the note NEVER expires (no timer) and is cleared only by forgetBlockedChurch — the manual retry', () => {
+  // A year-old entry must STILL refuse: with manual-retry there is no 30-day lapse. The owner's decision
+  // (2026-10-14) is that a member a church unblocks rejoins by TAPPING follow, which clears the note, not by
+  // waiting out a timer.
+  const e = engine({ store: { 'trinityone.blockedchurches': JSON.stringify({ [CP]: Date.now() - 400 * 24 * 3600 * 1000 }) } });
+  assert.equal(e.isBlockedChurch(CP), true, 'an old entry lapsed — there must be NO timer any more');
+  assert.equal(e.isBlockedChurch(OTHER), false, 'the guard is per church');
+  e.forgetBlocked(CP);
+  assert.equal(e.isBlockedChurch(CP), false, 'forgetBlockedChurch did not clear the note — the manual retry cannot work');
+  assert.equal(e.store['trinityone.blockedchurches'], '{}', 'the entry was not removed from storage');
 });
 
 // ── APP: the real App() ────────────────────────────────────────────────────────────────────────────────────
@@ -94,6 +100,7 @@ function boot({ blockedGuard = () => false } = {}) {
   window.Fellowship = new Proxy({
     myPubkey: 'dd'.repeat(32), CANONICAL_RELAYS: [], hasRelays: true, toPub: (x) => x,
     isBlockedChurch: (x) => blockedGuard(x),
+    forgetBlockedChurch: (x) => { (calls.forgetBlockedChurch = calls.forgetBlockedChurch || []).push(x); },
     subscribeAmBlocked: (cb) => { blockedCb = cb; cb(false, ''); return () => {}; },
     forgetChurch: (x) => { (calls.forgetChurch = calls.forgetChurch || []).push(x); },
     ackAmBlocked: () => { calls.ack = (calls.ack || 0) + 1; },
@@ -146,14 +153,20 @@ test('APP: nothing happens on the "not blocked" signal — the reset keys off th
   assert.equal(m.calls.forgetChurch, undefined);
 });
 
-test('GUARD AT THE POINT OF USE: the real followChurch refuses a church the phone has recorded as blocking it', async () => {
+test('MANUAL RETRY AT THE POINT OF USE: a deliberate followChurch of a blocked church clears the note and follows; an AUTOMATIC re-follow is refused', async () => {
   const blocked = boot({ blockedGuard: () => true });
   await settle(blocked);
   const OTHERNPUB = 'npub1' + '3'.repeat(58);
+  // an AUTOMATIC re-follow (opts.auto) of a church the guard holds is still refused — the bounce loop stays shut
   const before = ctxOf(blocked.draw()).churches.length;
-  assert.equal(ctxOf(blocked.draw()).followChurch(OTHERNPUB), false, 'a church the guard holds was followed again — the bounce loop is open');
-  assert.equal(ctxOf(blocked.draw()).churches.length, before);
-  // control, same App, guard open: the same code follows it, so the refusal above is the guard and nothing else
+  assert.equal(ctxOf(blocked.draw()).followChurch(OTHERNPUB, { auto: true }), false, 'an automatic re-follow of a blocked church was allowed — the bounce loop is open');
+  assert.equal(ctxOf(blocked.draw()).churches.length, before, 'the auto re-follow still added the church');
+  assert.equal((blocked.calls.forgetBlockedChurch || []).length, 0, 'an auto re-follow must NOT clear the note');
+  // a DELIBERATE follow (no opts.auto) is the member choosing to rejoin: clear the note and follow it — one-tap rejoin
+  ctxOf(blocked.draw()).followChurch(OTHERNPUB);
+  assert.ok((blocked.calls.forgetBlockedChurch || []).includes(OTHERNPUB), 'a manual follow did not clear the block note');
+  assert.equal(ctxOf(blocked.draw()).churches.length, before + 1, 'a manual follow of a blocked church did not follow it — the owner wants one-tap rejoin');
+  // control, same App, guard open: the same code follows it, so the guard is the only thing in play
   const open = boot({ blockedGuard: () => false });
   await settle(open);
   const n0 = ctxOf(open.draw()).churches.length;

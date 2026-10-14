@@ -3110,10 +3110,10 @@ function _notifyBlocked() { for (const fn of [..._blockedSubs]) { try { fn(_amBl
 // onboarding and the block for ever. So the church is kept in a small local map {churchHex: blockedAtMs} under
 // trinityone.blockedchurches, and followChurch (app.jsx) refuses a church that is in it. It is NOT a security control
 // (the relay is — it refuses a blocked reader everything private) and it survives _forgetChurch, whose sweep only
-// removes keys containing the church id. It EXPIRES after 30 days so a member the church later unblocks is not
-// locked out of it for ever by a stale phone; a steward re-adding someone is a human decision this list cannot see.
+// removes keys containing the church id. It does NOT expire: it is cleared the moment the member DELIBERATELY
+// re-follows the church (manual retry — _forgetBlockedChurch, called from followChurch in app.jsx), so a member
+// a church later unblocks is back in with one tap, while a programmatic/automatic re-follow stays refused.
 const BLOCKED_CHURCHES_KEY = 'trinityone.blockedchurches';
-const BLOCKED_CHURCH_TTL_MS = 30 * 24 * 3600 * 1000;
 function _blockedChurchMap() {
   try { const o = JSON.parse(localStorage.getItem(BLOCKED_CHURCHES_KEY) || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; }
 }
@@ -3122,8 +3122,11 @@ function _noteBlockedChurch(cp) {
 }
 function _isBlockedChurch(npubOrHex) {
   const cp = toPub(npubOrHex); if (!cp) return false;
-  const at = Number(_blockedChurchMap()[String(cp).toLowerCase()] || 0);
-  return !!at && Date.now() - at < BLOCKED_CHURCH_TTL_MS;
+  return !!Number(_blockedChurchMap()[String(cp).toLowerCase()] || 0);   // recorded == blocked; no expiry (manual retry clears it)
+}
+function _forgetBlockedChurch(npubOrHex) {
+  const cp = (toPub(npubOrHex) || String(npubOrHex || '')).toLowerCase();
+  try { const m = _blockedChurchMap(); delete m[cp]; localStorage.setItem(BLOCKED_CHURCHES_KEY, JSON.stringify(m)); } catch (e) {}
 }
 async function _checkIfBlocked() {
   if (_amBlocked || _amBlockedChecking || !pub) return;
@@ -3861,6 +3864,7 @@ window.Fellowship = {
   // The app calls this once it has dropped the church and shown "follow a church", so the NEXT church can be checked.
   ackAmBlocked() { _amBlocked = false; _blockedCp = ''; _notifyBlocked(); },
   isBlockedChurch(npubOrHex) { return _isBlockedChurch(npubOrHex); },
+  forgetBlockedChurch(npubOrHex) { return _forgetBlockedChurch(npubOrHex); },
   refetchChurchDocs,   // force church-doc hubs to re-fetch on app resume (updates without a full restart)
   CANONICAL_RELAY,
   CANONICAL_RELAYS,
