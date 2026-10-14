@@ -207,6 +207,83 @@ window.safeImgUrl = function (v) {
   }
   // The credit that must appear wherever these references are shown (CC BY obliges attribution).
   function crossrefLicense(){ for(const a in crossrefs) if(crossrefs[a].license) return crossrefs[a].license; return ""; }
+
+  // ── word definitions (WordNet, filtered to the shipped Bibles' vocabulary) — a JSON module, like cross-refs ──
+  // The Strong's lexicon only answers on TAGGED Bibles; this works on any English text (BSB, an imported
+  // translation) because it looks a plain word up. Module shape (scripts/build-worddefs.mjs):
+  //   { meta:{abbr,name,license,kind:"worddef"}, defs:{ head:[[pos,gloss],…] }, forms:{ inflected:head } }
+  // It is catalogued under "dictionaries" so the Library lists (and can remove) it, but it is kind "worddef",
+  // NOT "dict": it is never added to `dicts`, so Strong's lex()/searchDict() do not see it.
+  const worddefs = {};   // abbr -> { name, license, defs, forms }
+  // "idle" (never asked) | "loading" | "ready" | "failed" — what the Define sheet shows while it waits.
+  let _worddefsState = "idle";
+  function loadWorddefsJSON(obj, abbr){
+    const a = (obj && obj.meta && obj.meta.abbr) || abbr || "WN";
+    worddefs[a] = { name: (obj && obj.meta && obj.meta.name) || a, license: (obj && obj.meta && obj.meta.license) || "",
+                    defs: (obj && obj.defs) || {}, forms: (obj && obj.forms) || {} };
+    _worddefsState = "ready";
+    notify();
+    return a;
+  }
+  function removeWorddefs(abbr){ delete worddefs[abbr]; _worddefsRequested = false; _worddefsState = "idle"; }
+  function worddefsLicense(){ for(const a in worddefs) if(worddefs[a].license) return worddefs[a].license; return ""; }
+  function worddefsState(){ return Object.keys(worddefs).length ? "ready" : _worddefsState; }
+  // Light fallback for a word the module has no form for: strip a common ending, restore a dropped e, undouble.
+  function _wdStems(w){
+    const out = [];
+    const add = s => { if(s && s.length > 1 && s !== w && out.indexOf(s) === -1) out.push(s); };
+    if(/ies$/.test(w)) add(w.slice(0, -3) + "y");
+    if(/ied$/.test(w)) add(w.slice(0, -3) + "y");
+    if(/(ches|shes|xes|zes|sses)$/.test(w)) add(w.slice(0, -2));
+    if(/s$/.test(w) && !/ss$/.test(w)) add(w.slice(0, -1));
+    for(const suf of ["ing", "ed", "er", "est"]){
+      if(w.length > suf.length + 2 && w.slice(-suf.length) === suf){
+        const stem = w.slice(0, -suf.length);
+        add(stem); add(stem + "e");
+        if(/([bdgklmnprt])\1$/.test(stem)) add(stem.slice(0, -1));
+      }
+    }
+    if(/ily$/.test(w)) add(w.slice(0, -3) + "y");
+    if(/ly$/.test(w)) add(w.slice(0, -2));
+    return out;
+  }
+  // One word -> { word, head, senses:[{pos,gloss}], license } or null. `head` differs from `word` when the word was
+  // an inflection ("loved" -> "love"); the sheet shows that. Lazily installs the module on first use.
+  function getDefinition(word){
+    ensureWorddefs();
+    let w = String(word == null ? "" : word).toLowerCase().replace(/\u2019/g, "\x27").replace(/^[^a-z]+|[^a-z]+$/g, "");
+    w = w.replace(/\x27s$/, "");
+    if(!w) return null;
+    for(const a in worddefs){
+      const d = worddefs[a];
+      let head = d.forms[w] || (d.defs[w] ? w : null);
+      if(!head){ const st = _wdStems(w); for(let i = 0; i < st.length; i++){ const h = d.forms[st[i]] || (d.defs[st[i]] ? st[i] : null); if(h){ head = h; break; } } }
+      if(head && d.defs[head]) return { word: w, head, senses: d.defs[head].map(s => ({ pos: s[0], gloss: s[1] })), license: d.license };
+    }
+    return null;
+  }
+  const _WD_STOP = new Set(("a about above after again against all also am an and any are as at be because been before being below between both but by " +
+    "can cannot could did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself " +
+    "me more most my myself no nor not of off on once only or other our ours ourselves out over own same she should so some such than that the their theirs them themselves then " +
+    "there these they this those through to too under until up upon us very was we were what when where which while who whom whose why will with would you your yours yourself yourselves " +
+    "thou thee thy thine ye hath hast hadst doth dost didst art wast wert shalt wilt canst shouldest wouldest couldest unto yea nay lo behold shall may might must let yet else whether " +
+    "ever every even just now one two three four five six seven eight nine ten amid among").split(/\s+/));
+  // A verse's plain text -> the definable words in order of appearance (no stopwords, no 1-2 letter words, one per
+  // headword). Pure apart from the dictionary lookup, which is why it is the thing the tests lift.
+  function defineText(text){
+    const plain = String(text == null ? "" : text).replace(/<[^>]*>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/\b[GH]\d{1,5}\b/g, " ");
+    const toks = plain.match(/[A-Za-z]+(?:[\x27\u2019][A-Za-z]+)?/g) || [];
+    const out = [], seenWord = new Set(), seenHead = new Set();
+    for(const t of toks){
+      const w = t.toLowerCase().replace(/\u2019/g, "\x27").replace(/\x27s$/, "");
+      if(w.length < 3 || _WD_STOP.has(w) || seenWord.has(w)) continue;
+      seenWord.add(w);
+      const d = getDefinition(w);
+      if(!d || seenHead.has(d.head)) continue;
+      seenHead.add(d.head); out.push(d);
+    }
+    return out;
+  }
   // PERF-AUDIT-2026-07-20 MEDIUM-2: the full Strong's dictionary (modules/strongs-dict.json — 4.01 MB raw,
   // 958 KB gzipped) used to install UNCONDITIONALLY on first run. That was 19% of the entire cold-start wire
   // cost — about 153 SECONDS on 2G — for a feature the auto-installed default Bible (BSB) doesn't even
@@ -812,6 +889,32 @@ window.safeImgUrl = function (v) {
     }catch(err){ _crossrefsRequested = false; console.warn("crossrefs install failed", err); }
   }
 
+  const DEFAULT_WORDDEFS = { id: "worddefs-wordnet", abbr: "WN", name: "Word Definitions (WordNet)",
+    kind: "worddef", format: "JSON", category: "dictionaries", url: "modules/worddefs-wordnet.json" };
+  // Same lazy, idempotent, self-healing shape as ensureCrossrefs. Fired by the first Define tap, so a member who
+  // never taps Define never downloads it. A failure clears the flag so the next tap (or retryWorddefs) retries.
+  let _worddefsRequested = false;
+  function ensureWorddefs(){
+    // "failed" does NOT retry by itself: the Define sheet looks up during render, so a retry-on-render would loop
+    // (fail -> notify -> render -> retry). A retry is a deliberate act: retryWorddefs(), or opening the sheet again.
+    if(_worddefsRequested || _worddefsState === "failed" || Object.keys(worddefs).length || typeof navigator === "undefined") return;
+    _worddefsRequested = true; _worddefsState = "loading";
+    const fail = err => { _worddefsRequested = false; _worddefsState = "failed"; console.warn("worddefs install failed", err); notify(); };
+    // Deferred a tick: the Define sheet looks words up DURING RENDER, and installModule notifies synchronously.
+    Promise.resolve().then(() => {
+      try{
+        // Recorded as installed: boot's restoreInstalled loads it. But a record whose bytes were evicted loads
+        // nothing and would leave the sheet on "loading" for ever, so check the bytes and re-download if gone.
+        if(isInstalled(DEFAULT_WORDDEFS.url)){
+          cacheGet(DEFAULT_WORDDEFS.url).then(b => b ? null : installModule(DEFAULT_WORDDEFS).then(notify)).catch(fail);
+          return;
+        }
+        installModule(DEFAULT_WORDDEFS).then(notify).catch(fail);
+      }catch(err){ fail(err); }
+    });
+  }
+  function retryWorddefs(){ _worddefsRequested = false; _worddefsState = "idle"; ensureWorddefs(); }
+
   // ── catalog + installed-module registry (download-once, MySword style) ──
   const INSTALLED_KEY = "trinityone.installed";   // localStorage map: url -> meta
   const installing = new Set();              // urls currently downloading
@@ -819,7 +922,7 @@ window.safeImgUrl = function (v) {
 
   function getInstalled(){ try{ return JSON.parse(localStorage.getItem(INSTALLED_KEY) || "{}"); }catch(e){ return {}; } }
   function setInstalled(map){ try{ localStorage.setItem(INSTALLED_KEY, JSON.stringify(map)); }catch(e){} }
-  function catOf(item){ return item.category || (item.kind === "crossref" ? "crossrefs" : item.kind === "dict" ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
+  function catOf(item){ return item.category || (item.kind === "crossref" ? "crossrefs" : (item.kind === "dict" || item.kind === "worddef") ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
   // A RECORD MUST NAME THE MODULE THE ENGINE REGISTERED, NOT THE ONE THE CATALOGUE ASKED FOR.
   // addSource/addCommentary/addDict have always deduped a colliding name (NT -> NT2), and the record kept
   // the catalogue's regardless, so two modules sharing one catalogue abbr produced two records saying the
@@ -916,6 +1019,8 @@ window.safeImgUrl = function (v) {
         const parsed = JSON.parse(new TextDecoder().decode(bytes));
         loaded = (item.kind === "crossref")
           ? { kind: "crossref", abbr: loadCrossrefsJSON(parsed, item.abbr) }
+          : (item.kind === "worddef")
+          ? { kind: "worddef", abbr: loadWorddefsJSON(parsed, item.abbr) }
           : { kind: "dict", abbr: loadDictJSON(parsed, item.abbr) };
       }else{
         // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
@@ -986,8 +1091,12 @@ window.safeImgUrl = function (v) {
         // only knowable once the module is loaded, which is here, so the repair happens on the next launch
         // and costs a localStorage write only when the two actually differ.
         if((meta.format || "").toUpperCase() === "JSON") {
-          const raw = bytes, u = url, isXr = meta.kind === "crossref";
-          _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u,
+          const raw = bytes, u = url, isXr = meta.kind === "crossref", isWd = meta.kind === "worddef";
+          // A word-definitions module is NOT a dictionary: it is parsed straight into `worddefs` (never queued in
+          // _pendingDicts, so removeDict has nothing to find and lex() never sees it), but it is filed under
+          // "dictionaries" so the Library lists it with them.
+          if(isWd) noteLoadedFrom(u, loadWorddefsJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries");
+          else _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u,
             isXr ? loadCrossrefsJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr)
                  : loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr),
             isXr ? "crossrefs" : "dictionaries") });
@@ -1157,7 +1266,8 @@ window.safeImgUrl = function (v) {
     const here = urlOf[urlKey(cat, abbr)];
     const loadedHere = !url || !here || here === url;
     if(loadedHere){
-      if(cat === "commentaries") delete commentaries[abbr];
+      if(meta && meta.kind === "worddef") removeWorddefs(abbr);
+      else if(cat === "commentaries") delete commentaries[abbr];
       else if(cat === "dictionaries") removeDict(abbr, url);
       else if(modules[abbr]){ delete modules[abbr]; order = order.filter(a => a !== abbr); }
       if(here === url) delete urlOf[urlKey(cat, abbr)];
@@ -1342,7 +1452,7 @@ window.safeImgUrl = function (v) {
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
+    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 

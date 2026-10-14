@@ -487,7 +487,8 @@ test('a rolled passage is never offered the per-verse actions', () => {
   R.pressTitled('Add the next verse');
   assert.equal(R.cardCount(), '2 verses selected',
     'the card counted only the verse on screen, so a passage spanning two chapters looked like a single verse');
-  assert.deepEqual(R.actionLabels(), ['Copy', 'Share'],
+  // Define (2026-10-14) acts on the passage's TEXT, not on one verse's anchor, so it is offered for a rolled passage too.
+  assert.deepEqual(R.actionLabels(), ['Copy', 'Share', 'Define'],
     'a passage that has crossed a chapter line was offered per-verse actions anchored on the wrong chapter. ' +
     'Found: ' + JSON.stringify(R.actionLabels()));
 });
@@ -595,13 +596,14 @@ test('the + stacks across TWO chapter lines, and the − unwinds them one at a t
 // Owner: cross-references and commentary live in the Study panel now, so the card carries only Bookmark /
 // Copy / Share (+ "Share note" when the verse has one). Tiles were icon 21, padding 14px 6px, gap 7, label
 // 12px; they are now x0.75 (15.75, 10.5px 4.5px, 5, 9px). Read off the REAL ReadScreen's real card.
-test('the verse card offers only Bookmark / Copy / Share, and those tiles are 25% smaller', () => {
+// 2026-10-14: the owner added Define (word definitions) after Share; same tile size, so the grid is Bookmark / Copy / Share / Define.
+test('the verse card offers only Bookmark / Copy / Share / Define, and those tiles are 25% smaller', () => {
   const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
   R.tapVerse(5);
-  assert.deepEqual(R.actionLabels(), ['Bookmark', 'Copy', 'Share'],
-    'the card should carry exactly Bookmark / Copy / Share; found ' + JSON.stringify(R.actionLabels()));
+  assert.deepEqual(R.actionLabels(), ['Bookmark', 'Copy', 'Share', 'Define'],
+    'the card should carry exactly Bookmark / Copy / Share / Define; found ' + JSON.stringify(R.actionLabels()));
   const tiles = find(R.tree(), x => x.type === 'button' && x.props && x.props.style && x.props.style.borderRadius === 16);
-  assert.equal(tiles.length, 3);
+  assert.equal(tiles.length, 4);
   for (const b of tiles) {
     assert.equal(b.props.style.padding, '10.5px 4.5px', 'tile padding is not 0.75 x 14px 6px');
     assert.equal(b.props.style.gap, 5, 'tile gap is not ~0.75 x 7');

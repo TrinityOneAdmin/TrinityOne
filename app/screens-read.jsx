@@ -154,10 +154,12 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
   const acts = isMulti ? [
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
+    { ic: 'book', label: 'Define', fn: ctx._define },
   ] : [
     { ic: 'bookmark', label: bookmarked ? 'Saved' : 'Bookmark', fn: ctx._bm, active: bookmarked },
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
+    { ic: 'book', label: 'Define', fn: ctx._define },
     ...(hasNote ? [{ ic: 'pen', label: 'Share note', fn: ctx._shareNote }] : []),
   ];
   return (
@@ -190,7 +192,8 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
           border: '2px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)',
         }}><Icon name="x" size={13.5} /></button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
+      {/* 4 tiles sit in one row; 3 or 5 (with "Share note") keep the three-column grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(' + (acts.length === 4 ? 4 : 3) + ',1fr)', gap: 10 }}>
         {acts.map(a => (
           <button key={a.label} onClick={a.fn} style={{
             border: '1px solid var(--line)', background: a.active ? 'var(--clay-soft)' : 'var(--surface-2)',
@@ -272,6 +275,67 @@ function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack }) 
           </div>
         </React.Fragment>}
       </div> : null}
+    </BottomSheet>
+  );
+}
+
+// ── define (plain-English meanings of the words in the selected verse; WordNet module, downloaded on first tap) ──
+// Works on ANY English text, tagged or not — it is the path for BSB, which has no Strong's numbers. Deliberately
+// separate from WordStudySheet/openWord (the Strong's path): that one is keyed by a Strong's id, this one by a word.
+const POS_NAME = { n: 'noun', v: 'verb', adj: 'adjective', adv: 'adverb' };
+function DefineSheet({ label, text, open, onClose }) {
+  const [, force] = useS(0);
+  const [pick, setPick] = useS(0);
+  useE(() => (window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), []);
+  useE(() => { if (open) setPick(0); }, [open, text]);
+  const B = window.Bible;
+  // Opening the sheet again after a failed download is a deliberate retry (a retry on every render would loop).
+  useE(() => { if (open && B.worddefsState && B.worddefsState() === 'failed') B.retryWorddefs(); }, [open]);
+  const words = open && B.defineText ? B.defineText(text).slice(0, 80) : [];
+  const state = B.worddefsState ? B.worddefsState() : 'ready';
+  const cur = words.length ? words[Math.min(pick, words.length - 1)] : null;
+  const licence = (B.worddefsLicense && B.worddefsLicense()) || (cur && cur.license) || '';
+  const note = { fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px', lineHeight: 1.5 };
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Define a word</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div></div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {words.length ? (
+        <React.Fragment>
+          <div data-testid="define-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7, maxHeight: 128, overflowY: 'auto', marginBottom: 14 }}>
+            {words.map((w, i) => {
+              const on = cur === w;
+              return <button key={w.word} onClick={() => setPick(i)} aria-pressed={on} style={{
+                border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface-2)',
+                color: on ? 'var(--on-clay)' : 'var(--ink)', borderRadius: 999, padding: '7px 13px', fontSize: 14, fontWeight: 600,
+                fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{w.word}</button>;
+            })}
+          </div>
+          <div data-testid="define-senses">
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
+              {cur.word}{cur.head !== cur.word ? <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}>{' → ' + cur.head}</span> : null}
+            </div>
+            {cur.senses.map((s, i) => (
+              <p key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', margin: '0 0 9px' }}>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{(POS_NAME[s.pos] || s.pos) + ' · '}</span>{s.gloss}
+              </p>
+            ))}
+          </div>
+        </React.Fragment>
+      ) : state === 'failed' ? (
+        <div style={note}>
+          <p style={{ margin: '0 0 12px' }}>Couldn't download the dictionary. It needs a connection the first time; after that it works offline.</p>
+          <button onClick={() => B.retryWorddefs && B.retryWorddefs()} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '10px 18px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Try again</button>
+        </div>
+      ) : state !== 'ready' ? (
+        <p style={note}>Downloading dictionary…</p>
+      ) : (
+        <p style={note}>No common words to define in this passage.</p>
+      )}
+      {licence ? <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>{licence}</div> : null}
     </BottomSheet>
   );
 }
@@ -1126,6 +1190,7 @@ function ReadScreen({ ctx }) {
     _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
+    _define: () => setSheet('define'),   // back to 'action' on close, so the selection survives
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: notes[keyOf(sel0)] || '' }); },
     // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
     // before" and "+ after", and the comment that lived on this line said they were needed because "the
@@ -1329,6 +1394,7 @@ function ReadScreen({ ctx }) {
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
+      <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} open={sheet === 'define'} onClose={() => setSheet('action')} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
       {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}

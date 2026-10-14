@@ -201,6 +201,10 @@ function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, 
     fnBody(ENGINE, 'function hasDict(abbr){'),
     fnBody(ENGINE, 'function removeDict(abbr, url){'),
     fnBody(ENGINE, 'function loadDictJSON(obj, abbr){'),
+    // word definitions (WordNet): a JSON module filed under "dictionaries" but NOT in `dicts`
+    'const worddefs = {}; let _worddefsState = "idle"; let _worddefsRequested = false;',
+    fnBody(ENGINE, 'function loadWorddefsJSON(obj, abbr){'),
+    fnBody(ENGINE, 'function removeWorddefs(abbr){'),
     fnBody(ENGINE, 'function addCommentary(src){'),
     fnBody(ENGINE, 'function addSource(src){'),
     fnBody(ENGINE, 'function applyMeta(src, meta){'),
@@ -267,7 +271,7 @@ function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, 
   const loc = { search };   // mutable, so a test can drive a second launch with a different query string
   const api = new Function('indexedDB', 'localStorage', 'console', 'FIXTURE', 'window', 'requestIdleCallback', 'location',
     parts.join('\n') +
-    '\nreturn { modules, dicts, _pendingDicts, commentaries, installing, addDict, _ensureDicts, loadDictJSON,' +
+    '\nreturn { worddefs, modules, dicts, _pendingDicts, commentaries, installing, addDict, _ensureDicts, loadDictJSON,' +
     ' addCommentary, addSource, cacheGet, cachePut, cacheKeys, cacheDelete, getInstalled, recordInstalled,' +
     ' isInstalled, isLoaded, removeModule, getCommentary, lex, searchDict, cacheHas, noteRegisteredAbbr, installModule, setInstalled,' +
     ' noteLoadedFrom, activeUrl: () => (active && urlOf[urlKey("bibles", active)]) || null,' +
@@ -1357,4 +1361,47 @@ test('isLoaded is false for a module whose record survived but whose bytes did n
   assert.equal(e2.isInstalled(BIBLE.url), true, 'the record should survive');
   assert.equal(e2.isLoaded(BIBLE.url), false,
     'isLoaded should be false for a module whose bytes are not loaded into memory');
+});
+
+// ── WORD DEFINITIONS (WordNet) — a JSON module of kind "worddef", filed under "dictionaries" ─────────────
+// Owner 2026-10-14: it must be visible in Library -> Dictionaries AND removable there. It is NOT a Strong's
+// dictionary: it never goes into `dicts`, so lex()/searchDict() cannot see it. The three tests drive the real
+// installModule / restoreInstalled / removeModule and the real Remove button.
+const WORDDEF = { id: 'worddefs-wordnet', abbr: 'WN', name: 'Word Definitions (WordNet)', kind: 'worddef', format: 'JSON', category: 'dictionaries', url: 'modules/worddefs-wordnet.json' };
+FIXTURE.set('worddefs-wordnet.json', { kind: 'worddef', bytes: new TextEncoder().encode(JSON.stringify(
+  { meta: { abbr: 'WN', name: 'Word Definitions (WordNet)', license: 'WordNet 3.0', kind: 'worddef' }, defs: { love: [['v', 'have affection']] }, forms: { loved: 'love' } })) });
+
+test('WORDDEF: installs into worddefs, never into the Strong\'s dictionaries, and is listed under Dictionary', async () => {
+  const e = await phone({ modules: [BIBLE, DICT, WORDDEF] });
+  assert.equal(e.worddefs.WN.defs.love[0][1], 'have affection', 'the module was not loaded into worddefs');
+  assert.equal(e.dicts.some(d => d.abbr === 'WN'), false, 'word definitions leaked into the Strong\'s dictionary list');
+  assert.equal(e.getInstalled()[WORDDEF.url].category, 'dictionaries', 'the record is not filed under dictionaries');
+  assert.equal(e.isLoaded(WORDDEF.url), true, 'isLoaded is false, so the Library would show it as not on the device');
+  const s = screen(e);
+  assert.match(s.words(), /Word Definitions \(WordNet\)/, 'the Installed tier does not list it');
+  assert.match(s.words(), /Dictionary/, 'it is not labelled as a Dictionary');
+});
+
+test('WORDDEF: the real Remove button removes it - bytes, record and the loaded copy', async () => {
+  const e = await phone({ modules: [BIBLE, DICT, WORDDEF] });
+  assert.ok(e.idb._keys().includes(WORDDEF.url), 'control: bytes should be in the store');
+  const s = screen(e);
+  await s.tapRemove('Word Definitions');
+  assert.equal(e.idb._keys().includes(WORDDEF.url), false, 'bytes still on the phone after Remove');
+  assert.equal(e.isInstalled(WORDDEF.url), false, 'record still says installed');
+  assert.deepEqual(Object.keys(e.worddefs), [], 'the loaded copy is still answering lookups');
+  assert.ok(e.isInstalled(DICT.url) && e.dicts.some(d => d.abbr === 'BDB'), 'removing it took the real dictionary with it');
+  assert.ok(s.toasts.some(t => /Removed WN/.test(t)), 'no honest "Removed" toast: ' + JSON.stringify(s.toasts));
+});
+
+test('WORDDEF: after a relaunch restoreInstalled loads it into worddefs, not the dictionaries', async () => {
+  const e = await phone({ modules: [WORDDEF] });
+  const e2 = engine();
+  await e2.cachePut(WORDDEF.url, FIXTURE.get('worddefs-wordnet.json').bytes);
+  e2.setInstalled(e.getInstalled());
+  await e2.restoreInstalled();
+  assert.equal(e2.worddefs.WN && e2.worddefs.WN.forms.loved, 'love', 'a relaunch did not bring the module back');
+  e2._ensureDicts();
+  assert.equal(e2.dicts.some(d => d.abbr === 'WN'), false, 'restore queued it as a Strong\'s dictionary');
+  assert.equal(e2.isLoaded(WORDDEF.url), true);
 });

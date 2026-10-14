@@ -123,6 +123,20 @@
      "desc": "8,181 Hebrew & Aramaic entries from Brown–Driver–Briggs, keyed to Strong's numbers — tap any Hebrew word in the reader for its definition."
     },
     {
+     "id": "worddefs-wordnet",
+     "name": "Word Definitions (WordNet)",
+     "abbr": "WN",
+     "lang": "English",
+     "size": "1.4 MB",
+     "license": "WordNet 3.0 \u00a9 2006 Princeton University",
+     "kind": "worddef",
+     "format": "JSON",
+     "url": "modules/worddefs-wordnet.json",
+     "featured": true,
+     "sha256": "6a47efccb1665e8f7235f234aa75c37810a4aac1e3377a434a32b72c57ca64db",
+     "desc": "Plain-English meanings for the words in the Bible you read, on any translation. Tap a verse, then Define. Downloads the first time you use it."
+    },
+    {
      "id": "import-dict",
      "name": "Import a dictionary…",
      "kind": "import",

@@ -80,7 +80,7 @@ cp modules/engbsb.zip "$WWW/modules/" 2>/dev/null || echo "  (warning: modules/e
 if [ "${BUNDLE_MODULES:-}" = "1" ]; then
   cp modules/engbsb.zip modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
      modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \
-     modules/crossrefs-openbible.json \
+     modules/crossrefs-openbible.json modules/worddefs-wordnet.json \
      "$WWW/modules/" 2>/dev/null || true
 fi
 
