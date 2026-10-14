@@ -7185,7 +7185,43 @@ function DashMembers() {
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
   const [reseatFor, setReseatFor] = React.useState(null);   // member who lost their 12 words and is back on a new key
-  const narrow = useStewNarrow();                           // the phone's one-row member card (memberRow) + its ⋯ sheet
+  // MEMBERS SWITCHES AT 1366, NOT THE DASHBOARD'S SHARED 760 (owner's choice, 2026-10-14).
+  //
+  // WHY 1366 AND NOT THE WIDTH WHERE THE ROW WRAPS. The desktop row survives on one line down to 1240, so
+  // 1240 looks like the switch point — and it is wrong. The IDENTITY LINE dies well before the row wraps.
+  // Measured headless on "Persephone Wilde" / "@persephonewilde", whose row is 52px at every width here:
+  //
+  //     1440   name block 302px   @handle 118px    whole
+  //     1366   name block 246.5px @handle  88.6px  whole
+  //     1280   name block 182px   @handle  24.1px  "@p…"      <- the console's own width
+  //     1240   name block 152px   @handle   0px    GONE
+  //
+  // In that band the controls still fit beside the name, so they take their width FIRST and what is left
+  // goes to the name block; below 1240 the controls wrap and hand the whole width back. Since 1e57878 a
+  // member who has a name shows no raw npub, so a collapsed handle leaves a cut-off identity on the screen
+  // carrying Child, Clear-for-youth and Block. 1366 is the lowest width where the handle is still whole.
+  //
+  // The phone card is 56px on ONE line with name AND handle whole at every width below this, so under 1366
+  // it is not a fallback for the desktop row — it is the better of the two. What it costs is real and was
+  // chosen with the numbers in hand: Child, Clear for youth, Reconnect and Block move into the ⋯ sheet.
+  // Chat stays on the row.
+  //
+  // It also retires the two-column panel below 1366, and with it the only thing wrong with it: the
+  // private-messages column is 137.5px at 900, where a conversation name overflows its card and runs under
+  // the chat icon (screenshots, 2026-10-14). The narrow branch does not draw that column at all — it folds
+  // private messages into a collapsible strip above the list — so the defect is unreachable, not patched.
+  //
+  // `useStewNarrow` has NINE callers: IdentitySwitcher (:154), StatCard (:3173), Panel (:3206),
+  // DashOverview, DashDevotionals, BulkUploadModal, THIS one, DashCheckin, DashSettings. Only this one
+  // passes an argument; the other eight keep the 760 default, so nothing else on the console changes shape.
+  // Panel is the one that nests: at 1280 its header keeps the desktop arrangement while the list below is
+  // the phone card. That is the header pill's position only, and it is correct for a wide window.
+  const narrow = useStewNarrow(1366);                       // the phone's one-row member card (memberRow) + its ⋯ sheet
+  // THE JOIN-REQUEST CARD KEEPS THE OLD 760 (owner, 2026-10-13, at 2649e2c: "one line at console width").
+  // It is a different shape from the member row — avatar, name, Approve, decline — and it still fits on one
+  // line at 1280 where the five-control member row does not. Folding it into `narrow` above put it back to
+  // two rows at 1280 and turned that fix's own test red; this keeps the two decisions independent.
+  const joinNarrow = useStewNarrow();                       // the two-row join card (phones only)
   const [moreFor, setMoreFor] = React.useState(null);       // whose ⋯ sheet (StewMemberSheet) is open, by pubkey
   const [bulkOpen, setBulkOpen] = React.useState(false);   // bulk-invite (print join slips) — bring a congregation across
   // safeguarding (child marking, youth clearance, parent links) is OWNER-ONLY at the relay — a delegated
@@ -7762,29 +7798,31 @@ function DashMembers() {
               const named = !!m.name; const label = named ? m.name : 'Anonymous';
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
               return (
-                <div key={m.pubkey} data-join-card="" style={narrow
+                <div key={m.pubkey} data-join-card="" style={joinNarrow
                   ? { display: 'flex', flexDirection: 'column', gap: 10, padding: '11px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }
                   : { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', padding: '7px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  {/* ONE LINE ON THE CONSOLE (owner 2026-10-13), TWO ROWS ON A PHONE. Same switch as the member row beside it
-                      (useStewNarrow, under 760px): wide = avatar, name, Approve and the decline all on one line; narrow = the
-                      person on a row of their own, as below. */}
+                  {/* ONE LINE ON THE CONSOLE (owner 2026-10-13), TWO ROWS ON A PHONE. `joinNarrow`, under 760px:
+                      wide = avatar, name, Approve and the decline all on one line; narrow = the person on a row of
+                      their own, as below. NOT the same switch as the member row beside it any more — that one is
+                      `narrow`, which turns over at 1366 (see its note at the top of DashMembers). This card is the
+                      narrower shape and still fits on one line at 1280, where the member row no longer does. */}
                   {/* THE PERSON GETS A ROW OF THEIR OWN. The name used to share one line with the badge, Approve and the
                       decline button, so on a 360px phone it was squeezed into ~100px and a real name broke mid-word.
                       Plain flex and overflow-wrap only (no gap-dependent grid, no var() in padding): Android WebViews
                       have dropped fancier layout before. */}
-                  <div data-join-person="" style={{ display: 'flex', alignItems: narrow ? 'flex-start' : 'center', gap: 10, ...(narrow ? null : { flex: '1 1 150px', minWidth: 0 }) }}>
-                    <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={narrow ? 32 : 36} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                  <div data-join-person="" style={{ display: 'flex', alignItems: joinNarrow ? 'flex-start' : 'center', gap: 10, ...(joinNarrow ? null : { flex: '1 1 150px', minWidth: 0 }) }}>
+                    <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={joinNarrow ? 32 : 36} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{label}</div>
                       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                     </div>
                   </div>
-                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, ...(narrow ? null : { flexShrink: 0 }) }}>
+                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, ...(joinNarrow ? null : { flexShrink: 0 }) }}>
                   {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
                       a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
                       compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
                       44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
-                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
+                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(joinNarrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
                   {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
                       Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
                       church's keys — irreversible, from the screen a steward is fastest on. The members

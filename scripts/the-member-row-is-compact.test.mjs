@@ -30,7 +30,12 @@ const MEMBERS = [
 function renderLive({ nophoto = [], setNoPhoto = () => Promise.resolve(true), members = MEMBERS, minors = [], links = {}, delegated = false } = {}) {
   const { React, draw } = miniReact();
   const win = {
-    innerWidth: 1280,
+    // 1440, NOT 1280 (2026-10-14). Members now takes the phone card below 1366 — at 1280 the desktop row's
+    // @handle was squeezed to 24.1px and to 0px by 1240, so the owner chose the one-line phone card for that
+    // band. Every assertion in this file is about the DESKTOP row, so it is driven at a desktop width.
+    // The phone card has its own coverage in console-phone-layout-batch-a.test.mjs and in
+    // the-console-member-row-shows-the-whole-name.test.mjs, which measures it in a real browser at 1280.
+    innerWidth: 1440,
     useStewardMembers: () => members,
     useStewardGroups: () => [], useStewardNetworks: () => [], useStewardCategories: () => [],
     useStewardRosters: () => ({}), useStewardChurch: () => ({ name: 'St X', features: {} }),

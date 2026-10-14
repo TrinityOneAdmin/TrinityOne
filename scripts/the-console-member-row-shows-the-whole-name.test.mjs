@@ -223,9 +223,13 @@ const COLUMNS = `(() => {
 
 // Measured on 2026-10-13 BEFORE the fix, in this harness: the name block 104.5px of a 620px column, the name
 // 104.5px against 137px of text (ellipsised), the @handle 0px. AFTER: block 182px, name 136.9px whole, handle
-// 38.1px. At 1024: block 433.5px, name 136.9px whole, handle 132px whole.
+// 38.1px.
+//   The widths are 1440 and 1366, NOT 1280 and 1024 (owner's choice, 2026-10-14). 1366 is the LOWEST width
+// at which this row works: the row stays one line down to 1240, but the @handle beside the name is 88.6px at
+// 1366, 24.1px at 1280 and 0px at 1240, because in that band the controls take their width first. Below 1366
+// Members is the phone card — see the sibling test below, which holds 1280, 1024 and 900.
 test('at console widths a member\'s whole name is on their row — never ellipsised, never below the name block\'s floor', SKIP, async () => {
-  for (const vw of [1280, 1024]) {
+  for (const vw of [1440, 1366]) {
     await setSize(vw, 900);
     for (const p of [PEOPLE.adult, PEOPLE.adult2, PEOPLE.cleared, PEOPLE.child]) {
       const m = await nameOf(p.name);
@@ -244,7 +248,7 @@ test('at console widths a member\'s whole name is on their row — never ellipsi
 // @handle beside the name collapses there is nothing on the row but the name. At 1280 before the fix both
 // adults' handles measured 0px wide. This asserts the identity line is never nothing.
 test('the @handle beside the name never collapses to nothing', SKIP, async () => {
-  for (const vw of [1280, 1024]) {
+  for (const vw of [1440, 1366]) {
     await setSize(vw, 900);
     for (const p of [PEOPLE.adult, PEOPLE.adult2, PEOPLE.cleared, PEOPLE.child]) {
       const m = await nameOf(p.name);
@@ -260,7 +264,7 @@ test('the @handle beside the name never collapses to nothing', SKIP, async () =>
 // in the suite stayed green; `3fr 1fr` gives it 697.5px and a 52px row. Measured here, at the point of use,
 // so putting 2fr back fails a test instead of shipping.
 test('the Members panel gives the list column three times the private-messages column', SKIP, async () => {
-  for (const vw of [1280, 1024]) {
+  for (const vw of [1440, 1366]) {
     await setSize(vw, 900);
     const g = JSON.parse(await evalIn(COLUMNS));
     assert.equal(g.found, true, 'no grid lays out the Members panel — re-anchor this test');
@@ -273,7 +277,44 @@ test('the Members panel gives the list column three times the private-messages c
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 
-// The phone card is a DIFFERENT branch of memberRow (`if (narrow)`, narrow = vw < 760) and the floor must
+// BELOW 1366 MEMBERS IS THE PHONE LAYOUT, AND THAT IS THE POINT OF USE (owner's choice, 2026-10-14).
+//
+// 1280 — the console's own width — is in here deliberately. The desktop row technically fits on one line at
+// 1280, but its @handle is squeezed to 24.1px ("@p…") and to 0px by 1240, so the row identifies a member by
+// a cut-off name alone on the screen carrying Child, Clear-for-youth and Block. The phone card is 56px on
+// ONE line with the name AND the handle whole at all three widths below, which is why the owner chose it
+// here over the desktop row. What it costs: Child / Clear for youth / Reconnect / Block move into the ⋯
+// sheet, Chat stays on the row.
+//
+// This is ALSO what fixes the private-messages panel. The two-column grid gave that column 137.5px at 900px
+// wide, where a conversation name overflowed its card and ran under the chat icon (screenshots, 2026-10-14).
+// The narrow branch never draws that column — private messages fold into a collapsible strip above the list
+// — so the defect is unreachable below 1366 rather than patched. Hence the grid assertion first.
+//
+// Sabotage check, run 2026-10-14: putting `useStewNarrow()` back in DashMembers makes this test red at all
+// three widths while every other test in this file stays green. The argument is load-bearing.
+test('below 1366 the Members page is the one-line phone layout, and the two-column panel is gone', SKIP, async () => {
+  for (const vw of [1280, 1024, 900]) {
+    await setSize(vw, 900);
+    const g = JSON.parse(await evalIn(COLUMNS));
+    assert.equal(g.found, false,
+      `at ${vw}px the Members panel is still drawing its two-column grid (${JSON.stringify(g)}) — DashMembers is not narrow here, so the private-messages column is back and a conversation name overflows it`);
+    for (const p of [PEOPLE.adult, PEOPLE.adult2, PEOPLE.cleared]) {
+      const m = await nameOf(p.name);
+      assert.ok(m.cardH <= 60,
+        `at ${vw}px ${p.name}'s card is ${m.cardH}px tall — that is the desktop row, not the one-line phone card`);
+      assert.equal(m.ellipsised, false,
+        `at ${vw}px "${p.name}" is CUT OFF on the phone card: the box is ${m.nameClientW}px and the text needs ${m.nameScrollW}px`);
+      assert.ok(m.identTextW !== null && m.identTextW >= 12,
+        `at ${vw}px ${p.name}'s "${m.identText}" is ${m.identTextW}px — the identity line has been squeezed out of the phone card too`);
+      assert.ok(m.cardRight <= m.vw, `at ${vw}px ${p.name}'s card runs off the screen: right ${m.cardRight} of ${m.vw}`);
+      console.log(`    ${vw}px ${p.name}: card ${m.cardH}px, name ${m.nameW}/${m.nameScrollW}px, @handle ${m.identTextW}px`);
+    }
+  }
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+// The phone card is a DIFFERENT branch of memberRow (`if (narrow)`, narrow = vw < 1366 on Members) and the floor must
 // not reach it: it has its own one-row shape, measured at 56px. A floor that leaked in would push the card
 // past the screen. (The phone card ellipsises a long name itself — that is older and not this fix's.)
 test('the phone card is untouched: one row, inside the screen', SKIP, async () => {

@@ -208,8 +208,13 @@ const has = (m, re) => m.buttons.filter(b => re.test(b.label));
 // Measured BEFORE this change in this same harness at 1280x900 (list column 620px wide then; 697.5px since
 // the panel's grid went to 3fr 1fr): 101px for an adult who has not posted, 137px for a cleared adult. The
 // owner's target: about half.
-test('at 1280px an adult row and a cleared-adult row are ONE line, at most 56px tall, with every control on the name line', SKIP, async () => {
-  await setSize(1280, 900);
+// 1440, NOT 1280 (2026-10-14). Members takes the one-line PHONE card below 1366 now, because the desktop
+// row's @handle was squeezed to 24.1px at 1280 and to 0px by 1240 (owner's choice). Left at 1280 this test
+// went on passing against the phone card — which is also one line and also under 56px — while asserting
+// nothing about the desktop row it is named for, and nothing about the five controls that row carries. The
+// phone card at 1280 is measured in the-console-member-row-shows-the-whole-name.test.mjs instead.
+test('at 1440px an adult row and a cleared-adult row are ONE line, at most 56px tall, with every control on the name line', SKIP, async () => {
+  await setSize(1440, 900);
   for (const p of [PEOPLE.adult, PEOPLE.adult2, PEOPLE.cleared]) {
     const r = await rowOf(p.name, true);
     assert.ok(r.height <= 56, `${p.name}'s row is ${r.height}px tall - not the single line the owner asked for. Buttons: ${JSON.stringify(r.buttons.map(b => [b.label.slice(0, 14), b.left, b.top]))}`);
@@ -222,8 +227,8 @@ test('at 1280px an adult row and a cleared-adult row are ONE line, at most 56px 
 
 // Measured BEFORE this change (1e57878) in this harness: Ivy, a child, 157px (87px after) - the guardian pill and "Link parent" wrapped
 // her row to a second line, taller than the 137px she had before 1e57878. The parent controls now live in More.
-test('at 1280px a CHILD row has the parent controls off it, a More button on it, its care controls on one line, and is far under its old height', SKIP, async () => {
-  await setSize(1280, 900);
+test('at 1440px a CHILD row has the parent controls off it, a More button on it, its care controls on one line, and is far under its old height', SKIP, async () => {
+  await setSize(1440, 900);
   const r = await rowOf(PEOPLE.child.name, true);
   // NOT 52 like an adult: a child carries Photo (children are photo-off by default) as well as Child / Clear /
   // Reconnect, and those cannot share a line with the name at this width whatever is done to the name block —
@@ -260,6 +265,11 @@ test('at 1280px a CHILD row has the parent controls off it, a More button on it,
 // Before this change the card was a name row over an Approve row. Browser-rendered only, device check pending.
 const NIA = PEOPLE.pending.name;
 const JOIN_CARD = `[...document.querySelectorAll('[data-join-card]')].find(c => (c.textContent||'').includes(${JSON.stringify(NIA)}))`;
+// THIS ONE STAYS AT 1280, and that is the point of `joinNarrow` in DashMembers. The join card is a different
+// shape from the member row — avatar, name, Approve, decline — and it still fits on one line at 1280 where
+// the five-control member row does not. When the member row's switch was first written as the single shared
+// `narrow`, this test went red: the card had been folded into the phone layout at 1280 and the owner's
+// 2026-10-13 decision at 2649e2c ("one line at console width") was silently undone. Two flags, two widths.
 test('at 1280px the join-request card is ONE line, at most 56px, with avatar, name, Approve and decline together', SKIP, async () => {
   await setSize(1280, 900);
   const r = await rowOf(NIA, true);
