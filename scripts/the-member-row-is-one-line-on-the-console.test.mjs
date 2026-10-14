@@ -208,10 +208,16 @@ const ROW_OF = (name, scroll) => `(() => {
 const rowOf = async (name, scroll = false) => { const m = JSON.parse(await evalIn(ROW_OF(name, scroll))); assert.equal(m.found, true, `"${name}" is not on the Members page — the seed did not paint`); return m; };
 const has = (m, re) => m.buttons.filter(b => re.test(b.label));
 
-// Measured BEFORE this change in this same harness at 1280x900 (list column 620px wide): 101px for an adult
-// who has not posted, 137px for a cleared adult. The owner's target: about half.
-test('at 1280px an adult row and a cleared-adult row are ONE line, at most 56px tall, with every control on the name line', SKIP, async () => {
-  await setSize(1280, 900);
+// Measured BEFORE this change in this same harness at 1280x900 (list column 620px wide then; 697.5px since
+// the panel's grid went to 3fr 1fr): 101px for an adult who has not posted, 137px for a cleared adult. The
+// owner's target: about half.
+// 1440, NOT 1280 (2026-10-14). Members takes the one-line PHONE card below 1366 now, because the desktop
+// row's @handle was squeezed to 24.1px at 1280 and to 0px by 1240 (owner's choice). Left at 1280 this test
+// went on passing against the phone card — which is also one line and also under 56px — while asserting
+// nothing about the desktop row it is named for, and nothing about the five controls that row carries. The
+// phone card at 1280 is measured in the-console-member-row-shows-the-whole-name.test.mjs instead.
+test('at 1440px an adult row and a cleared-adult row are ONE line, at most 56px tall, with every control on the name line', SKIP, async () => {
+  await setSize(1440, 900);
   for (const p of [PEOPLE.adult, PEOPLE.adult2, PEOPLE.cleared]) {
     const r = await rowOf(p.name, true);
     assert.ok(r.height <= 56, `${p.name}'s row is ${r.height}px tall - not the single line the owner asked for. Buttons: ${JSON.stringify(r.buttons.map(b => [b.label.slice(0, 14), b.left, b.top]))}`);
@@ -224,15 +230,24 @@ test('at 1280px an adult row and a cleared-adult row are ONE line, at most 56px 
 
 // Measured BEFORE this change (1e57878) in this harness: Ivy, a child, 157px (87px after) - the guardian pill and "Link parent" wrapped
 // her row to a second line, taller than the 137px she had before 1e57878. The parent controls now live in More.
-test('at 1280px a CHILD row has the parent controls off it, a More button on it, every control on one line, and is far under its old height', SKIP, async () => {
-  await setSize(1280, 900);
+test('at 1440px a CHILD row has the parent controls off it, a More button on it, its care controls on one line, and is far under its old height', SKIP, async () => {
+  await setSize(1440, 900);
   const r = await rowOf(PEOPLE.child.name, true);
-  // NOT 52 like an adult: a child carries Photo (children are photo-off by default) as well as Child / Clear / Reconnect, and
-  // those controls fill the 620px column on their own (594px measured), so the NAME takes the line above. That is the owner's
-  // call to make (move Photo / Reconnect / copy into More too); this test holds what THIS change achieved: 157px -> 87px.
+  // NOT 52 like an adult: a child carries Photo (children are photo-off by default) as well as Child / Clear /
+  // Reconnect, and those cannot share a line with the name at this width whatever is done to the name block —
+  // the controls measure 458.2px, copy + Block 111.3px, and with the avatar and the gaps they need 785.5px of
+  // the list column's 671.5px (measured 2026-10-13). So the row is two lines, and this test holds what the
+  // change achieved: 157px -> 87px.
   assert.ok(r.height <= 90, `${PEOPLE.child.name}'s row is ${r.height}px tall - more than the 87px this change measured (157px before it). Buttons: ${JSON.stringify(r.buttons.map(b => [b.label.slice(0, 14), b.left, b.top]))}`);
-  const tops = r.buttons.map(b => b.top);
-  assert.ok(Math.max(...tops) - Math.min(...tops) <= 4, `the controls are not on one line: ${JSON.stringify(tops)}`);
+  // THE CARE CONTROLS SHARE ONE LINE, copy + Block take the second. Measured 2026-10-13 once the name block
+  // got its 150px floor: six buttons at y=514, copy and Block at y=552. Before the floor all eight shared a
+  // line and it was the NAME that gave way instead, squeezed to 104.5px and ellipsised — the defect
+  // the-console-member-row-shows-the-whole-name.test.mjs measures. Nothing may stack beyond those two lines.
+  const care = r.buttons.filter(b => !/^(Copy npub|Block)$/.test(b.label));
+  const careTops = care.map(b => b.top);
+  assert.ok(Math.max(...careTops) - Math.min(...careTops) <= 4, `the child's care controls are not on one line: ${JSON.stringify(care.map(b => [b.label.slice(0, 14), b.top]))}`);
+  const lines = [...new Set(r.buttons.map(b => b.top))].sort((a, b) => a - b);
+  assert.ok(lines.length <= 2, `the child row stacks its controls over ${lines.length} lines: ${JSON.stringify(lines)}`);
   assert.deepEqual(has(r, /^(Link parent|Parents)$/), [], 'the parent control is still on the child row');
   assert.ok(!r.tags.some(t => /no guardian|parent:/.test(t)), 'a guardian pill is still on the child row: ' + JSON.stringify(r.tags));
   const more = has(r, /^More for /);
@@ -253,6 +268,11 @@ test('at 1280px a CHILD row has the parent controls off it, a More button on it,
 // Before this change the card was a name row over an Approve row. Browser-rendered only, device check pending.
 const NIA = PEOPLE.pending.name;
 const JOIN_CARD = `[...document.querySelectorAll('[data-join-card]')].find(c => (c.textContent||'').includes(${JSON.stringify(NIA)}))`;
+// THIS ONE STAYS AT 1280, and that is the point of `joinNarrow` in DashMembers. The join card is a different
+// shape from the member row — avatar, name, Approve, decline — and it still fits on one line at 1280 where
+// the five-control member row does not. When the member row's switch was first written as the single shared
+// `narrow`, this test went red: the card had been folded into the phone layout at 1280 and the owner's
+// 2026-10-13 decision at 2649e2c ("one line at console width") was silently undone. Two flags, two widths.
 test('at 1280px the join-request card is ONE line, at most 56px, with avatar, name, Approve and decline together', SKIP, async () => {
   await setSize(1280, 900);
   const r = await rowOf(NIA, true);
