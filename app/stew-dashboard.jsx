@@ -12533,7 +12533,6 @@ function StewDmWindow({ peer, offset, onClose }) {
   // affordance already failed on the Oppo in the member app (DMSwipe), so reply must never hang on a gesture.
   const [replyTo, setReplyTo] = React.useState(null);
   const [menuFor, setMenuFor] = React.useState('');   // msg id whose ⋯ menu is open
-  const swipeRef = React.useRef(null);
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   const _threadConn = window.useStewardConn ? window.useStewardConn() : 0;
@@ -12587,14 +12586,39 @@ function StewDmWindow({ peer, offset, onClose }) {
   const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
   const canReply = (m) => !m._pending && !m._failed;   // a waiting message has nothing on the relay to quote yet
   const byId = {}; shown.forEach(m => { byId[m.id] = m; });
+  // SWIPE TO REPLY (APK). Same feel as the member app's DMSwipe: the row follows the finger, a reply arrow fills
+  // in once the drag is far enough, and letting go past that point replies. The live offset is the REF; the
+  // `swipeAt` state exists only to redraw (see the long note in Row/DMSwipe: the last touchmove and the
+  // touchend can arrive with no render between them).
+  const SW_ARM = 48, SW_MAX = 76;
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const swipeTo = (id, v) => { if (swipeSt.current) swipeSt.current.dx = v; setSwipeAt({ id: v ? id : '', dx: v }); };
+  // Resetting must NOT consult `swipeAt` — it is the offset of the last completed render, which is stale when the
+  // lift arrives in the same dispatch as the last move (the arrow would stay on screen after a reply).
+  const swipeClear = () => setSwipeAt(p => p.dx ? { id: '', dx: 0 } : p);
   const swipe = (m) => isNative && canReply(m) ? {
-    onTouchStart: (e) => { const t = e.touches && e.touches[0]; swipeRef.current = t ? { x: t.clientX, y: t.clientY } : null; },
+    onTouchStart: (e) => { const t = e.touches && e.touches[0]; swipeSt.current = t ? { x: t.clientX, y: t.clientY, on: true, dx: 0 } : null; swipeClear(); },
+    onTouchMove: (e) => {
+      const t = e.touches && e.touches[0], s0 = swipeSt.current;
+      if (!t || !s0 || !s0.on) return;
+      const ddx = t.clientX - s0.x, ddy = t.clientY - s0.y;
+      if (Math.abs(ddy) > Math.abs(ddx)) { s0.on = false; swipeClear(); return; }   // a scroll, not a swipe
+      swipeTo(m.id, Math.max(0, Math.min(SW_MAX, ddx)));
+    },
     onTouchEnd: (e) => {
-      const s0 = swipeRef.current; swipeRef.current = null;
-      const t = e.changedTouches && e.changedTouches[0];
-      if (!s0 || !t) return;
-      const dx = t.clientX - s0.x, dy = t.clientY - s0.y;
-      if (dx >= 48 && Math.abs(dy) < dx / 2) startReply(m);   // a rightward flick, not a scroll
+      const s0 = swipeSt.current; swipeSt.current = null;
+      swipeClear();
+      if (!s0 || !s0.on) return;
+      const t = e && e.changedTouches && e.changedTouches[0];
+      let far = s0.dx;
+      if (t) { const ddx = t.clientX - s0.x, ddy = t.clientY - s0.y; if (Math.abs(ddy) <= Math.abs(ddx)) far = Math.max(far, ddx); }
+      if (far >= SW_ARM) startReply(m);   // a rightward flick, not a scroll
+    },
+    onTouchCancel: () => {   // past the arm a cancel still replies — the OS taking the gesture must not lose the reply
+      const s0 = swipeSt.current; swipeSt.current = null;
+      swipeClear();
+      if (s0 && s0.on && s0.dx >= SW_ARM) startReply(m);
     },
   } : {};
   const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
@@ -12613,7 +12637,15 @@ function StewDmWindow({ peer, offset, onClose }) {
           <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
             {shown.map(m => (
-              <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
+              <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative',
+                touchAction: 'pan-y', transform: swipeAt.id === m.id && swipeAt.dx ? ('translateX(' + swipeAt.dx + 'px)') : '', transition: swipeAt.id === m.id && swipeAt.dx ? '' : 'transform .18s ease' }}>
+                {swipeAt.id === m.id && swipeAt.dx ? (
+                  <div aria-hidden="true" data-reply-cue="1" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, swipeAt.dx / SW_ARM),
+                    width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: swipeAt.dx >= SW_ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                    <Icon name="reply" size={14} color={swipeAt.dx >= SW_ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
+                  </div>
+                ) : null}
                 {m.replyTo && byId[m.replyTo] ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: '100%' }}>
                     <Icon name="reply" size={11} color="var(--ink-3)" />
