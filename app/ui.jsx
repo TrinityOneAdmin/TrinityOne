@@ -304,6 +304,31 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
   const modal = !docked && !passthrough;
   useDialogA11y(open && modal, panelRef, onClose);
   const _label = useAutoDialogLabel(open && modal, panelRef, label);
+  // SWIPE DOWN TO DISMISS (the grey handle used to be decoration only). A drag counts only when it is
+  // predominantly VERTICAL and DOWNWARD, and starts with every scrolled ancestor (inside the panel) at its top —
+  // so inner scrolling, horizontal swipes and upward drags are untouched. Past 80px, or a quick flick, closes.
+  const [dragY, setDragY] = useU(0);
+  const gest = useUR(null);
+  const scrolledDown = (el, root) => { for (; el && el !== root; el = el.parentElement) { if (el.scrollTop > 0) return true; } return false; };
+  const onTS = (e) => { const t = e.touches && e.touches[0]; if (!t) return; gest.current = { x: t.clientX, y: t.clientY, t: Date.now(), on: false, dead: scrolledDown(e.target, panelRef.current) }; };
+  const onTM = (e) => {
+    const g = gest.current, t = e.touches && e.touches[0]; if (!g || g.dead || !t) return;
+    const dy = t.clientY - g.y, dx = t.clientX - g.x;
+    if (!g.on) {
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) { g.dead = true; return; }   // horizontal: not ours
+      if (dy < -10) { g.dead = true; return; }                                          // upward: not ours
+      if (dy > 10 && dy > Math.abs(dx) * 1.5) g.on = true; else return;
+    }
+    setDragY(Math.max(0, dy));
+  };
+  const onTE = (e) => {
+    const g = gest.current; gest.current = null; if (!g || !g.on) return;
+    const t = e.changedTouches && e.changedTouches[0]; const dy = t ? t.clientY - g.y : 0;
+    const flick = dy > 30 && dy / Math.max(1, Date.now() - g.t) > 0.6;
+    setDragY(0);
+    if (dy > 80 || flick) onClose && onClose();
+  };
+  const onTC = () => { gest.current = null; setDragY(0); };
   if (!mounted && !open) return null;
   if (docked) {
     return (
@@ -320,14 +345,14 @@ function BottomSheet({ open, onClose, children, maxHeight = '78%', pad = true, z
         position: 'absolute', inset: 0, background: 'rgba(20,14,8,.42)',
         opacity: open ? 1 : 0, transition: 'opacity .28s',
       }} />}
-      <div ref={panelRef} {...(modal ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label={_label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} style={{
+      <div ref={panelRef} {...(modal ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label={_label} tabIndex={-1} onTransitionEnd={() => { if (!open) setMounted(false); }} onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onTouchCancel={onTC} style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         maxWidth: 500, marginLeft: 'auto', marginRight: 'auto',   // centered column on a wide screen; full-width on a phone (maxWidth > viewport)
         background: 'var(--surface)', borderRadius: '30px 30px 0 0',
         maxHeight, display: 'flex', flexDirection: 'column',
         boxShadow: '0 -10px 40px rgba(20,14,8,.22)',
-        transform: open ? 'translateY(0)' : 'translateY(102%)',
-        transition: 'transform .34s cubic-bezier(.32,.72,0,1)',
+        transform: open ? (dragY ? 'translateY(' + dragY + 'px)' : 'translateY(0)') : 'translateY(102%)',
+        transition: dragY ? 'none' : 'transform .34s cubic-bezier(.32,.72,0,1)',
         paddingBottom: 14, pointerEvents: 'auto', outline: 'none',
       }}>
         <div style={{ display: 'flex', justifyContent: 'center', padding: '11px 0 4px', flexShrink: 0 }}>
