@@ -205,6 +205,27 @@
      "desc": "Add a MySword .dvn.mybible devotional you already have. Hosted devotionals are coming."
     }
    ]
+  },
+  {
+   "id": "crossrefs",
+   "name": "Cross References",
+   "icon": "link",
+   "items": [
+    {
+     "id": "crossrefs-openbible",
+     "name": "Cross References (openbible.info)",
+     "abbr": "TSK",
+     "lang": "English",
+     "size": "3.3 MB",
+     "license": "CC BY 4.0 · www.openbible.info, from the Treasury of Scripture Knowledge (public domain)",
+     "kind": "crossref",
+     "format": "JSON",
+     "url": "modules/crossrefs-openbible.json",
+     "featured": true,
+     "sha256": "f14c43a15167ff959186cdb54ede7e493a54387f40534e8da15ebeb45ffe2815",
+     "desc": "Where scripture echoes scripture — 29,320 verses linked, best-voted first, from the Treasury of Scripture Knowledge."
+    }
+   ]
   }
  ]
 }

@@ -688,9 +688,60 @@ function CommentaryEdge({ open, onToggle }) {
     </button>
   );
 }
-function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
-  const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
+// A cross-reference preview: read the verse in place, then choose to open it in the reader (owner 2026-10-14,
+// consistent with the Library page's preview-then-jump). Text comes from the active translation if it has that
+// chapter loaded; a same-chapter range shows all its verses. Never fabricates — an empty result says so.
+function XrefPreviewSheet({ refStr, open, onClose, onGo, version }) {
+  const loc = refStr ? window.Bible.parseRef(refStr) : null;
+  let text = '';
+  if (loc) {
+    try {
+      const rows = window.Bible.getVerses(loc.book, loc.chap, version) || [];
+      const from = loc.verse || 1, to = loc.verseEnd || from;
+      text = rows.filter(r => r.v >= from && r.v <= to).map(r => r.text).join(' ');
+    } catch (e) { text = ''; }
+  }
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Cross reference</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{refStr || ''}</div>
+        </div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {!loc ? (
+        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16, padding: '6px 0 14px' }}>Couldn’t read that reference.</p>
+      ) : (
+        <React.Fragment>
+          {text
+            ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: '4px 0 16px', textWrap: 'pretty' }}>{text}</p>
+            : <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>Open it in the reader to read the full verse.</p>}
+          <button onClick={() => onGo(loc)} style={{
+            width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 18px',
+            borderRadius: 13, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <Icon name="book" size={16} color="currentColor" /> Open in reader
+          </button>
+        </React.Fragment>
+      )}
+    </BottomSheet>
+  );
+}
+
+function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, readerVerse }) {
+  const panelScrollRef = useR(null);
+  // Scroll the cross-ref list so verse N's group sits near the top — how the panel "follows" the reader.
+  const scrollToVerse = (v) => {
+    const sc = panelScrollRef.current; if (!sc || v == null) return;
+    const el = sc.querySelector('#xr-' + v); if (!el) return;
+    try { sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 10; } catch (e) {}
+  };
+  const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
+  const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
+  const [xrefPreview, setXrefPreview] = useS(null);   // a cross-reference being previewed before jumping to it
+  const [xrefOpen, setXrefOpen] = useS({});           // verse -> show all its cross-refs (past the first 4)
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
   // Written under the SAME key the verse card uses, so the note shows on its verse as well as in this list. A
   // verse that already has a note gets this one added under it, never replaced by it.
@@ -715,6 +766,26 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
   }, [open, loc.book, loc.chap, ctx.version]);
+  // Cross references: read ONLY when the tab is open, so the ~3 MB module downloads on first use, not on
+  // every panel open. getCrossRefs() lazily installs the default set and fires notify() when it lands, so
+  // subscribe() re-reads and the empty list fills in. Not version-dependent — cross-refs are translation-agnostic.
+  useE(() => {
+    if (!open || view !== 'crossrefs') return;
+    setXrefOpen({});   // a new chapter collapses every group back to its first few
+    const read = () => { try { setXrefs(window.Bible.getCrossRefs ? window.Bible.getCrossRefs(loc.book, loc.chap) : {}); } catch (e) { setXrefs({}); } };
+    read();
+    return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
+  }, [open, view, loc.book, loc.chap]);
+  // Follow the reader: register the scroll handler and align to the reader's current verse whenever the Cross
+  // refs tab is shown or its list fills. On a phone the panel is an overlay, so this aligns on open; when the
+  // panel is docked beside the reader, the reader's onScroll calls the same handler live.
+  useE(() => {
+    if (!open || view !== 'crossrefs') { if (syncRef) syncRef.current = null; return; }
+    if (syncRef) syncRef.current = scrollToVerse;
+    const v = readerVerse ? readerVerse() : null;
+    if (v != null) { scrollToVerse(v); setTimeout(() => scrollToVerse(v), 60); }
+    return () => { if (syncRef) syncRef.current = null; };
+  }, [open, view, loc.book, loc.chap, xrefs]);
   // SWIPE-TO-CLOSE ONLY COUNTS WHEN THE SWIPE IS MOSTLY SIDEWAYS. This measured the finger's rightward travel
   // alone: end more than 56px right of where it started and the panel closed. A long thumb-scroll down these
   // notes is rarely vertical — 60px of drift over 400px of scrolling counted as a swipe, and the panel slid
@@ -755,11 +826,47 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
             {docked ? null : <IconBtn name="chevR" onClick={onClose} />}
           </div>
           <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
-            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
+            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
           </div>
         </div>
-        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
-          {view === 'notes' ? (
+        <div ref={panelScrollRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
+          {view === 'crossrefs' ? (
+            Object.keys(xrefs).length ? (
+              <React.Fragment>
+                {Object.keys(xrefs).map(n => parseInt(n, 10)).sort((a, b) => a - b).map(v => (
+                  <div key={v} id={'xr-' + v} style={{ marginBottom: 16 }}>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 8 }}>{label}:{v}</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {(xrefOpen[v] ? xrefs[v] : xrefs[v].slice(0, 4)).map((r, i) => (
+                        <button key={i} onClick={() => setXrefPreview(r)} style={{
+                          border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', cursor: 'pointer',
+                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {r}<Icon name="chevR" size={13} color="var(--ink-3)" />
+                        </button>
+                      ))}
+                      {xrefs[v].length > 4 ? (
+                        <button onClick={() => setXrefOpen(o => ({ ...o, [v]: !o[v] }))} style={{
+                          border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', color: 'var(--clay-ink)', cursor: 'pointer',
+                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          {xrefOpen[v] ? 'Show fewer' : `${xrefs[v].length - 4} more`}
+                          <Icon name={xrefOpen[v] ? 'chevU' : 'chevD'} size={14} color="var(--clay)" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+                {window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? (
+                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>{window.Bible.crossrefLicense()}</div>
+                ) : null}
+              </React.Fragment>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+                <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="link" size={24} /></div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? `No cross references for ${label}` : 'Gathering cross references…'}</div>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? 'This chapter has none in the set yet.' : 'Fetching the cross-reference set the first time — a moment on a new phone, then it is saved.'}</p>
+              </div>
+            )
+          ) : view === 'notes' ? (
             <React.Fragment>
               {composing ? (
                 <div style={{ marginBottom: 14, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid var(--clay)', boxShadow: 'var(--shadow)' }}>
@@ -825,6 +932,9 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
           )}
         </div>
       </div>
+      <XrefPreviewSheet refStr={xrefPreview} open={!!xrefPreview} version={ctx.version}
+        onClose={() => setXrefPreview(null)}
+        onGo={(t) => { setXrefPreview(null); onClose(); ctx.gotoRef(t.book, t.chap, t.verse); }} />
     </React.Fragment>
   );
 }
@@ -870,6 +980,29 @@ function ReadScreen({ ctx }) {
   const [narrateState, setNarrateState] = useS('idle');   // idle | playing | paused
   const [narrateV, setNarrateV] = useS(null);              // verse number currently being spoken
   const scrollRef = useR();
+  // Cross-reference panel follows the reader: track the verse at the top of the reader, and let the panel
+  // register a "scroll your list to verse N" callback so it can align to where the reader is (owner 2026-10-14).
+  const topVerseRef = useR(null);
+  const panelSyncRef = useR(null);
+  const syncRaf = useR(null);
+  const readerTopVerse = () => {
+    const sc = scrollRef.current; if (!sc) return null;
+    const line = sc.getBoundingClientRect().top + 140;   // just below the sticky header
+    let v = null;
+    const els = sc.querySelectorAll('[id^="rv-"]');
+    for (let i = 0; i < els.length; i++) {
+      if (els[i].getBoundingClientRect().top <= line) v = parseInt(els[i].id.slice(3), 10); else break;
+    }
+    return v;
+  };
+  const onReaderScroll = () => {
+    if (syncRaf.current) return;
+    syncRaf.current = requestAnimationFrame(() => {
+      syncRaf.current = null;
+      const v = readerTopVerse();
+      if (v != null) { topVerseRef.current = v; if (commentaryOpen && panelSyncRef.current) try { panelSyncRef.current(v); } catch (e) {} }
+    });
+  };
   const synth = (typeof window !== 'undefined' && window.speechSynthesis) || null;
   const stopNarration = () => { if (synth) try { synth.cancel(); } catch (e) {} setNarrateState('idle'); setNarrateV(null); };
   // stop speaking when the passage changes or the screen unmounts
@@ -1129,7 +1262,7 @@ function ReadScreen({ ctx }) {
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
         onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
-      <div ref={scrollRef} className="no-scrollbar"
+      <div ref={scrollRef} className="no-scrollbar" onScroll={onReaderScroll}
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
         style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
@@ -1200,7 +1333,7 @@ function ReadScreen({ ctx }) {
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
-      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />}
+      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
       <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
         onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />

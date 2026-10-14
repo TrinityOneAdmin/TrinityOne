@@ -176,6 +176,37 @@ window.safeImgUrl = function (v) {
   }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
+
+  // ── cross-references (openbible.info / Treasury of Scripture Knowledge) — a JSON module, like the lexicon ──
+  // Each module's `map` is { "<book>.<chap>.<verse>": ["Display Ref", …] } in TrinityOne book numbering,
+  // best-voted first. The display strings round-trip through parseRef(), so a caller navigates straight from
+  // one with Bible.parseRef(ref) — no second OSIS mapping at read time.
+  const crossrefs = {};   // abbr -> { name, license, map }
+  function loadCrossrefsJSON(obj, abbr){
+    const a = (obj && obj.meta && obj.meta.abbr) || abbr || "TSK";
+    crossrefs[a] = { name: (obj && obj.meta && obj.meta.name) || a, license: (obj && obj.meta && obj.meta.license) || "", map: (obj && obj.refs) || {} };
+    notify();
+    return a;
+  }
+  // Every cross-reference for a chapter, keyed by verse number, merged across installed cross-ref modules.
+  // Lazily installs the default set on first use (like the lexicon), so the reader tab works with no manual
+  // module install; returns what is loaded now (empty until the install lands, then populated on next read).
+  function getCrossRefs(b, c){
+    ensureCrossrefs();
+    const out = {}, prefix = b + "." + c + ".";
+    for(const a in crossrefs){
+      const map = crossrefs[a].map;
+      for(const key in map){
+        if(key.lastIndexOf(prefix, 0) !== 0) continue;
+        const v = parseInt(key.slice(prefix.length), 10); if(!v) continue;
+        const list = out[v] || (out[v] = []);
+        for(const r of map[key]) if(list.indexOf(r) === -1) list.push(r);
+      }
+    }
+    return out;
+  }
+  // The credit that must appear wherever these references are shown (CC BY obliges attribution).
+  function crossrefLicense(){ for(const a in crossrefs) if(crossrefs[a].license) return crossrefs[a].license; return ""; }
   // PERF-AUDIT-2026-07-20 MEDIUM-2: the full Strong's dictionary (modules/strongs-dict.json — 4.01 MB raw,
   // 958 KB gzipped) used to install UNCONDITIONALLY on first run. That was 19% of the entire cold-start wire
   // cost — about 153 SECONDS on 2G — for a feature the auto-installed default Bible (BSB) doesn't even
@@ -768,6 +799,18 @@ window.safeImgUrl = function (v) {
   // number resolves to a full definition (not just the tiny built-in fallback set).
   const DEFAULT_LEXICON = { id: "strongs", abbr: "Strong's", name: "Strong's Greek & Hebrew Dictionary",
     kind: "dict", format: "JSON", category: "dictionaries", url: "modules/strongs-dict.json" };
+  const DEFAULT_CROSSREFS = { id: "crossrefs-openbible", abbr: "TSK", name: "Cross References (openbible.info)",
+    kind: "crossref", format: "JSON", category: "crossrefs", url: "modules/crossrefs-openbible.json" };
+  // Lazy, idempotent, and self-healing on a failed connection — the lexicon pattern (_ensureFullLexicon).
+  let _crossrefsRequested = false;
+  function ensureCrossrefs(){
+    if(_crossrefsRequested || Object.keys(crossrefs).length || typeof navigator === "undefined") return;
+    _crossrefsRequested = true;
+    try{
+      if(isInstalled(DEFAULT_CROSSREFS.url)) return;
+      installModule(DEFAULT_CROSSREFS).then(notify).catch(err => { _crossrefsRequested = false; console.warn("crossrefs install failed", err); });
+    }catch(err){ _crossrefsRequested = false; console.warn("crossrefs install failed", err); }
+  }
 
   // ── catalog + installed-module registry (download-once, MySword style) ──
   const INSTALLED_KEY = "trinityone.installed";   // localStorage map: url -> meta
@@ -776,7 +819,7 @@ window.safeImgUrl = function (v) {
 
   function getInstalled(){ try{ return JSON.parse(localStorage.getItem(INSTALLED_KEY) || "{}"); }catch(e){ return {}; } }
   function setInstalled(map){ try{ localStorage.setItem(INSTALLED_KEY, JSON.stringify(map)); }catch(e){} }
-  function catOf(item){ return item.category || (item.kind === "dict" ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
+  function catOf(item){ return item.category || (item.kind === "crossref" ? "crossrefs" : item.kind === "dict" ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
   // A RECORD MUST NAME THE MODULE THE ENGINE REGISTERED, NOT THE ONE THE CATALOGUE ASKED FOR.
   // addSource/addCommentary/addDict have always deduped a colliding name (NT -> NT2), and the record kept
   // the catalogue's regardless, so two modules sharing one catalogue abbr produced two records saying the
@@ -870,7 +913,10 @@ window.safeImgUrl = function (v) {
           if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + bytes.byteLength + " bytes — refusing)");
           await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes);
         }   // M3: verify before cache/parse
-        loaded = { kind: "dict", abbr: loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)), item.abbr) };
+        const parsed = JSON.parse(new TextDecoder().decode(bytes));
+        loaded = (item.kind === "crossref")
+          ? { kind: "crossref", abbr: loadCrossrefsJSON(parsed, item.abbr) }
+          : { kind: "dict", abbr: loadDictJSON(parsed, item.abbr) };
       }else{
         // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
         // standing between a compromised gateway or mirror and a module whose HTML goes into the reader
@@ -940,8 +986,11 @@ window.safeImgUrl = function (v) {
         // only knowable once the module is loaded, which is here, so the repair happens on the next launch
         // and costs a localStorage write only when the two actually differ.
         if((meta.format || "").toUpperCase() === "JSON") {
-          const raw = bytes, u = url;
-          _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u, loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries") });
+          const raw = bytes, u = url, isXr = meta.kind === "crossref";
+          _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u,
+            isXr ? loadCrossrefsJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr)
+                 : loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr),
+            isXr ? "crossrefs" : "dictionaries") });
         } else {
           const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
           noteLoadedFrom(url, r && r.abbr, catOf(meta));
@@ -1293,7 +1342,7 @@ window.safeImgUrl = function (v) {
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
+    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 
