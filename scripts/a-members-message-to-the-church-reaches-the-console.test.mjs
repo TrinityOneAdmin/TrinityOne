@@ -128,11 +128,11 @@ function sender() {
     publish: async (e) => { published.push(e); return true; },
   };
   // finalizeEvent is imported under a bundle name; bind whatever the body calls so a rename fails loudly.
-  const body = fnBody(ST, 'async sendDM(peerHex, content, replyTo) {', 'sendDM');
+  const body = fnBody(ST, 'async sendDM(peerHex, content, replyTo, meta) {', 'sendDM');
   const fin = (body.match(/\b(finalizeEvent\d*)\(/) || [])[1];
   assert.ok(fin, 're-anchor: sendDM no longer signs an event');
   scope[fin] = finalizeEvent;
-  return { send: lift({ anchor: 'async sendDM(peerHex, content, replyTo) {', name: 'sendDM' }, scope), published };
+  return { send: lift({ anchor: 'async sendDM(peerHex, content, replyTo, meta) {', name: 'sendDM' }, scope), published };
 }
 
 test('the console sends NIP-44, which the member app reads first', async () => {

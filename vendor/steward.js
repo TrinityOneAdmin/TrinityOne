@@ -18317,22 +18317,28 @@ zoo`.split("\n");
       return await decrypt2(sk2, peerPub, ct);
     }
   };
-  var _dmWrap = (text, replyTo) => {
-    if (!replyTo || !replyTo.id) return text;
+  var _dmWrap = (text, replyTo, meta) => {
+    const hasR = !!(replyTo && replyTo.id);
+    const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : "";
+    if (!hasR && !nr && !ev) return text;
     try {
-      return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) });
+      const o = { v: 1, t: String(text) };
+      if (hasR) o.r = String(replyTo.id).slice(0, 64);
+      if (nr) o.nr = 1;
+      if (ev) o.ev = ev;
+      return JSON.stringify(o);
     } catch (e) {
       return text;
     }
   };
   var _dmUnwrap = (body) => {
-    if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null };
+    if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null };
     try {
       const o = JSON.parse(body);
-      if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null };
+      if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null };
     } catch (e) {
     }
-    return { text: body, replyTo: null };
+    return { text: body, replyTo: null, noReply: false, eventId: null };
   };
   var _sOutKey = () => "trinityone.steward.outbox:" + (pub || "");
   var _sOutbox = [];
@@ -21343,11 +21349,11 @@ zoo`.split("\n");
       return publish(finalizeEvent2(_monotonic({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", targetPub || ""], ["t", NET], ["t", groupId]], content: emoji || "-" }), sk));
     },
     // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
-    async sendDM(peerHex, content, replyTo) {
+    async sendDM(peerHex, content, replyTo, meta) {
       if (!sk || !peerHex) return null;
       let enc = "";
       try {
-        enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo));
+        enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo, meta));
       } catch {
         return null;
       }

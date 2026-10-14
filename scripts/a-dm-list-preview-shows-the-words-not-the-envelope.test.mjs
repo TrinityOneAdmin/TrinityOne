@@ -14,7 +14,7 @@ import { fnBody } from './test-slice.mjs';
 
 const FEL = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const sub = fnBody(FEL, 'subscribeDMs(onConvos) {', 'subscribeDMs');
-const wrap = fnBody(FEL, '_dmWrap(text, replyTo) {', '_dmWrap');
+const wrap = fnBody(FEL, '_dmWrap(text, replyTo, meta) {', '_dmWrap');
 const unwrap = fnBody(FEL, '_dmUnwrap(body) {', '_dmUnwrap');
 const coalesce = /\n  function _coalesce\(fn\) \{[\s\S]*?\n  \}\n/.exec(FEL);
 assert.ok(coalesce, '_coalesce not found in the bundle');

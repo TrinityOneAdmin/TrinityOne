@@ -55,7 +55,7 @@ test('a message can be swiped to reply, in group rooms AND in direct messages', 
 
 test('a DM reply is carried INSIDE the encryption, not in a public tag', () => {
   const src = stripComments(FEL);
-  assert.match(src, /_dmWrap\(text, replyTo\)/, 'the reply reference is wrapped into the body');
+  assert.match(src, /_dmWrap\(text, replyTo(, meta)?\)/, 'the reply reference is wrapped into the body');
   assert.match(src, /_dmUnwrap\(body\)/, 'and unwrapped on read');
   assert.match(src, /const body = window\.Fellowship\._dmWrap\(content, replyTo\)/,
     'sendDM must encrypt the WRAPPED body — wrapping after encryption would do nothing');
@@ -67,7 +67,7 @@ test('a DM reply is carried INSIDE the encryption, not in a public tag', () => {
   // Old messages are bare strings and must keep working.
   const un = src.slice(src.indexOf('_dmUnwrap(body)'), src.indexOf('_dmUnwrap(body)') + 500);
   assert.match(un, /body\[0\] !== '\{'/, 'every DM ever sent is a bare string — it must still read as text');
-  assert.match(un, /return \{ text: body, replyTo: null \}/, 'and unparseable content must not lose the words');
+  assert.match(un, /return \{ text: body, replyTo: null(, noReply: false, eventId: null)? \}/, 'and unparseable content must not lose the words');
 });
 
 test('the 12-word check lets you try again when you get it wrong', () => {
