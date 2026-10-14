@@ -1156,10 +1156,6 @@ function evtToMsg(e) {
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
-  const [hidden, setHidden] = React.useState(() => { try { return localStorage.getItem('trinityone.serving.cardHidden') === '1'; } catch { return false; } });
-  const dismiss = (e) => { if (e) { e.stopPropagation(); e.preventDefault(); } try { localStorage.setItem('trinityone.serving.cardHidden', '1'); } catch {} setHidden(true); };
-  if (hidden) return null;
-  const xBtn = <button onClick={dismiss} aria-label="Dismiss" style={{ position: "absolute", top: -6, right: -6, width: 24, height: 24, borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, boxShadow: "var(--shadow)", zIndex: 1 }}><Icon name="x" size={13} stroke={2.4} color="var(--ink-3)" /></button>;
   if (!next && !pending) {
     // not rostered — still offer a way into Serving & events
     return (
@@ -1172,7 +1168,6 @@ function ServingEntry({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </button>
-        {xBtn}
       </div>
     );
   }
@@ -1187,7 +1182,6 @@ function ServingEntry({ ctx }) {
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
-      {xBtn}
     </div>
   );
 }

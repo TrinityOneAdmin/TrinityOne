@@ -2309,10 +2309,6 @@ function TodayScreen({ ctx }) {
   // `ctx.servingSeenTs` is the per-church mark; app/app.jsx stamps it forward from ctx.openServing().
   const servNew = servingNewCount(ctx, ctx.servingSeenTs);
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
-  const [servHidden, setServHidden] = React.useState(() => { try { return localStorage.getItem('trinityone.serving.cardHidden') === '1'; } catch { return false; } });
-  const dismissServing = (e) => { if (e) e.stopPropagation(); try { localStorage.setItem('trinityone.serving.cardHidden', '1'); } catch {} setServHidden(true); };
-  const _openServingOrig = ctx.openServing;
-  const openServingAndShow = React.useCallback((...a) => { try { localStorage.removeItem('trinityone.serving.cardHidden'); } catch {} setServHidden(false); _openServingOrig && _openServingOrig(...a); }, [_openServingOrig]);
 
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
@@ -2392,9 +2388,9 @@ function TodayScreen({ ctx }) {
           unconditionally — "Serving & events · RSVP · your rota" — so a locked phone still announced that its
           owner belongs to a church with a rota even after the church's NAME was hidden. Hiding one string is
           not hiding the church. AUDIT-2026-07-27. */}
-      {!ctx.church ? null : servHidden ? null : (servNext || servPendingN) ? (
+      {!ctx.church ? null : (servNext || servPendingN) ? (
         <div style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
-          <div onClick={() => openServingAndShow()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)",
+          <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)",
             background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 9%, var(--surface))",
             border: servPendingN ? "1px solid color-mix(in oklab, var(--gold) 32%, var(--line))" : "1px solid color-mix(in oklab, var(--sage) 30%, var(--line))" }}>
             <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
@@ -2414,11 +2410,10 @@ function TodayScreen({ ctx }) {
             </div>
             <Icon name="chevR" size={18} color="var(--ink-3)" />
           </div>
-          <button onClick={dismissServing} aria-label="Dismiss" style={{ position: "absolute", top: -6, right: -6, width: 24, height: 24, borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, boxShadow: "var(--shadow)" }}><Icon name="x" size={13} stroke={2.4} color="var(--ink-3)" /></button>
         </div>
       ) : (
         <div style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
-          <div onClick={() => openServingAndShow()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)", background: "var(--surface)", border: "1px solid var(--line)" }}>
+          <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)", background: "var(--surface)", border: "1px solid var(--line)" }}>
             <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "color-mix(in oklab, var(--sage) 16%, var(--surface))", color: "var(--sage)" }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
             <div style={{ flex: 1, minWidth: 0 }}>
               {/* The title and its dot are ONE line. "What’s happening" plus a "9+" badge is wider than the
@@ -2433,7 +2428,6 @@ function TodayScreen({ ctx }) {
             </div>
             <Icon name="chevR" size={18} color="var(--ink-3)" />
           </div>
-          <button onClick={dismissServing} aria-label="Dismiss" style={{ position: "absolute", top: -6, right: -6, width: 24, height: 24, borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, boxShadow: "var(--shadow)" }}><Icon name="x" size={13} stroke={2.4} color="var(--ink-3)" /></button>
         </div>
       )}
 
