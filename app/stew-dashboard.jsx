@@ -4042,13 +4042,26 @@ function GroupChatModal({ group, onClose }) {
   // way out and the steward watched their answer vanish into a room it never reached. Clear ONLY once a relay
   // has taken it; otherwise keep the words and say so through the banner doPin/doUnpin/doRemove already use.
   const [sending, setSending] = React.useState(false);
+  // REPLYING — the shared TrinityReplyKit (app/reply-kit.jsx), as StewDmWindow and the member app use it. The
+  // reply is cleared only once a relay has taken the post (like the words); a failed send leaves it in place,
+  // and the .then/.catch put it back if the steward moved on to another message while it was in flight.
+  const [replyTo, setReplyTo] = React.useState(null);
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const send = () => {
     const t = text.trim(); if (!t || sending) return;
     setSending(true);
-    Promise.resolve(window.Steward.publishPost(t, group.id))
-      .then((ok) => { setSending(false); if (ok) setText(''); else showMod('That didn’t send — nothing reached your church. Your message is still in the box; try again.'); })
-      .catch(() => { setSending(false); showMod('That didn’t send — the relay could not be reached. Your message is still in the box; try again.'); });
+    const quoting = replyTo;
+    Promise.resolve(window.Steward.publishPost(t, group.id, quoting ? { id: quoting.id, by: quoting.by } : undefined))
+      .then((ok) => { setSending(false); if (ok) { setText(''); setReplyTo(r => (r === quoting ? null : r)); } else { setReplyTo(r => r || quoting); showMod('That didn’t send — nothing reached your church. Your message is still in the box; try again.'); } })
+      .catch(() => { setSending(false); setReplyTo(r => r || quoting); showMod('That didn’t send — the relay could not be reached. Your message is still in the box; try again.'); });
   };
+  const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
+  // SWIPE TO REPLY (APK): one row is dragged at a time, so one ref + one {id, dx} state serves the list.
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const swipe = (m) => isNative
+    ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
+    : {};
   const react = (m, emoji) => { window.Steward.reactGroup(group.id, m.id, m.by, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const doPin = (m) => {
     setMenuFor('');
@@ -4177,11 +4190,16 @@ function GroupChatModal({ group, onClose }) {
               <button onClick={() => doUnremove(m)} aria-label={'Put back the removed message from ' + (nameFor(m.by) || 'a member')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', padding: '4px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Put back</button>
             </div>
           ) : (
-            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
+            <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative',
+              ...(isNative ? TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) : {}) }}>
+              {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
               {!m.mine ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, paddingLeft: 2 }}>
                 <SkBadge initials={initialsFor(m.by)} av={avFor(m.by)} pubkey={m.by} size={20} radius={7} accent="var(--sage)" />
                 <span style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{nameFor(m.by)}</span>
               </div> : null}
+              {m.replyTo && m.quote
+                ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: msgText(m.quote) })
+                : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
                 <div style={{ position: 'relative', flexShrink: 0 }}>
@@ -4190,6 +4208,7 @@ function GroupChatModal({ group, onClose }) {
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" aria-label={'Moderate the message from ' + (nameFor(m.by) || 'a member')} aria-expanded={menuFor === m.id} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
                   {menuFor === m.id ? (
                     <div style={{ position: 'absolute', top: 22, left: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button>
                       <button onClick={() => (pin && pin.msgId === m.id) ? doUnpin() : doPin(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="#8a6717" /> {(pin && pin.msgId === m.id) ? 'Unpin message' : 'Pin message'}</button>
                       <button onClick={() => doRemove(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay-ink)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button>
                     </div>
@@ -4213,6 +4232,7 @@ function GroupChatModal({ group, onClose }) {
             </div>
           )))}
         </div>
+        {replyTo ? TrinityReplyKit.bar({ variant: 'console', who: nameFor(replyTo.by), text: msgText(replyTo), onCancel: () => setReplyTo(null) }) : null}
         <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderTop: '1px solid var(--line)' }}>
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
           <button onClick={send} disabled={!text.trim() || sending} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: (text.trim() && !sending) ? 1 : 0.55 }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
