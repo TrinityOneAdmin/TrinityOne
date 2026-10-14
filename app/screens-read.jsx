@@ -688,10 +688,53 @@ function CommentaryEdge({ open, onToggle }) {
     </button>
   );
 }
+// A cross-reference preview: read the verse in place, then choose to open it in the reader (owner 2026-10-14,
+// consistent with the Library page's preview-then-jump). Text comes from the active translation if it has that
+// chapter loaded; a same-chapter range shows all its verses. Never fabricates — an empty result says so.
+function XrefPreviewSheet({ refStr, open, onClose, onGo, version }) {
+  const loc = refStr ? window.Bible.parseRef(refStr) : null;
+  let text = '';
+  if (loc) {
+    try {
+      const rows = window.Bible.getVerses(loc.book, loc.chap, version) || [];
+      const from = loc.verse || 1, to = loc.verseEnd || from;
+      text = rows.filter(r => r.v >= from && r.v <= to).map(r => r.text).join(' ');
+    } catch (e) { text = ''; }
+  }
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Cross reference</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{refStr || ''}</div>
+        </div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {!loc ? (
+        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16, padding: '6px 0 14px' }}>Couldn’t read that reference.</p>
+      ) : (
+        <React.Fragment>
+          {text
+            ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: '4px 0 16px', textWrap: 'pretty' }}>{text}</p>
+            : <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>Open it in the reader to read the full verse.</p>}
+          <button onClick={() => onGo(loc)} style={{
+            width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 18px',
+            borderRadius: 13, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <Icon name="book" size={16} color="currentColor" /> Open in reader
+          </button>
+        </React.Fragment>
+      )}
+    </BottomSheet>
+  );
+}
+
 function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
   const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
+  const [xrefPreview, setXrefPreview] = useS(null);   // a cross-reference being previewed before jumping to it
+  const [xrefOpen, setXrefOpen] = useS({});           // verse -> show all its cross-refs (past the first 4)
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
   // Written under the SAME key the verse card uses, so the note shows on its verse as well as in this list. A
   // verse that already has a note gets this one added under it, never replaced by it.
@@ -721,6 +764,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
   // subscribe() re-reads and the empty list fills in. Not version-dependent — cross-refs are translation-agnostic.
   useE(() => {
     if (!open || view !== 'crossrefs') return;
+    setXrefOpen({});   // a new chapter collapses every group back to its first few
     const read = () => { try { setXrefs(window.Bible.getCrossRefs ? window.Bible.getCrossRefs(loc.book, loc.chap) : {}); } catch (e) { setXrefs({}); } };
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
@@ -776,13 +820,21 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
                   <div key={v} style={{ marginBottom: 16 }}>
                     <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 8 }}>{label}:{v}</span>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {xrefs[v].map((r, i) => (
-                        <button key={i} onClick={() => { const t = window.Bible.parseRef(r); if (t) { onClose(); ctx.gotoRef(t.book, t.chap, t.verse); } }} style={{
+                      {(xrefOpen[v] ? xrefs[v] : xrefs[v].slice(0, 4)).map((r, i) => (
+                        <button key={i} onClick={() => setXrefPreview(r)} style={{
                           border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', cursor: 'pointer',
                           padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                           {r}<Icon name="chevR" size={13} color="var(--ink-3)" />
                         </button>
                       ))}
+                      {xrefs[v].length > 4 ? (
+                        <button onClick={() => setXrefOpen(o => ({ ...o, [v]: !o[v] }))} style={{
+                          border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', color: 'var(--clay-ink)', cursor: 'pointer',
+                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          {xrefOpen[v] ? 'Show fewer' : `${xrefs[v].length - 4} more`}
+                          <Icon name={xrefOpen[v] ? 'chevU' : 'chevD'} size={14} color="var(--clay)" />
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -863,6 +915,9 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
           )}
         </div>
       </div>
+      <XrefPreviewSheet refStr={xrefPreview} open={!!xrefPreview} version={ctx.version}
+        onClose={() => setXrefPreview(null)}
+        onGo={(t) => { setXrefPreview(null); onClose(); ctx.gotoRef(t.book, t.chap, t.verse); }} />
     </React.Fragment>
   );
 }

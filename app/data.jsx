@@ -691,7 +691,9 @@ const COLLECTIONS = [
   { id: 'highlights', name: 'Highlights', count: 9, icon: 'marker' },
   { id: 'bookmarks', name: 'Bookmarks', count: 7, icon: 'bookmark' },
   { id: 'notes', name: 'Notes', count: 6, icon: 'pen' },
-  { id: 'crossrefs', name: 'Cross References', count: 5, icon: 'link' },
+  // Cross References removed as a Library page (owner 2026-10-14): cross-refs now live in the reader's Study
+  // panel, driven by the real openbible.info module — see engine.js getCrossRefs and CommentaryPanel. The
+  // old COLLECTION_ITEMS.crossrefs seed below is now unreferenced and kept only to avoid a wider edit.
 ];
 // Prayer list intentionally NOT a Library collection -- it's community-shaped; the MyData
 // 'prayer' type + CollectionView handling stay in place for a future Community-page home.

@@ -557,73 +557,6 @@ function VisChip({ visibility, onClick }) {
   );
 }
 
-// ── verse preview: tap any reference on a cross-ref card to read it in place, then jump ──
-// The pattern every major reader ships (Olive Tree / Logos / SwordSearcher): a reference previews
-// its own text WITHOUT leaving the list, and a single button opens it in the reader. Before this,
-// a tap called ctx.openReader() with no target and so just re-opened the last page (the plan reading).
-function VersePreview({ refStr, open, onClose, ctx }) {
-  const loc = refStr ? Bible.parseRef(refStr) : null;
-  const label = window.verseRefLabel ? window.verseRefLabel(refStr) : refStr;
-  // The verse text, only if the active translation has that chapter loaded. Never fabricated: an empty
-  // result shows "open it to read", not a blank that looks like the verse.
-  let text = '';
-  if (loc) {
-    const rows = Bible.getVerses(loc.book, loc.chap, ctx.version) || [];
-    const row = rows.find(r => String(r.v) === String(loc.verse));
-    text = row ? row.text : '';
-  }
-  return (
-    <BottomSheet open={open} onClose={onClose}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Cross reference</div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div>
-        </div>
-        <IconBtn name="x" onClick={onClose} />
-      </div>
-      {!loc ? (
-        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16, padding: '6px 0 14px' }}>Couldn’t read that reference.</p>
-      ) : (
-        <React.Fragment>
-          {text
-            ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: '4px 0 16px', textWrap: 'pretty' }}>{text}</p>
-            : <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>Open it in the reader to read the full verse.</p>}
-          <button onClick={() => { onClose(); ctx.gotoRef(loc.book, loc.chap, loc.verse); }} style={{
-            width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 18px',
-            borderRadius: 13, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)',
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-            <Icon name="book" size={16} color="currentColor" /> Open in reader
-          </button>
-        </React.Fragment>
-      )}
-    </BottomSheet>);
-}
-
-// ── one cross-reference card: the source verse plus each reference it points at, every one tappable ──
-function XrefCard({ it, onTap }) {
-  const refs = String(it.text || '').split('·').map(s => s.trim()).filter(Boolean);
-  return (
-    <div style={{ padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
-      <button onClick={() => onTap(it.ref)} style={{
-        display: 'inline-flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer',
-        padding: 0, marginBottom: 9, fontWeight: 700, color: 'var(--clay)', fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>
-        <Icon name="link" size={14} color="var(--clay)" />
-        <span>{window.verseRefLabel ? window.verseRefLabel(it.ref) : it.ref}</span>
-      </button>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {refs.map((r, i) => (
-          <button key={i} onClick={() => onTap(r)} style={{
-            border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', cursor: 'pointer',
-            padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13,
-            display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {window.verseRefLabel ? window.verseRefLabel(r) : r}
-            <Icon name="chevR" size={13} color="var(--ink-3)" />
-          </button>
-        ))}
-      </div>
-    </div>);
-}
-
 // ── collection drill-in (Highlights / Bookmarks / Notes / Prayer list / Cross refs) ──
 // User-owned types read + manage through window.MyData; cross-refs stay reference data.
 function CollectionView({ coll, open, onClose, ctx }) {
@@ -634,8 +567,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
   const [adding, setAdding] = React.useState(false);
   const [pWho, setPWho] = React.useState('');
   const [pText, setPText] = React.useState('');
-  const [preview, setPreview] = React.useState(null);   // a reference string being previewed (cross-refs)
-  React.useEffect(() => { if (open) { setQ(''); setAdding(false); setPWho(''); setPText(''); setPreview(null); } }, [open, coll && coll.id]);
+  React.useEffect(() => { if (open) { setQ(''); setAdding(false); setPWho(''); setPText(''); } }, [open, coll && coll.id]);
   React.useEffect(() => MD.on(() => force(x => x + 1)), []);
   if (!coll) return null;
 
@@ -704,9 +636,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-            {items.map((it) => isXref ? (
-              <XrefCard key={it.id || it.ref} it={it} onTap={setPreview} />
-            ) : (
+            {items.map((it) => (
               <div key={it.id || it.ref} onClick={() => !isPrayer && jump(it)} style={{
                 padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: it.ref && !isPrayer ? 'pointer' : 'default', boxShadow: 'var(--shadow)',
                 position: 'relative', overflow: 'hidden', paddingLeft: it.color ? 18 : 15, opacity: it.answered ? .62 : 1 }}>
@@ -750,7 +680,6 @@ function CollectionView({ coll, open, onClose, ctx }) {
           </div>
         )}
       </div>
-      {isXref ? <VersePreview refStr={preview} open={!!preview} onClose={() => setPreview(null)} ctx={ctx} /> : null}
     </Overlay>);
 
 }

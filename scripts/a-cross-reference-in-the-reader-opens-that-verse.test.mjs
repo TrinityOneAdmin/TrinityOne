@@ -114,6 +114,8 @@ function studyPanel(loc, label) {
       crossrefLicense: () => MODULE.meta.license,
       getCommentary: () => [], subscribe: () => () => {},
       refKey: (l, v) => l.book + '.' + l.chap + '.' + v,
+      // the preview reads the target verse's text from the active translation
+      getVerses: (book, chap) => (book === 1 && chap === 1) ? [{ v: 1, text: 'In the beginning God created the heavens and the earth.' }] : [],
     },
     sanitizeHtml: h => h, innerWidth: 360,
   };
@@ -126,21 +128,23 @@ function studyPanel(loc, label) {
     Icon, cx: (...a) => a.filter(Boolean).join(' '),
     lsGet: (k, d) => d, lsSet: () => {},
     useTrinityAudio: () => ({ track: null, playing: false }),
-    Overlay: Stub('Overlay'), ReadPlansTabs: Stub('ReadPlansTabs'), BottomSheet: Stub('BottomSheet'),
+    Overlay: Stub('Overlay'), ReadPlansTabs: Stub('ReadPlansTabs'),
+    BottomSheet: ({ open, children }) => (open ? React.createElement('div', {}, children) : null),
     Sheet: Stub('Sheet'), Modal: Stub('Modal'), Pill: Stub('Pill'), Row: Stub('Row'),
     IconBtn: Stub('IconBtn'), Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
   };
   const { CommentaryPanel } = loadScreen('app/screens-read.jsx', ['CommentaryPanel'], globals);
   const ctx = { notes: {}, setNote() {}, gotoRef: (book, chap, verse) => gotoCalls.push({ book, chap, verse }), version: 'BSB' };
   const props = { loc, label, open: true, onClose() {}, ctx, docked: true };
-  let tree = draw(CommentaryPanel, props);
+  const render = () => draw(CommentaryPanel, props);
+  let tree = render();
   // the tab must be on the screen; switch to it, then let the effect fetch + the next paint render
   const tab = button(tree, 'Cross refs');
   assert.equal(tab.length, 1, 'there is no "Cross refs" tab in the Study panel');
   tab[0].props.onClick();
-  draw(CommentaryPanel, props);          // view -> crossrefs, effect runs getCrossRefs -> setXrefs
-  tree = draw(CommentaryPanel, props);   // xrefs now on screen
-  return { tree, gotoCalls };
+  render();          // view -> crossrefs, effect runs getCrossRefs -> setXrefs
+  tree = render();   // xrefs now on screen
+  return { tree, gotoCalls, render };
 }
 
 test('POINT OF USE: the Cross refs tab shows this chapter\'s references, with the openbible.info credit', () => {
@@ -153,11 +157,30 @@ test('POINT OF USE: the Cross refs tab shows this chapter\'s references, with th
   assert.match(page, /openbible\.info/, 'the CC BY credit is not shown beside the references');
 });
 
-test('POINT OF USE: tapping a cross-reference opens THAT verse via gotoRef — not the last page', () => {
-  const { tree, gotoCalls } = studyPanel({ book: 43, chap: 1 }, 'John 1');
-  const b = button(tree, 'Genesis 1:1').filter(n => texts(n).join('').includes('Genesis 1:1'));
-  assert.ok(b.length >= 1, 'Genesis 1:1 is not a tappable control in the Cross refs tab');
-  b[0].props.onClick();
+test('POINT OF USE: a verse with more than 4 cross-refs collapses behind a chevron, and expands', () => {
+  // John 1:1 has 8 cross-references, so its group must show only some with a chevron to reveal the rest.
+  const { tree, render } = studyPanel({ book: 43, chap: 1 }, 'John 1');
+  const refChips = t => button(t, 'chevR');            // ref chips carry a chevR icon; the toggle carries chevD/chevU
+  const before = refChips(tree).length;
+  const more = button(tree, 'more');                   // the "N more" chevron(s)
+  assert.ok(more.length >= 1, 'a verse with more than 4 cross-references showed them all — nothing collapsed');
+  more[0].props.onClick();
+  const after = render();
+  assert.ok(refChips(after).length > before, 'expanding the group revealed no further references');
+  assert.ok(button(after, 'Show fewer').length >= 1, 'the expanded group offers no way to collapse again');
+});
+
+test('POINT OF USE: tapping a cross-reference PREVIEWS the verse, then Open in reader goes to it', () => {
+  const { tree, gotoCalls, render } = studyPanel({ book: 43, chap: 1 }, 'John 1');
+  const chip = button(tree, 'Genesis 1:1').filter(n => texts(n).join('').includes('Genesis 1:1'));
+  assert.ok(chip.length >= 1, 'Genesis 1:1 is not a tappable control in the Cross refs tab');
+  chip[0].props.onClick();                 // open the preview, do NOT navigate yet
+  const after = render();
+  assert.deepEqual(gotoCalls, [], 'tapping a reference navigated immediately instead of previewing first');
+  assert.match(reads(after), /In the beginning God created/, 'the preview did not show the verse text');
+  const go = button(after, 'Open in reader');
+  assert.equal(go.length, 1, 'the preview has no "Open in reader" button');
+  go[0].props.onClick();
   assert.deepEqual(gotoCalls, [{ book: 1, chap: 1, verse: 1 }],
-    'tapping a cross-reference did not navigate to that exact verse via gotoRef');
+    '"Open in reader" did not navigate to that exact verse via gotoRef');
 });
