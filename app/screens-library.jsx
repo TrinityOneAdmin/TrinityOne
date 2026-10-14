@@ -657,7 +657,15 @@ function CollectionView({ coll, open, onClose, ctx }) {
                 {/* management footer (user-owned only) */}
                 {owned ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 11 }} onClick={e => e.stopPropagation()}>
-                    <VisChip visibility={it.visibility} onClick={() => toggleVis(it)} />
+                    {/* NO PUBLIC/PRIVATE CHIP ON BOOKMARKS OR HIGHLIGHTS (owner, 2026-10-13). The flag is stored and
+                        toggled and NOTHING reads it: the only three mentions of an item's `visibility` in the tree are
+                        defVis, the write in put(), and setVisibility itself. Personal documents are DEVICE-ONLY since
+                        the owner's 2026-09-27 decision (src/mydata.src.js, D1) -- they are never synced to a relay, so a
+                        bookmark cannot be public and the chip said it was. Highlights and bookmarks DID publish in
+                        plaintext once (SECURITY-AUDIT-2026-07-20 C1, an anonymous REQ returned every member and the
+                        verses they marked); that was encrypted, then stopped syncing, and this chip outlived both.
+                        Owner: "people can manually share verse if they want". The other collections keep it. */}
+                    {coll.id === 'bookmarks' || coll.id === 'highlights' ? null : <VisChip visibility={it.visibility} onClick={() => toggleVis(it)} />}
                     {isPrayer ? (
                       <button onClick={() => MD.put('prayer', { ...it, answered: !it.answered })} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999, cursor: 'pointer',
                         border: '1px solid var(--line)', background: it.answered ? 'color-mix(in oklab, var(--sage) 14%, var(--surface))' : 'var(--surface-2)', color: it.answered ? 'var(--sage)' : 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 10.5 }}>
