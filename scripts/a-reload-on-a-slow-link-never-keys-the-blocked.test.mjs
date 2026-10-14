@@ -83,7 +83,7 @@ before(async () => {
   const cdp = await H.freePort('the slow-blocked test\'s Chrome debug port');
   prof = mkdtempSync(join(tmpdir(), 'trin-slowblk-chr-'));
   const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
-  chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=1280,1200', `${relay.base}/steward.html`], { stdio: 'ignore' });
+  chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=1440,1200', `${relay.base}/steward.html`], { stdio: 'ignore' });
   let targets = null;
   for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${cdp}/json`)).json(); } catch {} }
   assert.ok(targets && targets.length, 'chromium never exposed a debug target');
