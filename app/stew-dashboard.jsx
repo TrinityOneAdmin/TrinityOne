@@ -266,7 +266,14 @@ function noteRelayRejection(refused) {
     // genuine refusals. Naming it would put "Refused our last change" on a box that was merely offline.
     const list = (Array.isArray(refused) ? refused : []).filter(r => r && r.url && !/^connection failure/i.test(String(r.error || '')))
       .map(r => ({ url: String(r.url), error: String(r.error || '').slice(0, 300), at: Date.now() }));
+    // AND WHEN NOTHING GENUINE WAS REFUSED, FORGET WHOEVER WAS NAMED LAST. If the filter above empties the
+    // list — every entry was an unreachable relay — this wrote no key and left the PREVIOUS list in place, so
+    // the new alarm put "Refused our last change" on a relay that had nothing to do with it. The timestamp on
+    // the line above still has to be written: "a relay refused us" with no url is a real state, and an older
+    // publish path calls this with no list at all (asserted in the-relay-row-says-which-one-refused). So this
+    // does NOT remove the alarm-with-no-pill case — it only stops the alarm naming the wrong relay.
     if (list.length) localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(list));
+    else try { localStorage.removeItem(window.REG_REFUSED_LS); } catch (e) {}
   } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-rejected')); } catch (e) {}
 }
@@ -302,6 +309,37 @@ try {
     window.addEventListener('steward-relay-accepted', (e) => { try { clearRelayRefusal(e && e.detail && e.detail.url); } catch (x) {} });
   }
 } catch (e) {}
+// A REFUSAL WHOSE RELAY IS NO LONGER ONE OF OURS. "Refused our last change" is cleared only by THAT relay
+// taking a write (above), so a refusing relay the steward then REMOVES — the obvious reaction to the warning
+// — or one whose tunnel address churns (reference/RELAY-ADMISSION.md root 3) is never written to again, and
+// nothing can ever match it. The alarm and its fix-it control then stand for the full 7-day TTL with NO pill on
+// any row to say which relay they are about, and that control is a relay admin-token field: it is "not
+// something to leave sitting on screen" (DashRelaysCard). A relay we no longer send anything to cannot be
+// refusing anything, so its refusal goes with it. Measured on the rendered Relays page: before this, a refusal
+// recorded against a relay the steward then removed had NO exit but the 7-day timer, and no write anywhere
+// could clear it — clearRelayRefusal() bails when the accepting url is not in the stored list.
+//
+// A REMOVED-THEN-RE-ADDED RELAY DOES NOT INHERIT ITS OLD REFUSAL. Owner-confirmed, intended: the next refused
+// write records it again, and until one happens there is nothing true to show.
+//
+// `urls` MUST BE A LOADED LIST. An empty or not-yet-probed one means "we do not know yet", never "every relay
+// is gone", so this refuses to act on one — otherwise every cold boot would discard a real refusal before the
+// relay health check had answered. The CALLER decides when the list has loaded; this refuses only the empty
+// case, and that one line is what makes the whole function safe.
+function dropRefusalsNotListed(urls) {
+  const keys = new Set((Array.isArray(urls) ? urls : []).map(relayUrlKey).filter(Boolean));
+  if (!keys.size) return;                                        // list not loaded: nothing is known to be gone
+  let list;
+  try { list = JSON.parse(localStorage.getItem(window.REG_REFUSED_LS) || '[]'); } catch (e) { return; }
+  if (!Array.isArray(list) || !list.length) return;
+  const rest = list.filter(r => r && keys.has(relayUrlKey(r.url)));
+  if (rest.length === list.length) return;                       // every refusal still names a listed relay
+  if (!rest.length) { clearRelayRejection(); return; }
+  // Same bookkeeping as clearRelayRefusal(): the list is per relay and the flag is global, so they move
+  // together — drop these entries, and drop the flag only when none remain.
+  try { localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(rest)); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('steward-relay-refusal-changed')); } catch (e) {}
+}
 // The flag says "a relay refused our posts". It's stale once posts are landing again — the steward may well
 // have fixed it another way (restored the key, the operator added the church) without touching the in-console
 // token, and the alarm shouldn't linger forever. True only if a rejection is recorded AND still fresh.
@@ -4845,7 +4883,11 @@ function DashRelaysCard() {
   const [regNeeded, setRegNeeded] = React.useState(relayRejectionActive);
   const [refusalTick, setRefusalTick] = React.useState(0);   // bumps when one relay's refusal clears but others remain
   React.useEffect(() => {
-    const onRejected = () => setRegNeeded(true);
+    // A SECOND REFUSAL, ON A DIFFERENT RELAY, WHILE THIS PAGE IS OPEN. setRegNeeded(true) is a no-op when the
+    // alarm is already up, so nothing in the refusedSet memo below moved and the pill stayed on the relay that
+    // refused FIRST — until the 30-second health probe happened to hand the card a fresh array. The tick is
+    // what that memo watches for a refusal CHANGING, so bump it here too.
+    const onRejected = () => { setRegNeeded(true); setRefusalTick(n => n + 1); };
     // A relay taking a write clears THAT relay's refusal (clearRelayRefusal, module level, fires
     // steward-relay-cleared when the last one goes). It used to clear everything on any steward-publish-ok -
     // but that fires when ANY relay accepted, so relay B saying yes wiped the pill on relay A still refusing,
@@ -4857,6 +4899,16 @@ function DashRelaysCard() {
     window.addEventListener('steward-relay-refusal-changed', onChanged);
     return () => { window.removeEventListener('steward-relay-rejected', onRejected); window.removeEventListener('steward-relay-cleared', onCleared); window.removeEventListener('steward-relay-refusal-changed', onChanged); };
   }, []);
+  // THE REFUSING RELAY IS NO LONGER IN THE LIST. Driven by the relay list rather than by a render: `status` is
+  // one entry per relaysRaw() (src/steward.src.js relayStatus), which is never empty for a real church — the
+  // canonical pool is appended unconditionally there, and that comment calls it the never-empty guard — so an
+  // empty `status` is "still checking", which is exactly what this card already calls `checking` below, and
+  // dropRefusalsNotListed leaves a real refusal alone for it. `status` is also the CANDIDATE list, not the
+  // publish set, so a relay the network gate has not proved yet is still on it and keeps its refusal.
+  // Keyed on the ADDRESSES, so the 30-second health re-probe (a fresh array each time) does not re-run it.
+  // Declared AFTER the listener effect above so those listeners are already subscribed when this raises one.
+  const listedRelayKeys = status.map(r => (r && r.url) || '').join(' ');
+  React.useEffect(() => { dropRefusalsNotListed(status.map(r => r && r.url)); }, [listedRelayKeys]);
   // WHICH RELAY REFUSED, keyed the way both sides store it. Recomputed when the alarm flips or the health
   // check returns, which is exactly when it can change. Compared with trailing slashes and case removed:
   // the pool keys relays by its own normaliser and a raw string compare has missed silently three times.
@@ -4871,6 +4923,12 @@ function DashRelaysCard() {
   // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
   const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
+  // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
+  // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
+  // covers a refusal arriving as well as one clearing (see onRejected), and `status` is the repaint when the
+  // health check returns; setRegNeeded(true) covers neither, because it is a no-op when the alarm is already
+  // up. Before the tick was bumped on arrival, a second refusal left the pill on the relay that refused first
+  // until the next 30-second probe; keying this on the addresses would have made that permanent.
   const refusedSet = React.useMemo(() => {
     const key = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');   // same normaliser as relayUrlKey(), inline so this card needs no other global
     const m = new Map();
