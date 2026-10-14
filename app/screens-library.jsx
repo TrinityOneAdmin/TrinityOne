@@ -48,6 +48,9 @@ function LibraryScreen({ ctx }) {
 
 function LibraryHome({ ctx }) {
   const D = window.TrinityData;
+  // Which Library sections are folded shut (default: none). Session-only.
+  const [folded, setFolded] = React.useState({});
+  const fold = (id) => () => setFolded((f) => ({ ...f, [id]: !f[id] }));
   // honest module counts from what's actually installed (was hardcoded "12 versions / 8 sets / 3 entries" fakes)
   const inst = (window.Bible && window.Bible.installedMap && window.Bible.installedMap()) || {};
   const byCat = {}; for (const v of Object.values(inst)) { const c = (v && v.category) || 'bibles'; byCat[c] = (byCat[c] || 0) + 1; }
@@ -76,18 +79,18 @@ function LibraryHome({ ctx }) {
         )}
       </div>
 
-      <SectionLabel>Modules</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'lumenFade .5s ease .1s both' }}>
+      <SectionLabel collapsed={!!folded.modules} onToggle={fold('modules')}>Modules</SectionLabel>
+      {!folded.modules && <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'lumenFade .5s ease .1s both' }}>
         {D.MODULES.map((m) => <ModuleTile key={m.id} m={{ ...m, count: countFor(m.id) }} onClick={() =>
           m.id === 'bibles' ? ctx.openStore('language', 'bibles')
           : m.id === 'dictionaries' ? ctx.openStore('featured', 'dictionaries')
           : m.id === 'commentaries' ? ctx.openStore('featured', 'commentaries')
           : ctx.openModule(m)
         } />)}
-      </div>
+      </div>}
 
-      <SectionLabel>Listen</SectionLabel>
-      <div style={{ marginBottom: 24, animation: 'lumenFade .5s ease .12s both' }}>
+      <SectionLabel collapsed={!!folded.listen} onToggle={fold('listen')}>Listen</SectionLabel>
+      {!folded.listen && <div style={{ marginBottom: 24, animation: 'lumenFade .5s ease .12s both' }}>
         <button onClick={() => ctx.openAudioBibles()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow)', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
           <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="headphones" size={22} color="currentColor" /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -96,10 +99,10 @@ function LibraryHome({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </button>
-      </div>
+      </div>}
 
-      <SectionLabel action="+ New" onAction={() => ctx.newJournal()}>Recent journal</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 11, animation: 'lumenFade .5s ease .15s both' }}>
+      <SectionLabel action="+ New" onAction={() => ctx.newJournal()} collapsed={!!folded.journal} onToggle={fold('journal')}>Recent journal</SectionLabel>
+      {!folded.journal && <div style={{ display: 'flex', flexDirection: 'column', gap: 11, animation: 'lumenFade .5s ease .15s both' }}>
         {(ctx.journalEntries || D.JOURNAL).length === 0 ? (
           <button onClick={() => ctx.newJournal()} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '30px 20px', borderRadius: 18,
             border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>
@@ -122,7 +125,7 @@ function LibraryHome({ ctx }) {
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{j.body}</p>
           </div>
         )}
-      </div>
+      </div>}
     </React.Fragment>);
 
 }
