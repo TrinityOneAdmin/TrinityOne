@@ -2284,6 +2284,8 @@ function TodayScreen({ ctx }) {
   const plan = started.sort((a, b) => (ctx.planProgress[b.id] || []).length - (ctx.planProgress[a.id] || []).length)[0] || D.PLANS[0];
   const pDone = (ctx.planProgress[plan.id] || []).length;
   const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
+  // how far along the plan line the marker sits: days done / days in the plan, as a percentage kept inside 0..100
+  const planPct = plan.len ? Math.round(Math.min(1, Math.max(0, pDone / plan.len)) * 10000) / 100 : 0;
 
   // am I being cared for right now? (a live care need names me as the recipient) → gentle banner near the top
   const _care = ctx.care || {};
@@ -2629,10 +2631,18 @@ function TodayScreen({ ctx }) {
           flex: 1, padding: 16, borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)',
           boxShadow: 'var(--shadow)', cursor: 'pointer',
         }}>
-          <ProgressRing value={plan.len ? pDone / plan.len : 0} />
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 10 }}>Reading plan</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Reading plan</div>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, lineHeight: 1.15, marginTop: 2 }}>{plan.title}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 4 }}>Day {pNext.d} of {plan.len}</div>
+          {/* ONE LINE, with a marker that sits further along it the more of the plan is done (owner 2026-10-14).
+              The 7px side margin is half the marker's width, so the marker never hangs off the card at 0% or 100%. */}
+          <div data-plan-line="" style={{ position: 'relative', height: 18, margin: '12px 7px 0' }}>
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 8, height: 3, borderRadius: 2, background: 'var(--line)' }} />
+            <div data-plan-fill="" style={{ position: 'absolute', left: 0, top: 8, height: 3, borderRadius: 2, background: 'var(--clay)', width: `${planPct}%` }} />
+            <div data-plan-marker="" role="img" aria-label={`${pDone} of ${plan.len} days done`} style={{ position: 'absolute', top: 2, left: `${planPct}%`, marginLeft: -7, width: 14, height: 14, borderRadius: 999, background: 'var(--clay)', boxShadow: '0 0 0 3px var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="chevR" size={10} stroke={3} color="#fff" />
+            </div>
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>Day {pNext.d} of {plan.len}</div>
         </div>
         {churchDevo ? (
           <div onClick={() => ctx.openChurchDevo(churchDevo)} style={{
