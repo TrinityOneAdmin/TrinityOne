@@ -5768,7 +5768,7 @@ function DashVersePrompt() {
   // verses that exist in the chosen chapter (VP_BOOKS.verses: one comma list of verse counts per book)
   var verseList = [];
   if (bookEntry && chap) {
-    var nVerses = Number(String(VP_BOOKS.verses[VP_BOOKS.indexOf(bookEntry)] || '').split(',')[Number(chap) - 1]) || 0;
+    var nVerses = Number(String((VP_BOOKS.verses || [])[VP_BOOKS.indexOf(bookEntry)] || '').split(',')[Number(chap) - 1]) || 0;
     for (var vi = 1; vi <= nVerses; vi++) verseList.push(vi);
   }
 
