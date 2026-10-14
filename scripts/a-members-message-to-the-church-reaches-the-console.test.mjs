@@ -28,6 +28,9 @@ const memberSk = generateSecretKey(), MEMBER = getPublicKey(memberSk);
 // What the bundle's own helpers are called, read off the shipped text.
 const DEC = stmt(ST, 'var _dmDecrypt =', '_dmDecrypt');
 const ENC = stmt(ST, 'var _dmEncrypt =', '_dmEncrypt');
+// The reply envelope helpers, lifted from the bundle too (they use only JSON/String, so no stubs needed).
+const WRP = stmt(ST, 'var _dmWrap =', '_dmWrap');
+const UNW = stmt(ST, 'var _dmUnwrap =', '_dmUnwrap');
 const decName = (DEC.match(/return (\w+)\(ct, (\w+)\(/) || [])[1];
 const ckName = (DEC.match(/return \w+\(ct, (\w+)\(/) || [])[1];
 const dec04Name = (DEC.match(/await (\w+)\(sk2/) || [])[1];
@@ -35,7 +38,7 @@ const encName = (ENC.match(/=> (\w+)\(text, /) || [])[1];
 assert.ok(decName && ckName && dec04Name && encName, 're-anchor: could not read the bundle\'s crypto helper names');
 
 const helpers = new Function(decName, ckName, dec04Name, encName,
-  ENC + '\n' + DEC + '\nreturn { _dmEncrypt, _dmDecrypt };')(
+  ENC + '\n' + DEC + '\n' + WRP + '\n' + UNW + '\nreturn { _dmEncrypt, _dmDecrypt, _dmWrap, _dmUnwrap };')(
   (ct, k) => nip44d(ct, k), nip44ck, nip04d, (t, k) => nip44e(t, k));
 
 function lift(method, stubs) {
@@ -55,7 +58,7 @@ function thread() {
   const pool = { subscribeMany: (_r, _f, h) => { Object.assign(handlers, h); return { close() {} }; } };
   const out = { msgs: [] };
   const sub = lift({ anchor: 'subscribeDMThread(peerHex, onMsgs) {', name: 'subscribeDMThread' },
-    { pool, relays: () => [], sk: churchSk, pub: CHURCH, _dmDecrypt: helpers._dmDecrypt });
+    { pool, relays: () => [], sk: churchSk, pub: CHURCH, _dmDecrypt: helpers._dmDecrypt, _dmUnwrap: helpers._dmUnwrap });
   sub(MEMBER, (m) => { out.msgs = m; });
   out.deliver = async (evt) => { handlers.onevent(evt); await new Promise(r => setTimeout(r, 20)); };
   return out;
@@ -76,6 +79,26 @@ test('a NIP-04 message from an older member build still opens (the fallback is k
   await t.deliver(dm(memberSk, CHURCH, await nip04e(memberSk, CHURCH, 'sent from an old build')));
   assert.equal(t.msgs.length, 1);
   assert.equal(t.msgs[0].text, 'sent from an old build');
+});
+
+test('a member\'s REPLY shows its words on the console, not the raw JSON envelope', async () => {
+  const t = thread();
+  const envelope = JSON.stringify({ v: 1, t: 'see you Sunday', r: 'a'.repeat(64) });
+  await t.deliver(dm(memberSk, CHURCH, nip44e(envelope, nip44ck(memberSk, CHURCH))));
+  assert.equal(t.msgs.length, 1);
+  assert.equal(t.msgs[0].text, 'see you Sunday',
+    'THE CONSOLE SHOWED THE RAW {"v":1,...} ENVELOPE — subscribeDMThread decrypted but never unwrapped the reply');
+  assert.equal(t.msgs[0].replyTo, 'a'.repeat(64), 'the quoted-message id was lost on the way to the console');
+});
+
+test('the console sends a reply the member app can thread (send-side parity)', async () => {
+  const s = sender();
+  await s.send(MEMBER, 'ten past six works', { id: 'b'.repeat(64) });
+  const body = nip44d(s.published[0].content, nip44ck(memberSk, CHURCH));
+  const un = helpers._dmUnwrap(body);   // the member reads the same envelope format
+  assert.equal(un.text, 'ten past six works', 'the console sent words the member cannot read as the message');
+  assert.equal(un.replyTo, 'b'.repeat(64),
+    'the console did not wrap the reply id — a reply from the console loses its quote (sendDM dropped _dmWrap)');
 });
 
 test('the church\'s own earlier reply reads back, in either format', async () => {
@@ -101,15 +124,15 @@ function sender() {
     sk: churchSk, pub: CHURCH, NET: 'trinityone', now: () => 2000,
     finalizeEvent, _monotonic: (t) => t, _sOutLoad() {}, _sOutSave() {},
     _sOutbox: [], _sOutPlain: new Map(),
-    _dmEncrypt: helpers._dmEncrypt,
+    _dmEncrypt: helpers._dmEncrypt, _dmWrap: helpers._dmWrap,
     publish: async (e) => { published.push(e); return true; },
   };
   // finalizeEvent is imported under a bundle name; bind whatever the body calls so a rename fails loudly.
-  const body = fnBody(ST, 'async sendDM(peerHex, content) {', 'sendDM');
+  const body = fnBody(ST, 'async sendDM(peerHex, content, replyTo) {', 'sendDM');
   const fin = (body.match(/\b(finalizeEvent\d*)\(/) || [])[1];
   assert.ok(fin, 're-anchor: sendDM no longer signs an event');
   scope[fin] = finalizeEvent;
-  return { send: lift({ anchor: 'async sendDM(peerHex, content) {', name: 'sendDM' }, scope), published };
+  return { send: lift({ anchor: 'async sendDM(peerHex, content, replyTo) {', name: 'sendDM' }, scope), published };
 }
 
 test('the console sends NIP-44, which the member app reads first', async () => {

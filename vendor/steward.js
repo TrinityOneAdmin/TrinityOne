@@ -18317,6 +18317,23 @@ zoo`.split("\n");
       return await decrypt2(sk2, peerPub, ct);
     }
   };
+  var _dmWrap = (text, replyTo) => {
+    if (!replyTo || !replyTo.id) return text;
+    try {
+      return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) });
+    } catch (e) {
+      return text;
+    }
+  };
+  var _dmUnwrap = (body) => {
+    if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null };
+    try {
+      const o = JSON.parse(body);
+      if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null };
+    } catch (e) {
+    }
+    return { text: body, replyTo: null };
+  };
   var _sOutKey = () => "trinityone.steward.outbox:" + (pub || "");
   var _sOutbox = [];
   var _sOutPlain = /* @__PURE__ */ new Map();
@@ -21319,11 +21336,11 @@ zoo`.split("\n");
       return publish(finalizeEvent2(_monotonic({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", targetPub || ""], ["t", NET], ["t", groupId]], content: emoji || "-" }), sk));
     },
     // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
-    async sendDM(peerHex, content) {
+    async sendDM(peerHex, content, replyTo) {
       if (!sk || !peerHex) return null;
       let enc = "";
       try {
-        enc = _dmEncrypt(sk, peerHex, content);
+        enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo));
       } catch {
         return null;
       }
@@ -21382,14 +21399,16 @@ zoo`.split("\n");
         if (byId.has(e.id)) return;
         const mine = e.pubkey === pub;
         const other = mine ? peerHex : e.pubkey;
-        let text = "", undecryptable = false;
+        let text = "", replyTo = null, undecryptable = false;
         try {
-          text = await _dmDecrypt(sk, other, e.content);
+          const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content));
+          text = un.text;
+          replyTo = un.replyTo;
         } catch {
           text = "\u{1F512} (could not decrypt)";
           undecryptable = true;
         }
-        byId.set(e.id, { id: e.id, mine, text, ts: e.created_at, undecryptable });
+        byId.set(e.id, { id: e.id, mine, text, replyTo, ts: e.created_at, undecryptable });
         emit();
       };
       const takeRx = (e) => {

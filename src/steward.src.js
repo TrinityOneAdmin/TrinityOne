@@ -4258,6 +4258,20 @@ const S_OUTBOX_MAX = 200;
 // symmetric, so the same call opens a message in either direction.
 const _dmEncrypt = (sk, peerPub, text) => nip44e(text, nip44ck(sk, peerPub));
 const _dmDecrypt = async (sk, peerPub, ct) => { try { return nip44d(ct, nip44ck(sk, peerPub)); } catch { return await nip04decrypt(sk, peerPub, ct); } };
+// REPLY ENVELOPE, THE SAME AS THE MEMBER APP'S (src/fellowship.src.js _dmWrap/_dmUnwrap). A reply carries its
+// quoted-message id INSIDE the ciphertext as {v:1,t:text,r:id} so the relay never sees the linkage. The console
+// decrypted but never UNWRAPPED, so a member's reply showed as raw JSON in the thread. Backward compatible both
+// ways: a plain message (no reply) stays a bare string, and a body that is not a v:1 envelope is shown as its
+// own words rather than lost — so old builds and the member app read either direction unchanged.
+const _dmWrap = (text, replyTo) => {
+  if (!replyTo || !replyTo.id) return text;
+  try { return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) }); } catch (e) { return text; }
+};
+const _dmUnwrap = (body) => {
+  if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null };
+  try { const o = JSON.parse(body); if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null }; } catch (e) {}
+  return { text: body, replyTo: null };
+};
 const _sOutKey = () => 'trinityone.steward.outbox:' + (pub || '');
 let _sOutbox = [];
 const _sOutPlain = new Map();
@@ -7633,9 +7647,9 @@ window.Steward = {
   },
 
   // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
-  async sendDM(peerHex, content) {
+  async sendDM(peerHex, content, replyTo) {
     if (!sk || !peerHex) return null;
-    let enc = ''; try { enc = _dmEncrypt(sk, peerHex, content); } catch { return null; }   // NIP-44, as the member app sends
+    let enc = ''; try { enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo)); } catch { return null; }   // NIP-44 + reply envelope, as the member app sends
     const evt = finalizeEvent(_monotonic({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }), sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule the member app follows. If the publish fails the words are
     // still here, and the retry sends this exact event with its original id, so nothing duplicates.
@@ -7670,9 +7684,9 @@ window.Steward = {
       const mine = e.pubkey === pub; const other = mine ? peerHex : e.pubkey;
       // NIP-44 first, then NIP-04 (_dmDecrypt). On total failure SHOW A PLACEHOLDER rather than `return`: a
       // message that vanishes from the thread with no trace is how the church never learns somebody wrote.
-      let text = '', undecryptable = false;
-      try { text = await _dmDecrypt(sk, other, e.content); } catch { text = '🔒 (could not decrypt)'; undecryptable = true; }
-      byId.set(e.id, { id: e.id, mine, text, ts: e.created_at, undecryptable }); emit();
+      let text = '', replyTo = null, undecryptable = false;
+      try { const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content)); text = un.text; replyTo = un.replyTo; } catch { text = '🔒 (could not decrypt)'; undecryptable = true; }
+      byId.set(e.id, { id: e.id, mine, text, replyTo, ts: e.created_at, undecryptable }); emit();
     };
     const takeRx = (e) => {
       const tid = (e.tags.find(t => t[0] === 'e') || [])[1]; if (!tid) return;
