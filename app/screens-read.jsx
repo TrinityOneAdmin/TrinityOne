@@ -689,8 +689,9 @@ function CommentaryEdge({ open, onToggle }) {
   );
 }
 function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
-  const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
+  const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
+  const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
   // Written under the SAME key the verse card uses, so the note shows on its verse as well as in this list. A
   // verse that already has a note gets this one added under it, never replaced by it.
@@ -715,6 +716,15 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
   }, [open, loc.book, loc.chap, ctx.version]);
+  // Cross references: read ONLY when the tab is open, so the ~3 MB module downloads on first use, not on
+  // every panel open. getCrossRefs() lazily installs the default set and fires notify() when it lands, so
+  // subscribe() re-reads and the empty list fills in. Not version-dependent — cross-refs are translation-agnostic.
+  useE(() => {
+    if (!open || view !== 'crossrefs') return;
+    const read = () => { try { setXrefs(window.Bible.getCrossRefs ? window.Bible.getCrossRefs(loc.book, loc.chap) : {}); } catch (e) { setXrefs({}); } };
+    read();
+    return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
+  }, [open, view, loc.book, loc.chap]);
   // SWIPE-TO-CLOSE ONLY COUNTS WHEN THE SWIPE IS MOSTLY SIDEWAYS. This measured the finger's rightward travel
   // alone: end more than 56px right of where it started and the panel closed. A long thumb-scroll down these
   // notes is rarely vertical — 60px of drift over 400px of scrolling counted as a swipe, and the panel slid
@@ -755,11 +765,39 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
             {docked ? null : <IconBtn name="chevR" onClick={onClose} />}
           </div>
           <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
-            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
+            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
           </div>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
-          {view === 'notes' ? (
+          {view === 'crossrefs' ? (
+            Object.keys(xrefs).length ? (
+              <React.Fragment>
+                {Object.keys(xrefs).map(n => parseInt(n, 10)).sort((a, b) => a - b).map(v => (
+                  <div key={v} style={{ marginBottom: 16 }}>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 8 }}>{label}:{v}</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {xrefs[v].map((r, i) => (
+                        <button key={i} onClick={() => { const t = window.Bible.parseRef(r); if (t) { onClose(); ctx.gotoRef(t.book, t.chap, t.verse); } }} style={{
+                          border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', cursor: 'pointer',
+                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {r}<Icon name="chevR" size={13} color="var(--ink-3)" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? (
+                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>{window.Bible.crossrefLicense()}</div>
+                ) : null}
+              </React.Fragment>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+                <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="link" size={24} /></div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? `No cross references for ${label}` : 'Gathering cross references…'}</div>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? 'This chapter has none in the set yet.' : 'Fetching the cross-reference set the first time — a moment on a new phone, then it is saved.'}</p>
+              </div>
+            )
+          ) : view === 'notes' ? (
             <React.Fragment>
               {composing ? (
                 <div style={{ marginBottom: 14, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid var(--clay)', boxShadow: 'var(--shadow)' }}>
