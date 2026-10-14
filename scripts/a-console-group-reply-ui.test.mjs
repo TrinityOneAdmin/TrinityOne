@@ -36,6 +36,7 @@ async function chat({ native = false, publish } = {}) {
   };
   const mod = await loadComponent('app/stew-dashboard.jsx', 'function GroupChatModal({ group, onClose }) {', {
     React, window: win, CustomEvent, setTimeout, clearTimeout,
+    document: { addEventListener() {}, removeEventListener() {} },   // the merged ⋯-menu close-on-tap-off effect listens on document
     get TrinityReplyKit() { return globalThis.TrinityReplyKit; },
     Icon: Stub('Icon'), SkBadge: Stub('SkBadge'), useStewDialog: () => ({}),
   });
