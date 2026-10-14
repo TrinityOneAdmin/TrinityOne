@@ -4947,6 +4947,7 @@ function accept(e) {
     // clearance and the church-authority escape to the churches the child actually belongs to.
     if (!safeguardAllows(e.pubkey, targetHex)) return false;
     if (targetHex && !safeguardAllows(targetHex, e.pubkey)) return false;
+    if (dmBlockedBetween(e.pubkey, targetHex)) return false;   // write-side mirror; the read check is the load-bearing one
     return true;
   }
   if (k === 7) return isMember;                                // reactions
@@ -4989,6 +4990,22 @@ function minorOf(pub, cp) {
 function churchWriter(pub, cp) {
   return churchReader(pub, cp);
 }
+// BLOCK MEANS NO PRIVATE ACCESS, AND A DIRECT MESSAGE IS PRIVATE ACCESS (owner 2026-10-02 / confirmed on a device 2026-10-14).
+// Commit 32bcd2b (2026-09-15) removed the AUTH-time ban the kind-4 read path silently relied on and never replaced it
+// for that path, so a blocked member kept receiving and sending DMs. True if EITHER party is blocked by any church the
+// OTHER belongs to — symmetric, because refusing only a blocked READER leaves a blocked SENDER an inbound channel.
+// Scoped to the peer's own churches, never relay-wide: someone blocked by church A may still DM a member of unrelated B.
+// Block does not prune membership, so churchesOf(x) still lists the church that blocked x; this works regardless.
+// KNOWN BOUNDARY: if the peer is a church key or a steward who is not a congregation member, churchesOf(peer) is empty
+// and no block is consulted for that pairing. Two member adults of one church (the confirmed case) are covered.
+// Users: canRead's kind-4 branch (read; makes DMs already on disk inert) and accept()'s kind-4 gate (write; supplement,
+// cannot stand alone because it does nothing about stored events).
+function dmBlockedBetween(a, b) {
+  if (!a || !b) return false;
+  for (const cp of churchesOf(b)) if (blockedBy(a, cp)) return true;
+  for (const cp of churchesOf(a)) if (blockedBy(b, cp)) return true;
+  return false;
+}
 function canRead(e, authed) {
   if (e.kind === 4) {
     const target = (e.tags.find(t => t[0] === 'p') || [])[1];
@@ -5004,7 +5021,9 @@ function canRead(e, authed) {
     // "anonymous" members. Restrict delivery to an ENDPOINT of the conversation. Members always NIP-42-auth, so a
     // recipient still receives their DMs (the auth-challenge trigger fires on a withheld kind-4). NIP-17 gift-wrap
     // is the eventual fix that also hides the graph from the relay ITSELF; this closes the anon-harvest today.
-    return !!authed && (authed === e.pubkey || authed === targetHex);
+    if (!authed || !(authed === e.pubkey || authed === targetHex)) return false;
+    if (dmBlockedBetween(e.pubkey, targetHex)) return false;   // see dmBlockedBetween: block is symmetric for DMs
+    return true;
   }
   if (e.kind === 30078) {
     const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -5024,6 +5043,14 @@ function canRead(e, authed) {
     // which is older and unchanged), and public documents (joinpolicy, relay-net) stay public, because a demoted
     // reader falls to exactly the anonymous branches below. canRead's three callers — the live broadcast, the REQ scan and the
     // NIP-42 replay — all pass through here, so one place covers all three.
+    // A BLOCKED MEMBER MAY READ THE DOCUMENT THAT BLOCKS THEM (and only that). The member app's _checkIfBlocked() must
+    // confirm that a "blocked" refusal is real before it resets the app; without this the demotion below hides the
+    // list from the very person it names and the app never learns. Tightly scoped: only d=blocked:<cp>, only when the
+    // event is AUTHORED BY that church key (cp), and only when the reader is on that church's list. Returns here.
+    if (authed && d.startsWith(BLOCKED_D)) {
+      const bcp = d.slice(BLOCKED_D.length);
+      if (bcp && e.pubkey === bcp && blockedBy(authed, bcp)) return true;
+    }
     if (authed && authed !== e.pubkey) {
       const rcp = d.startsWith(SAFE_D) ? d.slice(SAFE_D.length) : owningChurch(e, d);
       if (rcp && blockedBy(authed, rcp)) authed = null;

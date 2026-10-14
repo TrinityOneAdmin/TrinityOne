@@ -40,10 +40,12 @@ test('the serving card cannot render without a church', () => {
 });
 
 // RULE 3: the text match above can be satisfied by a gate that is disabled. This one RENDERS the Today screen.
-function renderToday(church) {
+function renderToday(church, opts = {}) {
   const { React, draw } = miniReact();
   const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
-  const LS = { getItem: () => null, setItem() {}, removeItem() {} };
+  // opts.hidden simulates a phone that tapped the now-removed "What’s happening" dismiss X, which used to
+  // persist trinityone.serving.cardHidden='1'. The card must still render — the gate is gone, not just the button.
+  const LS = { getItem: (k) => (opts.hidden && k === 'trinityone.serving.cardHidden' ? '1' : null), setItem() {}, removeItem() {} };
   const win = { Fellowship: { myPubkey: 'me' }, Capacitor: { isNativePlatform: () => false },
     TrinityData: { VOTD_POOL: [{ ref: 'John 3:16', text: 'x' }], PLANS: [{ id: 'p1', name: 'A plan', days: [{ d: 1, ref: 'Gen 1' }] }], NOTIFICATIONS: [] },
     Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], bookName: () => 'G', bookAbbr: () => 'G', maxChapter: () => 50, activeVersion: 'WEB' },
@@ -75,6 +77,15 @@ test('RENDERED: a locked phone (no ctx.church) draws no serving card; CONTROL: w
     'A LOCKED PHONE DRAWS "What’s happening · RSVP · your rota" — it says church as loudly as the name did');
   const open = renderToday({ id: 'c1', name: "St Chad's", npub: 'n'.repeat(8) });
   assert.match(open, /What\s*.\s*s\s*happening/, 'CONTROL: with a church the card should draw, or the absence above proves nothing');
+});
+
+test('RENDERED: the removed dismiss X cannot hide the serving card for ever', () => {
+  // One X on either the Today or Community card used to set trinityone.serving.cardHidden='1', shared by both,
+  // hiding "What’s happening" (and the six things behind it, incl. Care) permanently. The X, its state and its
+  // render gate were removed. A phone that already tapped it (flag still '1') must see the card again.
+  const dismissed = renderToday({ id: 'c1', name: "St Chad's", npub: 'n'.repeat(8) }, { hidden: true });
+  assert.match(dismissed, /What\s*.\s*s\s*happening/,
+    'the serving card is hidden when the legacy dismiss flag is set — the hide-gate is still live; removing the button alone is not enough');
 });
 
 test('the honest limit is written down next to the fix', () => {

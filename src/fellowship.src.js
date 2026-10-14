@@ -3096,6 +3096,66 @@ function _outboxSave() {
   for (const fn of [..._outboxSubs]) { try { fn(_outbox); } catch (e) {} }
 }
 _outboxLoad();
+
+// ── blocked-member detection ─────────────────────────────────────────────────────────────────────────────
+// When a relay refuses a publish with "blocked", confirm by reading the church's blocked document.
+// If this member's pubkey is on the list, set _amBlocked so the app can show a clear message.
+let _amBlocked = false;
+let _amBlockedChecking = false;
+const _blockedSubs = new Set();
+let _blockedCp = '';   // the church (hex) whose blocklist confirmed it — the one the app must drop
+function _notifyBlocked() { for (const fn of [..._blockedSubs]) { try { fn(_amBlocked, _blockedCp); } catch (e) {} } }
+// RE-FOLLOW-LOOP GUARD. After a CONFIRMED block the app drops the church and returns to "follow a church". With nothing
+// remembered, the same identity key could follow it again at once, be refused, be re-confirmed, and bounce between
+// onboarding and the block for ever. So the church is kept in a small local map {churchHex: blockedAtMs} under
+// trinityone.blockedchurches, and followChurch (app.jsx) refuses a church that is in it. It is NOT a security control
+// (the relay is — it refuses a blocked reader everything private) and it survives _forgetChurch, whose sweep only
+// removes keys containing the church id. It does NOT expire: it is cleared the moment the member DELIBERATELY
+// re-follows the church (manual retry — _forgetBlockedChurch, called from followChurch in app.jsx), so a member
+// a church later unblocks is back in with one tap, while a programmatic/automatic re-follow stays refused.
+const BLOCKED_CHURCHES_KEY = 'trinityone.blockedchurches';
+function _blockedChurchMap() {
+  try { const o = JSON.parse(localStorage.getItem(BLOCKED_CHURCHES_KEY) || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; }
+}
+function _noteBlockedChurch(cp) {
+  try { const m = _blockedChurchMap(); m[String(cp).toLowerCase()] = Date.now(); localStorage.setItem(BLOCKED_CHURCHES_KEY, JSON.stringify(m)); } catch (e) {}
+}
+function _isBlockedChurch(npubOrHex) {
+  const cp = toPub(npubOrHex); if (!cp) return false;
+  return !!Number(_blockedChurchMap()[String(cp).toLowerCase()] || 0);   // recorded == blocked; no expiry (manual retry clears it)
+}
+function _forgetBlockedChurch(npubOrHex) {
+  const cp = (toPub(npubOrHex) || String(npubOrHex || '')).toLowerCase();
+  try { const m = _blockedChurchMap(); delete m[cp]; localStorage.setItem(BLOCKED_CHURCHES_KEY, JSON.stringify(m)); } catch (e) {}
+}
+async function _checkIfBlocked() {
+  if (_amBlocked || _amBlockedChecking || !pub) return;
+  _amBlockedChecking = true;
+  try {
+    const cp = window.Fellowship.churchPub;
+    if (!cp) { _amBlockedChecking = false; return; }
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], '#d': ['trinityone/blocked:' + cp] }]);
+    let best = null;
+    for (const e of (evs || [])) {
+      if (e.pubkey !== cp) continue;
+      if (((e.tags || []).find(function(t) { return t[0] === 'd'; }) || [])[1] !== 'trinityone/blocked:' + cp) continue;
+      if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+    }
+    if (!best) { _amBlockedChecking = false; return; }
+    var o = JSON.parse(best.content || '{}');
+    var list = Array.isArray(o.pubkeys) ? o.pubkeys : [];
+    var myKey = String(pub || '').toLowerCase();
+    if (list.some(function(p) { return String(p || '').toLowerCase() === myKey; })) {
+      // ONLY HERE — a church-key-signed list that literally names this member's own key — never on the bare
+      // "blocked:" refusal text (other relay messages start that way, e.g. "blocked: please update the app").
+      _amBlocked = true;
+      _blockedCp = cp;
+      _noteBlockedChurch(cp);   // before the notify, so the app cannot re-follow in the same tick
+      _notifyBlocked();
+    }
+  } catch (e) {}
+  _amBlockedChecking = false;
+}
 let _flushing = false;
 // A JOIN THAT LANDED IS A FACT, NOT THE ABSENCE OF A QUEUE ENTRY. Device pass 2026-09-06 (AUTH-DIAGNOSIS.md):
 // a PIN-locked phone opened a follow link, announceMembership returned before queueing anything (no key),
@@ -3404,6 +3464,7 @@ function _publishAny(relays, evt) {
       // resolves connection failures as strings, and `connection failure` is deliberately NOT in this
       // vocabulary, so it cannot be mistaken for an answer.
       err.refused = rs.some(r => _PUB_REFUSED.test(_saidAny(r)));
+      if (rs.some(function(r) { return /^blocked/i.test(_saidAny(r)); })) _checkIfBlocked();
       // NOTHING LEFT THE DEVICE. Distinct from `refused` (a box said no) and from neither (nobody answered
       // in time), because all three want different words on a worker's screen.
       //
@@ -3499,6 +3560,7 @@ async function _outboxFlush() {
         if (!outage) item.tries = (item.tries || 0) + 1;
         item.lastTry = Math.floor(Date.now() / 1000);
         item.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
+        if (permanent && errs.some(function(e) { return /^blocked/i.test(String((e && e.message) || '')); })) _checkIfBlocked();
         if (permanent || item.tries >= MAX_TRIES) {
           // Give up, but do NOT silently bin the member's words — mark it so the thread can show it was
           // refused and offer to discard or copy it out.
@@ -3797,6 +3859,12 @@ window.Fellowship = {
   // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
   // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
   recentFailures: () => _FAILURES.slice(),
+  amBlocked() { return _amBlocked; },
+  subscribeAmBlocked(fn) { _blockedSubs.add(fn); fn(_amBlocked, _blockedCp); return function() { _blockedSubs.delete(fn); }; },
+  // The app calls this once it has dropped the church and shown "follow a church", so the NEXT church can be checked.
+  ackAmBlocked() { _amBlocked = false; _blockedCp = ''; _notifyBlocked(); },
+  isBlockedChurch(npubOrHex) { return _isBlockedChurch(npubOrHex); },
+  forgetBlockedChurch(npubOrHex) { return _forgetBlockedChurch(npubOrHex); },
   refetchChurchDocs,   // force church-doc hubs to re-fetch on app resume (updates without a full restart)
   CANONICAL_RELAY,
   CANONICAL_RELAYS,

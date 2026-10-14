@@ -9379,6 +9379,86 @@
     }
   }
   _outboxLoad();
+  var _amBlocked = false;
+  var _amBlockedChecking = false;
+  var _blockedSubs = /* @__PURE__ */ new Set();
+  var _blockedCp = "";
+  function _notifyBlocked() {
+    for (const fn of [..._blockedSubs]) {
+      try {
+        fn(_amBlocked, _blockedCp);
+      } catch (e) {
+      }
+    }
+  }
+  var BLOCKED_CHURCHES_KEY = "trinityone.blockedchurches";
+  function _blockedChurchMap() {
+    try {
+      const o = JSON.parse(localStorage.getItem(BLOCKED_CHURCHES_KEY) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function _noteBlockedChurch(cp) {
+    try {
+      const m = _blockedChurchMap();
+      m[String(cp).toLowerCase()] = Date.now();
+      localStorage.setItem(BLOCKED_CHURCHES_KEY, JSON.stringify(m));
+    } catch (e) {
+    }
+  }
+  function _isBlockedChurch(npubOrHex) {
+    const cp = toPub(npubOrHex);
+    if (!cp) return false;
+    return !!Number(_blockedChurchMap()[String(cp).toLowerCase()] || 0);
+  }
+  function _forgetBlockedChurch(npubOrHex) {
+    const cp = (toPub(npubOrHex) || String(npubOrHex || "")).toLowerCase();
+    try {
+      const m = _blockedChurchMap();
+      delete m[cp];
+      localStorage.setItem(BLOCKED_CHURCHES_KEY, JSON.stringify(m));
+    } catch (e) {
+    }
+  }
+  async function _checkIfBlocked() {
+    if (_amBlocked || _amBlockedChecking || !pub) return;
+    _amBlockedChecking = true;
+    try {
+      const cp = window.Fellowship.churchPub;
+      if (!cp) {
+        _amBlockedChecking = false;
+        return;
+      }
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], "#d": ["trinityone/blocked:" + cp] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (e.pubkey !== cp) continue;
+        if (((e.tags || []).find(function(t) {
+          return t[0] === "d";
+        }) || [])[1] !== "trinityone/blocked:" + cp) continue;
+        if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+      }
+      if (!best) {
+        _amBlockedChecking = false;
+        return;
+      }
+      var o = JSON.parse(best.content || "{}");
+      var list = Array.isArray(o.pubkeys) ? o.pubkeys : [];
+      var myKey = String(pub || "").toLowerCase();
+      if (list.some(function(p) {
+        return String(p || "").toLowerCase() === myKey;
+      })) {
+        _amBlocked = true;
+        _blockedCp = cp;
+        _noteBlockedChurch(cp);
+        _notifyBlocked();
+      }
+    } catch (e) {
+    }
+    _amBlockedChecking = false;
+  }
   var _flushing = false;
   var JOINSENT_KEY = "trinityone.joinsent";
   var _joinSent = {};
@@ -9602,6 +9682,9 @@
         const err = new Error(String(why));
         const _saidAny = (r) => String(r.status === "rejected" ? r.reason && r.reason.message || r.reason || "" : r.value == null ? "" : r.value);
         err.refused = rs.some((r) => _PUB_REFUSED.test(_saidAny(r)));
+        if (rs.some(function(r) {
+          return /^blocked/i.test(_saidAny(r));
+        })) _checkIfBlocked();
         const _unreachable = (r) => r.status === "fulfilled" && /^connection failure/i.test(String(r.value == null ? "" : r.value));
         if (!targets.length || rs.length && rs.every(_unreachable)) err.unsent = true;
         throw err;
@@ -9659,6 +9742,9 @@
           if (!outage) item.tries = (item.tries || 0) + 1;
           item.lastTry = Math.floor(Date.now() / 1e3);
           item.lastError = String(errs[0] && errs[0].message || "").slice(0, 120);
+          if (permanent && errs.some(function(e2) {
+            return /^blocked/i.test(String(e2 && e2.message || ""));
+          })) _checkIfBlocked();
           if (permanent || item.tries >= MAX_TRIES) {
             item.failed = true;
             item.permanent = !!permanent;
@@ -9944,6 +10030,28 @@
     // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
     // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
     recentFailures: () => _FAILURES.slice(),
+    amBlocked() {
+      return _amBlocked;
+    },
+    subscribeAmBlocked(fn) {
+      _blockedSubs.add(fn);
+      fn(_amBlocked, _blockedCp);
+      return function() {
+        _blockedSubs.delete(fn);
+      };
+    },
+    // The app calls this once it has dropped the church and shown "follow a church", so the NEXT church can be checked.
+    ackAmBlocked() {
+      _amBlocked = false;
+      _blockedCp = "";
+      _notifyBlocked();
+    },
+    isBlockedChurch(npubOrHex) {
+      return _isBlockedChurch(npubOrHex);
+    },
+    forgetBlockedChurch(npubOrHex) {
+      return _forgetBlockedChurch(npubOrHex);
+    },
     refetchChurchDocs,
     // force church-doc hubs to re-fetch on app resume (updates without a full restart)
     CANONICAL_RELAY,
