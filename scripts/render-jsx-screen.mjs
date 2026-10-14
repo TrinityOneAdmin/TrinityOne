@@ -46,7 +46,12 @@ export function compileScreen(relPath) {
 // global is how a test ends up asserting about something that is not the code.
 export function loadScreen(relPath, exportNames, globals) {
   const names = Object.keys(globals);
-  const js = compileScreen(relPath);
+  let js = compileScreen(relPath);
+  // The shared reply pieces (app/reply-kit.jsx) are a classic-script global in the app; give every screen the
+  // REAL kit, compiled from source, unless the test supplied its own or is loading the kit itself.
+  if (relPath !== 'app/reply-kit.jsx' && !names.includes('TrinityReplyKit') && js.includes('TrinityReplyKit')) {
+    js = compileScreen('app/reply-kit.jsx') + '\n' + js;
+  }
   const mod = new Function(...names, js + '\nreturn { ' + exportNames.join(', ') + ' };')(...names.map(k => globals[k]));
   for (const n of exportNames) {
     assert.equal(typeof mod[n], 'function', `${n} is not a component in ${relPath} — re-anchor this test`);
