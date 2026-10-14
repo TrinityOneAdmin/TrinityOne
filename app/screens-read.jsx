@@ -162,15 +162,16 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
   ];
   return (
     <BottomSheet open={open} onClose={onClose} passthrough>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ minWidth: 0, flexShrink: 1 }}>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{isMulti ? multi + ' verses selected' : 'Verse selected'}</div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
         </div>
-        <div data-testid="verse-extent" style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8, marginRight: 6, flexShrink: 0 }}>
+        <div data-testid="verse-extent" style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 12, flexShrink: 0 }}>
           <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
           <button onClick={ctx._extend} title="Add the next verse" style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
         </div>
+        <div style={{ flex: 1 }} />
         <IconBtn name="x" onClick={onClose} />
       </div>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
