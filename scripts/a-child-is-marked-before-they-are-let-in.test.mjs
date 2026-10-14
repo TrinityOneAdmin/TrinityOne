@@ -145,7 +145,11 @@ async function joinRowFor({ results = {} } = {}) {
       // admitMember's world
       admittedList: [],
       // the row's own furniture — none of it is the control under test
-      minorNotice: null, narrow: false, confirmBlock: null, delegated: false,
+      minorNotice: null, narrow: false, joinNarrow: false, confirmBlock: null, delegated: false,
+      // joinNarrow, NOT narrow, since 2026-10-14: the join card was split onto its own breakpoint
+      // (760) when the member row moved to 1366, so joinRow closes over `joinNarrow`. Without it the
+      // slice throws ReferenceError and every test here fails — which is exactly how that regression
+      // was caught. `narrow` stays: the sliced siblings above still use it.
       block: () => {}, setConfirmBlock: () => {},
       SkBadge: Stub('SkBadge'), Icon: Stub('Icon'),
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' } },
