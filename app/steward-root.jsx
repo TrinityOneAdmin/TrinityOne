@@ -821,51 +821,71 @@ function StewardUnlock() {
   const [stayOpen, setStayOpen] = useSt(false);
   const [waitLeft, setWaitLeft] = useSt(() => { const g = readGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
   const [lostKey, setLostKey] = useSt(false);
+  // A typed PIN has PRIORITY over the automatic stay-open replay. `auto` records whether the replay owns `busy`
+  // (auto.on), lets submit() cancel it (auto.cancel) and wait for a call already in flight (auto.inflight), so
+  // unlockStayOpen and unlock(pin) never overlap in the engine. Cancelling NEVER deletes the record.
+  const auto = React.useRef({ on: false, cancel: null, inflight: null }).current;
+  const [autoBusy, setAutoBusy] = useSt(false);
   const [pinVis, setPinVis] = useSt(false);   // the device-bound key is gone — offer the way out, not a retry loop
   // Read the real stay-open state, and replay it. The engine replays on a cold start AND after an idle lock
   // (lock('idle') re-arms it). When the Keystore does not answer ('retry') the record is KEPT: try again with a
   // short backoff and whenever the app comes back to the foreground, then fall to the PIN prompt, deleting nothing.
   useStE(() => {
-    let live = true, timer = null, tries = 0, running = false, retrying = false;
+    let live = true, stopped = false, timer = null, tries = 0, running = false, retrying = false;
     const S = window.Steward;
+    const dead = () => !live || stopped;
+    const setAuto = (v) => { auto.on = v; setAutoBusy(v); };
+    const release = () => { setAuto(false); setBusy(false); };
     const BACKOFF = [1000, 2000, 4000, 8000];
     const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    auto.cancel = () => { stopped = true; stop(); retrying = false; auto.on = false; };
     const attempt = () => {
-      if (!live || running) return Promise.resolve();
+      if (dead() || running) return Promise.resolve();
       running = true; stop();
-      return Promise.resolve(S.unlockStayOpen()).then(ok => {
+      const call = Promise.resolve(S.unlockStayOpen());
+      auto.inflight = call;
+      return call.then(ok => {
         running = false;
-        if (!live) return;
+        if (dead()) return;
         retrying = ok === 'retry';
-        if (ok === true) { try { localStorage.removeItem(GUARD_KEY); } catch (e) {} return; }
+        if (ok === true) { auto.on = false; try { localStorage.removeItem(GUARD_KEY); } catch (e) {} return; }
         if (ok === 'retry') {
           if (tries < BACKOFF.length) { timer = setTimeout(attempt, BACKOFF[tries++]); return; }
-          setBusy(false); return;   // budget spent: the PIN prompt, record untouched
+          release(); return;   // budget spent: the PIN prompt, record untouched
         }
-        setBusy(false);
+        release();
         if (ok === false) setStayOpen(false);   // the engine deleted a record that would not open this church
-      }).catch(() => { running = false; if (live) setBusy(false); });
+      }).catch(() => { running = false; if (!dead()) release(); });
     };
     const onVis = () => {
-      if (!live || !S.stayOpenStatus || document.visibilityState !== 'visible' || !retrying) return;
-      tries = 0; setBusy(true); attempt();
+      if (dead() || !S.stayOpenStatus || document.visibilityState !== 'visible' || !retrying) return;
+      tries = 0; setAuto(true); setBusy(true); attempt();
     };
     document.addEventListener('visibilitychange', onVis);
     Promise.resolve(S.stayOpenStatus ? S.stayOpenStatus() : null).then(st => {
-      if (!live || !st) return;
+      if (dead() || !st) return;
       setStayAvail(!!st.available); setStayOpen(!!(st.available && st.active));
       if (!st.available || !st.active || !S.unlockStayOpen) return;
-      setBusy(true);
+      setAuto(true); setBusy(true);
       return attempt();
-    }).catch(() => { if (live) setBusy(false); });
-    return () => { live = false; stop(); document.removeEventListener('visibilitychange', onVis); };
+    }).catch(() => { if (!dead()) release(); });
+    return () => { live = false; stop(); auto.cancel = null; document.removeEventListener('visibilitychange', onVis); };
   }, []);
   useStE(() => { if (waitLeft <= 0) return; const t = setInterval(() => { const g = readGuard(); const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); setWaitLeft(left); if (left <= 0) { setErr(''); clearInterval(t); } }, 500); return () => clearInterval(t); }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
   const submit = async () => {
-    if (!pin || busy) return;
+    if (!pin || (busy && !auto.on)) return;
     const g0 = readGuard();
     if ((g0.until || 0) > Date.now()) { setErr('Too many attempts — wait a moment.'); return; }
+    // A typed PIN beats the automatic replay: stop it for good on this mount (it deletes nothing), and let a
+    // call already in flight finish first so the two never overlap in the engine.
+    const flight = auto.on ? auto.inflight : null;
+    if (auto.cancel) auto.cancel();
+    setAutoBusy(false);
     setBusy(true); setErr('');
+    if (flight) {
+      try { await flight; } catch (e) {}
+      if (window.Steward.hasKey) return;   // the replay opened it while we waited: nothing left to unlock
+    }
     const ok = await window.Steward.unlock(pin);   // fires steward-key on success → StewardRoot re-renders
     if (ok) {
       try { localStorage.removeItem(GUARD_KEY); } catch {}
@@ -934,7 +954,8 @@ function StewardUnlock() {
             </span>
           </label>
         ) : null}
-        <button onClick={submit} disabled={!pin || busy || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
+        <button onClick={submit} disabled={!pin || (busy && !autoBusy) || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || (busy && !autoBusy) || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy && !(autoBusy && pin) ? (autoBusy ? 'Reopening…' : 'Unlocking…') : 'Unlock')}</button>
+        {autoBusy ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 8 }}>Reopening automatically — or type your PIN to unlock now.</div> : null}
         {/* AUDIT-2026-07-30. The lost-device-key message used to say 'Use "I have my 12 words"' — a control that
             exists only in the MEMBER app. The console's equivalent is called "Restore a church" and lives on
             StewardWelcome, which steward-root.jsx renders ONLY when no key blob exists. So while locked, the

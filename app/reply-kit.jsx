@@ -15,7 +15,7 @@
 //
 // Users (CLAUDE.md rule 2): Row (group rooms, app/screens-chat.jsx) · DMSwipe + DMThread (member DM, same file)
 // · ChatRoom's reply bar (same file) · StewDmWindow (console DM, app/stew-dashboard.jsx). · CareChatSheet (app/screens-today.jsx) · StewCareChat (app/stew-meals.jsx).
-// replyOnlyDots(): Row, DMSwipe, StewDmWindow, CareChatSheet, StewCareChat (the five places the ⋯ offers Reply and nothing else).
+// replyDotsMode()/atDots()/dotsProps(): the same five. replyOnlyDots(): Row, DMSwipe, StewDmWindow, CareChatSheet, StewCareChat (the five places the ⋯ offers Reply and nothing else).
 // The console GROUP chat is deliberately NOT an adopter yet.
 var TrinityReplyKit = (function () {
   var ARM = 48;   // how far to drag before letting go replies
@@ -234,5 +234,26 @@ var TrinityReplyKit = (function () {
     try { return !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches); } catch (e) { return false; }
   }
 
-  return { replyOnlyDots: replyOnlyDots, ARM: ARM, MAX: MAX, CUE_INSET: CUE_INSET, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, tapOffHandler: tapOffHandler, quote: quote, bar: bar };
+  // ASSISTIVE TECH ON TOUCH. replyOnlyDots(true) is false on a touch phone, so the reply-only ⋯ is not drawn and
+  // the only reply route is the swipe, which TalkBack / Switch Access cannot perform. replyDotsMode says which
+  // way the reply-only ⋯ is drawn: 'visible' (exactly when replyOnlyDots is true today) or 'at' (touch: a real,
+  // focusable, clickable button that is visually hidden until an assistive-tech cursor focuses it, then the
+  // normal pill). Not display:none / pointer-events:none / tabIndex -1: TalkBack needs a focusable, clickable node.
+  function replyDotsMode(swipeLive) { return replyOnlyDots(swipeLive) ? 'visible' : 'at'; }
+  var HIDDEN = { position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0 0 0 0)', opacity: 0, border: '0', padding: '0' };
+  function atDots(size) {
+    var px = (size || 30) + 'px';
+    var show = function (e) { var st = e && e.currentTarget && e.currentTarget.style; if (!st) return; st.width = px; st.height = px; st.overflow = 'visible'; st.clip = 'auto'; st.opacity = '1'; st.border = '1px solid var(--line)'; };
+    var hide = function (e) { var st = e && e.currentTarget && e.currentTarget.style; if (!st) return; st.width = '1px'; st.height = '1px'; st.overflow = 'hidden'; st.clip = 'rect(0 0 0 0)'; st.opacity = '0'; st.border = '0'; };
+    return { style: Object.assign({}, HIDDEN), onFocus: show, onBlur: hide };
+  }
+  // What a call site spreads onto its reply-only ⋯ button: { style, onFocus?, onBlur? }. 'visible' -> the base
+  // style untouched; 'at' -> the base with the visually-hidden override and the focus/blur handlers.
+  function dotsProps(swipeLive, size, base) {
+    if (replyDotsMode(swipeLive) !== 'at') return { style: base };
+    var a = atDots(size);
+    return { style: Object.assign({}, base, a.style), onFocus: a.onFocus, onBlur: a.onBlur };
+  }
+
+  return { replyOnlyDots: replyOnlyDots, replyDotsMode: replyDotsMode, atDots: atDots, dotsProps: dotsProps, ARM: ARM, MAX: MAX, CUE_INSET: CUE_INSET, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, tapOffHandler: tapOffHandler, quote: quote, bar: bar };
 })();

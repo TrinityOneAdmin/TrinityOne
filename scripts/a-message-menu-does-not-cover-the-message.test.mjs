@@ -190,12 +190,13 @@ test('the room swipe declares touch-action: pan-y', () => {
 
 // ── TOUCH (owner 2026-10-15): the ⋯ stays where it has MORE than Reply, and goes where Reply is all it holds ──
 
-test('TOUCH: a plain member who may not DM privately has NO ⋯ on any room message (Reply is the only action; swipe replies)', () => {
+const hiddenDots = (b) => !!b.props.style && b.props.style.width === '1px' && b.props.style.opacity === 0 && !!b.props.style.clip && b.props.style.display !== 'none' && !b.props.disabled && b.props.tabIndex === undefined && b.props['aria-label'] === 'Message actions';
+test('TOUCH: a plain member who may not DM privately has NO VISIBLE ⋯ on any room message (a hidden focusable one remains for assistive tech; swipe replies)', () => {
   globalThis.__roomTouch = true;
   try {
     const draw = room({ canDM: false });
     const tree = draw();
-    assert.equal(dots(tree).length, 0, 'reply-only ⋯ still on screen for touch: ' + dots(tree).length);
+    assert.ok(dots(tree).length > 0 && dots(tree).every(hiddenDots), 'reply-only ⋯ still visible on touch, or the hidden assistive-tech route is gone: ' + dots(tree).length);
     assert.ok(find(tree, n => n.props && typeof n.props.onTouchStart === 'function').length >= 2, 'the swipe handlers are gone: no reply route left');
   } finally { globalThis.__roomTouch = false; }
 });
@@ -203,8 +204,10 @@ test('TOUCH: a plain member who may not DM privately has NO ⋯ on any room mess
 test('TOUCH: the ⋯ is KEPT where there is more than Reply — Reply privately on their message, Pin/Remove for a leader', () => {
   globalThis.__roomTouch = true;
   try {
-    assert.equal(dots(room({ canDM: true })()).length, 1, 'their message (Reply privately) must keep the ⋯, mine (reply only) must not');
-    assert.equal(dots(room({ leader: true, canDM: false })()).length, 2, 'a steward lost the ⋯ that holds Pin / Remove');
+    const d1 = dots(room({ canDM: true })());
+    assert.equal(d1.filter(b => !hiddenDots(b)).length, 1, 'their message (Reply privately) must keep the VISIBLE ⋯, mine (reply only) must not');
+    assert.ok(d1.some(hiddenDots), 'mine (reply only) lost its hidden assistive-tech ⋯');
+    assert.equal(dots(room({ leader: true, canDM: false })()).filter(b => !hiddenDots(b)).length, 2, 'a steward lost the visible ⋯ that holds Pin / Remove');
   } finally { globalThis.__roomTouch = false; }
 });
 
@@ -334,4 +337,32 @@ test('BROWSER: an OPEN direct-message menu paints ON TOP of the message undernea
   assert.equal(res.menu, true, 're-anchor: the open DM menu is not in the page (is Reply-only ⋯ gated off here?): ' + JSON.stringify(res));
   assert.equal(res.onTop, true,
     'the open DM actions menu is painted UNDER the message below it. At its centre the page shows: ' + JSON.stringify(res.under));
+});
+
+// ── ASSISTIVE TECH ON TOUCH (Row): the reply-only ⋯ stays reachable as a hidden, focusable, clickable node ──────
+// TalkBack / Switch Access cannot swipe. On touch the reply-only ⋯ is visually hidden but still a real button a
+// screen-reader cursor lands on; focusing it shows the normal pill, activating it opens the menu holding Reply.
+test('TOUCH POINT OF USE: the room reply-only ⋯ is hidden but focusable and clickable; focus shows it; a click opens Reply', () => {
+  globalThis.__roomTouch = true;
+  try {
+    const draw = room({ canDM: false });
+    const b = dots(draw())[0];
+    assert.ok(b, 'THE DEFECT: on touch the reply-only ⋯ is ABSENT, so TalkBack has no reply route at all');
+    const st = b.props.style;
+    assert.equal(st.width, '1px'); assert.equal(st.height, '1px'); assert.equal(st.opacity, 0); assert.match(String(st.clip), /rect\(0/);
+    assert.notEqual(st.display, 'none'); assert.notEqual(st.pointerEvents, 'none');
+    assert.ok(!b.props.disabled && b.props.tabIndex === undefined, 'the hidden ⋯ must stay focusable');
+    const el = { style: {} };
+    b.props.onFocus({ currentTarget: el });
+    assert.equal(el.style.width, '30px'); assert.equal(el.style.opacity, '1');
+    b.props.onBlur({ currentTarget: el });
+    assert.equal(el.style.width, '1px'); assert.equal(el.style.opacity, '0');
+    b.props.onClick();
+    assert.ok(find(draw(), n => n.type === 'button' && texts(n).join(' ').includes('Reply')).length >= 1, 'the hidden ⋯ opened no Reply');
+  } finally { globalThis.__roomTouch = false; }
+});
+test('POINTER: the room reply-only ⋯ is the normal visible pill (not the hidden one)', () => {
+  globalThis.__roomTouch = false;
+  const b = dots(room({ canDM: false })())[0];
+  assert.equal(b.props.style.width, 30); assert.equal(b.props.style.opacity, undefined); assert.equal(b.props.onFocus, undefined);
 });
