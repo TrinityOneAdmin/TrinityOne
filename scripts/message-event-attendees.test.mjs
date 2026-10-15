@@ -8,7 +8,7 @@
 //                  buttons are pressed and Steward.sendDM is a spy. Going-only reaches exactly the Going
 //                  pubkeys; everyone reaches the audience; a half-failed fan-out never says "Sent".
 //   3. MEMBER    — the real DMThread is rendered with messages that went through the REAL subscribeThread
-//                  and _dmUnwrap. A no-reply message loses swipe, ⋯ menu and Reply; a normal one keeps them.
+//                  and _dmUnwrap. An announcement (nr flag) keeps its label AND swipe, ⋯ menu and Reply (owner 2026-10-15); a normal one is unchanged.
 //
 // Users of the code touched (rule 2):
 //   _dmWrap / _dmUnwrap (member app)  : sendDM, subscribeThread (deliver), subscribeDMs (list preview).
@@ -171,7 +171,15 @@ test('CONSOLE: a TEAM event, Everyone invited, posts once into the team\'s group
   assert.equal(c.posts[0].group, 'g1', 'the post must carry the team\'s group id');
   assert.equal(c.calls.length, 0, 'posting to the group must not also DM');
 });
-test('CONSOLE: the replies toggle sets the no-reply flag on every message', async () => {
+test('CONSOLE: the sender sheet no longer promises "no replies": two honest options, Announcement still sets the label flag', async () => {
+  const c = await composer();
+  const all = texts(c.draw()).join(' | ');
+  assert.doesNotMatch(all, /no repl/i, 'the sheet still promises no replies');
+  assert.ok(c.btn('Normal message'), 'normal-message option missing');
+  assert.ok(c.btn('They can still reply'), 'the announcement option must say replies still work');
+  assert.equal(c.btn('no replies'), undefined, 'the sheet still promises no replies');
+});
+test('CONSOLE: the announcement option sets the announcement flag on every message (label), the normal one does not', async () => {
   const a = await composer();
   a.type('hello'); await a.send();
   assert.ok(a.calls.length > 0 && a.calls.every(x => x.meta.noReply === false));
@@ -322,15 +330,25 @@ const dotsOf = (t) => find(t, n => n.type === 'button' && n.props && n.props['ar
 const swipersOf = (t) => find(t, n => n.type === 'div' && n.props && typeof n.props.onTouchStart === 'function');
 const touch = (x, y) => ({ touches: [{ clientX: x, clientY: y }] });
 
-test('MEMBER: a no-reply church message shows "Announcement" and offers NO dots, NO Reply, and a swipe does not start a reply', async () => {
+test('MEMBER: an announcement (nr flag, with event id) shows the "Announcement" label AND stays replyable: dots, Reply, swipe', async () => {
   const t = await memberThread([fel._dmWrap('Doors at 6', null, { noReply: true, eventId: 'ev-1' })], [{ id: 'ev-1', title: 'Harvest supper' }]);
   const tree = t.redraw();
-  assert.match(reads(tree), /Announcement/);
+  assert.match(reads(tree), /Harvest supper Announcement/);
   assert.match(reads(tree), /Doors at 6/);
-  assert.equal(dotsOf(tree).length, 0, 'an announcement still carries the ⋯ menu');
+  assert.equal(dotsOf(tree).length, 1, 'an announcement lost its dots menu');
+  dotsOf(tree)[0].props.onClick();
+  const reply = find(t.redraw(), n => n.type === 'button' && texts(n).join(' ').includes('Reply'));
+  assert.equal(reply.length, 1, 'an announcement has no Reply');
+  reply[0].props.onClick();
+  assert.match(reads(t.redraw()), /Replying to Church/);
+});
+test('MEMBER: swiping an announcement (nr, no event id) starts a reply, and the label stays', async () => {
+  const t = await memberThread([fel._dmWrap('Doors at 6', null, { noReply: true })]);
+  const tree = t.redraw();
+  assert.match(reads(tree), /Announcement/);
   const s = swipersOf(tree)[0];
   s.props.onTouchStart(touch(100, 300)); s.props.onTouchMove(touch(130, 302)); s.props.onTouchMove(touch(170, 303)); s.props.onTouchEnd();
-  assert.doesNotMatch(reads(t.redraw()), /Replying to/, 'swiping an announcement started a reply');
+  assert.match(reads(t.redraw()), /Replying to Church/, 'swiping an announcement did not start a reply');
 });
 test('MEMBER: a reply-allowed event message and a plain message keep the ⋯ menu, Reply and the swipe (the event one is labelled, the plain one is not)', async () => {
   const t = await memberThread([fel._dmWrap('Doors at 6', null, { eventId: 'ev-1' }), 'plain old message']);
@@ -343,10 +361,10 @@ test('MEMBER: a reply-allowed event message and a plain message keep the ⋯ men
   reply[0].props.onClick();
   assert.match(reads(t.redraw()), /Replying to Church/);
 });
-test('MEMBER: in a mixed thread only the announcement loses the affordances', async () => {
+test('MEMBER: in a mixed thread every message, announcement included, keeps its dots; only the announcement is labelled', async () => {
   const t = await memberThread(['plain', fel._dmWrap('Doors at 6', null, { noReply: true }), 'plain two']);
   const tree = t.redraw();
-  assert.equal(dotsOf(tree).length, 2);
+  assert.equal(dotsOf(tree).length, 3);
   assert.equal((reads(tree).match(/Announcement/g) || []).length, 1);
 });
 
