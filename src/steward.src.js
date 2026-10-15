@@ -4081,7 +4081,9 @@ function makeStayOpen(deps) {
     available: () => !!isNative(),
     purgeLegacy,
     clear,
-    async status() { const r = await read(); return { available: !!isNative(), active: !!r }; },   // transient → active (record kept)
+    // THREE-VALUED. `unknown` = the store did not answer (the read is TRANSIENT): we cannot say whether a record
+    // exists, so the caller must NOT treat it as "no record". `active` is true only for a record we have read.
+    async status() { const r = await read(); const unknown = r === TRANSIENT; return { available: !!isNative(), active: !!r && !unknown, unknown }; },
     // Re-arm replay after an IDLE lock (see `replayed`).
     rearm() { replayed = false; },
     // → { seed } on success; { seed: null, skipped: true } while a replay is running or used up; { seed: null,
@@ -4113,9 +4115,13 @@ function makeStayOpen(deps) {
         const { S } = await secure();
         await S.set(STAY_SS, payload);
         const back = await S.get(STAY_SS);
-        if (back == null || String(back) !== payload) { await clear(); return false; }
+        // Clear ONLY on a readback that is PRESENT and WRONG (a corrupt write). A NULL readback is the store not
+        // answering, and a THROWN set() means the old record may still be intact and valid: deleting either
+        // destroyed a good 30-day record on a transient miss. Both just report "not saved".
+        if (back == null) return false;
+        if (String(back) !== payload) { await clear(); return false; }
         return true;
-      } catch (e) { console.warn('[steward] stay-open save failed', e); await clear(); return false; }
+      } catch (e) { console.warn('[steward] stay-open save failed', e); return false; }
     },
   };
 }
@@ -6019,10 +6025,13 @@ window.Steward = {
     // sending the steward off to re-restore a key that was never broken. Worse, the caller returns before the
     // failed-attempt counter, so the escalating lockout stayed disabled for the rest of the session.
     window.Steward.deviceKeyLost = false;
+    window.Steward.unlockStoreMiss = false;   // reports THIS attempt only; the screen reads it beside keyStoreStuck
     let raw;
     try { raw = await encBlobRaw(); }
     catch (e) { if (e && e.deviceKeyMissing) { window.Steward.deviceKeyLost = true; return false; } throw e; }
-    if (!raw) return lsGet(ENC_LS) ? false : true;   // S6: a marker we cannot open is a FAILED unlock, not an open door
+    // An empty read while the marker exists = the store did not answer, NOT a wrong PIN: flag it so the screen says
+    // so and does not count it toward the lockout. The return value is unchanged (true with no marker, false with one).
+    if (!raw) { const marker = !!lsGet(ENC_LS); if (marker) window.Steward.unlockStoreMiss = true; return marker ? false : true; }   // S6: a marker we cannot open is a FAILED unlock, not an open door
     try {
       const o = JSON.parse(raw);
       const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));

@@ -53,12 +53,18 @@ function engine() {
 function hardwareStore() {
   const map = {};
   const impl = {
-    get: async (k) => { if (k === SS_KEY && hw.failGet > 0) { hw.failGet--; throw new Error('keystore slow'); } return k in map ? map[k] : null; },
-    set: async (k, v) => { map[k] = String(v); },
+    get: async (k) => {
+      if (k === SS_KEY && hw.failGet > 0) { hw.failGet--; throw new Error('keystore slow'); }
+      // nullGet: the store ANSWERS with null although the record is there (the suspected rare trigger of #8)
+      if (k === SS_KEY && hw.nullGet > 0) { hw.nullGet--; return null; }
+      if (k === SS_KEY && hw.garbleGet > 0) { hw.garbleGet--; return 'not-what-was-written'; }
+      return k in map ? map[k] : null;
+    },
+    set: async (k, v) => { if (k === SS_KEY && hw.failSet > 0) { hw.failSet--; throw new Error('keystore busy'); } map[k] = String(v); },
     remove: async (k) => { if (hw.failRemove > 0) { hw.failRemove--; if (hw.silent) return; throw new Error('keystore busy'); } delete map[k]; },
   };
   const S = new Proxy(impl, { get: (t, p) => (p in t ? t[p] : (typeof p === 'symbol' ? undefined : () => { throw new Error('"SecureStorage.' + String(p) + '()" is not implemented on android'); })) });
-  const hw = { map, S, failRemove: 0, silent: false, failGet: 0 };
+  const hw = { map, S, failRemove: 0, silent: false, failGet: 0, nullGet: 0, garbleGet: 0, failSet: 0 };
   return hw;
 }
 
@@ -572,5 +578,142 @@ test('(n) a cancelled replay stays off for the mount: a stale timer and a later 
   L.vis(); await L.settle();
   assert.equal(calls, 0, 'the replay ran again after a typed PIN cancelled it');
   assert.equal(dev.hw.map[SS_KEY], before);
+  L.unmount();
+});
+
+// ── (o) BUG #8: a NULL read of the live record must never DELETE it ───────────────────────────────────────────
+// The Keystore sometimes answers a get() with null although the record is there. status() then said "no record",
+// the box drew unticked, the steward typed the correct PIN, and submit's `want = stayAvail && stayOpen` (false)
+// ran setStayOpen(pin, false) -> clear(): a live 30-day record deleted by someone who never touched the box.
+// Fixed by: only a TOUCHED untick deletes; status() is three-valued; save() clears only on a present-but-wrong
+// readback. The point of use is the shipped StewardUnlock, with the shipped engine behind it.
+const lifted = (dev, L) => liftMethod('async unlock(pin) {', {
+  window: L.window, encBlobRaw: async () => dev.blobRaw !== undefined ? dev.blobRaw : dev.blob, lsGet: () => (dev.blob ? 'marker' : null), ENC_LS: 'enc',
+  b64d: (s) => new Uint8Array(Buffer.from(s, 'base64')), PIN_ITER_LEGACY: 210000, crypto: webcrypto, TextDecoder,
+  deriveAes: async (pin, salt, it) => { const base = await webcrypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+    return webcrypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: it, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']); },
+  _enterUnlocked: (seed) => { L.Steward.hasKey = true; L.Steward.locked = false; L.entered.push(seed); L.window.dispatch('steward-key', {}); },
+}).unlock;
+async function withRecord() {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY]; assert.ok(before, 're-anchor: no record was made');
+  return { dev, before };
+}
+
+test('(o) A, POINT OF USE: the store answers NULL for a live record, the steward types the CORRECT PIN without touching the box -> the record is UNCHANGED and the next idle lock still replays', async () => {
+  const { dev, before } = await withRecord();
+  dev.hw.nullGet = 1;                              // status() reads once and gets null
+  const L = launch(dev); await L.mount();
+  assert.equal(L.box().props.checked, false, 're-anchor: the null read did not draw the box unticked - not at the point of the defect');
+  assert.equal(L.Steward.hasKey, false);
+  await L.typeAndUnlock(PIN);                      // the box is NEVER touched
+  assert.equal(L.Steward.hasKey, true, 're-anchor: the PIN did not unlock');
+  assert.equal(dev.hw.map[SS_KEY], before, 'THE DEFECT (#8): a null read + a correct PIN, box untouched, changed or deleted the live record');
+  L.idleLock(); L.fresh(); await L.mount();
+  assert.equal(L.Steward.hasKey, true, 'the record no longer replays on the next idle lock');
+  assert.deepEqual(L.entered, [SEED, SEED]);
+  L.unmount();
+});
+
+test('(o) B, POINT OF USE: submit BEFORE status resolves (screen state still "unavailable, unticked") keeps the record', async () => {
+  const { dev, before } = await withRecord();
+  const L = launch(dev);
+  L.draw();                                        // no settle: the status promise has not been consumed
+  assert.equal(L.box(), undefined, 're-anchor: status already resolved - this is not the race');
+  await L.typeAndUnlock(PIN);
+  assert.equal(L.Steward.hasKey, true, 're-anchor: the PIN did not unlock');
+  assert.equal(dev.hw.map[SS_KEY], before, 'THE RACE: submitting before status resolved deleted the live record');
+  L.unmount();
+});
+
+test('(o) C: a TOUCHED untick still deletes - even when the first read was a null', async () => {
+  const { dev } = await withRecord();
+  dev.hw.nullGet = 1;
+  const L = launch(dev); await L.mount();
+  assert.equal(L.box().props.checked, false);
+  L.box().props.onChange({ target: { checked: true } }); L.draw();
+  await L.typeAndUnlock(PIN, false);               // tick then untick: the steward asked for it gone
+  assert.equal(L.Steward.hasKey, true);
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'a touched untick no longer deletes the record');
+  L.unmount();
+});
+
+test('(o) D: a WRONG PIN after a null read does not delete the record, still counts, and the guard still fires at 5', async () => {
+  const { dev, before } = await withRecord();
+  dev.hw.nullGet = 1;
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  for (let i = 1; i <= 5; i++) {
+    await L.typeAndUnlock('wrong-pin-' + i);
+    assert.equal(L.Steward.hasKey, false);
+    assert.equal(JSON.parse(dev.ls.getItem('trinityone.steward.pinguard')).fails, i, 'miss ' + i + ' not counted');
+    assert.equal(dev.hw.map[SS_KEY], before, 'a wrong PIN touched the record');
+    L.draw();
+  }
+  assert.match(texts(L.draw()).join(' '), /Too many attempts|Locked/, 'the 5th miss did not lock out');
+  L.unmount();
+});
+
+test('(o) E: the secure store gives back an EMPTY blob while the marker exists -> says so, NO lockout, NO delete (shipped unlock() lifted)', async () => {
+  const { dev, before } = await withRecord();
+  dev.hw.nullGet = 1;                              // keep the launch on the PIN prompt (no automatic replay)
+  const L = launch(dev); await L.mount();
+  assert.equal(L.Steward.hasKey, false, 're-anchor: the replay opened the console');
+  L.Steward.unlock = lifted(dev, L);
+  dev.blobRaw = '';                                // encBlobRaw answers '' while dev.blob (the marker) exists
+  await L.typeAndUnlock(PIN);
+  assert.equal(L.Steward.unlockStoreMiss, true, 'unlock() did not flag the store miss');
+  assert.equal(L.Steward.hasKey, false);
+  assert.match(texts(L.draw()).join(' '), /didn’t answer/, 'the screen does not say the secure storage did not answer');
+  assert.equal(dev.ls.getItem('trinityone.steward.pinguard'), null, 'a store miss was counted toward the lockout');
+  assert.equal(dev.hw.map[SS_KEY], before, 'a store miss deleted the record');
+  // the next attempt is judged afresh: the store answers, the right PIN opens, and the flag is not latched
+  dev.blobRaw = undefined; await L.typeAndUnlock(PIN);
+  assert.equal(L.Steward.hasKey, true); assert.equal(L.Steward.unlockStoreMiss, false, 'the flag latched');
+  L.unmount();
+});
+
+test('(o) unlock() keeps its boolean contract: no marker -> true (the stuck-locked fix), wrong PIN -> false and NOT a store miss', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L = launch(dev); const unlock = lifted(dev, L);
+  dev.blobRaw = ''; const marker = dev.blob; dev.blob = null;   // empty AND no marker: nothing to unlock
+  assert.equal(await unlock(PIN), true, 'unlock() no longer returns true when there is no marker (stuck-locked bug is back)');
+  assert.equal(L.Steward.unlockStoreMiss, false);
+  dev.blob = marker; dev.blobRaw = undefined;
+  assert.equal(await unlock('wrong'), false); assert.equal(L.Steward.unlockStoreMiss, false, 'a wrong PIN was reported as a store miss');
+  L.unmount();
+});
+
+test('(o) F: a decrypt failure on a PRESENT record still deletes it (a dead record is not a transient one)', async () => {
+  const { dev } = await withRecord();
+  const rec = JSON.parse(dev.hw.map[SS_KEY]); rec.k = Buffer.from(new Uint8Array(32)).toString('base64'); dev.hw.map[SS_KEY] = JSON.stringify(rec);
+  const L = launch(dev); await L.mount();
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'a present record that cannot open the blob was kept');
+  L.unmount();
+});
+
+test('(o) status() is three-valued: a throw is `unknown` (not active:false); no record is plainly inactive', async () => {
+  const { dev } = await withRecord();
+  const L = launch(dev);
+  dev.hw.failGet = 1;
+  assert.deepEqual(await L.stay.status(), { available: true, active: false, unknown: true });
+  assert.deepEqual(await L.stay.status(), { available: true, active: true, unknown: false });
+  delete dev.hw.map[SS_KEY];
+  assert.deepEqual(await L.stay.status(), { available: true, active: false, unknown: false });
+  L.unmount();
+});
+
+test('(o) save(pin,true) clears ONLY on a present-but-WRONG readback: a thrown set() and a null readback keep the old record', async () => {
+  const { dev, before } = await withRecord();
+  const L = launch(dev);
+  dev.hw.failSet = 1;
+  assert.equal(await L.stay.save(PIN, true), false);
+  assert.equal(dev.hw.map[SS_KEY], before, 'a thrown set() deleted the old record');
+  dev.hw.nullGet = 1;                              // the only SS_KEY get in save() is the readback
+  assert.equal(await L.stay.save(PIN, true), false);
+  assert.ok(dev.hw.map[SS_KEY], 'a null readback deleted the record');
+  dev.hw.garbleGet = 1;
+  assert.equal(await L.stay.save(PIN, true), false);
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'a corrupt (present, wrong) readback was kept');
   L.unmount();
 });
