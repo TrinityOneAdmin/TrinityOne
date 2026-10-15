@@ -520,12 +520,11 @@ function ChatScreen({ ctx }) {
         const topMb = (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20);
         const hasBanner = !!(ctx.church && ctx.church.banner);
         return hasBanner ? (
-          <React.Fragment>
-            <div style={{ marginBottom: 14, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
-              <ChurchPill ctx={ctx} />
-            </div>
-            <div data-top-bar="banner" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: topMb, animation: 'trinityFade .5s ease .04s both' }}>{topIcons}</div>
-          </React.Fragment>
+          <div data-top-bar="banner" style={{ position: 'relative', marginBottom: topMb, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
+            <ChurchPill ctx={ctx} />
+            {/* the three icons FLOAT OVER the banner, in line with the church name at its top (ChurchPill reserves their width) */}
+            <div data-top-icons-float="1" style={{ position: 'absolute', right: 14, top: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>{topIcons}</div>
+          </div>
         ) : (
           <div data-top-bar="one-row" style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: topMb, animation: 'trinityFade .5s ease both' }}>
             <div style={{ flex: 1, minWidth: 0 }}><ChurchPill ctx={ctx} /></div>
