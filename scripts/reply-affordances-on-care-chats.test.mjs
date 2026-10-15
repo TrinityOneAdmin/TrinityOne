@@ -128,10 +128,11 @@ test('steward web console: no swipe rows (the swipe is APK-only there), ⋯ stil
 
 // ── TOUCH (owner 2026-10-15): Reply is the SOLE action behind the ⋯, so a touch phone shows none ─────────────
 for (const which of ['member', 'steward']) {
-  test(`${which}: TOUCH + swipe live -> NO ⋯ on any message, and the swipe still replies`, () => {
+  test(`${which}: TOUCH + swipe live -> NO VISIBLE ⋯ on any message (hidden focusable ones remain), and the swipe still replies`, () => {
     const w = build(which, { native: true, touch: true });
     const t = w.d();
-    assert.equal(w.dots(t).length, 0, 'a touch surface still shows the reply-only ⋯');
+    assert.equal(w.dots(t).length, 3, 'a touch surface lost the hidden assistive-tech ⋯');
+    assert.ok(w.dots(t).every(b => b.props.style.width === '1px' && b.props.style.opacity === 0 && b.props.style.display !== 'none'), 'a touch surface still shows the reply-only ⋯ visibly');
     const r = w.rows(t)[0];
     r.props.onTouchStart(touch(10, 10)); r.props.onTouchMove(touch(70, 12));
     r.props.onTouchEnd({ changedTouches: [{ clientX: 70, clientY: 12 }] });

@@ -187,12 +187,13 @@ test('STEP 2: an open menu asks to be scrolled into view', async () => {
 // ── TOUCH (owner 2026-10-15): Reply is the ONLY action behind this ⋯, so the APK shows none; a mouse keeps it ──
 const dotsOf = (t) => find(t, n => n.type === 'button' && n.props.title === 'Message actions');
 
-test('TOUCH: on the APK (swipe live, no fine pointer) the console DM has NO ⋯, and the swipe still replies', async () => {
+test('TOUCH: on the APK (swipe live, no fine pointer) the console DM has NO VISIBLE ⋯ (hidden focusable ones remain), and the swipe still replies', async () => {
   globalThis.__trinityTouch = true;
   try {
     const w = await win({ native: true });
     const t = w.draw();
-    assert.equal(dotsOf(t).length, 0, 'the reply-only ⋯ is still on a touch console DM');
+    assert.equal(dotsOf(t).length, 3, 'the hidden assistive-tech ⋯ is gone from a touch console DM');
+    assert.ok(dotsOf(t).every(b => b.props.style.width === '1px' && b.props.style.opacity === 0 && b.props.style.display !== 'none'), 'the reply-only ⋯ is still VISIBLE on a touch console DM');
     const r = w.rows(t)[0];
     r.props.onTouchStart(touch(10, 10)); r.props.onTouchMove(touch(70, 12));
     r.props.onTouchEnd({ changedTouches: [{ clientX: 70, clientY: 12 }] });

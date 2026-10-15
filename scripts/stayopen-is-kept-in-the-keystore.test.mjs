@@ -88,7 +88,7 @@ function launch(dev, { manualTimers = false } = {}) {
   const r = fakeReact();
   const b = fakeBrowser();
   const timers = [];   // with manualTimers the screen's setTimeout calls are RECORDED, not run: { f, ms }
-  if (manualTimers) { b.window.setTimeout = (f, ms) => { timers.push({ f, ms }); return timers.length; }; b.window.clearTimeout = () => {}; }
+  if (manualTimers) { b.window.setTimeout = (f, ms) => { timers.push({ f, ms }); return timers.length; }; b.window.clearTimeout = (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; }; }
   for (const [k, v] of Object.entries(dev.lsSeed)) b.localStorage.setItem(k, v);
   dev.ls = b.localStorage;
   const lib = engine();
@@ -522,5 +522,55 @@ test('(m) a failed (dead) replay runs once: no retry timer, no re-run on visibil
   L.Steward.lock('idle'); L.fresh(); await L.mount();
   assert.equal(calls, 1, 'the idle re-arm replayed a record that was already deleted');
   assert.equal(L.Steward.hasKey, false);
+  L.unmount();
+});
+
+// ── (n) a typed PIN beats the automatic replay (the box was dead for ~15s after an idle resume) ───────────────
+// The replay owns `busy` while it backs off 1s/2s/4s/8s; the button was disabled for that whole time, so a
+// steward who typed the PIN straight away could not submit it. Now the typed PIN cancels the replay (deleting
+// nothing) and unlocks at once. Driven through the real StewardUnlock, with the shipped engine behind it.
+const mainButton = (L) => nodes(L.draw()).find(n => n.type === 'button' && /Unlock|Reopening|Unlocking/.test(texts(n).join(' ')));
+test('(n) POINT OF USE: while the replay is backing off, a typed PIN unlocks at once — no timers drained, record untouched, no retry left', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY];
+  dev.hw.failGet = 2;
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  assert.equal(L.Steward.hasKey, false);
+  assert.ok(L.timers.some(t => t.ms === 1000), 'not in the replay backoff: the test is not at the point of the defect');
+  dev.hw.failGet = 0;
+  const pinField = () => nodes(L.draw()).find(n => n.type === 'input' && n.props['aria-label'] === 'Your console PIN or passphrase');
+  assert.equal(mainButton(L).props.disabled, true, 're-anchor: with no PIN typed the button is disabled');
+  assert.match(texts(L.draw()).join(' '), /Reopening automatically/, 'the hint is missing');
+  pinField().props.onChange({ target: { value: PIN } });
+  const btn = mainButton(L);
+  assert.equal(btn.props.disabled, false, 'THE DEFECT: a typed PIN could not be submitted while the replay was backing off');
+  assert.match(texts(btn).join(' '), /Unlock/);
+  await btn.props.onClick(); await L.settle();
+  assert.equal(L.Steward.hasKey, true, 'the typed PIN did not unlock while the replay was pending');
+  assert.equal(dev.hw.map[SS_KEY], before, 'cancelling the replay touched the stay-open record');
+  assert.deepEqual(L.timers.filter(t => !t.cleared), [], 'a retry timer is still pending after the typed PIN cancelled the replay');
+  L.unmount();
+});
+test('(n) a cancelled replay stays off for the mount: a stale timer and a later visibilitychange do nothing; WRONG typed PINs keep the record and 5 misses still lock out', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY];
+  dev.hw.failGet = 1e6;
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  let calls = 0; const real = L.Steward.unlockStayOpen; L.Steward.unlockStayOpen = (...a) => { calls++; return real(...a); };
+  const pending = L.timers.slice();
+  for (let i = 1; i <= 5; i++) {
+    await L.typeAndUnlock('wrong-pin-' + i);
+    assert.equal(L.Steward.hasKey, false);
+    assert.equal(JSON.parse(dev.ls.getItem('trinityone.steward.pinguard')).fails, i, 'miss ' + i + ' not counted');
+    assert.equal(dev.hw.map[SS_KEY], before, 'a wrong typed PIN touched the live record');
+    L.draw();
+  }
+  assert.match(texts(L.draw()).join(' '), /Too many attempts|Locked/, 'the 5th miss did not lock out');
+  for (const t of pending) t.f();               // a stale timer firing after the cancel
+  L.vis(); await L.settle();
+  assert.equal(calls, 0, 'the replay ran again after a typed PIN cancelled it');
+  assert.equal(dev.hw.map[SS_KEY], before);
   L.unmount();
 });

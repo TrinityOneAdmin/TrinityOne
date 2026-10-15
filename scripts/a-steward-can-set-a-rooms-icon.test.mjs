@@ -236,3 +236,38 @@ test('member Community list: an icon the church document carries but the allowli
   const icons = rowIcons(communityList(MEMBER_ROOMS), 'Bad');
   assert.ok(!icons.includes('bogus'));
 });
+
+// ── the schedule's "Belongs to" chips honour the chosen icon (they drew a shield for every team and a speech bubble
+// for everything else, whatever the steward had picked) ────────────────────────────────────────────────────────
+// SchEventModal (app/stew-schedule.jsx) is RENDERED, with the REAL groupIcon (lifted from app/stew-dashboard.jsx,
+// where it is a global declaration the schedule page also loads) and the REAL roomIconOk (app/icons.jsx).
+function schChipIcons(groups) {
+  const { React, draw } = miniReact();
+  const win = { ...ICONS, useStewardGroups: () => groups, Steward: {}, matchMedia: () => ({ matches: true }) };
+  const groupIcon = new Function('window', fnBody(STEW, 'function groupIcon(', 'groupIcon') + '\nreturn groupIcon;')(win);
+  const mod = loadScreen('app/stew-schedule.jsx', ['SchEventModal'], {
+    React, window: win, Icon: IconEl, groupIcon, useStewDialog: () => ({ current: null }), todayISO: () => '2026-10-02',
+    document: { addEventListener() {}, removeEventListener() {} },
+  });
+  const tree = draw(mod.SchEventModal, { day: '2026-10-11', onClose() {} });
+  const chips = find(tree, n => n.type === 'button' && n.props && n.props.style && n.props.style.fontWeight === 700 && n.props.style.fontSize === 12.5);
+  return chips.map(c => ({ name: texts(c).join(''), icon: iconNames(c)[0] }));
+}
+test('schedule "Belongs to" chips: a non-team room draws its chosen icon; a forged icon falls to the kind default; whole church stays "send"', () => {
+  const chips = schChipIcons([
+    { id: 'x', name: 'Heartroom', kind: 'chat', icon: 'heart' },
+    { id: 'y', name: 'Forged', kind: 'chat', icon: '<img onerror=alert(1)>' },
+    { id: 't', name: 'Music', kind: 'team', icon: 'music' },
+    { id: 'u', name: 'PlainTeam', kind: 'team' },
+  ]);
+  const by = (n) => chips.find(c => c.name.includes(n));
+  assert.ok(by('Whole church'), 're-anchor: the chips were not found in SchEventModal');
+  assert.equal(by('Whole church').icon, 'send');
+  assert.equal(by('Heartroom').icon, 'heart', 'a chosen icon on a non-team room is ignored');
+  assert.equal(by('Forged').icon, 'chat', 'a forged icon was drawn');
+  assert.equal(by('Music').icon, 'music');
+  assert.equal(by('PlainTeam').icon, 'shield');
+});
+test('schedule chips: the old kind-only expression is gone from the page', () => {
+  assert.doesNotMatch(readFileSync(join(ROOT, 'app/stew-schedule.jsx'), 'utf8'), /g\.kind === 'team' \? \(g\.icon \|\| 'shield'\) : 'chat'/);
+});

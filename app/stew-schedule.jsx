@@ -1554,7 +1554,7 @@ function SchEventModal({ day, onClose }) {
               const on = group === g.id;
               return (
                 <button key={g.id || 'all'} onClick={() => setGroup(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-                  <Icon name={g.id ? (g.kind === 'team' ? (g.icon || 'shield') : 'chat') : 'send'} size={13} color="currentColor" />{g.name}</button>
+                  <Icon name={g.id ? (typeof groupIcon === 'function' ? groupIcon(g) : 'chat') : 'send'} size={13} color="currentColor" />{g.name}</button>
               );
             })}
           </div>

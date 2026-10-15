@@ -1045,9 +1045,9 @@ function Row({ me, m, children, ctx, mod }) {
           // reply context without leaking any content (audit U2 + U3)
           : m.replyTo ? TrinityReplyKit.quote({ variant: 'card', missing: true }) : null}
         {children}
-        {(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM) || (M.onReply && TrinityReplyKit.replyOnlyDots(true))) ? (
+        {(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM) || M.onReply) ? (
           <React.Fragment>
-            <button data-msg-menu="1" onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
+            <button data-msg-menu="1" onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!M.menuOpen} {...(() => { const base = { position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }; const replyOnly = !(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)); return replyOnly ? TrinityReplyKit.dotsProps(true, 30, base) : { style: base }; })()}><Icon name="dots" size={15} /></button>
             {/* ⚠ THE MENU MUST NOT COVER THE MESSAGE IT ACTS ON. It used to open at `top: 18, left: 0` —
                 18px DOWN FROM THE TOP OF THE BUBBLE, i.e. across it — so a steward deciding whether to
                 reply, or to reply privately, could no longer read the words they were answering. Device
@@ -2012,12 +2012,12 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, noReply, children }) {
         {children}
         {/* AN ANNOUNCEMENT (a church message flagged "no replies") offers no way to answer it: no swipe
             (enabled:false above), no dots menu with Reply, and DMThread adds no reply bar for it. */}
-        {(noReply || !TrinityReplyKit.replyOnlyDots(true)) ? null : <button data-dm-menu="1" onClick={onOpenMenu} title="Message actions" aria-label="Message actions"
-          style={{ position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
+        {noReply ? null : <button data-dm-menu="1" onClick={onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!menuOpen}
+          {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>}
+            justifyContent: 'center', boxShadow: 'var(--shadow)' })}><Icon name="dots" size={15} /></button>}
         {/* below the bubble, anchored to the side the dots are on — see the long note in Row */}
-        {menuOpen && !noReply && TrinityReplyKit.replyOnlyDots(true) ? (
+        {menuOpen && !noReply ? (
           <div data-dm-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
             borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',

@@ -541,9 +541,9 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
               {!m.mine ? <div style={{ fontSize: 11, color: 'var(--ink-3)', margin: '0 0 2px 11px' }}>{careName(m.from, '')}</div> : null}
               {quoted ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: '100%', text: quoted.text ? quoted.text.slice(0, 80) : '' }) : (m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null)}
               <div onContextMenu={e => { e.preventDefault(); setMenuMsg(menuMsg === m.id ? null : m.id); }} onClick={e => { if (menuMsg && menuMsg !== m.id) { setMenuMsg(null); e.stopPropagation(); } }} style={{ padding: '9px 13px', borderRadius: 15, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text', WebkitUserSelect: 'text' }}>{m.text}</div>
-              {canReply(m) && TrinityReplyKit.replyOnlyDots(true) ? (
-                <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions"
-                  style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -36, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={14} /></button>
+              {canReply(m) ? (
+                <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={dotsMsg === m.id}
+                  {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -36, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={14} /></button>
               ) : null}
               {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before. */}
               {dotsMsg === m.id ? (
