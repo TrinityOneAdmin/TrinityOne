@@ -70,15 +70,25 @@ test('Study panel: with no bookmarks the tab says so', () => {
   assert.ok(texts(t).some(s => /No bookmarks yet/.test(s)));
 });
 
-test('Study panel: tabs never squish — the row scrolls, tabs keep their width, counts are badges, labels are short', () => {
+test('Study panel: tabs never squish — two rows of two, every tab reachable by tap, counts are badges, labels are short', () => {
   const p = panel(['43.3.16', '1.1.3']);
   const t = p.redraw();
   const tabs = find(t, n => n.type === 'button' && n.props && n.props['data-tab']);
   assert.deepEqual(tabs.map(b => b.props['data-tab']), ['commentary', 'crossrefs', 'notes', 'bookmarks']);
   assert.deepEqual(tabs.map(b => reads(b).replace(/\d+$/, '')), ['Commentary', 'Cross refs', 'Notes', 'Bookmarks']);
-  tabs.forEach(b => assert.equal(b.props.style.flex, '0 0 auto', b.props['data-tab'] + ' tab can still shrink'));
-  const row = find(t, n => n.type === 'div' && n.props && n.props.style && n.props.style.overflowX === 'auto')[0];
-  assert.ok(row, 'the tab row does not scroll sideways');
-  assert.equal(find(row, n => n.props && n.props['data-tab-count']).length, 1, 'only Bookmarks has a count here (no notes) — and it must be a badge');
+  // two rows of two: the four tabs sit in ONE grid container with exactly two equal columns, and nothing scrolls sideways
+  const grid = find(t, n => n.type === 'div' && n.props && n.props['data-tab-grid'])[0];
+  assert.ok(grid, 'the tabs are not in a grid');
+  assert.equal(grid.props.style.display, 'grid');
+  assert.equal(grid.props.style.gridTemplateColumns, '1fr 1fr', 'the grid is not two columns (so four tabs = two rows of two)');
+  assert.equal(find(grid, n => n.type === 'button' && n.props['data-tab']).length, 4, 'a tab is outside the grid');
+  assert.notEqual(grid.props.style.overflowX, 'auto', 'the tab row still scrolls sideways');
+  tabs.forEach(b => assert.equal(b.props.style.flex, undefined, b.props['data-tab'] + ' tab is still a flex-row item'));
+  assert.equal(find(grid, n => n.props && n.props['data-tab-count']).length, 1, 'only Bookmarks has a count here (no notes) — and it must be a badge');
   assert.equal(texts(t).some(s => /·\s*\d/.test(s)), false, 'a "· N" text suffix is back on a tab');
+  // every tab is reachable: tapping the second-row tabs changes what the panel shows
+  seg(t, /^Bookmarks/).props.onClick();
+  assert.ok(rows(p.redraw()).length > 0, 'the second-row Bookmarks tab does not open the bookmarks');
+  seg(p.redraw(), /^Notes/).props.onClick();
+  assert.equal(rows(p.redraw()).length, 0, 'the Notes tab did not leave the bookmarks view');
 });

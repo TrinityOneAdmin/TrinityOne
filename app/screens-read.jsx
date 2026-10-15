@@ -303,6 +303,14 @@ function hebrewMorphSeg(seg) {
   else if (pos === 'A') { if (HEB_GEN[seg[2]]) out.push(HEB_GEN[seg[2]]); if (HEB_NUM[seg[3]]) out.push(HEB_NUM[seg[3]]); }
   return out.join(' · ');
 }
+// Display form: the same decode with the technical Greek verb terms explained in brackets, so a reader who has never
+// met "aorist" or "optative" can still read the line. Hebrew keeps morphText as is (its terms differ in meaning).
+function morphPlain(code, lang) {
+  const t = morphText(code, lang);
+  if (lang === 'hebrew') return t;
+  const GLOSS = { pluperfect: 'pluperfect (finished before another past event)', imperfect: 'imperfect (ongoing past)', perfect: 'perfect (finished, with a lasting result)', aorist: 'aorist (simple past)', optative: 'optative (a wish or possibility)', subjunctive: 'subjunctive (possible or intended)', middle: 'middle (done to or for oneself)' };
+  return t.replace(/\b(pluperfect|imperfect|perfect|aorist|optative|subjunctive|middle(?! or))\b/g, m => GLOSS[m]);
+}
 function morphText(code, lang) {
   code = String(code || '').trim();
   if (!code) return '';
@@ -346,7 +354,7 @@ function OriginalWords({ verses, pill, onWord }) {
   const matched = pill ? all.filter(x => glossMatchesPill(x.w.g, pill)) : [];
   const sidOf = w => { const m = /^([GH])0*(\d+)/i.exec(String(w.s || '')); return m ? m[1].toUpperCase() + m[2] : ''; };
   const head = (x, big) => {
-    const w = x.w, mt = morphText(w.m, lang);
+    const w = x.w, mt = morphPlain(w.m, lang);
     return <React.Fragment>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
         <span style={{ fontFamily: 'var(--font-read)', fontSize: big ? 30 : 24, fontWeight: 500 }}>{w.w}</span>
@@ -366,7 +374,7 @@ function OriginalWords({ verses, pill, onWord }) {
         {matched.map((x, i) => (
           <div key={i} data-testid="define-original-word" style={{ marginBottom: 18 }}>
             {head(x, true)}
-            <div style={{ marginTop: 6 }}><LexDetail id={sidOf(x.w)} onWord={onWord} /></div>
+            <div style={{ marginTop: 6 }}><LexDetail id={sidOf(x.w)} onWord={onWord} showLemma /></div>
           </div>
         ))}
         <OriginalLicencePill />
@@ -376,7 +384,7 @@ function OriginalWords({ verses, pill, onWord }) {
   // No pill (dictionary not installed) or no match: the whole verse, each word tappable into its lexicon entry.
   return (
     <div data-testid="define-original">
-      {pill ? <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>{'"' + pill + '" isn\'t a single original word — the whole verse:'}</div> : null}
+      {pill ? <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>{'There is no one-word match for "' + pill + '" in the original. Here is the whole verse:'}</div> : null}
       {all.map((x, i) => { const sid = sidOf(x.w); return (
         <button key={i} data-testid="define-original-word" disabled={!sid} onClick={() => sid && onWord && onWord(sid, x.vv.v)} style={{
           display: 'block', width: '100%', textAlign: 'left', border: '1px solid var(--line)', background: 'var(--surface-2)',
@@ -394,12 +402,12 @@ function OriginalWords({ verses, pill, onWord }) {
 // cross-references), the KJV usage and the occurrence count. Shared by WordStudySheet (its sheet body) and the
 // Define sheet's original page (listed inline UNDER the word the English pill matched), so the two never drift.
 // `onWord(id)` follows a derivation cross-reference. Returns null with no id.
-function LexDetail({ id, onWord }) {
+function LexDetail({ id, onWord, showLemma }) {
   const e = id ? window.Bible.lex(id) : null;
   if (!e) return null;
   if (e.missing) return (
     <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink-2)', margin: '18px 0 6px', textWrap: 'pretty' }}>
-      No entry in the built-in lexicon for this number. A dictionary module (<span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.dct.mybible</span>) would supply the full definition.
+      No entry in the built-in lexicon for this number. A dictionary module from the Library would supply the full definition.
     </p>
   );
   return (
@@ -410,6 +418,11 @@ function LexDetail({ id, onWord }) {
           <Icon name="sparkle" size={15} stroke={2} /> {e.short}
         </div>
       ) : <div style={{ height: 16 }} />}
+      {showLemma && e.lemma ? (
+        <div data-testid="lex-lemma" style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, color: 'var(--ink-2)', margin: '-4px 0 10px' }}>
+          Dictionary form: <span style={{ fontSize: 20, fontWeight: 500, color: 'var(--ink)' }}>{e.lemma}</span>{e.translit ? <span style={{ fontStyle: 'italic' }}>{'  ' + e.translit}</span> : null}
+        </div>
+      ) : null}
       <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 16px', textWrap: 'pretty' }}>{e.def || e.gloss}</p>
       {e.deriv ? (
         <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 12 }}>
@@ -437,10 +450,11 @@ function LexDetail({ id, onWord }) {
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>occurrences in scripture</div>
           </div>
         ) : null}
-        <div style={{ flex: 1, background: 'var(--ink)', color: 'var(--paper)', borderRadius: 16,
+        {/* a LABEL for which language this word is from — not a control (nothing happens on tap), so it is drawn flat */}
+        <div data-testid="lex-root-label" style={{ flex: 1, background: 'transparent', border: '1px dashed var(--line)', color: 'var(--ink-2)', borderRadius: 16,
           fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex',
           flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '13px 15px', gap: 2 }}>
-          <Icon name="study" size={18} color="var(--paper)" /> {e.lang === 'HEBREW' ? 'Hebrew' : 'Greek'} root
+          <Icon name="study" size={18} color="var(--ink-3)" /> {e.lang === 'HEBREW' ? 'Hebrew' : 'Greek'} root
         </div>
       </div>
     </React.Fragment>
@@ -480,7 +494,7 @@ function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack, ve
               <div key={i} data-testid="original-word" style={{ marginTop: i ? 8 : 0 }}>
                 <span style={{ fontFamily: 'var(--font-read)', fontSize: 24, fontWeight: 500 }}>{w.w}</span>
                 <span style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t ? '  ' + w.t : ''}</span>
-                {w.m ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{morphText(w.m, origLang)}</div> : null}
+                {w.m ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{morphPlain(w.m, origLang)}</div> : null}
               </div>
             ))}
             <OriginalLicencePill />
@@ -574,8 +588,8 @@ function DefineSheet({ label, text, verses, open, onClose, onWord }) {
       {vlist.length ? (
         <React.Fragment>
           <div data-testid="define-pager-tabs" style={{ display: 'flex', gap: 7, marginBottom: 12 }}>
-            <button onClick={() => goPage(0)} aria-selected={page === 0} style={seg(page === 0)}>English</button>
-            <button onClick={() => goPage(1)} aria-selected={page === 1} style={seg(page === 1)}>{origLabel}</button>
+            <button onClick={() => goPage(0)} aria-selected={page === 0} style={seg(page === 0)}>In English</button>
+            <button onClick={() => goPage(1)} aria-selected={page === 1} style={seg(page === 1)}>{'In the original (' + origLabel + ')'}</button>
           </div>
           <div ref={scroller} onScroll={onScroll} data-testid="define-pager" style={{ display: 'flex', overflowX: 'auto', scrollSnapType: 'x mandatory', scrollbarWidth: 'none', margin: '0 -2px' }}>
             <div data-testid="define-page-english" style={{ flex: '0 0 100%', scrollSnapAlign: 'start', padding: '0 2px', boxSizing: 'border-box' }}>{englishBody}</div>
@@ -1123,10 +1137,10 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
     });
     return out.sort((x, y) => (x.b - y.b) || (x.c - y.c) || (x.v - y.v));
   })();
-  // Tabs never squish: the row scrolls sideways, each tab keeps its natural width, and a count is a small BADGE
-  // (data-tab-count) rather than a "· N" text suffix that overflowed a 75px tab on a 360px phone.
+  // Tabs never squish: TWO ROWS OF TWO (a 2x2 grid, data-tab-grid), every tab the same generous width and always
+  // reachable without sideways scrolling, and a count is a small BADGE (data-tab-count) rather than a "· N" text suffix.
   const seg = (k, lbl, n) => (
-    <button onClick={() => setView(k)} data-tab={k} style={{ flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', padding: '8px 12px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>
+    <button onClick={() => setView(k)} data-tab={k} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, whiteSpace: 'nowrap', padding: '9px 12px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>
       {lbl}
       {n ? <span data-tab-count={n} aria-label={n + ' saved'} style={{ minWidth: 17, height: 17, padding: '0 5px', borderRadius: 999, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10.5, fontWeight: 800, lineHeight: 1, background: view === k ? 'rgba(255,255,255,.28)' : 'color-mix(in oklab, var(--clay) 18%, var(--surface))', color: view === k ? '#fff' : 'var(--clay)' }}>{n}</span> : null}
     </button>
@@ -1155,7 +1169,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             {docked ? null : <IconBtn name="chevR" onClick={onClose} />}
           </div>
           <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
-            <div className="no-scrollbar" style={{ display: 'flex', flex: 1, minWidth: 0, overflowX: 'auto', scrollbarWidth: 'none', background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', 'Notes', myNotes.length)}{seg('bookmarks', 'Bookmarks', myMarks.length)}</div>
+            <div data-tab-grid="2x2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, flex: 1, minWidth: 0, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', 'Notes', myNotes.length)}{seg('bookmarks', 'Bookmarks', myMarks.length)}</div>
           </div>
         </div>
         <div ref={panelScrollRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>

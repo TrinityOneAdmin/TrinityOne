@@ -938,7 +938,9 @@ window.safeImgUrl = function (v) {
   function ensureWorddefs(){
     // "failed" does NOT retry by itself: the Define sheet looks up during render, so a retry-on-render would loop
     // (fail -> notify -> render -> retry). A retry is a deliberate act: retryWorddefs(), or opening the sheet again.
-    if(_worddefsRequested || _worddefsState === "failed" || Object.keys(worddefs).length || typeof navigator === "undefined") return;
+    // WordNet is the BACKSTOP behind Webster: a member who installed only Webster still gets WordNet fetched on first Define,
+    // so a word Webster lacks is defined rather than dropped. (Keyed on WN, not "anything loaded".)
+    if(_worddefsRequested || _worddefsState === "failed" || worddefs.WN || typeof navigator === "undefined") return;
     _worddefsRequested = true; _worddefsState = "loading";
     const fail = err => { _worddefsRequested = false; _worddefsState = "failed"; console.warn("worddefs install failed", err); notify(); };
     // Deferred a tick: the Define sheet looks words up DURING RENDER, and installModule notifies synchronously.
