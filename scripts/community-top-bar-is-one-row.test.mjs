@@ -25,7 +25,7 @@ import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const CDP = 9356;
+const CDP = 9500;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const UNITLESS = new Set(['opacity', 'zIndex', 'fontWeight', 'lineHeight', 'flex', 'flexGrow', 'flexShrink', 'order', 'zoom', 'aspectRatio', 'strokeWidth']);
