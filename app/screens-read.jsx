@@ -266,7 +266,8 @@ function greekMorph(code) {
   const pos = parts[0];
   if (pos === 'V') {
     const out = ['verb'];
-    const tvm = parts[1] || '';
+    // STEP prefixes 2nd-aorist/perfect/future with a digit (V-2API-3S): it is not a tense letter, drop it
+    const tvm = (parts[1] || '').replace(/^\d/, '');
     if (GK_TENSE[tvm[0]]) out.push(GK_TENSE[tvm[0]]);
     if (GK_VOICE[tvm[1]]) out.push(GK_VOICE[tvm[1]]);
     const mood = tvm[2]; if (GK_MOOD[mood]) out.push(GK_MOOD[mood]);
@@ -276,9 +277,11 @@ function greekMorph(code) {
     return out.join(' · ');
   }
   const base = GK_POS[code] || GK_POS[pos];
-  const cng = parts[1] || '';
+  let cng = parts[1] || '';
   const out = [];
   if (base) out.push(base);
+  // pronouns lead with a person digit (P-1NS, P-2DP): say it, then read case/number/gender after it
+  if (/^[1-3]/.test(cng) && /^[PSRCDKQIXF]$/.test(pos)) { out.push(ORD[cng[0]]); cng = cng.slice(1); }
   if (GK_CASE[cng[0]]) out.push(GK_CASE[cng[0]]);
   if (GK_NUM[cng[1]]) out.push(GK_NUM[cng[1]]);
   if (GK_GEN[cng[2]]) out.push(GK_GEN[cng[2]]);
@@ -303,7 +306,7 @@ function hebrewMorphSeg(seg) {
 function morphText(code, lang) {
   code = String(code || '').trim();
   if (!code) return '';
-  if (lang === 'hebrew') return code.split('/').map(s => hebrewMorphSeg(s.replace(/^[HA]/, ''))).filter(Boolean).join('  +  ');
+  if (lang === 'hebrew') return code.replace(/^[HA]/, '').split('/').map(s => hebrewMorphSeg(s)).filter(Boolean).join('  +  ');
   return greekMorph(code);
 }
 // Does an original word's English gloss answer to the English word the reader picked? Loose: an exact token or a
