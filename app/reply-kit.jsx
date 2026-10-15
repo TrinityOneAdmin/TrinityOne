@@ -88,6 +88,37 @@ var TrinityReplyKit = (function () {
     );
   }
 
+  // CLOSE AN OPEN POP-OVER WHEN THE FINGER LANDS OUTSIDE IT (owner 2026-10-15). The ⋯ moderation menu in the
+  // console group chat already did this inline; the reactions picker did it nowhere and the member + console
+  // DM windows did it nowhere, so a picker or a menu, once open, stayed open until you tapped it again — on a
+  // phone there is no "click elsewhere" the way a mouse has.
+  //
+  // This is the ONE thing worth sharing: the rule for what counts as a press "off" the pop-over. It is a PURE
+  // function (no React), because the kit is a classic-script global and, in the console's unit rig, is built
+  // with a hook-free stub React — a hook here would crash every console test that renders these screens. Each
+  // screen keeps its own three-line effect (its React, its `document`), registered while the pop-over is open:
+  //
+  //   useCE(() => {
+  //     if (!openKey) return undefined;
+  //     const off = TrinityReplyKit.tapOffHandler('[data-...]', () => setOpen(''));
+  //     document.addEventListener('pointerdown', off, true);
+  //     return () => document.removeEventListener('pointerdown', off, true);
+  //   }, [openKey]);
+  //
+  //   selector  what counts as INSIDE: a pointerdown whose target .closest(selector) is non-null is ignored,
+  //             so the trigger and the pop-over itself carry it (the bubble that toggles the picker, the ⋯
+  //             wrapper that holds the menu). Everything else closes it.
+  //   close     what to call for a press outside — setRxFor(''), setMenuFor(null), …
+  // pointerdown + capture (set by the caller): a touch and a mouse behave alike and a child's own handler
+  // cannot swallow it, the same shape the original inline ⋯-menu effect used.
+  function tapOffHandler(selector, close) {
+    return function (e) {
+      var t = e && e.target;
+      if (t && typeof t.closest === 'function' && t.closest(selector)) return;
+      close();
+    };
+  }
+
   // The hook for a row that owns its own state (Row, DMSwipe).
   function useSwipe(onReply, opts) {
     var st = React.useRef({ x: 0, y: 0, on: false, dx: 0 });
@@ -171,5 +202,5 @@ var TrinityReplyKit = (function () {
     );
   }
 
-  return { ARM: ARM, MAX: MAX, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, quote: quote, bar: bar };
+  return { ARM: ARM, MAX: MAX, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, tapOffHandler: tapOffHandler, quote: quote, bar: bar };
 })();

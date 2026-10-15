@@ -799,7 +799,7 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) 
           <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
         </button>
       ))}
-      <div style={{ position: 'relative' }}>
+      <div data-rx-pop="1" style={{ position: 'relative' }}>
         <button onClick={onOpenPicker} title="React" style={{
           width: 28, height: 22, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)',
           cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .8 }}>
@@ -1026,7 +1026,7 @@ function Row({ me, m, children, ctx, mod }) {
         {children}
         {(M.onReply || M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)) ? (
           <React.Fragment>
-            <button onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
+            <button data-msg-menu="1" onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
             {/* ⚠ THE MENU MUST NOT COVER THE MESSAGE IT ACTS ON. It used to open at `top: 18, left: 0` —
                 18px DOWN FROM THE TOP OF THE BUBBLE, i.e. across it — so a steward deciding whether to
                 reply, or to reply privately, could no longer read the words they were answering. Device
@@ -1039,7 +1039,7 @@ function Row({ me, m, children, ctx, mod }) {
                 everyone else's — which is also what keeps it on a narrow screen: a menu wider than its
                 bubble can then only grow INWARD, toward the middle of the screen, never off the edge. */}
             {M.menuOpen ? (
-              <div style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div data-msg-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
                     · not my own message (replying privately to yourself is nonsense), and
@@ -1222,6 +1222,23 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [pin, setPin] = useC(null);              // the group's pinned message { msgId, text, by, ts } or null
   const [hidden, setHidden] = useC(null);        // Set of removed message ids (null until first load)
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
+  // TAP OFF A POP-OVER TO CLOSE IT (owner 2026-10-15). The reactions picker and the leader ⋯ menu stayed open
+  // on a phone until tapped again — there is no "click elsewhere" the way a mouse gives one. The rule for
+  // "off" is shared (TrinityReplyKit.tapOffHandler); the effect is local so it uses this screen's own React
+  // and `document`. The trigger + pop-over carry the data-attr so a press on them is ignored (the picker
+  // button toggles itself; a menu item runs its own close).
+  useCE(() => {
+    if (!pickerFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-rx-pop]', () => setPickerFor(null));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [pickerFor]);
+  useCE(() => {
+    if (!menuFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-msg-menu]', () => setMenuFor(null));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [menuFor]);
   const isLeader = !!group && (ctx.myLeaderGroups || []).some(g => g.id === group.id);
   const churchNpub = ctx.church && ctx.church.npub;
   // `broadcast` is carried through the room-list map; `kind` is the fallback for a room reached by any
@@ -1947,13 +1964,13 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, noReply, children }) {
         {children}
         {/* AN ANNOUNCEMENT (a church message flagged "no replies") offers no way to answer it: no swipe
             (enabled:false above), no dots menu with Reply, and DMThread adds no reply bar for it. */}
-        {noReply ? null : <button onClick={onOpenMenu} title="Message actions" aria-label="Message actions"
+        {noReply ? null : <button data-dm-menu="1" onClick={onOpenMenu} title="Message actions" aria-label="Message actions"
           style={{ position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
             justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>}
         {/* below the bubble, anchored to the side the dots are on — see the long note in Row */}
         {menuOpen && !noReply ? (
-          <div style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
+          <div data-dm-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
             borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
               padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>
@@ -1987,6 +2004,21 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   const [rxFor, setRxFor] = useC('');
   const [dmReply, setDmReply] = useC(null);   // the message being answered, or null — mirrors group rooms
   const [dmMenuFor, setDmMenuFor] = useC(null);   // which message has its three-dots menu open — mirrors `menuFor` in ChatRoom
+  // TAP OFF TO CLOSE (owner 2026-10-15), same as the group room above and the console. The reactions picker
+  // trigger is the bubble itself (data-dm-rx on the bubble AND the picker); the ⋯ menu lives in DMSwipe
+  // (data-dm-menu on the dots button and the menu). Shared rule, local effect — see the note in ChatRoom.
+  useCE(() => {
+    if (!rxFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-rx]', () => setRxFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [rxFor]);
+  useCE(() => {
+    if (!dmMenuFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-menu]', () => setDmMenuFor(null));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [dmMenuFor]);
   const scRef = useCR();
   const FS = window.Fellowship;
   const DM_EMOJI = REACT_EMOJIS;   // shared with group rooms — see the note on REACT_EMOJIS
@@ -2082,7 +2114,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
               ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: 274, text: msgById[m.replyTo].content })
               : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
             {m.noReply ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />Announcement</span> : null}
-            <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
+            <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
               {/* Same as the group bubble: the line breaks are in the message, HTML just collapses them.
@@ -2118,7 +2150,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
               </div>
             ) : null}
             {rxFor === m.id ? (
-              <div style={{ display: 'flex', gap: 3, marginTop: 5, padding: '5px 8px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+              <div data-dm-rx="1" style={{ display: 'flex', gap: 3, marginTop: 5, padding: '5px 8px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                 {DM_EMOJI.map(emo => (
                   <button key={emo} onClick={() => react(m, emo)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '2px 4px', borderRadius: 8, opacity: m.myReaction === emo ? 1 : 0.9 }}>{emo}</button>
                 ))}

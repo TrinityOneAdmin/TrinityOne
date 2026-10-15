@@ -84,6 +84,7 @@ async function win({ native = false, result = { id: 'e1' }, msgs = THREAD } = {}
     React,
     window: { Steward, Capacitor: native ? { isNativePlatform: () => true } : undefined,
       addEventListener: () => {}, removeEventListener: () => {} },
+    document: { addEventListener: () => {}, removeEventListener: () => {} },   // the ⋯-menu / picker tap-off effects listen on document
     Icon: ({ name }) => null, SkBadge: () => null, SK_TINT: { gold: { fg: '#000' } },
     nameHandle: () => '', shortNpub: () => 'npub1…',
   });
