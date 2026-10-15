@@ -1120,8 +1120,13 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
     });
     return out.sort((x, y) => (x.b - y.b) || (x.c - y.c) || (x.v - y.v));
   })();
-  const seg = (k, lbl) => (
-    <button onClick={() => setView(k)} style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', padding: '8px 4px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>{lbl}</button>
+  // Tabs never squish: the row scrolls sideways, each tab keeps its natural width, and a count is a small BADGE
+  // (data-tab-count) rather than a "· N" text suffix that overflowed a 75px tab on a 360px phone.
+  const seg = (k, lbl, n) => (
+    <button onClick={() => setView(k)} data-tab={k} style={{ flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', padding: '8px 12px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>
+      {lbl}
+      {n ? <span data-tab-count={n} aria-label={n + ' saved'} style={{ minWidth: 17, height: 17, padding: '0 5px', borderRadius: 999, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10.5, fontWeight: 800, lineHeight: 1, background: view === k ? 'rgba(255,255,255,.28)' : 'color-mix(in oklab, var(--clay) 18%, var(--surface))', color: view === k ? '#fff' : 'var(--clay)' }}>{n}</span> : null}
+    </button>
   );
   return (
     <React.Fragment>
@@ -1147,7 +1152,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             {docked ? null : <IconBtn name="chevR" onClick={onClose} />}
           </div>
           <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
-            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}{seg('bookmarks', `Bookmarks${myMarks.length ? ' · ' + myMarks.length : ''}`)}</div>
+            <div className="no-scrollbar" style={{ display: 'flex', flex: 1, minWidth: 0, overflowX: 'auto', scrollbarWidth: 'none', background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', 'Notes', myNotes.length)}{seg('bookmarks', 'Bookmarks', myMarks.length)}</div>
           </div>
         </div>
         <div ref={panelScrollRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>

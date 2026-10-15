@@ -1118,6 +1118,12 @@ function evtToMsg(e) {
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
+  // same per-slot dismiss as the Today strip (same localStorage key); a pending ask is never dismissable
+  const [, setDismissTick] = React.useState(0);
+  const servKey = next ? [next.id || '', next.date || '', next.teamName || '', next.role || ''].join('|') : '';
+  let dismissed = false;
+  try { dismissed = !!servKey && localStorage.getItem('trinityone.servStripDismiss') === servKey; } catch {}
+  const dismiss = (e) => { if (e) e.stopPropagation(); try { if (servKey) localStorage.setItem('trinityone.servStripDismiss', servKey); } catch {} setDismissTick(t => t + 1); };
   // ONE card: the "What's happening" entry point, with "You're serving" / "Can you serve?" folded onto it as a
   // single line underneath when there's a slot (owner 2026-10-14) — not a separate alternate card.
   return (
@@ -1131,11 +1137,12 @@ function ServingEntry({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
-        {(next || pending) ? (
+        {(pending || (next && !dismissed)) ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderTop: '1px solid var(--line)', fontSize: 12.5, fontWeight: 700, minWidth: 0,
             background: pending ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 8%, var(--surface))', color: pending ? '#8a6717' : 'var(--sage)' }}>
             <Icon name={pending ? 'sparkle' : 'calCheck'} size={14} color="currentColor" />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{pending ? `${pending} request${pending > 1 ? 's' : ''} waiting for your reply` : `You’re serving · ${next.teamName} · ${next.role}`}</span>
+            {!pending ? <span role="button" tabIndex={0} onClick={dismiss} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') dismiss(e); }} aria-label="Dismiss" title="Dismiss — it comes back for your next slot" style={{ flexShrink: 0, width: 40, height: 40, margin: '-13px -8px -13px auto', borderRadius: 999, background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>✕</span> : null}
           </div>
         ) : null}
       </button>
@@ -1219,6 +1226,11 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [reactions, setReactions] = useC({});    // targetId -> { reactorPubkey: {content, ts} }
   const [pickerFor, setPickerFor] = useC(null);  // message id whose emoji picker is open
   const [composeEvt, setComposeEvt] = useC(false); // group-leader event composer open?
+  // The "UPCOMING IN THIS GROUP" card can be folded away when it lists more than one event (default OPEN, remembered
+  // per room). Declared here, BEFORE the `if (!group) return null` below, so the hook count never changes.
+  const evOpenKey = 'trinityone.groupEvOpen.' + (group ? group.id : '');
+  const [evOpen, setEvOpenState] = useC(() => { try { return lsGet(evOpenKey, true) !== false; } catch (e) { return true; } });
+  const setEvOpen = (v) => { setEvOpenState(v); try { lsSet(evOpenKey, v); } catch (e) {} };
   const [pin, setPin] = useC(null);              // the group's pinned message { msgId, text, by, ts } or null
   const [hidden, setHidden] = useC(null);        // Set of removed message ids (null until first load)
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
@@ -1546,6 +1558,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
   // Ask Fellowship rather than re-deriving the rule here — the tiers live in one place so a screen can never
   // drift from what the relay will actually accept.
+  const evFoldable = groupEvents.length > 1;
+  const evShown = !evFoldable || evOpen;
+  const evNext = groupEvents[0] ? new Date(groupEvents[0].date + 'T00:00') : null;
+  const evSummary = groupEvents.length + ' events' + (evNext && !isNaN(evNext) ? ' · next ' + ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][evNext.getDay()] + ' ' + evNext.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][evNext.getMonth()] : '');
   const canAddEvent = !!(window.Fellowship && window.Fellowship.canAddGroupEvent
     && window.Fellowship.canAddGroupEvent(ctx.church && ctx.church.npub, group));
 
@@ -1629,6 +1645,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
               <Icon name="calendar" size={14} color="var(--clay)" /> <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
+              {evFoldable ? <button onClick={() => setEvOpen(!evOpen)} aria-expanded={evOpen} aria-label={evOpen ? 'Collapse upcoming events' : 'Expand upcoming events'} data-ev-chevron style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, margin: '-6px -2px -6px 0', borderRadius: 999, border: 'none', background: 'transparent', cursor: 'pointer' }}><Icon name={evOpen ? 'chevU' : 'chevD'} size={16} color="var(--clay-ink)" /></button> : null}
               {/* The church empowered this member to run the group, and the console's own message tells them to
                   "open the group and tap Event" — so the button has to be here, and only here, or that promise
                   is broken. Hidden entirely for members without the authority: an offer the relay would refuse
@@ -1636,7 +1653,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
               {canAddEvent ? <button onClick={() => setComposeEvt(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 999, cursor: 'pointer', border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'var(--surface)', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 11, letterSpacing: '.3px' }}><Icon name="plus" size={12} color="var(--clay)" /> EVENT</button> : null}
             </div>
             {!groupEvents.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', paddingBottom: 2 }}>Nothing planned yet — add the group’s next gathering so everyone sees it.</div> : null}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {!evShown ? <button onClick={() => setEvOpen(true)} data-ev-summary style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{evSummary}</button> : null}
+            {evShown ? <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {groupEvents.map(e => {
                 const p = (window.svParts ? window.svParts(e.date) : null) || {};
                 const d = new Date(e.date + 'T00:00');
@@ -1657,7 +1675,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                   </button>
                 );
               })}
-            </div>
+            </div> : null}
           </div>
         ) : null}
         {/* AN EMPTY ROOM MUST EXPLAIN ITSELF. This rendered {bubbles} alone, so a room with no messages was a

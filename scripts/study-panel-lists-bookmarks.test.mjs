@@ -38,8 +38,9 @@ test('Study panel: a Bookmarks tab lists every bookmarked verse (all books, read
   const p = panel(['43.3.16', '1.1.3', '19.23.1']);
   let t = p.redraw();
   assert.equal(rows(t).length, 0, 'control: bookmarks must not show on the Commentary tab');
-  const tab = seg(t, /^Bookmarks · 3$/);
-  assert.ok(tab, 'no "Bookmarks · 3" segment in the Study panel');
+  const tab = seg(t, /^Bookmarks\s?3$/);
+  assert.ok(tab, 'no "Bookmarks" tab carrying a count of 3 in the Study panel');
+  assert.equal(find(tab, n => n.props && n.props['data-tab-count'] === 3).length, 1, 'the count is not a badge on the tab');
   tab.props.onClick();
   t = p.redraw();
   assert.deepEqual(rows(t).map(r => reads(r)), ['Genesis 1:3', 'Psalms 23:1', 'John 3:16']);
@@ -67,4 +68,17 @@ test('Study panel: with no bookmarks the tab says so', () => {
   t = p.redraw();
   assert.equal(rows(t).length, 0);
   assert.ok(texts(t).some(s => /No bookmarks yet/.test(s)));
+});
+
+test('Study panel: tabs never squish — the row scrolls, tabs keep their width, counts are badges, labels are short', () => {
+  const p = panel(['43.3.16', '1.1.3']);
+  const t = p.redraw();
+  const tabs = find(t, n => n.type === 'button' && n.props && n.props['data-tab']);
+  assert.deepEqual(tabs.map(b => b.props['data-tab']), ['commentary', 'crossrefs', 'notes', 'bookmarks']);
+  assert.deepEqual(tabs.map(b => reads(b).replace(/\d+$/, '')), ['Commentary', 'Cross refs', 'Notes', 'Bookmarks']);
+  tabs.forEach(b => assert.equal(b.props.style.flex, '0 0 auto', b.props['data-tab'] + ' tab can still shrink'));
+  const row = find(t, n => n.type === 'div' && n.props && n.props.style && n.props.style.overflowX === 'auto')[0];
+  assert.ok(row, 'the tab row does not scroll sideways');
+  assert.equal(find(row, n => n.props && n.props['data-tab-count']).length, 1, 'only Bookmarks has a count here (no notes) — and it must be a badge');
+  assert.equal(texts(t).some(s => /·\s*\d/.test(s)), false, 'a "· N" text suffix is back on a tab');
 });

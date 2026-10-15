@@ -4134,6 +4134,10 @@ function GroupChatModal({ group, onClose }) {
   };
   // ── group events: schedule from the chat window + show what's upcoming ──
   const [gevents, setGevents] = React.useState([]);
+  // fold the "UPCOMING IN THIS GROUP" strip away when it lists more than one event (default open, remembered per room)
+  const gevKey = 'trinityone.console.groupEvOpen.' + group.id;
+  const [gevOpen, setGevOpenState] = React.useState(() => { try { return window.localStorage.getItem(gevKey) !== '0'; } catch { return true; } });
+  const setGevOpen = (v) => { setGevOpenState(v); try { window.localStorage.setItem(gevKey, v ? '1' : '0'); } catch {} };
   React.useEffect(() => (window.Steward.subscribeGroupEvents ? window.Steward.subscribeGroupEvents(group.id, setGevents) : undefined), [group.id]);
   const [composeEvt, setComposeEvt] = React.useState(false);
   const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '' });
@@ -4197,18 +4201,27 @@ function GroupChatModal({ group, onClose }) {
             </div>
           </div>
         ) : null}
-        {gevents.length ? (
+        {gevents.length ? (() => {
+          const shown = gevents.slice(0, 3);
+          const foldable = shown.length > 1;
+          const nx = new Date(shown[0].date + 'T00:00');
+          const summary = shown.length + ' events' + (!isNaN(nx) ? ' · next ' + ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][nx.getDay()] + ' ' + nx.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][nx.getMonth()] : '');
+          return (
           <div style={{ padding: '9px 14px', borderBottom: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-            <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', marginBottom: 5 }}>UPCOMING IN THIS GROUP</div>
-            {gevents.slice(0, 3).map(ev => (
-              <button key={ev.id} onClick={() => setEvDetail(ev)} title="See full details" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink)', padding: '3px 0', width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', marginBottom: (foldable && !gevOpen) ? 2 : 5 }}>
+              <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
+              {foldable ? <button onClick={() => setGevOpen(!gevOpen)} aria-expanded={gevOpen} aria-label={gevOpen ? 'Collapse upcoming events' : 'Expand upcoming events'} data-ev-chevron style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, margin: '-8px -4px -8px 0', borderRadius: 999, border: 'none', background: 'transparent', cursor: 'pointer' }}><Icon name={gevOpen ? 'chevU' : 'chevD'} size={15} color="var(--clay-ink)" /></button> : null}
+            </div>
+            {foldable && !gevOpen ? <button onClick={() => setGevOpen(true)} data-ev-summary style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{summary}</button> : shown.map((ev, i) => (
+              <button key={ev.id} onClick={() => setEvDetail(ev)} title="See full details" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink)', padding: '7px 0', minHeight: 36, boxSizing: 'border-box', width: '100%', border: 'none', borderTop: i ? '1px solid var(--line)' : 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                 <Icon name="calendar" size={13} color="var(--clay)" />
                 <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.title}</span>
                 <span style={{ color: 'var(--ink-3)', flexShrink: 0, marginLeft: 'auto' }}>{ev.date}{ev.time ? ' · ' + ev.time : ''}</span>
               </button>
             ))}
           </div>
-        ) : null}
+          );
+        })() : null}
         <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
           {msgs.map(m => (m.removed ? (

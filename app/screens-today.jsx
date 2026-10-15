@@ -2336,6 +2336,16 @@ function TodayScreen({ ctx }) {
   const servNext = ctx.servNext;
   // (top bar sits just below the status bar; care + serving cards, then the verse — see the ScreenScroll top below)
   const servPendingN = (ctx.servPending || []).length;
+  // "You're serving" strip can be dismissed with an X (owner 2026-10-15), snoozed per SLOT: a new or changed slot
+  // changes the key and the strip returns. A pending "can you serve?" ask is never dismissable (hiding it = a
+  // silent drop). Same key as ServingEntry in screens-chat.jsx so one X clears both surfaces.
+  const [servDismissTick, setServDismissTick] = React.useState(0);
+  const servKey = servNext ? [servNext.id || '', servNext.date || '', servNext.teamName || '', servNext.role || ''].join('|') : '';
+  const servStripDismissed = React.useMemo(() => {
+    if (!servKey) return false;
+    try { return localStorage.getItem('trinityone.servStripDismiss') === servKey; } catch { return false; }
+  }, [servKey, servDismissTick]);
+  const dismissServStrip = (e) => { if (e) e.stopPropagation(); try { if (servKey) localStorage.setItem('trinityone.servStripDismiss', servKey); } catch {} setServDismissTick(t => t + 1); };
   // how many things the church has posted, that THIS member is served, since they last opened this card.
   // `ctx.servingSeenTs` is the per-church mark; app/app.jsx stamps it forward from ctx.openServing().
   const servNew = servingNewCount(ctx, ctx.servingSeenTs);
@@ -2438,7 +2448,7 @@ function TodayScreen({ ctx }) {
             {/* SINGLE-LINE SERVING NOTICE (owner 2026-10-14): "You’re serving" / "Can you serve?" folded onto the
                 What’s happening card as ONE line under it, not a separate alternate card. Pending is prioritised
                 and gold; otherwise the next serving slot. nowrap + ellipsis keeps it to one line. */}
-            {(servNext || servPendingN) ? (
+            {(servPendingN || (servNext && !servStripDismissed)) ? (
               <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", borderTop: "1px solid var(--line)",
                 background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 8%, var(--surface))",
                 color: servPendingN ? "#8a6717" : "var(--sage)", fontSize: 12.5, fontWeight: 700, minWidth: 0 }}>
@@ -2446,6 +2456,7 @@ function TodayScreen({ ctx }) {
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{servPendingN
                   ? <React.Fragment>{servPendingN} request{servPendingN > 1 ? "s" : ""} waiting for your reply</React.Fragment>
                   : <React.Fragment>You{"’"}re serving {"·"} {servNext.teamName} {"·"} {servNext.role} {"·"} {fmtServe(servNext.date)}</React.Fragment>}</span>
+                {!servPendingN ? <button onClick={dismissServStrip} aria-label="Dismiss" title="Dismiss — it comes back for your next slot" style={{ flexShrink: 0, width: 40, height: 40, margin: "-13px -8px -13px auto", borderRadius: 999, border: "none", background: "transparent", color: "var(--ink-3)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, lineHeight: 1 }}>{"✕"}</button> : null}
               </div>
             ) : null}
           </div>

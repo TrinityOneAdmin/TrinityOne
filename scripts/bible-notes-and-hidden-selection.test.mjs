@@ -118,12 +118,12 @@ function reader(opts = {}) {
   const typeInto = (pred, value) => { const t = find(tree, pred)[0]; assert.ok(t && t.props.onChange, 'nothing to type into'); t.props.onChange({ target: { value } }); return redraw(); };
   // does the verse row carry the gold note mark?
   const hasNoteMark = (n) => find(find(tree, x => x.props && x.props.id === 'rv-' + n)[0], x => x.props && x.props.name === 'note').length > 0;
-  // THE STUDY PANEL, as a reader opens it: the edge tab, then the "My notes" segment.
+  // THE STUDY PANEL, as a reader opens it: the edge tab, then the "Notes" segment.
   const openNotesPanel = () => {
     const edge = find(tree, x => x.type === 'button' && /STUDY/.test(reads(x)) && x.props && typeof x.props.onClick === 'function')[0];
     assert.ok(edge, 'no STUDY edge tab on the reader');
     edge.props.onClick(); redraw();
-    press(/^My notes/);
+    press(/^Notes/);
   };
   const panelText = () => {
     // the panel is the one element the screen gives a left border and a slide transform
@@ -151,7 +151,7 @@ test('36: a note saved on a verse through the verse card is listed in the Study 
   assert.match(t, /Heaven open - a note only Grace should read/, 'the note made on John 1:51 is not in the panel: ' + t);
   assert.match(t, /John 1:51/, 'the panel should name the verse as a person reads it, not as a code: ' + t);
   assert.doesNotMatch(t, /No notes here yet/);
-  assert.match(t, /My notes · 1/);
+  assert.match(t, /Notes\s?1(?!\d)/);
 });
 
 test('36: a note saved from the panel is written under the verse card\'s key, and shows on its verse', () => {
@@ -181,7 +181,7 @@ test('36: a verse with a note under BOTH spellings shows both texts, and nothing
   R.openNotesPanel();
   const t = R.panelText();
   assert.match(t, /Card note/); assert.match(t, /Panel note/, 'the second note is hidden behind the first: ' + t);
-  assert.match(t, /My notes · 1/, 'one verse, one entry');
+  assert.match(t, /Notes\s?1(?!\d)/, 'one verse, one entry');
   // (editing from the verse card was removed from the card 2026-10-14)
 });
 
@@ -191,7 +191,7 @@ test('36: the panel lists only THIS chapter\'s notes, in verse order', () => {
   const t = R.panelText();
   assert.doesNotMatch(t, /chapter two/);
   assert.ok(t.indexOf('two') < t.indexOf('five') && t.indexOf('five') < t.indexOf('nine'), 'not in verse order: ' + t);
-  assert.match(t, /My notes · 3/);
+  assert.match(t, /Notes\s?3(?!\d)/);
 });
 
 // ── the Library lists the same notes: heading is "John 1:51", not "43.1.51" ───────────────────────────────
