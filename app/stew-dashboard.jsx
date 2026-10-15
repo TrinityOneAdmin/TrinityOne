@@ -4061,6 +4061,12 @@ function GroupChatModal({ group, onClose }) {
     return () => document.removeEventListener('pointerdown', off, true);
   }, [rxFor]);
   const scRef = React.useRef(null);
+  // ⚠ THE ⋯ MENU IS CLIPPED NEAR THE BOTTOM. It lives inside the `overflowY: auto` message scroller, so a menu
+  // opened on the last message(s) was cut off under the composer (owner device report, Pixel console group
+  // chat). Same fix StewDmWindow already carries: the LAST message opens its menu UPWARD (over the message
+  // before it), and any open menu scrolls itself into view so a message near the bottom edge can't hide it.
+  const lastMsgId = msgs.length ? msgs[msgs.length - 1].id : '';
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
   const GROUP_EMOJI = ['❤️', '🙏', '👍', '😂', '🔥', '🎉'];
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
   React.useEffect(() => window.Steward.subscribeGroupPin(group.id, setPin), [group.id]);
@@ -4235,7 +4241,7 @@ function GroupChatModal({ group, onClose }) {
                       empty innerText, aria-label null — a screen reader had nothing to announce. */}
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" aria-label={'Moderate the message from ' + (nameFor(m.by) || 'a member')} aria-expanded={menuFor === m.id} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
                   {menuFor === m.id ? (
-                    <div style={{ position: 'absolute', top: 22, left: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <div ref={menuIntoView} data-reply-menu={m.id === lastMsgId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastMsgId ? { bottom: 22, marginBottom: 2 } : { top: 22 }), left: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button>
                       <button onClick={() => (pin && pin.msgId === m.id) ? doUnpin() : doPin(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="#8a6717" /> {(pin && pin.msgId === m.id) ? 'Unpin message' : 'Pin message'}</button>
                       <button onClick={() => doRemove(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay-ink)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button>

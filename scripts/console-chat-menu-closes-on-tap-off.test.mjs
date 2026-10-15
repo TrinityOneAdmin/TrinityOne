@@ -141,3 +141,26 @@ test('the bubble AND the open picker both carry data-gc-rx (so neither tap re-op
   const marked = find(c.tree(), n => n.props && n.props['data-gc-rx']);
   assert.ok(marked.length >= 2, 'expected the bubble and the picker row both marked data-gc-rx');
 });
+
+// THE ⋯ MENU IS NOT CLIPPED NEAR THE BOTTOM (owner device report 2026-10-15, Pixel console group chat).
+// The menu lives inside the overflowY:auto scroller; on the LAST message it must open UPWARD, or the
+// composer cuts it off. Mirrors the StewDmWindow fix. Point of use: the real GroupChatModal, menu drawn.
+const FIRST = { id: 'g-first', by: 'aa11', mine: false, text: 'earlier', ts: 1, reactions: [] };
+const LAST  = { id: 'g-last',  by: 'bb22', mine: false, text: 'the last one', ts: 2, reactions: [] };
+const mods = (c) => find(c.tree(), n => n.type === 'button' && n.props.title === 'Moderate');
+const openMenuDir = (c) => { const d = find(c.tree(), n => n.props && n.props['data-reply-menu']); return d.length ? d[0].props['data-reply-menu'] : null; };
+
+test('the ⋯ menu on the LAST group message opens UPWARD (not clipped by the composer)', async () => {
+  const c = await chat({ msgs: [FIRST, LAST] });
+  const b = mods(c);
+  b[b.length - 1].props.onClick();   // open the LAST message's menu
+  c.redraw();
+  assert.equal(openMenuDir(c), 'up', 'the last message menu did not open upward — it would be cut off at the bottom');
+});
+
+test('the ⋯ menu on an EARLIER group message opens downward', async () => {
+  const c = await chat({ msgs: [FIRST, LAST] });
+  mods(c)[0].props.onClick();        // open the FIRST message's menu
+  c.redraw();
+  assert.equal(openMenuDir(c), 'down', 'an earlier message menu should open downward');
+});
