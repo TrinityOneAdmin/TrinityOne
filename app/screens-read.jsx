@@ -160,7 +160,6 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
     { ic: 'book', label: 'Define', fn: ctx._define },
-    { ic: 'study', label: 'Original', fn: ctx._original },
     ...(hasNote ? [{ ic: 'pen', label: 'Share note', fn: ctx._shareNote }] : []),
   ];
   return (
@@ -247,44 +246,49 @@ function OriginalLicencePill() {
     </div>
   );
 }
-// Verse-level fallback for Bibles with no Strong's tags: the verse's original words, each opening its lexicon entry.
-function OriginalSheet({ label, verse, open, onClose, onWord }) {
+// The verse's original words (STEPBible), each opening its lexicon entry. This is the second page of the
+// Define sheet (swipe right from the English meanings). For Bibles with no Strong's tags it is the ONLY
+// original available; on a tagged Bible the exact word for a tapped superscript is still one tap away
+// (WordStudySheet). `verses` is the selected passage's verses [{book,chap,v}]; `onWord(sid, v)` opens the
+// lexicon. Language is taken from the first verse (OT book <= 39 -> Hebrew, else Greek).
+function OriginalWords({ verses, onWord }) {
   const [, force] = useS(0);
-  useE(() => (open && window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), [open]);
-  const lang = verse && verse.book <= 39 ? 'hebrew' : 'greek';
+  useE(() => (window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), []);
   const B = window.Bible;
-  const words = open && verse && B.getOriginal ? B.getOriginal(verse.book, verse.chap, verse.v, lang) : [];
+  const list = (verses || []).filter(Boolean);
+  const lang = list.length && list[0].book <= 39 ? 'hebrew' : 'greek';
   const installed = B.hasOriginal ? B.hasOriginal(lang) : false;
-  return (
-    <BottomSheet open={open} onClose={onClose}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{lang === 'hebrew' ? 'Hebrew' : 'Greek'} original</div>
-        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div></div>
-        <IconBtn name="x" onClick={onClose} />
-      </div>
-      {words.length ? (
-        <div data-testid="original-verse-words" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
-          {words.map((w, i) => {
-            const m = /^([GH])0*(\d+)/i.exec(String(w.s || ''));
-            const sid = m ? m[1].toUpperCase() + m[2] : '';
-            return <button key={i} data-testid="original-verse-word" disabled={!sid} onClick={() => sid && onWord(sid)} style={{
-              border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', borderRadius: 14, padding: '7px 12px',
-              fontFamily: 'var(--font-read)', cursor: sid ? 'pointer' : 'default', textAlign: 'center' }}>
-              <div style={{ fontSize: 22 }}>{w.w}</div>
-              <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</div>
-            </button>;
-          })}
-        </div>
-      ) : installed ? (
-        <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px' }}>No original text for this verse.</p>
-      ) : (
-        <div style={{ padding: '4px 0 12px' }}>
+  const groups = list.map(vv => ({ vv, words: (B.getOriginal ? B.getOriginal(vv.book, vv.chap, vv.v, lang) : []) }));
+  const any = groups.some(g => g.words.length);
+  if (!any) {
+    return installed
+      ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px' }}>No original text for this passage.</p>
+      : <div data-testid="define-original" style={{ padding: '4px 0 12px' }}>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', margin: '0 0 12px' }}>The {lang === 'hebrew' ? 'Hebrew' : 'Greek'} text is an optional download.</p>
           <OriginalOffer lang={lang} />
+        </div>;
+  }
+  return (
+    <div data-testid="define-original">
+      {groups.map((g, gi) => g.words.length ? (
+        <div key={gi} style={{ marginBottom: 12 }}>
+          {list.length > 1 ? <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 5 }}>{'Verse ' + g.vv.v}</div> : null}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {g.words.map((w, i) => {
+              const m = /^([GH])0*(\d+)/i.exec(String(w.s || ''));
+              const sid = m ? m[1].toUpperCase() + m[2] : '';
+              return <button key={i} data-testid="define-original-word" disabled={!sid} onClick={() => sid && onWord && onWord(sid, g.vv.v)} style={{
+                border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', borderRadius: 14, padding: '7px 12px',
+                fontFamily: 'var(--font-read)', cursor: sid ? 'pointer' : 'default', textAlign: 'center' }}>
+                <div style={{ fontSize: 22 }}>{w.w}</div>
+                <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</div>
+              </button>;
+            })}
+          </div>
         </div>
-      )}
-      {words.length ? <OriginalLicencePill /> : null}
-    </BottomSheet>
+      ) : null)}
+      <OriginalLicencePill />
+    </div>
   );
 }
 
@@ -378,16 +382,21 @@ function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack, ve
   );
 }
 
-// ── define (plain-English meanings of the words in the selected verse; WordNet module, downloaded on first tap) ──
-// Works on ANY English text, tagged or not — it is the path for BSB, which has no Strong's numbers. Deliberately
-// separate from WordStudySheet/openWord (the Strong's path): that one is keyed by a Strong's id, this one by a word.
+// ── define (the one word-study sheet; English meanings + the original-language words of the passage) ──
+// Works on ANY English text, tagged or not — it is the path for BSB, which has no Strong's numbers. Two pages
+// sit under the word pills and swipe left/right: ENGLISH (the WordNet/Webster meaning of the picked word) is the
+// default, and the ORIGINAL page (STEPBible Greek/Hebrew for the selected verses) is a swipe to the right. The
+// per-word Strong's path still lives in WordStudySheet (tapping a tagged superscript opens the exact word);
+// this sheet is the home for the plain-English meaning and the verse-level original.
 const POS_NAME = { n: 'noun', v: 'verb', adj: 'adjective', adv: 'adverb' };
-function DefineSheet({ label, text, open, onClose }) {
+function DefineSheet({ label, text, verses, open, onClose, onWord }) {
   const [, force] = useS(0);
   const [pick, setPick] = useS(0);
+  const [page, setPage] = useS(0);             // 0 = English meaning, 1 = original language; the pager scrolls between them
   const [licOpen, setLicOpen] = useS(false);   // the WordNet licence is a pill; tapping it shows the full text (the attribution stays reachable)
+  const scroller = useR(null);
   useE(() => (window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), []);
-  useE(() => { if (open) setPick(0); }, [open, text]);
+  useE(() => { if (open) { setPick(0); setPage(0); try { if (scroller.current) scroller.current.scrollLeft = 0; } catch (e) {} } }, [open, text]);
   const B = window.Bible;
   // Opening the sheet again after a failed download is a deliberate retry (a retry on every render would loop).
   useE(() => { if (open && B.worddefsState && B.worddefsState() === 'failed') B.retryWorddefs(); }, [open]);
@@ -397,35 +406,23 @@ function DefineSheet({ label, text, open, onClose }) {
   const licence = (cur && cur.license) || (B.worddefsLicense && B.worddefsLicense()) || '';   // the licence of the dictionary that ANSWERED, not just the first one loaded
   const sourceLabel = (cur && cur.label) || 'WordNet';
   const note = { fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px', lineHeight: 1.5 };
-  return (
-    <BottomSheet open={open} onClose={onClose}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Define a word</div>
-        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div></div>
-        <IconBtn name="x" onClick={onClose} />
-      </div>
+  const vlist = (verses || []).filter(Boolean);
+  const origLabel = vlist.length && vlist[0].book <= 39 ? 'Hebrew' : 'Greek';       // the page-two tab reads the passage's testament
+  const goPage = (i) => { setPage(i); try { const el = scroller.current; if (el && el.scrollTo) el.scrollTo({ left: i * el.clientWidth, behavior: 'smooth' }); else if (el) el.scrollLeft = i * el.clientWidth; } catch (e) {} };
+  const onScroll = () => { try { const el = scroller.current; if (el && el.clientWidth) setPage(Math.round(el.scrollLeft / el.clientWidth)); } catch (e) {} };
+  const englishBody = (
+    <React.Fragment>
       {words.length ? (
-        <React.Fragment>
-          <div data-testid="define-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7, maxHeight: 128, overflowY: 'auto', marginBottom: 14 }}>
-            {words.map((w, i) => {
-              const on = cur === w;
-              return <button key={w.word} onClick={() => setPick(i)} aria-pressed={on} style={{
-                border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface-2)',
-                color: on ? 'var(--on-clay)' : 'var(--ink)', borderRadius: 999, padding: '7px 13px', fontSize: 14, fontWeight: 600,
-                fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{w.word}</button>;
-            })}
+        <div data-testid="define-senses">
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
+            {cur.word}{cur.head !== cur.word ? <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}>{' → ' + cur.head}</span> : null}
           </div>
-          <div data-testid="define-senses">
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
-              {cur.word}{cur.head !== cur.word ? <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}>{' → ' + cur.head}</span> : null}
-            </div>
-            {cur.senses.map((s, i) => (
-              <p key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', margin: '0 0 9px' }}>
-                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{(POS_NAME[s.pos] || s.pos) + ' · '}</span>{s.gloss}
-              </p>
-            ))}
-          </div>
-        </React.Fragment>
+          {cur.senses.map((s, i) => (
+            <p key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', margin: '0 0 9px' }}>
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{(POS_NAME[s.pos] || s.pos) + ' · '}</span>{s.gloss}
+            </p>
+          ))}
+        </div>
       ) : state === 'failed' ? (
         <div style={note}>
           <p style={{ margin: '0 0 12px' }}>Couldn't download the dictionary. It needs a connection the first time; after that it works offline.</p>
@@ -442,6 +439,42 @@ function DefineSheet({ label, text, open, onClose }) {
           {licOpen ? <div data-testid="define-licence-text" style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 8 }}>{licence}</div> : null}
         </div>
       ) : null}
+    </React.Fragment>
+  );
+  const seg = (on) => ({ flex: 1, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface-2)',
+    color: on ? 'var(--on-clay)' : 'var(--ink-2)', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer' });
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Define a word</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div></div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {words.length ? (
+        <div data-testid="define-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7, maxHeight: 128, overflowY: 'auto', marginBottom: 14 }}>
+          {words.map((w, i) => {
+            const on = cur === w;
+            return <button key={w.word} onClick={() => { setPick(i); goPage(0); }} aria-pressed={on} style={{
+              border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface-2)',
+              color: on ? 'var(--on-clay)' : 'var(--ink)', borderRadius: 999, padding: '7px 13px', fontSize: 14, fontWeight: 600,
+              fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{w.word}</button>;
+          })}
+        </div>
+      ) : null}
+      {vlist.length ? (
+        <React.Fragment>
+          <div data-testid="define-pager-tabs" style={{ display: 'flex', gap: 7, marginBottom: 12 }}>
+            <button onClick={() => goPage(0)} aria-selected={page === 0} style={seg(page === 0)}>English</button>
+            <button onClick={() => goPage(1)} aria-selected={page === 1} style={seg(page === 1)}>{origLabel}</button>
+          </div>
+          <div ref={scroller} onScroll={onScroll} data-testid="define-pager" style={{ display: 'flex', overflowX: 'auto', scrollSnapType: 'x mandatory', scrollbarWidth: 'none', margin: '0 -2px' }}>
+            <div data-testid="define-page-english" style={{ flex: '0 0 100%', scrollSnapAlign: 'start', padding: '0 2px', boxSizing: 'border-box' }}>{englishBody}</div>
+            <div data-testid="define-page-original" style={{ flex: '0 0 100%', scrollSnapAlign: 'start', padding: '0 2px', boxSizing: 'border-box' }}>
+              <OriginalWords verses={vlist} onWord={onWord} />
+            </div>
+          </div>
+        </React.Fragment>
+      ) : englishBody}
     </BottomSheet>
   );
 }
@@ -1326,7 +1359,6 @@ function ReadScreen({ ctx }) {
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
     _define: () => setSheet('define'),
-    _original: () => setSheet('original'),   // back to 'action' on close, so the selection survives
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: notes[keyOf(sel0)] || '' }); },
     // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
     // before" and "+ after", and the comment that lived on this line said they were needed because "the
@@ -1529,9 +1561,8 @@ function ReadScreen({ ctx }) {
         onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setArrived(null); setSheet(null); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
-      <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'original' ? () => setSheet('original') : close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
-      <OriginalSheet label={labelOf(sel0)} verse={sel0 ? { book: loc.book, chap: loc.chap, v: sel0 } : null} open={sheet === 'original'} onClose={() => setSheet('action')} onWord={(sid) => openWord(sid, sel0, 'original')} />
-      <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} open={sheet === 'define'} onClose={() => setSheet('action')} />
+      <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
+      <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} verses={sheet === 'define' ? passage.flatMap(p => p.verses.map(v => ({ book: p.book, chap: p.chap, v }))) : []} open={sheet === 'define'} onClose={() => setSheet('action')} onWord={(sid, v) => openWord(sid, v, 'define')} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
       {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
@@ -1569,4 +1600,4 @@ const navBtnStyle = {
   cursor: 'pointer', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
 };
 
-Object.assign(window, { ReadScreen, verseRefLabel, WordStudySheet, OriginalSheet });
+Object.assign(window, { ReadScreen, verseRefLabel, WordStudySheet, DefineSheet, OriginalWords });

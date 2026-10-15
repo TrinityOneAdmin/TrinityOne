@@ -3,9 +3,9 @@
 //
 // Chain: engine.js's OWN getOriginal/hasOriginal/originalList lifted and run over a small fixture module, then the REAL
 // ReadScreen drawn through the repo's mini-React: a real tap on a Strong's superscript opens WordStudySheet with the
-// verse's original form; a real tap on the verse card's Original tile lists the verse's words on an UNTAGGED Bible and a
-// word opens the lexicon sheet; with no module installed the download offer calls installModule. Nothing here matches
-// text in app/*.jsx (CLAUDE.md rule 3). NOT ON A DEVICE (rule 6).
+// verse's original form; on an UNTAGGED Bible the verse card's Define tile opens the Define sheet, whose second
+// (swipe-right) page lists the verse's original words and a word opens the lexicon sheet; with no module installed the
+// download offer calls installModule. Nothing here matches text in app/*.jsx (CLAUDE.md rule 3). NOT ON A DEVICE (rule 6).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -112,34 +112,35 @@ test('TAGGED, module NOT installed: a download offer appears, never an automatic
   assert.match(reads(R.byId('original-word')[0]), /λόγος/, 'after the install the original form is not shown');
 });
 
-test('UNTAGGED: the verse card has an Original tile; it lists the verse\'s words; tapping one opens the lexicon sheet, and its close returns to the list', async () => {
+test('UNTAGGED: Define has a second (Greek/Hebrew) page listing the verse\'s words; tapping one opens the lexicon, and its close returns to Define', async () => {
   const R = reader({ installed: true, tagged: false });
   await R.tapVerse();
-  const tile = R.tile('Original');
-  assert.ok(tile, 'the verse card has no Original tile');
-  assert.equal(R.byId('original-verse-words').length, 0, 'the sheet is open before it was asked for');
+  const tile = R.tile('Define');
+  assert.ok(tile, 'the verse card has no Define tile');
+  assert.equal(R.byId('define-original-word').length, 0, 'the sheet is open before it was asked for');
   await R.press(tile);
-  const ws = R.byId('original-verse-word');
+  assert.equal(R.byId('define-page-original').length, 1, 'the Define sheet has no original-language page');
+  const ws = R.byId('define-original-word');
   assert.deepEqual(ws.map(w => reads(w)), ['Ἐν En', 'λόγος logos', 'θεόν theon'], 'words not the verse\'s, in order: ' + ws.map(w => reads(w)));
-  assert.equal(R.byId('original-licence-pill').length, 1, 'no licence pill on the verse list');
+  assert.equal(R.byId('original-licence-pill').length, 1, 'no licence pill on the original page');
   await R.press(ws[1]);
   assert.match(reads(R.tree()), /STRONG'S G3056/, 'tapping a word did not open its lexicon entry');
-  assert.equal(R.byId('original-verse-words').length, 0);
+  assert.equal(R.byId('define-original-word').length, 0);
   // the lexicon sheet's own X: the smallest node holding the Strong's header, then its close button
   const sheet = find(R.tree(), n => /STRONG'S G3056/.test(reads(n))).sort((x, y) => reads(x).length - reads(y).length);
   const xs = find(sheet.find(n => find(n, i => i.props && i.props.name === 'x').length), n => n.type === 'button' && n.props.onClick && find(n, i => i.props && i.props.name === 'x').length);
   assert.ok(xs.length, 'no close control on the lexicon sheet');
   await R.press(xs[xs.length - 1]);
-  assert.equal(R.byId('original-verse-words').length, 1, 'closing the lexicon did not return to the verse\'s words');
+  assert.equal(R.byId('define-original-word').length, 3, 'closing the lexicon did not return to the Define original page');
 });
 
-test('UNTAGGED, module NOT installed: the Original sheet offers the download and calls installModule on tap', async () => {
+test('UNTAGGED, module NOT installed: the Define original page offers the download and calls installModule on tap', async () => {
   const R = reader({ installed: false, tagged: false });
   await R.tapVerse();
-  await R.press(R.tile('Original'));
+  await R.press(R.tile('Define'));
   assert.equal(R.installs.length, 0);
-  const btn = find(R.byId('original-offer')[0], n => n.type === 'button')[0];
+  const btn = find(R.byId('define-original')[0], n => n.type === 'button')[0];
   await R.press(btn); await R.redraw();
   assert.deepEqual(R.installs, ['original-greek']);
-  assert.equal(R.byId('original-verse-word').length, 1, 'the installed words did not appear after the download');
+  assert.equal(R.byId('define-original-word').length, 1, 'the installed words did not appear after the download');
 });
