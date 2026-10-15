@@ -131,7 +131,7 @@ function ChurchPill({ ctx }) {
   // so the old two-line "Your church" caption is dropped to save vertical space.
   return (
     <button onClick={ctx.openChurchSwitcher} style={{
-      display: 'flex', alignItems: 'center', gap: 10, width: '100%', border: '1px solid var(--line)',
+      display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, border: '1px solid var(--line)',
       background: 'var(--surface)', borderRadius: 14, padding: '7px 11px', cursor: 'pointer',
       boxShadow: 'var(--shadow)', textAlign: 'left',
     }}>
