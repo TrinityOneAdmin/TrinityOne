@@ -805,7 +805,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
     const el = sc.querySelector('#xr-' + v); if (!el) return;
     try { sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 10; } catch (e) {}
   };
-  const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs'
+  const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs' | 'bookmarks'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
   const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
   const [xrefPreview, setXrefPreview] = useS(null);   // a cross-reference being previewed before jumping to it
@@ -867,8 +867,21 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   const myNotes = Object.keys(chapNotes).filter(k => k.indexOf(prefix) === 0 && /^\d+$/.test(k.slice(prefix.length)))
     .map(k => ({ ref: k, v: parseInt(k.slice(prefix.length), 10) || 0, text: chapNotes[k] }))
     .sort((a, b) => a.v - b.v);
+  // THE MEMBER'S BOOKMARKS (every chapter, not just this one), read from ctx.bookmarks — the same list the verse
+  // card's Bookmark button toggles (keys are "book.chap.verse"; an older spelling like "John 1:4" is folded in by
+  // noteKeyOf). Sorted in reading order. `raw` is the key as stored, so removing hands toggleBookmark exactly what
+  // was put there. A key that cannot be placed on a verse is left out (nothing to jump to).
+  const myMarks = (() => {
+    const seen = {}, out = [];
+    (ctx.bookmarks || []).forEach(raw => {
+      const c = noteKeyOf(raw), m = /^(\d+)\.(\d+)\.(\d+)$/.exec(c);
+      if (!m || seen[c]) return;
+      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3] });
+    });
+    return out.sort((x, y) => (x.b - y.b) || (x.c - y.c) || (x.v - y.v));
+  })();
   const seg = (k, lbl) => (
-    <button onClick={() => setView(k)} style={{ flex: 1, padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>{lbl}</button>
+    <button onClick={() => setView(k)} style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', padding: '8px 4px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>{lbl}</button>
   );
   return (
     <React.Fragment>
@@ -894,7 +907,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             {docked ? null : <IconBtn name="chevR" onClick={onClose} />}
           </div>
           <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
-            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
+            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}{seg('bookmarks', `Bookmarks${myMarks.length ? ' · ' + myMarks.length : ''}`)}</div>
           </div>
         </div>
         <div ref={panelScrollRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
@@ -932,6 +945,21 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
                 <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="link" size={24} /></div>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? `No cross references for ${label}` : 'Gathering cross references…'}</div>
                 <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? 'This chapter has none in the set yet.' : 'Fetching the cross-reference set the first time — a moment on a new phone, then it is saved.'}</p>
+              </div>
+            )
+          ) : view === 'bookmarks' ? (
+            myMarks.length ? myMarks.map(bm => (
+              <div key={bm.key} data-bookmark={bm.key} style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                <button onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 9, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
+                  <Icon name="bookmark" size={15} color="var(--clay)" fill /> {verseRefLabel(bm.key)}
+                </button>
+                <button onClick={() => ctx.toggleBookmark(bm.raw)} aria-label={'Remove bookmark ' + verseRefLabel(bm.key)} title="Remove bookmark" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 8 }}><Icon name="x" size={16} /></button>
+              </div>
+            )) : (
+              <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+                <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="bookmark" size={24} /></div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No bookmarks yet</div>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap a verse, then <b>Bookmark</b>. The verses you save gather here.</p>
               </div>
             )
           ) : view === 'notes' ? (
