@@ -50,6 +50,7 @@ function room({ leader = false, canDM = true } = {}) {
     canAddGroupEvent: () => false,
   };
   const win = {
+    matchMedia: () => ({ matches: !globalThis.__roomTouch }),   // pointer device unless a test sets __roomTouch (the ⋯ on a reply-only surface is pointer-only)
     Fellowship,
     TrinityData: { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] },
     TrinityIdentity: { current: { handle: 'me', color: '#123456' } },
@@ -179,4 +180,24 @@ test('the room swipe declares touch-action: pan-y', () => {
   const s = find(draw(), n => n.type === 'div' && n.props && typeof n.props.onTouchStart === 'function')[0];
   assert.equal(s.props.style.touchAction, 'pan-y',
     'without pan-y the compositor may hand the horizontal drag to an ancestor scroller and cancel the touch');
+});
+
+// ── TOUCH (owner 2026-10-15): the ⋯ stays where it has MORE than Reply, and goes where Reply is all it holds ──
+
+test('TOUCH: a plain member who may not DM privately has NO ⋯ on any room message (Reply is the only action; swipe replies)', () => {
+  globalThis.__roomTouch = true;
+  try {
+    const draw = room({ canDM: false });
+    const tree = draw();
+    assert.equal(dots(tree).length, 0, 'reply-only ⋯ still on screen for touch: ' + dots(tree).length);
+    assert.ok(find(tree, n => n.props && typeof n.props.onTouchStart === 'function').length >= 2, 'the swipe handlers are gone: no reply route left');
+  } finally { globalThis.__roomTouch = false; }
+});
+
+test('TOUCH: the ⋯ is KEPT where there is more than Reply — Reply privately on their message, Pin/Remove for a leader', () => {
+  globalThis.__roomTouch = true;
+  try {
+    assert.equal(dots(room({ canDM: true })()).length, 1, 'their message (Reply privately) must keep the ⋯, mine (reply only) must not');
+    assert.equal(dots(room({ leader: true, canDM: false })()).length, 2, 'a steward lost the ⋯ that holds Pin / Remove');
+  } finally { globalThis.__roomTouch = false; }
 });

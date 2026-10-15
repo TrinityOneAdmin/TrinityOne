@@ -12724,7 +12724,7 @@ function StewDmWindow({ peer, offset, onClose }) {
                   : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
                 {(m.noReply || m.eventId) ? <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px' }}>{stewDmAnnounceLabel(m, _dmEvents)}</span> : null}
                 <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
-                {canReply(m) ? (
+                {canReply(m) && TrinityReplyKit.replyOnlyDots(isNative) ? (
                   <button data-dm-menu="1" onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions"
                     style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={13} /></button>
                 ) : null}

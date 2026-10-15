@@ -53,7 +53,7 @@ function room() {
   };
   const mod = loadScreen('app/screens-chat.jsx', ['ChatRoom'], {
     React,
-    window: { Fellowship, TrinityData: { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] },
+    window: { matchMedia: () => ({ matches: true }), Fellowship, TrinityData: { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] },
       TrinityIdentity: { current: { handle: 'me', color: '#123456' } }, addEventListener: () => {}, removeEventListener: () => {},
       localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }, confirm: () => true },
     document: doc,
@@ -120,7 +120,7 @@ function thread() {
   };
   const mod = loadScreen('app/screens-chat.jsx', ['DMThread', 'DMSwipe'], {
     React,
-    window: { Fellowship: F, addEventListener() {}, removeEventListener() {} },
+    window: { matchMedia: () => ({ matches: true }), Fellowship: F, addEventListener() {}, removeEventListener() {} },
     document: doc,
     location: { search: '', href: 'https://app.trinityone.church/' },
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},

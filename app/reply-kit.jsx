@@ -15,6 +15,7 @@
 //
 // Users (CLAUDE.md rule 2): Row (group rooms, app/screens-chat.jsx) · DMSwipe + DMThread (member DM, same file)
 // · ChatRoom's reply bar (same file) · StewDmWindow (console DM, app/stew-dashboard.jsx). · CareChatSheet (app/screens-today.jsx) · StewCareChat (app/stew-meals.jsx).
+// replyOnlyDots(): Row, DMSwipe, StewDmWindow, CareChatSheet, StewCareChat (the five places the ⋯ offers Reply and nothing else).
 // The console GROUP chat is deliberately NOT an adopter yet.
 var TrinityReplyKit = (function () {
   var ARM = 48;   // how far to drag before letting go replies
@@ -222,5 +223,16 @@ var TrinityReplyKit = (function () {
     );
   }
 
-  return { ARM: ARM, MAX: MAX, CUE_INSET: CUE_INSET, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, tapOffHandler: tapOffHandler, quote: quote, bar: bar };
+  // THE REPLY-ONLY ⋯. Where Reply is the SOLE action behind the three dots, the dots are noise on a phone — swipe
+  // replies — so a touch surface shows none. A mouse cannot swipe, so a POINTER device (web / desktop console)
+  // keeps the ⋯ as its reply route. `swipeLive` says whether this surface's swipe is actually attached (the console
+  // only attaches it on the native app; on a touch-only browser it is not, so the ⋯ must stay or there is no route).
+  // Owner 2026-10-15: this REVERSES the 2026-10-14 "keep the ⋯". Where Pin / Remove / Delete / Reply-privately
+  // also exist the ⋯ is NOT reply-only and its callers keep it unconditionally — they do not call this.
+  function replyOnlyDots(swipeLive) {
+    if (!swipeLive) return true;
+    try { return !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches); } catch (e) { return false; }
+  }
+
+  return { replyOnlyDots: replyOnlyDots, ARM: ARM, MAX: MAX, CUE_INSET: CUE_INSET, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, tapOffHandler: tapOffHandler, quote: quote, bar: bar };
 })();

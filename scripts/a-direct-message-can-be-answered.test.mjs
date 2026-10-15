@@ -60,7 +60,7 @@ function thread() {
   };
   const mod = loadScreen('app/screens-chat.jsx', ['DMThread', 'DMSwipe'], {
     React,
-    window: { Fellowship: F, addEventListener() {}, removeEventListener() {} },
+    window: { matchMedia: () => ({ matches: !globalThis.__dmTouch }), Fellowship: F, addEventListener() {}, removeEventListener() {} },
     document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
     location: { search: '', href: 'https://app.trinityone.church/' },
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
@@ -298,4 +298,33 @@ test('the swipe container declares touch-action: pan-y, so the list scrolls and 
   assert.equal(s.props.style && s.props.style.touchAction, 'pan-y',
     'without pan-y the compositor may hand a horizontal drag to an ancestor scroller and fire touchcancel '
     + 'part-way through it. React attaches touch listeners passively, so preventDefault() cannot do this job.');
+});
+
+// ── (c) TOUCH: Reply is the SOLE action here, so a touch phone shows NO ⋯ — the swipe replies ────────────────
+// Owner 2026-10-15 (reverses the 2026-10-14 "keep the ⋯"). A POINTER device (the tests above) keeps the ⋯,
+// because a mouse cannot swipe. These drive the real DMThread with matchMedia answering "no fine pointer".
+
+test('TOUCH: a reply-only DM bubble has NO three-dots control, and the swipe still replies', () => {
+  globalThis.__dmTouch = true;
+  try {
+    const t = thread();
+    const tree = t.redraw();
+    assert.equal(dots(tree).length, 0, 'a touch phone still shows the reply-only ⋯ (' + dots(tree).length + ' found)');
+    const s = swipers(tree)[0];
+    assert.ok(s, 'the swipe handler is gone — with the ⋯ also gone there would be NO way to reply');
+    s.props.onTouchStart(touch(100, 300));
+    s.props.onTouchMove(touch(160, 303));
+    s.props.onTouchEnd();
+    assert.match(replying(t.redraw()), /Replying to Sam/, 'swipe did not reply on the touch render');
+  } finally { globalThis.__dmTouch = false; }
+});
+
+test('POINTER: the same DM thread keeps its ⋯ and it replies (a mouse cannot swipe)', () => {
+  globalThis.__dmTouch = false;
+  const t = thread();
+  const d = dots(t.redraw());
+  assert.equal(d.length, 2, 'pointer device lost its only reply route');
+  d[0].props.onClick();
+  named(t.redraw(), 'Reply')[0].props.onClick();
+  assert.match(replying(t.redraw()), /Replying to Sam/);
 });

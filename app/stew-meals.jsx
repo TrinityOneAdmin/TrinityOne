@@ -483,7 +483,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
               {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
               {quoted ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: quoted.text ? quoted.text.slice(0, 80) : '' }) : (m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null)}
               <div onContextMenu={e => { e.preventDefault(); setMenuMsg(menuMsg === m.id ? null : m.id); }} style={{ padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
-              {canReply(m) ? (
+              {canReply(m) && TrinityReplyKit.replyOnlyDots(isNative) ? (
                 <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions"
                   style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={14} /></button>
               ) : null}
