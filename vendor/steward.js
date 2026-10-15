@@ -17528,11 +17528,72 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  function _noteBlockedList(cp, epoch, list, at) {
+  var BLOCKED_SINCE_LS = "trinityone.steward.blockedsince.";
+  function _blockedSinceGet(cp) {
+    try {
+      const o = JSON.parse(lsGet(BLOCKED_SINCE_LS + cp) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function _blockedSinceStamp(cp, pks, at) {
+    const o = _blockedSinceGet(cp), keep = _blockedLastSet(cp);
+    let ch = false;
+    for (const raw of pks || []) {
+      const k = String(raw).toLowerCase();
+      if (keep.has(k) && (o[k] || 0) < (at || 0)) {
+        o[k] = at || 0;
+        ch = true;
+      }
+    }
+    for (const k of Object.keys(o)) if (!keep.has(k)) {
+      delete o[k];
+      ch = true;
+    }
+    if (ch) lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(o));
+  }
+  function _liftRememberedBlock(cp, epoch, pks, at) {
+    if (!_stillOn(cp, epoch)) return [];
+    const since = _blockedSinceGet(cp), held = _blockedLastSet(cp), lifted = [];
+    for (const raw of pks || []) {
+      const p = String(raw).toLowerCase();
+      if (!((at || 0) > (since[p] || 0))) continue;
+      if (!held.has(p) && !_localBlocked.has(p)) continue;
+      held.delete(p);
+      _localBlocked.delete(p);
+      delete since[p];
+      lifted.push(p);
+    }
+    if (!lifted.length) return lifted;
+    lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([...held]));
+    lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(since));
+    try {
+      const o = _pendingRotAll(cp);
+      let moved = false;
+      for (const k of Object.keys(o)) {
+        const before = (o[k].drop || []).length;
+        o[k].drop = (o[k].drop || []).filter((x) => lifted.indexOf(x) === -1);
+        if (o[k].drop.length !== before) moved = true;
+        if (!o[k].drop.length) delete o[k];
+      }
+      if (moved) lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+    } catch (x) {
+    }
+    for (const f of [..._membersReask]) {
+      try {
+        f();
+      } catch (e) {
+      }
+    }
+    return lifted;
+  }
+  function _noteBlockedList(cp, epoch, list, at, asserted) {
     if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
     _localBlocked = new Set((list || []).map((p) => String(p).toLowerCase()));
     _localBlockedAt = at || 0;
     lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([..._localBlocked]));
+    _blockedSinceStamp(cp, asserted || list, at || 0);
   }
   var EVENT_POLICIES = ["leaders", "stewards", "everyone"];
   var _nameKeyRing = [];
@@ -21947,6 +22008,11 @@ zoo`.split("\n");
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (d !== BLOCKED_D + cp0) return false;
         if (_authFuture(e) || !_byChurch(e)) return false;
+        try {
+          const un = e.tags.filter((t) => t[0] === "unblocked" && t[1]).map((t) => t[1]);
+          if (un.length) _liftRememberedBlock(cp0, _tag.epoch, un, e.created_at);
+        } catch (x) {
+        }
         if (e.created_at < latest) return false;
         latest = e.created_at;
         try {
@@ -21954,7 +22020,7 @@ zoo`.split("\n");
         } catch {
           cur = [];
         }
-        if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
+        if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
         return true;
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
@@ -21977,7 +22043,7 @@ zoo`.split("\n");
           tok.genuine = true;
           tok.at = Date.now();
           cur = [...cur];
-          _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
+          _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
           onBlocked(cur);
           _keysReadSignal("blocked");
         }
@@ -22107,8 +22173,11 @@ zoo`.split("\n");
       _localBlocked = /* @__PURE__ */ new Set([..._localBlocked, ...low]);
       _localBlockedAt = now();
       lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+      const stampAt = _localBlockedAt;
+      _blockedSinceStamp(cp0, low, stampAt);
       const content = JSON.stringify({ pubkeys: list });
-      const sent = _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk));
+      const unTags = [...off].filter((p) => !low.includes(p)).map((p) => ["unblocked", p]);
+      const sent = _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET], ...unTags], content }), sk));
       return _landed("blocked list", Promise.resolve(sent).then((ok) => {
         if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const p of drop) _localBlocked.delete(p);

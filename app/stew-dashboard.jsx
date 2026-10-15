@@ -7066,6 +7066,11 @@ function DashMembers() {
   // this file. That was equally true of photo suppression until a second way in was added.
   const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
   const isBlocked = (pk) => blockedSet.has(String(pk || '').toLowerCase());
+  // WHO THIS CONSOLE HOLDS AS BLOCKED THAT THE CHURCH'S LIST DOES NOT NAME (owner, 2026-10-15). A block this device remembers
+  // (Steward.blockedHere) outlives the list it came from, and the subscription above never shows it — so there was no
+  // Unblock to press and a steward could not clear it. The blocked panel below lists the union, so the control is always there.
+  const heldHere = (() => { try { return ((window.Steward.blockedHere && window.Steward.blockedHere()) || []).map(p => String(p || '').toLowerCase()); } catch (e) { return []; } })();
+  const blockedShown = [...(blockedList || []), ...heldHere.filter(p => !blockedSet.has(p))];
   // safeguarding: who's a child, and which adults are cleared to contact youth (mirrors the church's cleared-worker list)
   const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], nophoto: [] };
   // WHO HOLDS A CHECK-IN CLEARANCE, so that marking one of them as a child can withdraw it (see toggleMinor).
@@ -8303,16 +8308,16 @@ function DashMembers() {
               {showInactive ? inactiveM.map(m => memberRow(m, true)) : null}
             </React.Fragment>
           ) : null}
-          {blockedList.length ? (
+          {blockedShown.length ? (
             <React.Fragment>
               <button onClick={() => setShowBlocked(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'var(--surface)', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
-                <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedList.length}
+                <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedShown.length}
               </button>
               {showBlocked && blockErr ? (
                 <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11, marginBottom: 8,
                   background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 38%, var(--line))', color: 'var(--ink)' }}>{blockErr}</div>
               ) : null}
-              {showBlocked ? blockedList.map(pk => (
+              {showBlocked ? blockedShown.map(pk => (
                 <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', opacity: 0.85 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>

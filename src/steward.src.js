@@ -3105,11 +3105,51 @@ function _minorsLastClear(keep) {
     for (const k of ks) localStorage.removeItem(k);
   } catch (e) {}
 }
-function _noteBlockedList(cp, epoch, list, at) {
+// WHEN THIS DEVICE LEARNED EACH REMEMBERED BLOCK, so a lift can tell a NEWER unblock from an older one. The device copy
+// above is a bare array with no clock, which is why a remembered block could never be lifted: nothing could say an
+// unblock was newer than the block. The stamps live in a SIBLING key ({ "<hex>": created_at }), not inside
+// `blockedlast`, so that key keeps its shape (an older build still reads it) and a copy with no stamps — every
+// device before this change — reads as 0 for everyone: any explicit unblock is newer than that.
+const BLOCKED_SINCE_LS = 'trinityone.steward.blockedsince.';
+function _blockedSinceGet(cp) {
+  try { const o = JSON.parse(lsGet(BLOCKED_SINCE_LS + cp) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; }
+  catch (e) { return {}; }
+}
+// `pks` were named by a church list written at `at` (a list we read, or the one a Block made here publishes): each keeps
+// the NEWEST such time. Stamps for people no longer remembered are dropped. Call after the device copy is written.
+function _blockedSinceStamp(cp, pks, at) {
+  const o = _blockedSinceGet(cp), keep = _blockedLastSet(cp); let ch = false;
+  for (const raw of (pks || [])) { const k = String(raw).toLowerCase(); if (keep.has(k) && (o[k] || 0) < (at || 0)) { o[k] = at || 0; ch = true; } }
+  for (const k of Object.keys(o)) if (!keep.has(k)) { delete o[k]; ch = true; }
+  if (ch) lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(o));
+}
+// THE ONLY WAY A REMEMBERED BLOCK IS LIFTED BY A READ (owner, 2026-10-15): an authentic church-signed blocklist event that
+// NAMES the person in an `unblocked` tag, and is newer than when this device learned they were blocked. A newer list that
+// merely LEAVES THEM OUT lifts nothing — that is also what a relay that missed the block, or a second steward who never
+// knew of it, looks like, and the safe side wins. Returns whom it lifted. A person lifted here leaves `_localBlocked`, the
+// device copy, and any rotation still waiting to take them out — what setBlocked does on the relay's yes.
+function _liftRememberedBlock(cp, epoch, pks, at) {
+  if (!_stillOn(cp, epoch)) return [];
+  const since = _blockedSinceGet(cp), held = _blockedLastSet(cp), lifted = [];
+  for (const raw of (pks || [])) {
+    const p = String(raw).toLowerCase();
+    if (!((at || 0) > (since[p] || 0))) continue;           // not newer than what this device knows: no
+    if (!held.has(p) && !_localBlocked.has(p)) continue;    // nothing remembered to lift
+    held.delete(p); _localBlocked.delete(p); delete since[p]; lifted.push(p);
+  }
+  if (!lifted.length) return lifted;
+  lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([...held]));
+  lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(since));
+  try { const o = _pendingRotAll(cp); let moved = false; for (const k of Object.keys(o)) { const before = (o[k].drop || []).length; o[k].drop = (o[k].drop || []).filter(x => lifted.indexOf(x) === -1); if (o[k].drop.length !== before) moved = true; if (!o[k].drop.length) delete o[k]; } if (moved) lsSet(PENDINGROT_LS + cp, JSON.stringify(o)); } catch (x) {}
+  for (const f of [..._membersReask]) { try { f(); } catch (e) {} }   // they were withheld while blocked; ask for the member list again
+  return lifted;
+}
+function _noteBlockedList(cp, epoch, list, at, asserted) {
   if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;   // another church now, or older than what we hold
   _localBlocked = new Set((list || []).map(p => String(p).toLowerCase()));
   _localBlockedAt = at || 0;
   lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([..._localBlocked]));
+  _blockedSinceStamp(cp, asserted || list, at || 0);   // `asserted`: what the church list itself names (the floor adds more, which keep their older stamp)
 }
 // WHO MAY CREATE AN EVENT IN A GROUP. Order matters: index 0 is the default and is never written to the
 // document, so a church that has not touched this setting publishes exactly the group definition it always
@@ -8272,12 +8312,16 @@ window.Steward = {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
       if (d !== BLOCKED_D + cp0) return false;
       if (_authFuture(e) || !_byChurch(e)) return false;   // owner-only; drop forgeries + future-dated pins
+      // AN EXPLICIT UNBLOCK LIFTS A REMEMBERED BLOCK (owner, 2026-10-15). setBlocked names whom an Unblock let back in on
+      // `unblocked` tags of the event it publishes. Read BEFORE the newest-wins test: a marker is authentic and stamped
+      // on its own, and _liftRememberedBlock only acts when it is newer than when this device learned of the block.
+      try { const un = e.tags.filter(t => t[0] === 'unblocked' && t[1]).map(t => t[1]); if (un.length) _liftRememberedBlock(cp0, _tag.epoch, un, e.created_at); } catch (x) {}
       // NEWEST WINS. This is a replaceable doc and we read it from every relay, so without this the copy
       // that ARRIVES last wins rather than the one that was WRITTEN last — a relay holding an older
       // blocklist silently reinstates blocks the owner has already lifted.
       if (e.created_at < latest) return false; latest = e.created_at;
       try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
-      if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
+      if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
       return true;
     };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
@@ -8288,7 +8332,7 @@ window.Steward = {
     // what lets the distributor tell "blocked" from "dropped by a rotation run from a partial list".
     const stopRead = _freshDocRead(cp0, [BLOCKED_D + cp0],
       (e) => { if (take(e)) onBlocked(cur); },
-      (how) => { genuine = true; floored = !!(how && how.without && how.without.length); tok.genuine = true; tok.at = Date.now(); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest); onBlocked(cur); _keysReadSignal('blocked'); });
+      (how) => { genuine = true; floored = !!(how && how.without && how.without.length); tok.genuine = true; tok.at = Date.now(); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur); onBlocked(cur); _keysReadSignal('blocked'); });
     return () => { tok.live = false; try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
@@ -8407,7 +8451,13 @@ window.Steward = {
     _localBlocked = new Set([..._localBlocked, ...low]);
     _localBlockedAt = now();
     lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));   // what this console just blocked, kept (HIGH 2)
+    const stampAt = _localBlockedAt;
+    _blockedSinceStamp(cp0, low, stampAt);                               // the list published below names them at this time
     const content = JSON.stringify({ pubkeys: list });
+    // WHO THIS ACTION LET BACK IN rides on the event as `unblocked` tags (additive — the relay and every older build read
+    // only d, t and content.pubkeys): it is how another console, which remembers the block and may never see an empty
+    // list, tells a genuine unblock from a relay that merely missed the block (_liftRememberedBlock).
+    const unTags = [...off].filter(p => !low.includes(p)).map(p => ['unblocked', p]);
     // ALL RELAYS, NOT THE FIRST TO ANSWER — see setMinors for the full reasoning. A red-team insider proved
     // this one on 2026-08-18: their ban reached only one of the three relays their app connected to, and on
     // the two that lacked the block they AUTHENTICATED and read the entire adult group. The relay refuses to
@@ -8419,7 +8469,7 @@ window.Steward = {
     // the name and care keys, though nothing was saved. So the people it lets back in leave `_localBlocked` and the
     // device copy only once every relay written to accepted it — and only for the newest call, on the church it
     // was made for. Nothing else is touched then: a list that arrived meanwhile keeps what it added.
-    const sent = _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk));
+    const sent = _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET], ...unTags], content }), sk));
     return _landed('blocked list', Promise.resolve(sent).then((ok) => {
       if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
         for (const p of drop) _localBlocked.delete(p);
