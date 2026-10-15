@@ -21,13 +21,13 @@ function liftOriginals(installed) {
   const b = ENGINE.indexOf('\n', ENGINE.indexOf('  function hasOriginal(lang)'));
   assert.ok(a > 0 && b > a, 're-anchor: engine.js original helpers moved');
   const originals = installed ? {
-    TAGNT: { name: 'Greek NT', lang: 'greek', license: 'STEPBible.org CC BY', v: { '43.1.1': [['Ἐν', 'En', 'G1722', 'PREP'], ['λόγος', 'logos', 'G3056G', 'N-NSM'], ['θεόν', 'theon', 'G2316', 'N-ASM']] } },
+    TAGNT: { name: 'Greek NT', lang: 'greek', license: 'STEPBible.org CC BY', v: { '43.1.1': [['Ἐν', 'En', 'G1722', 'PREP', 'In'], ['λόγος', 'logos', 'G3056G', 'N-NSM', 'Word'], ['θεόν', 'theon', 'G2316', 'N-ASM', 'God']] } },
   } : {};
   const api = new Function('originals', ENGINE.slice(a, b) + '\nreturn { getOriginal, hasOriginal, originalList };')(originals);
   return { api, originals };
 }
 
-function reader({ installed, tagged }) {
+function reader({ installed, tagged, defineWords = [] }) {
   const { api, originals } = liftOriginals(installed);
   const { React, draw } = miniReact();
   const subs = [];
@@ -56,8 +56,8 @@ function reader({ installed, tagged }) {
     lex: id => (id === 'G3056' ? { id, lang: 'GREEK', lemma: 'λόγος', translit: 'logos', pos: 'noun', short: 'word', def: 'a word', gloss: 'a word' } : { id, missing: true }),
     getCatalog: async () => ({ categories: [{ id: 'dictionaries', items: [{ id: 'original-greek', kind: 'original', lang: 'Greek', url: 'modules/original-greek.json' }] }] }),
     isInstalled: () => true, isInstalling: () => false,
-    installModule: async item => { installs.push(item.id); originals.TAGNT = { name: 'Greek NT', lang: 'greek', license: 'STEPBible.org CC BY', v: { '43.1.1': [['λόγος', 'logos', 'G3056', 'N-NSM']] } }; subs.forEach(f => f()); return {}; },
-    defineText: () => [], getDefinition: () => null, worddefsLicense: () => '', worddefsState: () => 'ready', retryWorddefs() {},
+    installModule: async item => { installs.push(item.id); originals.TAGNT = { name: 'Greek NT', lang: 'greek', license: 'STEPBible.org CC BY', v: { '43.1.1': [['λόγος', 'logos', 'G3056', 'N-NSM', 'Word']] } }; subs.forEach(f => f()); return {}; },
+    defineText: () => defineWords, getDefinition: () => null, worddefsLicense: () => '', worddefsState: () => 'ready', retryWorddefs() {},
     getOriginal: api.getOriginal, hasOriginal: api.hasOriginal, originalList: api.originalList,
   };
   const { ReadScreen } = loadScreen('app/screens-read.jsx', ['ReadScreen'], {
@@ -88,7 +88,10 @@ test('TAGGED: tapping a Strong\'s number shows the original form in THIS verse, 
   const words = R.byId('original-word');
   assert.equal(words.length, 1, 'only the tapped Strong\'s word (G3056 matches G3056G by base) should show, got ' + words.length);
   const t = reads(words[0]);
-  assert.match(t, /λόγος/); assert.match(t, /logos/); assert.match(t, /N-NSM/);
+  assert.match(t, /λόγος/); assert.match(t, /logos/);
+  assert.match(t, /nominative/, 'the morphology code was not decoded to plain English');
+  assert.match(t, /singular/); assert.match(t, /masculine/);
+  assert.ok(!/N-NSM/.test(t), 'the raw morphology code is still showing');
   assert.ok(!/Ἐν/.test(reads(R.tree())), 'a word with a different Strong\'s number was shown');
   const pill = R.byId('original-licence-pill');
   assert.equal(pill.length, 1, 'no STEPBible licence pill');
@@ -121,7 +124,11 @@ test('UNTAGGED: Define has a second (Greek/Hebrew) page listing the verse\'s wor
   await R.press(tile);
   assert.equal(R.byId('define-page-original').length, 1, 'the Define sheet has no original-language page');
   const ws = R.byId('define-original-word');
-  assert.deepEqual(ws.map(w => reads(w)), ['Ἐν En', 'λόγος logos', 'θεόν theon'], 'words not the verse\'s, in order: ' + ws.map(w => reads(w)));
+  assert.equal(ws.length, 3, 'the verse\'s three original words are not all shown: ' + ws.length);
+  const txt = ws.map(w => reads(w)).join(' | ');
+  assert.match(txt, /λόγος.*logos.*Word/, 'the Greek word, transliteration and English gloss are not shown together');
+  assert.match(txt, /θεόν.*theon.*God/);
+  assert.match(txt, /preposition/, 'the morphology was not decoded to plain English'); assert.match(txt, /nominative/);
   assert.equal(R.byId('original-licence-pill').length, 1, 'no licence pill on the original page');
   await R.press(ws[1]);
   assert.match(reads(R.tree()), /STRONG'S G3056/, 'tapping a word did not open its lexicon entry');
@@ -132,6 +139,18 @@ test('UNTAGGED: Define has a second (Greek/Hebrew) page listing the verse\'s wor
   assert.ok(xs.length, 'no close control on the lexicon sheet');
   await R.press(xs[xs.length - 1]);
   assert.equal(R.byId('define-original-word').length, 3, 'closing the lexicon did not return to the Define original page');
+});
+
+test('UNTAGGED: picking an English word pill leads the original page with the gloss-matched original word, the rest of the verse below', async () => {
+  const R = reader({ installed: true, tagged: false, defineWords: [{ word: 'word', head: 'word', senses: [['n', 'a unit of language']], license: '' }] });
+  await R.tapVerse();
+  await R.press(R.tile('Define'));
+  const head = R.byId('define-original-head');
+  assert.equal(head.length, 1, 'no "<pill> in the original" heading on the original page');
+  assert.match(reads(head[0]), /word/i);
+  const ws = R.byId('define-original-word');
+  assert.match(reads(ws[0]), /λόγος/, 'the gloss-matched Greek word (λόγος, "Word") does not LEAD the page; got: ' + reads(ws[0]));
+  assert.equal(ws.length, 3, 'the rest of the verse should still follow the matched word');
 });
 
 test('UNTAGGED, module NOT installed: the Define original page offers the download and calls installModule on tap', async () => {

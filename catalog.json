@@ -154,12 +154,12 @@
      "name": "Greek New Testament (original words)",
      "abbr": "TAGNT",
      "lang": "Greek",
-     "size": "5.8 MB",
+     "size": "6.7 MB",
      "license": "CC BY 4.0 · STEPBible.org",
      "kind": "original",
      "format": "JSON",
      "url": "modules/original-greek.json",
-     "sha256": "d85419e0ef6bfb4c4a97e14d1639a4da913f24fc6f922e878c517f8483ec033a",
+     "sha256": "387cea50bc85a2a81f44a6905740aaa7c40fdcf222e76a3c219a46f0f7c8016b",
      "desc": "The Greek text of the New Testament, word by word, with each word's transliteration, Strong's number and grammar (STEPBible TAGNT). Download only if you want the original language."
     },
     {
@@ -167,12 +167,12 @@
      "name": "Hebrew Old Testament (original words)",
      "abbr": "TAHOT",
      "lang": "Hebrew",
-     "size": "15.4 MB",
+     "size": "18.4 MB",
      "license": "CC BY 4.0 · STEPBible.org",
      "kind": "original",
      "format": "JSON",
      "url": "modules/original-hebrew.json",
-     "sha256": "95dc7052746a3f8da3679ac9757367502eaef303d53a164f8f5a273240376afb",
+     "sha256": "2942344aa80881b7010c9ff7e673d11deb4a06b31cb81ad577678c70b36e904e",
      "desc": "The Hebrew text of the Old Testament, word by word, with each word's transliteration, Strong's number and grammar (STEPBible TAHOT). Download only if you want the original language."
     },
     {

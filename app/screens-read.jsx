@@ -247,20 +247,92 @@ function OriginalLicencePill() {
   );
 }
 // The verse's original words (STEPBible), each opening its lexicon entry. This is the second page of the
-// Define sheet (swipe right from the English meanings). For Bibles with no Strong's tags it is the ONLY
-// original available; on a tagged Bible the exact word for a tapped superscript is still one tap away
-// (WordStudySheet). `verses` is the selected passage's verses [{book,chap,v}]; `onWord(sid, v)` opens the
-// lexicon. Language is taken from the first verse (OT book <= 39 -> Hebrew, else Greek).
-function OriginalWords({ verses, onWord }) {
+// Define sheet (swipe right from the English meanings).
+
+// ── plain-English morphology (STEPBible tags Greek with Robinson codes, Hebrew with OpenScriptures codes) ──
+// "V-AAI-3S" -> "verb · aorist · active · indicative · 3rd person · singular"; "N-NSF" -> "noun · nominative ·
+// singular · feminine". A reader who doesn't know the codes can read the grammar. Unknown pieces fall back to the
+// raw code rather than inventing a meaning.
+const GK_POS = { N: 'noun', A: 'adjective', T: 'article', V: 'verb', P: 'personal pronoun', R: 'relative pronoun', C: 'reciprocal pronoun', D: 'demonstrative pronoun', K: 'correlative pronoun', I: 'interrogative pronoun', X: 'indefinite pronoun', F: 'reflexive pronoun', S: 'possessive pronoun', Q: 'correlative pronoun', ADV: 'adverb', CONJ: 'conjunction', COND: 'conditional', PRT: 'particle', PREP: 'preposition', INJ: 'interjection', ARAM: 'Aramaic word', HEB: 'Hebrew word', 'N-PRI': 'proper noun', 'A-NUI': 'numeral' };
+const GK_CASE = { N: 'nominative', G: 'genitive', D: 'dative', A: 'accusative', V: 'vocative' };
+const GK_NUM = { S: 'singular', P: 'plural' };
+const GK_GEN = { M: 'masculine', F: 'feminine', N: 'neuter' };
+const GK_TENSE = { P: 'present', I: 'imperfect', F: 'future', A: 'aorist', X: 'perfect', Y: 'pluperfect', R: 'perfect' };
+const GK_VOICE = { A: 'active', M: 'middle', P: 'passive', E: 'middle or passive', D: 'deponent', O: 'deponent', N: 'deponent' };
+const GK_MOOD = { I: 'indicative', S: 'subjunctive', O: 'optative', M: 'imperative', N: 'infinitive', P: 'participle' };
+const ORD = { '1': '1st person', '2': '2nd person', '3': '3rd person' };
+function greekMorph(code) {
+  const parts = code.split('-');
+  const pos = parts[0];
+  if (pos === 'V') {
+    const out = ['verb'];
+    const tvm = parts[1] || '';
+    if (GK_TENSE[tvm[0]]) out.push(GK_TENSE[tvm[0]]);
+    if (GK_VOICE[tvm[1]]) out.push(GK_VOICE[tvm[1]]);
+    const mood = tvm[2]; if (GK_MOOD[mood]) out.push(GK_MOOD[mood]);
+    const tail = parts[2] || '';
+    if (mood === 'P') { if (GK_CASE[tail[0]]) out.push(GK_CASE[tail[0]]); if (GK_NUM[tail[1]]) out.push(GK_NUM[tail[1]]); if (GK_GEN[tail[2]]) out.push(GK_GEN[tail[2]]); }
+    else if (mood !== 'N') { if (ORD[tail[0]]) out.push(ORD[tail[0]]); if (GK_NUM[tail[1]]) out.push(GK_NUM[tail[1]]); }
+    return out.join(' · ');
+  }
+  const base = GK_POS[code] || GK_POS[pos];
+  const cng = parts[1] || '';
+  const out = [];
+  if (base) out.push(base);
+  if (GK_CASE[cng[0]]) out.push(GK_CASE[cng[0]]);
+  if (GK_NUM[cng[1]]) out.push(GK_NUM[cng[1]]);
+  if (GK_GEN[cng[2]]) out.push(GK_GEN[cng[2]]);
+  return out.length ? out.join(' · ') : (base || code);
+}
+const HEB_POS = { N: 'noun', V: 'verb', A: 'adjective', P: 'pronoun', R: 'preposition', C: 'conjunction', D: 'adverb', T: 'particle', S: 'suffix' };
+const HEB_GEN = { m: 'masculine', f: 'feminine', c: 'common', b: 'both' };
+const HEB_NUM = { s: 'singular', p: 'plural', d: 'dual' };
+const HEB_STATE = { a: 'absolute', c: 'construct', d: 'determined' };
+const HEB_STEM = { q: 'qal', N: 'niphal', p: 'piel', P: 'pual', h: 'hiphil', H: 'hophal', t: 'hithpael' };
+const HEB_ASPECT = { p: 'perfect', q: 'perfect', i: 'imperfect', w: 'sequential', h: 'cohortative', j: 'jussive', v: 'imperative', r: 'participle', s: 'passive participle', a: 'infinitive absolute', c: 'infinitive construct' };
+function hebrewMorphSeg(seg) {
+  const pos = seg[0];
+  const base = HEB_POS[pos];
+  if (!base) return seg;
+  const out = [base];
+  if (pos === 'N') { if (HEB_GEN[seg[2]]) out.push(HEB_GEN[seg[2]]); if (HEB_NUM[seg[3]]) out.push(HEB_NUM[seg[3]]); if (HEB_STATE[seg[4]]) out.push(HEB_STATE[seg[4]]); }
+  else if (pos === 'V') { if (HEB_STEM[seg[1]]) out.push(HEB_STEM[seg[1]]); if (HEB_ASPECT[seg[2]]) out.push(HEB_ASPECT[seg[2]]); if (ORD[seg[3]]) out.push(ORD[seg[3]]); if (HEB_GEN[seg[4]]) out.push(HEB_GEN[seg[4]]); if (HEB_NUM[seg[5]]) out.push(HEB_NUM[seg[5]]); }
+  else if (pos === 'A') { if (HEB_GEN[seg[2]]) out.push(HEB_GEN[seg[2]]); if (HEB_NUM[seg[3]]) out.push(HEB_NUM[seg[3]]); }
+  return out.join(' · ');
+}
+function morphText(code, lang) {
+  code = String(code || '').trim();
+  if (!code) return '';
+  if (lang === 'hebrew') return code.split('/').map(s => hebrewMorphSeg(s.replace(/^[HA]/, ''))).filter(Boolean).join('  +  ');
+  return greekMorph(code);
+}
+// Does an original word's English gloss answer to the English word the reader picked? Loose: an exact token or a
+// shared stem ("loved" finds gloss "loved"/"love", "nations" finds "nation"). It only LINKS the pill to its word;
+// it never gates showing the verse — a miss just shows the whole verse.
+const _normW = s => String(s || '').toLowerCase().replace(/[^a-z']/g, '');
+const _stemW = s => _normW(s).replace(/('s|ing|edly|ed|es|eth|est|en|ly|s)$/, '');
+function glossMatchesPill(gloss, pill) {
+  const p = _normW(pill), ps = _stemW(pill);
+  if (!p) return false;
+  return String(gloss || '').split(/\s+/).some(tok => { const t = _normW(tok); return t && (t === p || (ps.length >= 3 && _stemW(t) === ps)); });
+}
+
+// The original words of the selected passage, as the Define sheet's second page. When the reader has picked an
+// English word pill, the matching original word(s) LEAD with full details (form, transliteration, English gloss,
+// plain-English grammar) so the English and original sides line up; the rest of the verse follows. With no pill
+// (dictionary not installed) or no match, the whole verse shows. Each word opens its full lexicon entry.
+// `verses` = the passage's verses [{book,chap,v}]; `pill` = the picked English word (or null). Language from the
+// first verse (OT book <= 39 -> Hebrew, else Greek). On a tagged Bible the exact word for a tapped superscript is
+// still one tap away in WordStudySheet.
+function OriginalWords({ verses, pill, onWord }) {
   const [, force] = useS(0);
   useE(() => (window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), []);
   const B = window.Bible;
   const list = (verses || []).filter(Boolean);
   const lang = list.length && list[0].book <= 39 ? 'hebrew' : 'greek';
   const installed = B.hasOriginal ? B.hasOriginal(lang) : false;
-  const groups = list.map(vv => ({ vv, words: (B.getOriginal ? B.getOriginal(vv.book, vv.chap, vv.v, lang) : []) }));
-  const any = groups.some(g => g.words.length);
-  if (!any) {
+  const all = list.flatMap(vv => (B.getOriginal ? B.getOriginal(vv.book, vv.chap, vv.v, lang) : []).map(w => ({ vv, w })));
+  if (!all.length) {
     return installed
       ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px' }}>No original text for this passage.</p>
       : <div data-testid="define-original" style={{ padding: '4px 0 12px' }}>
@@ -268,25 +340,34 @@ function OriginalWords({ verses, onWord }) {
           <OriginalOffer lang={lang} />
         </div>;
   }
+  const matched = pill ? all.filter(x => glossMatchesPill(x.w.g, pill)) : [];
+  const lead = matched.length ? matched : all;
+  const rest = matched.length ? all.filter(x => matched.indexOf(x) < 0) : [];
+  const card = (x, key, dim) => {
+    const w = x.w;
+    const m = /^([GH])0*(\d+)/i.exec(String(w.s || ''));
+    const sid = m ? m[1].toUpperCase() + m[2] : '';
+    const mt = morphText(w.m, lang);
+    return <button key={key} data-testid="define-original-word" disabled={!sid} onClick={() => sid && onWord && onWord(sid, x.vv.v)} style={{
+      display: 'block', width: '100%', textAlign: 'left', border: '1px solid var(--line)', background: 'var(--surface-2)',
+      color: 'var(--ink)', borderRadius: 14, padding: '11px 14px', marginBottom: 8, cursor: sid ? 'pointer' : 'default', opacity: dim ? 0.72 : 1 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: 'var(--font-read)', fontSize: 24, fontWeight: 500 }}>{w.w}</span>
+        <span style={{ fontFamily: 'var(--font-read)', fontSize: 15, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</span>
+        {list.length > 1 ? <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginLeft: 'auto' }}>{'v' + x.vv.v}</span> : null}
+      </div>
+      {w.g ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, color: 'var(--ink)', marginTop: 3 }}>{w.g}</div> : null}
+      {mt ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', marginTop: 3 }}>{mt}</div> : null}
+    </button>;
+  };
   return (
     <div data-testid="define-original">
-      {groups.map((g, gi) => g.words.length ? (
-        <div key={gi} style={{ marginBottom: 12 }}>
-          {list.length > 1 ? <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 5 }}>{'Verse ' + g.vv.v}</div> : null}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {g.words.map((w, i) => {
-              const m = /^([GH])0*(\d+)/i.exec(String(w.s || ''));
-              const sid = m ? m[1].toUpperCase() + m[2] : '';
-              return <button key={i} data-testid="define-original-word" disabled={!sid} onClick={() => sid && onWord && onWord(sid, g.vv.v)} style={{
-                border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', borderRadius: 14, padding: '7px 12px',
-                fontFamily: 'var(--font-read)', cursor: sid ? 'pointer' : 'default', textAlign: 'center' }}>
-                <div style={{ fontSize: 22 }}>{w.w}</div>
-                <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</div>
-              </button>;
-            })}
-          </div>
-        </div>
-      ) : null)}
+      {pill ? <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>{matched.length ? ('"' + pill + '" in the original') : ('"' + pill + '" isn\'t a single original word — the whole verse:')}</div> : null}
+      {lead.map((x, i) => card(x, 'l' + i, false))}
+      {rest.length ? <React.Fragment>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', margin: '6px 0 7px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Rest of the verse</div>
+        {rest.map((x, i) => card(x, 'r' + i, true))}
+      </React.Fragment> : null}
       <OriginalLicencePill />
     </div>
   );
@@ -326,7 +407,7 @@ function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack, ve
               <div key={i} data-testid="original-word" style={{ marginTop: i ? 8 : 0 }}>
                 <span style={{ fontFamily: 'var(--font-read)', fontSize: 24, fontWeight: 500 }}>{w.w}</span>
                 <span style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t ? '  ' + w.t : ''}</span>
-                {w.m ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{w.m}</div> : null}
+                {w.m ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{morphText(w.m, origLang)}</div> : null}
               </div>
             ))}
             <OriginalLicencePill />
@@ -454,7 +535,7 @@ function DefineSheet({ label, text, verses, open, onClose, onWord }) {
         <div data-testid="define-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7, maxHeight: 128, overflowY: 'auto', marginBottom: 14 }}>
           {words.map((w, i) => {
             const on = cur === w;
-            return <button key={w.word} onClick={() => { setPick(i); goPage(0); }} aria-pressed={on} style={{
+            return <button key={w.word} onClick={() => setPick(i)} aria-pressed={on} style={{
               border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface-2)',
               color: on ? 'var(--on-clay)' : 'var(--ink)', borderRadius: 999, padding: '7px 13px', fontSize: 14, fontWeight: 600,
               fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{w.word}</button>;
@@ -470,7 +551,7 @@ function DefineSheet({ label, text, verses, open, onClose, onWord }) {
           <div ref={scroller} onScroll={onScroll} data-testid="define-pager" style={{ display: 'flex', overflowX: 'auto', scrollSnapType: 'x mandatory', scrollbarWidth: 'none', margin: '0 -2px' }}>
             <div data-testid="define-page-english" style={{ flex: '0 0 100%', scrollSnapAlign: 'start', padding: '0 2px', boxSizing: 'border-box' }}>{englishBody}</div>
             <div data-testid="define-page-original" style={{ flex: '0 0 100%', scrollSnapAlign: 'start', padding: '0 2px', boxSizing: 'border-box' }}>
-              <OriginalWords verses={vlist} onWord={onWord} />
+              <OriginalWords verses={vlist} pill={cur ? cur.word : null} onWord={onWord} />
             </div>
           </div>
         </React.Fragment>

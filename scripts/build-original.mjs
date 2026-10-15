@@ -12,10 +12,12 @@
 //
 // Output module (installed by engine.js installModule as kind "original", format "JSON"):
 //   { meta:{ abbr, name, license:"STEPBible.org CC BY", kind:"original", lang:"greek"|"hebrew", source },
-//     v:{ "<book>.<chap>.<verse>": [ [form, translit, strongs, morph], … ] } }
+//     v:{ "<book>.<chap>.<verse>": [ [form, translit, strongs, morph, gloss], … ] } }
 // The verse key is the SAME key the cross-reference module and Bible.refKey use: TrinityOne book number (1 = Genesis …
 // 66 = Revelation), chapter, verse — "43.1.1" is John 1:1. Words are in reading order (Hebrew: right-to-left order of
-// the text, i.e. the order the file gives them). No glosses: those already live in the Strong's lexicon.
+// the text, i.e. the order the file gives them). `gloss` is STEPBible's CONTEXT gloss — the short English of THIS word
+// as translated here ("[The] book", "loved") — kept so an English reader can read the original side and so the Define
+// sheet can link an English word pill to its original word; the full lexical definition still lives in the lexicon.
 //
 // Which words are kept (the file marks each word with the manuscript editions that carry it):
 //   Greek  — words in the Nestle-Aland text (type contains an UPPER-CASE "N": N, NK, N(k)O …). Words only some
@@ -58,7 +60,7 @@ export function parseLine(line, lang) {
   const book = BOOK_NUM[m[1]];
   if (!book) return null;
   const type = m[4];
-  let form, translit, strongs, morph;
+  let form, translit, strongs, morph, gloss;
   if (lang === 'greek') {
     if (!/N/.test(type)) return null;
     const w = /^(.*?)\s*\(([^)]*)\)\s*$/.exec(c[1] || '');
@@ -67,6 +69,7 @@ export function parseLine(line, lang) {
     const g = (c[3] || '').split('=');
     strongs = g[0].split('|').pop().split('«').pop();
     morph = g[1] || '';
+    gloss = c[2] || '';                                   // STEPBible's context gloss ("[The] book")
   } else {
     if (!/^[LQ]/.test(type)) return null;
     form = clean(c[1] || '');
@@ -75,10 +78,14 @@ export function parseLine(line, lang) {
     const br = /\{([^}]+)\}/.exec(s);
     strongs = br ? br[1] : ((/H(?!9\d{3})\d{4}[A-Za-z]?/.exec(s) || [''])[0]);
     morph = c[5] || '';
+    gloss = c[3] || '';                                   // STEPBible's context gloss ("in/ beginning")
   }
   if (!form || !strongs) return null;
+  // Readable English of THIS word: drop the [brackets] STEPBible puts round words it supplied, turn the "/" morpheme
+  // joiners into spaces, collapse whitespace. "[The] book" -> "The book"; "in/ beginning" -> "in beginning".
+  const cleanGloss = g => String(g || '').replace(/[\[\]<>]/g, '').replace(/[\/\\]/g, ' ').replace(/\s+/g, ' ').trim();
   // NFC, so a word compares equal to the same word typed or stored elsewhere (STEPBible's Greek is decomposed).
-  return { key: book + '.' + m[2] + '.' + m[3], word: [form.trim().normalize('NFC'), translit.trim().normalize('NFC'), strongs.trim(), morph.trim()] };
+  return { key: book + '.' + m[2] + '.' + m[3], word: [form.trim().normalize('NFC'), translit.trim().normalize('NFC'), strongs.trim(), morph.trim(), cleanGloss(gloss)] };
 }
 
 export function build(lang, texts) {

@@ -226,7 +226,7 @@ window.safeImgUrl = function (v) {
   // Extended Strong's -> the plain number the lexicons key on: "G0976" -> "G976", "H7225G" -> "H7225".
   function _strongBase(s){ const m = /^([GH])0*(\d+)/.exec(String(s == null ? "" : s).trim().toUpperCase()); return m ? m[1] + m[2] : ""; }
   // Verse -> the original words of the first installed original module that has it (lang "greek"/"hebrew" narrows
-  // it; omit for whichever answers): [{ w: form, t: transliteration, s: extended Strong's, m: morphology }], reading
+  // it; omit for whichever answers): [{ w: form, t: transliteration, s: extended Strong's, m: morphology, g: gloss }], reading
   // order, or [] (nothing installed, or the verse is absent from that text). `strongs` ("G3056", "G3056G", "H7225")
   // keeps only the words with that number — the verse-plus-Strong's lookup.
   function getOriginal(b, c, v, lang, strongs){
@@ -237,7 +237,7 @@ window.safeImgUrl = function (v) {
       const list = o.v[key];
       if(!list) continue;
       const out = [];
-      for(const x of list){ if(want && _strongBase(x[2]) !== want) continue; out.push({ w: x[0], t: x[1], s: x[2], m: x[3] }); }
+      for(const x of list){ if(want && _strongBase(x[2]) !== want) continue; out.push({ w: x[0], t: x[1], s: x[2], m: x[3], g: x[4] || "" }); }
       return out;
     }
     return [];

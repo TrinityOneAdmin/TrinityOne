@@ -10,7 +10,8 @@
 //      only stub; the bytes and the catalogue entry are the real ones), verifies the pin, caches it, and
 //      window.Bible.getOriginal — the function the reader will call — answers from it. Removal empties it.
 //
-// NOT PROVED HERE: no reader screen calls getOriginal yet (phase 1b); not on a device; IndexedDB is an in-memory Map.
+// NOT PROVED HERE: the reader wiring (phase 1b, the Define sheet) is proved in original-language-reaches-the-reader.test.mjs;
+// not on a device; IndexedDB is an in-memory Map.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -50,9 +51,9 @@ test('BUILD (Greek): the right words for John 1:1, in order, critical text only,
   assert.deepEqual(m.meta, { abbr: 'TAGNT', name: m.meta.name, lang: 'greek', license: 'STEPBible.org CC BY', kind: 'original', source: m.meta.source });
   assert.equal(BOOK_NUM.Jhn, 43);
   assert.deepEqual(m.v['43.1.1'], [
-    ['Ἐν', 'En', 'G1722', 'PREP'], ['ἀρχῇ', 'archēa', 'G0746', 'N-DSF'], ['ἦν', 'ēn', 'G1510', 'V-IAI-3S'],
-    ['λόγος,', 'logos', 'G3056', 'N-NSM'], ['λόγος', 'logos', 'G3056', 'N-NSM']]);
-  assert.deepEqual(m.v['66.22.21'], [['ἡ', 'hē', 'G3588', 'T-NSF']], 'Revelation must be book 66');
+    ['Ἐν', 'En', 'G1722', 'PREP', 'In the'], ['ἀρχῇ', 'archēa', 'G0746', 'N-DSF', 'beginning'], ['ἦν', 'ēn', 'G1510', 'V-IAI-3S', 'was'],
+    ['λόγος,', 'logos', 'G3056', 'N-NSM', 'Word,'], ['λόγος', 'logos', 'G3056', 'N-NSM', 'Word']]);
+  assert.deepEqual(m.v['66.22.21'], [['ἡ', 'hē', 'G3588', 'T-NSF', 'the']], 'Revelation must be book 66');
   assert.deepEqual(Object.keys(m.v).sort(), ['43.1.1', '66.22.21']);
 });
 
@@ -60,7 +61,7 @@ test('BUILD (Hebrew): Genesis 1:1, separators removed, braces pick the head word
   const m = build('hebrew', [TAHOT]);
   assert.equal(m.meta.lang, 'hebrew');
   assert.deepEqual(m.v['1.1.1'], [
-    ['בְּרֵאשִׁית', 'be.re.Shit', 'H7225G', 'HR/Ncfsa'], ['בָּרָא', "ba.Ra'", 'H1254A', 'HVqp3ms'], ['אֱלֹהִים', "'E.lo.Him", 'H0430G', 'HNcmpa']]);
+    ['בְּרֵאשִׁית', 'be.re.Shit', 'H7225G', 'HR/Ncfsa', 'in beginning'], ['בָּרָא', "ba.Ra'", 'H1254A', 'HVqp3ms', 'he created'], ['אֱלֹהִים', "'E.lo.Him", 'H0430G', 'HNcmpa', 'God']]);
   assert.deepEqual(m.v['19.3.0'].map(w => w[2]), ['H4210'], 'Psa.3.0(3.1) must be filed under the English reference 3.0');
   assert.deepEqual(m.v['19.3.1'].map(w => w[2]), ['H3068G'], 'a Qere word is a reading word');
   assert.equal(parseLine('Gen.1.1#04=K\tx\tx\tx\t{H0001}\tHN', 'hebrew'), null);
@@ -81,7 +82,7 @@ test('SHIPPED modules: John 1:1 / Genesis 1:1 are right, every key is a TrinityO
     for (const k in mod.v) {
       const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(k);
       assert.ok(m && +m[1] >= lo && +m[1] <= hi, `${lang}: bad verse key ${k}`);
-      assert.ok(mod.v[k].every(w => w.length === 4 && w[0] && w[2]), `${lang} ${k}: malformed word`);
+      assert.ok(mod.v[k].every(w => w.length === 5 && w[0] && w[2]), `${lang} ${k}: malformed word`);
     }
   }
   assert.ok(Object.keys(SHIPPED.greek.v).length > 7800, 'the Greek NT should have ~7,900 verses');
@@ -158,7 +159,7 @@ test('ENGINE: install through the real installModule -> window.Bible.getOriginal
 
   const john = p.Bible.getOriginal(43, 1, 1);
   assert.equal(john.length, 17);
-  assert.deepEqual(J(john[4]), { w: N('λόγος,'), t: 'logos', s: 'G3056', m: 'N-NSM' });
+  assert.deepEqual(J(john[4]), { w: N('λόγος,'), t: 'logos', s: 'G3056', m: 'N-NSM', g: 'Word,' });
   assert.deepEqual(J(p.Bible.getOriginal(1, 1, 1)).map(x => x.s), ['H7225G', 'H1254A', 'H0430G', 'H0853', 'H8064', 'H0853', 'H0776G']);
   // verse + Strong's: the plain lexicon number, the extended one, and a different-letter variant all find the same word
   for (const q of ['G3056', 'G03056', 'g3056']) assert.equal(p.Bible.getOriginal(43, 1, 1, 'greek', q).length, 3, q);
