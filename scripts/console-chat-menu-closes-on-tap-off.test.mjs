@@ -107,3 +107,37 @@ test('the [data-chat-menu] wrapper really holds the ⋯ button AND the menu item
   assert.ok(find(wrap[0], n => n.type === 'button' && n.props.title === 'Moderate').length, 'the button is outside the wrapper: its own tap would be read as "off" and re-open');
   assert.match(texts(wrap[0]).join(' '), /Remove message/, 'the menu items are outside the wrapper: tapping one would close the menu before it acted');
 });
+
+// THE REACTIONS PICKER CLOSES ON TAP-OFF TOO (owner 2026-10-15). Same shape as the ⋯ menu: a bubble opens its
+// emoji picker, and a press anywhere but the bubble/picker closes it.
+const bubble = (c) => find(c.tree(), n => n.type === 'div' && n.props.title === 'Tap to react')[0];
+const pickerOpen = (c) => find(c.tree(), n => n.type === 'button' && /^React with/.test(n.props.title || '')).length > 0;
+
+async function pickerShowing() {
+  const c = await chat({ msgs: [NORMAL] });
+  bubble(c).props.onClick();   // tap the message to open its reactions picker
+  c.redraw();
+  assert.ok(pickerOpen(c), 'precondition: tapping the bubble opened the reactions picker');
+  assert.ok(c.listeners.some(l => l.t === 'pointerdown'), 'an open picker registered nothing to hear a tap elsewhere');
+  return c;
+}
+
+test('pressing OFF the reactions picker closes it', async () => {
+  const c = await pickerShowing();
+  press(c, outside);
+  c.redraw();
+  assert.equal(pickerOpen(c), false, 'tapping off the picker left it open');
+});
+
+test('pressing INSIDE the bubble/picker (data-gc-rx) does not close the picker', async () => {
+  const c = await pickerShowing();
+  press(c, { closest: (sel) => (sel === '[data-gc-rx]' ? {} : null) });
+  c.redraw();
+  assert.equal(pickerOpen(c), true, 'a press inside the bubble/picker closed the picker');
+});
+
+test('the bubble AND the open picker both carry data-gc-rx (so neither tap re-opens or stray-closes)', async () => {
+  const c = await pickerShowing();
+  const marked = find(c.tree(), n => n.props && n.props['data-gc-rx']);
+  assert.ok(marked.length >= 2, 'expected the bubble and the picker row both marked data-gc-rx');
+});

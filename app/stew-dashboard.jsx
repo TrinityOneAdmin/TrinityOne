@@ -4050,6 +4050,16 @@ function GroupChatModal({ group, onClose }) {
     document.addEventListener('pointerdown', off, true);
     return () => document.removeEventListener('pointerdown', off, true);
   }, [menuFor]);
+  // SAME FOR THE REACTIONS PICKER (owner 2026-10-15): tapping off closes it too, universally. Mirrors the
+  // ⋯-menu effect just above (known-good on device); uses the shared TrinityReplyKit.tapOffHandler for the
+  // "off" rule. The bubble toggles the picker, so it and the picker row carry data-gc-rx and a press on them
+  // is ignored.
+  React.useEffect(() => {
+    if (!rxFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-gc-rx]', () => setRxFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [rxFor]);
   const scRef = React.useRef(null);
   const GROUP_EMOJI = ['❤️', '🙏', '👍', '😂', '🔥', '🎉'];
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
@@ -4219,7 +4229,7 @@ function GroupChatModal({ group, onClose }) {
                 ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: msgText(m.quote) })
                 : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
-                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
+                <div data-gc-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
                 <div data-chat-menu="1" style={{ position: 'relative', flexShrink: 0 }}>
                   {/* NAMED, and it is the ONLY route to Remove and Pin. Measured 2026-09-04: 21px wide,
                       empty innerText, aria-label null — a screen reader had nothing to announce. */}
@@ -4241,7 +4251,7 @@ function GroupChatModal({ group, onClose }) {
                 </div>
               ) : null}
               {rxFor === m.id ? (
-                <div style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+                <div data-gc-rx="1" style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                   {GROUP_EMOJI.map(emo => (
                     <button key={emo} onClick={() => react(m, emo)} title={'React with ' + emo} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 3px', borderRadius: 7, opacity: m.myReaction === emo ? 1 : 0.85 }}>{emo}</button>
                   ))}
@@ -12590,6 +12600,23 @@ function StewDmWindow({ peer, offset, onClose }) {
   // affordance already failed on the Oppo in the member app (DMSwipe), so reply must never hang on a gesture.
   const [replyTo, setReplyTo] = React.useState(null);
   const [menuFor, setMenuFor] = React.useState('');   // msg id whose ⋯ menu is open
+  // TAP OFF TO CLOSE (owner 2026-10-15): on device the ⋯ menu and the reactions picker in this DM window
+  // stayed open until tapped again. Same rule as GroupChatModal and the member app, via the shared pure
+  // TrinityReplyKit.tapOffHandler; the effect is local so it uses this screen's React and `document`. The
+  // bubble toggles the picker (data-dm-rx on it and the picker); the ⋯ button and its menu carry data-dm-menu
+  // so a press on them is ignored and the menu's own Reply button closes it.
+  React.useEffect(() => {
+    if (!rxFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-rx]', () => setRxFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [rxFor]);
+  React.useEffect(() => {
+    if (!menuFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-menu]', () => setMenuFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [menuFor]);
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   const _dmEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // names for the event label on a message
@@ -12677,9 +12704,9 @@ function StewDmWindow({ peer, offset, onClose }) {
                   ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: byId[m.replyTo].text })
                   : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
                 {(m.noReply || m.eventId) ? <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px' }}>{stewDmAnnounceLabel(m, _dmEvents)}</span> : null}
-                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
+                <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
                 {canReply(m) ? (
-                  <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions"
+                  <button data-dm-menu="1" onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions"
                     style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={13} /></button>
                 ) : null}
                 {menuFor === m.id ? (
@@ -12690,7 +12717,7 @@ function StewDmWindow({ peer, offset, onClose }) {
                   // UPWARD (over the message before it, never over its own words), and any open menu scrolls itself
                   // into view so a message near the bottom edge can't hide it either. NEEDS A DEVICE/BROWSER REPRO
                   // to confirm this was the whole cause.
-                  <div ref={menuIntoView} data-reply-menu={m.id === lastId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
+                  <div ref={menuIntoView} data-dm-menu="1" data-reply-menu={m.id === lastId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
                     <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer', padding: '7px 9px', borderRadius: 7, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
                       <Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                   </div>
@@ -12717,7 +12744,7 @@ function StewDmWindow({ peer, offset, onClose }) {
                   </div>
                 ) : null}
                 {rxFor === m.id ? (
-                  <div style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+                  <div data-dm-rx="1" style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                     {DM_EMOJI.map(emo => (
                       <button key={emo} onClick={() => react(m, emo)} title={'React with ' + emo} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 3px', borderRadius: 7, opacity: m.myReaction === emo ? 1 : 0.85 }}>{emo}</button>
                     ))}
