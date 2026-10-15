@@ -18102,6 +18102,7 @@ zoo`.split("\n");
   function makeStayOpen(deps) {
     const { secure, isNative, lsRemove, now: now2, readBlob, deriveBits, pubOf } = deps;
     let replayed = false;
+    const markerPresent = deps.markerPresent || (() => false);
     const purgeLegacy = () => {
       try {
         lsRemove(STAY_LEGACY_LS);
@@ -18123,10 +18124,24 @@ zoo`.split("\n");
         return false;
       }
     };
+    const TRANSIENT = { transient: true };
     const blobOf = async () => {
+      let raw;
       try {
-        const raw = await readBlob();
-        const b = raw ? JSON.parse(raw) : null;
+        raw = await readBlob();
+      } catch (e) {
+        return TRANSIENT;
+      }
+      if (!raw) {
+        let m = false;
+        try {
+          m = !!markerPresent();
+        } catch (e) {
+        }
+        return m ? TRANSIENT : null;
+      }
+      try {
+        const b = JSON.parse(raw);
         return b && b.ct && b.iv && b.salt ? b : null;
       } catch (e) {
         return null;
@@ -18139,11 +18154,15 @@ zoo`.split("\n");
     const read = async () => {
       purgeLegacy();
       if (!isNative()) return null;
-      let rec = null;
+      let rec = null, s;
       try {
         const { S } = await secure();
-        const s = await S.get(STAY_SS);
-        if (!s) return null;
+        s = await S.get(STAY_SS);
+      } catch (e) {
+        return TRANSIENT;
+      }
+      if (!s) return null;
+      try {
         rec = JSON.parse(String(s));
       } catch (e) {
         await clear();
@@ -18154,6 +18173,7 @@ zoo`.split("\n");
         return null;
       }
       const blob = await blobOf();
+      if (blob === TRANSIENT) return TRANSIENT;
       if (!blob || blob.salt !== rec.salt) {
         await clear();
         return null;
@@ -18168,12 +18188,22 @@ zoo`.split("\n");
         const r = await read();
         return { available: !!isNative(), active: !!r };
       },
-      // → { seed } on success; { seed: null, skipped: true } after the first try this launch; otherwise
-      // { seed: null } with any record deleted. The owner check: the seed must be the church the record names.
+      // transient → active (record kept)
+      // Re-arm replay after an IDLE lock (see `replayed`).
+      rearm() {
+        replayed = false;
+      },
+      // → { seed } on success; { seed: null, skipped: true } while a replay is running or used up; { seed: null,
+      // retry: true } when the store did not answer (record KEPT, latch released so a retry can run); otherwise
+      // { seed: null } with any dead record deleted. The owner check: the seed must be the church the record names.
       async replay() {
         if (replayed) return { seed: null, skipped: true };
         replayed = true;
         const r = await read();
+        if (r === TRANSIENT) {
+          replayed = false;
+          return { seed: null, retry: true };
+        }
         if (!r) return { seed: null };
         try {
           const seed = await openBlob(b64d(r.rec.k), r.blob);
@@ -18193,7 +18223,7 @@ zoo`.split("\n");
           return !on && gone;
         }
         const blob = await blobOf();
-        if (!blob) return false;
+        if (!blob || blob === TRANSIENT) return false;
         try {
           const bits2 = await deriveBits(pin, b64d(blob.salt), blob.it || PIN_ITER_LEGACY);
           const seed = await openBlob(bits2, blob);
@@ -18234,6 +18264,7 @@ zoo`.split("\n");
     lsRemove: (k) => localStorage.removeItem(k),
     now: () => Date.now(),
     readBlob: encBlobRaw,
+    markerPresent: () => !!lsGet(ENC_LS),
     deriveBits: deriveAesBits,
     pubOf: (m) => getPublicKey2(privateKeyFromSeedWords(m))
   });
@@ -19508,15 +19539,16 @@ zoo`.split("\n");
     clearStayOpen() {
       return _stay.clear();
     },
-    // Replay the stored key ONCE per launch. true = unlocked; false = no usable record (any record deleted);
-    // null = already tried this launch, so a lock later in the session stays locked.
+    // Replay the stored key. true = unlocked; false = no usable record (a dead record is deleted); null = a replay
+    // is running or was used up (a typed PIN, or already tried since the last idle lock); 'retry' = the store did
+    // not answer, the record is KEPT, ask again.
     async unlockStayOpen() {
       const r = await _stay.replay();
-      if (!r.seed) return r.skipped ? null : false;
+      if (!r.seed) return r.retry ? "retry" : r.skipped ? null : false;
       _enterUnlocked(r.seed);
       return true;
     },
-    lock() {
+    lock(reason) {
       if (needsPin) return;
       sk = null;
       pub = null;
@@ -19527,6 +19559,12 @@ zoo`.split("\n");
       window.Steward.npub = null;
       window.Steward.hasKey = false;
       window.Steward.locked = !!lsGet(ENC_LS);
+      if (reason === "idle") {
+        try {
+          _stay.rearm();
+        } catch (e) {
+        }
+      }
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
     },
     // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).

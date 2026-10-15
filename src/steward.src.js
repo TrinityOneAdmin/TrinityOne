@@ -3974,7 +3974,13 @@ const STAY_SS = 'trinityone.steward.stayopen.v2';         // SecureStorage key (
 const STAY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 function makeStayOpen(deps) {
   const { secure, isNative, lsRemove, now, readBlob, deriveBits, pubOf } = deps;
-  let replayed = false;   // the record is replayed ONCE per launch: a lock later in the session really locks
+  // true while a replay is running or has been used up. It stops duplicate/concurrent replays within one mount.
+  // rearm() clears it: an IDLE lock (a backgrounded WebView keeps this module alive, so the latch used to stay
+  // true for ever) must let the still-valid record reopen the console. A typed PIN (save) sets it: nothing to replay.
+  let replayed = false;
+  // Is there a church-key marker on this device? An empty blob read while it exists means the store did not
+  // answer, not that the key is gone. Optional dep: absent → "no marker", i.e. an empty read is definitive.
+  const markerPresent = deps.markerPresent || (() => false);
   const purgeLegacy = () => { try { lsRemove(STAY_LEGACY_LS); } catch (e) {} };
   // → TRUE only when the record is verifiably GONE (read back, like save() reads back a write). It used to
   // return nothing and swallow a failed removal, so save(pin, false) - the steward UNTICKING the box, which on
@@ -3991,9 +3997,14 @@ function makeStayOpen(deps) {
       return false;
     } catch (e) { console.warn('[steward] stay-open clear failed', e); return false; }
   };
+  // TRI-STATE: a blob → usable; null → definitively no usable blob (read fine, but malformed); TRANSIENT → the
+  // read threw, or came back empty while the church-key marker exists (the Keystore did not answer).
+  const TRANSIENT = { transient: true };
   const blobOf = async () => {
-    try { const raw = await readBlob(); const b = raw ? JSON.parse(raw) : null; return b && b.ct && b.iv && b.salt ? b : null; }
-    catch (e) { return null; }
+    let raw;
+    try { raw = await readBlob(); } catch (e) { return TRANSIENT; }
+    if (!raw) { let m = false; try { m = !!markerPresent(); } catch (e) {} return m ? TRANSIENT : null; }
+    try { const b = JSON.parse(raw); return b && b.ct && b.iv && b.salt ? b : null; } catch (e) { return null; }
   };
   const openBlob = async (bits, blob) => {
     const key = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['decrypt']);
@@ -4001,14 +4012,18 @@ function makeStayOpen(deps) {
   };
   // The live record and the blob it is for, or null. Anything expired, malformed, or made for a different
   // blob (a PIN change, a restore) is DELETED here, at the read, so no caller has to remember to.
+  // A TRANSIENT miss (the store threw, or the blob read did not answer) returns TRANSIENT and deletes NOTHING:
+  // a slow Keystore on resume used to delete the live 30-day record.
   const read = async () => {
     purgeLegacy();
     if (!isNative()) return null;
-    let rec = null;
-    try { const { S } = await secure(); const s = await S.get(STAY_SS); if (!s) return null; rec = JSON.parse(String(s)); }
-    catch (e) { await clear(); return null; }
+    let rec = null, s;
+    try { const { S } = await secure(); s = await S.get(STAY_SS); } catch (e) { return TRANSIENT; }
+    if (!s) return null;
+    try { rec = JSON.parse(String(s)); } catch (e) { await clear(); return null; }
     if (!rec || rec.v !== 1 || typeof rec.k !== 'string' || typeof rec.salt !== 'string' || typeof rec.owner !== 'string' || !(rec.until > now())) { await clear(); return null; }
     const blob = await blobOf();
+    if (blob === TRANSIENT) return TRANSIENT;
     if (!blob || blob.salt !== rec.salt) { await clear(); return null; }
     return { rec, blob };
   };
@@ -4016,13 +4031,17 @@ function makeStayOpen(deps) {
     available: () => !!isNative(),
     purgeLegacy,
     clear,
-    async status() { const r = await read(); return { available: !!isNative(), active: !!r }; },
-    // → { seed } on success; { seed: null, skipped: true } after the first try this launch; otherwise
-    // { seed: null } with any record deleted. The owner check: the seed must be the church the record names.
+    async status() { const r = await read(); return { available: !!isNative(), active: !!r }; },   // transient → active (record kept)
+    // Re-arm replay after an IDLE lock (see `replayed`).
+    rearm() { replayed = false; },
+    // → { seed } on success; { seed: null, skipped: true } while a replay is running or used up; { seed: null,
+    // retry: true } when the store did not answer (record KEPT, latch released so a retry can run); otherwise
+    // { seed: null } with any dead record deleted. The owner check: the seed must be the church the record names.
     async replay() {
       if (replayed) return { seed: null, skipped: true };
       replayed = true;
       const r = await read();
+      if (r === TRANSIENT) { replayed = false; return { seed: null, retry: true }; }
       if (!r) return { seed: null };
       try {
         const seed = await openBlob(b64d(r.rec.k), r.blob);
@@ -4036,7 +4055,7 @@ function makeStayOpen(deps) {
       replayed = true;   // the steward typed the PIN this launch; nothing left to replay
       if (!on || !isNative()) { const gone = await clear(); return !on && gone; }
       const blob = await blobOf();
-      if (!blob) return false;
+      if (!blob || blob === TRANSIENT) return false;
       try {
         const bits = await deriveBits(pin, b64d(blob.salt), blob.it || PIN_ITER_LEGACY);
         const seed = await openBlob(bits, blob);   // proves these bytes open THIS blob before anything is kept
@@ -4081,7 +4100,7 @@ function _enterUnlocked(seed) {
 }
 const _stay = makeStayOpen({
   secure: _secureStore, isNative: _isNative, lsRemove: (k) => localStorage.removeItem(k), now: () => Date.now(),
-  readBlob: encBlobRaw, deriveBits: deriveAesBits, pubOf: (m) => getPublicKey(privateKeyFromSeedWords(m)),
+  readBlob: encBlobRaw, markerPresent: () => !!lsGet(ENC_LS), deriveBits: deriveAesBits, pubOf: (m) => getPublicKey(privateKeyFromSeedWords(m)),
 });
 // HANDOFF-2026-07-31 (1). nostr-tools does NOT reject when it cannot open the socket — SimplePool.publish
 // RESOLVES that relay's promise with the plain string `"connection failure: " + err`. A resolution satisfies
@@ -5965,15 +5984,16 @@ window.Steward = {
   stayOpenStatus() { return _stay.status(); },        // -> { available, active }; deletes a dead record
   setStayOpen(pin, on) { return _stay.save(pin, !!on); },
   clearStayOpen() { return _stay.clear(); },
-  // Replay the stored key ONCE per launch. true = unlocked; false = no usable record (any record deleted);
-  // null = already tried this launch, so a lock later in the session stays locked.
+  // Replay the stored key. true = unlocked; false = no usable record (a dead record is deleted); null = a replay
+  // is running or was used up (a typed PIN, or already tried since the last idle lock); 'retry' = the store did
+  // not answer, the record is KEPT, ask again.
   async unlockStayOpen() {
     const r = await _stay.replay();
-    if (!r.seed) return r.skipped ? null : false;
+    if (!r.seed) return r.retry ? 'retry' : r.skipped ? null : false;
     _enterUnlocked(r.seed);
     return true;
   },
-  lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
+  lock(reason) {                                   // forget the in-memory key (idle / manual); seed stays encrypted
     // "seed stays encrypted" is only true once it HAS been encrypted. While needsPin is set — after createKey,
     // restoreKey, adoptChurch or removeLock — the seed exists nowhere but `currentMnemonic`, so forgetting it
     // is not locking, it is destroying the church. The 10-minute idle timer in steward-root.jsx fires on a
@@ -5985,6 +6005,8 @@ window.Steward = {
     churchSk = null; churchPub = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
     window.Steward.locked = !!lsGet(ENC_LS);
+    // Only an IDLE lock re-arms the stay-open replay, so the lock screen reopens from the live record.
+    if (reason === 'idle') { try { _stay.rearm(); } catch (e) {} }
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
   },
   // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).

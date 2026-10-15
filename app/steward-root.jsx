@@ -821,24 +821,43 @@ function StewardUnlock() {
   const [waitLeft, setWaitLeft] = useSt(() => { const g = readGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
   const [lostKey, setLostKey] = useSt(false);
   const [pinVis, setPinVis] = useSt(false);   // the device-bound key is gone — offer the way out, not a retry loop
-  // Read the real stay-open state, and replay it — the engine replays once per launch, so a lock later in the
-  // session shows this screen with the box ticked rather than reopening by itself.
+  // Read the real stay-open state, and replay it. The engine replays on a cold start AND after an idle lock
+  // (lock('idle') re-arms it). When the Keystore does not answer ('retry') the record is KEPT: try again with a
+  // short backoff and whenever the app comes back to the foreground, then fall to the PIN prompt, deleting nothing.
   useStE(() => {
-    let live = true;
+    let live = true, timer = null, tries = 0, running = false, retrying = false;
     const S = window.Steward;
+    const BACKOFF = [1000, 2000, 4000, 8000];
+    const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    const attempt = () => {
+      if (!live || running) return Promise.resolve();
+      running = true; stop();
+      return Promise.resolve(S.unlockStayOpen()).then(ok => {
+        running = false;
+        if (!live) return;
+        retrying = ok === 'retry';
+        if (ok === true) { try { localStorage.removeItem(GUARD_KEY); } catch (e) {} return; }
+        if (ok === 'retry') {
+          if (tries < BACKOFF.length) { timer = setTimeout(attempt, BACKOFF[tries++]); return; }
+          setBusy(false); return;   // budget spent: the PIN prompt, record untouched
+        }
+        setBusy(false);
+        if (ok === false) setStayOpen(false);   // the engine deleted a record that would not open this church
+      }).catch(() => { running = false; if (live) setBusy(false); });
+    };
+    const onVis = () => {
+      if (!live || !S.stayOpenStatus || document.visibilityState !== 'visible' || !retrying) return;
+      tries = 0; setBusy(true); attempt();
+    };
+    document.addEventListener('visibilitychange', onVis);
     Promise.resolve(S.stayOpenStatus ? S.stayOpenStatus() : null).then(st => {
       if (!live || !st) return;
       setStayAvail(!!st.available); setStayOpen(!!(st.available && st.active));
       if (!st.available || !st.active || !S.unlockStayOpen) return;
       setBusy(true);
-      return S.unlockStayOpen().then(ok => {
-        if (ok) { try { localStorage.removeItem(GUARD_KEY); } catch (e) {} return; }
-        if (!live) return;
-        setBusy(false);
-        if (ok === false) setStayOpen(false);   // the engine deleted a record that would not open this church
-      });
+      return attempt();
     }).catch(() => { if (live) setBusy(false); });
-    return () => { live = false; };
+    return () => { live = false; stop(); document.removeEventListener('visibilitychange', onVis); };
   }, []);
   useStE(() => { if (waitLeft <= 0) return; const t = setInterval(() => { const g = readGuard(); const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); setWaitLeft(left); if (left <= 0) { setErr(''); clearInterval(t); } }, 500); return () => clearInterval(t); }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
   const submit = async () => {
@@ -910,7 +929,7 @@ function StewardUnlock() {
             <input type="checkbox" aria-label="Stay open for 30 days" checked={stayOpen} onChange={e => setStayOpen(e.target.checked)} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
             <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
               Stay open for <b>30 days</b>.<br />
-              <span style={{ color: 'var(--ink-3)' }}>Anyone who can unlock this phone can act as the church.</span>
+              <span style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>Anyone who can unlock this phone can open this console and act as the church, even after it locks itself.</span>
             </span>
           </label>
         ) : null}
@@ -984,7 +1003,7 @@ function StewardRoot() {
   // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
   useStE(() => {
     if (!ks.has || !window.Steward.hasPinLock || !window.Steward.hasPinLock()) return;
-    let t; const reset = () => { clearTimeout(t); t = setTimeout(() => window.Steward.lock(), 10 * 60 * 1000); };
+    let t; const reset = () => { clearTimeout(t); t = setTimeout(() => window.Steward.lock('idle'), 10 * 60 * 1000); };
     const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
     evs.forEach(e => window.addEventListener(e, reset, { passive: true })); reset();
     return () => { clearTimeout(t); evs.forEach(e => window.removeEventListener(e, reset)); };

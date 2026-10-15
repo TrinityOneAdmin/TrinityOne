@@ -245,7 +245,7 @@ test('unlocking restores the acting identity, or claims none', () => {
 test('lock() still does not clear the acting church — the restore depends on it', () => {
   // If lock() ever starts clearing actingChurch, the restore above silently becomes a no-op and delegates go
   // back to being dropped into their own church on every unlock. Anchored so that change cannot pass quietly.
-  const body = stripComments(fnBody(SRC, 'lock() {', 'lock'));
+  const body = stripComments(fnBody(SRC, 'lock(reason) {', 'lock'));
   assert.doesNotMatch(body, /actingChurch = ''/,
     'lock() now clears actingChurch, so unlock() has nothing to restore and every delegate is dropped back ' +
     'into their own empty church whenever the console idles');
