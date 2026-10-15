@@ -12569,6 +12569,14 @@ function StewVersion() {
 }
 
 // ── Facebook-style docked DM window: the church <-> one member, encrypted ──
+// Label over a message that was sent about an event (see schSendEventMessage): "<event name> Announcement", or
+// "Event announcement" when this console does not hold that event. No event id: plain "Announcement". Users: StewDmWindow.
+function stewDmAnnounceLabel(m, events) {
+  if (!m || !m.eventId) return 'Announcement';
+  const ev = (events || []).find(x => x && x.id === m.eventId);
+  const name = ev && String(ev.title || '').trim();
+  return name ? name + ' Announcement' : 'Event announcement';
+}
 function StewDmWindow({ peer, offset, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
@@ -12582,6 +12590,7 @@ function StewDmWindow({ peer, offset, onClose }) {
   const [menuFor, setMenuFor] = React.useState('');   // msg id whose ⋯ menu is open
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
+  const _dmEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // names for the event label on a message
   const _threadConn = window.useStewardConn ? window.useStewardConn() : 0;
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey, _threadConn]);
   // ⚠ THE OTHER HALF OF THE OUTBOX, AND IT LIVED NOWHERE. The engine has had outboxForPeer, retryQueuedDM
@@ -12665,6 +12674,7 @@ function StewDmWindow({ peer, offset, onClose }) {
                 {m.replyTo && byId[m.replyTo]
                   ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: byId[m.replyTo].text })
                   : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
+                {(m.noReply || m.eventId) ? <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px' }}>{stewDmAnnounceLabel(m, _dmEvents)}</span> : null}
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
                 {canReply(m) ? (
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions"

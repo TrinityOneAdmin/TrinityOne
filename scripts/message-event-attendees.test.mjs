@@ -101,7 +101,7 @@ function miniReact() {
       return [states[k], (v) => { states[k] = typeof v === 'function' ? v(states[k]) : v; }]; },
     useMemo(f, deps) { const k = mi++; if (!memos[k] || !same(memos[k].deps, deps)) memos[k] = { deps, v: f() }; return memos[k].v; },
     useEffect(fn, deps) { const k = ei++; if (!(k in effDeps) || !same(effDeps[k], deps)) { effDeps[k] = deps; queued.push(fn); } },
-    useRef: () => ({ current: null }),
+    useRef: () => ({ current: null }), useCallback: (f) => f,
     createElement: (type, props, ...kids) => ({ type, props: props || {}, kids }),
     Fragment: 'Fragment',
   };
@@ -122,23 +122,24 @@ const RSVPS = { 'ev-1': { [GOING1]: 'going', [GOING2]: 'going', [MAYBE]: 'maybe'
 
 async function composer({ event = EVENT, groups = [], failFor = new Set(), queuedFor = new Set() } = {}) {
   const calls = [];
+  const timers = []; let closed = 0;   // setTimeout is faked so the auto-close can be seen and fired
   const { React, reset, flush } = miniReact();
   const Steward = {
     pubkey: P('f'),
     sendDM: async (pk, body, rt, meta) => { calls.push({ pk, body, rt, meta }); if (failFor.has(pk)) return null; return queuedFor.has(pk) ? { id: 'q', _queued: true } : { id: 'e' + calls.length }; },
   };
   const mod = await compile(SLICE, ['SchEventMessage', 'schEventAudience'], {
-    React,
+    React, setTimeout: (f) => { timers.push(f); return timers.length; }, clearTimeout: () => {},
     window: { Steward, useStewardRsvps: () => RSVPS, useStewardMembers: () => MEMBERS,
       useStewardPickableMembers: () => MEMBERS.filter(m => m.pubkey !== BLOCKED),
       useStewardGroups: () => groups, useStewardBlocked: () => [BLOCKED] },
   });
-  const draw = () => { reset(); const t = mod.SchEventMessage({ event, onClose() {} }); flush(); return t; };
+  const draw = () => { reset(); const t = mod.SchEventMessage({ event, onClose() { closed++; } }); flush(); return t; };
   draw();
   const btn = (label) => find(draw(), n => n.type === 'button' && texts(n).join(' ').includes(label))[0];
   const type = (v) => find(draw(), n => n.type === 'textarea')[0].props.onChange({ target: { value: v } });
   const send = async () => { const b = find(draw(), n => n.type === 'button' && /^(Send to|Retry)/.test(texts(n).join('')))[0]; await b.props.onClick(); await tick(); await tick(); };
-  return { calls, draw, btn, type, send, mod, Steward, status: () => texts(find(draw(), n => n.props && n.props.role === 'status')[0]).join(' | ') };
+  return { calls, timers, closed: () => closed, draw, btn, type, send, mod, Steward, status: () => texts(find(draw(), n => n.props && n.props.role === 'status')[0]).join(' | ') };
 }
 
 test('CONSOLE: "Just those going" sends to exactly the Going pubkeys, not Maybe / No / blocked / no-RSVP', async () => {
@@ -214,7 +215,7 @@ test('CONSOLE: the event detail offers the Message action, which opens the compo
 // ── 3. MEMBER ────────────────────────────────────────────────────────────────────────────────────────────
 const ME = 'a'.repeat(64), CHURCH = 'c'.repeat(64);
 const subSrc = fnBody(FEL, 'subscribeThread(peerPub, onMsg) {', 'subscribeThread');
-function memberThread(bodies) {
+function memberThread(bodies, churchEvents = []) {
   // The REAL subscribeThread + REAL _dmUnwrap: each body is what the church's sendDM put inside the ciphertext.
   let handler;
   const pool = { subscribeMany: (_u, _f, h) => { handler = h; return { close() {} }; } };
@@ -243,7 +244,7 @@ function memberThread(bodies) {
     BottomSheet: ({ open, children }) => (open ? children : null),
     safeCssColor: (c) => c, relTime: () => 'now', D: { GROUPS: [], RELAYS: [] },
   });
-  const props = { peer: CHURCH, open: true, onClose() {}, ctx: { toast() {}, canDMPeer: () => true, connTick: 0, openDM() {} }, docked: false };
+  const props = { peer: CHURCH, open: true, onClose() {}, ctx: { toast() {}, canDMPeer: () => true, connTick: 0, openDM() {}, churchEvents }, docked: false };
   const redraw = () => draw(mod.DMThread, props);
   redraw();
   return (async () => {
@@ -258,7 +259,7 @@ const swipersOf = (t) => find(t, n => n.type === 'div' && n.props && typeof n.pr
 const touch = (x, y) => ({ touches: [{ clientX: x, clientY: y }] });
 
 test('MEMBER: a no-reply church message shows "Announcement" and offers NO dots, NO Reply, and a swipe does not start a reply', async () => {
-  const t = await memberThread([fel._dmWrap('Doors at 6', null, { noReply: true, eventId: 'ev-1' })]);
+  const t = await memberThread([fel._dmWrap('Doors at 6', null, { noReply: true, eventId: 'ev-1' })], [{ id: 'ev-1', title: 'Harvest supper' }]);
   const tree = t.redraw();
   assert.match(reads(tree), /Announcement/);
   assert.match(reads(tree), /Doors at 6/);
@@ -267,10 +268,10 @@ test('MEMBER: a no-reply church message shows "Announcement" and offers NO dots,
   s.props.onTouchStart(touch(100, 300)); s.props.onTouchMove(touch(130, 302)); s.props.onTouchMove(touch(170, 303)); s.props.onTouchEnd();
   assert.doesNotMatch(reads(t.redraw()), /Replying to/, 'swiping an announcement started a reply');
 });
-test('MEMBER: a reply-allowed event message and a plain message keep the ⋯ menu, Reply and the swipe, with no Announcement label', async () => {
+test('MEMBER: a reply-allowed event message and a plain message keep the ⋯ menu, Reply and the swipe (the event one is labelled, the plain one is not)', async () => {
   const t = await memberThread([fel._dmWrap('Doors at 6', null, { eventId: 'ev-1' }), 'plain old message']);
   const tree = t.redraw();
-  assert.doesNotMatch(reads(tree), /Announcement/);
+  assert.equal((reads(tree).match(/nnouncement/g) || []).length, 1);
   assert.equal(dotsOf(tree).length, 2);
   dotsOf(tree)[0].props.onClick();
   const reply = find(t.redraw(), n => n.type === 'button' && texts(n).join(' ').includes('Reply'));
@@ -301,4 +302,84 @@ test('ENGINE: Steward.sendDM wraps `meta` into the encrypted body (and a plain s
   assert.equal(un.text, 'Doors at 6'); assert.equal(un.noReply, true); assert.equal(un.eventId, 'ev-9');
   await send('q'.repeat(64), 'plain');
   assert.equal(sealed, 'plain');
+});
+
+
+// ── B4: the composer confirms a REAL success and closes; anything less stays open ─────────────────────────
+test('B4 CONSOLE: a fully delivered send says so, then closes the box when the timer fires (not before)', async () => {
+  const c = await composer();
+  c.btn('Just those going').props.onClick();
+  c.type('Bring a dish'); await c.send();
+  c.draw();
+  assert.match(c.status(), /Sent to 2 people\./);
+  assert.match(c.status(), /Closing/);
+  assert.equal(c.closed(), 0, 'closed before the steward could read the confirmation');
+  assert.equal(c.timers.length, 1, 'no auto-close was scheduled');
+  c.timers[0]();
+  assert.equal(c.closed(), 1);
+});
+test('B4 CONSOLE: a half-failed send keeps the box open and the words, schedules NO close, and says so', async () => {
+  const c = await composer({ failFor: new Set([GOING2]) });
+  c.btn('Just those going').props.onClick();
+  c.type('Bring a dish'); await c.send();
+  c.draw();
+  assert.equal(c.timers.length, 0, 'a partly failed send scheduled a close');
+  assert.equal(c.closed(), 0);
+  assert.match(c.status(), /1 NOT sent/);
+  assert.doesNotMatch(c.status(), /Closing/);
+  assert.equal(find(c.draw(), n => n.type === 'textarea')[0].props.value, 'Bring a dish', 'the words were lost');
+});
+test('B4 CONSOLE: a send where nobody was reached, or everything was only queued, never closes the box', async () => {
+  const none = await composer({ failFor: new Set([GOING1, GOING2]) });
+  none.btn('Just those going').props.onClick(); none.type('x'); await none.send(); none.draw();
+  assert.equal(none.timers.length, 0); assert.equal(none.closed(), 0);
+  assert.match(none.status(), /2 NOT sent/);
+  const q = await composer({ queuedFor: new Set([GOING1, GOING2]) });
+  q.btn('Just those going').props.onClick(); q.type('x'); await q.send(); q.draw();
+  assert.equal(q.timers.length, 0, 'saved-but-waiting was treated as delivered');
+  assert.match(q.status(), /waiting for signal/);
+  assert.equal(find(q.draw(), n => n.type === 'textarea')[0].props.value, 'x');
+});
+
+// ── B5: the event id reaches the screen as "<event name> Announcement" ───────────────────────────────────────
+const KNOWN = [{ id: 'ev-1', title: 'Harvest supper' }];
+test('B5 MEMBER: a message sent about a known event is labelled "<event name> Announcement"', async () => {
+  const t = await memberThread([fel._dmWrap('Doors at 6', null, { noReply: true, eventId: 'ev-1' })], KNOWN);
+  assert.match(reads(t.redraw()), /Harvest supper Announcement/);
+});
+test('B5 MEMBER: an event the app does not hold falls back to "Event announcement"; no event id keeps plain "Announcement"; plain DM has none', async () => {
+  const t = await memberThread([fel._dmWrap('a', null, { eventId: 'ev-gone' }), fel._dmWrap('b', null, { noReply: true }), 'plain'], KNOWN);
+  const r = reads(t.redraw());
+  assert.match(r, /Event announcement/);
+  assert.equal((r.match(/nnouncement/g) || []).length, 2);
+  assert.match(r, /(^|[^t] )Announcement/);
+});
+
+const subDM = fnBody(STW, 'subscribeDMThread(peerHex, onMsgs) {', 'subscribeDMThread');
+async function consoleWindow(bodies, events) {
+  const { loadComponent } = await import('./console-component-rig.mjs');
+  let handler;
+  const pool = { subscribeMany: (_r, _f, h) => { handler = h; return { close() {} }; } };
+  const lib = new Function('pub', 'sk', 'pool', 'relays', '_dmDecrypt', '_dmUnwrap', `return ({ ${subDM} });`)(
+    'a'.repeat(64), new Uint8Array(32), pool, () => [], async (_s, _o, ct) => ct, stw._dmUnwrap);
+  const { React, reset, flush } = miniReact();
+  const Steward = { subscribeDMThread: lib.subscribeDMThread, sendDM: async () => ({}), reactDM() {}, outboxForPeer: () => [] };
+  const Comp = await loadComponent('app/stew-dashboard.jsx', ['function stewDmAnnounceLabel(', 'function StewDmWindow('], {
+    React, window: { Steward, useStewardEvents: () => events, addEventListener() {}, removeEventListener() {} },
+    Icon: () => null, SkBadge: () => null, SK_TINT: { gold: { fg: '#000' } }, nameHandle: () => '', shortNpub: () => 'npub1',
+    TrinityReplyKit: { handlers: () => ({}), style: () => ({}), cue: () => null, quote: () => null },
+  });
+  const draw = () => { reset(); const t = Comp.StewDmWindow({ peer: { pubkey: 'c'.repeat(64), name: 'Ruth' }, offset: 0, onClose() {} }); flush(); return t; };
+  draw();
+  let n = 0;
+  for (const b of bodies) await handler.onevent({ id: 'm' + (++n), kind: 4, pubkey: 'c'.repeat(64), tags: [], created_at: 1760000000 + n, content: b });
+  await tick();
+  return draw;
+}
+test('B5 CONSOLE: the steward DM window labels a message about a known event, falls back for an unknown one, leaves a plain one alone', async () => {
+  const draw = await consoleWindow([stw._dmWrap('Doors at 6', null, { noReply: true, eventId: 'ev-1' }), stw._dmWrap('x', null, { eventId: 'ev-gone' }), 'plain'], KNOWN);
+  const r = reads(draw());
+  assert.match(r, /Harvest supper Announcement/);
+  assert.match(r, /Event announcement/);
+  assert.equal((r.match(/nnouncement/g) || []).length, 2);
 });

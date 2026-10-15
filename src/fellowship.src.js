@@ -5315,7 +5315,7 @@ window.Fellowship = {
       const mine = e.pubkey === pub;
       let content = ''; try { content = await _dmDecrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
       const un = window.Fellowship._dmUnwrap(content);
-      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, ts: e.created_at, pubkey: e.pubkey };
+      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, ts: e.created_at, pubkey: e.pubkey };
       msgs.set(e.id, m); push(m);
     };
     const deliverRx = (e) => {

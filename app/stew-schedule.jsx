@@ -1962,6 +1962,10 @@ function SchEventMessage({ event, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState(null);
   const [retry, setRetry] = React.useState(null);   // the people a previous press could not reach
+  const [done, setDone] = React.useState(false);    // true ONLY when every person was reached and delivered
+  // A clean send says so for a moment, then closes the box. Anything less (failed, or saved-but-waiting) never sets
+  // `done`, so the box stays open with the words in it.
+  React.useEffect(() => { if (!done) return; const t = setTimeout(() => { if (onClose) onClose(); }, 1800); return () => clearTimeout(t); }, [done]);
   const nameFor = (pub) => { const m = allMembers.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
   const audience = schEventAudience({ event: e, mode, rsvps, members: pickable, groups, blocked, selfPub: window.Steward && window.Steward.pubkey });
   const target = retry || audience;
@@ -1972,6 +1976,7 @@ function SchEventMessage({ event, onClose }) {
     const r = await schSendEventMessage({ send: (p, t, rt, meta) => window.Steward.sendDM(p, t, rt, meta), pubs: target, text: text.trim(), noReply, eventId: e.id });
     setBusy(false); setResult(r);
     if (r.failed) setRetry(r.failedPubs); else { setRetry(null); if (!r.queued) setText(''); }
+    if (r.tried > 0 && !r.failed && !r.queued && r.sent === r.tried) setDone(true);
   };
   const opt = (on, label, sub, onClick) => (
     <button type="button" aria-pressed={on} onClick={onClick} style={{ flex: 1, textAlign: 'left', padding: '9px 11px', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', border: '1px solid ' + (on ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface-2)' }}>
@@ -1993,13 +1998,13 @@ function SchEventMessage({ event, onClose }) {
         </div>
         <textarea aria-label="Message" value={text} onChange={ev => setText(ev.target.value)} rows={4} placeholder="Write your message…" style={{ width: '100%', boxSizing: 'border-box', marginTop: 12, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', resize: 'vertical' }} />
         <div role="status" style={{ fontSize: 12.5, color: result && (result.failed || result.queued) ? 'var(--clay-ink)' : 'var(--ink-2)', marginTop: 8, lineHeight: 1.5 }}>
-          {result ? <div>{schSendSummary(result)}</div> : null}
+          {result ? <div>{schSendSummary(result)}{done ? ' Closing…' : ''}</div> : null}
           {retry ? <div>Not reached: {retry.map(nameFor).join(', ')}. Press the button to try just them again.</div> : null}
           {!result && !audience.length ? <div>{mode === 'going' ? 'Nobody has said Going yet.' : 'There is nobody to message yet.'}</div> : null}
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>Close</button>
-          <button onClick={send} disabled={busy || !text.trim() || !target.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>{busy ? 'Sending…' : retry ? `Retry ${retry.length} not reached` : `Send to ${audience.length}`}</button>
+          <button onClick={send} disabled={busy || done || !text.trim() || !target.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>{busy ? 'Sending…' : retry ? `Retry ${retry.length} not reached` : `Send to ${audience.length}`}</button>
         </div>
       </div>
     </div>
