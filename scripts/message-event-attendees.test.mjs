@@ -296,7 +296,7 @@ function memberThread(bodies, churchEvents = []) {
     requestProfiles: () => {}, reactDM: () => {}, sendDM: async () => ({}), requeue: () => true, dropQueued: () => {},
   };
   const mod = loadScreen('app/screens-chat.jsx', ['DMThread', 'DMSwipe'], {
-    React, window: { Fellowship: F, addEventListener() {}, removeEventListener() {} },
+    React, window: { matchMedia: () => ({ matches: true }), Fellowship: F, addEventListener() {}, removeEventListener() {} },
     document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
     location: { search: '', href: 'https://app.trinityone.church/' },
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
@@ -431,7 +431,7 @@ async function consoleWindow(bodies, events) {
   const Comp = await loadComponent('app/stew-dashboard.jsx', ['function stewDmAnnounceLabel(', 'function StewDmWindow('], {
     React, window: { Steward, useStewardEvents: () => events, addEventListener() {}, removeEventListener() {} },
     Icon: () => null, SkBadge: () => null, SK_TINT: { gold: { fg: '#000' } }, nameHandle: () => '', shortNpub: () => 'npub1',
-    TrinityReplyKit: { handlers: () => ({}), style: () => ({}), cue: () => null, quote: () => null },
+    TrinityReplyKit: { handlers: () => ({}), style: () => ({}), cue: () => null, quote: () => null, replyOnlyDots: () => true },
   });
   const draw = () => { reset(); const t = Comp.StewDmWindow({ peer: { pubkey: 'c'.repeat(64), name: 'Ruth' }, offset: 0, onClose() {} }); flush(); return t; };
   draw();

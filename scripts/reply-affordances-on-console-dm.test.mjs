@@ -183,3 +183,29 @@ test('STEP 2: an open menu asks to be scrolled into view', async () => {
   ref({ scrollIntoView: (o) => { asked = o; } });
   assert.deepEqual(asked, { block: 'nearest' });
 });
+
+// ── TOUCH (owner 2026-10-15): Reply is the ONLY action behind this ⋯, so the APK shows none; a mouse keeps it ──
+const dotsOf = (t) => find(t, n => n.type === 'button' && n.props.title === 'Message actions');
+
+test('TOUCH: on the APK (swipe live, no fine pointer) the console DM has NO ⋯, and the swipe still replies', async () => {
+  globalThis.__trinityTouch = true;
+  try {
+    const w = await win({ native: true });
+    const t = w.draw();
+    assert.equal(dotsOf(t).length, 0, 'the reply-only ⋯ is still on a touch console DM');
+    const r = w.rows(t)[0];
+    r.props.onTouchStart(touch(10, 10)); r.props.onTouchMove(touch(70, 12));
+    r.props.onTouchEnd({ changedTouches: [{ clientX: 70, clientY: 12 }] });
+    assert.ok(w.barOf(w.draw()), 'with the ⋯ gone the swipe must still reply');
+  } finally { globalThis.__trinityTouch = false; }
+});
+
+test('POINTER: the web console (no swipe) keeps its ⋯ — and so does a touch-only browser, which has no swipe either', async () => {
+  const w = await win({ native: false });
+  assert.equal(dotsOf(w.draw()).length, 3, 'a mouse user lost the only reply route');
+  globalThis.__trinityTouch = true;
+  try {
+    const w2 = await win({ native: false });
+    assert.equal(dotsOf(w2.draw()).length, 3, 'a touch browser with no swipe lost its only reply route');
+  } finally { globalThis.__trinityTouch = false; }
+});

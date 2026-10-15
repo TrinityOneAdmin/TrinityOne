@@ -27,7 +27,10 @@ function withReplyKit(body) {
     const js = execFileSync(join(root, 'node_modules/.bin/esbuild'), [join(root, 'app/reply-kit.jsx'), '--jsx=transform', '--log-level=error'], { encoding: 'utf8' });
     const React = { createElement: (type, props, ...kids) => ({ type, props: props || {}, kids }) };
     const Icon = () => null;
-    globalThis.TrinityReplyKit = new Function('React', 'Icon', js + '\nreturn TrinityReplyKit;')(React, Icon);
+    // `window` for the kit's replyOnlyDots(): a POINTER device unless a test sets globalThis.__trinityTouch = true
+    // (the matchMedia the kit asks is '(hover: hover) and (pointer: fine)', so a touch phone answers false).
+    const win = { matchMedia: () => ({ matches: !globalThis.__trinityTouch }) };
+    globalThis.TrinityReplyKit = new Function('React', 'Icon', 'window', js + '\nreturn TrinityReplyKit;')(React, Icon, win);
   }
   return body;
 }

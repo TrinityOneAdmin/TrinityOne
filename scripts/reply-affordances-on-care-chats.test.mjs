@@ -20,14 +20,14 @@ const THREAD = [
 const sent = [];
 const touch = (x, y) => ({ touches: [{ clientX: x, clientY: y }], changedTouches: [{ clientX: x, clientY: y }] });
 
-function build(which, { native = true } = {}) {
+function build(which, { native = true, touch = false } = {}) {
   const { React, draw } = miniReact();
   const Icon = ({ name }) => React.createElement('i', { 'data-icon': name });
   const api = {
     subscribeCareChat: (id, cb) => { cb(THREAD); return () => {}; },
     sendCareChat: async (...a) => { sent.push(a); return { id: 'x' }; },
   };
-  const win = { addEventListener() {}, removeEventListener() {}, Fellowship: api, StewardMeals: api,
+  const win = { matchMedia: () => ({ matches: !touch }), addEventListener() {}, removeEventListener() {}, Fellowship: api, StewardMeals: api,
     Capacitor: native ? { isNativePlatform: () => true } : undefined };
   const globals = { React, window: win, Icon, console, setTimeout, clearTimeout, setInterval, clearInterval,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
@@ -124,4 +124,30 @@ test('steward web console: no swipe rows (the swipe is APK-only there), ⋯ stil
   const t = w.d();
   assert.equal(w.rows(t).length, 0);
   assert.equal(w.dots(t).length, 3);
+});
+
+// ── TOUCH (owner 2026-10-15): Reply is the SOLE action behind the ⋯, so a touch phone shows none ─────────────
+for (const which of ['member', 'steward']) {
+  test(`${which}: TOUCH + swipe live -> NO ⋯ on any message, and the swipe still replies`, () => {
+    const w = build(which, { native: true, touch: true });
+    const t = w.d();
+    assert.equal(w.dots(t).length, 0, 'a touch surface still shows the reply-only ⋯');
+    const r = w.rows(t)[0];
+    r.props.onTouchStart(touch(10, 10)); r.props.onTouchMove(touch(70, 12));
+    r.props.onTouchEnd({ changedTouches: [{ clientX: 70, clientY: 12 }] });
+    assert.ok(w.bar(w.d()), 'swipe no longer replies once the ⋯ is gone');
+  });
+  test(`${which}: POINTER + native still shows the ⋯ and it replies (mouse cannot swipe)`, () => {
+    const w = build(which, { native: true, touch: false });
+    const d = w.dots(w.d());
+    assert.equal(d.length, 3);
+    d[0].props.onClick();
+    find(w.menu(w.d())[0], n => n.type === 'button')[0].props.onClick();
+    assert.ok(w.bar(w.d()));
+  });
+}
+test('steward: TOUCH browser with NO swipe (not the APK) keeps its ⋯ — otherwise there is no reply route at all', () => {
+  const w = build('steward', { native: false, touch: true });
+  assert.equal(w.rows(w.d()).length, 0);
+  assert.equal(w.dots(w.d()).length, 3);
 });
