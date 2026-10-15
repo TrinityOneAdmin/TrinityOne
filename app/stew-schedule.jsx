@@ -1942,12 +1942,30 @@ async function schSendEventMessage({ send, pubs, text, noReply, eventId }) {
 }
 function schSendSummary(r) {
   if (!r) return '';
+  // B6 (2026-10-15): a group-post result is one post, not a fan-out. It must NEVER say "Sent" on a refusal
+  // (publishPost resolved null/false — e.g. a sealed room with no key, or the relay rejecting it), so the
+  // confirmation only ever follows a real post (CLAUDE.md "fix the control, not the label").
+  if (r.groupPost) return r.ok ? 'Posted to the group chat.' : 'Not posted — the group chat would not accept it. Try again.';
   if (!r.failed && !r.queued) return `Sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'}.`;
   const parts = [];
   if (r.sent) parts.push(`${r.sent} sent`);
   if (r.queued) parts.push(`${r.queued} saved and waiting for signal`);
   if (r.failed) parts.push(`${r.failed} NOT sent`);
   return `Not everyone was reached: ${parts.join(', ')}.`;
+}
+// B6 (2026-10-15): WHEN "everyone invited" IS A GROUP POST. An event that was created inside a chat group
+// carries e.groupId. If that group is a real conversation — NOT a team roster, NOT a one-way broadcast —
+// then "everyone invited" IS the people in that chat, so the right thing is ONE post into the group (which
+// everyone there already reads, where replies live in the thread) rather than a sealed DM to each person.
+// Teams/broadcasts and church-wide events (no groupId, or a group we can't resolve) keep the DM fan-out.
+// Users (rule 2): SchEventMessage only.
+function schEventPostGroup({ event, groups }) {
+  const e = event || {};
+  if (!e.groupId) return null;
+  const g = (groups || []).find(x => x && x.id === e.groupId);
+  if (!g) return null;
+  if (g.kind === 'team' || g.kind === 'broadcast') return null;   // taxonomy: screens-chat.jsx churchGroups map
+  return g;
 }
 function SchEventMessage({ event, onClose }) {
   const e = event || {};
@@ -1969,9 +1987,24 @@ function SchEventMessage({ event, onClose }) {
   const nameFor = (pub) => { const m = allMembers.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
   const audience = schEventAudience({ event: e, mode, rsvps, members: pickable, groups, blocked, selfPub: window.Steward && window.Steward.pubkey });
   const target = retry || audience;
+  // B6: "Everyone invited" posts into the originating chat group (if any); "Just those going" is an RSVP
+  // subset and can never be a group post, so it always fans out by DM. `retry` is DM-only too.
+  const postGroup = (mode === 'everyone' && !retry) ? schEventPostGroup({ event: e, groups }) : null;
   const dlgRef = window.useStewDialog ? window.useStewDialog(onClose) : null;
   const send = async () => {
-    if (busy || !text.trim() || !target.length) return;
+    if (busy || !text.trim()) return;
+    if (postGroup) {
+      // ONE post into the group. publishPost resolves the event (truthy) when a relay accepted it, or
+      // null/false when none did / a sealed room had no key — map that to a real failed state, never "Sent".
+      setBusy(true);
+      let ok = false;
+      try { ok = !!(await window.Steward.publishPost(text.trim(), postGroup.id)); } catch (err) { ok = false; }
+      setBusy(false); setRetry(null);
+      setResult({ groupPost: true, ok, tried: 1, sent: ok ? 1 : 0, queued: 0, failed: ok ? 0 : 1, failedPubs: [] });
+      if (ok) { setText(''); setDone(true); }
+      return;
+    }
+    if (!target.length) return;
     setBusy(true);
     const r = await schSendEventMessage({ send: (p, t, rt, meta) => window.Steward.sendDM(p, t, rt, meta), pubs: target, text: text.trim(), noReply, eventId: e.id });
     setBusy(false); setResult(r);
@@ -1987,24 +2020,28 @@ function SchEventMessage({ event, onClose }) {
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 310, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 34%, transparent)' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Message attendees" tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', padding: 22 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>Message about “{e.title || 'this event'}”</div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>Each person gets their own private message. They cannot see who else received it.</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{postGroup ? 'This posts once into the group’s chat — everyone there sees it and can reply in the thread.' : 'Each person gets their own private message. They cannot see who else received it.'}</div>
         <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
           {opt(mode === 'everyone', 'Everyone invited', 'The whole audience of this event', () => { setMode('everyone'); setRetry(null); setResult(null); })}
           {opt(mode === 'going', 'Just those going', 'Only people who said Going', () => { setMode('going'); setRetry(null); setResult(null); })}
         </div>
+        {/* B6: the replies toggle has no meaning for a group post — replies live in the group thread — so it is
+            hidden in that branch (and `noReply` is never read on the publishPost path). */}
+        {postGroup ? null : (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           {opt(!noReply, 'Allow replies', 'They can answer you', () => setNoReply(false))}
           {opt(noReply, 'Announcement — no replies', 'Shown as an announcement', () => setNoReply(true))}
         </div>
+        )}
         <textarea aria-label="Message" value={text} onChange={ev => setText(ev.target.value)} rows={4} placeholder="Write your message…" style={{ width: '100%', boxSizing: 'border-box', marginTop: 12, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', resize: 'vertical' }} />
         <div role="status" style={{ fontSize: 12.5, color: result && (result.failed || result.queued) ? 'var(--clay-ink)' : 'var(--ink-2)', marginTop: 8, lineHeight: 1.5 }}>
           {result ? <div>{schSendSummary(result)}{done ? ' Closing…' : ''}</div> : null}
           {retry ? <div>Not reached: {retry.map(nameFor).join(', ')}. Press the button to try just them again.</div> : null}
-          {!result && !audience.length ? <div>{mode === 'going' ? 'Nobody has said Going yet.' : 'There is nobody to message yet.'}</div> : null}
+          {!result && !audience.length && !postGroup ? <div>{mode === 'going' ? 'Nobody has said Going yet.' : 'There is nobody to message yet.'}</div> : null}
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>Close</button>
-          <button onClick={send} disabled={busy || done || !text.trim() || !target.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>{busy ? 'Sending…' : retry ? `Retry ${retry.length} not reached` : `Send to ${audience.length}`}</button>
+          <button onClick={send} disabled={busy || done || !text.trim() || (!postGroup && !target.length)} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>{busy ? (postGroup ? 'Posting…' : 'Sending…') : postGroup ? 'Post to the group' : retry ? `Retry ${retry.length} not reached` : `Send to ${audience.length}`}</button>
         </div>
       </div>
     </div>

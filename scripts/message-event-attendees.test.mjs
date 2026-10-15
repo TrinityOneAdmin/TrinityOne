@@ -111,7 +111,7 @@ const find = hFind;
 const texts = (n, out = []) => { if (n == null || n === false) return out; if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return out; } if (Array.isArray(n)) { n.forEach(c => texts(c, out)); return out; } (n.kids || []).forEach(c => texts(c, out)); return out; };   // children only: the harness texts() also yields string props like className
 
 // Lift just the composer and its three helpers out of the 3,000-line schedule file.
-const SLICE = ['function schEventAudience(', 'async function schSendEventMessage(', 'function schSendSummary(', 'function SchEventMessage(']
+const SLICE = ['function schEventAudience(', 'async function schSendEventMessage(', 'function schSendSummary(', 'function schEventPostGroup(', 'function SchEventMessage(']
   .map(a => fnBody(SCH, a, a)).join('\n');
 
 const P = (c) => c.repeat(64);
@@ -120,13 +120,15 @@ const MEMBERS = [GOING1, GOING2, MAYBE, NO, NORSVP, BLOCKED].map((pubkey, n) => 
 const EVENT = { id: 'ev-1', title: 'Harvest supper', date: '2026-11-01' };
 const RSVPS = { 'ev-1': { [GOING1]: 'going', [GOING2]: 'going', [MAYBE]: 'maybe', [NO]: 'no', [BLOCKED]: 'going' } };
 
-async function composer({ event = EVENT, groups = [], failFor = new Set(), queuedFor = new Set() } = {}) {
+async function composer({ event = EVENT, groups = [], failFor = new Set(), queuedFor = new Set(), postResult = { id: 'post-1' } } = {}) {
   const calls = [];
+  const posts = [];   // B6: every window.Steward.publishPost(content, group) the composer makes
   const timers = []; let closed = 0;   // setTimeout is faked so the auto-close can be seen and fired
   const { React, reset, flush } = miniReact();
   const Steward = {
     pubkey: P('f'),
     sendDM: async (pk, body, rt, meta) => { calls.push({ pk, body, rt, meta }); if (failFor.has(pk)) return null; return queuedFor.has(pk) ? { id: 'q', _queued: true } : { id: 'e' + calls.length }; },
+    publishPost: async (content, group, replyTo) => { posts.push({ content, group, replyTo }); return typeof postResult === 'function' ? postResult() : postResult; },
   };
   const mod = await compile(SLICE, ['SchEventMessage', 'schEventAudience'], {
     React, setTimeout: (f) => { timers.push(f); return timers.length; }, clearTimeout: () => {},
@@ -138,8 +140,8 @@ async function composer({ event = EVENT, groups = [], failFor = new Set(), queue
   draw();
   const btn = (label) => find(draw(), n => n.type === 'button' && texts(n).join(' ').includes(label))[0];
   const type = (v) => find(draw(), n => n.type === 'textarea')[0].props.onChange({ target: { value: v } });
-  const send = async () => { const b = find(draw(), n => n.type === 'button' && /^(Send to|Retry)/.test(texts(n).join('')))[0]; await b.props.onClick(); await tick(); await tick(); };
-  return { calls, timers, closed: () => closed, draw, btn, type, send, mod, Steward, status: () => texts(find(draw(), n => n.props && n.props.role === 'status')[0]).join(' | ') };
+  const send = async () => { const b = find(draw(), n => n.type === 'button' && /^(Send to|Retry|Post to)/.test(texts(n).join('')))[0]; await b.props.onClick(); await tick(); await tick(); };
+  return { calls, posts, timers, closed: () => closed, draw, btn, type, send, mod, Steward, status: () => texts(find(draw(), n => n.props && n.props.role === 'status')[0]).join(' | ') };
 }
 
 test('CONSOLE: "Just those going" sends to exactly the Going pubkeys, not Maybe / No / blocked / no-RSVP', async () => {
@@ -156,11 +158,15 @@ test('CONSOLE: "Everyone invited" reaches the whole audience (church members, mi
   await c.send();
   assert.deepEqual(c.calls.map(x => x.pk).sort(), [GOING1, GOING2, MAYBE, NO, NORSVP].sort());
 });
-test('CONSOLE: an invite-only group event goes to that group\'s roster, not the whole church', async () => {
-  const groups = [{ id: 'g1', visibility: 'invite', members: [GOING1, NORSVP, BLOCKED] }];
+// Updated for B6 (2026-10-15): an invite-only *team* (not a chat group) still DMs its roster — the invite
+// branch of schEventAudience, which drops the blocked member, is exercised here. (A plain invite-only CHAT
+// group now posts to the group instead; that is the B6 behaviour change, covered below.)
+test('CONSOLE: an invite-only TEAM event DMs that team\'s roster, not the whole church, and drops the blocked', async () => {
+  const groups = [{ id: 'g1', kind: 'team', visibility: 'invite', members: [GOING1, NORSVP, BLOCKED] }];
   const c = await composer({ event: { ...EVENT, groupId: 'g1' }, groups });
   c.type('Group news');
   await c.send();
+  assert.equal(c.posts.length, 0, 'a team is a DM fan-out, not a group post');
   assert.deepEqual(c.calls.map(x => x.pk).sort(), [GOING1, NORSVP].sort(), 'blocked roster member must be dropped');
 });
 test('CONSOLE: the replies toggle sets the no-reply flag on every message', async () => {
@@ -210,6 +216,61 @@ test('CONSOLE: the event detail offers the Message action, which opens the compo
   open[0].props.onClick();
   const after = draw();
   assert.ok(find(after, n => typeof n.type === 'function' && n.type.name === 'SchEventMessage').length === 1, 'pressing Message did not open the composer');
+});
+
+// ── 2b. B6: "Everyone invited" posts into a chat-group event's group, instead of a DM fan-out ────────────────
+// FEATURE PRESENCE — fails if the group-post branch is deleted from the SCREEN (CLAUDE.md rule 1): render the
+// real composer with a chat-group event, press the real "Everyone invited" + Send buttons, and prove ONE
+// publishPost(group, text) and ZERO sendDM.
+test('B6 CONSOLE: an event from a chat group posts ONCE into that group and does NOT DM anyone', async () => {
+  const groups = [{ id: 'cg1', name: 'Youth', kind: 'group' }];
+  const c = await composer({ event: { ...EVENT, groupId: 'cg1' }, groups });
+  c.type('Harvest supper — 6pm Saturday');
+  await c.send();
+  assert.equal(c.posts.length, 1, 'expected exactly one group post');
+  assert.equal(c.posts[0].group, 'cg1', 'the post must carry the originating group id');
+  assert.equal(c.posts[0].content, 'Harvest supper — 6pm Saturday', 'the post must carry the typed text');
+  assert.equal(c.calls.length, 0, 'a chat-group post must not DM anyone');
+  assert.match(c.status(), /Posted to the group/);
+});
+// NEGATIVE GUARDS — the DM fan-out must stay EXACTLY as today for everything that is not a postable chat group.
+test('B6 CONSOLE: a church-wide event (groupId empty) still fans out by DM, never a group post', async () => {
+  const c = await composer({ event: { ...EVENT, groupId: '' } });
+  c.type('See you there');
+  await c.send();
+  assert.equal(c.posts.length, 0, 'church-wide must not post to a group');
+  assert.deepEqual(c.calls.map(x => x.pk).sort(), [GOING1, GOING2, MAYBE, NO, NORSVP].sort());
+});
+test('B6 CONSOLE: a BROADCAST group event still fans out by DM, never a group post', async () => {
+  const groups = [{ id: 'b1', name: 'Notices', kind: 'broadcast' }];
+  const c = await composer({ event: { ...EVENT, groupId: 'b1' }, groups });
+  c.type('Notice');
+  await c.send();
+  assert.equal(c.posts.length, 0, 'a one-way broadcast is not a chat-group post audience');
+  assert.ok(c.calls.length > 0, 'broadcast event still DMs the church');
+});
+test('B6 CONSOLE: "Just those going" on a chat-group event still fans out by DM (an RSVP subset is not the group)', async () => {
+  const groups = [{ id: 'cg1', name: 'Youth', kind: 'group' }];
+  const c = await composer({ event: { ...EVENT, groupId: 'cg1' }, groups });
+  c.btn('Just those going').props.onClick();
+  c.type('Bring a dish');
+  await c.send();
+  assert.equal(c.posts.length, 0, '"Just those going" must never become a group post');
+  assert.deepEqual(c.calls.map(x => x.pk).sort(), [GOING1, GOING2].sort());
+});
+// SUMMARY MAPPING — a publishPost that resolves null/false is a real failure, never "Sent"/"Posted" (CLAUDE.md
+// "fix the control, not the label"; mirrors how the DM half refuses to claim a send that did not happen).
+test('B6 CONSOLE: a refused group post (publishPost -> null) shows a NOT-posted state, never Sent/Posted', async () => {
+  const groups = [{ id: 'cg1', name: 'Youth', kind: 'group' }];
+  const c = await composer({ event: { ...EVENT, groupId: 'cg1' }, groups, postResult: null });
+  c.type('Harvest supper');
+  await c.send();
+  assert.equal(c.posts.length, 1, 'it still attempted the post');
+  const said = c.status();
+  assert.doesNotMatch(said, /^Sent to/, 'a refused post said "Sent to…": ' + said);
+  assert.doesNotMatch(said, /Posted to the group/, 'a refused post must not claim it posted: ' + said);
+  assert.match(said, /Not posted/, 'a refused post must say so: ' + said);
+  assert.doesNotMatch(said, /Closing/, 'a refused post must not enter the auto-close state');
 });
 
 // ── 3. MEMBER ────────────────────────────────────────────────────────────────────────────────────────────
