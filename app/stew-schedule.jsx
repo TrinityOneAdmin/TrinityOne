@@ -2033,8 +2033,8 @@ function SchEventMessage({ event, onClose }) {
             hidden in that branch (and `noReply` is never read on the publishPost path). */}
         {postGroup ? null : (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          {opt(!noReply, 'Allow replies', 'They can answer you', () => setNoReply(false))}
-          {opt(noReply, 'Announcement — no replies', 'Shown as an announcement', () => setNoReply(true))}
+          {opt(!noReply, 'Normal message', 'Arrives as an ordinary message', () => setNoReply(false))}
+          {opt(noReply, 'Announcement', 'Labelled as an announcement. They can still reply', () => setNoReply(true))}
         </div>
         )}
         <textarea aria-label="Message" value={text} onChange={ev => setText(ev.target.value)} rows={4} placeholder="Write your message…" style={{ width: '100%', boxSizing: 'border-box', marginTop: 12, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', resize: 'vertical' }} />
