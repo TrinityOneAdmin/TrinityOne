@@ -123,7 +123,7 @@ function recorder() {
 const reach = (root) => { const out = []; const go = (n) => { if (n == null || typeof n !== 'object') return; if (Array.isArray(n)) return n.forEach(go); out.push(n); (n.kids || []).forEach(go); }; go(root); return out; };
 const texts = (nodes) => nodes.flatMap(n => n.kids.filter(k => typeof k === 'string' || typeof k === 'number').map(String)).join(' | ');
 
-function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], open = false, allowed = true, needs = [], slots = [], skips = [], picking = null, status = {}, sendDM = async () => ({ id: 'evt' }) }) {
+function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], minorsDocSeen = undefined, acting = false, caps = null, open = false, allowed = true, needs = [], slots = [], skips = [], picking = null, status = {}, sendDM = async () => ({ id: 'evt' }) }) {
   const { nodes, h } = recorder();
   const events = []; const sent = []; const statusLog = [];
   const scope = {
@@ -132,10 +132,10 @@ function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], ope
     React: { useState: (v) => [typeof v === 'boolean' ? open : v === null ? picking : (v && typeof v === 'object' && !Array.isArray(v)) ? status : v, (f) => { if (v && typeof v === 'object' && !Array.isArray(v)) statusLog.push(typeof f === 'function' ? f(status) : f); }] },
     mealsTypeLabel: () => 'Meals', todayISO: () => '2026-10-15',
     window: {
-      useMealsNeeds: () => needs, useMealsSlots: () => slots, useMealsSkips: () => skips, todayISO: () => '2026-10-15', Steward: { sendDM: (...a) => { sent.push(a); return sendDM(...a); } },
+      useMealsNeeds: () => needs, useMealsSlots: () => slots, useMealsSkips: () => skips, todayISO: () => '2026-10-15', Steward: { actingChurch: acting ? 'c'.repeat(64) : null, myStewardCaps: () => (acting ? caps : null), sendDM: (...a) => { sent.push(a); return sendDM(...a); } },
       useMealsAvail: () => avail,
       useStewardDirectory: () => ({ [ADULT]: { pubkey: ADULT, name: 'Margaret', npub: 'npub1margaret' }, [SECOND]: { pubkey: SECOND, name: 'Tomas' }, [CHILD]: { pubkey: CHILD, name: 'Ellie' } }),
-      useStewardSafeguard: () => ({ minors, approved: [], minorsKnown }),
+      useStewardSafeguard: () => ({ minors, approved: [], minorsKnown, ...(minorsDocSeen === undefined ? {} : { minorsDocSeen }) }),
       useStewardBlocked: () => blocked,
       dispatchEvent: (e) => events.push(e),
     },
@@ -148,7 +148,7 @@ function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], ope
   const helpers = ['const CARE_AVAIL_LABEL', 'const careAvailLabel'].map(a => { const i = MEALS_JSX.indexOf(a); return MEALS_JSX.slice(i, MEALS_JSX.indexOf('\n', i)); }).join('\n');
   delete scope.CARE_AVAIL_LABEL;
   const lift = (a) => fnBody(MEALS_JSX, a, a);
-  const src = helpers + `\nconst needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');\n` + lift('function mealsDateRange(') + '\n' + lift('function careOpenNeeds(') + '\n' + lift('async function careInvite(') + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
+  const src = helpers + `\nconst needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');\n` + lift('function readyToHelpCanSeeChildren(') + '\n' + lift('function mealsDateRange(') + '\n' + lift('function careOpenNeeds(') + '\n' + lift('async function careInvite(') + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
   const Comp = new Function('scope', `with (scope) { ${compile(src, 'StewReadyToHelp')} }`)(permissive(scope));
   const tree = Comp();
   const seen = reach(tree);
@@ -300,7 +300,7 @@ test('(C) ONE open need: one tap sends a private message that NAMES the need, to
   assert.match(r.sent[0][1], /Margaret/); assert.match(r.sent[0][1], /Verity — a lift/); assert.match(r.sent[0][1], /3 days still open/);
   assert.match(r.sent[0][1], /sign up for a day that suits you/, 'the message must leave the sign-up to them');
   // the ONLY thing the screen may call is sendDM: no slot writer, no rota/need publisher is even in scope
-  assert.deepEqual(Object.keys(r.scope.window.Steward), ['sendDM']);
+  assert.deepEqual(Object.keys(r.scope.window.Steward).filter(k => k !== 'actingChurch' && k !== 'myStewardCaps'), ['sendDM']);
 });
 
 test('(C) MULTIPLE open needs: a tap shows a picker (no send yet); choosing a need sends that one', async () => {
@@ -369,4 +369,45 @@ test('(C) the status the row records matches what happened: sent -> ok, waiting 
   assert.deepEqual(await kinds(async () => ({ id: 'e', _queued: true })), ['busy', 'queued']);
   assert.deepEqual(await kinds(async () => null), ['busy', 'err'], 'a send that did not happen was confirmed');
   assert.deepEqual(await kinds(async () => { throw new Error('x'); }), ['busy', 'err']);
+});
+
+// ── (A4) FAIL CLOSED FOR A SCOPED DELEGATE: minorsKnown (EOSE while authed) is not "we know who the children are" ──
+// The relay withholds minors: from a steward without Safeguarding, so their minors set stays [] and minorsKnown
+// still turns true. These mount the REAL StewReadyToHelp; deleting the gate from the component turns (1) red.
+const NOTICE = /Can.t check which members are children here/;
+test('(A4-1) scoped delegate (care only), minors doc never seen: the child, the adult and the count are NOT drawn; a notice is', () => {
+  const r = renderReady({ avail: [offer(CHILD), offer(ADULT)], minors: [], minorsKnown: true, minorsDocSeen: false, acting: true, caps: ['care'], open: true });
+  assert.ok(!/Ellie|Margaret/.test(r.all), 'a child or the list was drawn for a console that cannot know who the children are');
+  assert.ok(!/Ready to help/.test(r.all) && !/\b2\b/.test(r.all), 'the count leaked');
+  assert.match(r.all, NOTICE);
+  assert.equal(renderReady({ avail: [], minorsKnown: true, minorsDocSeen: false, acting: true, caps: ['care'] }).tree, null, 'no notice over an empty list');
+});
+test('(A4-2) a safeguarding delegate, or a delegate who RECEIVED the minors doc: adult listed, child not', () => {
+  for (const x of [{ caps: ['care', 'safeguarding'], minorsDocSeen: false }, { caps: ['care'], minorsDocSeen: true }]) {
+    const r = renderReady({ avail: [offer(CHILD), offer(ADULT)], minors: [CHILD], minorsKnown: true, acting: true, open: true, ...x });
+    assert.match(r.all, /Margaret/); assert.ok(!/Ellie/.test(r.all), JSON.stringify(x)); assert.match(r.all, /Ready to help ·\s*\|\s*1/);
+  }
+});
+test('(A4-3) owner console, minorsKnown, no children marked: the list is shown (a childless church is not hidden)', () => {
+  const r = renderReady({ avail: [offer(ADULT)], minors: [], minorsKnown: true, acting: false, open: true });
+  assert.match(r.all, /Margaret/);
+});
+test('(A4-4) unscoped steward (caps null): shown', () => {
+  const r = renderReady({ avail: [offer(ADULT)], minors: [], minorsKnown: true, acting: true, caps: null, open: true });
+  assert.match(r.all, /Margaret/);
+});
+test('(A4-5) minorsKnown false: nothing at all, for every kind of console', () => {
+  for (const x of [{ acting: false }, { acting: true, caps: null }, { acting: true, caps: ['care', 'safeguarding'] }, { acting: true, caps: ['care'], minorsDocSeen: true }]) {
+    const r = renderReady({ avail: [offer(CHILD), offer(ADULT)], minors: [], minorsKnown: false, open: true, ...x });
+    assert.equal(r.tree, null, JSON.stringify(x));
+  }
+});
+test('(A4-6) RACE: the minors doc arrives after first paint -- the child is never drawn, before or after', () => {
+  const avail = [offer(CHILD), offer(ADULT)];
+  const before = renderReady({ avail, minors: [], minorsKnown: true, minorsDocSeen: false, acting: true, caps: ['care'], open: true });
+  assert.ok(!/Ellie/.test(before.all));
+  const dflt = renderReady({ avail, minors: [], minorsKnown: true, acting: true, caps: ['care'], open: true });   // no minorsDocSeen key at all
+  assert.ok(!/Ellie|Margaret/.test(dflt.all), 'an absent minorsDocSeen must fail closed');
+  const after = renderReady({ avail, minors: [CHILD], minorsKnown: true, minorsDocSeen: true, acting: true, caps: ['care'], open: true });
+  assert.ok(!/Ellie/.test(after.all)); assert.match(after.all, /Margaret/);
 });
