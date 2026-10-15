@@ -20,7 +20,13 @@
 // claim only a device can settle, and nothing here makes it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
+import { loadScreen, miniReact, texts, find, compileScreen } from './render-jsx-screen.mjs';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { WebSocket } from 'ws';
+import { requireFreePort } from './test-ports.mjs';
 
 const GROUP = { id: 'g1', name: 'Youth', accent: 'var(--clay)', kind: 'Group' };
 const THEIRS = { id: 'm-theirs', pubkey: 'themhex', kind: 1, created_at: 1756500000, tags: [], content: 'Could we talk on Sunday?' };
@@ -200,4 +206,132 @@ test('TOUCH: the ⋯ is KEPT where there is more than Reply — Reply privately 
     assert.equal(dots(room({ canDM: true })()).length, 1, 'their message (Reply privately) must keep the ⋯, mine (reply only) must not');
     assert.equal(dots(room({ leader: true, canDM: false })()).length, 2, 'a steward lost the ⋯ that holds Pin / Remove');
   } finally { globalThis.__roomTouch = false; }
+});
+
+// ── Z-ORDER, IN A REAL BROWSER (owner device report, 2026-10-15) ────────────────────────────────────────────
+// The menu opens BELOW its message (top:100%, zIndex:5). zIndex:5 orders it only inside its own row; the NEXT
+// message row is a later `position:relative` sibling and painted OVER it, so "Reply / Reply privately" sat
+// behind the message underneath. The render harness above has no layout engine and cannot see that, so this
+// drives the REAL Row / DMSwipe (compiled from app/screens-chat.jsx) with the REAL React in real Chromium and
+// hit-tests a point inside the open menu. CLAUDE.md rule 3: nothing here matches text in app/*.jsx.
+const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
+const CDP = 9461;
+const ROOTDIR = new URL('..', import.meta.url).pathname;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+const PAGE_STUBS = `
+  window.matchMedia = () => ({ matches: true, addEventListener(){}, removeEventListener(){} });
+  const mk = (id, t, content) => ({ id, pubkey: 'themhex', kind: 1, created_at: t, tags: [], content });
+  window.Fellowship = {
+    myPubkey: 'mehex', relays: ['wss://relay.example'], relayReady: () => true, groupEncState: () => 'clear',
+    pinPost: async () => ({ ok: true }), unpin: async () => ({ ok: true }), hideMessage: async () => ({ ok: true }),
+    react() {}, requestProfiles() {}, outboxFor: () => [], onOutbox: () => () => {},
+    subscribeGroup: (_g, add) => { add(mk('a1', 1756500000, 'First message, the one whose menu is open.'));
+      add(mk('a2', 1756500100, 'Second message directly underneath. '.repeat(6))); add(mk('a3', 1756500200, 'Third message. '.repeat(6))); return () => {}; },
+    subscribeReactions: () => () => {}, subscribeGroupPin: (_g, cb) => { cb(null); return () => {}; },
+    subscribeHidden: (_g, cb) => { cb(new Set()); return () => {}; }, subscribeMessageTags: (_n, cb) => { cb([]); return () => {}; },
+    displayFor: () => ({ handle: 'sam', color: '#888' }), canAddGroupEvent: () => false,
+  };
+  window.TrinityData = { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] };
+  window.TrinityIdentity = { current: { handle: 'me', color: '#123456' } };
+  window.D = { GROUPS: [], RELAYS: [] };
+  window.lsGet = (_k, d) => d; window.lsSet = () => {}; window.todayISO = () => '2026-10-13';
+  window.Icon = () => null;
+  window.IconBtn = ({ name }) => React.createElement('button', { title: name });
+  window.Overlay = ({ open, children }) => (open ? children : null);
+  window.UserAvatar = () => null; window.SectionLabel = ({ children }) => children; window.BottomSheet = ({ children }) => children;
+  window.safeCssColor = (c) => c;
+`;
+
+// Launch chromium, load real React + the compiled chat screen, run `body` (page JS that renders and returns
+// a result), always tear down.
+async function inBrowser(body) {
+  await requireFreePort(CDP, 'a-message-menu-does-not-cover-the-message.test.mjs (Chrome debug port)');
+  const prof = join(tmpdir(), 'trin-msgmenu-chr-' + process.pid + '-' + Date.now());
+  const chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
+    `--user-data-dir=${prof}`, '--window-size=411,800', 'about:blank'], { stdio: 'ignore' });
+  let ws;
+  try {
+    let targets = null;
+    for (let i = 0; i < 40 && !targets; i++) { await sleep(300); try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); } catch {} }
+    assert.ok(targets && targets.length, 'chromium never exposed a debug target');
+    const page = targets.find(t => t.type === 'page') || targets[0];
+    ws = new WebSocket(page.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
+    await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    let id = 0; const pend = new Map();
+    ws.on('message', (d) => { const m = JSON.parse(d); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } });
+    const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+    await send('Runtime.enable');
+    await send('Emulation.setDeviceMetricsOverride', { width: 411, height: 800, deviceScaleFactor: 1, mobile: true });
+    const run = async (expression) => {
+      const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+      if (rr?.result?.exceptionDetails) throw new Error('in-page: ' + JSON.stringify(rr.result.exceptionDetails.exception || rr.result.exceptionDetails).slice(0, 400));
+      return rr?.result?.result?.value;
+    };
+    await run(readFileSync(join(ROOTDIR, 'vendor/react.production.min.js'), 'utf8'));
+    await run(readFileSync(join(ROOTDIR, 'vendor/react-dom.production.min.js'), 'utf8'));
+    // The app's OWN entrance animation (index.html), read from the shipped file: `animation: trinityFade .3s ease both`
+    // on a row is what turns each row into its own stacking context, which is the whole bug.
+    const kf = /@keyframes trinityFade \{[^\n]*\}/.exec(readFileSync(join(ROOTDIR, 'index.html'), 'utf8'));
+    assert.ok(kf, 're-anchor: @keyframes trinityFade is gone from index.html');
+    await run(`(() => { const st = document.createElement('style'); st.textContent = ${JSON.stringify(kf[0])}; document.head.appendChild(st); })()`);
+    await run(PAGE_STUBS);
+    await run(compileScreen('app/reply-kit.jsx'));
+    await run(compileScreen('app/screens-chat.jsx'));
+    return await run(body);
+  } finally {
+    try { ws && ws.close(); } catch {}
+    chr.kill('SIGKILL');
+    await sleep(200);
+    try { rmSync(prof, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// In-page: what is on top at the centre of the open menu?
+const HIT = `
+  const menu = document.querySelector('[data-msg-menu][style*="position: absolute"][style*="top: 100%"], [data-dm-menu][style*="top: 100%"]');
+  if (!menu) return { menu: false };
+  const r = menu.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const top = document.elementFromPoint(x, y);
+  return { menu: true, onTop: !!(top && top.closest('[data-msg-menu],[data-dm-menu]')), h: r.height, y,
+           under: top ? (top.textContent || '').slice(0, 60) : null };
+`;
+
+test('BROWSER: an OPEN room menu paints ON TOP of the message underneath it, not behind it', { skip: !CHROME && 'no chromium' }, async () => {
+  const res = await inBrowser(`(async () => {
+    const host = document.createElement('div'); host.style.cssText = 'width:411px;height:800px;position:relative;overflow:auto';
+    document.body.style.margin = '0'; document.body.appendChild(host);
+    const ctx = { toast() {}, church: { npub: 'npub1church', name: 'Trinity LA', id: 'c1' }, myLeaderGroups: [], churchEvents: [], safeguard: {},
+      myPubkey: 'mehex', canDMPeer: () => true, openDM() {} };
+    ReactDOM.createRoot(host).render(React.createElement(ChatRoom, { group: { id: 'g1', name: 'Youth', accent: 'var(--clay)', kind: 'Group' }, open: true, onClose() {}, ctx, docked: true }));
+    await new Promise(r => setTimeout(r, 600));
+    const dots = [...document.querySelectorAll('button[aria-label="Message actions"]')];
+    if (dots.length < 2) return { menu: false, dots: dots.length };
+    dots[0].click();
+    await new Promise(r => setTimeout(r, 400));
+    ${HIT.replace(/^/, '')}
+  })()`);
+  assert.equal(res.menu, true, 're-anchor: the open menu is not in the page: ' + JSON.stringify(res));
+  assert.ok(res.h > 30, 'the menu has no height, so nothing was measured: ' + JSON.stringify(res));
+  assert.equal(res.onTop, true,
+    'the open actions menu is painted UNDER the message below it (Reply is covered). At its centre the page shows: ' + JSON.stringify(res.under));
+});
+
+// DMSwipe needed NO elevation: its rows have no entrance animation, so no row is a stacking context and the menu's
+// zIndex:5 already ranks above the rows after it. Measured: this stays green with Row's lift removed. It is a GUARD
+// (it goes red if someone gives a DM row its own stacking context), not proof of the Row fix above.
+test('BROWSER: an OPEN direct-message menu paints ON TOP of the message underneath it', { skip: !CHROME && 'no chromium' }, async () => {
+  const res = await inBrowser(`(async () => {
+    const host = document.createElement('div'); host.style.cssText = 'width:411px;height:800px;position:relative;padding:20px 40px;box-sizing:border-box';
+    document.body.style.margin = '0'; document.body.appendChild(host);
+    const bubble = (t) => React.createElement('div', { style: { background: '#ddd', padding: 12, borderRadius: 12, maxWidth: 300 } }, t);
+    const row = (key, open) => React.createElement(DMSwipe, { key, mine: false, onReply() {}, menuOpen: open, onOpenMenu() {}, noReply: false }, bubble('DM ' + key + ' '.padEnd(1) + 'text '.repeat(14)));
+    ReactDOM.createRoot(host).render(React.createElement('div', null, row('one', true), row('two', false), row('three', false)));
+    await new Promise(r => setTimeout(r, 400));
+    ${HIT}
+  })()`);
+  assert.equal(res.menu, true, 're-anchor: the open DM menu is not in the page (is Reply-only ⋯ gated off here?): ' + JSON.stringify(res));
+  assert.equal(res.onTop, true,
+    'the open DM actions menu is painted UNDER the message below it. At its centre the page shows: ' + JSON.stringify(res.under));
 });

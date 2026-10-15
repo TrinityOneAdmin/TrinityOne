@@ -1005,9 +1005,13 @@ function Row({ me, m, children, ctx, mod }) {
     // HORIZONTAL drag as a pan it owns. Without it the browser may claim the gesture for an ancestor scroller
     // and fire touchcancel part-way through the drag; React attaches touch listeners passively, so
     // preventDefault() cannot do this job and the CSS has to.
+    // zIndex: while THIS row's menu is open the whole row is lifted above the rows after it. The menu opens BELOW
+    // its message (top:100%) and each row is its own stacking context (the trinityFade entrance), so the menu's own
+    // zIndex:5 only ranks it inside the row and the NEXT message painted over it. Gated on the menu ONLY: the reaction
+    // picker opens upward and needs no lift.
     <div {...sw.handlers} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
       style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
-        position: 'relative', ...sw.style }}>
+        position: 'relative', zIndex: M.menuOpen ? 30 : undefined, ...sw.style }}>
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
       {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
