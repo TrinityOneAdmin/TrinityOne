@@ -341,39 +341,109 @@ function OriginalWords({ verses, pill, onWord }) {
         </div>;
   }
   const matched = pill ? all.filter(x => glossMatchesPill(x.w.g, pill)) : [];
-  const lead = matched.length ? matched : all;
-  const rest = matched.length ? all.filter(x => matched.indexOf(x) < 0) : [];
-  const card = (x, key, dim) => {
-    const w = x.w;
-    const m = /^([GH])0*(\d+)/i.exec(String(w.s || ''));
-    const sid = m ? m[1].toUpperCase() + m[2] : '';
-    const mt = morphText(w.m, lang);
-    return <button key={key} data-testid="define-original-word" disabled={!sid} onClick={() => sid && onWord && onWord(sid, x.vv.v)} style={{
-      display: 'block', width: '100%', textAlign: 'left', border: '1px solid var(--line)', background: 'var(--surface-2)',
-      color: 'var(--ink)', borderRadius: 14, padding: '11px 14px', marginBottom: 8, cursor: sid ? 'pointer' : 'default', opacity: dim ? 0.72 : 1 }}>
+  const sidOf = w => { const m = /^([GH])0*(\d+)/i.exec(String(w.s || '')); return m ? m[1].toUpperCase() + m[2] : ''; };
+  const head = (x, big) => {
+    const w = x.w, mt = morphText(w.m, lang);
+    return <React.Fragment>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontFamily: 'var(--font-read)', fontSize: 24, fontWeight: 500 }}>{w.w}</span>
-        <span style={{ fontFamily: 'var(--font-read)', fontSize: 15, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</span>
+        <span style={{ fontFamily: 'var(--font-read)', fontSize: big ? 30 : 24, fontWeight: 500 }}>{w.w}</span>
+        <span style={{ fontFamily: 'var(--font-read)', fontSize: big ? 16 : 15, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</span>
         {list.length > 1 ? <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginLeft: 'auto' }}>{'v' + x.vv.v}</span> : null}
       </div>
-      {w.g ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, color: 'var(--ink)', marginTop: 3 }}>{w.g}</div> : null}
+      {w.g ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, color: 'var(--ink-2)', marginTop: 2 }}>{w.g}</div> : null}
       {mt ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', marginTop: 3 }}>{mt}</div> : null}
-    </button>;
+    </React.Fragment>;
   };
+  // Pill matched: the matched word(s) with the full lexicon definition LISTED INLINE beneath each — the original
+  // side now mirrors the English side (pick a word, read its meaning) without opening a second sheet.
+  if (matched.length) {
+    return (
+      <div data-testid="define-original">
+        <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 10 }}>{'"' + pill + '" in the original'}</div>
+        {matched.map((x, i) => (
+          <div key={i} data-testid="define-original-word" style={{ marginBottom: 18 }}>
+            {head(x, true)}
+            <div style={{ marginTop: 6 }}><LexDetail id={sidOf(x.w)} onWord={onWord} /></div>
+          </div>
+        ))}
+        <OriginalLicencePill />
+      </div>
+    );
+  }
+  // No pill (dictionary not installed) or no match: the whole verse, each word tappable into its lexicon entry.
   return (
     <div data-testid="define-original">
-      {pill ? <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>{matched.length ? ('"' + pill + '" in the original') : ('"' + pill + '" isn\'t a single original word — the whole verse:')}</div> : null}
-      {lead.map((x, i) => card(x, 'l' + i, false))}
-      {rest.length ? <React.Fragment>
-        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', margin: '6px 0 7px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Rest of the verse</div>
-        {rest.map((x, i) => card(x, 'r' + i, true))}
-      </React.Fragment> : null}
+      {pill ? <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>{'"' + pill + '" isn\'t a single original word — the whole verse:'}</div> : null}
+      {all.map((x, i) => { const sid = sidOf(x.w); return (
+        <button key={i} data-testid="define-original-word" disabled={!sid} onClick={() => sid && onWord && onWord(sid, x.vv.v)} style={{
+          display: 'block', width: '100%', textAlign: 'left', border: '1px solid var(--line)', background: 'var(--surface-2)',
+          color: 'var(--ink)', borderRadius: 14, padding: '11px 14px', marginBottom: 8, cursor: sid ? 'pointer' : 'default' }}>
+          {head(x, false)}
+        </button>
+      ); })}
       <OriginalLicencePill />
     </div>
   );
 }
 
 // ── word study (real lexicon via window.Bible.lex) ──
+// The lexicon definition for a Strong's id: the short gloss, the full definition, the derivation (with tappable
+// cross-references), the KJV usage and the occurrence count. Shared by WordStudySheet (its sheet body) and the
+// Define sheet's original page (listed inline UNDER the word the English pill matched), so the two never drift.
+// `onWord(id)` follows a derivation cross-reference. Returns null with no id.
+function LexDetail({ id, onWord }) {
+  const e = id ? window.Bible.lex(id) : null;
+  if (!e) return null;
+  if (e.missing) return (
+    <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink-2)', margin: '18px 0 6px', textWrap: 'pretty' }}>
+      No entry in the built-in lexicon for this number. A dictionary module (<span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.dct.mybible</span>) would supply the full definition.
+    </p>
+  );
+  return (
+    <React.Fragment>
+      {e.short ? (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
+          padding: '6px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, margin: '16px 0 14px' }}>
+          <Icon name="sparkle" size={15} stroke={2} /> {e.short}
+        </div>
+      ) : <div style={{ height: 16 }} />}
+      <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 16px', textWrap: 'pretty' }}>{e.def || e.gloss}</p>
+      {e.deriv ? (
+        <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>Derivation</div>
+          <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+            {/* turn each Strong's cross-reference (G3956 / H1234) into a tappable link to that entry */}
+            {e.deriv.split(/([GH]\d{1,5})/).map((part, i) => (
+              /^[GH]\d{1,5}$/.test(part) && onWord && !window.Bible.lex(part).missing
+                ? <span key={i} onClick={() => onWord(part)} style={{ color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in oklab, var(--clay) 45%, transparent)', textUnderlineOffset: 2 }}>{part}</span>
+                : part
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {e.kjv ? (
+        <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>KJV translates it</div>
+          <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{e.kjv}</div>
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', gap: 10 }}>
+        {e.occ ? (
+          <div style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 16, padding: '13px 15px' }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, color: 'var(--clay)' }}>{e.occ}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>occurrences in scripture</div>
+          </div>
+        ) : null}
+        <div style={{ flex: 1, background: 'var(--ink)', color: 'var(--paper)', borderRadius: 16,
+          fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex',
+          flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '13px 15px', gap: 2 }}>
+          <Icon name="study" size={18} color="var(--paper)" /> {e.lang === 'HEBREW' ? 'Hebrew' : 'Greek'} root
+        </div>
+      </div>
+    </React.Fragment>
+  );
+}
+
 function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack, verse }) {
   const e = id ? window.Bible.lex(id) : null;
   const [, force] = useS(0);
@@ -413,51 +483,7 @@ function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack, ve
             <OriginalLicencePill />
           </div>
         ) : origOffer ? <div style={{ marginTop: 14 }}><OriginalOffer lang={origLang} /></div> : null}
-        {e.missing ? (
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink-2)', margin: '18px 0 6px', textWrap: 'pretty' }}>
-            No entry in the built-in lexicon for this number. A dictionary module (<span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.dct.mybible</span>) would supply the full definition.
-          </p>
-        ) : <React.Fragment>
-          {e.short ? (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
-              padding: '6px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, margin: '16px 0 14px' }}>
-              <Icon name="sparkle" size={15} stroke={2} /> {e.short}
-            </div>
-          ) : <div style={{ height: 16 }} />}
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 16px', textWrap: 'pretty' }}>{e.def || e.gloss}</p>
-          {e.deriv ? (
-            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>Derivation</div>
-              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-                {/* turn each Strong's cross-reference (G3956 / H1234) into a tappable link to that entry */}
-                {e.deriv.split(/([GH]\d{1,5})/).map((part, i) => (
-                  /^[GH]\d{1,5}$/.test(part) && onWord && !window.Bible.lex(part).missing
-                    ? <span key={i} onClick={() => onWord(part)} style={{ color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in oklab, var(--clay) 45%, transparent)', textUnderlineOffset: 2 }}>{part}</span>
-                    : part
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {e.kjv ? (
-            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>KJV translates it</div>
-              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{e.kjv}</div>
-            </div>
-          ) : null}
-          <div style={{ display: 'flex', gap: 10 }}>
-            {e.occ ? (
-              <div style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 16, padding: '13px 15px' }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, color: 'var(--clay)' }}>{e.occ}</div>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>occurrences in scripture</div>
-              </div>
-            ) : null}
-            <div style={{ flex: 1, background: 'var(--ink)', color: 'var(--paper)', borderRadius: 16,
-              fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex',
-              flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '13px 15px', gap: 2 }}>
-              <Icon name="study" size={18} color="var(--paper)" /> {e.lang === 'HEBREW' ? 'Hebrew' : 'Greek'} root
-            </div>
-          </div>
-        </React.Fragment>}
+        <LexDetail id={e.id} onWord={onWord} />
       </div> : null}
     </BottomSheet>
   );

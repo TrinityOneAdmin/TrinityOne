@@ -141,7 +141,7 @@ test('UNTAGGED: Define has a second (Greek/Hebrew) page listing the verse\'s wor
   assert.equal(R.byId('define-original-word').length, 3, 'closing the lexicon did not return to the Define original page');
 });
 
-test('UNTAGGED: picking an English word pill leads the original page with the gloss-matched original word, the rest of the verse below', async () => {
+test('UNTAGGED: picking an English word pill shows its gloss-matched original word with the lexicon definition listed INLINE', async () => {
   const R = reader({ installed: true, tagged: false, defineWords: [{ word: 'word', head: 'word', senses: [['n', 'a unit of language']], license: '' }] });
   await R.tapVerse();
   await R.press(R.tile('Define'));
@@ -149,8 +149,10 @@ test('UNTAGGED: picking an English word pill leads the original page with the gl
   assert.equal(head.length, 1, 'no "<pill> in the original" heading on the original page');
   assert.match(reads(head[0]), /word/i);
   const ws = R.byId('define-original-word');
-  assert.match(reads(ws[0]), /λόγος/, 'the gloss-matched Greek word (λόγος, "Word") does not LEAD the page; got: ' + reads(ws[0]));
-  assert.equal(ws.length, 3, 'the rest of the verse should still follow the matched word');
+  assert.equal(ws.length, 1, 'only the matched word should show (its definition replaces the verse list)');
+  const t = reads(ws[0]);
+  assert.match(t, /λόγος/, 'the matched Greek word is not shown: ' + t);
+  assert.match(t, /a word/, 'the lexicon definition is not listed inline under the matched word: ' + t);
 });
 
 test('UNTAGGED, module NOT installed: the Define original page offers the download and calls installModule on tap', async () => {
