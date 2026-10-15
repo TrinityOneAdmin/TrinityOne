@@ -1961,11 +1961,13 @@ function schSendSummary(r) {
 // Users (rule 2): SchEventMessage only.
 function schEventPostGroup({ event, groups }) {
   const e = event || {};
-  if (!e.groupId) return null;
-  const g = (groups || []).find(x => x && x.id === e.groupId);
-  if (!g) return null;
-  if (g.kind === 'team' || g.kind === 'broadcast') return null;   // taxonomy: screens-chat.jsx churchGroups map
-  return g;
+  if (!e.groupId) return null;   // church-wide event: no group to post into, so it stays a DM fan-out
+  // Any group the event is tied to is a place to post this announcement — a plain chat group, a serving team's
+  // room, or a broadcast channel are all "the group the event lives in". "Everyone invited" means the people in
+  // that group (owner, 2026-10-15: "these events are specific to groups, so everyone is invited"). publishPost
+  // itself refuses an encrypted room with no key, so a room that genuinely can't take the post surfaces as "not
+  // posted" rather than being pre-filtered here.
+  return (groups || []).find(x => x && x.id === e.groupId) || null;
 }
 function SchEventMessage({ event, onClose }) {
   const e = event || {};

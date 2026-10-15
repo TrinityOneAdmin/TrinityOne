@@ -158,16 +158,18 @@ test('CONSOLE: "Everyone invited" reaches the whole audience (church members, mi
   await c.send();
   assert.deepEqual(c.calls.map(x => x.pk).sort(), [GOING1, GOING2, MAYBE, NO, NORSVP].sort());
 });
-// Updated for B6 (2026-10-15): an invite-only *team* (not a chat group) still DMs its roster — the invite
-// branch of schEventAudience, which drops the blocked member, is exercised here. (A plain invite-only CHAT
-// group now posts to the group instead; that is the B6 behaviour change, covered below.)
-test('CONSOLE: an invite-only TEAM event DMs that team\'s roster, not the whole church, and drops the blocked', async () => {
+// B6 (owner 2026-10-15): a TEAM is a group with a room too — a team-building workshop event should be able to
+// post into the team's chat. So "Everyone invited" on ANY group the event is tied to (plain group, team or
+// broadcast) posts into it; only a church-wide event (no groupId) fans out by DM. The blocked-member drop on
+// the DM path is covered by the church-wide "Everyone invited" test above (BLOCKED never appears there).
+test('CONSOLE: a TEAM event, Everyone invited, posts once into the team\'s group (teams are groups too)', async () => {
   const groups = [{ id: 'g1', kind: 'team', visibility: 'invite', members: [GOING1, NORSVP, BLOCKED] }];
   const c = await composer({ event: { ...EVENT, groupId: 'g1' }, groups });
-  c.type('Group news');
+  c.type('Team-building workshop — Saturday');
   await c.send();
-  assert.equal(c.posts.length, 0, 'a team is a DM fan-out, not a group post');
-  assert.deepEqual(c.calls.map(x => x.pk).sort(), [GOING1, NORSVP].sort(), 'blocked roster member must be dropped');
+  assert.equal(c.posts.length, 1, 'a team event should post into the team\'s group');
+  assert.equal(c.posts[0].group, 'g1', 'the post must carry the team\'s group id');
+  assert.equal(c.calls.length, 0, 'posting to the group must not also DM');
 });
 test('CONSOLE: the replies toggle sets the no-reply flag on every message', async () => {
   const a = await composer();
@@ -241,13 +243,14 @@ test('B6 CONSOLE: a church-wide event (groupId empty) still fans out by DM, neve
   assert.equal(c.posts.length, 0, 'church-wide must not post to a group');
   assert.deepEqual(c.calls.map(x => x.pk).sort(), [GOING1, GOING2, MAYBE, NO, NORSVP].sort());
 });
-test('B6 CONSOLE: a BROADCAST group event still fans out by DM, never a group post', async () => {
+test('B6 CONSOLE: a BROADCAST group event posts into that broadcast channel (an announcement channel is a group too)', async () => {
   const groups = [{ id: 'b1', name: 'Notices', kind: 'broadcast' }];
   const c = await composer({ event: { ...EVENT, groupId: 'b1' }, groups });
   c.type('Notice');
   await c.send();
-  assert.equal(c.posts.length, 0, 'a one-way broadcast is not a chat-group post audience');
-  assert.ok(c.calls.length > 0, 'broadcast event still DMs the church');
+  assert.equal(c.posts.length, 1, 'a broadcast event posts to the broadcast group');
+  assert.equal(c.posts[0].group, 'b1');
+  assert.equal(c.calls.length, 0, 'posting to the broadcast must not also DM');
 });
 test('B6 CONSOLE: "Just those going" on a chat-group event still fans out by DM (an RSVP subset is not the group)', async () => {
   const groups = [{ id: 'cg1', name: 'Youth', kind: 'group' }];
