@@ -6627,7 +6627,11 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   //
   // AND NOT ON A DELEGATED CONSOLE. The relay serves minors:/guardians: to the church key (or a safeguarding
   // steward) alone, so a steward holding only `members` — whose Reconnect the relay does accept, and for whom
-  // the button that opens this modal is deliberately offered — can NEVER satisfy minorsKnown. Gating them
+  // the button that opens this modal is deliberately offered — does not receive those documents. (CORRECTED
+  // 2026-10-15: an earlier version said such a steward "can NEVER satisfy minorsKnown". That is false: minorsKnown
+  // also turns true on EOSE while authenticated, so they DO satisfy it — without ever holding the document. That
+  // is why this guard excludes the delegate by `!actingChurch`, and why minorsKnown must not be read as "we know
+  // who the children are" on a delegate; see minorsDocSeen.) Gating them
   // would delete a shipped capability rather than close a hole. Their case is unchanged, and listed.
   const confirm = async () => {
     if (!newPub || same || busy) return;

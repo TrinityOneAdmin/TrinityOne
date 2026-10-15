@@ -759,6 +759,20 @@ const careAvailLabel = (t) => CARE_AVAIL_LABEL[t] || (String(t || '').charAt(0).
 // arrived the whole section stays empty, because an empty minors set answers "no" as confidently as a loaded one.
 // A blocked member is not listed either. The name key may not have arrived (the reader then yields nothing and
 // the section is simply absent — never an empty-looking list drawn as "nobody is ready").
+// CAN THIS CONSOLE POSITIVELY SAY WHO THE CHILDREN ARE? Fails closed. `minorsKnown` is not enough for a SCOPED
+// delegate: the relay withholds minors: from a steward who lacks Safeguarding (and is not a care admin), yet
+// minorsKnown still turns true for them on EOSE-while-authenticated, with an EMPTY set — which then answers
+// "no children" and lists a child. So a scoped steward without the safeguarding cap must have RECEIVED the minors
+// document (minorsDocSeen). Owner console and unscoped steward (caps null) and a safeguarding steward are served it
+// (or honestly have none), so for them minorsKnown stands. `S` is window.Steward. Users: StewReadyToHelp.
+function readyToHelpCanSeeChildren(sg, S) {
+  if (!sg || sg.minorsKnown !== true) return false;
+  if (!S || !S.actingChurch) return true;                                   // owner console
+  const caps = S.myStewardCaps ? S.myStewardCaps() : undefined;
+  if (caps === null) return true;                                           // unscoped steward
+  if (Array.isArray(caps) && caps.indexOf('safeguarding') >= 0) return true;
+  return sg.minorsDocSeen === true;                                         // scoped without Safeguarding: only a document we hold
+}
 function StewReadyToHelp() {
   const allowed = (typeof stewCapState === 'function') ? stewCapState('care').allowed : true;
   const avail = window.useMealsAvail ? window.useMealsAvail() : [];
@@ -772,6 +786,11 @@ function StewReadyToHelp() {
   const [picking, setPicking] = React.useState(null);   // pubkey whose "which need?" picker is showing
   const [status, setStatus] = React.useState({});       // pubkey -> { kind: 'ok'|'queued'|'err'|'busy', text }
   if (!allowed || sg.minorsKnown !== true) return null;
+  // A SCOPED DELEGATE who cannot be shown the children list: say so, list nothing, count nothing.
+  if (!readyToHelpCanSeeChildren(sg, window.Steward)) {
+    if (!(avail && avail.length)) return null;
+    return <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 14, border: '1px solid var(--line)', fontSize: 13, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>Can’t check which members are children here — this list is hidden. Ask a safeguarding steward.</div>;
+  }
   const minors = new Set((sg.minors || []).map(x => String(x || '').toLowerCase()));
   const rows = (avail || []).filter(a => a && a.pubkey && !minors.has(String(a.pubkey).toLowerCase()) && !blocked.has(String(a.pubkey).toLowerCase()));
   if (!rows.length) return null;
