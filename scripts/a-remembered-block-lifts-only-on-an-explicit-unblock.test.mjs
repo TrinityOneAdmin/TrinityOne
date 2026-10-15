@@ -308,3 +308,65 @@ test('4. the real Unblock of X1 publishes an event that names them; a console th
   assert.ok(!recipsOn(r1, NAMEKEY_D + churchA).includes(X2.pub), 'X2 was keyed');
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
+
+// ── THE ACCEPTED, BOUNDED RESIDUAL (owner, 2026-10-15; reference/DOMAIN.md "Blocked list while a relay is down") ──────────
+// block P (T0) -> unblock P (T1) -> RE-block P (T2). A device offline across T1/T2 reconnects and can reach only a relay still
+// serving the stale unblock E1@T1 (the relay holding the re-block E2@T2 is down): it lifts P. That is irreducible without a
+// reachable relay that has E2. What is promised, and tested here at the point of use, is the other half: the console SELF-HEALS
+// the instant it reaches any relay carrying E2 (_noteBlockedList re-adds P and re-stamps it, and the keys re-rotate), and the
+// Block control is the steward's manual backstop. Relay 1 stands for "the relay that can be reached"; E2 is published to it
+// once the console has lifted P on the stale E1.
+const publishList = async (pubkeys, unblocked = []) => {
+  const cur = blockDoc();
+  const at = Math.max(Math.floor(Date.now() / 1000), (cur ? cur.created_at : 0) + 1);
+  await H.publishAll(r1, [finalizeEvent({ kind: 30078, created_at: at, tags: [['d', BLOCKED_D + churchA], ['t', 'trinityone'], ...unblocked.map(u => ['unblocked', u])], content: JSON.stringify({ pubkeys }) }, ASK)]);
+  assert.ok(await until(() => { const d = blockDoc(); return d && d.created_at === at; }, 15000), 'CONTROL: relay 1 does not hold the list just published');
+  return at;
+};
+
+test('5. THE RESIDUAL SELF-HEALS: a device that learned X1 was blocked at T0 lifts X1 on a stale unblock E1@T1 (the relay with the re-block E2@T2 unreachable); when E2 reaches it, X1 is blocked again and withheld the next key', { skip: SKIP, timeout: 400000 }, async () => {
+  const E1 = blockDoc();
+  assert.ok(E1 && unblockTags(E1).includes(X1.pub) && !listOf(E1).includes(X1.pub), 'CONTROL: relay 1 does not serve the unblock of X1 (E1) this row starts from');
+  const T0 = E1.created_at - 100;
+  assert.ok(recipsOn(r1, NAMEKEY_D + churchA).includes(X1.pub), 'CONTROL: X1 is not keyed before the row (the prior unblock should have re-keyed them)');
+  // since[X1] = T0 < E1@T1: the device was told of the block long before the unblock; it never saw the re-block
+  await seedOnQuietPage(`localStorage.setItem('trinityone.steward.blockedlast.' + ${JSON.stringify(churchA)}, ${JSON.stringify(JSON.stringify([X1.pub, X2.pub]))});
+    localStorage.setItem('trinityone.steward.blockedsince.' + ${JSON.stringify(churchA)}, ${JSON.stringify(JSON.stringify({ [X1.pub]: T0, [X2.pub]: T0 }))});`);
+  await cdpSend('Page.navigate', { url: r1.base + '/steward.html' });
+  await sleep(2500);
+  await reload();
+  const t0 = Date.now(); let lifted = false;
+  while (Date.now() - t0 < 40000 && !lifted) { lifted = !(await heldHere()).includes(X1.pub); if (!lifted) await sleep(700); }
+  assert.ok(lifted, 'CONTROL: the stale unblock E1 did not lift X1 — the residual this row documents is not in play, so the self-heal below proves nothing');
+  assert.ok((await heldHere()).includes(X2.pub), 'CONTROL: the lift took X2, whom the church still blocks');
+  // E2: the re-block, newer than E1, now reaches the console through a relay it can reach
+  await evalIn('(() => { window.__env = []; return 1; })()');
+  await publishList([X2.pub, X1.pub]);
+  const t1 = Date.now(); let healed = false;
+  while (Date.now() - t1 < 40000 && !healed) { healed = (await heldHere()).includes(X1.pub); if (!healed) await sleep(700); }
+  assert.ok(healed, 'THE SELF-HEAL FAILED: E2 (a newer list naming X1, no unblock) reached the console and X1 is still not held as blocked');
+  assert.ok((await devCopy()).includes(X1.pub), 'the re-block did not reach the device copy — a restart would admit X1 again');
+  assert.ok(await shownBlocked(X1), 'X1 is not under "See blocked" after the self-heal');
+  // THE NEXT KEY: a member who joins now makes the console write the name key's recipients again. X3 must be in it, X1 must not.
+  // (The re-block itself does not re-rotate a key X1 already holds — only the Block control does that; see row 6.)
+  await evalIn('(() => { window.__env = []; return 1; })()');
+  await H.publishAll(r1, [joinTo(churchA, X3)]);
+  assert.ok(await until(() => recipsOn(r1, NAMEKEY_D + churchA).includes(X3.pub), 60000), 'CONTROL: the console never wrote the next name key for the member who joined');
+  assert.ok(!recipsOn(r1, NAMEKEY_D + churchA).includes(X1.pub), 'X1 WAS IN THE NEXT KEY after the re-block reached the console: the self-heal did not withhold it');
+  assert.deepEqual(await sentTo(X1.pub), [], 'A KEY WAS SENT TO X1 after the re-block reached the console');
+});
+
+test('6. THE MANUAL BACKSTOP: when a stale unblock has lifted X1, the steward presses Block on the Members screen and X1 is blocked and un-keyed', { skip: SKIP, timeout: 400000 }, async () => {
+  // put the console back in the lifted state: X1 unblocked on the church list (what the stale relay serves), no re-block anywhere
+  await publishList([X2.pub], [X1.pub]);
+  const t0 = Date.now(); let lifted = false;
+  while (Date.now() - t0 < 40000 && !lifted) { lifted = !(await heldHere()).includes(X1.pub); if (!lifted) await sleep(700); }
+  assert.ok(lifted, 'CONTROL: X1 is still held as blocked, so the Block control has nothing to re-block');
+  assert.ok(await until(() => recipsOn(r1, NAMEKEY_D + churchA).includes(X1.pub), 60000), 'CONTROL: X1 was not keyed again after the lift');
+  await sleep(3000);
+  await blockOnScreen(X1, [M, X2]);
+  assert.ok(await until(() => listOf(blockDoc()).includes(X1.pub), 40000), 'THE BLOCK CONTROL DID NOT RE-BLOCK X1: the published list does not name them');
+  assert.ok((await heldHere()).includes(X1.pub), 'the console does not hold X1 as blocked after pressing Block');
+  assert.ok(await until(() => !recipsOn(r1, NAMEKEY_D + churchA).includes(X1.pub), 60000), 'X1 stayed keyed after the steward pressed Block');
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});

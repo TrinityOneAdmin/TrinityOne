@@ -3128,6 +3128,16 @@ function _blockedSinceStamp(cp, pks, at) {
 // merely LEAVES THEM OUT lifts nothing — that is also what a relay that missed the block, or a second steward who never
 // knew of it, looks like, and the safe side wins. Returns whom it lifted. A person lifted here leaves `_localBlocked`, the
 // device copy, and any rotation still waiting to take them out — what setBlocked does on the relay's yes.
+// ACCEPTED, BOUNDED RESIDUAL (owner, 2026-10-15): church blocks P (T0), unblocks P (T1), RE-blocks P (T2). A device offline
+// across T1/T2 that can reach only a relay still serving the stale unblock E1@T1 (the relay with the re-block E2@T2 is down or
+// split off) lifts P, because E1 really is an authentic, newer-than-T0 explicit unblock; nothing reachable says otherwise.
+// That is a network partition and cannot be closed from here. It is bounded: (1) it SELF-HEALS — the moment this device reaches
+// ANY relay carrying E2, _noteBlockedList puts P back in _localBlocked and re-stamps them, so P is withheld every key written
+// after that (it does not pull a key P already received — only the Block control rotates that); (2) the console's Block/Unblock
+// is the steward's manual backstop; (3) the since-stamp already rejects a replay older than the block this device knows.
+// It is far likelier in a messy multi-relay test setup than on stable pilot relays. Tested: the last two rows of
+// scripts/a-remembered-block-lifts-only-on-an-explicit-unblock.test.mjs. Do not "fix" it by trusting omissions: that reopens
+// the frozen-out/seized-relay cases this rule exists for.
 function _liftRememberedBlock(cp, epoch, pks, at) {
   if (!_stillOn(cp, epoch)) return [];
   const since = _blockedSinceGet(cp), held = _blockedLastSet(cp), lifted = [];
