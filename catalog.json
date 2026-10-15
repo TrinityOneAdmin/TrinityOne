@@ -150,6 +150,32 @@
      "desc": "Older, richer meanings from Webster\u2019s 1913 dictionary \u2014 closer to the language of the KJV. When installed, Define uses it first and falls back to WordNet."
     },
     {
+     "id": "original-greek",
+     "name": "Greek New Testament (original words)",
+     "abbr": "TAGNT",
+     "lang": "Greek",
+     "size": "5.8 MB",
+     "license": "CC BY 4.0 · STEPBible.org",
+     "kind": "original",
+     "format": "JSON",
+     "url": "modules/original-greek.json",
+     "sha256": "d85419e0ef6bfb4c4a97e14d1639a4da913f24fc6f922e878c517f8483ec033a",
+     "desc": "The Greek text of the New Testament, word by word, with each word's transliteration, Strong's number and grammar (STEPBible TAGNT). Download only if you want the original language."
+    },
+    {
+     "id": "original-hebrew",
+     "name": "Hebrew Old Testament (original words)",
+     "abbr": "TAHOT",
+     "lang": "Hebrew",
+     "size": "15.4 MB",
+     "license": "CC BY 4.0 · STEPBible.org",
+     "kind": "original",
+     "format": "JSON",
+     "url": "modules/original-hebrew.json",
+     "sha256": "95dc7052746a3f8da3679ac9757367502eaef303d53a164f8f5a273240376afb",
+     "desc": "The Hebrew text of the Old Testament, word by word, with each word's transliteration, Strong's number and grammar (STEPBible TAHOT). Download only if you want the original language."
+    },
+    {
      "id": "import-dict",
      "name": "Import a dictionary…",
      "kind": "import",

@@ -208,6 +208,44 @@ window.safeImgUrl = function (v) {
   // The credit that must appear wherever these references are shown (CC BY obliges attribution).
   function crossrefLicense(){ for(const a in crossrefs) if(crossrefs[a].license) return crossrefs[a].license; return ""; }
 
+  // ── original-language text (STEPBible TAGNT Greek NT / TAHOT Hebrew OT) — a JSON module, installed on demand ──
+  // Module shape (scripts/build-original.mjs): { meta:{abbr,name,license,kind:"original",lang:"greek"|"hebrew"},
+  //   v:{ "<book>.<chap>.<verse>": [[form, translit, strongs, morph], …] } } — the SAME verse key as cross-references
+  // and refKey. Never a default download: nothing here fetches; the Library installs it (kind "original"), and it is
+  // filed under "dictionaries" like word definitions so it is listed and removable there. NOT a Strong's dictionary:
+  // it never enters `dicts`, so lex()/searchDict() do not see it.
+  const originals = {};   // abbr -> { name, license, lang, v }
+  function loadOriginalJSON(obj, abbr){
+    const m = (obj && obj.meta) || {};
+    const a = m.abbr || abbr || "Original";
+    originals[a] = { name: m.name || a, license: m.license || "", lang: m.lang || "", v: (obj && obj.v) || {} };
+    notify();
+    return a;
+  }
+  function removeOriginal(abbr){ delete originals[abbr]; }
+  // Extended Strong's -> the plain number the lexicons key on: "G0976" -> "G976", "H7225G" -> "H7225".
+  function _strongBase(s){ const m = /^([GH])0*(\d+)/.exec(String(s == null ? "" : s).trim().toUpperCase()); return m ? m[1] + m[2] : ""; }
+  // Verse -> the original words of the first installed original module that has it (lang "greek"/"hebrew" narrows
+  // it; omit for whichever answers): [{ w: form, t: transliteration, s: extended Strong's, m: morphology }], reading
+  // order, or [] (nothing installed, or the verse is absent from that text). `strongs` ("G3056", "G3056G", "H7225")
+  // keeps only the words with that number — the verse-plus-Strong's lookup.
+  function getOriginal(b, c, v, lang, strongs){
+    const key = b + "." + c + "." + v, want = strongs ? _strongBase(strongs) : "";
+    for(const a in originals){
+      const o = originals[a];
+      if(lang && o.lang !== lang) continue;
+      const list = o.v[key];
+      if(!list) continue;
+      const out = [];
+      for(const x of list){ if(want && _strongBase(x[2]) !== want) continue; out.push({ w: x[0], t: x[1], s: x[2], m: x[3] }); }
+      return out;
+    }
+    return [];
+  }
+  // Which original-language texts are on this phone: [{abbr,name,lang,license}].
+  function originalList(){ return Object.keys(originals).map(a => ({ abbr: a, name: originals[a].name, lang: originals[a].lang, license: originals[a].license })); }
+  function hasOriginal(lang){ for(const a in originals) if(!lang || originals[a].lang === lang) return true; return false; }
+
   // ── word definitions (WordNet, filtered to the shipped Bibles' vocabulary) — a JSON module, like cross-refs ──
   // The Strong's lexicon only answers on TAGGED Bibles; this works on any English text (BSB, an imported
   // translation) because it looks a plain word up. Module shape (scripts/build-worddefs.mjs):
@@ -925,7 +963,7 @@ window.safeImgUrl = function (v) {
 
   function getInstalled(){ try{ return JSON.parse(localStorage.getItem(INSTALLED_KEY) || "{}"); }catch(e){ return {}; } }
   function setInstalled(map){ try{ localStorage.setItem(INSTALLED_KEY, JSON.stringify(map)); }catch(e){} }
-  function catOf(item){ return item.category || (item.kind === "crossref" ? "crossrefs" : (item.kind === "dict" || item.kind === "worddef") ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
+  function catOf(item){ return item.category || (item.kind === "crossref" ? "crossrefs" : (item.kind === "dict" || item.kind === "worddef" || item.kind === "original") ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
   // A RECORD MUST NAME THE MODULE THE ENGINE REGISTERED, NOT THE ONE THE CATALOGUE ASKED FOR.
   // addSource/addCommentary/addDict have always deduped a colliding name (NT -> NT2), and the record kept
   // the catalogue's regardless, so two modules sharing one catalogue abbr produced two records saying the
@@ -1024,6 +1062,8 @@ window.safeImgUrl = function (v) {
           ? { kind: "crossref", abbr: loadCrossrefsJSON(parsed, item.abbr) }
           : (item.kind === "worddef")
           ? { kind: "worddef", abbr: loadWorddefsJSON(parsed, item.abbr) }
+          : (item.kind === "original")
+          ? { kind: "original", abbr: loadOriginalJSON(parsed, item.abbr) }
           : { kind: "dict", abbr: loadDictJSON(parsed, item.abbr) };
       }else{
         // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
@@ -1094,11 +1134,12 @@ window.safeImgUrl = function (v) {
         // only knowable once the module is loaded, which is here, so the repair happens on the next launch
         // and costs a localStorage write only when the two actually differ.
         if((meta.format || "").toUpperCase() === "JSON") {
-          const raw = bytes, u = url, isXr = meta.kind === "crossref", isWd = meta.kind === "worddef";
+          const raw = bytes, u = url, isXr = meta.kind === "crossref", isWd = meta.kind === "worddef", isOr = meta.kind === "original";
           // A word-definitions module is NOT a dictionary: it is parsed straight into `worddefs` (never queued in
           // _pendingDicts, so removeDict has nothing to find and lex() never sees it), but it is filed under
           // "dictionaries" so the Library lists it with them.
           if(isWd) noteLoadedFrom(u, loadWorddefsJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries");
+          else if(isOr) noteLoadedFrom(u, loadOriginalJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries");
           else _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u,
             isXr ? loadCrossrefsJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr)
                  : loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr),
@@ -1270,6 +1311,7 @@ window.safeImgUrl = function (v) {
     const loadedHere = !url || !here || here === url;
     if(loadedHere){
       if(meta && meta.kind === "worddef") removeWorddefs(abbr);
+      else if(meta && meta.kind === "original") removeOriginal(abbr);
       else if(cat === "commentaries") delete commentaries[abbr];
       else if(cat === "dictionaries") removeDict(abbr, url);
       else if(modules[abbr]){ delete modules[abbr]; order = order.filter(a => a !== abbr); }
@@ -1455,7 +1497,7 @@ window.safeImgUrl = function (v) {
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
+    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 
