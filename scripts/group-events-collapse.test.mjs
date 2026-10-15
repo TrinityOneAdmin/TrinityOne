@@ -93,7 +93,7 @@ test('member: ONE event has no chevron and stays shown', () => {
 async function loadConsole(globals) {
   const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
   const name = 'GroupChatModal';
-  const src = fnBody(STEW, 'function GroupChatModal({ group, onClose }) {', name);
+  const src = fnBody(STEW, 'function GroupChatModal({ group, onClose }) {', name) + '\n' + fnBody(STEW, 'function groupIcon(', 'groupIcon');   // + the room-icon helper it draws through
   const tmp = join(tmpdir(), 'gevc-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

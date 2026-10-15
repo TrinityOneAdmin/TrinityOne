@@ -186,7 +186,8 @@ const ROOM_HELPERS = (() => {
   assert.notEqual(at, -1, 'the room-list helpers moved out of app/screens-chat.jsx — re-anchor this test');
   const end = CHAT_SRC.indexOf('function ChatScreen({ ctx })', at);
   assert.ok(end > at, 'could not find ChatScreen below the helpers — re-anchor this test');
-  return new Function(CHAT_SRC.slice(at, end) + '\nreturn { ROOM_KIND_LABEL, roomKindLabel, roomIcon };')();
+  // roomIcon now reads window.roomIconOk (a steward-chosen icon); with none installed it is the kind default
+  return new Function('window', CHAT_SRC.slice(at, end) + '\nreturn { ROOM_KIND_LABEL, roomKindLabel, roomIcon };')({});
 })();
 
 function renderChatScreen({ isMinor = false, assumeMinor = false, groups = [] } = {}) {
