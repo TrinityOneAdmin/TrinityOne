@@ -21412,16 +21412,18 @@ zoo`.split("\n");
         if (byId.has(e.id)) return;
         const mine = e.pubkey === pub;
         const other = mine ? peerHex : e.pubkey;
-        let text = "", replyTo = null, undecryptable = false;
+        let text = "", replyTo = null, undecryptable = false, noReply = false, eventId = null;
         try {
           const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content));
           text = un.text;
           replyTo = un.replyTo;
+          noReply = !!un.noReply;
+          eventId = un.eventId || null;
         } catch {
           text = "\u{1F512} (could not decrypt)";
           undecryptable = true;
         }
-        byId.set(e.id, { id: e.id, mine, text, replyTo, ts: e.created_at, undecryptable });
+        byId.set(e.id, { id: e.id, mine, text, replyTo, noReply, eventId, ts: e.created_at, undecryptable });
         emit();
       };
       const takeRx = (e) => {

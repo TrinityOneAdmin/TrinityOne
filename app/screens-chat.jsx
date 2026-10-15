@@ -1933,6 +1933,15 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 // it is there is nothing left to tap — so this also carries the same three-dots control a group room has had
 // all along (Row, above). The menu offers Reply only: inside a direct message you are ALREADY private, so
 // "Reply privately" would be meaningless here, and there is nothing to moderate in someone else's inbox.
+// The label over a church message. One that came with an event id reads "<event name> Announcement" (the name is
+// looked up in the events this app already holds; an event it does not hold falls back to "Event announcement").
+// A no-reply message with no event id is plain "Announcement". Users: DMThread only.
+function dmAnnounceLabel(m, events) {
+  if (!m || !m.eventId) return 'Announcement';
+  const ev = (events || []).find(x => x && x.id === m.eventId);
+  const name = ev && String(ev.title || '').trim();
+  return name ? name + ' Announcement' : 'Event announcement';
+}
 function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, noReply, children }) {
   // The swipe lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with Row and the console
   // DM. ⚠ its offset is a REF, never state read at lift time: see the note on the same trap in the kit.
@@ -2081,7 +2090,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
             {m.replyTo && msgById[m.replyTo]
               ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: 274, text: msgById[m.replyTo].content })
               : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
-            {m.noReply ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />Announcement</span> : null}
+            {(m.noReply || m.eventId) ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />{dmAnnounceLabel(m, ctx && ctx.churchEvents)}</span> : null}
             <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>

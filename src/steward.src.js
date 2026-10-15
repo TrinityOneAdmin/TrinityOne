@@ -7704,9 +7704,9 @@ window.Steward = {
       const mine = e.pubkey === pub; const other = mine ? peerHex : e.pubkey;
       // NIP-44 first, then NIP-04 (_dmDecrypt). On total failure SHOW A PLACEHOLDER rather than `return`: a
       // message that vanishes from the thread with no trace is how the church never learns somebody wrote.
-      let text = '', replyTo = null, undecryptable = false;
-      try { const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content)); text = un.text; replyTo = un.replyTo; } catch { text = '🔒 (could not decrypt)'; undecryptable = true; }
-      byId.set(e.id, { id: e.id, mine, text, replyTo, ts: e.created_at, undecryptable }); emit();
+      let text = '', replyTo = null, undecryptable = false, noReply = false, eventId = null;
+      try { const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content)); text = un.text; replyTo = un.replyTo; noReply = !!un.noReply; eventId = un.eventId || null; } catch { text = '🔒 (could not decrypt)'; undecryptable = true; }
+      byId.set(e.id, { id: e.id, mine, text, replyTo, noReply, eventId, ts: e.created_at, undecryptable }); emit();
     };
     const takeRx = (e) => {
       const tid = (e.tags.find(t => t[0] === 'e') || [])[1]; if (!tid) return;
