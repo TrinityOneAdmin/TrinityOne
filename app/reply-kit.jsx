@@ -77,10 +77,23 @@ var TrinityReplyKit = (function () {
   }
 
   // The arrow that appears from under the row as it moves, and fills in once far enough to let go.
+  //
+  // WHERE IT SITS (owner 2026-10-15): the cue is a child of the row, so it rides along with the row's slide.
+  // At `left: -34` it is 8px left of the row's own left edge, and a received (left-aligned) group message sits
+  // flush against the ~16px gutter — so for the first ~18px of the drag the arrow was half off the SCREEN, and
+  // it faded in from opacity 0 at the same time, which read as "a tiny dot clipped by the edge". The fix is
+  // to hold the cue still at CUE_INSET px inside the row's ORIGINAL left edge until the row has moved far
+  // enough to trail it (dx >= 34 + CUE_INSET), then let it trail at -34 exactly as before. So the arrow's
+  // position measured from where the row started is never left of CUE_INSET, and from dx 38 on it is
+  // unchanged for every surface. Users of cue(): Row (group) and DMSwipe (member DM) via useSwipe; called
+  // directly by CareChatSheet (screens-today), StewCareChat (stew-meals), GroupChatModal and StewDmWindow
+  // (stew-dashboard).
+  var CUE_INSET = 4;
+  function cueLeft(dx) { return Math.max(-34, CUE_INSET - dx); }
   function cue(dx) {
     if (!dx) return null;
     return (
-      <div aria-hidden="true" data-reply-cue="1" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / ARM),
+      <div aria-hidden="true" data-reply-cue="1" style={{ position: 'absolute', left: cueLeft(dx), top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / ARM),
         width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: dx >= ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
         <Icon name="reply" size={14} color={dx >= ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
@@ -202,5 +215,5 @@ var TrinityReplyKit = (function () {
     );
   }
 
-  return { ARM: ARM, MAX: MAX, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, tapOffHandler: tapOffHandler, quote: quote, bar: bar };
+  return { ARM: ARM, MAX: MAX, CUE_INSET: CUE_INSET, handlers: handlers, style: style, cue: cue, useSwipe: useSwipe, tapOffHandler: tapOffHandler, quote: quote, bar: bar };
 })();
