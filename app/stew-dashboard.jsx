@@ -4471,6 +4471,7 @@ function DashGroups() {
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
   const [settingsFor, setSettingsFor] = React.useState(null);       // APK: group whose settings sheet is open
+  const [iconFor, setIconFor] = React.useState(null);               // WEB: group whose icon picker is open (the APK uses the settings sheet)
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -4572,6 +4573,7 @@ function DashGroups() {
                 {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             ) : null}
+            <button onClick={(e) => { e.stopPropagation(); setIconFor(raw(it)); }} title="Change icon" aria-label={'Change icon for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center' }}><Icon name={groupIcon(it)} size={15} color="currentColor" /></button>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
@@ -4617,6 +4619,21 @@ function DashGroups() {
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
       {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
+      {iconFor ? (() => {
+        // WEB console: the same GroupIconPicker + the same publish the APK sheet uses (raw document, only `icon` changed).
+        const g = iconFor;
+        return (
+          <div onClick={() => setIconFor(null)} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
+            <div role="dialog" aria-modal="true" aria-label={'Icon for ' + g.name} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '18px 22px 22px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{g.name}</div>
+                <button onClick={() => setIconFor(null)} title="Close" aria-label="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+              </div>
+              <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setIconFor({ ...g, icon: ic }); }} />
+            </div>
+          </div>
+        );
+      })() : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
