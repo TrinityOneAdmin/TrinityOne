@@ -2551,6 +2551,8 @@ function App() {
       delete rsvpUnsureRef.current[eventId];
       setMyRsvps(m => ({ ...m, [eventId]: next }));
       if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
+      // A CONFIRMED answer is acknowledged (E11). Only here, after `sent.ok` — a send that merely fired, or failed, took the arm above.
+      else toast(next === 'going' ? 'You’re going — your church has your answer' : next === 'maybe' ? 'Marked maybe — your church has your answer' : 'Marked can’t make it — your church has your answer');
     },
     // RETURN the promise. This dropped it, so even a handler that awaited could not learn that the church
     // had refused the write — which is how a pending member's "I'm away" became a success toast over nothing.
