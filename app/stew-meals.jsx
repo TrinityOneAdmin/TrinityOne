@@ -700,6 +700,136 @@ function StewCareRequests() {
   );
 }
 
+// WHO HAS SIGNED UP, PER OPEN NEED. The Overview banner counted requests and the need detail named people only
+// once a steward opened it, so a steward never saw WHO had answered. Pure: needs, slots, a name lookup and today.
+// Returns [{ needId, title, names }] for each still-running need that has at least one sign-up, names distinct.
+// Users: the Overview strip in app/stew-dashboard.jsx (window.careSignupSummary) and MealsNeedCard below.
+function careSignupSummary(needs, slots, nameOf, today) {
+  const out = [];
+  for (const n of (needs || [])) {
+    if (!n || (n.endDate && today && n.endDate < today)) continue;
+    const seen = new Set(), names = [];
+    for (const sl of (slots || [])) {
+      if (!sl || sl.needId !== n.id || !sl.pubkey || seen.has(sl.pubkey)) continue;
+      seen.add(sl.pubkey); names.push(nameOf(sl.pubkey));
+    }
+    if (names.length) out.push({ needId: n.id, title: needTitle(n), names });
+  }
+  return out;
+}
+window.careSignupSummary = careSignupSummary;
+
+// THE NEEDS A HELPER CAN BE INVITED TO: still running, readable (a sealed need has no name to put in an invite),
+// and with at least one day nobody has taken or skipped. Pure. [{ id, title, type, openCount }].
+function careOpenNeeds(needs, slots, skips, today) {
+  const out = [];
+  for (const n of (needs || [])) {
+    if (!n || n._sealed || (n.endDate && today && n.endDate < today)) continue;
+    const dates = (Array.isArray(n.dates) && n.dates.length) ? n.dates : mealsDateRange(n.startDate, n.endDate);
+    const taken = new Set([...(slots || []).filter(x => x && x.needId === n.id).map(x => x.isoDate), ...(skips || []).filter(x => x && x.needId === n.id).map(x => x.isoDate)]);
+    const open = dates.filter(d => !taken.has(d) && (!today || d >= today));
+    if (open.length) out.push({ id: n.id, title: needTitle(n), type: mealsTypeLabel(n), openCount: open.length });
+  }
+  return out;
+}
+window.careOpenNeeds = careOpenNeeds;
+
+// INVITE A HELPER TO A NEED. A plain private message that NAMES the need and asks — it signs nobody onto anything
+// (no slot is written; they sign up themselves, which is their consent). Honest result, because the message is
+// the only thing this does: Steward.sendDM answers the event when it reached a relay, `{_queued:true}` when it
+// is waiting to send, and null when nothing was sent (no key / encrypt failed); it can also throw.
+//   -> { ok:true }  sent;   { ok:true, queued:true }  waiting for a connection;   { ok:false }  NOT sent.
+// A caller must say "invited" only for ok && !queued. Users: StewReadyToHelp.
+async function careInvite(sendDM, person, need) {
+  const first = String(person && person.name || '').trim().split(/\s+/)[0];
+  const body = (first ? 'Hi ' + first + ', thank you' : 'Thank you') + ' for offering to help. We have a need you might be able to help with: ' + need.title + ' (' + need.type + '), ' + need.openCount + ' ' + (need.openCount === 1 ? 'day' : 'days') + ' still open. If you can, open Care in the app and sign up for a day that suits you. No pressure either way.';
+  let r = null;
+  try { r = await sendDM(person.pubkey, body); } catch (e) { return { ok: false }; }
+  if (!r) return { ok: false };
+  return r._queued ? { ok: true, queued: true } : { ok: true };
+}
+window.careInvite = careInvite;
+
+const CARE_AVAIL_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare', prayer: 'Prayer', other: 'Other' };
+const careAvailLabel = (t) => CARE_AVAIL_LABEL[t] || (String(t || '').charAt(0).toUpperCase() + String(t || '').slice(1));
+
+// READY TO HELP — members who tapped "I'm here to help" in the member app. A standing list: no steward surface
+// read it before. Collapsed by default, with a count. A CHILD IS NEVER LISTED (the member app filters minors out
+// of the same list for the same reason: being listed invites contact) — and while the children list has not
+// arrived the whole section stays empty, because an empty minors set answers "no" as confidently as a loaded one.
+// A blocked member is not listed either. The name key may not have arrived (the reader then yields nothing and
+// the section is simply absent — never an empty-looking list drawn as "nobody is ready").
+function StewReadyToHelp() {
+  const allowed = (typeof stewCapState === 'function') ? stewCapState('care').allowed : true;
+  const avail = window.useMealsAvail ? window.useMealsAvail() : [];
+  const dir = window.useStewardDirectory ? window.useStewardDirectory() : {};
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
+  const blocked = new Set((window.useStewardBlocked ? window.useStewardBlocked() : []).map(p => String(p || '').toLowerCase()));
+  const needs = window.useMealsNeeds ? window.useMealsNeeds() : [];
+  const slots = window.useMealsSlots ? window.useMealsSlots() : [];
+  const skips = window.useMealsSkips ? window.useMealsSkips() : [];
+  const [open, setOpen] = React.useState(false);
+  const [picking, setPicking] = React.useState(null);   // pubkey whose "which need?" picker is showing
+  const [status, setStatus] = React.useState({});       // pubkey -> { kind: 'ok'|'queued'|'err'|'busy', text }
+  if (!allowed || sg.minorsKnown !== true) return null;
+  const minors = new Set((sg.minors || []).map(x => String(x || '').toLowerCase()));
+  const rows = (avail || []).filter(a => a && a.pubkey && !minors.has(String(a.pubkey).toLowerCase()) && !blocked.has(String(a.pubkey).toLowerCase()));
+  if (!rows.length) return null;
+  const nameOf = (pub) => (dir && dir[pub] && dir[pub].name) || (pub.slice(0, 6) + '…' + pub.slice(-4));
+  const openNeeds = careOpenNeeds(needs, slots, skips, window.todayISO ? window.todayISO() : (typeof todayISO === 'function' ? todayISO() : ''));
+  const invite = (a, need) => {
+    setPicking(null);
+    setStatus(st => ({ ...st, [a.pubkey]: { kind: 'busy', text: 'Sending…' } }));
+    const person = { pubkey: a.pubkey, name: (dir && dir[a.pubkey] && dir[a.pubkey].name) || '' };
+    return Promise.resolve(careInvite((pk, body) => window.Steward.sendDM(pk, body), person, need)).then(r => {
+      setStatus(st => ({ ...st, [a.pubkey]: r.ok && !r.queued ? { kind: 'ok', text: 'Invited — they were sent a message and can sign up themselves' }
+        : r.ok ? { kind: 'queued', text: 'Not delivered yet — it will send when the connection returns' }
+        : { kind: 'err', text: 'Not sent — nothing was delivered. Try again, or use Message.' } }));
+    });
+  };
+  const onInvite = (a) => { if (!openNeeds.length) return; if (openNeeds.length === 1) return invite(a, openNeeds[0]); setPicking(p => p === a.pubkey ? null : a.pubkey); };
+  const dm = (a) => { const m = (dir && dir[a.pubkey]) || {}; window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: a.pubkey, npub: m.npub, name: nameOf(a.pubkey), nip05: m.nip05 } })); };
+  return (
+    <div style={{ marginTop: 14, borderRadius: 14, border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', background: 'color-mix(in oklab, var(--sage) 6%, var(--surface))' }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '12px 14px', border: 'none', background: 'none', fontFamily: 'var(--font-ui)' }}>
+        <Icon name="heart" size={16} color="var(--sage)" />
+        <span style={{ flex: 1, fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>Ready to help · {rows.length}</span>
+        <Icon name="chevR" size={15} color="var(--ink-3)" />
+      </button>
+      {open ? (
+        <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rows.map(a => (
+            <div key={a.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '9px 11px', borderRadius: 11, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{nameOf(a.pubkey)}</div>
+                {(a.tags || []).length ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{a.tags.map(t => <span key={t} style={{ fontSize: 11.5, padding: '2px 8px', borderRadius: 99, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-2)' }}>{careAvailLabel(t)}</span>)}</div> : null}
+                {a.note ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.45 }}>{a.note}</div> : null}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => dm(a)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
+                  <button onClick={() => onInvite(a)} disabled={!openNeeds.length || (status[a.pubkey] && status[a.pubkey].kind === 'busy')} title={openNeeds.length ? 'Ask them to help with an open need' : 'No open needs'} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13, opacity: openNeeds.length ? 1 : 0.5 }}>Invite to a need</button>
+                </div>
+                {!openNeeds.length ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>No open needs</span> : null}
+              </div>
+            </div>
+            {picking === a.pubkey ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '2px 0 4px' }}>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 700 }}>Which need?</div>
+                {openNeeds.map(n => <button key={n.id} onClick={() => invite(a, n)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 11px', fontSize: 13, textAlign: 'left' }}>{n.title} · {n.type} · {n.openCount} open</button>)}
+              </div>
+            ) : null}
+            {status[a.pubkey] ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.45, color: status[a.pubkey].kind === 'err' ? 'var(--clay-deep, #b4462f)' : status[a.pubkey].kind === 'ok' ? 'var(--sage-ink)' : 'var(--ink-2)' }}>{status[a.pubkey].text}</div> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+window.StewReadyToHelp = StewReadyToHelp;
+
 function DashMeals() {
   const needs = window.useMealsNeeds ? window.useMealsNeeds() : [];
   const slots = window.useMealsSlots ? window.useMealsSlots() : [];
@@ -726,8 +856,10 @@ function DashMeals() {
 
       <StewCareRequests />
 
+      <StewReadyToHelp />
+
       {!detail && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14, marginBottom: 6 }}>
           <button onClick={() => setEditing('new')} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Start care</button>
         </div>
       )}

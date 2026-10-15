@@ -49,6 +49,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   const CARETEAM_D = NET + '/careteam:';     // + churchpub — the care-team recipient roster (pubkeys a member seals an "ask for help" request to)
   const CAREREQ_D  = NET + '/carereq:';      // + id — a member's sealed "ask for help" request
   const CARESTATUS_D = NET + '/carereqstatus:'; // + id — the care team's resolution
+  const CAREAVAIL_D = NET + '/careavail:';   // + churchpub — a member's sealed "I'm here to help" listing (member-authored; member app: setCareAvail)
   const CARECHAT_D = NET + '/carechat:';     // + reqId:msgId — a message in the shared thread
 
   const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -517,6 +518,40 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     });
     return () => { try { sub.close(); } catch (e) {} };
   }
+  // ---- "I'm here to help" availability (console side): who has offered to help ----
+  // The member app writes one doc per member (setCareAvail, src/fellowship.src.js): d=careavail:<churchPub>,
+  // tagged ['church', cp], member-signed, SEALED under the church name key. Before this reader NO console
+  // surface showed it. Opening goes through Steward.openChurchDoc (the name-key ring); null = sealed and the
+  // key has not arrived — LEAVE the person as they are (never delete on null) and retry when the ring changes,
+  // exactly as the member-side subscribeCareAvail does. Emits [{ pubkey, tags, note, ts }]. Minors are NOT
+  // filtered here — the surface does it (it holds the children list); this is a plain reader.
+  function subscribeCareAvail(cb) {
+    const cp = activeChurch();
+    if (!S() || !S().subscribeMany || !cp || !S().openChurchDoc) { cb([]); return () => {}; }
+    const dtag = CAREAVAIL_D + cp;
+    const byPub = new Map(), seenTs = new Map(), locked = new Map();
+    let eosed = false;   // sticky: do not blank on a transient empty before EOSE
+    const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; try { cb(v); } catch (e) {} };
+    const handlers = {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d !== dtag) return;
+        const at = e.created_at || 0;
+        if ((seenTs.get(e.pubkey) || 0) > at) return;   // a lagging older copy must not resurrect/replace
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { seenTs.set(e.pubkey, at); locked.delete(e.pubkey); byPub.delete(e.pubkey); emit(); return; }
+        let o = null; try { o = S().openChurchDoc(e.content); } catch (x) { return; }
+        if (o === null) { locked.set(e.pubkey, e); return; }   // key not here yet — leave as-is, retried on key arrival
+        seenTs.set(e.pubkey, at); locked.delete(e.pubkey);
+        if (!o.available) { byPub.delete(e.pubkey); emit(); return; }
+        byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || '').trim(), ts: at });
+        emit();
+      },
+      oneose() { eosed = true; if (byPub.size) emit(); },
+    };
+    const sub = S().subscribeMany([{ kinds: [30078], '#church': [cp], '#d': [dtag] }], handlers);
+    const stopKey = S().onNameKeyRing ? S().onNameKeyRing(() => { for (const e of [...locked.values()]) handlers.onevent(e); }) : () => {};
+    return () => { try { sub.close(); } catch (e) {} try { stopKey(); } catch (e) {} };
+  }
   function setCareRequestStatus(reqId, requesterPub, opts) {
     if (!S() || !S().publishSigned || !S().churchPub || !reqId) return Promise.resolve(null);
     const o = opts || {}; const tags = [['d', CARESTATUS_D + reqId], ['t', NET], ['t', 'carereqstatus'], ['church', S().churchPub]];
@@ -636,7 +671,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // care-team recipient roster (for the "ask for help" seal)
     publishCareTeam, refreshCareTeam, dropPendingCareTeam,
     // "ask for help" requests (console side): triage / approve / decline / thread
-    subscribeCareRequests, setCareRequestStatus, declineCareRequest, approveCareRequest, subscribeCareChat, sendCareChat,
+    subscribeCareRequests, subscribeCareAvail, setCareRequestStatus, declineCareRequest, approveCareRequest, subscribeCareChat, sendCareChat,
     // needs
     publishNeed, removeNeed, subscribeNeeds, openNeed,   // openNeed exported so it is testable against the SHIPPED bundle
     // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)
