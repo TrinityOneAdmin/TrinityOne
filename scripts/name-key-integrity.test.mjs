@@ -173,7 +173,7 @@ function blockRig(have, answer) {   // answer: what the relay says to the blockl
   const ensureM = fnBody(STEWARD, 'async _ensureNameKeyLocked(', '_ensureNameKeyLocked in the shipped bundle');
   const src = `
     let _localBlocked = new Set();
-    let _localBlockedAt = 0; const lsSet = () => {}; const BLOCKED_LAST_LS = 'trinityone.steward.blockedlast.';   // setBlocked keeps a copy on the device (2026-10-02): not this file's question
+    let _localBlockedAt = 0; const lsSet = () => {}; const _blockedSinceStamp = () => {}; const BLOCKED_LAST_LS = 'trinityone.steward.blockedlast.';   // setBlocked keeps a copy on the device (2026-10-02): not this file's question
     let _setBlockedSeq = 0;                 // setBlocked's newest-call counter (an unblock applies on the relay's yes)
     let _nameKeyRing = ['11'.repeat(32)];
     let _nameKeyDocKeys = HAVE;
