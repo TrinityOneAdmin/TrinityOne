@@ -1953,11 +1953,13 @@ function schSendSummary(r) {
   if (r.failed) parts.push(`${r.failed} NOT sent`);
   return `Not everyone was reached: ${parts.join(', ')}.`;
 }
-// B6 (2026-10-15): WHEN "everyone invited" IS A GROUP POST. An event that was created inside a chat group
-// carries e.groupId. If that group is a real conversation — NOT a team roster, NOT a one-way broadcast —
-// then "everyone invited" IS the people in that chat, so the right thing is ONE post into the group (which
-// everyone there already reads, where replies live in the thread) rather than a sealed DM to each person.
-// Teams/broadcasts and church-wide events (no groupId, or a group we can't resolve) keep the DM fan-out.
+// B6 (2026-10-15): WHEN "everyone invited" IS A GROUP POST. An event tied to a group carries e.groupId. When that
+// id matches a group in the list, "everyone invited" IS the people in that room, so the message is ONE post into the
+// room (which its members already read, where replies live in the thread) rather than a sealed DM to each person.
+// This holds for EVERY kind of group — a plain chat group, a team, or a broadcast channel (since 0c827c93; owner,
+// 2026-10-15, confirmed): a team-tied "everyone invited" posts to the team's room ONLY, i.e. to that room's
+// members, not as a church-wide DM. Only a church-wide event (no groupId) or a groupId that matches no group in
+// the list passed in falls back to the per-person DM fan-out (the function returns null for those).
 // Users (rule 2): SchEventMessage only.
 function schEventPostGroup({ event, groups }) {
   const e = event || {};

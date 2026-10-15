@@ -92,7 +92,7 @@ const ROOMS = [
 ];
 const WANT = { 'g-plain': 'chat', 'g-set': 'heart', 'g-bad': 'chat', 't-plain': 'shield', 't-set': 'music', 'b-plain': 'send', 'b-set': 'bell', 'b-bad': 'send' };
 
-async function groupsTab(rooms = ROOMS) {
+async function groupsTab(rooms = ROOMS, native = true) {
   const { React, draw } = miniReact();
   const published = [];
   let captured = null;
@@ -100,7 +100,7 @@ async function groupsTab(rooms = ROOMS) {
     ...ICONS,
     Steward: { publishGroup: (g) => { published.push(g); return Promise.resolve({ ...g, ts: 1 }); }, joinPolicyFresh: () => false, listIsFresh: () => true },
     useStewardGroups: () => rooms, useStewardRosters: () => [], useStewardMembers: () => [],
-    Capacitor: { isNativePlatform: () => true },   // the settings sheet is the steward APP's surface (the web console uses inline row controls)
+    Capacitor: { isNativePlatform: () => native },   // the settings sheet is the steward APP's surface (the web console uses inline row controls)
     useStewardCategories: () => [], dispatchEvent: () => true, addEventListener() {}, removeEventListener() {},
   };
   const stewKeys = ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
@@ -152,6 +152,38 @@ test('console picker, driven from the sheet: picking publishes the WHOLE raw doc
     const raw = ROOMS.find(r => r.id === id);
     assert.deepEqual(g.published[0], { ...raw, icon: 'flame' }, 'what was published was not the raw document + icon (display fields must not leak)');
     assert.deepEqual(find(g.redraw(), n => n.type === IconEl && n.props.size === 20).map(n => n.props.name), ['flame'], 'the sheet header does not show the new choice');
+  }
+});
+
+// WEB console (no Capacitor): the row has no Settings sheet, so the icon picker is an inline row control that opens
+// the SAME GroupIconPicker and publishes through the SAME path as the APK sheet.
+function openWebPicker(g, id) {
+  const it = g.captured().items.find(i => i.id === id);
+  const btn = find(g.captured().renderRight(it), n => n.type === 'button' && /^Change icon for /.test(String((n.props || {})['aria-label'] || '')));
+  assert.equal(btn.length, 1, 'the web row has no Change-icon control for ' + id);
+  btn[0].props.onClick({ stopPropagation() {} });
+  return g.redraw();
+}
+test('WEB console row: carries a Change-icon control showing the room icon, and no Settings sheet', async () => {
+  const g = await groupsTab(ROOMS, false);
+  assert.equal(g.captured().renderInline, undefined, 'the web row grew a Settings sheet control - re-anchor');
+  for (const id of Object.keys(WANT)) {
+    const it = g.captured().items.find(i => i.id === id);
+    const btn = find(g.captured().renderRight(it), n => n.type === 'button' && /^Change icon for /.test(String((n.props || {})['aria-label'] || '')));
+    assert.equal(btn.length, 1, id);
+    assert.deepEqual(find(btn[0], n => n.type === IconEl).map(n => n.props.name), [WANT[id]], id + ' control does not draw the room icon');
+  }
+});
+test('WEB console picker, driven from the row: opens the real picker; picking publishes the WHOLE raw document with only the icon changed', async () => {
+  for (const id of ['g-plain', 't-set', 'b-plain', 'g-bad']) {
+    const g = await groupsTab(ROOMS, false);
+    assert.equal(find(g.redraw(), n => n.type === g.mod.GroupIconPicker).length, 0, 'picker open before it was asked for');
+    const picker = find(openWebPicker(g, id), n => n.type === g.mod.GroupIconPicker);
+    assert.equal(picker.length, 1, id + ': the web control opened no icon picker');
+    picker[0].props.onPick('flame');
+    assert.equal(g.published.length, 1, 'picking an icon published nothing');
+    assert.deepEqual(g.published[0], { ...ROOMS.find(r => r.id === id), icon: 'flame' });
+    assert.equal(find(g.redraw(), n => n.type === g.mod.GroupIconPicker)[0].props.group.icon, 'flame', 'the open picker does not show the new choice');
   }
 });
 
