@@ -420,7 +420,7 @@ test('B5 MEMBER: an event the app does not hold falls back to "Event announcemen
 });
 
 const subDM = fnBody(STW, 'subscribeDMThread(peerHex, onMsgs) {', 'subscribeDMThread');
-async function consoleWindow(bodies, events) {
+async function consoleWindow(bodies, events, { stewards = ['c'.repeat(64)], from = 'c'.repeat(64) } = {}) {
   const { loadComponent } = await import('./console-component-rig.mjs');
   let handler;
   const pool = { subscribeMany: (_r, _f, h) => { handler = h; return { close() {} }; } };
@@ -428,15 +428,15 @@ async function consoleWindow(bodies, events) {
     'a'.repeat(64), new Uint8Array(32), pool, () => [], async (_s, _o, ct) => ct, stw._dmUnwrap);
   const { React, reset, flush } = miniReact();
   const Steward = { subscribeDMThread: lib.subscribeDMThread, sendDM: async () => ({}), reactDM() {}, outboxForPeer: () => [] };
-  const Comp = await loadComponent('app/stew-dashboard.jsx', ['function stewDmAnnounceLabel(', 'function StewDmWindow('], {
-    React, window: { Steward, useStewardEvents: () => events, addEventListener() {}, removeEventListener() {} },
+  const Comp = await loadComponent('app/stew-dashboard.jsx', ['function stewDmAnnounceLabel(', 'function stewDmMayAnnounce(', 'function StewDmWindow('], {
+    React, window: { Steward, useStewardEvents: () => events, useStewardStewards: () => stewards, addEventListener() {}, removeEventListener() {} },
     Icon: () => null, SkBadge: () => null, SK_TINT: { gold: { fg: '#000' } }, nameHandle: () => '', shortNpub: () => 'npub1',
     TrinityReplyKit: { handlers: () => ({}), style: () => ({}), cue: () => null, quote: () => null, replyOnlyDots: () => true, replyDotsMode: () => 'visible', atDots: () => ({ style: {} }), dotsProps: (l, s, base) => ({ style: base }) },
   });
   const draw = () => { reset(); const t = Comp.StewDmWindow({ peer: { pubkey: 'c'.repeat(64), name: 'Ruth' }, offset: 0, onClose() {} }); flush(); return t; };
   draw();
   let n = 0;
-  for (const b of bodies) await handler.onevent({ id: 'm' + (++n), kind: 4, pubkey: 'c'.repeat(64), tags: [], created_at: 1760000000 + n, content: b });
+  for (const b of bodies) await handler.onevent({ id: 'm' + (++n), kind: 4, pubkey: from, tags: [], created_at: 1760000000 + n, content: b });
   await tick();
   return draw;
 }
@@ -446,4 +446,14 @@ test('B5 CONSOLE: the steward DM window labels a message about a known event, fa
   assert.match(r, /Harvest supper Announcement/);
   assert.match(r, /Event announcement/);
   assert.equal((r.match(/nnouncement/g) || []).length, 2);
+});
+
+test('B5 CONSOLE (forged): flags from a peer who is NOT a steward or the church key show no Announcement label', async () => {
+  const draw = await consoleWindow([stw._dmWrap('Send money', null, { noReply: true, eventId: 'ev-1' }), stw._dmWrap('x', null, { noReply: true })], KNOWN, { stewards: ['d'.repeat(64)] });
+  assert.doesNotMatch(reads(draw()), /nnouncement/);
+  assert.match(reads(draw()), /Send money/);
+});
+test('B5 CONSOLE: a message this console sent itself keeps the label even with an empty steward list', async () => {
+  const draw = await consoleWindow([stw._dmWrap('Doors at 6', null, { noReply: true, eventId: 'ev-1' })], KNOWN, { stewards: [], from: 'a'.repeat(64) });
+  assert.match(reads(draw()), /Harvest supper Announcement/);
 });

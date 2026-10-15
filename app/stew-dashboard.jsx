@@ -12673,6 +12673,20 @@ function stewDmAnnounceLabel(m, events) {
   const name = ev && String(ev.title || '').trim();
   return name ? name + ' Announcement' : 'Event announcement';
 }
+// WHO MAY CARRY THE ANNOUNCEMENT LABEL (B5). The no-reply / event flags ride inside the encrypted DM body, so any
+// client can set them on an ordinary message. A message earns the label only if it came from THIS console (`mine`,
+// signed by the key it holds) or its sender is the church key or a steward on the church-signed roster. In this
+// thread a message that is not `mine` was sent by the peer, so the sender is `peerPub`. Everything else renders as a
+// plain message. `stewards` is the list from Steward.subscribeStewards (owner-key checked); `churchKey` may be ''.
+// Users: StewDmWindow only.
+function stewDmMayAnnounce(m, peerPub, stewards, churchKey) {
+  if (!m) return false;
+  if (m.mine) return true;
+  const p = String(peerPub || '').toLowerCase();
+  if (!p) return false;
+  if (churchKey && String(churchKey).toLowerCase() === p) return true;
+  return (Array.isArray(stewards) ? stewards : []).some(x => String(x || '').toLowerCase() === p);
+}
 function StewDmWindow({ peer, offset, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
@@ -12704,6 +12718,8 @@ function StewDmWindow({ peer, offset, onClose }) {
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   const _dmEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // names for the event label on a message
+  const _dmStewards = window.useStewardStewards ? window.useStewardStewards() : [];   // who may carry the Announcement label (stewDmMayAnnounce)
+  const _dmChurchKey = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
   const _threadConn = window.useStewardConn ? window.useStewardConn() : 0;
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey, _threadConn]);
   // ⚠ THE OTHER HALF OF THE OUTBOX, AND IT LIVED NOWHERE. The engine has had outboxForPeer, retryQueuedDM
@@ -12787,7 +12803,7 @@ function StewDmWindow({ peer, offset, onClose }) {
                 {m.replyTo && byId[m.replyTo]
                   ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: byId[m.replyTo].text })
                   : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
-                {(m.noReply || m.eventId) ? <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px' }}>{stewDmAnnounceLabel(m, _dmEvents)}</span> : null}
+                {((m.noReply || m.eventId) && stewDmMayAnnounce(m, peer.pubkey, _dmStewards, _dmChurchKey)) ? <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px' }}>{stewDmAnnounceLabel(m, _dmEvents)}</span> : null}
                 <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
                 {canReply(m) ? (
                   <button data-dm-menu="1" onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={menuFor === m.id}
