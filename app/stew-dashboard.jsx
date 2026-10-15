@@ -3402,6 +3402,25 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     try { u = window.StewardMeals.subscribeCareRequests(list => { setOpenCareReqs((list || []).filter(r => r && r.status === 'open').length); setCareNewMsgs((list || []).filter(r => r && r.status !== 'open' && r.newMessage).length); }); } catch (e) {}
     return () => { try { u && u(); } catch (e) {} };
   }, [careAllowed, _ovConn]);
+  // WHO HAS ANSWERED, not just that someone asked. Needs a steward opened that members have since signed up to:
+  // one line per need, naming the people (careSignupSummary, app/stew-meals.jsx — a pure function). Nothing on
+  // the Overview named a responder before; the names lived two clicks away in the need's detail.
+  const _sgnNeeds = window.useMealsNeeds ? window.useMealsNeeds() : [];
+  const _sgnSlots = window.useMealsSlots ? window.useMealsSlots() : [];
+  const _sgnDir = window.useStewardDirectory ? window.useStewardDirectory() : {};
+  const careSignups = (careAllowed && window.careSignupSummary)
+    ? window.careSignupSummary(_sgnNeeds, _sgnSlots, (pk) => (_sgnDir && _sgnDir[pk] && _sgnDir[pk].name) || (String(pk).slice(0, 6) + '…' + String(pk).slice(-4)), window.todayISO ? window.todayISO() : '').slice(0, 4)
+    : [];
+  const careSignupBanner = careSignups.length ? (
+    <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 28%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
+      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={21} color="currentColor" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>People have signed up to help</div>
+        {careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>)}
+      </div>
+      <Icon name="chevR" size={15} color="var(--ink-3)" />
+    </button>
+  ) : null;
   const careReqBanner = (openCareReqs || careNewMsgs) ? (
     <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={21} color="currentColor" /></div>
@@ -3528,7 +3547,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{verseBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3537,7 +3556,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{verseBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3546,6 +3565,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       {pendingBanner}
       {careReqBanner}
+      {careSignupBanner}
       {stewardReqBanner}
       {verseBanner}
       {stat}

@@ -9106,6 +9106,12 @@ window.Steward = {
     return '';
   },
   nameKeyReady() { return _nameKeyReady(); },
+  // Open a document sealed under the church name key (cleartext ones pass straight through); null = sealed and we
+  // hold no key for it YET. onNameKeyRing(fn) fires when the ring changes, so a reader can retry what it could not
+  // open — StewardMeals.subscribeCareAvail is the user (steward-meals is a separate bundle and cannot see the
+  // module-private _openChurchDoc / _onNameKeyRing).
+  openChurchDoc(content) { return _openChurchDoc(content); },
+  onNameKeyRing(fn) { return _onNameKeyRing(fn); },
   // Is this team's roster on show only as a copy this console cannot open? StewardMeals.publishCareTeam refuses then.
   rosterLocked(teamId) { return !!teamId && _addrLocked(ROSTER_D + teamId); },
   // Why the last calendar save (roster, rota, service, run sheet, room, booking) came back null — see _saveFailed.

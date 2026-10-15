@@ -324,6 +324,7 @@ window.useMealsSettings = makeSub(ME, 'subscribeSettings', () => ({ enabled: (wi
 window.useMealsNeeds = makeSub(ME, 'subscribeNeeds', () => []);
 window.useMealsSlots = makeSub(ME, 'subscribeSlots', () => []);
 window.useMealsSkips = makeSub(ME, 'subscribeSkips', () => []);
+window.useMealsAvail = makeSub(ME, 'subscribeCareAvail', () => []);   // members who tapped "I'm here to help" (sealed; opens once the name key lands)
 })();
 
 // ── hooks that don't fit the factory (custom callback / derived / polling / two-effect) ──

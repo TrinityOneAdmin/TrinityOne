@@ -700,6 +700,73 @@ function StewCareRequests() {
   );
 }
 
+// WHO HAS SIGNED UP, PER OPEN NEED. The Overview banner counted requests and the need detail named people only
+// once a steward opened it, so a steward never saw WHO had answered. Pure: needs, slots, a name lookup and today.
+// Returns [{ needId, title, names }] for each still-running need that has at least one sign-up, names distinct.
+// Users: the Overview strip in app/stew-dashboard.jsx (window.careSignupSummary) and MealsNeedCard below.
+function careSignupSummary(needs, slots, nameOf, today) {
+  const out = [];
+  for (const n of (needs || [])) {
+    if (!n || (n.endDate && today && n.endDate < today)) continue;
+    const seen = new Set(), names = [];
+    for (const sl of (slots || [])) {
+      if (!sl || sl.needId !== n.id || !sl.pubkey || seen.has(sl.pubkey)) continue;
+      seen.add(sl.pubkey); names.push(nameOf(sl.pubkey));
+    }
+    if (names.length) out.push({ needId: n.id, title: needTitle(n), names });
+  }
+  return out;
+}
+window.careSignupSummary = careSignupSummary;
+
+const CARE_AVAIL_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare', prayer: 'Prayer', other: 'Other' };
+const careAvailLabel = (t) => CARE_AVAIL_LABEL[t] || (String(t || '').charAt(0).toUpperCase() + String(t || '').slice(1));
+
+// READY TO HELP — members who tapped "I'm here to help" in the member app. A standing list: no steward surface
+// read it before. Collapsed by default, with a count. A CHILD IS NEVER LISTED (the member app filters minors out
+// of the same list for the same reason: being listed invites contact) — and while the children list has not
+// arrived the whole section stays empty, because an empty minors set answers "no" as confidently as a loaded one.
+// A blocked member is not listed either. The name key may not have arrived (the reader then yields nothing and
+// the section is simply absent — never an empty-looking list drawn as "nobody is ready").
+function StewReadyToHelp() {
+  const allowed = (typeof stewCapState === 'function') ? stewCapState('care').allowed : true;
+  const avail = window.useMealsAvail ? window.useMealsAvail() : [];
+  const dir = window.useStewardDirectory ? window.useStewardDirectory() : {};
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
+  const blocked = new Set((window.useStewardBlocked ? window.useStewardBlocked() : []).map(p => String(p || '').toLowerCase()));
+  const [open, setOpen] = React.useState(false);
+  if (!allowed || sg.minorsKnown !== true) return null;
+  const minors = new Set((sg.minors || []).map(x => String(x || '').toLowerCase()));
+  const rows = (avail || []).filter(a => a && a.pubkey && !minors.has(String(a.pubkey).toLowerCase()) && !blocked.has(String(a.pubkey).toLowerCase()));
+  if (!rows.length) return null;
+  const nameOf = (pub) => (dir && dir[pub] && dir[pub].name) || (pub.slice(0, 6) + '…' + pub.slice(-4));
+  const dm = (a) => { const m = (dir && dir[a.pubkey]) || {}; window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: a.pubkey, npub: m.npub, name: nameOf(a.pubkey), nip05: m.nip05 } })); };
+  return (
+    <div style={{ marginTop: 14, borderRadius: 14, border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', background: 'color-mix(in oklab, var(--sage) 6%, var(--surface))' }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '12px 14px', border: 'none', background: 'none', fontFamily: 'var(--font-ui)' }}>
+        <Icon name="heart" size={16} color="var(--sage)" />
+        <span style={{ flex: 1, fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>Ready to help · {rows.length}</span>
+        <Icon name="chevR" size={15} color="var(--ink-3)" />
+      </button>
+      {open ? (
+        <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rows.map(a => (
+            <div key={a.pubkey} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{nameOf(a.pubkey)}</div>
+                {(a.tags || []).length ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{a.tags.map(t => <span key={t} style={{ fontSize: 11.5, padding: '2px 8px', borderRadius: 99, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-2)' }}>{careAvailLabel(t)}</span>)}</div> : null}
+                {a.note ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.45 }}>{a.note}</div> : null}
+              </div>
+              <button onClick={() => dm(a)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13, flexShrink: 0 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+window.StewReadyToHelp = StewReadyToHelp;
+
 function DashMeals() {
   const needs = window.useMealsNeeds ? window.useMealsNeeds() : [];
   const slots = window.useMealsSlots ? window.useMealsSlots() : [];
@@ -725,6 +792,8 @@ function DashMeals() {
       <SafetyCheckPanel />
 
       <StewCareRequests />
+
+      <StewReadyToHelp />
 
       {!detail && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>

@@ -63,6 +63,7 @@
     const CARETEAM_D = NET + "/careteam:";
     const CAREREQ_D = NET + "/carereq:";
     const CARESTATUS_D = NET + "/carereqstatus:";
+    const CAREAVAIL_D = NET + "/careavail:";
     const CARECHAT_D = NET + "/carechat:";
     const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     const now = () => Math.floor(Date.now() / 1e3);
@@ -557,6 +558,78 @@
         }
       };
     }
+    function subscribeCareAvail(cb) {
+      const cp = activeChurch();
+      if (!S() || !S().subscribeMany || !cp || !S().openChurchDoc) {
+        cb([]);
+        return () => {
+        };
+      }
+      const dtag = CAREAVAIL_D + cp;
+      const byPub = /* @__PURE__ */ new Map(), seenTs = /* @__PURE__ */ new Map(), locked = /* @__PURE__ */ new Map();
+      let eosed = false;
+      const emit = () => {
+        const v = [...byPub.values()];
+        if (!eosed && !v.length) return;
+        try {
+          cb(v);
+        } catch (e) {
+        }
+      };
+      const handlers = {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== dtag) return;
+          const at = e.created_at || 0;
+          if ((seenTs.get(e.pubkey) || 0) > at) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            seenTs.set(e.pubkey, at);
+            locked.delete(e.pubkey);
+            byPub.delete(e.pubkey);
+            emit();
+            return;
+          }
+          let o = null;
+          try {
+            o = S().openChurchDoc(e.content);
+          } catch (x) {
+            return;
+          }
+          if (o === null) {
+            locked.set(e.pubkey, e);
+            return;
+          }
+          seenTs.set(e.pubkey, at);
+          locked.delete(e.pubkey);
+          if (!o.available) {
+            byPub.delete(e.pubkey);
+            emit();
+            return;
+          }
+          byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), ts: at });
+          emit();
+        },
+        oneose() {
+          eosed = true;
+          if (byPub.size) emit();
+        }
+      };
+      const sub = S().subscribeMany([{ kinds: [30078], "#church": [cp], "#d": [dtag] }], handlers);
+      const stopKey = S().onNameKeyRing ? S().onNameKeyRing(() => {
+        for (const e of [...locked.values()]) handlers.onevent(e);
+      }) : () => {
+      };
+      return () => {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+        try {
+          stopKey();
+        } catch (e) {
+        }
+      };
+    }
     function setCareRequestStatus(reqId, requesterPub, opts) {
       if (!S() || !S().publishSigned || !S().churchPub || !reqId) return Promise.resolve(null);
       const o = opts || {};
@@ -735,6 +808,7 @@
       dropPendingCareTeam,
       // "ask for help" requests (console side): triage / approve / decline / thread
       subscribeCareRequests,
+      subscribeCareAvail,
       setCareRequestStatus,
       declineCareRequest,
       approveCareRequest,
