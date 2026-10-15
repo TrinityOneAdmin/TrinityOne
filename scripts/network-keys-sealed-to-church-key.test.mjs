@@ -42,7 +42,7 @@ test('netKeys in the bundle decrypts sealedMnemonic with churchSk', () => {
 });
 
 test('lock clears churchSk so sealed mnemonics cannot be decrypted', () => {
-  const fn = fnBody(STEWARD, 'lock()', 'lock');
+  const fn = fnBody(STEWARD, 'lock(reason)', 'lock');
   assert.match(fn, /churchSk\s*=\s*null/,
     'lock() does not clear churchSk — a locked console can still decrypt sealed network mnemonics');
 });

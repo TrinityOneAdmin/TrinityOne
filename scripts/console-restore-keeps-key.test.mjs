@@ -109,7 +109,7 @@ test('restoreKey clears the state scoped to the church it just replaced', () => 
 });
 
 test('lock() refuses to discard a seed that has never been persisted', () => {
-  const fn = fnBody(STEWARD, 'lock()', 'Steward.lock');
+  const fn = fnBody(STEWARD, 'lock(reason)', 'Steward.lock');
   assert.match(fn, /if\s*\(\s*needsPin\s*\)\s*return/,
     'lock() nulls currentMnemonic. While needsPin is set that is the only copy of the church key, so the ' +
     '10-minute idle timer destroys the church from the forced-PIN screen.');
