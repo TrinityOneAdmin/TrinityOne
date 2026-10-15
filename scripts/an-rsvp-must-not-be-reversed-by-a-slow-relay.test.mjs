@@ -229,3 +229,25 @@ test('every caller of setEventRsvp reads .ok — truth-testing it would record a
       'a caller does not check `' + v + '.ok` — it must, or delivery is never actually confirmed');
   }
 });
+
+// ── E11: A CONFIRMED ANSWER IS ACKNOWLEDGED, AN UNCONFIRMED ONE IS NOT ───────────────────────────────────
+// Runs the shipped setRsvp (lifted, not matched). The toast helper is the app's own `toast`, which collapses itself.
+test('E11: a confirmed Going / Maybe / No each toast once, and say the church has it', async () => {
+  for (const v of ['going', 'maybe', 'no']) {
+    const s = screen({ results: [OK] });
+    await s.tap(v);
+    assert.equal(s.toasts.length, 1, v + ': a confirmed RSVP gave ' + s.toasts.length + ' toasts: ' + JSON.stringify(s.toasts));
+    assert.match(s.toasts[0], /your church has your answer/, v + ': ' + s.toasts[0]);
+    assert.ok(!/withdrawn|couldn’t/i.test(s.toasts[0]), v + ': wrong sentence: ' + s.toasts[0]);
+  }
+});
+
+test('E11: NO success toast when the RSVP was not confirmed (unconfirmed, refused, not-sent)', async () => {
+  for (const r of [UNCONFIRMED, NOTSENT, { ok: false, reason: 'refused' }]) {
+    const s = screen({ results: [r] });
+    await s.tap('going');
+    assert.ok(!s.toasts.some(t => /your church has your answer/.test(t)),
+      'SUCCESS TOAST OVER A SEND THAT WAS NOT CONFIRMED (' + r.reason + '): ' + JSON.stringify(s.toasts));
+    assert.equal(s.toasts.length, 1, 'exactly the failure sentence expected: ' + JSON.stringify(s.toasts));
+  }
+});
