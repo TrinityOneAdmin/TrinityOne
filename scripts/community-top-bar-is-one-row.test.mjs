@@ -4,7 +4,8 @@
 // Owner decision (task #6): on the Community tab the church pill used to sit full-width on its own line with
 // Search / Direct messages / the profile avatar on a second, right-aligned line. They now share ONE row; the
 // pill takes the width the icons leave and ellipsises the church name. A church with a brand BANNER keeps the
-// full-bleed 3:1 image (it cannot sit inline) with the icons in their own row beneath it, as before.
+// full-bleed 3:1 image, with the church name at the TOP of it and the three icons FLOATING OVER the banner in line
+// with the name (item 13; they used to drop to their own row beneath the image, and the name sat at the bottom).
 //
 // CLAUDE.md rule 3: nothing here matches text in app/*.jsx. The REAL ChatScreen, ChurchPill, ChurchBadge,
 // IconBtn, UserAvatar and Icon are compiled and rendered through scripts/render-jsx-screen.mjs; the tree is
@@ -160,6 +161,7 @@ async function rects(i) {
     const banner = q('button[style*="aspect-ratio"]');
     return JSON.stringify({ vw: document.documentElement.clientWidth, mode: bar && bar.getAttribute('data-top-bar'),
       bar: box(bar), sel: box(sel), banner: box(banner), search: box(btn('Search')), dm: box(btn('Direct messages')), me: box(btn('Your anonymous identity')),
+      nameBox: box(nameEl), reach: [btn('Search'), btn('Direct messages'), btn('Your anonymous identity')].map(b => { if (!b) return false; const r = b.getBoundingClientRect(); const t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!t && b.contains(t); }),
       name: nameEl ? { clipped: nameEl.scrollWidth > nameEl.clientWidth, h: Math.round(nameEl.getBoundingClientRect().height) } : null }); })()`;
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   assert.ok(!(r.result && r.result.exceptionDetails), 'probe threw: ' + JSON.stringify(r.result && r.result.exceptionDetails || {}).slice(0, 300));
@@ -199,7 +201,16 @@ for (const [i, c] of CASES.entries()) {
     } else {
       assert.equal(m.mode, 'banner');
       assert.ok(m.banner && m.banner.w >= m.vw - 2, `banner is not full width (${m.banner && m.banner.w}px of ${m.vw}px)`);
-      assert.ok(m.search.y >= m.banner.bottom - 1, 'icons should sit beneath the banner');
+      // ITEM 13: name at the TOP of the banner block, icons floating over the banner in line with it, still tappable.
+      assert.ok(m.nameBox, 'church name not found');
+      assert.ok(m.nameBox.y < m.banner.y + m.banner.h / 2, `the church name should sit in the top half of the banner (name y ${m.nameBox.y}, banner ${m.banner.y}..${m.banner.bottom})`);
+      for (const k of ['search', 'dm', 'me']) {
+        assert.ok(m[k].y >= m.banner.y && m[k].bottom <= m.banner.bottom, `${k} should float OVER the banner, not sit below it (${m[k].y}..${m[k].bottom} vs ${m.banner.y}..${m.banner.bottom})`);
+      }
+      const nameMid = m.nameBox.y + m.nameBox.h / 2, iconMid = m.search.y + m.search.h / 2;
+      assert.ok(Math.abs(nameMid - iconMid) <= 20, `icons should be in line with the name (name mid ${nameMid}, icon mid ${iconMid})`);
+      assert.ok(m.nameBox.right <= m.search.x, `the church name (ends ${m.nameBox.right}) runs under the icons (start ${m.search.x})`);
+      assert.deepEqual(m.reach, [true, true, true], 'every floated icon must be the element hit at its own centre (reachable, not covered by the banner button)');
     }
   });
 }
