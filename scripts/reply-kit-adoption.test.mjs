@@ -45,7 +45,8 @@ test('Row: dragging right shows the arrow and moves the row; touch-action is pan
   s.props.onTouchMove(touch(130, 301));
   t = draw(mod.Row, props);
   assert.equal(cues(t).length, 1, 'no reply arrow while dragging a group message');
-  assert.match(swiper(t).props.style.transform, /translateX\(30px\)/);
+  assert.match(swiper(t).props.style.translate, /^30px\b/, 'the row follows the finger via the `translate` property');
+  assert.ok(!swiper(t).props.style.transform, 'the slide must NOT use `transform` — the trinityFade mount animation (to{transform:none}, fill both) overrides it, so the message never slid (bug 2026-10-15)');
   // lift past the arm with NO redraw between move and lift
   const s2 = swiper(t);
   s2.props.onTouchMove(touch(170, 302));

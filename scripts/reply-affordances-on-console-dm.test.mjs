@@ -103,8 +103,8 @@ test('STEP 1: dragging a row right moves it and shows the reply arrow; before th
   w.rows(w.draw())[0].props.onTouchMove(touch(40, 12));
   const t1 = w.draw();
   assert.equal(w.cues(t1).length, 1, 'dragging right shows no reply arrow — the swipe is invisible');
-  assert.match(w.rows(t1)[0].props.style.transform, /translateX\(30px\)/, 'the row does not follow the finger');
-  assert.equal(w.rows(t1)[1].props.style.transform, '', 'a different row moved');
+  assert.match(w.rows(t1)[0].props.style.translate, /^30px\b/, 'the row does not follow the finger');
+  assert.equal(w.rows(t1)[1].props.style.translate, '', 'a different row moved');
 });
 
 test('STEP 1: lifting past the arm replies WITH NO REDRAW between move and lift (the stale-offset race); short does not', async () => {

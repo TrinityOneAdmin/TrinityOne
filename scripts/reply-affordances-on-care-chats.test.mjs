@@ -67,7 +67,7 @@ for (const which of ['member', 'steward']) {
     r.props.onTouchMove(touch(40, 12));
     const t1 = w.d();
     assert.equal(w.cues(t1).length, 1, 'no reply arrow while dragging');
-    assert.match(w.rows(t1)[0].props.style.transform, /translateX\(30px\)/);
+    assert.match(w.rows(t1)[0].props.style.translate, /^30px\b/);
     w.rows(t1)[0].props.onTouchMove(touch(70, 12));
     w.rows(t1)[0].props.onTouchEnd({ changedTouches: [{ clientX: 70, clientY: 12 }] });
     const t2 = w.d();

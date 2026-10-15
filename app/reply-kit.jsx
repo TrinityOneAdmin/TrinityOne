@@ -73,7 +73,14 @@ var TrinityReplyKit = (function () {
   // compositor NOT to treat a horizontal drag as a pan it owns (React's touch listeners are passive, so
   // preventDefault() cannot do this job — the CSS has to). Spread it into the row's style.
   function style(dx) {
-    return { touchAction: 'pan-y', transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' };
+    // SLIDE WITH THE `translate` PROPERTY, NOT `transform`. A member message row also carries the trinityFade
+    // mount animation, and trinityFade ends on `to { transform: none }` with fill `both`, which PERMANENTLY
+    // overrides any inline `transform` on the same element — so the bubble never slid, though the reply still
+    // fired (the handler reads swipe.current.dx, not the paint). The `translate` property composes WITH
+    // `transform` instead of being overridden by it. Proven on the Oppo: inline `transform: translateX(60px)`
+    // moved the row 0px; `translate: 60px 0` moved it 60px. The console windows have no such animation and slide
+    // either way, so this is safe for every user of style() (Row + DMSwipe here; GroupChatModal + StewDmWindow).
+    return { touchAction: 'pan-y', translate: dx ? (dx + 'px 0') : '', transition: dx ? '' : 'translate .18s ease' };
   }
 
   // The arrow that appears from under the row as it moves, and fills in once far enough to let go.
