@@ -18245,11 +18245,13 @@ zoo`.split("\n");
       available: () => !!isNative(),
       purgeLegacy,
       clear,
+      // THREE-VALUED. `unknown` = the store did not answer (the read is TRANSIENT): we cannot say whether a record
+      // exists, so the caller must NOT treat it as "no record". `active` is true only for a record we have read.
       async status() {
         const r = await read();
-        return { available: !!isNative(), active: !!r };
+        const unknown = r === TRANSIENT;
+        return { available: !!isNative(), active: !!r && !unknown, unknown };
       },
-      // transient → active (record kept)
       // Re-arm replay after an IDLE lock (see `replayed`).
       rearm() {
         replayed = false;
@@ -18292,14 +18294,14 @@ zoo`.split("\n");
           const { S } = await secure();
           await S.set(STAY_SS, payload);
           const back = await S.get(STAY_SS);
-          if (back == null || String(back) !== payload) {
+          if (back == null) return false;
+          if (String(back) !== payload) {
             await clear();
             return false;
           }
           return true;
         } catch (e) {
           console.warn("[steward] stay-open save failed", e);
-          await clear();
           return false;
         }
       }
@@ -19569,6 +19571,7 @@ zoo`.split("\n");
     },
     async unlock(pin) {
       window.Steward.deviceKeyLost = false;
+      window.Steward.unlockStoreMiss = false;
       let raw;
       try {
         raw = await encBlobRaw();
@@ -19579,7 +19582,11 @@ zoo`.split("\n");
         }
         throw e;
       }
-      if (!raw) return lsGet(ENC_LS) ? false : true;
+      if (!raw) {
+        const marker = !!lsGet(ENC_LS);
+        if (marker) window.Steward.unlockStoreMiss = true;
+        return marker ? false : true;
+      }
       try {
         const o = JSON.parse(raw);
         const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));

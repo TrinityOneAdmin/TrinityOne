@@ -819,6 +819,10 @@ function StewardUnlock() {
   // for this church, so the box tells the truth after a lock instead of always starting unticked.
   const [stayAvail, setStayAvail] = useSt(false);
   const [stayOpen, setStayOpen] = useSt(false);
+  // Has the steward themselves ticked or unticked the box? The box is only ever DELETED over by a touched untick:
+  // an untouched box that merely drew unticked (a store that answered null, a submit before status resolved) says
+  // nothing about what the steward wants, and used to delete a live 30-day record.
+  const stayTouched = React.useRef(false);
   const [waitLeft, setWaitLeft] = useSt(() => { const g = readGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
   const [lostKey, setLostKey] = useSt(false);
   // A typed PIN has PRIORITY over the automatic stay-open replay. `auto` records whether the replay owns `busy`
@@ -864,8 +868,11 @@ function StewardUnlock() {
     document.addEventListener('visibilitychange', onVis);
     Promise.resolve(S.stayOpenStatus ? S.stayOpenStatus() : null).then(st => {
       if (dead() || !st) return;
-      setStayAvail(!!st.available); setStayOpen(!!(st.available && st.active));
-      if (!st.available || !st.active || !S.unlockStayOpen) return;
+      // st.unknown: the store did not answer. Draw the box TICKED (a record is probably there) and go down the
+      // retry/backoff path - never the "no record" path.
+      const live = !!(st.active || st.unknown);
+      setStayAvail(!!st.available); setStayOpen(!!(st.available && live));
+      if (!st.available || !live || !S.unlockStayOpen) return;
       setAuto(true); setBusy(true);
       return attempt();
     }).catch(() => { if (!dead()) release(); });
@@ -895,8 +902,13 @@ function StewardUnlock() {
       try {
         if (window.Steward.setStayOpen) {
           const want = stayAvail && stayOpen;
-          const done = await window.Steward.setStayOpen(pin, want);
-          if (!want && done === false && window.Steward.clearStayOpen) await window.Steward.clearStayOpen();
+          // Only a ticked box saves, and only a box the steward UNTICKED deletes. Untouched + unticked means "the
+          // screen did not know" (null read, or submitted before status resolved): leave the record alone.
+          if (want) await window.Steward.setStayOpen(pin, true);
+          else if (stayTouched.current) {
+            const done = await window.Steward.setStayOpen(pin, false);
+            if (done === false && window.Steward.clearStayOpen) await window.Steward.clearStayOpen();
+          }
         }
       } catch (e) {}
       return;
@@ -915,6 +927,12 @@ function StewardUnlock() {
       setBusy(false); setPin('');
       setLostKey(true);
       setErr('This computer’s secure storage isn’t responding, so the console can’t tell whether a church key is stored here. Restart the console to try again — and if it keeps happening, restore from your 12 words rather than setting up a new church, which would replace a key that may still be there.');
+      return;
+    }
+    if (window.Steward.unlockStoreMiss === true) {   // === true: only the engine’s own flag
+      // The secure store gave back nothing while a church key is on this device: not a wrong PIN, so no lockout.
+      setBusy(false); setPin('');
+      setErr('Secure storage didn’t answer — try again.');
       return;
     }
     if (window.Steward.deviceKeyLost) {
@@ -947,7 +965,7 @@ function StewardUnlock() {
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}{blocked ? ' (' + waitLeft + 's)' : ''}</div> : null}
         {stayAvail ? (
           <label style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 14, cursor: 'pointer', textAlign: 'left' }}>
-            <input type="checkbox" aria-label="Stay open for 30 days" checked={stayOpen} onChange={e => setStayOpen(e.target.checked)} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
+            <input type="checkbox" aria-label="Stay open for 30 days" checked={stayOpen} onChange={e => { stayTouched.current = true; setStayOpen(e.target.checked); }} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
             <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
               Stay open for <b>30 days</b>.<br />
               <span style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>Anyone who can unlock this phone can open this console and act as the church, even after it locks itself.</span>
