@@ -299,7 +299,8 @@ function miniBtn() {
 const ROOM_KIND_LABEL = { Broadcast: 'From your church', Team: 'Team', Group: 'Group' };
 const roomKindLabel = (g) => (g && ROOM_KIND_LABEL[g.kind]) || (g && g.kind) || 'Group';
 // the icon the steward console has always used for a broadcast room, so the two surfaces agree
-const roomIcon = (g) => (g && g.broadcast) ? 'send' : (g && g.team) ? 'shield' : (g && g.prayer) ? 'pray' : 'chat';
+// A steward-chosen icon (validated against the allowlist on READ) wins; an absent or unknown one falls back to the kind's default.
+const roomIcon = (g) => (g && window.roomIconOk && window.roomIconOk(g.icon)) || ((g && g.broadcast) ? 'send' : (g && g.team) ? 'shield' : (g && g.prayer) ? 'pray' : 'chat');
 
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
@@ -379,7 +380,7 @@ function ChatScreen({ ctx }) {
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
-        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category, icon: g.icon,
           // CARRY THE PERMISSION FIELDS. This map builds a NEW object from an explicit list, so anything
           // not named here is dropped — and `members` below is deliberately turned into a COUNT. The
           // event-permission check needs the church's chosen tier, the group's named leaders and, for an

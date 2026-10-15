@@ -3194,7 +3194,7 @@ function NewPostModal({ onClose }) {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {targets.map(g => (
                 <button key={g.id} onClick={() => setTarget(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: '1px solid ' + (target === g.id ? 'var(--clay)' : 'var(--line)'), background: target === g.id ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: target === g.id ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-                  <Icon name={g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat'} size={13} color="currentColor" />{g.name}{g.kind === 'team' ? <span style={{ fontSize: 10, fontWeight: 800, opacity: .6, letterSpacing: '.4px' }}>TEAM</span> : null}</button>
+                  <Icon name={groupIcon(g)} size={13} color="currentColor" />{g.name}{g.kind === 'team' ? <span style={{ fontSize: 10, fontWeight: 800, opacity: .6, letterSpacing: '.4px' }}>TEAM</span> : null}</button>
               ))}
             </div>
           </div>
@@ -4182,7 +4182,7 @@ function GroupChatModal({ group, onClose }) {
   return (
     <div style={{ width: '100%', maxWidth: 'calc(100vw - 32px)', height: 480, maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '16px 16px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenRise .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
-          <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={isTeam ? (group.icon || 'shield') : group.kind === 'broadcast' ? 'send' : 'chat'} size={19} /></div>
+          <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={groupIcon(group)} size={19} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{group.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{isTeam ? 'Team chat' : group.kind === 'broadcast' ? 'Broadcast' : 'Group chat'} · you post as the church</div></div>
           <button onClick={() => setComposeEvt(v => !v)} title="Schedule an event for this group" style={{ border: 'none', background: composeEvt ? 'var(--clay-soft)' : 'var(--clay)', color: composeEvt ? 'var(--clay-ink)' : '#fff', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}><Icon name="calPlus" size={15} color="currentColor" /> Event</button>
           <button onClick={onClose} title="Close chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
@@ -4488,7 +4488,7 @@ function DashGroups() {
   const raw = (g) => (g && rawById.get(g.id)) || g;
   const rawByIdRef = React.useRef(rawById); rawByIdRef.current = rawById;   // the dialogs read THIS at save time, not the map from the render they opened in
   const currentOf = (g) => () => (g && rawByIdRef.current.get(g.id)) || null;   // null = deleted meanwhile; the dialogs then publish nothing
-  const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: groupIcon(g), fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
     const f = [];
@@ -4627,7 +4627,7 @@ function DashGroups() {
           <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
             <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat'} size={20} /></div>
+                <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={groupIcon(g)} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{g.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{g.kind === 'team' ? 'Team' : g.kind === 'broadcast' ? 'Broadcast' : 'Group'} settings</div></div>
                 <button onClick={() => setSettingsFor(null)} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
               </div>
@@ -4636,6 +4636,8 @@ function DashGroups() {
                 <div style={sLabel}><Icon name={g.childsafe ? 'check' : 'pray'} size={18} color={g.childsafe ? 'var(--sage)' : 'var(--ink-3)'} /><div><div style={sName}>Child-safe</div><div style={sSub}>{g.childsafe ? 'Members marked as a child can join' : 'Hidden from children'}</div></div></div>
                 <input type="checkbox" className="sw" checked={!!g.childsafe} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe — the relay didn\'t accept it.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
               </div>
+
+              <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setSettingsFor({ ...g, icon: ic }); }} />
 
               {g.kind !== 'team' ? (
                 <div style={sToggle}>
@@ -10621,6 +10623,27 @@ window.DashSermons = DashSermons;
 // the church add its own — Testimony, Praise, … — published as one church-signed doc. Icon/accent come from
 // fixed allowlists (no free-text CSS/icons). A tag's id is STABLE once saved, so renaming its label never
 // orphans messages already flagged with it.
+// The icon a chat room shows on the console: the steward's chosen one when it is on the allowlist, else
+// today's default for the room's kind. ONE helper for every place the console draws a room's icon.
+function groupIcon(g) {
+  const ok = window.roomIconOk ? window.roomIconOk(g && g.icon) : '';
+  return ok || (g && g.kind === 'team' ? 'shield' : g && g.kind === 'broadcast' ? 'send' : 'chat');
+}
+// The Icon row in a room's settings sheet: a grid of the allowlisted icons; picking one calls onPick(name).
+function GroupIconPicker({ group, onPick }) {
+  const cur = groupIcon(group);
+  const list = window.ROOM_ICONS || [];
+  return (
+    <div style={{ padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>Icon</div>
+      <div role="group" aria-label="Room icon" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        {list.map(ic => (
+          <button key={ic} onClick={() => onPick(ic)} aria-label={'Icon ' + ic} aria-pressed={cur === ic} style={{ width: 34, height: 34, borderRadius: 9, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: cur === ic ? '1.5px solid var(--clay)' : '1px solid var(--line)', background: cur === ic ? 'var(--surface-2)' : 'var(--surface)', color: cur === ic ? 'var(--clay-ink)' : 'var(--ink-3)' }}><Icon name={ic} size={16} color="currentColor" /></button>
+        ))}
+      </div>
+    </div>
+  );
+}
 const CHATTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
 const CHATTAG_ACCENTS = [['gold', 'var(--gold)'], ['sage', 'var(--sage)'], ['clay', 'var(--clay)'], ['sky', '#5360D6'], ['plum', '#C24B7A'], ['teal', '#2E8B8B']];
 const chatTagCss = (a) => (CHATTAG_ACCENTS.find(x => x[0] === a) || CHATTAG_ACCENTS[2])[1];

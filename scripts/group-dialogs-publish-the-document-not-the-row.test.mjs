@@ -62,6 +62,7 @@ async function screen() {
     // the shared approved-members filter DashGroups seals with (round 3a) — compiled in, not stubbed
     { name: 'stewKeyRecipients', anchor: 'function stewKeyRecipients(' }, { name: 'stewKeyRecipientsOrAdmitted', anchor: 'function stewKeyRecipientsOrAdmitted(' },
     { name: 'useStewKeyRecipients', anchor: 'function useStewKeyRecipients(' },
+    { name: 'groupIcon', anchor: 'function groupIcon(' },   // DashGroups draws every room's icon through it
   ], {
     STEW_KEYS_LOADING: 'loading',
     React, window: win, CustomEvent, setTimeout, clearTimeout,
