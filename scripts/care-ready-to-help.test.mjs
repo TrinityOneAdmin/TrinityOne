@@ -123,13 +123,16 @@ function recorder() {
 const reach = (root) => { const out = []; const go = (n) => { if (n == null || typeof n !== 'object') return; if (Array.isArray(n)) return n.forEach(go); out.push(n); (n.kids || []).forEach(go); }; go(root); return out; };
 const texts = (nodes) => nodes.flatMap(n => n.kids.filter(k => typeof k === 'string' || typeof k === 'number').map(String)).join(' | ');
 
-function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], open = false, allowed = true }) {
+function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], open = false, allowed = true, needs = [], slots = [], skips = [], picking = null, status = {}, sendDM = async () => ({ id: 'evt' }) }) {
   const { nodes, h } = recorder();
-  const events = [];
+  const events = []; const sent = []; const statusLog = [];
   const scope = {
     h, Frag: 'Frag',
-    React: { useState: (v) => [typeof v === 'boolean' ? open : v, () => {}] },
+    // state by the shape of its initial value: boolean = open, null = which person's picker, {} = per-person status
+    React: { useState: (v) => [typeof v === 'boolean' ? open : v === null ? picking : (v && typeof v === 'object' && !Array.isArray(v)) ? status : v, (f) => { if (v && typeof v === 'object' && !Array.isArray(v)) statusLog.push(typeof f === 'function' ? f(status) : f); }] },
+    mealsTypeLabel: () => 'Meals', todayISO: () => '2026-10-15',
     window: {
+      useMealsNeeds: () => needs, useMealsSlots: () => slots, useMealsSkips: () => skips, todayISO: () => '2026-10-15', Steward: { sendDM: (...a) => { sent.push(a); return sendDM(...a); } },
       useMealsAvail: () => avail,
       useStewardDirectory: () => ({ [ADULT]: { pubkey: ADULT, name: 'Margaret', npub: 'npub1margaret' }, [SECOND]: { pubkey: SECOND, name: 'Tomas' }, [CHILD]: { pubkey: CHILD, name: 'Ellie' } }),
       useStewardSafeguard: () => ({ minors, approved: [], minorsKnown }),
@@ -144,12 +147,13 @@ function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], ope
   // the component's module-level helper constants sit beside it in the file; compile them with it
   const helpers = ['const CARE_AVAIL_LABEL', 'const careAvailLabel'].map(a => { const i = MEALS_JSX.indexOf(a); return MEALS_JSX.slice(i, MEALS_JSX.indexOf('\n', i)); }).join('\n');
   delete scope.CARE_AVAIL_LABEL;
-  const src = helpers + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
+  const lift = (a) => fnBody(MEALS_JSX, a, a);
+  const src = helpers + `\nconst needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');\n` + lift('function mealsDateRange(') + '\n' + lift('function careOpenNeeds(') + '\n' + lift('async function careInvite(') + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
   const Comp = new Function('scope', `with (scope) { ${compile(src, 'StewReadyToHelp')} }`)(permissive(scope));
   const tree = Comp();
   const seen = reach(tree);
   const buttons = seen.filter(n => n.type === 'button');
-  return { tree, nodes: seen, all: texts(seen), buttons, events, scope };
+  return { tree, nodes: seen, all: texts(seen), buttons, events, scope, sent, statusLog };
 }
 const offer = (pubkey, extra = {}) => ({ pubkey, tags: ['meals', 'prayer'], note: 'Free on weekday evenings', ts: 1, ...extra });
 
@@ -269,4 +273,100 @@ test('(B) ...and says nothing when nobody has signed up, or when this steward la
   const needs = [{ id: 'n1', displayLabel: 'Verity — a lift', endDate: '2026-11-01' }];
   assert.ok(!/signed up/.test(renderOverview({ needs, slots: [] })));
   assert.ok(!/Callum/.test(renderOverview({ needs, slots: [{ needId: 'n1', pubkey: ADULT }], allowed: false })));
+});
+
+// ── (C) "Invite to a need" ───────────────────────────────────────────────────────────────────────────────────
+const NEED1 = { id: 'n1', displayLabel: 'Verity — a lift', type: 'rides', startDate: '2026-10-20', endDate: '2026-10-22' };
+const NEED2 = { id: 'n2', displayLabel: 'The Okafors — meals', type: 'meals', dates: ['2026-10-25'], endDate: '2026-10-25' };
+const btnText = (b) => reach(b).map(n => n.kids.filter(k => typeof k === 'string').join('')).join('');
+const inviteBtn = (r, i = 0) => r.buttons.filter(b => /Invite to a need/.test(btnText(b)))[i];
+
+test('(C) ZERO open needs: the button is disabled and says why', () => {
+  const none = renderReady({ avail: [offer(ADULT)], open: true, needs: [] });
+  assert.equal(inviteBtn(none).props.disabled, true);
+  assert.match(none.all, /No open needs/);
+  // a fully-covered need and a closed one are not open either
+  const covered = renderReady({ avail: [offer(ADULT)], open: true, needs: [{ ...NEED1 }, { ...NEED2, endDate: '2026-09-01', dates: ['2026-09-01'] }],
+    slots: [{ needId: 'n1', isoDate: '2026-10-20' }, { needId: 'n1', isoDate: '2026-10-21' }], skips: [{ needId: 'n1', isoDate: '2026-10-22' }] });
+  assert.equal(inviteBtn(covered).props.disabled, true, 'covered / past needs were offered as open');
+});
+
+test('(C) ONE open need: one tap sends a private message that NAMES the need, to that person, and writes no sign-up', async () => {
+  const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1] });
+  assert.ok(!inviteBtn(r).props.disabled);
+  await inviteBtn(r).props.onClick();
+  assert.equal(r.sent.length, 1, 'one tap must send exactly one message');
+  assert.equal(r.sent[0][0], ADULT);
+  assert.match(r.sent[0][1], /Margaret/); assert.match(r.sent[0][1], /Verity — a lift/); assert.match(r.sent[0][1], /3 days still open/);
+  assert.match(r.sent[0][1], /sign up for a day that suits you/, 'the message must leave the sign-up to them');
+  // the ONLY thing the screen may call is sendDM: no slot writer, no rota/need publisher is even in scope
+  assert.deepEqual(Object.keys(r.scope.window.Steward), ['sendDM']);
+});
+
+test('(C) MULTIPLE open needs: a tap shows a picker (no send yet); choosing a need sends that one', async () => {
+  const two = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1, NEED2] });
+  await inviteBtn(two).props.onClick();
+  assert.equal(two.sent.length, 0, 'with several needs the steward must choose — nothing may be sent on the first tap');
+  const picker = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1, NEED2], picking: ADULT });
+  assert.match(picker.all, /Which need\?/);
+  const choice = picker.buttons.filter(b => /The Okafors/.test(btnText(b)));
+  assert.equal(choice.length, 1); assert.equal(picker.buttons.filter(b => /Verity/.test(btnText(b))).length, 1);
+  await choice[0].props.onClick();
+  assert.equal(picker.sent.length, 1); assert.match(picker.sent[0][1], /The Okafors — meals/); assert.ok(!/Verity/.test(picker.sent[0][1]));
+});
+
+test('(C) a sealed need is never offered (its name is hidden)', () => {
+  const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [{ ...NEED1, _sealed: true }] });
+  assert.equal(inviteBtn(r).props.disabled, true);
+});
+
+test('(C) the Invite button is only on listed rows — a child never gets a row, so never an invite', () => {
+  const r = renderReady({ avail: [offer(CHILD)], minors: [CHILD], open: true, needs: [NEED1] });
+  assert.equal(r.tree, null);
+});
+
+// honest feedback: the engine answers three ways, and only one of them is "invited"
+function loadInvite() {
+  const src = fnBody(MEALS_JSX, 'async function careInvite(', 'careInvite');
+  return new Function('window', src + '\nreturn careInvite;')({});
+}
+const NEED = { title: 'Verity — a lift', type: 'Rides', openCount: 1 };
+test('(C) careInvite is honest: sent / queued / not sent are three different answers', async () => {
+  const f = loadInvite(); const P = { pubkey: ADULT, name: 'Margaret' };
+  assert.deepEqual(await f(async () => ({ id: 'e' }), P, NEED), { ok: true });
+  assert.deepEqual(await f(async () => ({ id: 'e', _queued: true }), P, NEED), { ok: true, queued: true });
+  assert.deepEqual(await f(async () => null, P, NEED), { ok: false }, 'a null from sendDM (nothing sent) was reported as success');
+  assert.deepEqual(await f(async () => { throw new Error('x'); }, P, NEED), { ok: false });
+  let body = ''; await f(async (pk, b) => { body = b; return { id: 'e' }; }, P, NEED);
+  assert.match(body, /1 day still open/);
+});
+test('(C) the row shows the honest line: success only for a sent message', () => {
+  const ok = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1], status: { [ADULT]: { kind: 'ok', text: 'Invited — they were sent a message and can sign up themselves' } } });
+  assert.match(ok.all, /Invited — /);
+  const none = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1] });
+  assert.ok(!/Invited — /.test(none.all), 'a success line is drawn before anything was sent');
+});
+
+// spacing: the Care page's "Start care" row must not touch the card above it
+test('(D) the Care page puts space above "Start care"', () => {
+  const { h } = recorder();
+  const scope = {
+    h, Frag: 'Frag', React: { useState: (v) => [v, () => {}] },
+    window: { useMealsNeeds: () => [], useMealsSlots: () => [], useMealsSkips: () => [] },
+    todayISO: () => '2026-10-15', mealsLbl: {}, Icon: function Icon() { return null; },
+    SafetyCheckPanel: function SafetyCheckPanel() { return null; }, StewCareRequests: function StewCareRequests() { return null; }, StewReadyToHelp: function StewReadyToHelp() { return null; },
+    MealsEmpty: function MealsEmpty() { return null; }, MealsNeedCard: function MealsNeedCard() { return null; }, MealsNeedDetail: function MealsNeedDetail() { return null; }, MealsNeedModal: function MealsNeedModal() { return null; },
+  };
+  const Comp = new Function('scope', `with (scope) { ${compile(fnBody(MEALS_JSX, 'function DashMeals()', 'DashMeals'), 'DashMeals')} }`)(permissive(scope));
+  const row = reach(Comp()).find(n => n.type === 'div' && n.kids.some(k => k && k.type === 'button' && /Start care/.test(btnText(k))));
+  assert.ok(row, 'no "Start care" row on the Care page');
+  assert.ok(row.props.style.marginTop >= 8, 'the Start care row has no gap above it, so it butts against the Ready to help card');
+});
+
+test('(C) the status the row records matches what happened: sent -> ok, waiting -> queued, nothing sent -> err (never ok)', async () => {
+  const kinds = async (sendDM) => { const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1], sendDM }); await inviteBtn(r).props.onClick(); return r.statusLog.map(l => l[ADULT].kind); };
+  assert.deepEqual(await kinds(async () => ({ id: 'e' })), ['busy', 'ok']);
+  assert.deepEqual(await kinds(async () => ({ id: 'e', _queued: true })), ['busy', 'queued']);
+  assert.deepEqual(await kinds(async () => null), ['busy', 'err'], 'a send that did not happen was confirmed');
+  assert.deepEqual(await kinds(async () => { throw new Error('x'); }), ['busy', 'err']);
 });
