@@ -2189,6 +2189,10 @@ function TodayScreen({ ctx }) {
   // deliberate: an unreadable or unrecognised value falls to the default, never to the old one.
   const [votdMin, setVotdMin] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-min') !== '0'; } catch { return true; } });
   const toggleVotd = () => setVotdMin(v => { const nv = !v; try { localStorage.setItem('trinityone.votd-min', nv ? '1' : '0'); } catch {} return nv; });
+  // "Your church is reading" folds to one line behind a chevron and remembers it (owner 2026-10-15). Its own key:
+  // it is NOT the "What's happening" card's dismiss key and does not touch it.
+  const [churchReadingFolded, setChurchReadingFolded] = useStateT(() => { try { return lsGet('trinityone.churchReadingFolded', false) === true; } catch (e) { return false; } });
+  const toggleChurchReading = () => setChurchReadingFolded(v => { const nv = !v; try { lsSet('trinityone.churchReadingFolded', nv); } catch (e) {} return nv; });
 
   // ⚠ `now` IS STILL HERE FOR THE VERSE OF THE DAY, WHICH PICKS BY DAY-OF-YEAR. Deleting it with the
   // greeting below blanked the whole Today screen ("now is not defined") — the silent-blank shape, caught by
@@ -2533,7 +2537,14 @@ function TodayScreen({ ctx }) {
       })() : null}
 
       {/* Church verse prompt — steward-pushed verse for the whole congregation */}
-      {vpPage && vpVisible ? (
+      {vpPage && vpVisible && churchReadingFolded ? (
+        <button type="button" onClick={toggleChurchReading} aria-expanded={false} aria-label="Expand Your church is reading" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 16, cursor: 'pointer', background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)', color: '#fff', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+          <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Your church is reading · {vpPage.ref}</div>
+          <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+        </button>
+      ) : null}
+      {vpPage && vpVisible && !churchReadingFolded ? (
         <div
           onTouchStart={(e) => { vpTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
           onTouchEnd={(e) => {
@@ -2556,6 +2567,7 @@ function TodayScreen({ ctx }) {
           <div style={{ position: 'absolute', right: -20, bottom: -28, opacity: .12 }}>
             <Icon name="book" size={150} stroke={1.2} color="#fff" />
           </div>
+          <button type="button" onClick={(e) => { e.stopPropagation(); toggleChurchReading(); }} aria-expanded={true} aria-label="Collapse Your church is reading" title="Collapse" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1, border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevU" size={16} color="#fff" /></button>
           <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => { const vl = Bible.parseRef(vpPage.ref); if (vl) ctx.gotoRef(vl.book, vl.chap, vl.verse); }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .88 }}>
               <Icon name="sparkle" size={14} stroke={2} /> Your church is reading
