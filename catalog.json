@@ -137,6 +137,19 @@
      "desc": "Plain-English meanings for the words in the Bible you read, on any translation. Tap a verse, then Define. Downloads the first time you use it."
     },
     {
+     "id": "worddefs-webster",
+     "name": "Word Definitions (Webster 1913)",
+     "abbr": "W1913",
+     "lang": "English",
+     "size": "2.1 MB",
+     "license": "Public domain (Webster\u2019s Revised Unabridged Dictionary, 1913)",
+     "kind": "worddef",
+     "format": "JSON",
+     "url": "modules/worddefs-webster.json",
+     "sha256": "d147c49ecd4dfcfcd692b57d6e388c9e5f0cd44ef9dd3e81d7121daabaf2419b",
+     "desc": "Older, richer meanings from Webster\u2019s 1913 dictionary \u2014 closer to the language of the KJV. When installed, Define uses it first and falls back to WordNet."
+    },
+    {
      "id": "import-dict",
      "name": "Import a dictionary…",
      "kind": "import",

@@ -295,7 +295,8 @@ function DefineSheet({ label, text, open, onClose }) {
   const words = open && B.defineText ? B.defineText(text).slice(0, 80) : [];
   const state = B.worddefsState ? B.worddefsState() : 'ready';
   const cur = words.length ? words[Math.min(pick, words.length - 1)] : null;
-  const licence = (B.worddefsLicense && B.worddefsLicense()) || (cur && cur.license) || '';
+  const licence = (cur && cur.license) || (B.worddefsLicense && B.worddefsLicense()) || '';   // the licence of the dictionary that ANSWERED, not just the first one loaded
+  const sourceLabel = (cur && cur.label) || 'WordNet';
   const note = { fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px', lineHeight: 1.5 };
   return (
     <BottomSheet open={open} onClose={onClose}>
@@ -338,7 +339,7 @@ function DefineSheet({ label, text, open, onClose }) {
       )}
       {licence ? (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-          <button data-testid="define-licence-pill" onClick={() => setLicOpen(o => !o)} aria-expanded={licOpen} title={licence} style={{ border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-3)', borderRadius: 999, padding: '2px 9px', fontSize: 10.5, fontWeight: 600, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>WordNet licence</button>
+          <button data-testid="define-licence-pill" data-source={sourceLabel} onClick={() => setLicOpen(o => !o)} aria-expanded={licOpen} title={licence} style={{ border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-3)', borderRadius: 999, padding: '2px 9px', fontSize: 10.5, fontWeight: 600, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{sourceLabel + ' licence'}</button>
           {licOpen ? <div data-testid="define-licence-text" style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 8 }}>{licence}</div> : null}
         </div>
       ) : null}

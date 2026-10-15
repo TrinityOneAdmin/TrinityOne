@@ -254,11 +254,14 @@ window.safeImgUrl = function (v) {
     let w = String(word == null ? "" : word).toLowerCase().replace(/\u2019/g, "\x27").replace(/^[^a-z]+|[^a-z]+$/g, "");
     w = w.replace(/\x27s$/, "");
     if(!w) return null;
-    for(const a in worddefs){
+    // Webster (W1913) answers first when it is installed; WordNet (or any other) is the fallback for a word Webster lacks.
+    const order = Object.keys(worddefs).sort((x, y) => (y === "W1913") - (x === "W1913"));
+    for(const a of order){
       const d = worddefs[a];
       let head = d.forms[w] || (d.defs[w] ? w : null);
       if(!head){ const st = _wdStems(w); for(let i = 0; i < st.length; i++){ const h = d.forms[st[i]] || (d.defs[st[i]] ? st[i] : null); if(h){ head = h; break; } } }
-      if(head && d.defs[head]) return { word: w, head, senses: d.defs[head].map(s => ({ pos: s[0], gloss: s[1] })), license: d.license };
+      if(head && d.defs[head]) return { word: w, head, senses: d.defs[head].map(s => ({ pos: s[0], gloss: s[1] })), license: d.license, source: a,
+        label: a === "WN" ? "WordNet" : a === "W1913" ? "Webster 1913" : d.name };
     }
     return null;
   }
