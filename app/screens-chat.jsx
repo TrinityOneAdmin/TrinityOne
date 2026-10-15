@@ -499,18 +499,12 @@ function ChatScreen({ ctx }) {
 
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 5px)">
-      <div style={{ marginBottom: 14, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
-        <ChurchPill ctx={ctx} />
-      </div>
-      {(ctx.requireFullName && !(ctx.joinState && ctx.joinState.isPending) && (myName(id) || '').trim().split(/\s+/).filter(Boolean).length < 2) ? (
-        <div onClick={() => ctx.openProfile()} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14, cursor: 'pointer', animation: 'trinityFade .5s ease both' }}>
-          <Icon name="pen" size={18} color="var(--clay)" style={{ flexShrink: 0 }} />
-          <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Add your full name.</b> {(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real first and last name so people can recognise you.</div>
-          <Icon name="chevR" size={17} color="var(--clay)" />
-        </div>
-      ) : null}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+      {/* TOP BAR. A church with a brand BANNER keeps the full-bleed 3:1 image, with the three icons in their own right-aligned
+          row beneath it (the image cannot sit inline). A church WITHOUT one gets ONE row: the church selector takes the
+          remaining width and ellipsises its name, the three icons keep their size on the right. */}
+      {(() => {
+        const topIcons = (
+        <div data-top-icons="1" style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
           <IconBtn name="search" onClick={() => { if (searchOpen) { setSearchOpen(false); setQ(''); } else setSearchOpen(true); }} title="Search" />
           <span style={{ position: 'relative', display: 'inline-flex' }}>
             <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
@@ -521,8 +515,30 @@ function ChatScreen({ ctx }) {
             <span style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 999, background: 'var(--sage)', border: '2px solid var(--surface)' }} />
           </button>
         </div>
-      </div>
-
+        );
+        const topMb = (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20);
+        const hasBanner = !!(ctx.church && ctx.church.banner);
+        return hasBanner ? (
+          <React.Fragment>
+            <div style={{ marginBottom: 14, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
+              <ChurchPill ctx={ctx} />
+            </div>
+            <div data-top-bar="banner" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: topMb, animation: 'trinityFade .5s ease .04s both' }}>{topIcons}</div>
+          </React.Fragment>
+        ) : (
+          <div data-top-bar="one-row" style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: topMb, animation: 'trinityFade .5s ease both' }}>
+            <div style={{ flex: 1, minWidth: 0 }}><ChurchPill ctx={ctx} /></div>
+            {topIcons}
+          </div>
+        );
+      })()}
+      {(ctx.requireFullName && !(ctx.joinState && ctx.joinState.isPending) && (myName(id) || '').trim().split(/\s+/).filter(Boolean).length < 2) ? (
+        <div onClick={() => ctx.openProfile()} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14, cursor: 'pointer', animation: 'trinityFade .5s ease both' }}>
+          <Icon name="pen" size={18} color="var(--clay)" style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Add your full name.</b> {(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real first and last name so people can recognise you.</div>
+          <Icon name="chevR" size={17} color="var(--clay)" />
+        </div>
+      ) : null}
       {/* the wider network(s) this church belongs to — a small line right under the church it's part of */}
       {(ctx.churchNetworks || []).length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: givingOn ? 16 : 20, animation: 'trinityFade .5s ease .05s both' }}>
