@@ -120,8 +120,8 @@ function reader(opts = {}) {
   const hasNoteMark = (n) => find(find(tree, x => x.props && x.props.id === 'rv-' + n)[0], x => x.props && x.props.name === 'note').length > 0;
   // THE STUDY PANEL, as a reader opens it: the edge tab, then the "My notes" segment.
   const openNotesPanel = () => {
-    const edge = find(tree, x => x.type === 'button' && /NOTES/.test(reads(x)) && x.props && typeof x.props.onClick === 'function')[0];
-    assert.ok(edge, 'no NOTES edge tab on the reader');
+    const edge = find(tree, x => x.type === 'button' && /STUDY/.test(reads(x)) && x.props && typeof x.props.onClick === 'function')[0];
+    assert.ok(edge, 'no STUDY edge tab on the reader');
     edge.props.onClick(); redraw();
     press(/^My notes/);
   };

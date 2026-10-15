@@ -227,6 +227,11 @@ test('POINT OF USE: the Define sheet shows word chips and a tapped chip\'s meani
   const labels = chips.map(c => reads(c));
   assert.ok(labels.includes('loved') && labels.includes('world'), 'chips: ' + labels);
   assert.ok(!labels.includes('the') && !labels.includes('for') && !labels.includes('that'), 'stopwords were shown as chips');
+  // The licence is a pill now (owner 2026-10-15): the full WordNet notice is behind a tap, not a standing line.
+  const pill = find(tree, n => n.type === 'button' && n.props['data-testid'] === 'define-licence-pill');
+  assert.equal(pill.length, 1, 'no licence pill');
+  pill[0].props.onClick();
+  tree = s.draw(s.DefineSheet, props);
   const page = reads(tree);
   assert.equal(chips[0].props['aria-pressed'], true, 'the first chip is not selected');
   const first = eng.defineText(props.text)[0];
@@ -239,6 +244,25 @@ test('POINT OF USE: the Define sheet shows word chips and a tapped chip\'s meani
   const after = reads(tree);
   assert.match(after, /loved\s*\u2192\s*love/, 'a lemmatised word does not show "loved -> love"');
   assert.ok(after.includes(eng.getDefinition('loved').senses[0].gloss), 'the tapped word\'s meaning is not shown');
+});
+
+test('POINT OF USE: the WordNet licence is a small pill; the full text is hidden until it is tapped, and tapping again hides it', () => {
+  const eng = wdEngine();
+  const s = screens(eng);
+  const props = { label: 'John 3:16', text: 'For God so loved the world', open: true, onClose() {} };
+  let tree = s.draw(s.DefineSheet, props);
+  const pill = () => find(tree, n => n.type === 'button' && n.props['data-testid'] === 'define-licence-pill');
+  assert.equal(pill().length, 1, 'no licence pill');
+  assert.equal(reads(pill()[0]), 'WordNet licence');
+  assert.ok(!/Princeton University/.test(reads(tree)), 'the full licence is still a standing line under the definitions');
+  assert.ok(/Princeton University/.test(String(pill()[0].props.title)), 'the licence is not reachable on hover');
+  pill()[0].props.onClick();
+  tree = s.draw(s.DefineSheet, props);
+  assert.match(reads(tree), /WordNet 3\.0/);
+  assert.match(reads(tree), /Princeton University/, 'tapping the pill does not show the licence');
+  pill()[0].props.onClick();
+  tree = s.draw(s.DefineSheet, props);
+  assert.ok(!/Princeton University/.test(reads(tree)), 'a second tap does not hide it');
 });
 
 test('POINT OF USE: while the dictionary downloads the sheet says so; a failed download offers Try again; nothing-to-define is stated', () => {
@@ -347,7 +371,10 @@ test('POINT OF USE (whole reader): tap a verse -> Define -> a sheet of its words
   assert.equal(R.sheetOpen(), true, 'tapping Define did not open the Define sheet');
   const labels = R.chips().map(c => reads(c));
   assert.deepEqual(labels.slice(0, 3), ['god', 'loved', 'world'], 'chips are not this verse\'s words, in order: ' + labels);
-  assert.match(reads(R.tree()), /Princeton University/, 'the attribution is not on the sheet');
+  const licPill = find(R.tree(), n => n.type === 'button' && n.props['data-testid'] === 'define-licence-pill');
+  assert.equal(licPill.length, 1, 'the licence pill is not on the sheet');
+  R.press(licPill[0]);
+  assert.match(reads(R.tree()), /Princeton University/, 'the attribution is not reachable from the sheet');
   // close with the sheet's own X: the card comes back and the verse is still the selection
   const xs = find(R.tree(), n => n.type === 'button' && n.props.onClick && find(n, i => i.props && i.props.name === 'x').length);
   assert.ok(xs.length, 'no close control on the Define sheet');

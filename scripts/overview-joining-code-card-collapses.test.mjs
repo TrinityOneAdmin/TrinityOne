@@ -66,8 +66,8 @@ test('tapping the chevron hides the card body and flips the chevron; tapping aga
   assert.equal(iconOf(chevron(tree)[0]), 'chevD');
 });
 
-test('control: no other Overview card got a chevron', () => {
+test('control: the Overview has exactly three chevrons - Joining code, Groups & rooms, Recent activity (2026-10-15)', () => {
   const tree = overview()();
   const all = find(tree, n => n.type === 'button' && /^(Collapse|Expand) /.test(String(n.props['aria-label'])));
-  assert.equal(all.length, 1, 'only the Joining code card should have one');
+  assert.deepEqual(all.map(b => String(b.props['aria-label'])).sort(), ['Collapse Groups & rooms', 'Collapse Joining code', 'Collapse Recent activity']);
 });

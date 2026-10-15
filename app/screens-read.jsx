@@ -286,6 +286,7 @@ const POS_NAME = { n: 'noun', v: 'verb', adj: 'adjective', adv: 'adverb' };
 function DefineSheet({ label, text, open, onClose }) {
   const [, force] = useS(0);
   const [pick, setPick] = useS(0);
+  const [licOpen, setLicOpen] = useS(false);   // the WordNet licence is a pill; tapping it shows the full text (the attribution stays reachable)
   useE(() => (window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), []);
   useE(() => { if (open) setPick(0); }, [open, text]);
   const B = window.Bible;
@@ -335,7 +336,12 @@ function DefineSheet({ label, text, open, onClose }) {
       ) : (
         <p style={note}>No common words to define in this passage.</p>
       )}
-      {licence ? <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>{licence}</div> : null}
+      {licence ? (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <button data-testid="define-licence-pill" onClick={() => setLicOpen(o => !o)} aria-expanded={licOpen} title={licence} style={{ border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-3)', borderRadius: 999, padding: '2px 9px', fontSize: 10.5, fontWeight: 600, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>WordNet licence</button>
+          {licOpen ? <div data-testid="define-licence-text" style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 8 }}>{licence}</div> : null}
+        </div>
+      ) : null}
     </BottomSheet>
   );
 }
@@ -740,13 +746,13 @@ function ChapterVerseMenu({ open, onClose, anchor, loc, version, onPick }) {
 function CommentaryEdge({ open, onToggle }) {
   if (open) return null;
   return (
-    <button onClick={onToggle} aria-label="Open commentary" style={{
+    <button onClick={onToggle} aria-label="Open study panel" style={{
       position: 'absolute', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
       background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
       boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
     }}>
       <Icon name="comment" size={17} color="#fff" />
-      <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 10, fontWeight: 800, letterSpacing: '1px', fontFamily: 'var(--font-ui)' }}>NOTES</span>
+      <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 10, fontWeight: 800, letterSpacing: '1px', fontFamily: 'var(--font-ui)' }}>STUDY</span>
     </button>
   );
 }
@@ -1291,7 +1297,7 @@ function ReadScreen({ ctx }) {
   //
   // Nothing here collides with the reader's other horizontal gesture. CommentaryPanel closes on a swipe
   // right, but only while it is OPEN, and while it is open its own backdrop (absolute, inset 0, z-index 24)
-  // covers the scripture so no touch reaches this element at all. The NOTES tab (CommentaryEdge) is a
+  // covers the scripture so no touch reaches this element at all. The STUDY tab (CommentaryEdge) is a
   // sibling of this container, not a child, so a drag begun on that tab is simply not a chapter turn.
   // How far a finger must travel ACROSS the page to be a chapter turn, and by how much it must beat its own
   // vertical travel. 60px is a deliberate gesture on a 360px screen; 1.7 keeps a diagonal scroll out. Kept

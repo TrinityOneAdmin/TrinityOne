@@ -3346,6 +3346,8 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const under850 = useStewNarrow(850);
   const fourUp = snug && !under850;
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
+  const [groupsOpen, setGroupsOpen] = React.useState(true);   // the Groups & rooms card's body, folded by its header chevron
+  const [activityOpen, setActivityOpen] = React.useState(true);   // likewise the Recent activity card
   const [joinOpen, setJoinOpen] = React.useState(true);   // the Joining code card's body; the chevron in its header folds it away
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3477,7 +3479,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     </div>
   );
   const groupsPanel = (
-    <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={fillStyle}>
+    <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={fillStyle} collapsible open={groupsOpen} onToggle={() => setGroupsOpen(o => !o)}>
       <div className="no-scrollbar" style={listStyle}>
         {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
         {groups.map(g => (
@@ -3498,7 +3500,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     </Panel>
   );
   const activityPanel = (
-    <Panel title="Recent activity" style={fillStyle}>
+    <Panel title="Recent activity" style={fillStyle} collapsible open={activityOpen} onToggle={() => setActivityOpen(o => !o)}>
       {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
       <div className="no-scrollbar" style={stacked ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {activity.map((a) => {
