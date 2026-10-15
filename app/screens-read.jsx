@@ -80,7 +80,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
       <span
         onClick={(e) => {
           const sup = e.target.closest && e.target.closest('sup.st');
-          if (sup) { e.stopPropagation(); onWord((sup.dataset.s || '').split(',')[0]); }
+          if (sup) { e.stopPropagation(); onWord((sup.dataset.s || '').split(',')[0], n); }
           else { onSelect(n); }
         }}
         style={{
@@ -160,6 +160,7 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
     { ic: 'book', label: 'Define', fn: ctx._define },
+    { ic: 'study', label: 'Original', fn: ctx._original },
     ...(hasNote ? [{ ic: 'pen', label: 'Share note', fn: ctx._shareNote }] : []),
   ];
   return (
@@ -208,9 +209,94 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
   );
 }
 
+// ── original language (STEPBible TAGNT / TAHOT, optional download-on-demand modules; CC BY 4.0) ──
+// "Show the original (download)": finds the catalogue's original module for this language and installs it through the
+// same installModule every other module uses. Never automatic. The engine notifies subscribers when it lands.
+function OriginalOffer({ lang }) {
+  const [st, setSt] = useS('idle');
+  const go = async () => {
+    setSt('busy');
+    try {
+      const cat = await window.Bible.getCatalog();
+      let item = null;
+      for (const c of ((cat && cat.categories) || [])) for (const it of (c.items || [])) if (it.kind === 'original' && String(it.lang).toLowerCase() === lang) item = it;
+      if (!item) throw new Error('not in the catalogue');
+      await window.Bible.installModule(item);
+      setSt('idle');
+    } catch (err) { setSt('failed'); }
+  };
+  return (
+    <div data-testid="original-offer">
+      <button onClick={go} disabled={st === 'busy'} style={{ border: '1px solid var(--clay)', background: 'var(--clay-soft)', color: 'var(--clay-ink)', borderRadius: 999, padding: '8px 14px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+        {st === 'busy' ? 'Downloading…' : 'Show the original (download)'}
+      </button>
+      {st === 'failed' ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 6 }}>Couldn't download it. It needs a connection the first time.</div> : null}
+    </div>
+  );
+}
+// the licence pill, like WordNet's: a small button, the full text behind a tap
+function OriginalLicencePill() {
+  const [open, setOpen] = useS(false);
+  const list = window.Bible.originalList ? window.Bible.originalList() : [];
+  const licence = (list[0] && list[0].license) || 'STEPBible.org CC BY';
+  const full = 'Original-language text and tagging: STEPBible.org (Tyndale House, Cambridge), licensed CC BY 4.0. ' + licence;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button data-testid="original-licence-pill" onClick={() => setOpen(o => !o)} aria-expanded={open} title={full} style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', borderRadius: 999, padding: '2px 9px', fontSize: 10.5, fontWeight: 600, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>STEPBible licence</button>
+      {open ? <div data-testid="original-licence-text" style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 8 }}>{full}</div> : null}
+    </div>
+  );
+}
+// Verse-level fallback for Bibles with no Strong's tags: the verse's original words, each opening its lexicon entry.
+function OriginalSheet({ label, verse, open, onClose, onWord }) {
+  const [, force] = useS(0);
+  useE(() => (open && window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), [open]);
+  const lang = verse && verse.book <= 39 ? 'hebrew' : 'greek';
+  const B = window.Bible;
+  const words = open && verse && B.getOriginal ? B.getOriginal(verse.book, verse.chap, verse.v, lang) : [];
+  const installed = B.hasOriginal ? B.hasOriginal(lang) : false;
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{lang === 'hebrew' ? 'Hebrew' : 'Greek'} original</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div></div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {words.length ? (
+        <div data-testid="original-verse-words" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+          {words.map((w, i) => {
+            const m = /^([GH])0*(\d+)/i.exec(String(w.s || ''));
+            const sid = m ? m[1].toUpperCase() + m[2] : '';
+            return <button key={i} data-testid="original-verse-word" disabled={!sid} onClick={() => sid && onWord(sid)} style={{
+              border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', borderRadius: 14, padding: '7px 12px',
+              fontFamily: 'var(--font-read)', cursor: sid ? 'pointer' : 'default', textAlign: 'center' }}>
+              <div style={{ fontSize: 22 }}>{w.w}</div>
+              <div style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</div>
+            </button>;
+          })}
+        </div>
+      ) : installed ? (
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px' }}>No original text for this verse.</p>
+      ) : (
+        <div style={{ padding: '4px 0 12px' }}>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', margin: '0 0 12px' }}>The {lang === 'hebrew' ? 'Hebrew' : 'Greek'} text is an optional download.</p>
+          <OriginalOffer lang={lang} />
+        </div>
+      )}
+      {words.length ? <OriginalLicencePill /> : null}
+    </BottomSheet>
+  );
+}
+
 // ── word study (real lexicon via window.Bible.lex) ──
-function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack }) {
+function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack, verse }) {
   const e = id ? window.Bible.lex(id) : null;
+  const [, force] = useS(0);
+  useE(() => (open && window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), [open]);
+  // `verse` = { book, chap, v }: where the tap happened. Without it (the app-level sheet) there is no original to show.
+  const origLang = e && /^H/i.test(String(e.id)) ? 'hebrew' : 'greek';
+  const origWords = open && e && verse && window.Bible.getOriginal ? window.Bible.getOriginal(verse.book, verse.chap, verse.v, origLang, e.id) : [];
+  const origOffer = open && e && verse && !origWords.length && window.Bible.hasOriginal && !window.Bible.hasOriginal(origLang);
   return (
     <BottomSheet open={open} onClose={onClose} docked={docked}>
       {e ? <div style={{ paddingBottom: 6 }}>
@@ -229,6 +315,19 @@ function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack }) 
           </div>
           <IconBtn name="x" onClick={onClose} />
         </div>
+        {origWords.length ? (
+          <div data-testid="original-words" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginTop: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>In this verse</div>
+            {origWords.map((w, i) => (
+              <div key={i} data-testid="original-word" style={{ marginTop: i ? 8 : 0 }}>
+                <span style={{ fontFamily: 'var(--font-read)', fontSize: 24, fontWeight: 500 }}>{w.w}</span>
+                <span style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t ? '  ' + w.t : ''}</span>
+                {w.m ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{w.m}</div> : null}
+              </div>
+            ))}
+            <OriginalLicencePill />
+          </div>
+        ) : origOffer ? <div style={{ marginTop: 14 }}><OriginalOffer lang={origLang} /></div> : null}
         {e.missing ? (
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink-2)', margin: '18px 0 6px', textWrap: 'pretty' }}>
             No entry in the built-in lexicon for this number. A dictionary module (<span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.dct.mybible</span>) would supply the full definition.
@@ -1166,7 +1265,8 @@ function ReadScreen({ ctx }) {
   // card and leave the verses selected and unseen, so the next tap added to them (sim item 37). Copy and
   // Share still use plain `close` — they finish the job and have never cleared the selection.
   const dismiss = () => { setSel([]); setCarry([]); setArrived(null); setSheet(null); };
-  const openWord = (id) => { setWordStack([id]); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
+  const [wordVerse, setWordVerse] = useS(null);   // { book, chap, v, from } where the Strong's was opened, so its original form can be found
+  const openWord = (id, n, from) => { setWordStack([id]); setWordVerse(n == null ? null : { book: loc.book, chap: loc.chap, v: n, from: from || null }); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
   const pushWord = (id) => { setWordStack(s => [...s, id]); };                    // follow a cross-reference, keeping history
   const backWord = () => setWordStack(s => s.length > 1 ? s.slice(0, -1) : s);    // return to the previous definition
 
@@ -1225,7 +1325,8 @@ function ReadScreen({ ctx }) {
     _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
-    _define: () => setSheet('define'),   // back to 'action' on close, so the selection survives
+    _define: () => setSheet('define'),
+    _original: () => setSheet('original'),   // back to 'action' on close, so the selection survives
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: notes[keyOf(sel0)] || '' }); },
     // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
     // before" and "+ after", and the comment that lived on this line said they were needed because "the
@@ -1428,7 +1529,8 @@ function ReadScreen({ ctx }) {
         onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setArrived(null); setSheet(null); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
-      <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
+      <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'original' ? () => setSheet('original') : close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
+      <OriginalSheet label={labelOf(sel0)} verse={sel0 ? { book: loc.book, chap: loc.chap, v: sel0 } : null} open={sheet === 'original'} onClose={() => setSheet('action')} onWord={(sid) => openWord(sid, sel0, 'original')} />
       <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} open={sheet === 'define'} onClose={() => setSheet('action')} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
@@ -1467,4 +1569,4 @@ const navBtnStyle = {
   cursor: 'pointer', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
 };
 
-Object.assign(window, { ReadScreen, verseRefLabel, WordStudySheet });
+Object.assign(window, { ReadScreen, verseRefLabel, WordStudySheet, OriginalSheet });

@@ -741,7 +741,7 @@ function StoreRow({ item, catIcon, ctx }) {
   };
   const onOpen = () => {
     // an installed bible: make it active and jump to the reader
-    if (item.kind !== 'dict' && item.kind !== 'worddef') { const v = window.Bible.versions().find(x => x.name === item.name); if (v) window.Bible.setActive(v.abbr); ctx.go('read'); ctx.closeStore(); }
+    if (item.kind !== 'dict' && item.kind !== 'worddef' && item.kind !== 'original') { const v = window.Bible.versions().find(x => x.name === item.name); if (v) window.Bible.setActive(v.abbr); ctx.go('read'); ctx.closeStore(); }
     else ctx.toast(`${item.abbr || item.name} is active`);
   };
 
