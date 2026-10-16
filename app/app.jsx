@@ -2537,7 +2537,7 @@ function App() {
       const repeat = !!held && held.verdict === verdict;
       const next = repeat ? held.next : (myRsvps[eventId] === verdict ? null : verdict);
       const cleared = next === null;
-      if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return;
+      if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return false;
       const sent = await window.Fellowship.setEventRsvp(np, eventId, next || 'none');
       // `sent.ok`, never `if (sent)` — an object is always truthy and a failure would take the success arm,
       // recording an answer the church never confirmed. (The markSafe trap, chunk 1.)
@@ -2546,13 +2546,14 @@ function App() {
         toast(sent && sent.reason === 'unconfirmed'
           ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again to send it again; it won’t withdraw it.'
           : 'Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
-        return;
+        return false;
       }
       delete rsvpUnsureRef.current[eventId];
       setMyRsvps(m => ({ ...m, [eventId]: next }));
       if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
       // A CONFIRMED answer is acknowledged (E11). Only here, after `sent.ok` — a send that merely fired, or failed, took the arm above.
       else toast(next === 'going' ? 'You’re going — your church has your answer' : next === 'maybe' ? 'Marked maybe — your church has your answer' : 'Marked can’t make it — your church has your answer');
+      return true;   // CONFIRMED only (sent.ok) — EventDetail closes its card on this; every other path above returns false
     },
     // RETURN the promise. This dropped it, so even a handler that awaited could not learn that the church
     // had refused the write — which is how a pending member's "I'm away" became a success toast over nothing.
