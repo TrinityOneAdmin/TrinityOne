@@ -36,7 +36,9 @@ test('the serving card cannot render without a church', () => {
   const at = TODAY.indexOf('{!ctx.church ? null : ');
   assert.notEqual(at, -1,
     'the serving card renders unconditionally again — "What’s happening · RSVP · your rota" on a locked phone says church as loudly as the name did');
-  assert.match(TODAY.slice(at, at + 160), /position: "relative", marginBottom: 22/,
+  // Read the gate's first rendered element to its opening-tag '>' rather than a fixed-width window, so this
+  // stays honest as the card body grows (test-windows.test.mjs). [re-anchored 2026-10-16]
+  assert.match(TODAY.slice(at, TODAY.indexOf('>', at) + 1), /position: "relative", marginBottom: 22/,
     'the What\'s happening card is no longer the ctx.church gate\'s only branch');
 });
 
