@@ -732,8 +732,13 @@ function careOpenNeeds(needs, slots, skips, today) {
   for (const n of (needs || [])) {
     if (!n || n._sealed || (n.endDate && today && n.endDate < today)) continue;
     const dates = (Array.isArray(n.dates) && n.dates.length) ? n.dates : mealsDateRange(n.startDate, n.endDate);
-    const taken = new Set([...(slots || []).filter(x => x && x.needId === n.id).map(x => x.isoDate), ...(skips || []).filter(x => x && x.needId === n.id).map(x => x.isoDate)]);
-    const open = dates.filter(d => !taken.has(d) && (!today || d >= today));
+    // per-meal: a day is still OPEN while any meal it needs is unclaimed (a legacy no-meal slot covers the whole
+    // day). Mirrors careNeedDays on the member side so the invite flow and the member's list agree.
+    const skipped = new Set((skips || []).filter(x => x && x.needId === n.id).map(x => x.isoDate));
+    const mealsOf = (iso) => (n.type === 'meals') ? ((n.dayMeals && n.dayMeals[iso] && n.dayMeals[iso].length) ? n.dayMeals[iso] : (Array.isArray(n.meals) ? n.meals : [])) : [];
+    const unitsOf = (iso) => { const ms = mealsOf(iso); return ms.length ? ms : ['']; };
+    const takenUnit = (iso, m) => (slots || []).some(x => x && x.needId === n.id && x.isoDate === iso && ((x.meal || '') === m || (x.meal || '') === ''));
+    const open = dates.filter(d => !skipped.has(d) && (!today || d >= today) && unitsOf(d).some(m => !takenUnit(d, m)));
     if (open.length) out.push({ id: n.id, title: needTitle(n), type: mealsTypeLabel(n), openCount: open.length, openDays: open });
   }
   return out;
@@ -1102,7 +1107,17 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const [dates, setDates] = React.useState(need ? (Array.isArray(need.dates) && need.dates.length ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate)) : []);
   const [pick, setPick]   = React.useState('');
   const addDate = () => { if (pick && !dates.includes(pick)) setDates(d => [...d, pick].sort()); setPick(''); };
-  const removeDate = (d) => setDates(ds => ds.filter(x => x !== d));
+  // Add a whole contiguous RANGE at once (owner 2026-10-16) — easier than tapping each day; days stay
+  // individually removable and non-contiguous sets still work via "Add day".
+  const [rangeFrom, setRangeFrom] = React.useState('');
+  const [rangeTo, setRangeTo]     = React.useState('');
+  const rangeOk = !!rangeFrom && !!rangeTo && rangeFrom <= rangeTo;
+  const addRange = () => { if (!rangeOk) return; const span = mealsDateRange(rangeFrom, rangeTo); setDates(d => [...new Set([...d, ...span])].sort()); setRangeFrom(''); setRangeTo(''); };
+  // Optional per-slot drop-off TIMES. Key "<iso>:<meal>" for a meals need, "<iso>" day-level otherwise.
+  const [slotTimes, setSlotTimes] = React.useState(need && need.slotTimes && typeof need.slotTimes === 'object' ? { ...need.slotTimes } : {});
+  const setTimeFor = (key, v) => setSlotTimes(st => { const n = { ...st }; if (v) n[key] = v; else delete n[key]; return n; });
+  // removing a day drops its drop-off times too, so a stale time never rides along on the published need.
+  const removeDate = (d) => { setDates(ds => ds.filter(x => x !== d)); setSlotTimes(st => Object.fromEntries(Object.entries(st).filter(([k]) => k.split(':')[0] !== d))); };
   const [notes, setNotes]   = React.useState(need ? need.notes : '');
   const [recipient, setRecipient] = React.useState(need ? need.recipient : '');
   const [diet, setDiet] = React.useState(need && Array.isArray(need.dietary) ? need.dietary : []);
@@ -1140,7 +1155,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         displayLabel: label.trim(), type, dates, notes: notes.trim(),
         recipient: (recipient || '').trim(),
         dietary: type === 'meals' ? diet : [],
-        meals: type === 'meals' ? meals : [], dayMeals: type === 'meals' ? dayMeals : {},
+        meals: type === 'meals' ? meals : [], dayMeals: type === 'meals' ? dayMeals : {}, slotTimes,
       });
       // The sheet closed on a refused publish, so a steward who had just typed a family's name and dates was
       // returned to a needs list they believed carried it. publishNeed now answers null for that.
@@ -1206,32 +1221,58 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         ) : null}
 
         <div style={mealsLbl}>WHICH DAYS?</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: dates.length ? 8 : 6 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           <input type="date" value={pick} min={today} onChange={e => setPick(e.target.value)} style={{ ...mealsFld, flex: 1 }} />
           <button onClick={addDate} disabled={!pick || dates.includes(pick)} className="sk-btn sk-btn--ghost" style={{ padding: '0 15px', fontSize: 13.5, flexShrink: 0, opacity: (pick && !dates.includes(pick)) ? 1 : 0.5 }}><Icon name="plus" size={14} color="currentColor" /> Add day</button>
+        </div>
+        {/* add a whole run of days at once — owner 2026-10-16. Each added day is still removable below. */}
+        <div style={{ display: 'flex', gap: 7, alignItems: 'center', marginBottom: dates.length ? 10 : 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, flexShrink: 0 }}>or a range</span>
+          <input aria-label="Range from" type="date" value={rangeFrom} min={today} onChange={e => setRangeFrom(e.target.value)} style={{ ...mealsFld, flex: 1, height: 40, fontSize: 13, padding: '0 10px' }} />
+          <span style={{ fontSize: 12, color: 'var(--ink-3)', flexShrink: 0 }}>to</span>
+          <input aria-label="Range to" type="date" value={rangeTo} min={rangeFrom || today} onChange={e => setRangeTo(e.target.value)} style={{ ...mealsFld, flex: 1, height: 40, fontSize: 13, padding: '0 10px' }} />
+          <button onClick={addRange} disabled={!rangeOk} className="sk-btn sk-btn--ghost" style={{ padding: '0 13px', fontSize: 13, flexShrink: 0, opacity: rangeOk ? 1 : 0.5 }}>Add</button>
         </div>
         {dates.length ? (type === 'meals' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
             {dates.map(d => (
-              <div key={d} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px 7px 11px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)' }}>
-                <span style={{ fontWeight: 700, fontSize: 12.5, width: 86, flexShrink: 0 }}>{mealsFmtDate(d)}</span>
-                <div style={{ display: 'flex', gap: 4, flex: 1 }}>
-                  {MEAL_KINDS.map(([mk, mlbl]) => { const on = effMeals(d).includes(mk); return (
-                    <button key={mk} onClick={() => toggleDayMeal(d, mk)} title={mlbl} style={{ flex: 1, padding: '6px 2px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mlbl[0]}</button>
-                  ); })}
+              <div key={d} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 8px 8px 11px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontWeight: 700, fontSize: 12.5, width: 86, flexShrink: 0 }}>{mealsFmtDate(d)}</span>
+                  <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+                    {MEAL_KINDS.map(([mk, mlbl]) => { const on = effMeals(d).includes(mk); return (
+                      <button key={mk} onClick={() => toggleDayMeal(d, mk)} title={mlbl} style={{ flex: 1, padding: '6px 2px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mlbl[0]}</button>
+                    ); })}
+                  </div>
+                  <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
                 </div>
-                <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+                {/* optional per-meal drop-off time (owner 2026-10-16) — one input per meal this day needs */}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', paddingLeft: 2 }}>
+                  {effMeals(d).map(mk => { const mlbl = (MEAL_KINDS.find(k => k[0] === mk) || [mk, mk])[1]; return (
+                    <label key={mk} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>
+                      {mlbl} by
+                      <input aria-label={'Drop-off time for ' + mlbl + ' on ' + d} type="time" value={slotTimes[d + ':' + mk] || ''} onChange={e => setTimeFor(d + ':' + mk, e.target.value)} style={{ height: 32, padding: '0 7px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                    </label>
+                  ); })}
+                  <span style={{ fontSize: 10.5, color: 'var(--ink-4, var(--ink-3))' }}>drop-off (optional)</span>
+                </div>
               </div>
             ))}
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
             {dates.map(d => (
-              <button key={d} onClick={() => removeDate(d)} title="Remove this day" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mealsFmtDate(d)} <Icon name="x" size={11} color="currentColor" /></button>
+              <div key={d} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px 7px 11px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)' }}>
+                <span style={{ fontWeight: 700, fontSize: 12.5, flex: 1, minWidth: 0 }}>{mealsFmtDate(d)}</span>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>by
+                  <input aria-label={'Time on ' + d} type="time" value={slotTimes[d] || ''} onChange={e => setTimeFor(d, e.target.value)} style={{ height: 32, padding: '0 7px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                </label>
+                <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+              </div>
             ))}
           </div>
         )) : null}
-        <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
+        <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add single days or a range, set an optional drop-off time, and tap ✕ to remove a day.` : 'Add each day care is needed — single days or a range; they don’t have to be in a row.'}</div>
 
         <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
         <RecipientPicker members={(members || []).filter(m => !(m && m.pubkey && blockedKeys.has(String(m.pubkey).toLowerCase())))} value={recipient} onChange={setRecipient} />
