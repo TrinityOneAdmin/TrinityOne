@@ -251,3 +251,24 @@ test('E11: NO success toast when the RSVP was not confirmed (unconfirmed, refuse
     assert.equal(s.toasts.length, 1, 'exactly the failure sentence expected: ' + JSON.stringify(s.toasts));
   }
 });
+
+// ── setRsvp REPORTS WHETHER THE ANSWER WAS CONFIRMED (EventDetail closes its card on it) ─────────────────
+// Callers of ctx.setRsvp: EventDetail's Going/Maybe/Can't buttons and svEventRsvpRow (both app/screens-serving.jsx);
+// only EventDetail reads the return. Lifted and run, not matched.
+test('setRsvp RETURNS true only for a confirmed answer (incl. a withdrawal that was confirmed)', async () => {
+  assert.equal(await screen({ results: [OK] }).tap('going'), true, 'a confirmed answer must return true');
+  const w = screen({ results: [OK] }); w.scope.myRsvps = { 'ev-1': 'going' };
+  assert.equal(await w.tap('going'), true, 'a confirmed withdrawal is still a confirmed send');
+});
+
+test('setRsvp RETURNS false for unconfirmed / not-sent / refused', async () => {
+  for (const r of [UNCONFIRMED, NOTSENT, { ok: false, reason: 'refused' }, null]) {
+    assert.equal(await screen({ results: [r] }).tap('going'), false, 'an unconfirmed answer reported success: ' + JSON.stringify(r));
+  }
+});
+
+test('setRsvp RETURNS false when there is no engine to send with', async () => {
+  const s = screen({ results: [OK] });
+  s.scope.window = {};
+  assert.equal(await s.tap('going'), false, 'no engine, yet it claimed a confirmed answer');
+});

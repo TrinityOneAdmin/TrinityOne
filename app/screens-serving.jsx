@@ -517,7 +517,7 @@ function EventDetail({ event, open, onClose, ctx }) {
           <div style={{ display: 'flex', gap: 8 }}>
             {[['going', 'Going', 'var(--sage)'], ['maybe', 'Maybe', 'var(--gold)'], ['no', 'Can’t', 'var(--ink-3)']].map(([v, lbl, c]) => {
               const on = rsvps[e.id] === v;
-              return <button key={v} onClick={() => ctx.setRsvp && ctx.setRsvp(e.id, v)} style={{ flex: 1, padding: '13px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
+              return <button key={v} onClick={async () => { if (ctx.setRsvp && await ctx.setRsvp(e.id, v)) onClose && onClose(); }} style={{ flex: 1, padding: '13px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, border: on ? 'none' : '1px solid var(--line)', background: on ? c : 'var(--surface)', color: on ? (v === 'maybe' ? 'var(--midnight)' : '#fff') : 'var(--ink-2)' }}>{lbl}</button>;
             })}
           </div>
         </div>
