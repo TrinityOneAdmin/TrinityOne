@@ -212,7 +212,7 @@ test('CONSOLE: a clean fan-out says Sent to N, and a QUEUED one is not called se
   assert.doesNotMatch(b.status(), /^Sent to/); assert.match(b.status(), /waiting for signal/);
 });
 test('CONSOLE: the event detail offers the Message action, which opens the composer (point of use)', async () => {
-  const Detail = fnBody(SCH, 'function SchEventDetail(', 'SchEventDetail');
+  const Detail = ['function schRsvpGroups(', 'function schAttendanceOrder(', 'function SchAttendance(', 'function SchEventDetail('].map(x => fnBody(SCH, x, x)).join('\n');
   const { React, reset, flush } = miniReact();
   const mod = await compile(SLICE + '\n' + Detail, ['SchEventDetail'], {
     React, window: { useStewardRsvps: () => RSVPS, useStewardMembers: () => MEMBERS, Steward: {} },

@@ -1605,9 +1605,7 @@ function DashCalendar() {
   const roomName = (id) => { const r = rooms.find(x => x.id === id); return (r && r.name) || 'Room'; };
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
   const rsvpSummary = (eventId) => {
-    const map = rsvps[eventId] || {}; const out = { going: [], maybe: [], no: [] };
-    for (const pub in map) { if (out[map[pub]]) out[map[pub]].push(nameFor(pub)); }
-    return out;
+    return schRsvpGroups(rsvps, eventId, nameFor);
   };
   const today = new Date();
   const [view, setView] = useSch({ y: today.getFullYear(), m: today.getMonth() });
@@ -1725,7 +1723,6 @@ function DashCalendar() {
                           {rs.maybe.length ? <span style={{ color: '#8a6717' }}>{rs.maybe.length} maybe</span> : null}
                           {rs.no.length ? <span style={{ color: 'var(--ink-3)' }}>{rs.no.length} can’t</span> : null}
                         </div>
-                        {rs.going.length ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 4, lineHeight: 1.45 }}>{rs.going.slice(0, 8).join(', ')}{rs.going.length > 8 ? ` +${rs.going.length - 8}` : ''}</div> : null}
                       </div>
                     );
                   })()}
@@ -2053,6 +2050,44 @@ function SchEventMessage({ event, onClose }) {
 }
 window.SchEventMessage = SchEventMessage;
 
+// Group an event's RSVPs into display names by answer. Pure: nameFor is passed in.
+// Users (rule 2): the Schedule list's rsvpSummary, SchEventDetail. (SchEventMessage keeps its own audience logic.)
+function schRsvpGroups(rsvps, eventId, nameFor) {
+  const map = (rsvps && rsvps[eventId]) || {}; const out = { going: [], maybe: [], no: [] };
+  for (const pub in map) { if (out[map[pub]]) out[map[pub]].push(nameFor(pub)); }
+  return out;
+}
+// Alphabetical, with the people who have no name on file ("Anonymous") last.
+function schAttendanceOrder(names) {
+  const anon = (n) => n === 'Anonymous' ? 1 : 0;
+  return (names || []).slice().sort((a, b) => anon(a) - anon(b) || a.localeCompare(b));
+}
+
+// The names behind one count chip. A sibling overlay of SchEventDetail, never nested in its animated card.
+function SchAttendance({ event, verdict, names, onClose }) {
+  const e = event || {};
+  const dlgRef = window.useStewDialog ? window.useStewDialog(onClose) : null;
+  const label = verdict === 'going' ? 'going' : verdict === 'maybe' ? 'maybe' : 'can’t make it';
+  const list = schAttendanceOrder(names);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 310, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={`${list.length} ${label}`} tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 400, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
+        <div style={{ padding: '18px 22px 8px' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>{list.length} {label}</div>
+          {e.title ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 2 }}>{e.title}</div> : null}
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 22px 12px' }}>
+          {list.length ? <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>{list.map((n, i) => <li key={i} style={{ fontSize: 14, color: 'var(--ink-2)', padding: '7px 0', borderBottom: '1px solid var(--line-2)' }}>{n}</li>)}</ul> : <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Nobody yet.</div>}
+        </div>
+        <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)' }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 13.5 }}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+window.SchAttendance = SchAttendance;
+
 function SchEventDetail({ event, onClose }) {
   const e = event || {};
   const [editing, setEditing] = React.useState(false);
@@ -2060,15 +2095,16 @@ function SchEventDetail({ event, onClose }) {
   const rsvps = window.useStewardRsvps ? window.useStewardRsvps() : {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
-  const map = rsvps[e.id] || {}; const rs = { going: [], maybe: [], no: [] };
-  for (const pub in map) { if (rs[map[pub]]) rs[map[pub]].push(nameFor(pub)); }
+  const [attendance, setAttendance] = React.useState(null);   // 'going' | 'maybe' | 'no' | null: which list is open
+  const rs = schRsvpGroups(rsvps, e.id, nameFor);
   const total = rs.going.length + rs.maybe.length + rs.no.length;
-  const seg = (list, label, color) => list.length ? (
-    <div style={{ marginTop: 9 }}>
-      <div style={{ fontSize: 12, fontWeight: 800, color }}>{list.length} {label}</div>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.5 }}>{list.join(', ')}</div>
-    </div>
-  ) : null;
+  // Counts only: a church of 200 would make an inline name list a wall of text. The names are one tap away.
+  // A chip with nothing behind it is hidden, except "0 going" whenever anyone has answered at all.
+  const chip = (verdict, label, color) => {
+    const n = rs[verdict].length;
+    if (!n && !(verdict === 'going' && total)) return null;
+    return <button key={verdict} onClick={() => setAttendance(verdict)} aria-label={`${n} ${label}, show names`} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 800, color }}>{n} {label}</button>;
+  };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   // THE EDIT DIALOG REPLACES THIS CARD; IT DOES NOT OPEN INSIDE IT (AUDIT-feeds-round5-2026-09-22 F2).
   // It used to render as the last child of the panel below, and a `position: fixed` overlay does NOT escape
@@ -2086,6 +2122,7 @@ function SchEventDetail({ event, onClose }) {
   return (
     <React.Fragment>
     {messaging ? <SchEventMessage event={e} onClose={() => setMessaging(false)} /> : null}
+    {attendance ? <SchAttendance event={e} verdict={attendance} names={rs[attendance]} onClose={() => setAttendance(null)} /> : null}
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 300, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={e.title || 'Event'} tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 4px' }}>
@@ -2108,7 +2145,7 @@ function SchEventDetail({ event, onClose }) {
           {e.blurb ? <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '14px 0 0' }}>{e.blurb}</p> : null}
           <div style={{ marginTop: 16, borderTop: '1px solid var(--line-2)', paddingTop: 12 }}>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Who’s coming</div>
-            {total ? <React.Fragment>{seg(rs.going, 'going', 'var(--sage)')}{seg(rs.maybe, 'maybe', '#8a6717')}{seg(rs.no, 'can’t make it', 'var(--ink-3)')}</React.Fragment> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
+            {total ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 9 }}>{chip('going', 'going', 'var(--sage)')}{chip('maybe', 'maybe', '#8a6717')}{chip('no', 'can’t make it', 'var(--ink-3)')}</div> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
           </div>
         </div>
         <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)', display: 'flex', gap: 10 }}>
