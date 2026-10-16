@@ -1293,8 +1293,23 @@ function careForMe(ctx) {
   const canVolunteer = !minorHere && ctx.minorState !== 'minor' && ctx.minorState !== 'maybe';
   const heldByMe = (n) => (care.slots || []).some(sl => sl && sl.needId === n.id && String(sl.pubkey || '').toLowerCase() === myPub);
   const liveShown = canVolunteer ? split.others : split.others.filter(heldByMe);
-  const open = liveShown.filter(n => !careNeedDays(n, care.slots || [], care.skips || []).covered).length;
+  // The badge is a "sign up for a day" invitation, so it counts only when this member MAY volunteer. A child
+  // (or the cold-start 'maybe' window) gets 0 even while holding a day — that commitment is shown and
+  // cancelled inside CareCard, it is not a new sign-up to advertise on the Today link.
+  const open = canVolunteer ? liveShown.filter(n => !careNeedDays(n, care.slots || [], care.skips || []).covered).length : 0;
   return { open, mine: split.mine.length, onRoster };
+}
+
+// The "Care" entry on the Today "What's happening" card: a link to the Care page that BOLDS and shows a
+// count when there are open needs this member can sign up for (careForMe). It renders here, as its own
+// component, so the badge has a point-of-use test; TodayScreen just drops it into the card's subtitle.
+function CareLink({ ctx }) {
+  const care = (ctx && ctx.care) || {};
+  if (!(care.settings && care.settings.enabled)) return null;
+  const open = careForMe(ctx).open;
+  return (
+    <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)', fontWeight: open > 0 ? 800 : 600 }}> {'·'} Care{open > 0 ? <span style={{ marginLeft: 4, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 10.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', verticalAlign: 'middle' }}>{open}</span> : null}</span>
+  );
 }
 
 function CareCard({ ctx, embedded }) {
@@ -2372,8 +2387,6 @@ function TodayScreen({ ctx }) {
   const _careToday = todayISO();
   const myCareNeed = (_care.settings && _care.settings.enabled) ? (_care.needs || []).find(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday)) : null;
   const beingCaredFor = !!myCareNeed;
-  // Today's "Care" link lights up with a count of days still open to sign up for (owner 2026-10-16).
-  const _careOpenForMe = careForMe(ctx).open;
   // the recipient can dismiss the care banner with ✕; it snoozes until the need changes (new id or edited ts)
   const [careDismissTick, setCareDismissTick] = React.useState(0);
   const careBannerDismissed = React.useMemo(() => {
@@ -2493,7 +2506,7 @@ function TodayScreen({ ctx }) {
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
                   <ServingNewDot n={servNew} />
                 </div>
-                <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing("care"); }} style={{ color: "var(--clay)", fontWeight: _careOpenForMe > 0 ? 800 : 600 }}> {"·"} Care{_careOpenForMe > 0 ? <span style={{ marginLeft: 4, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 999, background: "var(--clay)", color: "var(--on-clay)", fontSize: 10.5, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center", verticalAlign: "middle" }}>{_careOpenForMe}</span> : null}</span> : null}</div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota<CareLink ctx={ctx} /></div>
               </div>
               <Icon name="chevR" size={18} color="var(--ink-3)" />
             </div>

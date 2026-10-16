@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadJsx, flatten, names } from './jsx-render.mjs';
-import { loadScreen, miniReact, texts, button } from './render-jsx-screen.mjs';
+import { loadScreen, miniReact, texts, button, find } from './render-jsx-screen.mjs';
 
 const win = { Fellowship: { cancelCareRequest() {}, subscribeCareRequests: () => () => {}, childCareAudience: () => Promise.resolve([{ pub: 'x' }]) } };
 const { render } = loadJsx('app/screens-today.jsx', ['AskForHelp'], { win });
@@ -159,7 +159,7 @@ const careGlobals = () => {
       TrinityData: { NOTIFICATIONS: [], PLANS: [], VOTD_POOL: [] },
       Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1, activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) } },
   };
-  const mod = loadScreen('app/screens-today.jsx', ['CareCard', 'careForMe'], globals);
+  const mod = loadScreen('app/screens-today.jsx', ['CareCard', 'careForMe', 'CareLink'], globals);
   return { React, draw, ...mod };
 };
 
@@ -217,9 +217,61 @@ test('careForMe never badges a child — confirmed, or the cold-start "maybe" wi
   const { careForMe } = careGlobals();
   assert.equal(careForMe(baseCare({ safeguard: { isMinor: true, minors: [] }, minorState: 'minor' })).open, 0, 'a confirmed minor was given a sign-up count');
   assert.equal(careForMe(baseCare({ minorState: 'maybe' })).open, 0, 'the cold-start "maybe" window gave a child a sign-up count');
+  // a minor who already HOLDS a day on a need that still has open days must still count 0 (the held day is
+  // a cancellable commitment shown inside CareCard, not a new sign-up to badge on Today).
+  assert.equal(careForMe(baseCare({ safeguard: { isMinor: true, minors: [] }, minorState: 'minor',
+    care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa', needs: [OPEN_NEED],
+      slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'aa' }], skips: [], avail: [] } })).open, 0,
+    'a minor holding a day on a still-open need was given a sign-up count');
 });
 
 test('careForMe is 0 when practical care is switched off', () => {
   const { careForMe } = careGlobals();
   assert.equal(careForMe(baseCare({ care: { settings: { enabled: false }, myPub: 'aa', needs: [OPEN_NEED], slots: [], skips: [], avail: [] } })).open, 0, 'the badge counted needs for a church with care off');
+});
+
+// ── the Today "Care" link (the findability badge) ───────────────────────────────────────────────────
+// The badge renders in CareLink (dropped into the What's happening card by TodayScreen). These render the
+// shipped CareLink, so deleting the badge span reddens them — the point-of-use the lifted careForMe tests alone
+// did not give (CLAUDE.md rule 1).
+test('the Today "Care" link shows a count when there are open days to sign up for', () => {
+  const { draw, CareLink } = careGlobals();
+  const t = texts(draw(CareLink, { ctx: baseCare() })).join(' ');
+  assert.match(t, /Care/, 're-anchor: the Care link is gone from the What\u2019s happening card');
+  assert.match(t, /\b1\b/, 'the Care link did not show the open-need count — the findability badge is dead');
+});
+
+test('the Today "Care" link is a plain link (no count) when nothing is open to sign up for', () => {
+  const { draw, CareLink } = careGlobals();
+  const covered = baseCare({ care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa',
+    needs: [OPEN_NEED], slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'cc' }, { needId: 'n1', isoDate: '2026-10-21', pubkey: 'cc' }], skips: [], avail: [] } });
+  const t = texts(draw(CareLink, { ctx: covered })).join(' ');
+  assert.match(t, /Care/, 'the Care link vanished when nothing was open — it should stay a plain link');
+  assert.doesNotMatch(t, /[0-9]/, 'the Care link showed a count when every day was already taken');
+});
+
+test('the Today "Care" link never shows a count to a child, even one already holding a day', () => {
+  const { draw, CareLink } = careGlobals();
+  const childHolds = baseCare({ safeguard: { isMinor: true, minors: [] }, minorState: 'minor',
+    care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa', needs: [OPEN_NEED],
+      slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'aa' }], skips: [], avail: [] } });
+  const t = texts(draw(CareLink, { ctx: childHolds })).join(' ');
+  assert.doesNotMatch(t, /[0-9]/, 'a child holding a day was badged with a "sign up" count on the Today card');
+});
+
+test('the Today "Care" link renders nothing when practical care is off', () => {
+  const { draw, CareLink } = careGlobals();
+  const off = baseCare({ care: { settings: { enabled: false }, myPub: 'aa', needs: [], slots: [], skips: [], avail: [] } });
+  assert.equal(texts(draw(CareLink, { ctx: off })).join(' ').trim(), '', 'the Care link rendered with practical care switched off');
+});
+
+test('tapping the Today "Care" link opens the Care page', () => {
+  const { draw, CareLink } = careGlobals();
+  const nav = [];
+  const ctx = baseCare(); ctx.openServing = (tab) => nav.push(tab);
+  const tree = draw(CareLink, { ctx });
+  const span = find(tree, n => n.type === 'span' && n.props && typeof n.props.onClick === 'function')[0];
+  assert.ok(span, 'the Care link has no tappable element');
+  span.props.onClick({ stopPropagation() {} });
+  assert.deepEqual(nav, ['care'], 'tapping the Care link did not open the Care page');
 });
