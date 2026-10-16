@@ -1177,10 +1177,6 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <input aria-label="Who is this for?" type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Sarah Jones, or “a family in our church”" autoFocus style={{ ...mealsFld, marginBottom: 6 }} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>You decide what reads right. A real name brings the church closer; a discreet label protects dignity. Up to you.</div>
 
-        <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
-        <RecipientPicker members={(members || []).filter(m => !(m && m.pubkey && blockedKeys.has(String(m.pubkey).toLowerCase())))} value={recipient} onChange={setRecipient} />
-        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>If the person uses the app, link them — then <b>they alone</b> can tick off days they’re already covered, so the church doesn’t double up. Leave unlinked if they’re not on the app.</div>
-
         <div style={mealsLbl}>WHAT KIND OF CARE?</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
           {MEALS_TYPES.map(([k, lbl, ic]) => (
@@ -1236,6 +1232,10 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
           </div>
         )) : null}
         <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
+
+        <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
+        <RecipientPicker members={(members || []).filter(m => !(m && m.pubkey && blockedKeys.has(String(m.pubkey).toLowerCase())))} value={recipient} onChange={setRecipient} />
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>If the person uses the app, link them — then <b>they alone</b> can tick off days they’re already covered, so the church doesn’t double up. Leave unlinked if they’re not on the app.</div>
 
         <div style={mealsLbl}>NOTES (OPTIONAL)</div>
         <textarea aria-label="Notes (optional)" value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />
