@@ -251,8 +251,11 @@ const PAGE_STUBS = `
 async function inBrowser(body) {
   await requireFreePort(CDP, 'a-message-menu-does-not-cover-the-message.test.mjs (Chrome debug port)');
   const prof = join(tmpdir(), 'trin-msgmenu-chr-' + process.pid + '-' + Date.now());
+  // Blackhole the production relays: the app dials the canonical relays from any origin, so without this a
+  // browser test could read/write live church data. no-browser-reaches-production.test.mjs enforces it.
+  const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
   const chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
-    `--user-data-dir=${prof}`, '--window-size=411,800', 'about:blank'], { stdio: 'ignore' });
+    BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=411,800', 'about:blank'], { stdio: 'ignore' });
   let ws;
   try {
     let targets = null;
