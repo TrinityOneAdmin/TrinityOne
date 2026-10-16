@@ -1672,7 +1672,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
             <Row icon="home" label={ctx.church.name} sub="Your church — open it to see people, groups and serving"
               accent="var(--sage, #4f7a5e)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('list'); }} />
           ) : null}
-          <Row icon="qr" label="Follow a church" sub="Scan a code or paste a church’s link" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('follow'); }} />
+          <Row icon="users" label="Your churches" sub="The churches you follow — switch, or follow another" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openChurchSwitcher('list'); }} />
           <DirectoryToggle identity={identity} onSave={onSave} ctx={ctx} />
         </Group>
 

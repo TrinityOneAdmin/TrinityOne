@@ -178,7 +178,7 @@ window.HelpData = {
       blocks: [
         { type: 'p', text: 'The Community tab is where your church life lives: announcements, group chats, and private messages. It’s a quiet, friendly space — just your church, no strangers, no adverts.' },
         { type: 'steps', label: 'Follow your church', items: [
-          'Tap You at the bottom → “Follow a church”.',
+          'Tap You at the bottom → “Your churches” → “Follow another church”.',
           'Point your camera at the church’s QR code, or paste the link they gave you.',
           'That’s it — you’ll see their groups and announcements.',
         ] },
