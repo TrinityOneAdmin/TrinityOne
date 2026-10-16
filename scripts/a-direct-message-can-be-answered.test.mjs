@@ -60,7 +60,7 @@ function thread() {
   };
   const mod = loadScreen('app/screens-chat.jsx', ['DMThread', 'DMSwipe'], {
     React,
-    window: { Fellowship: F, addEventListener() {}, removeEventListener() {} },
+    window: { matchMedia: () => ({ matches: !globalThis.__dmTouch }), Fellowship: F, addEventListener() {}, removeEventListener() {} },
     document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
     location: { search: '', href: 'https://app.trinityone.church/' },
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
@@ -298,4 +298,60 @@ test('the swipe container declares touch-action: pan-y, so the list scrolls and 
   assert.equal(s.props.style && s.props.style.touchAction, 'pan-y',
     'without pan-y the compositor may hand a horizontal drag to an ancestor scroller and fire touchcancel '
     + 'part-way through it. React attaches touch listeners passively, so preventDefault() cannot do this job.');
+});
+
+// ── (c) TOUCH: Reply is the SOLE action here, so a touch phone shows NO ⋯ — the swipe replies ────────────────
+// Owner 2026-10-15 (reverses the 2026-10-14 "keep the ⋯"). A POINTER device (the tests above) keeps the ⋯,
+// because a mouse cannot swipe. These drive the real DMThread with matchMedia answering "no fine pointer".
+
+const hiddenDots = (b) => !!b.props.style && b.props.style.width === '1px' && b.props.style.opacity === 0 && !!b.props.style.clip && b.props.style.display !== 'none' && !b.props.disabled && b.props.tabIndex === undefined && b.props['aria-label'] === 'Message actions';
+test('TOUCH: a reply-only DM bubble has NO VISIBLE three-dots control (a hidden, focusable one remains for assistive tech), and the swipe still replies', () => {
+  globalThis.__dmTouch = true;
+  try {
+    const t = thread();
+    const tree = t.redraw();
+    assert.ok(dots(tree).length > 0 && dots(tree).every(hiddenDots), 'a touch phone shows the reply-only ⋯, or has dropped the hidden assistive-tech route (' + dots(tree).length + ' found)');
+    const s = swipers(tree)[0];
+    assert.ok(s, 'the swipe handler is gone — with the ⋯ also gone there would be NO way to reply');
+    s.props.onTouchStart(touch(100, 300));
+    s.props.onTouchMove(touch(160, 303));
+    s.props.onTouchEnd();
+    assert.match(replying(t.redraw()), /Replying to Sam/, 'swipe did not reply on the touch render');
+  } finally { globalThis.__dmTouch = false; }
+});
+
+test('POINTER: the same DM thread keeps its ⋯ and it replies (a mouse cannot swipe)', () => {
+  globalThis.__dmTouch = false;
+  const t = thread();
+  const d = dots(t.redraw());
+  assert.equal(d.length, 2, 'pointer device lost its only reply route');
+  d[0].props.onClick();
+  named(t.redraw(), 'Reply')[0].props.onClick();
+  assert.match(replying(t.redraw()), /Replying to Sam/);
+});
+
+// ── ASSISTIVE TECH ON TOUCH (DMSwipe): the reply-only ⋯ stays reachable as a hidden, focusable node ─────────────
+test('TOUCH POINT OF USE: the DM reply-only ⋯ is hidden but focusable and clickable; focus shows it; a click opens Reply', () => {
+  globalThis.__dmTouch = true;
+  try {
+    const t = thread();
+    const b = dots(t.redraw())[0];
+    assert.ok(b, 'THE DEFECT: on touch the reply-only ⋯ is ABSENT, so TalkBack has no reply route at all');
+    const st = b.props.style;
+    assert.equal(st.width, '1px'); assert.equal(st.height, '1px'); assert.equal(st.opacity, 0); assert.match(String(st.clip), /rect\(0/);
+    assert.notEqual(st.display, 'none'); assert.notEqual(st.pointerEvents, 'none');
+    assert.ok(!b.props.disabled && b.props.tabIndex === undefined, 'the hidden ⋯ must stay focusable');
+    const el = { style: {} };
+    b.props.onFocus({ currentTarget: el });
+    assert.equal(el.style.width, '30px'); assert.equal(el.style.opacity, '1');
+    b.props.onBlur({ currentTarget: el });
+    assert.equal(el.style.width, '1px');
+    b.props.onClick();
+    assert.ok(named(t.redraw(), 'Reply').length >= 1, 'the hidden ⋯ opened no Reply');
+  } finally { globalThis.__dmTouch = false; }
+});
+test('POINTER: the DM reply-only ⋯ is the normal visible pill (not the hidden one)', () => {
+  globalThis.__dmTouch = false;
+  const b = dots(thread().redraw())[0];
+  assert.equal(b.props.style.width, 30); assert.equal(b.props.style.opacity, undefined); assert.equal(b.props.onFocus, undefined);
 });

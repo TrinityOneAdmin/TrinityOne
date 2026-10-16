@@ -178,7 +178,7 @@ window.HelpData = {
       blocks: [
         { type: 'p', text: 'The Community tab is where your church life lives: announcements, group chats, and private messages. It’s a quiet, friendly space — just your church, no strangers, no adverts.' },
         { type: 'steps', label: 'Follow your church', items: [
-          'Tap You at the bottom → “Follow a church”.',
+          'Tap You at the bottom → “Your churches” → “Follow another church”.',
           'Point your camera at the church’s QR code, or paste the link they gave you.',
           'That’s it — you’ll see their groups and announcements.',
         ] },
@@ -649,6 +649,22 @@ window.HelpData = {
         { type: 'note', text: 'These limits are enforced by your church’s relay, each time it is asked — not by the app on a steward’s phone. That is what makes them hold even against a tampered app, but it also means they need a relay that knows how to check them. A relay running very old software may not check capabilities at all, and would quietly hand a steward everything regardless of what you ticked. The shared TrinityOne relay is always kept current; if your church runs its own, keeping it updated is what keeps these limits real.' },
         { type: 'callout', tone: 'clay', text: 'Handing over the recovery phrase is the other thing entirely, and it cannot be undone. It does not add a helper — it makes a second owner with exactly your powers, permanently. Settings → Security → Stewards & handoff is where that lives, and it says so at the moment you would do it.' },
         { type: 'rule', text: 'If you might ever want it back, it is a delegated steward. The phrase is for someone you would trust to be the church.' },
+      ],
+    },
+    {
+      id: 'console-care',
+      illo: 'heart',
+      title: 'Care: a request, then a need',
+      summary: 'A request is someone asking you privately. Turn it into a need, and the church can sign up — then you can invite the people who offered.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'The Care page has two different things on it, and they come in order.' },
+        { type: 'list', items: [
+          { lead: 'A request for help', text: 'Someone has asked you, privately — only cleared stewards see it, never the church. You answer it: set up help, message them, or close it.' },
+          { lead: 'A need', text: 'The visible version — a task with days the whole church can see and sign up to. You make one by tapping “Set up help” on a request, or “Start care” to open one from scratch (a meal train, lifts, visits). Pick the days and it goes up.' },
+        ] },
+        { type: 'p', text: '“Ready to help” lists members who tapped “I’m here to help”. “Invite to a need” asks one of them to take a day of an open need — so it stays greyed until a need with a free day exists. Nothing open yet? Start care, or set up help on a request, first.' },
+        { type: 'note', text: 'A young person’s request is never turned into a need: it has no “Set up help” and stays confidential to cleared stewards. A need is a notice board the whole church reads — a child’s disclosure never belongs there.' },
       ],
     },
     {

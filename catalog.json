@@ -123,6 +123,59 @@
      "desc": "8,181 Hebrew & Aramaic entries from Brown–Driver–Briggs, keyed to Strong's numbers — tap any Hebrew word in the reader for its definition."
     },
     {
+     "id": "worddefs-wordnet",
+     "name": "Word Definitions (WordNet)",
+     "abbr": "WN",
+     "lang": "English",
+     "size": "1.4 MB",
+     "license": "WordNet 3.0 \u00a9 2006 Princeton University",
+     "kind": "worddef",
+     "format": "JSON",
+     "url": "modules/worddefs-wordnet.json",
+     "featured": true,
+     "sha256": "6a47efccb1665e8f7235f234aa75c37810a4aac1e3377a434a32b72c57ca64db",
+     "desc": "Plain-English meanings for the words in the Bible you read, on any translation. Tap a verse, then Define. Downloads the first time you use it."
+    },
+    {
+     "id": "worddefs-webster",
+     "name": "Word Definitions (Webster 1913)",
+     "abbr": "W1913",
+     "lang": "English",
+     "size": "2.1 MB",
+     "license": "Public domain (Webster\u2019s Revised Unabridged Dictionary, 1913)",
+     "kind": "worddef",
+     "format": "JSON",
+     "url": "modules/worddefs-webster.json",
+     "sha256": "d147c49ecd4dfcfcd692b57d6e388c9e5f0cd44ef9dd3e81d7121daabaf2419b",
+     "desc": "Older, richer meanings from Webster\u2019s 1913 dictionary \u2014 closer to the language of the KJV. When installed, Define uses it first and falls back to WordNet."
+    },
+    {
+     "id": "original-greek",
+     "name": "Greek New Testament (original words)",
+     "abbr": "TAGNT",
+     "lang": "Greek",
+     "size": "6.7 MB",
+     "license": "CC BY 4.0 · STEPBible.org",
+     "kind": "original",
+     "format": "JSON",
+     "url": "modules/original-greek.json",
+     "sha256": "387cea50bc85a2a81f44a6905740aaa7c40fdcf222e76a3c219a46f0f7c8016b",
+     "desc": "The Greek text of the New Testament, word by word, with each word's transliteration, Strong's number and grammar (STEPBible TAGNT). Download only if you want the original language."
+    },
+    {
+     "id": "original-hebrew",
+     "name": "Hebrew Old Testament (original words)",
+     "abbr": "TAHOT",
+     "lang": "Hebrew",
+     "size": "18.4 MB",
+     "license": "CC BY 4.0 · STEPBible.org",
+     "kind": "original",
+     "format": "JSON",
+     "url": "modules/original-hebrew.json",
+     "sha256": "2942344aa80881b7010c9ff7e673d11deb4a06b31cb81ad577678c70b36e904e",
+     "desc": "The Hebrew text of the Old Testament, word by word, with each word's transliteration, Strong's number and grammar (STEPBible TAHOT). Download only if you want the original language."
+    },
+    {
      "id": "import-dict",
      "name": "Import a dictionary…",
      "kind": "import",
@@ -203,6 +256,27 @@
      "kind": "import",
      "accept": "devotional",
      "desc": "Add a MySword .dvn.mybible devotional you already have. Hosted devotionals are coming."
+    }
+   ]
+  },
+  {
+   "id": "crossrefs",
+   "name": "Cross References",
+   "icon": "link",
+   "items": [
+    {
+     "id": "crossrefs-openbible",
+     "name": "Cross References (openbible.info)",
+     "abbr": "TSK",
+     "lang": "English",
+     "size": "3.3 MB",
+     "license": "CC BY 4.0 · www.openbible.info, from the Treasury of Scripture Knowledge (public domain)",
+     "kind": "crossref",
+     "format": "JSON",
+     "url": "modules/crossrefs-openbible.json",
+     "featured": true,
+     "sha256": "f14c43a15167ff959186cdb54ede7e493a54387f40534e8da15ebeb45ffe2815",
+     "desc": "Where scripture echoes scripture — 29,320 verses linked, best-voted first, from the Treasury of Scripture Knowledge."
     }
    ]
   }

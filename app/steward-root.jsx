@@ -304,7 +304,7 @@ window.usePendingStewards = makeSub(S, 'subscribeStewardRequests', () => []);
 // way, so a child's care request was still shown as an adult's at cold start and check-in still claimed
 // the church had marked nobody. Found by the batch 3-7 audit, 2026-09-03: the batch 4 fix did not actually
 // work until this line changed. An empty list plus "not known" is the honest starting state.
-window.useStewardSafeguard = makeSub(S, 'subscribeSafeguard', () => ({ minors: [], approved: [], minorsKnown: false }));
+window.useStewardSafeguard = makeSub(S, 'subscribeSafeguard', () => ({ minors: [], approved: [], minorsKnown: false, minorsDocSeen: false }));
 window.useStewardGuardianRequests = makeSub(S, 'subscribeGuardianRequests', () => []);
 window.useStewardGuardians = makeSub(S, 'subscribeGuardians', () => ({ links: {}, closed: {} }));
 window.useStewardJoinPolicy = makeSub(S, 'subscribeJoinPolicy', () => false);
@@ -324,6 +324,7 @@ window.useMealsSettings = makeSub(ME, 'subscribeSettings', () => ({ enabled: (wi
 window.useMealsNeeds = makeSub(ME, 'subscribeNeeds', () => []);
 window.useMealsSlots = makeSub(ME, 'subscribeSlots', () => []);
 window.useMealsSkips = makeSub(ME, 'subscribeSkips', () => []);
+window.useMealsAvail = makeSub(ME, 'subscribeCareAvail', () => []);   // members who tapped "I'm here to help" (sealed; opens once the name key lands)
 })();
 
 // ── hooks that don't fit the factory (custom callback / derived / polling / two-effect) ──
@@ -818,34 +819,80 @@ function StewardUnlock() {
   // for this church, so the box tells the truth after a lock instead of always starting unticked.
   const [stayAvail, setStayAvail] = useSt(false);
   const [stayOpen, setStayOpen] = useSt(false);
+  // Has the steward themselves ticked or unticked the box? The box is only ever DELETED over by a touched untick:
+  // an untouched box that merely drew unticked (a store that answered null, a submit before status resolved) says
+  // nothing about what the steward wants, and used to delete a live 30-day record.
+  const stayTouched = React.useRef(false);
   const [waitLeft, setWaitLeft] = useSt(() => { const g = readGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
   const [lostKey, setLostKey] = useSt(false);
+  // A typed PIN has PRIORITY over the automatic stay-open replay. `auto` records whether the replay owns `busy`
+  // (auto.on), lets submit() cancel it (auto.cancel) and wait for a call already in flight (auto.inflight), so
+  // unlockStayOpen and unlock(pin) never overlap in the engine. Cancelling NEVER deletes the record.
+  const auto = React.useRef({ on: false, cancel: null, inflight: null }).current;
+  const [autoBusy, setAutoBusy] = useSt(false);
   const [pinVis, setPinVis] = useSt(false);   // the device-bound key is gone — offer the way out, not a retry loop
-  // Read the real stay-open state, and replay it — the engine replays once per launch, so a lock later in the
-  // session shows this screen with the box ticked rather than reopening by itself.
+  // Read the real stay-open state, and replay it. The engine replays on a cold start AND after an idle lock
+  // (lock('idle') re-arms it). When the Keystore does not answer ('retry') the record is KEPT: try again with a
+  // short backoff and whenever the app comes back to the foreground, then fall to the PIN prompt, deleting nothing.
   useStE(() => {
-    let live = true;
+    let live = true, stopped = false, timer = null, tries = 0, running = false, retrying = false;
     const S = window.Steward;
-    Promise.resolve(S.stayOpenStatus ? S.stayOpenStatus() : null).then(st => {
-      if (!live || !st) return;
-      setStayAvail(!!st.available); setStayOpen(!!(st.available && st.active));
-      if (!st.available || !st.active || !S.unlockStayOpen) return;
-      setBusy(true);
-      return S.unlockStayOpen().then(ok => {
-        if (ok) { try { localStorage.removeItem(GUARD_KEY); } catch (e) {} return; }
-        if (!live) return;
-        setBusy(false);
+    const dead = () => !live || stopped;
+    const setAuto = (v) => { auto.on = v; setAutoBusy(v); };
+    const release = () => { setAuto(false); setBusy(false); };
+    const BACKOFF = [1000, 2000, 4000, 8000];
+    const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    auto.cancel = () => { stopped = true; stop(); retrying = false; auto.on = false; };
+    const attempt = () => {
+      if (dead() || running) return Promise.resolve();
+      running = true; stop();
+      const call = Promise.resolve(S.unlockStayOpen());
+      auto.inflight = call;
+      return call.then(ok => {
+        running = false;
+        if (dead()) return;
+        retrying = ok === 'retry';
+        if (ok === true) { auto.on = false; try { localStorage.removeItem(GUARD_KEY); } catch (e) {} return; }
+        if (ok === 'retry') {
+          if (tries < BACKOFF.length) { timer = setTimeout(attempt, BACKOFF[tries++]); return; }
+          release(); return;   // budget spent: the PIN prompt, record untouched
+        }
+        release();
         if (ok === false) setStayOpen(false);   // the engine deleted a record that would not open this church
-      });
-    }).catch(() => { if (live) setBusy(false); });
-    return () => { live = false; };
+      }).catch(() => { running = false; if (!dead()) release(); });
+    };
+    const onVis = () => {
+      if (dead() || !S.stayOpenStatus || document.visibilityState !== 'visible' || !retrying) return;
+      tries = 0; setAuto(true); setBusy(true); attempt();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    Promise.resolve(S.stayOpenStatus ? S.stayOpenStatus() : null).then(st => {
+      if (dead() || !st) return;
+      // st.unknown: the store did not answer. Draw the box TICKED (a record is probably there) and go down the
+      // retry/backoff path - never the "no record" path.
+      const live = !!(st.active || st.unknown);
+      setStayAvail(!!st.available); setStayOpen(!!(st.available && live));
+      if (!st.available || !live || !S.unlockStayOpen) return;
+      setAuto(true); setBusy(true);
+      return attempt();
+    }).catch(() => { if (!dead()) release(); });
+    return () => { live = false; stop(); auto.cancel = null; document.removeEventListener('visibilitychange', onVis); };
   }, []);
   useStE(() => { if (waitLeft <= 0) return; const t = setInterval(() => { const g = readGuard(); const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); setWaitLeft(left); if (left <= 0) { setErr(''); clearInterval(t); } }, 500); return () => clearInterval(t); }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
   const submit = async () => {
-    if (!pin || busy) return;
+    if (!pin || (busy && !auto.on)) return;
     const g0 = readGuard();
     if ((g0.until || 0) > Date.now()) { setErr('Too many attempts — wait a moment.'); return; }
+    // A typed PIN beats the automatic replay: stop it for good on this mount (it deletes nothing), and let a
+    // call already in flight finish first so the two never overlap in the engine.
+    const flight = auto.on ? auto.inflight : null;
+    if (auto.cancel) auto.cancel();
+    setAutoBusy(false);
     setBusy(true); setErr('');
+    if (flight) {
+      try { await flight; } catch (e) {}
+      if (window.Steward.hasKey) return;   // the replay opened it while we waited: nothing left to unlock
+    }
     const ok = await window.Steward.unlock(pin);   // fires steward-key on success → StewardRoot re-renders
     if (ok) {
       try { localStorage.removeItem(GUARD_KEY); } catch {}
@@ -855,8 +902,13 @@ function StewardUnlock() {
       try {
         if (window.Steward.setStayOpen) {
           const want = stayAvail && stayOpen;
-          const done = await window.Steward.setStayOpen(pin, want);
-          if (!want && done === false && window.Steward.clearStayOpen) await window.Steward.clearStayOpen();
+          // Only a ticked box saves, and only a box the steward UNTICKED deletes. Untouched + unticked means "the
+          // screen did not know" (null read, or submitted before status resolved): leave the record alone.
+          if (want) await window.Steward.setStayOpen(pin, true);
+          else if (stayTouched.current) {
+            const done = await window.Steward.setStayOpen(pin, false);
+            if (done === false && window.Steward.clearStayOpen) await window.Steward.clearStayOpen();
+          }
         }
       } catch (e) {}
       return;
@@ -875,6 +927,12 @@ function StewardUnlock() {
       setBusy(false); setPin('');
       setLostKey(true);
       setErr('This computer’s secure storage isn’t responding, so the console can’t tell whether a church key is stored here. Restart the console to try again — and if it keeps happening, restore from your 12 words rather than setting up a new church, which would replace a key that may still be there.');
+      return;
+    }
+    if (window.Steward.unlockStoreMiss === true) {   // === true: only the engine’s own flag
+      // The secure store gave back nothing while a church key is on this device: not a wrong PIN, so no lockout.
+      setBusy(false); setPin('');
+      setErr('Secure storage didn’t answer — try again.');
       return;
     }
     if (window.Steward.deviceKeyLost) {
@@ -907,14 +965,15 @@ function StewardUnlock() {
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}{blocked ? ' (' + waitLeft + 's)' : ''}</div> : null}
         {stayAvail ? (
           <label style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 14, cursor: 'pointer', textAlign: 'left' }}>
-            <input type="checkbox" aria-label="Stay open for 30 days" checked={stayOpen} onChange={e => setStayOpen(e.target.checked)} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
+            <input type="checkbox" aria-label="Stay open for 30 days" checked={stayOpen} onChange={e => { stayTouched.current = true; setStayOpen(e.target.checked); }} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
             <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
               Stay open for <b>30 days</b>.<br />
-              <span style={{ color: 'var(--ink-3)' }}>Anyone who can unlock this phone can act as the church.</span>
+              <span style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>Anyone who can unlock this phone can open this console and act as the church, even after it locks itself.</span>
             </span>
           </label>
         ) : null}
-        <button onClick={submit} disabled={!pin || busy || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
+        <button onClick={submit} disabled={!pin || (busy && !autoBusy) || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || (busy && !autoBusy) || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy && !(autoBusy && pin) ? (autoBusy ? 'Reopening…' : 'Unlocking…') : 'Unlock')}</button>
+        {autoBusy ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 8 }}>Reopening automatically — or type your PIN to unlock now.</div> : null}
         {/* AUDIT-2026-07-30. The lost-device-key message used to say 'Use "I have my 12 words"' — a control that
             exists only in the MEMBER app. The console's equivalent is called "Restore a church" and lives on
             StewardWelcome, which steward-root.jsx renders ONLY when no key blob exists. So while locked, the
@@ -984,7 +1043,7 @@ function StewardRoot() {
   // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
   useStE(() => {
     if (!ks.has || !window.Steward.hasPinLock || !window.Steward.hasPinLock()) return;
-    let t; const reset = () => { clearTimeout(t); t = setTimeout(() => window.Steward.lock(), 10 * 60 * 1000); };
+    let t; const reset = () => { clearTimeout(t); t = setTimeout(() => window.Steward.lock('idle'), 10 * 60 * 1000); };
     const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
     evs.forEach(e => window.addEventListener(e, reset, { passive: true })); reset();
     return () => { clearTimeout(t); evs.forEach(e => window.removeEventListener(e, reset)); };

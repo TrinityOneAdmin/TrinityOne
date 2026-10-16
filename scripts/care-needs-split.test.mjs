@@ -66,13 +66,13 @@ test('finished needs drop out, and a signed-out reader is offered nothing of the
 //     contains the word, so "the file mentions mineBlock" proves nothing at all
 import { stripComments } from './test-slice.mjs';
 
-test('the member’s own needs are rendered, in both variants of the screen', () => {
+test('the member’s own needs are rendered on the Care page', () => {
+  // Care moved OFF Today onto the Care page (owner 2026-10-16); CareCard renders only embedded now, so the
+  // own-needs block is built once and rendered once (the embedded "If you can help" section). Today's side is
+  // held by today-care-is-a-link.test.mjs (CareCard non-embedded renders nothing; the badged Care link).
   const code = stripComments(SRC);
-  assert.match(code, /const mineBlock = mineNeeds\.length \?/, 'the block is no longer built from the split');
+  assert.match(code, /const mineBlock = mineNeeds\.length \?/, 'the own-needs block is no longer built from the split');
   const uses = (code.match(/\{mineBlock\}/g) || []).length;
-  assert.equal(uses, 2,
-    `the own-needs block is rendered ${uses} time(s), expected 2 — the Care tab and the Today card. ` +
-    'Deleting these is invisible to every other test and empties a recipient’s screen.');
-  // …and the volunteering block must still be there beside it, or this fix has eaten the other half.
-  assert.match(code, /\{live\.length \? needsBlock : null\}/, 'the volunteering list is gone from Today');
+  assert.equal(uses, 1, `the own-needs block is rendered ${uses} time(s), expected 1 (the embedded Care tab)`);
+  assert.match(code, /\{needsBlock\}/, 'the volunteering list is gone from the Care page');
 });

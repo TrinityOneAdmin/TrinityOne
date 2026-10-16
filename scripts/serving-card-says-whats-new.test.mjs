@@ -532,3 +532,62 @@ test('no Care link when the church has care disabled', () => {
       `has care turned off would tap it and find nothing`);
   }
 });
+
+// ── the X on the "You're serving" strip (owner 2026-10-15) ─────────────────────────────────────────────────
+// Both surfaces — the Today card and Community's ServingEntry — dismiss with the SAME per-slot key, so one X
+// clears both and a NEW slot brings the strip back. A pending "can you serve?" ask has NO X: hiding it is a
+// silent drop. Both are rendered for real; sabotage-proven (see commit message).
+const SLOT = { id: 'rota:1', teamName: 'Welcome', role: 'Greeter', date: '2026-10-04', service: 'Sunday' };
+const SLOT2 = { id: 'rota:2', teamName: 'Welcome', role: 'Greeter', date: '2026-10-11', service: 'Sunday' };
+const xBtn = tree => find(tree, n => n.type === 'button' && typeof (n.props || {}).onClick === 'function'
+  && (n.props || {})['aria-label'] === 'Dismiss');
+
+test('Today: the "You’re serving" strip has an X; clicking it hides the strip; a NEW slot brings it back', () => {
+  const s = todayScreen({ servNext: SLOT });
+  let tree = s.draw();
+  assert.equal(texts(tree).join('|').includes('serving'), true, 'the strip is not on the screen to begin with');
+  assert.equal(xBtn(tree).length, 1, 'no X on the serving strip');
+  let stopped = false;
+  xBtn(tree)[0].props.onClick({ stopPropagation() { stopped = true; } });
+  assert.equal(stopped, true, 'the X lets the tap through to the card, which would open the overlay');
+  assert.equal(s.opened.length, 0, 'dismissing opened the Serving overlay');
+  tree = s.draw();
+  assert.equal(texts(tree).join('|').includes('serving'), false, 'the strip is still there after the X');
+  assert.equal(servingCard(tree).length >= 1, true, 'dismissing the strip removed the whole What’s happening card');
+  // same phone, a different slot: the strip returns
+  s.ctx.servNext = SLOT2;
+  assert.equal(texts(s.draw()).join('|').includes('serving'), true, 'a new slot did not bring the strip back');
+});
+
+test('Today: a pending "can you serve?" ask has NO X', () => {
+  const s = todayScreen({ servNext: SLOT, servPending: [{ id: 'ask1' }] });
+  const tree = s.draw();
+  assert.equal(texts(tree).join('|').includes('waiting for your reply'), true, 'the pending strip is missing');
+  assert.equal(xBtn(tree).length, 0, 'a pending ask can be dismissed — that is a silent drop');
+});
+
+function servingEntry(over) {
+  const { React, draw } = miniReact();
+  const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
+  const store = new Map();
+  const localStorage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem(k, v) { store.set(k, String(v)); } };
+  const { ServingEntry } = loadScreen('app/screens-chat.jsx', ['ServingEntry'], { React, window: {}, localStorage, Icon, console });
+  const ctx = { servNext: null, servPending: [], openServing() {}, ...over };
+  return { ctx, store, draw: () => draw(ServingEntry, { ctx }) };
+}
+
+test('Community ServingEntry: X hides the strip, shares the Today key, and is absent for a pending ask', () => {
+  const s = servingEntry({ servNext: SLOT });
+  let tree = s.draw();
+  const x = find(tree, n => (n.props || {})['aria-label'] === 'Dismiss');
+  assert.equal(x.length, 1, 'no X on the Community serving strip');
+  assert.equal(texts(tree).join('|').includes('serving'), true);
+  x[0].props.onClick({ stopPropagation() {} });
+  assert.equal(s.store.get('trinityone.servStripDismiss'), 'rota:1|2026-10-04|Welcome|Greeter',
+    'the Community X writes a different key from the Today X, so one would not clear the other');
+  tree = s.draw();
+  assert.equal(texts(tree).join('|').includes('serving'), false, 'strip still there after the X');
+  const p = servingEntry({ servNext: SLOT, servPending: [{ id: 'a' }] }).draw();
+  assert.equal(find(p, n => (n.props || {})['aria-label'] === 'Dismiss').length, 0, 'a pending ask has an X');
+  assert.equal(texts(p).join('|').includes('waiting for your reply'), true);
+});

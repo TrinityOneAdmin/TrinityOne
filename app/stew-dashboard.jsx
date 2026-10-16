@@ -3194,7 +3194,7 @@ function NewPostModal({ onClose }) {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {targets.map(g => (
                 <button key={g.id} onClick={() => setTarget(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: '1px solid ' + (target === g.id ? 'var(--clay)' : 'var(--line)'), background: target === g.id ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: target === g.id ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-                  <Icon name={g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat'} size={13} color="currentColor" />{g.name}{g.kind === 'team' ? <span style={{ fontSize: 10, fontWeight: 800, opacity: .6, letterSpacing: '.4px' }}>TEAM</span> : null}</button>
+                  <Icon name={groupIcon(g)} size={13} color="currentColor" />{g.name}{g.kind === 'team' ? <span style={{ fontSize: 10, fontWeight: 800, opacity: .6, letterSpacing: '.4px' }}>TEAM</span> : null}</button>
               ))}
             </div>
           </div>
@@ -3264,7 +3264,7 @@ function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
   );
 }
 
-function Panel({ title, action, children, style = {}, scroll = false }) {
+function Panel({ title, action, children, style = {}, scroll = false, collapsible = false, open = true, onToggle }) {
   const narrow = useStewNarrow();
   return (
     <div className="sk-panel" style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
@@ -3273,10 +3273,11 @@ function Panel({ title, action, children, style = {}, scroll = false }) {
           <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, margin: 0 }}>{title}</h2>
           <div style={{ flex: 1, minWidth: 24 }} />
           {!narrow ? action : null}
+          {collapsible ? <button onClick={onToggle} aria-expanded={open} aria-label={(open ? 'Collapse ' : 'Expand ') + title} title={open ? 'Collapse' : 'Expand'} style={{ border: 'none', background: 'none', cursor: 'pointer', display: 'flex', padding: 4, marginLeft: 4, color: 'var(--ink-3)' }}><Icon name={open ? 'chevD' : 'chevU'} size={18} color="currentColor" /></button> : null}
         </div>
         {(narrow && action) ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{action}</div> : null}
       </div>
-      {scroll ? <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div> : children}
+      {!open ? null : scroll ? <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div> : children}
     </div>
   );
 }
@@ -3345,6 +3346,9 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const under850 = useStewNarrow(850);
   const fourUp = snug && !under850;
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
+  const [groupsOpen, setGroupsOpen] = React.useState(true);   // the Groups & rooms card's body, folded by its header chevron
+  const [activityOpen, setActivityOpen] = React.useState(true);   // likewise the Recent activity card
+  const [joinOpen, setJoinOpen] = React.useState(true);   // the Joining code card's body; the chevron in its header folds it away
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
   // people waiting for approval (only when the church requires it) — surfaced big on the dashboard
@@ -3398,6 +3402,25 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     try { u = window.StewardMeals.subscribeCareRequests(list => { setOpenCareReqs((list || []).filter(r => r && r.status === 'open').length); setCareNewMsgs((list || []).filter(r => r && r.status !== 'open' && r.newMessage).length); }); } catch (e) {}
     return () => { try { u && u(); } catch (e) {} };
   }, [careAllowed, _ovConn]);
+  // WHO HAS ANSWERED, not just that someone asked. Needs a steward opened that members have since signed up to:
+  // one line per need, naming the people (careSignupSummary, app/stew-meals.jsx — a pure function). Nothing on
+  // the Overview named a responder before; the names lived two clicks away in the need's detail.
+  const _sgnNeeds = window.useMealsNeeds ? window.useMealsNeeds() : [];
+  const _sgnSlots = window.useMealsSlots ? window.useMealsSlots() : [];
+  const _sgnDir = window.useStewardDirectory ? window.useStewardDirectory() : {};
+  const careSignups = (careAllowed && window.careSignupSummary)
+    ? window.careSignupSummary(_sgnNeeds, _sgnSlots, (pk) => (_sgnDir && _sgnDir[pk] && _sgnDir[pk].name) || (String(pk).slice(0, 6) + '…' + String(pk).slice(-4)), window.todayISO ? window.todayISO() : '').slice(0, 4)
+    : [];
+  const careSignupBanner = careSignups.length ? (
+    <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 28%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
+      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={21} color="currentColor" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>People have signed up to help</div>
+        {careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>)}
+      </div>
+      <Icon name="chevR" size={15} color="var(--ink-3)" />
+    </button>
+  ) : null;
   const careReqBanner = (openCareReqs || careNewMsgs) ? (
     <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={21} color="currentColor" /></div>
@@ -3475,7 +3498,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     </div>
   );
   const groupsPanel = (
-    <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={fillStyle}>
+    <Panel title="Groups & rooms" action={<button onClick={() => onTab('groups')} style={{ border: 'none', background: 'none', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Manage →</button>} style={fillStyle} collapsible open={groupsOpen} onToggle={() => setGroupsOpen(o => !o)}>
       <div className="no-scrollbar" style={listStyle}>
         {groups.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>No groups yet — create your church’s first chat room.</div> : null}
         {groups.map(g => (
@@ -3490,13 +3513,13 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     </Panel>
   );
   const joinPanel = (
-    <Panel title="Joining code">
+    <Panel title="Joining code" collapsible open={joinOpen} onToggle={() => setJoinOpen(o => !o)}>
       <JoinCard qrSize={92} center={stacked} />
       <div style={{ marginTop: 12 }}><PushEnabler /></div>
     </Panel>
   );
   const activityPanel = (
-    <Panel title="Recent activity" style={fillStyle}>
+    <Panel title="Recent activity" style={fillStyle} collapsible open={activityOpen} onToggle={() => setActivityOpen(o => !o)}>
       {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
       <div className="no-scrollbar" style={stacked ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {activity.map((a) => {
@@ -3524,7 +3547,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{verseBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3533,7 +3556,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{verseBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3542,6 +3565,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       {pendingBanner}
       {careReqBanner}
+      {careSignupBanner}
       {stewardReqBanner}
       {verseBanner}
       {stat}
@@ -4032,7 +4056,37 @@ function GroupChatModal({ group, onClose }) {
     clearTimeout(modTimer.current);
     modTimer.current = setTimeout(() => setModMsg(null), 9000);
   };
+  // TAP OFF THE ⋯ MENU CLOSES IT (owner 2026-10-14). Only registered while a menu is open, removed when it
+  // closes. pointerdown (not click) so a touch and a mouse behave alike; capture so a bubble's own handler
+  // cannot swallow it. A press INSIDE the [data-chat-menu] wrapper (the ⋯ button and its menu) is ignored: the
+  // button's own toggle and the items' own handlers do their job. Pure open/close — pin/remove are untouched.
+  React.useEffect(() => {
+    if (!menuFor) return undefined;
+    const off = (e) => {
+      const t = e && e.target;
+      if (t && typeof t.closest === 'function' && t.closest('[data-chat-menu]')) return;
+      setMenuFor('');
+    };
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [menuFor]);
+  // SAME FOR THE REACTIONS PICKER (owner 2026-10-15): tapping off closes it too, universally. Mirrors the
+  // ⋯-menu effect just above (known-good on device); uses the shared TrinityReplyKit.tapOffHandler for the
+  // "off" rule. The bubble toggles the picker, so it and the picker row carry data-gc-rx and a press on them
+  // is ignored.
+  React.useEffect(() => {
+    if (!rxFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-gc-rx]', () => setRxFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [rxFor]);
   const scRef = React.useRef(null);
+  // ⚠ THE ⋯ MENU IS CLIPPED NEAR THE BOTTOM. It lives inside the `overflowY: auto` message scroller, so a menu
+  // opened on the last message(s) was cut off under the composer (owner device report, Pixel console group
+  // chat). Same fix StewDmWindow already carries: the LAST message opens its menu UPWARD (over the message
+  // before it), and any open menu scrolls itself into view so a message near the bottom edge can't hide it.
+  const lastMsgId = msgs.length ? msgs[msgs.length - 1].id : '';
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
   const GROUP_EMOJI = ['❤️', '🙏', '👍', '😂', '🔥', '🎉'];
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
   React.useEffect(() => window.Steward.subscribeGroupPin(group.id, setPin), [group.id]);
@@ -4042,13 +4096,26 @@ function GroupChatModal({ group, onClose }) {
   // way out and the steward watched their answer vanish into a room it never reached. Clear ONLY once a relay
   // has taken it; otherwise keep the words and say so through the banner doPin/doUnpin/doRemove already use.
   const [sending, setSending] = React.useState(false);
+  // REPLYING — the shared TrinityReplyKit (app/reply-kit.jsx), as StewDmWindow and the member app use it. The
+  // reply is cleared only once a relay has taken the post (like the words); a failed send leaves it in place,
+  // and the .then/.catch put it back if the steward moved on to another message while it was in flight.
+  const [replyTo, setReplyTo] = React.useState(null);
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const send = () => {
     const t = text.trim(); if (!t || sending) return;
     setSending(true);
-    Promise.resolve(window.Steward.publishPost(t, group.id))
-      .then((ok) => { setSending(false); if (ok) setText(''); else showMod('That didn’t send — nothing reached your church. Your message is still in the box; try again.'); })
-      .catch(() => { setSending(false); showMod('That didn’t send — the relay could not be reached. Your message is still in the box; try again.'); });
+    const quoting = replyTo;
+    Promise.resolve(window.Steward.publishPost(t, group.id, quoting ? { id: quoting.id, by: quoting.by } : undefined))
+      .then((ok) => { setSending(false); if (ok) { setText(''); setReplyTo(r => (r === quoting ? null : r)); } else { setReplyTo(r => r || quoting); showMod('That didn’t send — nothing reached your church. Your message is still in the box; try again.'); } })
+      .catch(() => { setSending(false); setReplyTo(r => r || quoting); showMod('That didn’t send — the relay could not be reached. Your message is still in the box; try again.'); });
   };
+  const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
+  // SWIPE TO REPLY (APK): one row is dragged at a time, so one ref + one {id, dx} state serves the list.
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const swipe = (m) => isNative
+    ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
+    : {};
   const react = (m, emoji) => { window.Steward.reactGroup(group.id, m.id, m.by, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const doPin = (m) => {
     setMenuFor('');
@@ -4087,6 +4154,10 @@ function GroupChatModal({ group, onClose }) {
   };
   // ── group events: schedule from the chat window + show what's upcoming ──
   const [gevents, setGevents] = React.useState([]);
+  // fold the "UPCOMING IN THIS GROUP" strip away when it lists more than one event (default open, remembered per room)
+  const gevKey = 'trinityone.console.groupEvOpen.' + group.id;
+  const [gevOpen, setGevOpenState] = React.useState(() => { try { return window.localStorage.getItem(gevKey) !== '0'; } catch { return true; } });
+  const setGevOpen = (v) => { setGevOpenState(v); try { window.localStorage.setItem(gevKey, v ? '1' : '0'); } catch {} };
   React.useEffect(() => (window.Steward.subscribeGroupEvents ? window.Steward.subscribeGroupEvents(group.id, setGevents) : undefined), [group.id]);
   const [composeEvt, setComposeEvt] = React.useState(false);
   const [evt, setEvt] = React.useState({ title: '', date: '', time: '', where: '' });
@@ -4111,7 +4182,7 @@ function GroupChatModal({ group, onClose }) {
   return (
     <div style={{ width: '100%', maxWidth: 'calc(100vw - 32px)', height: 480, maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '16px 16px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenRise .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
-          <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={isTeam ? (group.icon || 'shield') : group.kind === 'broadcast' ? 'send' : 'chat'} size={19} /></div>
+          <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={groupIcon(group)} size={19} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{group.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{isTeam ? 'Team chat' : group.kind === 'broadcast' ? 'Broadcast' : 'Group chat'} · you post as the church</div></div>
           <button onClick={() => setComposeEvt(v => !v)} title="Schedule an event for this group" style={{ border: 'none', background: composeEvt ? 'var(--clay-soft)' : 'var(--clay)', color: composeEvt ? 'var(--clay-ink)' : '#fff', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}><Icon name="calPlus" size={15} color="currentColor" /> Event</button>
           <button onClick={onClose} title="Close chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
@@ -4150,18 +4221,27 @@ function GroupChatModal({ group, onClose }) {
             </div>
           </div>
         ) : null}
-        {gevents.length ? (
+        {gevents.length ? (() => {
+          const shown = gevents.slice(0, 3);
+          const foldable = shown.length > 1;
+          const nx = new Date(shown[0].date + 'T00:00');
+          const summary = shown.length + ' events' + (!isNaN(nx) ? ' · next ' + ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][nx.getDay()] + ' ' + nx.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][nx.getMonth()] : '');
+          return (
           <div style={{ padding: '9px 14px', borderBottom: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-            <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', marginBottom: 5 }}>UPCOMING IN THIS GROUP</div>
-            {gevents.slice(0, 3).map(ev => (
-              <button key={ev.id} onClick={() => setEvDetail(ev)} title="See full details" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink)', padding: '3px 0', width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)', marginBottom: (foldable && !gevOpen) ? 2 : 5 }}>
+              <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
+              {foldable ? <button onClick={() => setGevOpen(!gevOpen)} aria-expanded={gevOpen} aria-label={gevOpen ? 'Collapse upcoming events' : 'Expand upcoming events'} data-ev-chevron style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, margin: '-8px -4px -8px 0', borderRadius: 999, border: 'none', background: 'transparent', cursor: 'pointer' }}><Icon name={gevOpen ? 'chevU' : 'chevD'} size={15} color="var(--clay-ink)" /></button> : null}
+            </div>
+            {foldable && !gevOpen ? <button onClick={() => setGevOpen(true)} data-ev-summary style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{summary}</button> : shown.map((ev, i) => (
+              <button key={ev.id} onClick={() => setEvDetail(ev)} title="See full details" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink)', padding: '7px 0', minHeight: 36, boxSizing: 'border-box', width: '100%', border: 'none', borderTop: i ? '1px solid var(--line)' : 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                 <Icon name="calendar" size={13} color="var(--clay)" />
                 <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.title}</span>
                 <span style={{ color: 'var(--ink-3)', flexShrink: 0, marginLeft: 'auto' }}>{ev.date}{ev.time ? ' · ' + ev.time : ''}</span>
               </button>
             ))}
           </div>
-        ) : null}
+          );
+        })() : null}
         <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
           {msgs.map(m => (m.removed ? (
@@ -4177,19 +4257,25 @@ function GroupChatModal({ group, onClose }) {
               <button onClick={() => doUnremove(m)} aria-label={'Put back the removed message from ' + (nameFor(m.by) || 'a member')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', padding: '4px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Put back</button>
             </div>
           ) : (
-            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
+            <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative',
+              ...(isNative ? TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) : {}) }}>
+              {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
               {!m.mine ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, paddingLeft: 2 }}>
                 <SkBadge initials={initialsFor(m.by)} av={avFor(m.by)} pubkey={m.by} size={20} radius={7} accent="var(--sage)" />
                 <span style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{nameFor(m.by)}</span>
               </div> : null}
+              {m.replyTo && m.quote
+                ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: msgText(m.quote) })
+                : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
-                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
-                <div style={{ position: 'relative', flexShrink: 0 }}>
+                <div data-gc-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
+                <div data-chat-menu="1" style={{ position: 'relative', flexShrink: 0 }}>
                   {/* NAMED, and it is the ONLY route to Remove and Pin. Measured 2026-09-04: 21px wide,
                       empty innerText, aria-label null — a screen reader had nothing to announce. */}
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" aria-label={'Moderate the message from ' + (nameFor(m.by) || 'a member')} aria-expanded={menuFor === m.id} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
                   {menuFor === m.id ? (
-                    <div style={{ position: 'absolute', top: 22, left: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <div ref={menuIntoView} data-reply-menu={m.id === lastMsgId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastMsgId ? { bottom: 22, marginBottom: 2 } : { top: 22 }), left: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button>
                       <button onClick={() => (pin && pin.msgId === m.id) ? doUnpin() : doPin(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="#8a6717" /> {(pin && pin.msgId === m.id) ? 'Unpin message' : 'Pin message'}</button>
                       <button onClick={() => doRemove(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay-ink)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button>
                     </div>
@@ -4204,7 +4290,7 @@ function GroupChatModal({ group, onClose }) {
                 </div>
               ) : null}
               {rxFor === m.id ? (
-                <div style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+                <div data-gc-rx="1" style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                   {GROUP_EMOJI.map(emo => (
                     <button key={emo} onClick={() => react(m, emo)} title={'React with ' + emo} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 3px', borderRadius: 7, opacity: m.myReaction === emo ? 1 : 0.85 }}>{emo}</button>
                   ))}
@@ -4213,6 +4299,7 @@ function GroupChatModal({ group, onClose }) {
             </div>
           )))}
         </div>
+        {replyTo ? TrinityReplyKit.bar({ variant: 'console', who: nameFor(replyTo.by), text: msgText(replyTo), onCancel: () => setReplyTo(null) }) : null}
         <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderTop: '1px solid var(--line)' }}>
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
           <button onClick={send} disabled={!text.trim() || sending} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: (text.trim() && !sending) ? 1 : 0.55 }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
@@ -4384,6 +4471,7 @@ function DashGroups() {
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
   const [settingsFor, setSettingsFor] = React.useState(null);       // APK: group whose settings sheet is open
+  const [iconFor, setIconFor] = React.useState(null);               // WEB: group whose icon picker is open (the APK uses the settings sheet)
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -4401,7 +4489,7 @@ function DashGroups() {
   const raw = (g) => (g && rawById.get(g.id)) || g;
   const rawByIdRef = React.useRef(rawById); rawByIdRef.current = rawById;   // the dialogs read THIS at save time, not the map from the render they opened in
   const currentOf = (g) => () => (g && rawByIdRef.current.get(g.id)) || null;   // null = deleted meanwhile; the dialogs then publish nothing
-  const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
+  const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: groupIcon(g), fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
     const f = [];
@@ -4485,6 +4573,7 @@ function DashGroups() {
                 {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             ) : null}
+            <button onClick={(e) => { e.stopPropagation(); setIconFor(raw(it)); }} title="Change icon" aria-label={'Change icon for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center' }}><Icon name={groupIcon(it)} size={15} color="currentColor" /></button>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
@@ -4530,6 +4619,21 @@ function DashGroups() {
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
       {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
+      {iconFor ? (() => {
+        // WEB console: the same GroupIconPicker + the same publish the APK sheet uses (raw document, only `icon` changed).
+        const g = iconFor;
+        return (
+          <div onClick={() => setIconFor(null)} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
+            <div role="dialog" aria-modal="true" aria-label={'Icon for ' + g.name} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '18px 22px 22px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{g.name}</div>
+                <button onClick={() => setIconFor(null)} title="Close" aria-label="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+              </div>
+              <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setIconFor({ ...g, icon: ic }); }} />
+            </div>
+          </div>
+        );
+      })() : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
@@ -4540,7 +4644,7 @@ function DashGroups() {
           <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
             <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat'} size={20} /></div>
+                <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={groupIcon(g)} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{g.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{g.kind === 'team' ? 'Team' : g.kind === 'broadcast' ? 'Broadcast' : 'Group'} settings</div></div>
                 <button onClick={() => setSettingsFor(null)} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
               </div>
@@ -4549,6 +4653,8 @@ function DashGroups() {
                 <div style={sLabel}><Icon name={g.childsafe ? 'check' : 'pray'} size={18} color={g.childsafe ? 'var(--sage)' : 'var(--ink-3)'} /><div><div style={sName}>Child-safe</div><div style={sSub}>{g.childsafe ? 'Members marked as a child can join' : 'Hidden from children'}</div></div></div>
                 <input type="checkbox" className="sw" checked={!!g.childsafe} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe — the relay didn\'t accept it.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
               </div>
+
+              <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setSettingsFor({ ...g, icon: ic }); }} />
 
               {g.kind !== 'team' ? (
                 <div style={sToggle}>
@@ -5749,6 +5855,12 @@ function DashVersePrompt() {
   var maxChap = bookEntry ? bookEntry[1] : 0;
   var chapList = [];
   for (var i = 1; i <= maxChap; i++) chapList.push(i);
+  // verses that exist in the chosen chapter (VP_BOOKS.verses: one comma list of verse counts per book)
+  var verseList = [];
+  if (bookEntry && chap) {
+    var nVerses = Number(String((VP_BOOKS.verses || [])[VP_BOOKS.indexOf(bookEntry)] || '').split(',')[Number(chap) - 1]) || 0;
+    for (var vi = 1; vi <= nVerses; vi++) verseList.push(vi);
+  }
 
   var assembled = '';
   if (book && chap) {
@@ -5819,8 +5931,7 @@ function DashVersePrompt() {
   };
 
   var selStyle = { height: 42, padding: '0 10px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
-  var numStyle = Object.assign({}, selStyle, { width: 72, textAlign: 'center' });
-
+  
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       {vp && vp.ref ? (function() {
@@ -5867,7 +5978,7 @@ function DashVersePrompt() {
       })() : null}
 
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', flex: 1, minHeight: 0, alignItems: 'flex-start' }}>
-      <Panel title="Add a passage" style={{ flex: '1 1 280px', maxWidth: '50%', minWidth: 280 }}>
+      <Panel title="Add a passage" style={{ flex: '1 1 100%', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Pick a verse or range. Add multiple passages, then push them all to the church at once.</div>
         {bibleVersions.length > 1 ? <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TRANSLATION</div>
@@ -5891,13 +6002,19 @@ function DashVersePrompt() {
               {chapList.map(function(c) { return <option key={c} value={String(c)}>{c}</option>; })}
             </select>
           </div> : null}
-          {chap ? <div style={{ flex: '0 0 72px' }}>
+          {chap ? <div style={{ flex: '0 0 118px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>FROM</div>
-            <input type="number" min="1" value={fromV} onChange={function(e) { setFrom(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="v" style={numStyle} aria-label="From verse" />
+            <select value={fromV} onChange={function(e) { setFrom(e.target.value); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="From verse">
+              <option value="">Whole chapter</option>
+              {verseList.map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
+            </select>
           </div> : null}
-          {fromV ? <div style={{ flex: '0 0 72px' }}>
+          {fromV ? <div style={{ flex: '0 0 80px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TO</div>
-            <input type="number" min={Number(fromV) + 1} value={toV} onChange={function(e) { setTo(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="v" style={numStyle} aria-label="To verse (optional)" />
+            <select value={toV} onChange={function(e) { setTo(e.target.value); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="To verse (optional)">
+              <option value="">{'\u2014'}</option>
+              {verseList.filter(function(v) { return v >= Number(fromV); }).map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
+            </select>
           </div> : null}
         </div>
         {assembled ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
@@ -5917,7 +6034,7 @@ function DashVersePrompt() {
         })() : null}
       </Panel>
 
-      {refs.length > 0 ? <Panel title={'Passages to send \u00b7 ' + refs.length}>
+      {refs.length > 0 ? <Panel title={'Passages to send \u00b7 ' + refs.length} style={{ flex: '1 1 100%', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
           {refs.map(function(r, i) {
             var hasSched = r.date && r.time;
@@ -5945,7 +6062,7 @@ function DashVersePrompt() {
         </div>
       </Panel> : null}
 
-      {pvRefs.length > 0 ? <div style={{ flex: '1 1 100%', maxWidth: 420 }}>
+      {pvRefs.length > 0 ? <div style={{ flex: '1 1 100%', width: '100%', boxSizing: 'border-box' }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.3px' }}>MEMBER PREVIEW</div>
           <div style={{ borderRadius: 22, overflow: 'hidden', background: 'linear-gradient(155deg, #6b8f71 0%, #3d5a40 100%)', padding: '20px 20px 16px', color: '#fff', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,.15)' }}>
             <div style={{ position: 'absolute', inset: 0, opacity: .4, background: 'radial-gradient(circle at 80% 15%, rgba(255,255,255,.3), transparent 45%)', pointerEvents: 'none' }} />
@@ -5968,7 +6085,7 @@ function DashVersePrompt() {
           </div>
         </div> : null}
 
-      {refs.length === 0 && !assembled ? <div style={{ flex: '1 1 280px', maxWidth: '50%', minWidth: 280, padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13.5 }}>Pick a book and chapter above, then add it to the list.</div> : null}
+      {refs.length === 0 && !assembled ? <div style={{ flex: '1 1 100%', padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13.5 }}>Pick a book and chapter above, then add it to the list.</div> : null}
       </div>
     </div>
   );
@@ -6510,7 +6627,11 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   //
   // AND NOT ON A DELEGATED CONSOLE. The relay serves minors:/guardians: to the church key (or a safeguarding
   // steward) alone, so a steward holding only `members` — whose Reconnect the relay does accept, and for whom
-  // the button that opens this modal is deliberately offered — can NEVER satisfy minorsKnown. Gating them
+  // the button that opens this modal is deliberately offered — does not receive those documents. (CORRECTED
+  // 2026-10-15: an earlier version said such a steward "can NEVER satisfy minorsKnown". That is false: minorsKnown
+  // also turns true on EOSE while authenticated, so they DO satisfy it — without ever holding the document. That
+  // is why this guard excludes the delegate by `!actingChurch`, and why minorsKnown must not be read as "we know
+  // who the children are" on a delegate; see minorsDocSeen.) Gating them
   // would delete a shipped capability rather than close a hole. Their case is unchanged, and listed.
   const confirm = async () => {
     if (!newPub || same || busy) return;
@@ -6988,6 +7109,11 @@ function DashMembers() {
   // this file. That was equally true of photo suppression until a second way in was added.
   const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
   const isBlocked = (pk) => blockedSet.has(String(pk || '').toLowerCase());
+  // WHO THIS CONSOLE HOLDS AS BLOCKED THAT THE CHURCH'S LIST DOES NOT NAME (owner, 2026-10-15). A block this device remembers
+  // (Steward.blockedHere) outlives the list it came from, and the subscription above never shows it — so there was no
+  // Unblock to press and a steward could not clear it. The blocked panel below lists the union, so the control is always there.
+  const heldHere = (() => { try { return ((window.Steward.blockedHere && window.Steward.blockedHere()) || []).map(p => String(p || '').toLowerCase()); } catch (e) { return []; } })();
+  const blockedShown = [...(blockedList || []), ...heldHere.filter(p => !blockedSet.has(p))];
   // safeguarding: who's a child, and which adults are cleared to contact youth (mirrors the church's cleared-worker list)
   const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], nophoto: [] };
   // WHO HOLDS A CHECK-IN CLEARANCE, so that marking one of them as a child can withdraw it (see toggleMinor).
@@ -8225,16 +8351,16 @@ function DashMembers() {
               {showInactive ? inactiveM.map(m => memberRow(m, true)) : null}
             </React.Fragment>
           ) : null}
-          {blockedList.length ? (
+          {blockedShown.length ? (
             <React.Fragment>
               <button onClick={() => setShowBlocked(s => !s)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, border: '1px dashed color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'var(--surface)', cursor: 'pointer', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>
-                <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedList.length}
+                <Icon name={showBlocked ? 'chevU' : 'chevD'} size={15} color="currentColor" /> {showBlocked ? 'Hide' : 'See'} blocked · {blockedShown.length}
               </button>
               {showBlocked && blockErr ? (
                 <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11, marginBottom: 8,
                   background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 38%, var(--line))', color: 'var(--ink)' }}>{blockErr}</div>
               ) : null}
-              {showBlocked ? blockedList.map(pk => (
+              {showBlocked ? blockedShown.map(pk => (
                 <div key={pk} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', opacity: 0.85 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="shield" size={18} /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -10518,6 +10644,27 @@ window.DashSermons = DashSermons;
 // the church add its own — Testimony, Praise, … — published as one church-signed doc. Icon/accent come from
 // fixed allowlists (no free-text CSS/icons). A tag's id is STABLE once saved, so renaming its label never
 // orphans messages already flagged with it.
+// The icon a chat room shows on the console: the steward's chosen one when it is on the allowlist, else
+// today's default for the room's kind. ONE helper for every place the console draws a room's icon.
+function groupIcon(g) {
+  const ok = window.roomIconOk ? window.roomIconOk(g && g.icon) : '';
+  return ok || (g && g.kind === 'team' ? 'shield' : g && g.kind === 'broadcast' ? 'send' : 'chat');
+}
+// The Icon row in a room's settings sheet: a grid of the allowlisted icons; picking one calls onPick(name).
+function GroupIconPicker({ group, onPick }) {
+  const cur = groupIcon(group);
+  const list = window.ROOM_ICONS || [];
+  return (
+    <div style={{ padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>Icon</div>
+      <div role="group" aria-label="Room icon" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        {list.map(ic => (
+          <button key={ic} onClick={() => onPick(ic)} aria-label={'Icon ' + ic} aria-pressed={cur === ic} style={{ width: 34, height: 34, borderRadius: 9, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: cur === ic ? '1.5px solid var(--clay)' : '1px solid var(--line)', background: cur === ic ? 'var(--surface-2)' : 'var(--surface)', color: cur === ic ? 'var(--clay-ink)' : 'var(--ink-3)' }}><Icon name={ic} size={16} color="currentColor" /></button>
+        ))}
+      </div>
+    </div>
+  );
+}
 const CHATTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'music'];
 const CHATTAG_ACCENTS = [['gold', 'var(--gold)'], ['sage', 'var(--sage)'], ['clay', 'var(--clay)'], ['sky', '#5360D6'], ['plum', '#C24B7A'], ['teal', '#2E8B8B']];
 const chatTagCss = (a) => (CHATTAG_ACCENTS.find(x => x[0] === a) || CHATTAG_ACCENTS[2])[1];
@@ -12522,6 +12669,28 @@ function StewVersion() {
 }
 
 // ── Facebook-style docked DM window: the church <-> one member, encrypted ──
+// Label over a message that was sent about an event (see schSendEventMessage): "<event name> Announcement", or
+// "Event announcement" when this console does not hold that event. No event id: plain "Announcement". Users: StewDmWindow.
+function stewDmAnnounceLabel(m, events) {
+  if (!m || !m.eventId) return 'Announcement';
+  const ev = (events || []).find(x => x && x.id === m.eventId);
+  const name = ev && String(ev.title || '').trim();
+  return name ? name + ' Announcement' : 'Event announcement';
+}
+// WHO MAY CARRY THE ANNOUNCEMENT LABEL (B5). The no-reply / event flags ride inside the encrypted DM body, so any
+// client can set them on an ordinary message. A message earns the label only if it came from THIS console (`mine`,
+// signed by the key it holds) or its sender is the church key or a steward on the church-signed roster. In this
+// thread a message that is not `mine` was sent by the peer, so the sender is `peerPub`. Everything else renders as a
+// plain message. `stewards` is the list from Steward.subscribeStewards (owner-key checked); `churchKey` may be ''.
+// Users: StewDmWindow only.
+function stewDmMayAnnounce(m, peerPub, stewards, churchKey) {
+  if (!m) return false;
+  if (m.mine) return true;
+  const p = String(peerPub || '').toLowerCase();
+  if (!p) return false;
+  if (churchKey && String(churchKey).toLowerCase() === p) return true;
+  return (Array.isArray(stewards) ? stewards : []).some(x => String(x || '').toLowerCase() === p);
+}
 function StewDmWindow({ peer, offset, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
@@ -12533,9 +12702,28 @@ function StewDmWindow({ peer, offset, onClose }) {
   // affordance already failed on the Oppo in the member app (DMSwipe), so reply must never hang on a gesture.
   const [replyTo, setReplyTo] = React.useState(null);
   const [menuFor, setMenuFor] = React.useState('');   // msg id whose ⋯ menu is open
-  const swipeRef = React.useRef(null);
+  // TAP OFF TO CLOSE (owner 2026-10-15): on device the ⋯ menu and the reactions picker in this DM window
+  // stayed open until tapped again. Same rule as GroupChatModal and the member app, via the shared pure
+  // TrinityReplyKit.tapOffHandler; the effect is local so it uses this screen's React and `document`. The
+  // bubble toggles the picker (data-dm-rx on it and the picker); the ⋯ button and its menu carry data-dm-menu
+  // so a press on them is ignored and the menu's own Reply button closes it.
+  React.useEffect(() => {
+    if (!rxFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-rx]', () => setRxFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [rxFor]);
+  React.useEffect(() => {
+    if (!menuFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-menu]', () => setMenuFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [menuFor]);
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
+  const _dmEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // names for the event label on a message
+  const _dmStewards = window.useStewardStewards ? window.useStewardStewards() : [];   // who may carry the Announcement label (stewDmMayAnnounce)
+  const _dmChurchKey = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
   const _threadConn = window.useStewardConn ? window.useStewardConn() : 0;
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey, _threadConn]);
   // ⚠ THE OTHER HALF OF THE OUTBOX, AND IT LIVED NOWHERE. The engine has had outboxForPeer, retryQueuedDM
@@ -12587,16 +12775,16 @@ function StewDmWindow({ peer, offset, onClose }) {
   const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
   const canReply = (m) => !m._pending && !m._failed;   // a waiting message has nothing on the relay to quote yet
   const byId = {}; shown.forEach(m => { byId[m.id] = m; });
-  const swipe = (m) => isNative && canReply(m) ? {
-    onTouchStart: (e) => { const t = e.touches && e.touches[0]; swipeRef.current = t ? { x: t.clientX, y: t.clientY } : null; },
-    onTouchEnd: (e) => {
-      const s0 = swipeRef.current; swipeRef.current = null;
-      const t = e.changedTouches && e.changedTouches[0];
-      if (!s0 || !t) return;
-      const dx = t.clientX - s0.x, dy = t.clientY - s0.y;
-      if (dx >= 48 && Math.abs(dy) < dx / 2) startReply(m);   // a rightward flick, not a scroll
-    },
-  } : {};
+  const lastId = shown.length ? shown[shown.length - 1].id : '';
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
+  // SWIPE TO REPLY (APK) — the shared TrinityReplyKit handlers (app/reply-kit.jsx): the row follows the finger, a
+  // reply arrow fills in at 48px, letting go past it replies (a cancel past it too), a vertical drag abandons it.
+  // One row is dragged at a time, so one ref + one {id, dx} state serves the whole list.
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const swipe = (m) => isNative && canReply(m)
+    ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
+    : {};
   const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
@@ -12613,24 +12801,27 @@ function StewDmWindow({ peer, offset, onClose }) {
           <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
             {shown.map(m => (
-              <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
-                {m.replyTo && byId[m.replyTo] ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: '100%' }}>
-                    <Icon name="reply" size={11} color="var(--ink-3)" />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{byId[m.replyTo].text}</span>
-                  </div>
-                ) : m.replyTo ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', margin: '0 4px 3px' }}>
-                    <Icon name="reply" size={11} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
-                  </div>
-                ) : null}
-                <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
+              <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative',
+                ...(isNative ? TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) : {}) }}>
+                {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
+                {m.replyTo && byId[m.replyTo]
+                  ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: byId[m.replyTo].text })
+                  : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
+                {((m.noReply || m.eventId) && stewDmMayAnnounce(m, peer.pubkey, _dmStewards, _dmChurchKey)) ? <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px' }}>{stewDmAnnounceLabel(m, _dmEvents)}</span> : null}
+                <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
                 {canReply(m) ? (
-                  <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions"
-                    style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={13} /></button>
+                  <button data-dm-menu="1" onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={menuFor === m.id}
+                    {...TrinityReplyKit.dotsProps(isNative, 24, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={13} /></button>
                 ) : null}
                 {menuFor === m.id ? (
-                  <div style={{ position: 'absolute', top: '100%', marginTop: 4, [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
+                  // ⚠ THE MENU LIVES INSIDE THE `overflowY: auto` MESSAGE SCROLLER, which CLIPS it. Below the LAST
+                  // message there is nothing to scroll into, so `top: 100%` put Reply outside the visible tile and
+                  // the steward saw the ⋯ do nothing (owner, members page: "reply is not working"). The docked tile
+                  // is only 420px tall, so this bites hardest here. Two guards: the last message opens its menu
+                  // UPWARD (over the message before it, never over its own words), and any open menu scrolls itself
+                  // into view so a message near the bottom edge can't hide it either. NEEDS A DEVICE/BROWSER REPRO
+                  // to confirm this was the whole cause.
+                  <div ref={menuIntoView} data-dm-menu="1" data-reply-menu={m.id === lastId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
                     <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer', padding: '7px 9px', borderRadius: 7, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
                       <Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                   </div>
@@ -12657,7 +12848,7 @@ function StewDmWindow({ peer, offset, onClose }) {
                   </div>
                 ) : null}
                 {rxFor === m.id ? (
-                  <div style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+                  <div data-dm-rx="1" style={{ display: 'flex', gap: 2, marginTop: 4, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                     {DM_EMOJI.map(emo => (
                       <button key={emo} onClick={() => react(m, emo)} title={'React with ' + emo} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 3px', borderRadius: 7, opacity: m.myReaction === emo ? 1 : 0.85 }}>{emo}</button>
                     ))}
@@ -12673,16 +12864,7 @@ function StewDmWindow({ peer, offset, onClose }) {
               <button onClick={() => setErr('')} title="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 1, flexShrink: 0 }}><Icon name="x" size={13} /></button>
             </div>
           ) : null}
-          {replyTo ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 11px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)', flexShrink: 0 }}>
-              <Icon name="reply" size={13} color="var(--ink-3)" />
-              <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)' }}>
-                <div style={{ fontWeight: 700, fontSize: 10.5, color: 'var(--ink-3)' }}>Replying to {replyTo.mine ? 'yourself' : (peer.name || 'Member')}</div>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{replyTo.text}</div>
-              </div>
-              <button onClick={() => setReplyTo(null)} aria-label="Stop replying" title="Stop replying" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={14} /></button>
-            </div>
-          ) : null}
+          {replyTo ? TrinityReplyKit.bar({ variant: 'console', who: replyTo.mine ? 'yourself' : (peer.name || 'Member'), text: replyTo.text, onCancel: () => setReplyTo(null) }) : null}
           <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
             <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} autoFocus placeholder="Message…" style={{ flex: 1, height: 38, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 13px', opacity: text.trim() ? 1 : 0.5 }}><Icon name="send" size={15} color="var(--on-clay)" /></button>

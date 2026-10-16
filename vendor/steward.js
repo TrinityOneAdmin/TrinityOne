@@ -17528,11 +17528,72 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  function _noteBlockedList(cp, epoch, list, at) {
+  var BLOCKED_SINCE_LS = "trinityone.steward.blockedsince.";
+  function _blockedSinceGet(cp) {
+    try {
+      const o = JSON.parse(lsGet(BLOCKED_SINCE_LS + cp) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function _blockedSinceStamp(cp, pks, at) {
+    const o = _blockedSinceGet(cp), keep = _blockedLastSet(cp);
+    let ch = false;
+    for (const raw of pks || []) {
+      const k = String(raw).toLowerCase();
+      if (keep.has(k) && (o[k] || 0) < (at || 0)) {
+        o[k] = at || 0;
+        ch = true;
+      }
+    }
+    for (const k of Object.keys(o)) if (!keep.has(k)) {
+      delete o[k];
+      ch = true;
+    }
+    if (ch) lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(o));
+  }
+  function _liftRememberedBlock(cp, epoch, pks, at) {
+    if (!_stillOn(cp, epoch)) return [];
+    const since = _blockedSinceGet(cp), held = _blockedLastSet(cp), lifted = [];
+    for (const raw of pks || []) {
+      const p = String(raw).toLowerCase();
+      if (!((at || 0) > (since[p] || 0))) continue;
+      if (!held.has(p) && !_localBlocked.has(p)) continue;
+      held.delete(p);
+      _localBlocked.delete(p);
+      delete since[p];
+      lifted.push(p);
+    }
+    if (!lifted.length) return lifted;
+    lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([...held]));
+    lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(since));
+    try {
+      const o = _pendingRotAll(cp);
+      let moved = false;
+      for (const k of Object.keys(o)) {
+        const before = (o[k].drop || []).length;
+        o[k].drop = (o[k].drop || []).filter((x) => lifted.indexOf(x) === -1);
+        if (o[k].drop.length !== before) moved = true;
+        if (!o[k].drop.length) delete o[k];
+      }
+      if (moved) lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+    } catch (x) {
+    }
+    for (const f of [..._membersReask]) {
+      try {
+        f();
+      } catch (e) {
+      }
+    }
+    return lifted;
+  }
+  function _noteBlockedList(cp, epoch, list, at, asserted) {
     if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
     _localBlocked = new Set((list || []).map((p) => String(p).toLowerCase()));
     _localBlockedAt = at || 0;
     lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([..._localBlocked]));
+    _blockedSinceStamp(cp, asserted || list, at || 0);
   }
   var EVENT_POLICIES = ["leaders", "stewards", "everyone"];
   var _nameKeyRing = [];
@@ -18102,6 +18163,7 @@ zoo`.split("\n");
   function makeStayOpen(deps) {
     const { secure, isNative, lsRemove, now: now2, readBlob, deriveBits, pubOf } = deps;
     let replayed = false;
+    const markerPresent = deps.markerPresent || (() => false);
     const purgeLegacy = () => {
       try {
         lsRemove(STAY_LEGACY_LS);
@@ -18123,10 +18185,24 @@ zoo`.split("\n");
         return false;
       }
     };
+    const TRANSIENT = { transient: true };
     const blobOf = async () => {
+      let raw;
       try {
-        const raw = await readBlob();
-        const b = raw ? JSON.parse(raw) : null;
+        raw = await readBlob();
+      } catch (e) {
+        return TRANSIENT;
+      }
+      if (!raw) {
+        let m = false;
+        try {
+          m = !!markerPresent();
+        } catch (e) {
+        }
+        return m ? TRANSIENT : null;
+      }
+      try {
+        const b = JSON.parse(raw);
         return b && b.ct && b.iv && b.salt ? b : null;
       } catch (e) {
         return null;
@@ -18139,11 +18215,15 @@ zoo`.split("\n");
     const read = async () => {
       purgeLegacy();
       if (!isNative()) return null;
-      let rec = null;
+      let rec = null, s;
       try {
         const { S } = await secure();
-        const s = await S.get(STAY_SS);
-        if (!s) return null;
+        s = await S.get(STAY_SS);
+      } catch (e) {
+        return TRANSIENT;
+      }
+      if (!s) return null;
+      try {
         rec = JSON.parse(String(s));
       } catch (e) {
         await clear();
@@ -18154,6 +18234,7 @@ zoo`.split("\n");
         return null;
       }
       const blob = await blobOf();
+      if (blob === TRANSIENT) return TRANSIENT;
       if (!blob || blob.salt !== rec.salt) {
         await clear();
         return null;
@@ -18164,16 +18245,28 @@ zoo`.split("\n");
       available: () => !!isNative(),
       purgeLegacy,
       clear,
+      // THREE-VALUED. `unknown` = the store did not answer (the read is TRANSIENT): we cannot say whether a record
+      // exists, so the caller must NOT treat it as "no record". `active` is true only for a record we have read.
       async status() {
         const r = await read();
-        return { available: !!isNative(), active: !!r };
+        const unknown = r === TRANSIENT;
+        return { available: !!isNative(), active: !!r && !unknown, unknown };
       },
-      // → { seed } on success; { seed: null, skipped: true } after the first try this launch; otherwise
-      // { seed: null } with any record deleted. The owner check: the seed must be the church the record names.
+      // Re-arm replay after an IDLE lock (see `replayed`).
+      rearm() {
+        replayed = false;
+      },
+      // → { seed } on success; { seed: null, skipped: true } while a replay is running or used up; { seed: null,
+      // retry: true } when the store did not answer (record KEPT, latch released so a retry can run); otherwise
+      // { seed: null } with any dead record deleted. The owner check: the seed must be the church the record names.
       async replay() {
         if (replayed) return { seed: null, skipped: true };
         replayed = true;
         const r = await read();
+        if (r === TRANSIENT) {
+          replayed = false;
+          return { seed: null, retry: true };
+        }
         if (!r) return { seed: null };
         try {
           const seed = await openBlob(b64d(r.rec.k), r.blob);
@@ -18193,7 +18286,7 @@ zoo`.split("\n");
           return !on && gone;
         }
         const blob = await blobOf();
-        if (!blob) return false;
+        if (!blob || blob === TRANSIENT) return false;
         try {
           const bits2 = await deriveBits(pin, b64d(blob.salt), blob.it || PIN_ITER_LEGACY);
           const seed = await openBlob(bits2, blob);
@@ -18201,14 +18294,14 @@ zoo`.split("\n");
           const { S } = await secure();
           await S.set(STAY_SS, payload);
           const back = await S.get(STAY_SS);
-          if (back == null || String(back) !== payload) {
+          if (back == null) return false;
+          if (String(back) !== payload) {
             await clear();
             return false;
           }
           return true;
         } catch (e) {
           console.warn("[steward] stay-open save failed", e);
-          await clear();
           return false;
         }
       }
@@ -18234,6 +18327,7 @@ zoo`.split("\n");
     lsRemove: (k) => localStorage.removeItem(k),
     now: () => Date.now(),
     readBlob: encBlobRaw,
+    markerPresent: () => !!lsGet(ENC_LS),
     deriveBits: deriveAesBits,
     pubOf: (m) => getPublicKey2(privateKeyFromSeedWords(m))
   });
@@ -18317,22 +18411,31 @@ zoo`.split("\n");
       return await decrypt2(sk2, peerPub, ct);
     }
   };
-  var _dmWrap = (text, replyTo) => {
-    if (!replyTo || !replyTo.id) return text;
+  var _dmWrap = (text, replyTo, meta) => {
+    const hasR = !!(replyTo && replyTo.id);
+    const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : "";
+    const cx = meta && meta.careOffer;
+    const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || "")) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
+    if (!hasR && !nr && !ev && !co) return text;
     try {
-      return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) });
+      const o = { v: 1, t: String(text) };
+      if (hasR) o.r = String(replyTo.id).slice(0, 64);
+      if (nr) o.nr = 1;
+      if (ev) o.ev = ev;
+      if (co) o.co = co;
+      return JSON.stringify(o);
     } catch (e) {
       return text;
     }
   };
   var _dmUnwrap = (body) => {
-    if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null };
+    if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
     try {
       const o = JSON.parse(body);
-      if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null };
+      if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || "")) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null };
     } catch (e) {
     }
-    return { text: body, replyTo: null };
+    return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
   };
   var _sOutKey = () => "trinityone.steward.outbox:" + (pub || "");
   var _sOutbox = [];
@@ -19471,6 +19574,7 @@ zoo`.split("\n");
     },
     async unlock(pin) {
       window.Steward.deviceKeyLost = false;
+      window.Steward.unlockStoreMiss = false;
       let raw;
       try {
         raw = await encBlobRaw();
@@ -19481,7 +19585,11 @@ zoo`.split("\n");
         }
         throw e;
       }
-      if (!raw) return lsGet(ENC_LS) ? false : true;
+      if (!raw) {
+        const marker = !!lsGet(ENC_LS);
+        if (marker) window.Steward.unlockStoreMiss = true;
+        return marker ? false : true;
+      }
       try {
         const o = JSON.parse(raw);
         const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
@@ -19502,15 +19610,16 @@ zoo`.split("\n");
     clearStayOpen() {
       return _stay.clear();
     },
-    // Replay the stored key ONCE per launch. true = unlocked; false = no usable record (any record deleted);
-    // null = already tried this launch, so a lock later in the session stays locked.
+    // Replay the stored key. true = unlocked; false = no usable record (a dead record is deleted); null = a replay
+    // is running or was used up (a typed PIN, or already tried since the last idle lock); 'retry' = the store did
+    // not answer, the record is KEPT, ask again.
     async unlockStayOpen() {
       const r = await _stay.replay();
-      if (!r.seed) return r.skipped ? null : false;
+      if (!r.seed) return r.retry ? "retry" : r.skipped ? null : false;
       _enterUnlocked(r.seed);
       return true;
     },
-    lock() {
+    lock(reason) {
       if (needsPin) return;
       sk = null;
       pub = null;
@@ -19521,6 +19630,12 @@ zoo`.split("\n");
       window.Steward.npub = null;
       window.Steward.hasKey = false;
       window.Steward.locked = !!lsGet(ENC_LS);
+      if (reason === "idle") {
+        try {
+          _stay.rearm();
+        } catch (e) {
+        }
+      }
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
     },
     // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
@@ -21117,7 +21232,12 @@ zoo`.split("\n");
     },
     // Post a kind-1 message into a group as the church. MUST carry ['p', churchPub] — the member's
     // subscribeGroup scopes by it, so without it the post is invisible to members (was the bug).
-    publishPost(content, group) {
+    //
+    // `replyTo` ({id, by}) makes it a reply, in the member app's exact shape (screens-chat.jsx send): an
+    // ['e', id, '', 'reply'] and a ['p', author]. They are APPENDED after ['p', pub] — which must stay first
+    // and present, because subscribeGroupChat/subscribeGroup scope on it. The relay scopes a kind-1 by the
+    // group's ['t'] tag (GROUP_CHURCH), not by p-tags, so these tags change neither church nor membership gate.
+    publishPost(content, group, replyTo) {
       if (!sk) return Promise.resolve(null);
       let body = content || "", encTag = [];
       const gkey = group && (_skeys[group] || [])[0];
@@ -21133,7 +21253,7 @@ zoo`.split("\n");
         console.warn("[steward] refusing plaintext post into sealed room \u2014 no key for", group);
         return Promise.resolve(null);
       }
-      return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag], content: body }));
+      return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag, ...replyTo && replyTo.id ? [["e", replyTo.id, "", "reply"], ...replyTo.by ? [["p", replyTo.by]] : []] : []], content: body }));
     },
     // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
     // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
@@ -21237,9 +21357,11 @@ zoo`.split("\n");
       let pending = [], batchTimer = null;
       let hidden = /* @__PURE__ */ new Set();
       const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
-        if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", reactions: [], myReaction: "" };
+        if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", replyTo: "", quote: null, reactions: [], myReaction: "" };
+        const q = m.replyTo ? byId.get(m.replyTo) : null;
+        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind } : null;
         const r = rx.get(m.id);
-        return { ...m, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
+        return { ...m, quote, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
       });
       const emit = () => onMsgs(attach());
       const resolveName = (pk) => {
@@ -21300,7 +21422,7 @@ zoo`.split("\n");
             }
             if (!ok) return;
           }
-          byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "" });
+          byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "", replyTo: (e.tags.find((t) => t[0] === "e" && t[3] === "reply") || [])[1] || "" });
           resolveName(e.pubkey);
           emit();
         },
@@ -21336,11 +21458,11 @@ zoo`.split("\n");
       return publish(finalizeEvent2(_monotonic({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", targetPub || ""], ["t", NET], ["t", groupId]], content: emoji || "-" }), sk));
     },
     // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
-    async sendDM(peerHex, content, replyTo) {
+    async sendDM(peerHex, content, replyTo, meta) {
       if (!sk || !peerHex) return null;
       let enc = "";
       try {
-        enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo));
+        enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo, meta));
       } catch {
         return null;
       }
@@ -21399,16 +21521,18 @@ zoo`.split("\n");
         if (byId.has(e.id)) return;
         const mine = e.pubkey === pub;
         const other = mine ? peerHex : e.pubkey;
-        let text = "", replyTo = null, undecryptable = false;
+        let text = "", replyTo = null, undecryptable = false, noReply = false, eventId = null;
         try {
           const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content));
           text = un.text;
           replyTo = un.replyTo;
+          noReply = !!un.noReply;
+          eventId = un.eventId || null;
         } catch {
           text = "\u{1F512} (could not decrypt)";
           undecryptable = true;
         }
-        byId.set(e.id, { id: e.id, mine, text, replyTo, ts: e.created_at, undecryptable });
+        byId.set(e.id, { id: e.id, mine, text, replyTo, noReply, eventId, ts: e.created_at, undecryptable });
         emit();
       };
       const takeRx = (e) => {
@@ -21894,6 +22018,11 @@ zoo`.split("\n");
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (d !== BLOCKED_D + cp0) return false;
         if (_authFuture(e) || !_byChurch(e)) return false;
+        try {
+          const un = e.tags.filter((t) => t[0] === "unblocked" && t[1]).map((t) => t[1]);
+          if (un.length) _liftRememberedBlock(cp0, _tag.epoch, un, e.created_at);
+        } catch (x) {
+        }
         if (e.created_at < latest) return false;
         latest = e.created_at;
         try {
@@ -21901,7 +22030,7 @@ zoo`.split("\n");
         } catch {
           cur = [];
         }
-        if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
+        if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
         return true;
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
@@ -21924,7 +22053,7 @@ zoo`.split("\n");
           tok.genuine = true;
           tok.at = Date.now();
           cur = [...cur];
-          _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
+          _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
           onBlocked(cur);
           _keysReadSignal("blocked");
         }
@@ -22054,8 +22183,11 @@ zoo`.split("\n");
       _localBlocked = /* @__PURE__ */ new Set([..._localBlocked, ...low]);
       _localBlockedAt = now();
       lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+      const stampAt = _localBlockedAt;
+      _blockedSinceStamp(cp0, low, stampAt);
       const content = JSON.stringify({ pubkeys: list });
-      const sent = _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk));
+      const unTags = [...off].filter((p) => !low.includes(p)).map((p) => ["unblocked", p]);
+      const sent = _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET], ...unTags], content }), sk));
       return _landed("blocked list", Promise.resolve(sent).then((ok) => {
         if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const p of drop) _localBlocked.delete(p);
@@ -22120,7 +22252,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -22134,7 +22266,7 @@ zoo`.split("\n");
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -22145,7 +22277,7 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === GUARDIANS_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
@@ -22155,7 +22287,7 @@ zoo`.split("\n");
             } catch {
               guardians = {};
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
+            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -22166,7 +22298,7 @@ zoo`.split("\n");
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
           sawEose = true;
-          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
+          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
         }
       });
       return () => {
@@ -22571,6 +22703,16 @@ zoo`.split("\n");
     },
     nameKeyReady() {
       return _nameKeyReady();
+    },
+    // Open a document sealed under the church name key (cleartext ones pass straight through); null = sealed and we
+    // hold no key for it YET. onNameKeyRing(fn) fires when the ring changes, so a reader can retry what it could not
+    // open — StewardMeals.subscribeCareAvail is the user (steward-meals is a separate bundle and cannot see the
+    // module-private _openChurchDoc / _onNameKeyRing).
+    openChurchDoc(content) {
+      return _openChurchDoc(content);
+    },
+    onNameKeyRing(fn) {
+      return _onNameKeyRing(fn);
     },
     // Is this team's roster on show only as a copy this console cannot open? StewardMeals.publishCareTeam refuses then.
     rosterLocked(teamId) {

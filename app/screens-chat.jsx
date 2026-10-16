@@ -299,7 +299,8 @@ function miniBtn() {
 const ROOM_KIND_LABEL = { Broadcast: 'From your church', Team: 'Team', Group: 'Group' };
 const roomKindLabel = (g) => (g && ROOM_KIND_LABEL[g.kind]) || (g && g.kind) || 'Group';
 // the icon the steward console has always used for a broadcast room, so the two surfaces agree
-const roomIcon = (g) => (g && g.broadcast) ? 'send' : (g && g.team) ? 'shield' : (g && g.prayer) ? 'pray' : 'chat';
+// A steward-chosen icon (validated against the allowlist on READ) wins; an absent or unknown one falls back to the kind's default.
+const roomIcon = (g) => (g && window.roomIconOk && window.roomIconOk(g.icon)) || ((g && g.broadcast) ? 'send' : (g && g.team) ? 'shield' : (g && g.prayer) ? 'pray' : 'chat');
 
 // ── group list (the Chat tab body) ──
 function ChatScreen({ ctx }) {
@@ -379,7 +380,7 @@ function ChatScreen({ ctx }) {
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
-        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category,
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category, icon: g.icon,
           // CARRY THE PERMISSION FIELDS. This map builds a NEW object from an explicit list, so anything
           // not named here is dropped — and `members` below is deliberately turned into a COUNT. The
           // event-permission check needs the church's chosen tier, the group's named leaders and, for an
@@ -499,18 +500,12 @@ function ChatScreen({ ctx }) {
 
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 5px)">
-      <div style={{ marginBottom: 14, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
-        <ChurchPill ctx={ctx} />
-      </div>
-      {(ctx.requireFullName && !(ctx.joinState && ctx.joinState.isPending) && (myName(id) || '').trim().split(/\s+/).filter(Boolean).length < 2) ? (
-        <div onClick={() => ctx.openProfile()} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14, cursor: 'pointer', animation: 'trinityFade .5s ease both' }}>
-          <Icon name="pen" size={18} color="var(--clay)" style={{ flexShrink: 0 }} />
-          <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Add your full name.</b> {(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real first and last name so people can recognise you.</div>
-          <Icon name="chevR" size={17} color="var(--clay)" />
-        </div>
-      ) : null}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+      {/* TOP BAR. A church with a brand BANNER keeps the full-bleed 3:1 image, with the three icons in their own right-aligned
+          row beneath it (the image cannot sit inline). A church WITHOUT one gets ONE row: the church selector takes the
+          remaining width and ellipsises its name, the three icons keep their size on the right. */}
+      {(() => {
+        const topIcons = (
+        <div data-top-icons="1" style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
           <IconBtn name="search" onClick={() => { if (searchOpen) { setSearchOpen(false); setQ(''); } else setSearchOpen(true); }} title="Search" />
           <span style={{ position: 'relative', display: 'inline-flex' }}>
             <IconBtn name="send" onClick={() => ctx.openDMInbox()} title="Direct messages" />
@@ -521,8 +516,29 @@ function ChatScreen({ ctx }) {
             <span style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 999, background: 'var(--sage)', border: '2px solid var(--surface)' }} />
           </button>
         </div>
-      </div>
-
+        );
+        const topMb = (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20);
+        const hasBanner = !!(ctx.church && ctx.church.banner);
+        return hasBanner ? (
+          <div data-top-bar="banner" style={{ position: 'relative', marginBottom: topMb, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
+            <ChurchPill ctx={ctx} />
+            {/* the three icons FLOAT OVER the banner, in line with the church name at its top (ChurchPill reserves their width) */}
+            <div data-top-icons-float="1" style={{ position: 'absolute', right: 14, top: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>{topIcons}</div>
+          </div>
+        ) : (
+          <div data-top-bar="one-row" style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: topMb, animation: 'trinityFade .5s ease both' }}>
+            <div style={{ flex: 1, minWidth: 0 }}><ChurchPill ctx={ctx} /></div>
+            {topIcons}
+          </div>
+        );
+      })()}
+      {(ctx.requireFullName && !(ctx.joinState && ctx.joinState.isPending) && (myName(id) || '').trim().split(/\s+/).filter(Boolean).length < 2) ? (
+        <div onClick={() => ctx.openProfile()} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 14, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 26%, transparent)', marginBottom: 14, cursor: 'pointer', animation: 'trinityFade .5s ease both' }}>
+          <Icon name="pen" size={18} color="var(--clay)" style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Add your full name.</b> {(ctx.church && ctx.church.name) || 'Your church'} asks members to use a real first and last name so people can recognise you.</div>
+          <Icon name="chevR" size={17} color="var(--clay)" />
+        </div>
+      ) : null}
       {/* the wider network(s) this church belongs to — a small line right under the church it's part of */}
       {(ctx.churchNetworks || []).length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: givingOn ? 16 : 20, animation: 'trinityFade .5s ease .05s both' }}>
@@ -799,7 +815,7 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) 
           <span style={{ fontSize: 13 }}>{r.emoji}</span> {r.count}
         </button>
       ))}
-      <div style={{ position: 'relative' }}>
+      <div data-rx-pop="1" style={{ position: 'relative' }}>
         <button onClick={onOpenPicker} title="React" style={{
           width: 28, height: 22, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)',
           cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .8 }}>
@@ -978,54 +994,25 @@ function Row({ me, m, children, ctx, mod }) {
   // nothing replies — while the arrow the member watched fill in says it should have. Measured by driving
   // these three handlers with no redraw between the move and the lift: see
   // scripts/a-direct-message-can-be-answered.test.mjs. Read `swipe.current.dx`, never `dx`.
-  const swipe = React.useRef({ x: 0, y: 0, on: false, dx: 0 });
-  const [dx, setDx] = React.useState(0);
+  // The swipe itself now lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with the
+  // member DM and the console DM. Everything the notes above say still holds; it is just implemented there.
+  // The press-and-hold share timer rides along through the kit's start/move/end hooks.
   const canReply = typeof M.onReply === 'function';
-  const SWIPE_ARM = 48;    // how far to drag before letting go replies
-  const SWIPE_MAX = 76;    // and how far the bubble will move at all
-  const moveTo = (v) => { swipe.current.dx = v; setDx(v); };
-  const onTS = (e) => {
-    startLP();
-    const t = e.touches && e.touches[0];
-    swipe.current = t ? { x: t.clientX, y: t.clientY, on: true, dx: 0 } : { x: 0, y: 0, on: false, dx: 0 };
-    if (dx) setDx(0);
-  };
-  const onTM = (e) => {
-    cancelLP();
-    const t = e.touches && e.touches[0];
-    if (!t || !swipe.current.on || !canReply) return;
-    const ddx = t.clientX - swipe.current.x, ddy = t.clientY - swipe.current.y;
-    if (Math.abs(ddy) > Math.abs(ddx)) { swipe.current.on = false; moveTo(0); return; }   // scrolling, not swiping
-    moveTo(Math.max(0, Math.min(SWIPE_MAX, ddx)));
-  };
-  // A CANCEL PAST THE THRESHOLD STILL REPLIES, and that is deliberate. touchcancel is what Android fires when
-  // the system takes a gesture away mid-drag, and it is the single most likely way a horizontal drag inside a
-  // scrolling list ends on a phone. Once the arrow has FILLED IN the app has promised "let go and you reply";
-  // abandoning that on a cancel is how a member ends up unable to answer a message at all. Below the
-  // threshold nothing was promised, so a cancel just springs back.
-  const onTE = () => {
-    cancelLP();
-    const far = swipe.current.dx;
-    if (canReply && far >= SWIPE_ARM) { try { M.onReply(); } catch (err) {} }
-    swipe.current.on = false; swipe.current.dx = 0;
-    if (dx) setDx(0);
-  };
+  const sw = TrinityReplyKit.useSwipe(M.onReply, { enabled: canReply, onStart: startLP, onMove: cancelLP, onEnd: cancelLP });
   return (
     // touch-action: pan-y lets the message list keep scrolling and tells the compositor NOT to treat a
     // HORIZONTAL drag as a pan it owns. Without it the browser may claim the gesture for an ancestor scroller
     // and fire touchcancel part-way through the drag; React attaches touch listeners passively, so
     // preventDefault() cannot do this job and the CSS has to.
-    <div onTouchStart={onTS} onTouchEnd={onTE} onTouchCancel={onTE} onTouchMove={onTM} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both', touchAction: 'pan-y',
-        position: 'relative', transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
+    // zIndex: while THIS row's menu is open the whole row is lifted above the rows after it. The menu opens BELOW
+    // its message (top:100%) and each row is its own stacking context (the trinityFade entrance), so the menu's own
+    // zIndex:5 only ranks it inside the row and the NEXT message painted over it. Gated on the menu ONLY: the reaction
+    // picker opens upward and needs no lift.
+    <div {...sw.handlers} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
+        position: 'relative', zIndex: M.menuOpen ? 30 : undefined, ...sw.style }}>
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
-      {dx ? (
-        <div aria-hidden="true" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / SWIPE_ARM),
-          width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: dx >= SWIPE_ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <Icon name="reply" size={14} color={dx >= SWIPE_ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
-        </div>
-      ) : null}
+      {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
         <UserAvatar av={avOf(d)} name={d.handle} size={22} />
         {/* A PARISH LETTER: the church's name on the letterhead, the person's underneath. Round 6 had a vicar's
@@ -1049,22 +1036,17 @@ function Row({ me, m, children, ctx, mod }) {
         <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.when}</span>
       </div> : null}
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start' }}>
-        {M.replyParent ? (
-          <div style={{ maxWidth: 260, marginBottom: 4, padding: '5px 10px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)', fontSize: 12, lineHeight: 1.3 }}>
-            <div style={{ fontWeight: 700, color: 'var(--ink-3)' }}>{M.replyParent.me ? 'You' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(M.replyParent.pubkey).handle) || 'someone')}</div>
-            <div style={{ color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{shareTextOf(M.replyParent) || '…'}</div>
-          </div>
-        ) : m.replyTo ? (
+        {M.replyParent
+          ? TrinityReplyKit.quote({ variant: 'card',
+              who: M.replyParent.me ? 'You' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(M.replyParent.pubkey).handle) || 'someone'),
+              text: shareTextOf(M.replyParent) || '…' })
           // it IS a reply, but the parent isn't in the loaded window (thin pipe) or was hidden/deleted — keep the
           // reply context without leaking any content (audit U2 + U3)
-          <div style={{ maxWidth: 260, marginBottom: 4, padding: '5px 10px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--line)', fontSize: 12, lineHeight: 1.3, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Icon name="reply" size={12} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
-          </div>
-        ) : null}
+          : m.replyTo ? TrinityReplyKit.quote({ variant: 'card', missing: true }) : null}
         {children}
-        {(M.onReply || M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)) ? (
+        {(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM) || M.onReply) ? (
           <React.Fragment>
-            <button onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
+            <button data-msg-menu="1" onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!M.menuOpen} {...(() => { const base = { position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }; const replyOnly = !(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)); return replyOnly ? TrinityReplyKit.dotsProps(true, 30, base) : { style: base }; })()}><Icon name="dots" size={15} /></button>
             {/* ⚠ THE MENU MUST NOT COVER THE MESSAGE IT ACTS ON. It used to open at `top: 18, left: 0` —
                 18px DOWN FROM THE TOP OF THE BUBBLE, i.e. across it — so a steward deciding whether to
                 reply, or to reply privately, could no longer read the words they were answering. Device
@@ -1077,7 +1059,7 @@ function Row({ me, m, children, ctx, mod }) {
                 everyone else's — which is also what keeps it on a narrow screen: a menu wider than its
                 bubble can then only grow INWARD, toward the middle of the screen, never off the edge. */}
             {M.menuOpen ? (
-              <div style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div data-msg-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
                     · not my own message (replying privately to yourself is nonsense), and
@@ -1156,6 +1138,12 @@ function evtToMsg(e) {
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
+  // same per-slot dismiss as the Today strip (same localStorage key); a pending ask is never dismissable
+  const [, setDismissTick] = React.useState(0);
+  const servKey = next ? [next.id || '', next.date || '', next.teamName || '', next.role || ''].join('|') : '';
+  let dismissed = false;
+  try { dismissed = !!servKey && localStorage.getItem('trinityone.servStripDismiss') === servKey; } catch {}
+  const dismiss = (e) => { if (e) e.stopPropagation(); try { if (servKey) localStorage.setItem('trinityone.servStripDismiss', servKey); } catch {} setDismissTick(t => t + 1); };
   // ONE card: the "What's happening" entry point, with "You're serving" / "Can you serve?" folded onto it as a
   // single line underneath when there's a slot (owner 2026-10-14) — not a separate alternate card.
   return (
@@ -1169,11 +1157,12 @@ function ServingEntry({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
-        {(next || pending) ? (
+        {(pending || (next && !dismissed)) ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderTop: '1px solid var(--line)', fontSize: 12.5, fontWeight: 700, minWidth: 0,
             background: pending ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 8%, var(--surface))', color: pending ? '#8a6717' : 'var(--sage)' }}>
             <Icon name={pending ? 'sparkle' : 'calCheck'} size={14} color="currentColor" />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{pending ? `${pending} request${pending > 1 ? 's' : ''} waiting for your reply` : `You’re serving · ${next.teamName} · ${next.role}`}</span>
+            {!pending ? <span role="button" tabIndex={0} onClick={dismiss} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') dismiss(e); }} aria-label="Dismiss" title="Dismiss — it comes back for your next slot" style={{ flexShrink: 0, width: 40, height: 40, margin: '-13px -8px -13px auto', borderRadius: 999, background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>✕</span> : null}
           </div>
         ) : null}
       </button>
@@ -1257,9 +1246,31 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [reactions, setReactions] = useC({});    // targetId -> { reactorPubkey: {content, ts} }
   const [pickerFor, setPickerFor] = useC(null);  // message id whose emoji picker is open
   const [composeEvt, setComposeEvt] = useC(false); // group-leader event composer open?
+  // The "UPCOMING IN THIS GROUP" card can be folded away when it lists more than one event (default OPEN, remembered
+  // per room). Declared here, BEFORE the `if (!group) return null` below, so the hook count never changes.
+  const evOpenKey = 'trinityone.groupEvOpen.' + (group ? group.id : '');
+  const [evOpen, setEvOpenState] = useC(() => { try { return lsGet(evOpenKey, true) !== false; } catch (e) { return true; } });
+  const setEvOpen = (v) => { setEvOpenState(v); try { lsSet(evOpenKey, v); } catch (e) {} };
   const [pin, setPin] = useC(null);              // the group's pinned message { msgId, text, by, ts } or null
   const [hidden, setHidden] = useC(null);        // Set of removed message ids (null until first load)
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
+  // TAP OFF A POP-OVER TO CLOSE IT (owner 2026-10-15). The reactions picker and the leader ⋯ menu stayed open
+  // on a phone until tapped again — there is no "click elsewhere" the way a mouse gives one. The rule for
+  // "off" is shared (TrinityReplyKit.tapOffHandler); the effect is local so it uses this screen's own React
+  // and `document`. The trigger + pop-over carry the data-attr so a press on them is ignored (the picker
+  // button toggles itself; a menu item runs its own close).
+  useCE(() => {
+    if (!pickerFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-rx-pop]', () => setPickerFor(null));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [pickerFor]);
+  useCE(() => {
+    if (!menuFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-msg-menu]', () => setMenuFor(null));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [menuFor]);
   const isLeader = !!group && (ctx.myLeaderGroups || []).some(g => g.id === group.id);
   const churchNpub = ctx.church && ctx.church.npub;
   // `broadcast` is carried through the room-list map; `kind` is the fallback for a room reached by any
@@ -1567,6 +1578,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
   // Ask Fellowship rather than re-deriving the rule here — the tiers live in one place so a screen can never
   // drift from what the relay will actually accept.
+  const evFoldable = groupEvents.length > 1;
+  const evShown = !evFoldable || evOpen;
+  const evNext = groupEvents[0] ? new Date(groupEvents[0].date + 'T00:00') : null;
+  const evSummary = groupEvents.length + ' events' + (evNext && !isNaN(evNext) ? ' · next ' + ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][evNext.getDay()] + ' ' + evNext.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][evNext.getMonth()] : '');
   const canAddEvent = !!(window.Fellowship && window.Fellowship.canAddGroupEvent
     && window.Fellowship.canAddGroupEvent(ctx.church && ctx.church.npub, group));
 
@@ -1650,6 +1665,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
               <Icon name="calendar" size={14} color="var(--clay)" /> <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
+              {evFoldable ? <button onClick={() => setEvOpen(!evOpen)} aria-expanded={evOpen} aria-label={evOpen ? 'Collapse upcoming events' : 'Expand upcoming events'} data-ev-chevron style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, margin: '-6px -2px -6px 0', borderRadius: 999, border: 'none', background: 'transparent', cursor: 'pointer' }}><Icon name={evOpen ? 'chevU' : 'chevD'} size={16} color="var(--clay-ink)" /></button> : null}
               {/* The church empowered this member to run the group, and the console's own message tells them to
                   "open the group and tap Event" — so the button has to be here, and only here, or that promise
                   is broken. Hidden entirely for members without the authority: an offer the relay would refuse
@@ -1657,7 +1673,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
               {canAddEvent ? <button onClick={() => setComposeEvt(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 999, cursor: 'pointer', border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'var(--surface)', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 11, letterSpacing: '.3px' }}><Icon name="plus" size={12} color="var(--clay)" /> EVENT</button> : null}
             </div>
             {!groupEvents.length ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', paddingBottom: 2 }}>Nothing planned yet — add the group’s next gathering so everyone sees it.</div> : null}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {!evShown ? <button onClick={() => setEvOpen(true)} data-ev-summary style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{evSummary}</button> : null}
+            {evShown ? <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {groupEvents.map(e => {
                 const p = (window.svParts ? window.svParts(e.date) : null) || {};
                 const d = new Date(e.date + 'T00:00');
@@ -1678,7 +1695,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                   </button>
                 );
               })}
-            </div>
+            </div> : null}
           </div>
         ) : null}
         {/* AN EMPTY ROOM MUST EXPLAIN ITSELF. This rendered {bubbles} alone, so a room with no messages was a
@@ -1742,16 +1759,9 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             </div>
           </div>
         ) : null}
-        {replyTo ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 8, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)' }}>
-            <Icon name="reply" size={15} color="var(--clay)" style={{ flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.3 }}>
-              <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>Replying to {replyTo.me ? 'yourself' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(replyTo.pubkey).handle) || 'someone')}</div>
-              <div style={{ color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shareTextOf(replyTo) || '…'}</div>
-            </div>
-            <button onClick={() => setReplyTo(null)} title="Cancel reply" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 2 }}><Icon name="x" size={16} /></button>
-          </div>
-        ) : null}
+        {replyTo ? TrinityReplyKit.bar({ variant: 'card',
+          who: replyTo.me ? 'yourself' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(replyTo.pubkey).handle) || 'someone'),
+          text: shareTextOf(replyTo) || '…', onCancel: () => setReplyTo(null) }) : null}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
           <div style={{ position: 'relative', flexShrink: 0 }}>
             {actionsOpen ? <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} /> : null}
@@ -1978,55 +1988,36 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 // it is there is nothing left to tap — so this also carries the same three-dots control a group room has had
 // all along (Row, above). The menu offers Reply only: inside a direct message you are ALREADY private, so
 // "Reply privately" would be meaningless here, and there is nothing to moderate in someone else's inbox.
+// The label over a church message. One that came with an event id reads "<event name> Announcement" (the name is
+// looked up in the events this app already holds; an event it does not hold falls back to "Event announcement").
+// A no-reply message with no event id is plain "Announcement". Users: DMThread only.
+function dmAnnounceLabel(m, events) {
+  if (!m || !m.eventId) return 'Announcement';
+  const ev = (events || []).find(x => x && x.id === m.eventId);
+  const name = ev && String(ev.title || '').trim();
+  return name ? name + ' Announcement' : 'Event announcement';
+}
 function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
-  // ⚠ READ `st.current.dx`, NEVER `dx` — see the long note on the same trap in Row above. `dx` state exists
-  // only to redraw; the live offset is the ref, because the last touchmove of a flick and the touchend after
-  // it reach these handlers with no render in between.
-  const st = React.useRef({ x: 0, y: 0, on: false, dx: 0 });
-  const [dx, setDx] = React.useState(0);
-  const ARM = 48, MAX = 76;
-  const moveTo = (v) => { st.current.dx = v; setDx(v); };
-  const onTS = (e) => {
-    const t = e.touches && e.touches[0];
-    st.current = t ? { x: t.clientX, y: t.clientY, on: true, dx: 0 } : { x: 0, y: 0, on: false, dx: 0 };
-    if (dx) setDx(0);
-  };
-  const onTM = (e) => {
-    const t = e.touches && e.touches[0];
-    if (!t || !st.current.on) return;
-    const ddx = t.clientX - st.current.x, ddy = t.clientY - st.current.y;
-    if (Math.abs(ddy) > Math.abs(ddx)) { st.current.on = false; moveTo(0); return; }   // a scroll, not a swipe
-    moveTo(Math.max(0, Math.min(MAX, ddx)));
-  };
-  // Past the threshold a cancel still replies, for the reason written out in Row.
-  const onTE = () => {
-    const far = st.current.dx;
-    if (far >= ARM && onReply) { try { onReply(); } catch (e) {} }
-    st.current.on = false; st.current.dx = 0;
-    if (dx) setDx(0);
-  };
+  // The swipe lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with Row and the console
+  // DM. ⚠ its offset is a REF, never state read at lift time: see the note on the same trap in the kit.
+  const sw = TrinityReplyKit.useSwipe(onReply);
   return (
-    // touch-action: pan-y — the list still scrolls, the browser does not claim the horizontal drag. See Row.
-    <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onTouchCancel={onTE}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative', touchAction: 'pan-y',
-        transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
-      {dx ? (
-        <div aria-hidden="true" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / ARM),
-          width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: dx >= ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <Icon name="reply" size={14} color={dx >= ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
-        </div>
-      ) : null}
+    // touch-action: pan-y (in sw.style) — the list still scrolls, the browser does not claim the horizontal drag.
+    <div {...sw.handlers}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative', ...sw.style }}>
+      {sw.cue}
       {/* the same shape Row uses: a relative column around the bubble so the dots can sit just outside it */}
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
         {children}
-        <button onClick={onOpenMenu} title="Message actions" aria-label="Message actions"
-          style={{ position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
+        {/* AN ANNOUNCEMENT IS STILL REPLYABLE (owner 2026-10-15: keep the label, allow replies). The `nr` flag
+            only drives the label now; every DM gets the swipe, the dots menu and Reply. */}
+        <button data-dm-menu="1" onClick={onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!menuOpen}
+          {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
+            justifyContent: 'center', boxShadow: 'var(--shadow)' })}><Icon name="dots" size={15} /></button>
         {/* below the bubble, anchored to the side the dots are on — see the long note in Row */}
         {menuOpen ? (
-          <div style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
+          <div data-dm-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
             borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
               padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>
@@ -2054,12 +2045,98 @@ function dmFailWording(evt) {
   return 'Not delivered. Private messages with this person are limited for safeguarding — a steward can help if you need to reach them.';
 }
 
+// CARE OFFER (2026-10-16): a steward offered this member one open day of a care need. Whether the "Accept this
+// day" button is drawn is decided HERE, at render, from live data — no timer, no stored state:
+//   · the offer must name a need that exists in the church's list (an invented or deleted one shows nothing);
+//   · that need must not be sealed or past its endDate, and the day must be one of its days and still OPEN
+//     (not taken by anyone, not skipped) — careNeedDays is the same answer the Care screen gives;
+//   · the day must not have passed, and the member's own "when I'm free" window must not have ended;
+//   · care must be switched on, and a known child is never offered a sign-up.
+// SENDER IDENTITY IS NOT CHECKED (it is not reliably known member-side). Worst case a forged offer lets a member
+// sign THEMSELVES up for a real, open day they could have signed up for on the Care screen anyway.
+// Pure: (offer {needId,isoDate}, care = ctx.care, today, minorState) -> { show, reason }.
+// minorState (NOT bare safeguard.isMinor): 'minor'|'maybe'|'adult'. Fail CLOSED on 'maybe' — isMinor is false for the
+// whole async loading window (app.jsx, see minorState), so gating on it would show a loading child the button. Mirrors
+// canVolunteer on the Care screen (screens-today.jsx). The engine fillCareSlot backstop also fails open on a cold start.
+function careOfferVerdict(offer, care, today, minorState) {
+  const no = (reason) => ({ show: false, reason });
+  if (!offer || !offer.needId || !offer.isoDate) return no('none');
+  if (minorState === 'minor' || minorState === 'maybe') return no('minor');
+  if (!care || !care.settings || !care.settings.enabled) return no('care-off');
+  if (offer.isoDate < today) return no('day-past');
+  const need = (care.needs || []).find(n => n && n.id === offer.needId);
+  if (!need || need._sealed) return no('need-gone');
+  if (need.endDate && need.endDate < today) return no('need-past');
+  const { dates, openDays } = careNeedDays(need, care.slots || [], care.skips || []);
+  if (!dates.includes(offer.isoDate)) return no('not-a-day');
+  if (!openDays.includes(offer.isoDate)) return no('day-taken');
+  const myPub = String(care.myPub || '').toLowerCase();
+  const mine = (care.avail || []).find(a => String(a && a.pubkey || '').toLowerCase() === myPub);
+  if (mine && mine.dates && mine.dates.to && mine.dates.to < today) return no('my-window-over');
+  return { show: true, reason: '' };
+}
+
+// The one-tap button under an offer bubble. Signs the member's OWN sign-up through the existing care.fill path.
+function CareOfferAccept({ offer, ctx }) {
+  const [st, setSt] = useC(null);   // { kind: 'ok'|'waiting'|'err'|'gone', text }
+  const [busy, setBusy] = useC(false);
+  const care = (ctx && ctx.care) || {};
+  const today = (typeof todayISO === 'function') ? todayISO() : '';
+  const v = careOfferVerdict(offer, care, today, (ctx && ctx.minorState) || 'maybe');
+  const note = st ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.45, margin: '4px 4px 0', maxWidth: 274, color: st.kind === 'err' || st.kind === 'gone' ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{st.text}</div> : null;
+  if (!v.show) return note;
+  const accept = async () => {
+    if (busy) return;
+    // re-decide at the moment of the tap: the day may have been taken while this screen sat open
+    const now = careOfferVerdict(offer, (ctx && ctx.care) || {}, (typeof todayISO === 'function') ? todayISO() : '', (ctx && ctx.minorState) || 'maybe');
+    if (!now.show) { setSt({ kind: 'gone', text: 'That day’s just been taken — nothing was signed up.' }); return; }
+    setBusy(true);
+    // Claim each MEAL still open on this day — not the whole day. A legacy whole-day slot ('') reads as
+    // covering EVERY meal, so it would double-book a meal another helper already took (the exact thing this
+    // invite exists to prevent). careNeedDays splits a meals day into its meals; a non-meals day is a single
+    // '' unit, so this stays one fill. (owner 2026-10-16 / audit fix)
+    const _need = (care.needs || []).find(n => n && n.id === offer.needId) || {};
+    const _nd = careNeedDays(_need, care.slots || [], care.skips || []);
+    const _open = (_nd.unitsOf ? _nd.unitsOf(offer.isoDate) : ['']).filter(m => !(_nd.takenUnit && _nd.takenUnit(offer.isoDate, m)));
+    let r = null;
+    if (!_open.length) { setBusy(false); setSt({ kind: 'gone', text: 'That day’s just been taken — nothing was signed up.' }); return; }
+    for (const _m of _open) { try { r = await care.fill(offer.needId, offer.isoDate, '', _m); } catch (e) { r = null; } if (!(r && r.ok)) break; }
+    setBusy(false);
+    // the RETURNED OBJECT decides, never its truthiness: fillCareSlot answers { ok, reason } and an object is always truthy
+    if (r && r.ok && !r._queued) setSt({ kind: 'ok', text: 'You’re signed up for that day — thank you.' });
+    else if (r && (r._queued || r.reason === 'unconfirmed')) setSt({ kind: 'waiting', text: 'Waiting — we couldn’t confirm that reached your church. It may well have; check Care before tapping again.' });
+    else if (r && r.reason === 'minor') setSt({ kind: 'err', text: 'This account can’t sign up for care days.' });
+    else setSt({ kind: 'err', text: 'That didn’t reach your church — you’re NOT signed up. Try again in a moment.' });
+  };
+  return (
+    <div style={{ margin: '5px 0 0' }}>
+      {st && st.kind !== 'err' ? null : <button onClick={accept} disabled={busy} className="sk-btn" style={{ padding: '8px 14px', fontSize: 13.5, fontWeight: 700, borderRadius: 999, border: 'none', background: 'var(--sage)', color: '#fff', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, fontFamily: 'var(--font-ui)' }}>{busy ? 'Signing up…' : 'Accept this day'}</button>}
+      {note}
+    </div>
+  );
+}
+
 function DMThread({ peer, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
   const [rxFor, setRxFor] = useC('');
   const [dmReply, setDmReply] = useC(null);   // the message being answered, or null — mirrors group rooms
   const [dmMenuFor, setDmMenuFor] = useC(null);   // which message has its three-dots menu open — mirrors `menuFor` in ChatRoom
+  // TAP OFF TO CLOSE (owner 2026-10-15), same as the group room above and the console. The reactions picker
+  // trigger is the bubble itself (data-dm-rx on the bubble AND the picker); the ⋯ menu lives in DMSwipe
+  // (data-dm-menu on the dots button and the menu). Shared rule, local effect — see the note in ChatRoom.
+  useCE(() => {
+    if (!rxFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-rx]', () => setRxFor(''));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [rxFor]);
+  useCE(() => {
+    if (!dmMenuFor) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-dm-menu]', () => setDmMenuFor(null));
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [dmMenuFor]);
   const scRef = useCR();
   const FS = window.Fellowship;
   const DM_EMOJI = REACT_EMOJIS;   // shared with group rooms — see the note on REACT_EMOJIS
@@ -2151,17 +2228,11 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
           <DMSwipe key={m.id} mine={m.mine} onReply={() => { setDmReply(m); setDmMenuFor(null); }}
             menuOpen={dmMenuFor === m.id} onOpenMenu={() => setDmMenuFor(dmMenuFor === m.id ? null : m.id)}>
             {/* the message this one answers, shown the same way a group room shows it */}
-            {m.replyTo && msgById[m.replyTo] ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: 274 }}>
-                <Icon name="reply" size={11} color="var(--ink-3)" />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{msgById[m.replyTo].content}</span>
-              </div>
-            ) : m.replyTo ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--ink-3)', margin: '0 4px 3px' }}>
-                <Icon name="reply" size={11} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
-              </div>
-            ) : null}
-            <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
+            {m.replyTo && msgById[m.replyTo]
+              ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: 274, text: msgById[m.replyTo].content })
+              : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
+            {(m.noReply || m.eventId) ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />{dmAnnounceLabel(m, ctx && ctx.churchEvents)}</span> : null}
+            <div data-dm-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
               {/* Same as the group bubble: the line breaks are in the message, HTML just collapses them.
@@ -2169,6 +2240,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                   defect ships. */}
               <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{m.content}</p>
             </div>
+            {m.careOffer && !m.mine ? <CareOfferAccept offer={m.careOffer} ctx={ctx} /> : null}
             {/* THE STATE THE COMMIT CLAIMED AND DID NOT SHIP. c2aacf7 queued a failed private message and
                 computed _pending/_failed for it — and then drew neither, so a message still waiting to send
                 looked exactly like one that had arrived. That is worse than the bug it replaced: the words are
@@ -2197,7 +2269,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
               </div>
             ) : null}
             {rxFor === m.id ? (
-              <div style={{ display: 'flex', gap: 3, marginTop: 5, padding: '5px 8px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
+              <div data-dm-rx="1" style={{ display: 'flex', gap: 3, marginTop: 5, padding: '5px 8px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, boxShadow: 'var(--shadow)' }}>
                 {DM_EMOJI.map(emo => (
                   <button key={emo} onClick={() => react(m, emo)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '2px 4px', borderRadius: 8, opacity: m.myReaction === emo ? 1 : 0.9 }}>{emo}</button>
                 ))}
@@ -2207,16 +2279,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
         ))}
       </div>
       {/* the message being answered, above the composer — the same affordance a group room shows */}
-      {dmReply ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-          <Icon name="reply" size={14} color="var(--ink-3)" />
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
-            <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--ink-3)' }}>Replying to {dmReply.mine ? 'yourself' : d.handle}</div>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{dmReply.content}</div>
-          </div>
-          <button onClick={() => setDmReply(null)} aria-label="Stop replying" style={{ border: 'none', background: 'var(--surface)', borderRadius: 999, width: 26, height: 26, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="x" size={14} /></button>
-        </div>
-      ) : null}
+      {dmReply ? TrinityReplyKit.bar({ variant: 'dm', who: dmReply.mine ? 'yourself' : d.handle, text: dmReply.content, onCancel: () => setDmReply(null) }) : null}
       {allowDM ? (
         <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9 }}>

@@ -1554,7 +1554,7 @@ function SchEventModal({ day, onClose }) {
               const on = group === g.id;
               return (
                 <button key={g.id || 'all'} onClick={() => setGroup(g.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-                  <Icon name={g.id ? (g.kind === 'team' ? (g.icon || 'shield') : 'chat') : 'send'} size={13} color="currentColor" />{g.name}</button>
+                  <Icon name={g.id ? (typeof groupIcon === 'function' ? groupIcon(g) : 'chat') : 'send'} size={13} color="currentColor" />{g.name}</button>
               );
             })}
           </div>
@@ -1605,9 +1605,7 @@ function DashCalendar() {
   const roomName = (id) => { const r = rooms.find(x => x.id === id); return (r && r.name) || 'Room'; };
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
   const rsvpSummary = (eventId) => {
-    const map = rsvps[eventId] || {}; const out = { going: [], maybe: [], no: [] };
-    for (const pub in map) { if (out[map[pub]]) out[map[pub]].push(nameFor(pub)); }
-    return out;
+    return schRsvpGroups(rsvps, eventId, nameFor);
   };
   const today = new Date();
   const [view, setView] = useSch({ y: today.getFullYear(), m: today.getMonth() });
@@ -1725,7 +1723,6 @@ function DashCalendar() {
                           {rs.maybe.length ? <span style={{ color: '#8a6717' }}>{rs.maybe.length} maybe</span> : null}
                           {rs.no.length ? <span style={{ color: 'var(--ink-3)' }}>{rs.no.length} can’t</span> : null}
                         </div>
-                        {rs.going.length ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 4, lineHeight: 1.45 }}>{rs.going.slice(0, 8).join(', ')}{rs.going.length > 8 ? ` +${rs.going.length - 8}` : ''}</div> : null}
                       </div>
                     );
                   })()}
@@ -1900,21 +1897,214 @@ window.SchEventEdit = SchEventEdit;
 
 // Full event details, openable from anywhere an event is tapped in the console (calendar, group chat).
 // Shows the date/time/place/blurb plus the RSVP breakdown (with names) and a Remove action.
+// ════ Message an event's people (2026-10-14) ════
+// A steward sends ONE message to everyone invited to an event, or just to those who said they are going. The
+// mechanism is a sealed direct message per person (Steward.sendDM): each is NIP-44 encrypted to its own
+// recipient, so nobody sees who else received it. RSVPs are untouched (they stay as they are published).
+//
+// WHO "EVERYONE INVITED" IS. An event belongs to a group (e.groupId) or to the whole church. An INVITE-ONLY
+// group has a roster (group.members) — that is its audience. An open group or a church-wide event has no
+// roster, so the audience is the church's members (`members` here is the PICKER view, useStewardPickableMembers:
+// not blocked, and admitted where the church requires approval). "Just those going" is the RSVPs marked
+// 'going', minus anyone on the blocklist. The sender is never messaged.
+// Users (rule 2): SchEventMessage (below) only.
+function schEventAudience({ event, mode, rsvps, members, groups, blocked, selfPub }) {
+  const e = event || {};
+  const low = (p) => String(p || '').toLowerCase();
+  const block = new Set((blocked || []).map(low));
+  const self = low(selfPub);
+  const map = (rsvps && rsvps[e.id]) || {};
+  let pubs;
+  if (mode === 'going') {
+    pubs = Object.keys(map).filter(p => map[p] === 'going');
+  } else {
+    const g = e.groupId ? (groups || []).find(x => x && x.id === e.groupId) : null;
+    pubs = (g && g.visibility === 'invite') ? (g.members || []).slice() : (members || []).map(m => m && m.pubkey);
+  }
+  const seen = new Set(); const out = [];
+  for (const p of pubs) { const k = low(p); if (!k || k === self || block.has(k) || seen.has(k)) continue; seen.add(k); out.push(p); }
+  return out;
+}
+// Sends to each person and COUNTS WHAT HAPPENED, because a fan-out that half-failed must not be reported as sent.
+// Steward.sendDM answers null when nothing was queued (no key / encrypt failed), the event with `_queued` when the
+// message is saved but not yet delivered, and the event when delivered. The three are counted apart.
+async function schSendEventMessage({ send, pubs, text, noReply, eventId }) {
+  let sent = 0, queued = 0; const failedPubs = [];
+  for (const p of pubs) {
+    let r = null;
+    try { r = await send(p, text, null, { noReply: !!noReply, eventId }); } catch (err) { r = null; }
+    if (!r) failedPubs.push(p); else if (r._queued) queued++; else sent++;
+  }
+  return { tried: pubs.length, sent, queued, failed: failedPubs.length, failedPubs };
+}
+function schSendSummary(r) {
+  if (!r) return '';
+  // B6 (2026-10-15): a group-post result is one post, not a fan-out. It must NEVER say "Sent" on a refusal
+  // (publishPost resolved null/false — e.g. a sealed room with no key, or the relay rejecting it), so the
+  // confirmation only ever follows a real post (CLAUDE.md "fix the control, not the label").
+  if (r.groupPost) return r.ok ? 'Posted to the group chat.' : 'Not posted — the group chat would not accept it. Try again.';
+  if (!r.failed && !r.queued) return `Sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'}.`;
+  const parts = [];
+  if (r.sent) parts.push(`${r.sent} sent`);
+  if (r.queued) parts.push(`${r.queued} saved and waiting for signal`);
+  if (r.failed) parts.push(`${r.failed} NOT sent`);
+  return `Not everyone was reached: ${parts.join(', ')}.`;
+}
+// B6 (2026-10-15): WHEN "everyone invited" IS A GROUP POST. An event tied to a group carries e.groupId. When that
+// id matches a group in the list, "everyone invited" IS the people in that room, so the message is ONE post into the
+// room (which its members already read, where replies live in the thread) rather than a sealed DM to each person.
+// This holds for EVERY kind of group — a plain chat group, a team, or a broadcast channel (since 0c827c93; owner,
+// 2026-10-15, confirmed): a team-tied "everyone invited" posts to the team's room ONLY, i.e. to that room's
+// members, not as a church-wide DM. Only a church-wide event (no groupId) or a groupId that matches no group in
+// the list passed in falls back to the per-person DM fan-out (the function returns null for those).
+// Users (rule 2): SchEventMessage only.
+function schEventPostGroup({ event, groups }) {
+  const e = event || {};
+  if (!e.groupId) return null;   // church-wide event: no group to post into, so it stays a DM fan-out
+  // Any group the event is tied to is a place to post this announcement — a plain chat group, a serving team's
+  // room, or a broadcast channel are all "the group the event lives in". "Everyone invited" means the people in
+  // that group (owner, 2026-10-15: "these events are specific to groups, so everyone is invited"). publishPost
+  // itself refuses an encrypted room with no key, so a room that genuinely can't take the post surfaces as "not
+  // posted" rather than being pre-filtered here.
+  return (groups || []).find(x => x && x.id === e.groupId) || null;
+}
+function SchEventMessage({ event, onClose }) {
+  const e = event || {};
+  const rsvps = window.useStewardRsvps ? window.useStewardRsvps() : {};
+  const pickable = window.useStewardPickableMembers ? window.useStewardPickableMembers() : [];
+  const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
+  const blocked = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const [mode, setMode] = React.useState('everyone');
+  const [noReply, setNoReply] = React.useState(false);
+  const [text, setText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [result, setResult] = React.useState(null);
+  const [retry, setRetry] = React.useState(null);   // the people a previous press could not reach
+  const [done, setDone] = React.useState(false);    // true ONLY when every person was reached and delivered
+  // A clean send says so for a moment, then closes the box. Anything less (failed, or saved-but-waiting) never sets
+  // `done`, so the box stays open with the words in it.
+  React.useEffect(() => { if (!done) return; const t = setTimeout(() => { if (onClose) onClose(); }, 1800); return () => clearTimeout(t); }, [done]);
+  const nameFor = (pub) => { const m = allMembers.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
+  const audience = schEventAudience({ event: e, mode, rsvps, members: pickable, groups, blocked, selfPub: window.Steward && window.Steward.pubkey });
+  const target = retry || audience;
+  // B6: "Everyone invited" posts into the originating chat group (if any); "Just those going" is an RSVP
+  // subset and can never be a group post, so it always fans out by DM. `retry` is DM-only too.
+  const postGroup = (mode === 'everyone' && !retry) ? schEventPostGroup({ event: e, groups }) : null;
+  const dlgRef = window.useStewDialog ? window.useStewDialog(onClose) : null;
+  const send = async () => {
+    if (busy || !text.trim()) return;
+    if (postGroup) {
+      // ONE post into the group. publishPost resolves the event (truthy) when a relay accepted it, or
+      // null/false when none did / a sealed room had no key — map that to a real failed state, never "Sent".
+      setBusy(true);
+      let ok = false;
+      try { ok = !!(await window.Steward.publishPost(text.trim(), postGroup.id)); } catch (err) { ok = false; }
+      setBusy(false); setRetry(null);
+      setResult({ groupPost: true, ok, tried: 1, sent: ok ? 1 : 0, queued: 0, failed: ok ? 0 : 1, failedPubs: [] });
+      if (ok) { setText(''); setDone(true); }
+      return;
+    }
+    if (!target.length) return;
+    setBusy(true);
+    const r = await schSendEventMessage({ send: (p, t, rt, meta) => window.Steward.sendDM(p, t, rt, meta), pubs: target, text: text.trim(), noReply, eventId: e.id });
+    setBusy(false); setResult(r);
+    if (r.failed) setRetry(r.failedPubs); else { setRetry(null); if (!r.queued) setText(''); }
+    if (r.tried > 0 && !r.failed && !r.queued && r.sent === r.tried) setDone(true);
+  };
+  const opt = (on, label, sub, onClick) => (
+    <button type="button" aria-pressed={on} onClick={onClick} style={{ flex: 1, textAlign: 'left', padding: '9px 11px', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', border: '1px solid ' + (on ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface-2)' }}>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>{label}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
+    </button>
+  );
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 310, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 34%, transparent)' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Message attendees" tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', padding: 22 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>Message about “{e.title || 'this event'}”</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{postGroup ? 'This posts once into the group’s chat — everyone there sees it and can reply in the thread.' : 'Each person gets their own private message. They cannot see who else received it.'}</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          {opt(mode === 'everyone', 'Everyone invited', 'The whole audience of this event', () => { setMode('everyone'); setRetry(null); setResult(null); })}
+          {opt(mode === 'going', 'Just those going', 'Only people who said Going', () => { setMode('going'); setRetry(null); setResult(null); })}
+        </div>
+        {/* B6: the replies toggle has no meaning for a group post — replies live in the group thread — so it is
+            hidden in that branch (and `noReply` is never read on the publishPost path). */}
+        {postGroup ? null : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          {opt(!noReply, 'Normal message', 'Arrives as an ordinary message', () => setNoReply(false))}
+          {opt(noReply, 'Announcement', 'Labelled as an announcement. They can still reply', () => setNoReply(true))}
+        </div>
+        )}
+        <textarea aria-label="Message" value={text} onChange={ev => setText(ev.target.value)} rows={4} placeholder="Write your message…" style={{ width: '100%', boxSizing: 'border-box', marginTop: 12, padding: '11px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--ink)', resize: 'vertical' }} />
+        <div role="status" style={{ fontSize: 12.5, color: result && (result.failed || result.queued) ? 'var(--clay-ink)' : 'var(--ink-2)', marginTop: 8, lineHeight: 1.5 }}>
+          {result ? <div>{schSendSummary(result)}{done ? ' Closing…' : ''}</div> : null}
+          {retry ? <div>Not reached: {retry.map(nameFor).join(', ')}. Press the button to try just them again.</div> : null}
+          {!result && !audience.length && !postGroup ? <div>{mode === 'going' ? 'Nobody has said Going yet.' : 'There is nobody to message yet.'}</div> : null}
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>Close</button>
+          <button onClick={send} disabled={busy || done || !text.trim() || (!postGroup && !target.length)} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}>{busy ? (postGroup ? 'Posting…' : 'Sending…') : postGroup ? 'Post to the group' : retry ? `Retry ${retry.length} not reached` : `Send to ${audience.length}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+window.SchEventMessage = SchEventMessage;
+
+// Group an event's RSVPs into display names by answer. Pure: nameFor is passed in.
+// Users (rule 2): the Schedule list's rsvpSummary, SchEventDetail. (SchEventMessage keeps its own audience logic.)
+function schRsvpGroups(rsvps, eventId, nameFor) {
+  const map = (rsvps && rsvps[eventId]) || {}; const out = { going: [], maybe: [], no: [] };
+  for (const pub in map) { if (out[map[pub]]) out[map[pub]].push(nameFor(pub)); }
+  return out;
+}
+// Alphabetical, with the people who have no name on file ("Anonymous") last.
+function schAttendanceOrder(names) {
+  const anon = (n) => n === 'Anonymous' ? 1 : 0;
+  return (names || []).slice().sort((a, b) => anon(a) - anon(b) || a.localeCompare(b));
+}
+
+// The names behind one count chip. A sibling overlay of SchEventDetail, never nested in its animated card.
+function SchAttendance({ event, verdict, names, onClose }) {
+  const e = event || {};
+  const dlgRef = window.useStewDialog ? window.useStewDialog(onClose) : null;
+  const label = verdict === 'going' ? 'going' : verdict === 'maybe' ? 'maybe' : 'can’t make it';
+  const list = schAttendanceOrder(names);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 310, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={`${list.length} ${label}`} tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 400, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
+        <div style={{ padding: '18px 22px 8px' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>{list.length} {label}</div>
+          {e.title ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 2 }}>{e.title}</div> : null}
+        </div>
+        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 22px 12px' }}>
+          {list.length ? <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>{list.map((n, i) => <li key={i} style={{ fontSize: 14, color: 'var(--ink-2)', padding: '7px 0', borderBottom: '1px solid var(--line-2)' }}>{n}</li>)}</ul> : <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Nobody yet.</div>}
+        </div>
+        <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)' }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 13.5 }}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+window.SchAttendance = SchAttendance;
+
 function SchEventDetail({ event, onClose }) {
   const e = event || {};
   const [editing, setEditing] = React.useState(false);
+  const [messaging, setMessaging] = React.useState(false);
   const rsvps = window.useStewardRsvps ? window.useStewardRsvps() : {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
-  const map = rsvps[e.id] || {}; const rs = { going: [], maybe: [], no: [] };
-  for (const pub in map) { if (rs[map[pub]]) rs[map[pub]].push(nameFor(pub)); }
+  const [attendance, setAttendance] = React.useState(null);   // 'going' | 'maybe' | 'no' | null: which list is open
+  const rs = schRsvpGroups(rsvps, e.id, nameFor);
   const total = rs.going.length + rs.maybe.length + rs.no.length;
-  const seg = (list, label, color) => list.length ? (
-    <div style={{ marginTop: 9 }}>
-      <div style={{ fontSize: 12, fontWeight: 800, color }}>{list.length} {label}</div>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.5 }}>{list.join(', ')}</div>
-    </div>
-  ) : null;
+  // Counts only: a church of 200 would make an inline name list a wall of text. The names are one tap away.
+  // A chip with nothing behind it is hidden, except "0 going" whenever anyone has answered at all.
+  const chip = (verdict, label, color) => {
+    const n = rs[verdict].length;
+    if (!n && !(verdict === 'going' && total)) return null;
+    return <button key={verdict} onClick={() => setAttendance(verdict)} aria-label={`${n} ${label}, show names`} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 800, color }}>{n} {label}</button>;
+  };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   // THE EDIT DIALOG REPLACES THIS CARD; IT DOES NOT OPEN INSIDE IT (AUDIT-feeds-round5-2026-09-22 F2).
   // It used to render as the last child of the panel below, and a `position: fixed` overlay does NOT escape
@@ -1930,6 +2120,9 @@ function SchEventDetail({ event, onClose }) {
   // Every hook above runs first, unconditionally, so this early return cannot reorder them.
   if (editing) return <SchEventEdit event={e} onClose={() => { setEditing(false); onClose(); }} />;
   return (
+    <React.Fragment>
+    {messaging ? <SchEventMessage event={e} onClose={() => setMessaging(false)} /> : null}
+    {attendance ? <SchAttendance event={e} verdict={attendance} names={rs[attendance]} onClose={() => setAttendance(null)} /> : null}
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 300, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={e.title || 'Event'} tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 4px' }}>
@@ -1952,11 +2145,12 @@ function SchEventDetail({ event, onClose }) {
           {e.blurb ? <p style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)', margin: '14px 0 0' }}>{e.blurb}</p> : null}
           <div style={{ marginTop: 16, borderTop: '1px solid var(--line-2)', paddingTop: 12 }}>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Who’s coming</div>
-            {total ? <React.Fragment>{seg(rs.going, 'going', 'var(--sage)')}{seg(rs.maybe, 'maybe', '#8a6717')}{seg(rs.no, 'can’t make it', 'var(--ink-3)')}</React.Fragment> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
+            {total ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 9 }}>{chip('going', 'going', 'var(--sage)')}{chip('maybe', 'maybe', '#8a6717')}{chip('no', 'can’t make it', 'var(--ink-3)')}</div> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
           </div>
         </div>
         <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)', display: 'flex', gap: 10 }}>
           <button onClick={() => setEditing(true)} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="pen" size={15} color="var(--on-clay)" /> Edit</button>
+          <button onClick={() => setMessaging(true)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="send" size={15} color="currentColor" /> Message</button>
           {/* The confirm has to say what actually happens: removeEvent() deletes the whole DOC, so on a repeating
               meeting it takes every occurrence with it — "Remove this event" read as "just this date". */}
           <button onClick={() => { if (window.confirm(e.recur
@@ -1966,6 +2160,7 @@ function SchEventDetail({ event, onClose }) {
         </div>
       </div>
     </div>
+    </React.Fragment>
   );
 }
 window.SchEventDetail = SchEventDetail;

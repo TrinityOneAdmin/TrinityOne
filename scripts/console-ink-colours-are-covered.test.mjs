@@ -399,7 +399,7 @@ const BARE_INVENTORY = [
   ['app/stew-custody.jsx', []],
   ['app/stew-dashboard.jsx', [
     [3, "background: 'var(--clay)'"],
-    [3, "background: 'var(--sage)'"],
+    [4, "background: 'var(--sage)'"],
     [1, "background: allUp ? 'var(--sage)' : 'var(--clay)'"],
     [1, "background: approval ? 'var(--clay)' : 'var(--line)'"],
     [1, "background: church.giving ? 'var(--sage)' : 'var(--line)'"],

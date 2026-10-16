@@ -33,8 +33,11 @@ test('the row leads somewhere useful', () => {
     'what a member looking at their own church wants, and it is also where leaving lives');
 });
 
-test('following a new church is still offered', () => {
-  assert.match(section, /Follow a church/,
-    'the follow option was removed along with the fix. A member with no church needs it, and a member with ' +
-    'one may be moving');
+test('following a new church is still reachable — via the Your-churches panel', () => {
+  // owner 2026-10-16: the old "Follow a church" row (which jumped into the follow flow) is now "Your churches",
+  // which opens the switcher list where "Follow another church" lives.
+  assert.match(section, /label="Your churches"/,
+    'the "Your churches" entry is gone — a member with no church needs a way in, and a member with one may be moving');
+  assert.match(section, /label="Your churches"[\s\S]*openChurchSwitcher\('list'\)/,
+    'the Your-churches entry no longer opens the switcher panel (where "Follow another church" lives)');
 });

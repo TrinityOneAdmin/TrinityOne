@@ -176,6 +176,155 @@ window.safeImgUrl = function (v) {
   }
   const commentaries = {};   // abbr -> commentary source { name, getComment(book,chap) }
   function addCommentary(src){ if(!src) return null; let abbr = src.abbr || "Cmt", i = 2; while(commentaries[abbr] && commentaries[abbr].name !== src.name) abbr = (src.abbr || "Cmt") + i++; src.abbr = abbr; commentaries[abbr] = src; notify(); return abbr; }
+
+  // ── cross-references (openbible.info / Treasury of Scripture Knowledge) — a JSON module, like the lexicon ──
+  // Each module's `map` is { "<book>.<chap>.<verse>": ["Display Ref", …] } in TrinityOne book numbering,
+  // best-voted first. The display strings round-trip through parseRef(), so a caller navigates straight from
+  // one with Bible.parseRef(ref) — no second OSIS mapping at read time.
+  const crossrefs = {};   // abbr -> { name, license, map }
+  function loadCrossrefsJSON(obj, abbr){
+    const a = (obj && obj.meta && obj.meta.abbr) || abbr || "TSK";
+    crossrefs[a] = { name: (obj && obj.meta && obj.meta.name) || a, license: (obj && obj.meta && obj.meta.license) || "", map: (obj && obj.refs) || {} };
+    notify();
+    return a;
+  }
+  // Every cross-reference for a chapter, keyed by verse number, merged across installed cross-ref modules.
+  // Lazily installs the default set on first use (like the lexicon), so the reader tab works with no manual
+  // module install; returns what is loaded now (empty until the install lands, then populated on next read).
+  function getCrossRefs(b, c){
+    ensureCrossrefs();
+    const out = {}, prefix = b + "." + c + ".";
+    for(const a in crossrefs){
+      const map = crossrefs[a].map;
+      for(const key in map){
+        if(key.lastIndexOf(prefix, 0) !== 0) continue;
+        const v = parseInt(key.slice(prefix.length), 10); if(!v) continue;
+        const list = out[v] || (out[v] = []);
+        for(const r of map[key]) if(list.indexOf(r) === -1) list.push(r);
+      }
+    }
+    return out;
+  }
+  // The credit that must appear wherever these references are shown (CC BY obliges attribution).
+  function crossrefLicense(){ for(const a in crossrefs) if(crossrefs[a].license) return crossrefs[a].license; return ""; }
+
+  // ── original-language text (STEPBible TAGNT Greek NT / TAHOT Hebrew OT) — a JSON module, installed on demand ──
+  // Module shape (scripts/build-original.mjs): { meta:{abbr,name,license,kind:"original",lang:"greek"|"hebrew"},
+  //   v:{ "<book>.<chap>.<verse>": [[form, translit, strongs, morph], …] } } — the SAME verse key as cross-references
+  // and refKey. Never a default download: nothing here fetches; the Library installs it (kind "original"), and it is
+  // filed under "dictionaries" like word definitions so it is listed and removable there. NOT a Strong's dictionary:
+  // it never enters `dicts`, so lex()/searchDict() do not see it.
+  const originals = {};   // abbr -> { name, license, lang, v }
+  function loadOriginalJSON(obj, abbr){
+    const m = (obj && obj.meta) || {};
+    const a = m.abbr || abbr || "Original";
+    originals[a] = { name: m.name || a, license: m.license || "", lang: m.lang || "", v: (obj && obj.v) || {} };
+    notify();
+    return a;
+  }
+  function removeOriginal(abbr){ delete originals[abbr]; }
+  // Extended Strong's -> the plain number the lexicons key on: "G0976" -> "G976", "H7225G" -> "H7225".
+  function _strongBase(s){ const m = /^([GH])0*(\d+)/.exec(String(s == null ? "" : s).trim().toUpperCase()); return m ? m[1] + m[2] : ""; }
+  // Verse -> the original words of the first installed original module that has it (lang "greek"/"hebrew" narrows
+  // it; omit for whichever answers): [{ w: form, t: transliteration, s: extended Strong's, m: morphology, g: gloss }], reading
+  // order, or [] (nothing installed, or the verse is absent from that text). `strongs` ("G3056", "G3056G", "H7225")
+  // keeps only the words with that number — the verse-plus-Strong's lookup.
+  function getOriginal(b, c, v, lang, strongs){
+    const key = b + "." + c + "." + v, want = strongs ? _strongBase(strongs) : "";
+    for(const a in originals){
+      const o = originals[a];
+      if(lang && o.lang !== lang) continue;
+      const list = o.v[key];
+      if(!list) continue;
+      const out = [];
+      for(const x of list){ if(want && _strongBase(x[2]) !== want) continue; out.push({ w: x[0], t: x[1], s: x[2], m: x[3], g: x[4] || "" }); }
+      return out;
+    }
+    return [];
+  }
+  // Which original-language texts are on this phone: [{abbr,name,lang,license}].
+  function originalList(){ return Object.keys(originals).map(a => ({ abbr: a, name: originals[a].name, lang: originals[a].lang, license: originals[a].license })); }
+  function hasOriginal(lang){ for(const a in originals) if(!lang || originals[a].lang === lang) return true; return false; }
+
+  // ── word definitions (WordNet, filtered to the shipped Bibles' vocabulary) — a JSON module, like cross-refs ──
+  // The Strong's lexicon only answers on TAGGED Bibles; this works on any English text (BSB, an imported
+  // translation) because it looks a plain word up. Module shape (scripts/build-worddefs.mjs):
+  //   { meta:{abbr,name,license,kind:"worddef"}, defs:{ head:[[pos,gloss],…] }, forms:{ inflected:head } }
+  // It is catalogued under "dictionaries" so the Library lists (and can remove) it, but it is kind "worddef",
+  // NOT "dict": it is never added to `dicts`, so Strong's lex()/searchDict() do not see it.
+  const worddefs = {};   // abbr -> { name, license, defs, forms }
+  // "idle" (never asked) | "loading" | "ready" | "failed" — what the Define sheet shows while it waits.
+  let _worddefsState = "idle";
+  function loadWorddefsJSON(obj, abbr){
+    const a = (obj && obj.meta && obj.meta.abbr) || abbr || "WN";
+    worddefs[a] = { name: (obj && obj.meta && obj.meta.name) || a, license: (obj && obj.meta && obj.meta.license) || "",
+                    defs: (obj && obj.defs) || {}, forms: (obj && obj.forms) || {} };
+    _worddefsState = "ready";
+    notify();
+    return a;
+  }
+  function removeWorddefs(abbr){ delete worddefs[abbr]; _worddefsRequested = false; _worddefsState = "idle"; }
+  function worddefsLicense(){ for(const a in worddefs) if(worddefs[a].license) return worddefs[a].license; return ""; }
+  function worddefsState(){ return Object.keys(worddefs).length ? "ready" : _worddefsState; }
+  // Light fallback for a word the module has no form for: strip a common ending, restore a dropped e, undouble.
+  function _wdStems(w){
+    const out = [];
+    const add = s => { if(s && s.length > 1 && s !== w && out.indexOf(s) === -1) out.push(s); };
+    if(/ies$/.test(w)) add(w.slice(0, -3) + "y");
+    if(/ied$/.test(w)) add(w.slice(0, -3) + "y");
+    if(/(ches|shes|xes|zes|sses)$/.test(w)) add(w.slice(0, -2));
+    if(/s$/.test(w) && !/ss$/.test(w)) add(w.slice(0, -1));
+    for(const suf of ["ing", "ed", "er", "est"]){
+      if(w.length > suf.length + 2 && w.slice(-suf.length) === suf){
+        const stem = w.slice(0, -suf.length);
+        add(stem); add(stem + "e");
+        if(/([bdgklmnprt])\1$/.test(stem)) add(stem.slice(0, -1));
+      }
+    }
+    if(/ily$/.test(w)) add(w.slice(0, -3) + "y");
+    if(/ly$/.test(w)) add(w.slice(0, -2));
+    return out;
+  }
+  // One word -> { word, head, senses:[{pos,gloss}], license } or null. `head` differs from `word` when the word was
+  // an inflection ("loved" -> "love"); the sheet shows that. Lazily installs the module on first use.
+  function getDefinition(word){
+    ensureWorddefs();
+    let w = String(word == null ? "" : word).toLowerCase().replace(/\u2019/g, "\x27").replace(/^[^a-z]+|[^a-z]+$/g, "");
+    w = w.replace(/\x27s$/, "");
+    if(!w) return null;
+    // Webster (W1913) answers first when it is installed; WordNet (or any other) is the fallback for a word Webster lacks.
+    const order = Object.keys(worddefs).sort((x, y) => (y === "W1913") - (x === "W1913"));
+    for(const a of order){
+      const d = worddefs[a];
+      let head = d.forms[w] || (d.defs[w] ? w : null);
+      if(!head){ const st = _wdStems(w); for(let i = 0; i < st.length; i++){ const h = d.forms[st[i]] || (d.defs[st[i]] ? st[i] : null); if(h){ head = h; break; } } }
+      if(head && d.defs[head]) return { word: w, head, senses: d.defs[head].map(s => ({ pos: s[0], gloss: s[1] })), license: d.license, source: a,
+        label: a === "WN" ? "WordNet" : a === "W1913" ? "Webster 1913" : d.name };
+    }
+    return null;
+  }
+  const _WD_STOP = new Set(("a about above after again against all also am an and any are as at be because been before being below between both but by " +
+    "can cannot could did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself " +
+    "me more most my myself no nor not of off on once only or other our ours ourselves out over own same she should so some such than that the their theirs them themselves then " +
+    "there these they this those through to too under until up upon us very was we were what when where which while who whom whose why will with would you your yours yourself yourselves " +
+    "thou thee thy thine ye hath hast hadst doth dost didst art wast wert shalt wilt canst shouldest wouldest couldest unto yea nay lo behold shall may might must let yet else whether " +
+    "ever every even just now one two three four five six seven eight nine ten amid among").split(/\s+/));
+  // A verse's plain text -> the definable words in order of appearance (no stopwords, no 1-2 letter words, one per
+  // headword). Pure apart from the dictionary lookup, which is why it is the thing the tests lift.
+  function defineText(text){
+    const plain = String(text == null ? "" : text).replace(/<[^>]*>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/\b[GH]\d{1,5}\b/g, " ");
+    const toks = plain.match(/[A-Za-z]+(?:[\x27\u2019][A-Za-z]+)?/g) || [];
+    const out = [], seenWord = new Set(), seenHead = new Set();
+    for(const t of toks){
+      const w = t.toLowerCase().replace(/\u2019/g, "\x27").replace(/\x27s$/, "");
+      if(w.length < 3 || _WD_STOP.has(w) || seenWord.has(w)) continue;
+      seenWord.add(w);
+      const d = getDefinition(w);
+      if(!d || seenHead.has(d.head)) continue;
+      seenHead.add(d.head); out.push(d);
+    }
+    return out;
+  }
   // PERF-AUDIT-2026-07-20 MEDIUM-2: the full Strong's dictionary (modules/strongs-dict.json — 4.01 MB raw,
   // 958 KB gzipped) used to install UNCONDITIONALLY on first run. That was 19% of the entire cold-start wire
   // cost — about 153 SECONDS on 2G — for a feature the auto-installed default Bible (BSB) doesn't even
@@ -768,6 +917,46 @@ window.safeImgUrl = function (v) {
   // number resolves to a full definition (not just the tiny built-in fallback set).
   const DEFAULT_LEXICON = { id: "strongs", abbr: "Strong's", name: "Strong's Greek & Hebrew Dictionary",
     kind: "dict", format: "JSON", category: "dictionaries", url: "modules/strongs-dict.json" };
+  const DEFAULT_CROSSREFS = { id: "crossrefs-openbible", abbr: "TSK", name: "Cross References (openbible.info)",
+    kind: "crossref", format: "JSON", category: "crossrefs", url: "modules/crossrefs-openbible.json" };
+  // Lazy, idempotent, and self-healing on a failed connection — the lexicon pattern (_ensureFullLexicon).
+  let _crossrefsRequested = false;
+  function ensureCrossrefs(){
+    if(_crossrefsRequested || Object.keys(crossrefs).length || typeof navigator === "undefined") return;
+    _crossrefsRequested = true;
+    try{
+      if(isInstalled(DEFAULT_CROSSREFS.url)) return;
+      installModule(DEFAULT_CROSSREFS).then(notify).catch(err => { _crossrefsRequested = false; console.warn("crossrefs install failed", err); });
+    }catch(err){ _crossrefsRequested = false; console.warn("crossrefs install failed", err); }
+  }
+
+  const DEFAULT_WORDDEFS = { id: "worddefs-wordnet", abbr: "WN", name: "Word Definitions (WordNet)",
+    kind: "worddef", format: "JSON", category: "dictionaries", url: "modules/worddefs-wordnet.json" };
+  // Same lazy, idempotent, self-healing shape as ensureCrossrefs. Fired by the first Define tap, so a member who
+  // never taps Define never downloads it. A failure clears the flag so the next tap (or retryWorddefs) retries.
+  let _worddefsRequested = false;
+  function ensureWorddefs(){
+    // "failed" does NOT retry by itself: the Define sheet looks up during render, so a retry-on-render would loop
+    // (fail -> notify -> render -> retry). A retry is a deliberate act: retryWorddefs(), or opening the sheet again.
+    // WordNet is the BACKSTOP behind Webster: a member who installed only Webster still gets WordNet fetched on first Define,
+    // so a word Webster lacks is defined rather than dropped. (Keyed on WN, not "anything loaded".)
+    if(_worddefsRequested || _worddefsState === "failed" || worddefs.WN || typeof navigator === "undefined") return;
+    _worddefsRequested = true; _worddefsState = "loading";
+    const fail = err => { _worddefsRequested = false; _worddefsState = "failed"; console.warn("worddefs install failed", err); notify(); };
+    // Deferred a tick: the Define sheet looks words up DURING RENDER, and installModule notifies synchronously.
+    Promise.resolve().then(() => {
+      try{
+        // Recorded as installed: boot's restoreInstalled loads it. But a record whose bytes were evicted loads
+        // nothing and would leave the sheet on "loading" for ever, so check the bytes and re-download if gone.
+        if(isInstalled(DEFAULT_WORDDEFS.url)){
+          cacheGet(DEFAULT_WORDDEFS.url).then(b => b ? null : installModule(DEFAULT_WORDDEFS).then(notify)).catch(fail);
+          return;
+        }
+        installModule(DEFAULT_WORDDEFS).then(notify).catch(fail);
+      }catch(err){ fail(err); }
+    });
+  }
+  function retryWorddefs(){ _worddefsRequested = false; _worddefsState = "idle"; ensureWorddefs(); }
 
   // ── catalog + installed-module registry (download-once, MySword style) ──
   const INSTALLED_KEY = "trinityone.installed";   // localStorage map: url -> meta
@@ -776,7 +965,7 @@ window.safeImgUrl = function (v) {
 
   function getInstalled(){ try{ return JSON.parse(localStorage.getItem(INSTALLED_KEY) || "{}"); }catch(e){ return {}; } }
   function setInstalled(map){ try{ localStorage.setItem(INSTALLED_KEY, JSON.stringify(map)); }catch(e){} }
-  function catOf(item){ return item.category || (item.kind === "dict" ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
+  function catOf(item){ return item.category || (item.kind === "crossref" ? "crossrefs" : (item.kind === "dict" || item.kind === "worddef" || item.kind === "original") ? "dictionaries" : item.kind === "comment" ? "commentaries" : item.kind === "devotional" ? "devotionals" : "bibles"); }
   // A RECORD MUST NAME THE MODULE THE ENGINE REGISTERED, NOT THE ONE THE CATALOGUE ASKED FOR.
   // addSource/addCommentary/addDict have always deduped a colliding name (NT -> NT2), and the record kept
   // the catalogue's regardless, so two modules sharing one catalogue abbr produced two records saying the
@@ -870,7 +1059,14 @@ window.safeImgUrl = function (v) {
           if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + bytes.byteLength + " bytes — refusing)");
           await verifyIntegrity(item.url, bytes, item.sha256); await cachePut(item.url, bytes);
         }   // M3: verify before cache/parse
-        loaded = { kind: "dict", abbr: loadDictJSON(JSON.parse(new TextDecoder().decode(bytes)), item.abbr) };
+        const parsed = JSON.parse(new TextDecoder().decode(bytes));
+        loaded = (item.kind === "crossref")
+          ? { kind: "crossref", abbr: loadCrossrefsJSON(parsed, item.abbr) }
+          : (item.kind === "worddef")
+          ? { kind: "worddef", abbr: loadWorddefsJSON(parsed, item.abbr) }
+          : (item.kind === "original")
+          ? { kind: "original", abbr: loadOriginalJSON(parsed, item.abbr) }
+          : { kind: "dict", abbr: loadDictJSON(parsed, item.abbr) };
       }else{
         // FORWARD THE CATALOGUE'S PIN. `verifyIntegrity(url, u8, meta && meta.sha256)` is the only thing
         // standing between a compromised gateway or mirror and a module whose HTML goes into the reader
@@ -940,8 +1136,16 @@ window.safeImgUrl = function (v) {
         // only knowable once the module is loaded, which is here, so the repair happens on the next launch
         // and costs a localStorage write only when the two actually differ.
         if((meta.format || "").toUpperCase() === "JSON") {
-          const raw = bytes, u = url;
-          _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u, loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries") });
+          const raw = bytes, u = url, isXr = meta.kind === "crossref", isWd = meta.kind === "worddef", isOr = meta.kind === "original";
+          // A word-definitions module is NOT a dictionary: it is parsed straight into `worddefs` (never queued in
+          // _pendingDicts, so removeDict has nothing to find and lex() never sees it), but it is filed under
+          // "dictionaries" so the Library lists it with them.
+          if(isWd) noteLoadedFrom(u, loadWorddefsJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries");
+          else if(isOr) noteLoadedFrom(u, loadOriginalJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr), "dictionaries");
+          else _pendingDicts.push({ abbr: meta.abbr, url: u, run: () => noteLoadedFrom(u,
+            isXr ? loadCrossrefsJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr)
+                 : loadDictJSON(JSON.parse(new TextDecoder().decode(raw)), meta.abbr),
+            isXr ? "crossrefs" : "dictionaries") });
         } else {
           const r = await loadModuleBytes(bytes, url.split("/").pop(), { abbr: meta.abbr, name: meta.name, category: meta.category });
           noteLoadedFrom(url, r && r.abbr, catOf(meta));
@@ -1108,7 +1312,9 @@ window.safeImgUrl = function (v) {
     const here = urlOf[urlKey(cat, abbr)];
     const loadedHere = !url || !here || here === url;
     if(loadedHere){
-      if(cat === "commentaries") delete commentaries[abbr];
+      if(meta && meta.kind === "worddef") removeWorddefs(abbr);
+      else if(meta && meta.kind === "original") removeOriginal(abbr);
+      else if(cat === "commentaries") delete commentaries[abbr];
       else if(cat === "dictionaries") removeDict(abbr, url);
       else if(modules[abbr]){ delete modules[abbr]; order = order.filter(a => a !== abbr); }
       if(here === url) delete urlOf[urlKey(cat, abbr)];
@@ -1293,7 +1499,7 @@ window.safeImgUrl = function (v) {
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
+    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 

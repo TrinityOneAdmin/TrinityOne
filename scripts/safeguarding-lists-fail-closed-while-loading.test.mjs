@@ -30,8 +30,8 @@ import { miniReact, find, texts } from './render-jsx-screen.mjs';
 const ROOT = new URL('../', import.meta.url).pathname;
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-async function loadFrom(file, name, anchor, globals) {
-  const src = fnBody(readFileSync(join(ROOT, file), 'utf8'), anchor, name);
+async function loadFrom(file, name, anchor, globals, prelude = '') {
+  const src = (prelude ? prelude + '\n' : '') + fnBody(readFileSync(join(ROOT, file), 'utf8'), anchor, name);
   const tmp = join(tmpdir(), 'sgfc-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -49,6 +49,9 @@ const REQ = { id: 'r1', from: CHILD, type: 'meal', forSelf: true, note: 'please 
 
 async function careRequests(sg) {
   const { React, draw } = miniReact();
+  // StewCareRequests now calls the module helper readyToHelpCanSeeChildren; lift it alongside or the render
+  // throws. Steward is not stubbed, so the helper takes its owner-console branch and minorsKnown governs.
+  const helperSrc = fnBody(readFileSync(join(ROOT, 'app/stew-meals.jsx'), 'utf8'), 'function readyToHelpCanSeeChildren(', 'readyToHelpCanSeeChildren');
   const Comp = await loadFrom('app/stew-meals.jsx', 'StewCareRequests', 'function StewCareRequests()', {
     React,
     window: {
@@ -67,7 +70,7 @@ async function careRequests(sg) {
     MEALS_TYPE_ICON: {}, mealsTypeLabel: () => 'Meal', mealsLbl: {},
     CareApproveModal: Stub('CareApproveModal'), CareChatModal: Stub('CareChatModal'),
     setTimeout, clearTimeout, document: { addEventListener() {}, removeEventListener() {} },
-  });
+  }, helperSrc);
   draw(Comp, {});               // first draw starts the subscription
   const tree = draw(Comp, {});  // second draw sees the requests it delivered
   const setUpHelp = find(tree, n => n.type === 'button' && /Set up help/.test(texts(n).join(' ')));

@@ -27,7 +27,12 @@ const CHILD = 'c'.repeat(64), ADULT = 'a'.repeat(64);
 // Render the shipped StewCareRequests with a recording element factory. Every stub below is scaffolding; the
 // component's own logic is untouched.
 function render({ minors, reqs }) {
-  const src = transformSync(fnBody(MEALS, 'function StewCareRequests()', 'StewCareRequests'),
+  // StewCareRequests now classifies via the module helper readyToHelpCanSeeChildren (shared with StewReadyToHelp);
+  // lift it too or the render throws. Steward is left undefined below, so the helper takes its owner-console
+  // branch (minorsKnown governs) — which is the console these cases describe.
+  const src = transformSync(
+    fnBody(MEALS, 'function readyToHelpCanSeeChildren(', 'readyToHelpCanSeeChildren') + '\n' +
+    fnBody(MEALS, 'function StewCareRequests()', 'StewCareRequests'),
     { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
   const nodes = [];
   const h = (type, props, ...kids) => {

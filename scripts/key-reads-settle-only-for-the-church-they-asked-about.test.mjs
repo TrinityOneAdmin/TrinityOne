@@ -135,7 +135,10 @@ function engine() {
     // the per-church blocklist the console keeps (audit of 5276297, HIGH 2)
     fnBody(BUNDLE, 'function lsGet(k) {'), fnBody(BUNDLE, 'function lsSet(k, v) {'),
     stmt(BUNDLE, 'var BLOCKED_LAST_LS = '),
-    fnBody(BUNDLE, 'function _blockedLastSet(cp) {'), fnBody(BUNDLE, 'function _noteBlockedList(cp, epoch, list, at) {'),
+    fnBody(BUNDLE, 'function _blockedLastSet(cp) {'), fnBody(BUNDLE, 'function _noteBlockedList(cp, epoch, list, at, asserted) {'),
+    // the stamps behind "newer", and the lift an explicit unblock makes (owner, 2026-10-15)
+    stmt(BUNDLE, 'var BLOCKED_SINCE_LS = '), fnBody(BUNDLE, 'function _blockedSinceGet(cp) {'), fnBody(BUNDLE, 'function _blockedSinceStamp(cp, pks, at) {'),
+    fnBody(BUNDLE, 'function _liftRememberedBlock(cp, epoch, pks, at) {'),
     't.__noteBlockedList = _noteBlockedList;',
     fnBody(BUNDLE, 'function setKey(mnemonic) {'), 't.__setKey = setKey;',   // a church unlocked / a reload: where a church starts
     fnBody(BUNDLE, 'function _landed(what, p) {'),                               // …and a Block made here (setBlocked, below)
@@ -1789,4 +1792,66 @@ test('3g finding 5: Remove D, then Block D — the record\'s reason becomes "blo
   for (let i = 0; i < 6; i++) await flush();
   const st = e2.S.rotationStatus(M3.pub);
   assert.deepEqual([st.cleared, st.done], [['care'], []], 'A RECORD CLEARED BECAUSE THEY WERE UNBLOCKED ELSEWHERE WAS SAID AS "DONE": ' + JSON.stringify(st));
+});
+
+// A REMEMBERED BLOCK IS LIFTED ONLY BY AN EXPLICIT UNBLOCK (owner, 2026-10-15). One console kept someone blocked for ever
+// after a steward unblocked them: its device copy (`blockedlast`) re-seeded the block on every start and carried no clock,
+// so nothing could say an unblock was newer. Now `setBlocked({ unblock })` names the person on an `unblocked` tag of the
+// church-signed event, the device keeps WHEN it learned of each block (`blockedsince`, a sibling key), and subscribeBlocked
+// lifts the block only for an authentic event that names them AND is newer. A newer list that merely omits them lifts
+// nothing: that is what a relay that missed the Block, or a second steward who never knew of it, looks like. These rows run
+// the SHIPPED subscribeBlocked and setBlocked from vendor/steward.js, so deleting the lift from either fails them.
+const floored = async (seedCopy, seedSince) => {   // R1 connected and answering, R2's dial failed: the floor is in force
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1]);
+  if (seedCopy) e.t.localStorage.setItem('trinityone.steward.blockedlast.' + A.pub, JSON.stringify(seedCopy));
+  if (seedSince) e.t.localStorage.setItem('trinityone.steward.blockedsince.' + A.pub, JSON.stringify(seedSince));
+  e.t._localBlocked = new Set(seedCopy || []);                              // what setKey seeds on a start
+  const x = { e, got: null };
+  e.S.subscribeBlocked((list) => { x.got = list; });
+  const [r1, r2] = blockedReads(e);
+  x.r1 = r1;
+  await e.closedByRelay(r2, 'connection failure: relay unreachable');
+  return x;
+};
+const unblockDoc = (list, un, at) => { const d = blockedDoc(list, at); d.tags.push(...un.map(p => ['unblocked', p])); return d; };
+const copyOf = (e) => JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub) || '[]');
+const settle = async (x) => { await x.e.eose(x.r1); };
+test('an authentic church list that EXPLICITLY unblocks M2 lifts a block this device remembered, with a relay down — a copy from before the stamps (a bare array) included', async () => {
+  const x = await floored([M2.pub]);                                         // a device copy of the old, bare-array shape
+  x.r1.handlers.onevent(unblockDoc([M1.pub], [M2.pub], 500)); await settle(x);
+  assert.deepEqual([...x.got], [M1.pub], 'AN EXPLICIT UNBLOCK DID NOT LIFT THE REMEMBERED BLOCK: the screens still get M2 through the floor — this is the frozen-out member');
+  assert.ok(!x.e.t._localBlocked.has(M2.pub), 'M2 is still in `_localBlocked`, so every key builder still leaves them out');
+  assert.ok(!copyOf(x.e).includes(M2.pub), 'M2 is still on the device copy, so the next start re-seeds the block');
+  assert.ok(copyOf(x.e).includes(M1.pub), 'CONTROL: the lift took M1, whom the church still blocks, off the device copy');
+});
+test('a newer church list that merely OMITS M2, with no unblock of M2, keeps the remembered block (a relay that missed the Block; a steward who never knew of it)', async () => {
+  const x = await floored([M2.pub], { [M2.pub]: 100 });
+  x.r1.handlers.onevent(blockedDoc([M1.pub], 500)); await settle(x);         // newer than the stamp, and it does not name M2 anywhere
+  assert.deepEqual([...x.got].sort(), [M1.pub, M2.pub].sort(), 'A NEWER LIST THAT OMITTED M2 LIFTED THE BLOCK — a relay that merely missed the Block now releases them');
+  assert.ok(x.e.t._localBlocked.has(M2.pub) && copyOf(x.e).includes(M2.pub), 'the omission took M2 off `_localBlocked` or the device copy');
+  const y = await floored([M2.pub], { [M2.pub]: 100 });                     // …and an unblock of SOMEONE ELSE does not lift M2 either
+  y.r1.handlers.onevent(unblockDoc([], [M3.pub], 500)); await settle(y);
+  assert.ok(y.e.t._localBlocked.has(M2.pub), 'an unblock of M3 lifted M2');
+});
+test('an unblock OLDER than when this device learned of the block does not lift it; a newer one does', async () => {
+  const x = await floored([M2.pub], { [M2.pub]: 1000 });                    // this device recorded M2 as blocked at 1000
+  x.r1.handlers.onevent(unblockDoc([M1.pub], [M2.pub], 500)); await settle(x);   // an unblock stamped 500: older
+  assert.ok(x.e.t._localBlocked.has(M2.pub) && copyOf(x.e).includes(M2.pub), 'AN UNBLOCK OLDER THAN THE BLOCK LIFTED IT — the stale copy of a lagging relay would release a person the church re-blocked');
+  assert.ok([...x.got].includes(M2.pub), 'the screens lost M2 on an older unblock');
+  x.r1.handlers.onevent(unblockDoc([M1.pub], [M2.pub], 1500));              // a genuinely newer one arrives on the stream
+  assert.ok(!x.e.t._localBlocked.has(M2.pub) && !copyOf(x.e).includes(M2.pub), 'CONTROL: a NEWER explicit unblock does not lift it');
+});
+test('a Block made here is stamped, and setBlocked({ unblock }) carries the unblock on the event as `unblocked` tags — additively', async () => {
+  const e = engine();
+  const sent = []; e.t._publishToRelays = async (ev) => { sent.push(ev); return true; };
+  await e.S.setBlocked([M2.pub]);                                           // Block M2
+  assert.deepEqual(sent.at(-1).tags.filter(t => t[0] === 'unblocked'), [], 'a plain Block carried an unblock tag');
+  assert.deepEqual(sent.at(-1).tags.slice(0, 2), [['d', 'trinityone/blocked:' + A.pub], ['t', 'trinityone']], 'the document\'s own tags moved — a relay or an older build reads those');
+  assert.deepEqual(JSON.parse(sent.at(-1).content), { pubkeys: [M2.pub] }, 'the content shape changed — the relay reads content.pubkeys');
+  assert.equal(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedsince.' + A.pub))[M2.pub], 1759300000, 'the Block did not stamp when this device learned of it');
+  await e.S.setBlocked([], { unblock: [M2.pub] });
+  assert.deepEqual(sent.at(-1).tags.filter(t => t[0] === 'unblocked'), [['unblocked', M2.pub]], 'THE UNBLOCK IS NOT CARRIED ON THE EVENT — no other console can tell it from a relay that missed the Block');
+  assert.deepEqual(JSON.parse(sent.at(-1).content), { pubkeys: [] }, 'the list still names the unblocked');
+  await e.S.setBlocked([M1.pub, M3.pub], { unblock: [M3.pub] });            // named in both: a person who stays blocked is never marked unblocked
+  assert.deepEqual(sent.at(-1).tags.filter(t => t[0] === 'unblocked'), [], 'someone still on the list was marked unblocked as well');
 });

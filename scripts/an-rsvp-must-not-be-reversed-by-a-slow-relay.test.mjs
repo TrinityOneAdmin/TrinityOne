@@ -229,3 +229,62 @@ test('every caller of setEventRsvp reads .ok — truth-testing it would record a
       'a caller does not check `' + v + '.ok` — it must, or delivery is never actually confirmed');
   }
 });
+
+// ── E11: A CONFIRMED ANSWER IS ACKNOWLEDGED, AN UNCONFIRMED ONE IS NOT ───────────────────────────────────
+// Runs the shipped setRsvp (lifted, not matched). The toast helper is the app's own `toast`, which collapses itself.
+test('E11: a confirmed Going / Maybe / No each toast once, and say the church has it', async () => {
+  for (const v of ['going', 'maybe', 'no']) {
+    const s = screen({ results: [OK] });
+    await s.tap(v);
+    assert.equal(s.toasts.length, 1, v + ': a confirmed RSVP gave ' + s.toasts.length + ' toasts: ' + JSON.stringify(s.toasts));
+    assert.match(s.toasts[0], /your church has your answer/, v + ': ' + s.toasts[0]);
+    assert.ok(!/withdrawn|couldn’t/i.test(s.toasts[0]), v + ': wrong sentence: ' + s.toasts[0]);
+  }
+});
+
+test('E11: NO success toast when the RSVP was not confirmed (unconfirmed, refused, not-sent)', async () => {
+  for (const r of [UNCONFIRMED, NOTSENT, { ok: false, reason: 'refused' }]) {
+    const s = screen({ results: [r] });
+    await s.tap('going');
+    assert.ok(!s.toasts.some(t => /your church has your answer/.test(t)),
+      'SUCCESS TOAST OVER A SEND THAT WAS NOT CONFIRMED (' + r.reason + '): ' + JSON.stringify(s.toasts));
+    assert.equal(s.toasts.length, 1, 'exactly the failure sentence expected: ' + JSON.stringify(s.toasts));
+  }
+});
+
+// ── setRsvp REPORTS WHETHER THE ANSWER WAS CONFIRMED (EventDetail closes its card on it) ─────────────────
+// Callers of ctx.setRsvp: EventDetail's Going/Maybe/Can't buttons and svEventRsvpRow (both app/screens-serving.jsx);
+// only EventDetail reads the return. Lifted and run, not matched.
+test('setRsvp RETURNS true only for a confirmed answer (incl. a withdrawal that was confirmed)', async () => {
+  assert.equal(await screen({ results: [OK] }).tap('going'), true, 'a confirmed answer must return true');
+  const w = screen({ results: [OK] }); w.scope.myRsvps = { 'ev-1': 'going' };
+  assert.equal(await w.tap('going'), true, 'a confirmed withdrawal is still a confirmed send');
+});
+
+test('setRsvp RETURNS false for unconfirmed / not-sent / refused', async () => {
+  for (const r of [UNCONFIRMED, NOTSENT, { ok: false, reason: 'refused' }, null]) {
+    assert.equal(await screen({ results: [r] }).tap('going'), false, 'an unconfirmed answer reported success: ' + JSON.stringify(r));
+  }
+});
+
+test('setRsvp RETURNS false when there is no engine to send with', async () => {
+  const s = screen({ results: [OK] });
+  s.scope.window = {};
+  assert.equal(await s.tap('going'), false, 'no engine, yet it claimed a confirmed answer');
+});
+
+// ── THE CONFIRMED "NO" IS A SUCCESS AND MUST NOT BE STYLED AS AN ERROR ───────────────────────────────────
+// "Marked can’t make it" matched toastKind's failure words, so a CONFIRMED answer rendered red with the alert
+// shield and role=alert. The shipped toastKind is lifted from app/ui.jsx and run on what setRsvp really toasts.
+test('a confirmed Going / Maybe / No toast is styled OK, never as an error', async () => {
+  const UI = readFileSync(new URL('../app/ui.jsx', import.meta.url), 'utf8');
+  const words = UI.match(/const TOAST_FAILURE_WORDS = [^\n]+/)[0];
+  const toastKind = new Function(words + '\n' + fnBody(UI, 'function toastKind(', 'toastKind') + '\nreturn toastKind;')();
+  assert.equal(toastKind('We couldn’t confirm your answer reached your church'), 'error', 'control: toastKind still flags failures');
+  for (const v of ['going', 'maybe', 'no']) {
+    const s = screen({ results: [OK] });
+    await s.tap(v);
+    assert.equal(s.toasts.length, 1, v + ': ' + JSON.stringify(s.toasts));
+    assert.equal(toastKind(s.toasts[0]), 'ok', v + ': a CONFIRMED answer toasted as an error: ' + s.toasts[0]);
+  }
+});

@@ -148,6 +148,17 @@ function lsSet(key, val){ if(!lsCanWrite(key)) return; try{ localStorage.setItem
 // cannot open; and a saved place is only trusted back if that book is still installed in the translation
 // that loads, else the reader starts where it always did. A verse is kept when the reader arrived at one.
 const READ_LOC_KEY = (version) => 'trinityone.readLoc.' + String(version || '');
+// The last few places read, most recent first, one per book+chapter, capped at 5 — the "Keep reading" list on
+// Today. Pure: takes the stored list and the new place, returns the new list. Anything malformed is dropped.
+const READ_HISTORY_MAX = 5;
+const READ_HISTORY_KEY = (version) => 'trinityone.readHistory.' + String(version || '');
+function pushReadHistory(list, loc) {
+  const ok = (e) => e && Number.isInteger(Number(e.book)) && Number.isInteger(Number(e.chap)) && Number(e.chap) >= 1;
+  if (!ok(loc)) return Array.isArray(list) ? list : [];
+  const entry = loc.verse ? { book: Number(loc.book), chap: Number(loc.chap), verse: loc.verse } : { book: Number(loc.book), chap: Number(loc.chap) };
+  const rest = (Array.isArray(list) ? list : []).filter(e => ok(e) && !(Number(e.book) === entry.book && Number(e.chap) === entry.chap));
+  return [entry].concat(rest).slice(0, READ_HISTORY_MAX);
+}
 function resolveStartLoc(saved, books, maxChapter, fallback) {
   const s = saved && typeof saved === 'object' ? saved : null;
   if (!s) return fallback;
@@ -444,6 +455,7 @@ function App() {
   useAE(() => {
     if (!loc || !Bible.activeVersion) return;
     lsSet(READ_LOC_KEY(Bible.activeVersion), loc.verse ? { book: loc.book, chap: loc.chap, verse: loc.verse } : { book: loc.book, chap: loc.chap });
+    lsSet(READ_HISTORY_KEY(Bible.activeVersion), pushReadHistory(lsGet(READ_HISTORY_KEY(Bible.activeVersion), []), loc));
   }, [loc, Bible.activeVersion]);
   // deep-links: ?group=<id> opens a chat room, ?plan=<id> opens a plan
   useAE(() => {
@@ -2303,8 +2315,8 @@ function App() {
       needs: careNeeds,
       slots: (() => {
         const mp = (window.Fellowship && window.Fellowship.myPubkey || '').toLowerCase();
-        let m = (careSlots || []).filter(s => !(optCare[(s.needId || '') + '|' + (s.isoDate || '')] === 'clear' && (s.pubkey || '').toLowerCase() === mp));
-        for (const k in optCare) { if (optCare[k] !== 'fill') continue; const p = k.split('|'); if (!m.some(s => s.needId === p[0] && s.isoDate === p[1] && (s.pubkey || '').toLowerCase() === mp)) m.push({ needId: p[0], isoDate: p[1], pubkey: mp }); }
+        let m = (careSlots || []).filter(s => !(optCare[(s.needId || '') + '|' + (s.isoDate || '') + '|' + (s.meal || '')] === 'clear' && (s.pubkey || '').toLowerCase() === mp));
+        for (const k in optCare) { if (optCare[k] !== 'fill') continue; const p = k.split('|'); if (!m.some(s => s.needId === p[0] && s.isoDate === p[1] && (s.meal || '') === (p[2] || '') && (s.pubkey || '').toLowerCase() === mp)) m.push({ needId: p[0], isoDate: p[1], meal: p[2] || '', pubkey: mp }); }
         return m;
       })(),
       skips: careSkips,
@@ -2320,10 +2332,10 @@ function App() {
       // the same document. "Tap it again" is therefore true and can never double a sign-up.
       // ⚠ AND THE OPTIMISTIC MARK STAYS ON 'unconfirmed'. Rolling it back would repaint the day as empty
       // under a sign-up that probably landed, which is the same lie again, one layer down.
-      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r && r.ok) toast('Thank you — you’re signed up'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see whether you are signed up.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
-      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r && r.ok) toast('Removed'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see whether you are still down for that day.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
+      fill: (careId, iso, note, meal) => { const _k = careId + '|' + iso + '|' + (meal || ''); setOptCare(o => ({ ...o, [_k]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note, meal).then(r => { if (r && r.ok) toast('Thank you — you’re signed up'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see whether you are signed up.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[_k]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
+      clearFill: (careId, iso, meal) => { const _k = careId + '|' + iso + '|' + (meal || ''); setOptCare(o => ({ ...o, [_k]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso, meal).then(r => { if (r && r.ok) toast('Removed'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see whether you are still down for that day.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[_k]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
-      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that note reached your church — it may well have. You can send it again.' : 'That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
+      setNote: (careId, iso, note, meal) => window.Fellowship.fillCareSlot(careId, iso, note, meal).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that note reached your church — it may well have. You can send it again.' : 'That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
       // ⚠ `skip` WAS THE ONE CARE CONTROL THAT SAID NOTHING EITHER WAY, and `if (!r)` — the check every
       // sibling on this object uses — would NOT have caught it. Those all return null when the publish
       // fails; markCareSkip returns the EVENT either way and records the outcome on `_delivered`, so a
@@ -2347,7 +2359,7 @@ function App() {
       // `r && r.ok`, never `if (r)` — both answer an object now and an object is always truthy, so a plain
       // truthiness test would thank a member for a listing the church never received. The failure wording
       // lives on the card in app/screens-today.jsx (CareAvailability), which is where a member is looking.
-      setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r && r.ok) toast('You’re listed — thank you for being ready to help'); return r; }),
+      setAvail: (tags, note, dates) => window.Fellowship.setCareAvail(tags, note, dates).then(r => { if (r && r.ok) toast('You’re listed — thank you for being ready to help'); return r; }),
       clearAvail: () => window.Fellowship.clearCareAvail().then(r => { if (r && r.ok) toast('You’re off the list'); return r; }),
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
@@ -2525,7 +2537,7 @@ function App() {
       const repeat = !!held && held.verdict === verdict;
       const next = repeat ? held.next : (myRsvps[eventId] === verdict ? null : verdict);
       const cleared = next === null;
-      if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return;
+      if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return false;
       const sent = await window.Fellowship.setEventRsvp(np, eventId, next || 'none');
       // `sent.ok`, never `if (sent)` — an object is always truthy and a failure would take the success arm,
       // recording an answer the church never confirmed. (The markSafe trap, chunk 1.)
@@ -2534,11 +2546,14 @@ function App() {
         toast(sent && sent.reason === 'unconfirmed'
           ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again to send it again; it won’t withdraw it.'
           : 'Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
-        return;
+        return false;
       }
       delete rsvpUnsureRef.current[eventId];
       setMyRsvps(m => ({ ...m, [eventId]: next }));
       if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
+      // A CONFIRMED answer is acknowledged (E11). Only here, after `sent.ok` — a send that merely fired, or failed, took the arm above.
+      else toast(next === 'going' ? 'You’re going — your church has your answer' : next === 'maybe' ? 'Marked maybe — your church has your answer' : 'Marked not coming — your church has your answer');
+      return true;   // CONFIRMED only (sent.ok) — EventDetail closes its card on this; every other path above returns false
     },
     // RETURN the promise. This dropped it, so even a handler that awaited could not learn that the church
     // had refused the write — which is how a pending member's "I'm away" became a success toast over nothing.

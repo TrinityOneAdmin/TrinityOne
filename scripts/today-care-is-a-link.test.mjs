@@ -1,27 +1,20 @@
-// TODAY LINKS TO CARE; IT DOES NOT OPEN CARE'S SHEETS.
+// CARE IS ON THE CARE PAGE, NOT TODAY (owner 2026-10-16).
 // Run: node --test scripts/today-care-is-a-link.test.mjs
 //
-// Found on the OPPO against the live relay, 2026-08-27, by looking at the screen. Tapping "Ask for help" on
-// Today drew the sheet as a 324x107 box sitting on top of the "Practical care" heading, its own last line cut
-// off mid-word. Measured, not guessed:
+// af7824b put a "Practical care" card on the Today screen because three members hunted for care inside
+// "Serving & events" and never found it. The owner reversed that on 2026-10-16: the section was "too much" on
+// Today. Care now renders ONLY on the Care page (CareCard embedded, in the Serving overlay's "Care" tab) and
+// Today keeps a LINK — the "Care" entry on the "What's happening" card — which lights up with a count of open
+// days via careForMe(). This file holds that boundary: nothing care renders on Today, the Care page still
+// opens the form and the conversation, and the badge counts only what THIS member may actually claim.
 //
-//     overlay  position:absolute inset:0   ->  top 429, height 107, width 324   (not the viewport)
-//     ancestor transform: matrix(1,0,0,1,0,0)                                    BREAKS_FIXED: true
-//
-// The sheet had not been touched since it was written. What moved was the card: af7824b put Practical care on
-// Today because three members hunted for care inside "Serving & events" and never found it. Today wraps that
-// section in `animation: trinityFade … both`, and the identity transform an animation leaves behind becomes the
-// containing block for `position: absolute` — so a full-screen backdrop is confined to the card's own 122px box.
-// `position: fixed` would be trapped by that ancestor too, and the absolute+inset:0 backdrop is the house
-// pattern in 48 other places where it is correct. So Today links to the Care page and opens no sheet.
-//
-// These assertions RENDER the shipped component. A pre-push audit defeated a string-matching test on this same
-// file by moving wording into an unused variable, and every assertion still passed.
+// POINT OF USE (rules 1 and 3): every assertion renders a shipped component or runs a lifted function; none
+// matches source text. A pre-push audit once defeated a string-matching test on this file by moving wording
+// into an unused variable, and every assertion still passed — so the render tests below exist deliberately.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { loadJsx, flatten, names } from './jsx-render.mjs';
-import { stripComments } from './test-slice.mjs';
+import { loadScreen, miniReact, texts, button, find } from './render-jsx-screen.mjs';
 
 const win = { Fellowship: { cancelCareRequest() {}, subscribeCareRequests: () => () => {}, childCareAudience: () => Promise.resolve([{ pub: 'x' }]) } };
 const { render } = loadJsx('app/screens-today.jsx', ['AskForHelp'], { win });
@@ -29,37 +22,6 @@ const { render } = loadJsx('app/screens-today.jsx', ['AskForHelp'], { win });
 const mkCtx = () => { const nav = []; return { nav,
   ctx: { care: { settings: { enabled: true }, myPub: 'aa' }, church: { npub: 'np' },
          openServing: (tab) => nav.push(tab), toast() {} } }; };
-
-// hook order in AskForHelp: 0 = mine[], 1 = open, 2 = chatting, 3 = audience
-const OPEN_AND_CHATTING = { 0: [{ id: 'r1', status: 'open', at: 1 }], 1: true, 2: { reqId: 'r1', requesterPub: 'aa' } };
-
-test('Today shows the ask, and it is a link — no sheet is rendered', () => {
-  const { ctx } = mkCtx();
-  const tree = names(render('AskForHelp', { ctx, linkOnly: true }, OPEN_AND_CHATTING));
-  assert.ok(!tree.includes('AskForHelpForm'),
-    'Today still renders the ask-for-help sheet. Its backdrop is absolute+inset:0 and Today\'s animated wrapper ' +
-    'is its containing block, so it draws as a small box over the "Practical care" heading with the text cut off.');
-  assert.ok(!tree.includes('CareChatSheet'),
-    'Today still renders the care conversation sheet — same trapped backdrop, same broken box.');
-});
-
-test('tapping it takes you to the Care page', () => {
-  const { ctx, nav } = mkCtx();
-  const btn = flatten(render('AskForHelp', { ctx, linkOnly: true })).find(n => n.name === 'button');
-  assert.ok(btn, 'the ask-for-help control is gone from Today entirely — three members could not find care ' +
-    'inside "Serving & events", which is why it was put on Today in the first place');
-  btn.props.onClick();
-  assert.deepEqual(nav, ['care'], 'tapping "Ask for help" on Today did not open the Care page');
-});
-
-test('an open request on Today opens the Care page, not the trapped chat sheet', () => {
-  const { ctx, nav } = mkCtx();
-  const row = flatten(render('AskForHelp', { ctx, linkOnly: true }, { 0: [{ id: 'r1', status: 'open', at: 1 }] }))
-    .find(n => n.name === 'MyRequestRow');
-  assert.ok(row, 'a member\'s own open request no longer shows on Today');
-  row.props.onMessage();
-  assert.deepEqual(nav, ['care'], 'the "message" action on Today still opens the sheet instead of the Care page');
-});
 
 test('THE CARE PAGE IS UNCHANGED — the form still opens there', () => {
   // The point of the fix is to move where the form opens, not to remove it. If this goes red the feature is gone.
@@ -73,22 +35,6 @@ test('the care conversation still opens on the Care page', () => {
   const { ctx } = mkCtx();
   const tree = names(render('AskForHelp', { ctx }, { 0: [{ id: 'r1', status: 'open', at: 1 }], 2: { reqId: 'r1', requesterPub: 'aa' } }));
   assert.ok(tree.includes('CareChatSheet'), 'the care conversation can no longer be opened from the Care page either');
-});
-
-test('Today passes linkOnly and the Care tab does not', () => {
-  // Both call sites read `<AskForHelp ctx={ctx} />` character for character, so this is pinned by which
-  // render they sit in, not by a pattern — a pattern replace would silently hit whichever came first.
-  // Slice on CODE, then strip comments. Slicing on a comment marker cannot work here — stripComments has
-  // already removed it, and the first version of this test failed for exactly that reason.
-  const raw = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
-  const iToday = raw.indexOf('<SectionLabel>Practical care</SectionLabel>');
-  assert.ok(iToday > 0, 're-anchor: the Today care section no longer starts with the Practical care label');
-  const embedded = stripComments(raw.slice(raw.indexOf('if (embedded)'), iToday));
-  const today = stripComments(raw.slice(iToday));
-  assert.match(today.slice(0, 400), /<AskForHelp ctx=\{ctx\} linkOnly/,
-    'the Today render no longer passes linkOnly, so the trapped sheet is back');
-  assert.doesNotMatch(embedded, /<AskForHelp ctx=\{ctx\} linkOnly/,
-    'the Care tab was made link-only too, which leaves nowhere for the form to open');
 });
 
 // ── The "You asked for help" row ───────────────────────────────────────────────────────────────────────────
@@ -188,4 +134,152 @@ test('the send button does not promise a child a care team either', () => {
   const adult = textOf(renderForm('AskForHelpForm',
     { ctx: { ...ctx, safeguard: { isMinor: false } }, onClose() {}, onSent() {} })).join(' ');
   assert.match(adult, /Send to care team/, 'an adult is no longer told where their request goes');
+});
+
+// ── CARE IS ON THE CARE PAGE, NOT TODAY ─────────────────────────────────────────────────────
+// CareCard renders content only when embedded (the Care tab); a non-embedded render — the shape Today used to
+// mount — now draws nothing. careForMe() is the single read that decides the Today "Care" link badge, and it
+// must mirror CareCard's own gating (visibility, care roster, the child filter).
+const careGlobals = () => {
+  const { React, draw } = miniReact();
+  const Stub = (n) => function S(p) { return React.createElement('div', { 'data-stub': n }, p && p.children); };
+  const globals = {
+    React, console, setTimeout, clearTimeout, setInterval, clearInterval,
+    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    SectionLabel: (p) => React.createElement('h2', {}, p.children),
+    ChurchBadge: Stub('ChurchBadge'), Halo: Stub('Halo'), Sheet: Stub('Sheet'), IconBtn: Stub('IconBtn'),
+    lsGet: (k, d) => d, lsSet: () => {}, cx: (...a) => a.filter(Boolean).join(' '),
+    useTrinityAudio: () => ({ track: null, playing: false }), todayISO: () => '2026-10-16',
+    fetch: async () => ({ ok: false, json: async () => ({}) }),
+    localStorage: { getItem: () => '1', setItem() {}, removeItem() {} },
+    document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
+    window: { addEventListener() {}, removeEventListener() {}, innerWidth: 360,
+      Fellowship: { subscribeSafetyCheck: () => () => {}, subscribeCareRequests: () => () => {}, childCareAudience: async () => [] },
+      TrinityData: { NOTIFICATIONS: [], PLANS: [], VOTD_POOL: [] },
+      Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1, activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) } },
+  };
+  const mod = loadScreen('app/screens-today.jsx', ['CareCard', 'careForMe', 'CareLink', 'CareCountBadge'], globals);
+  return { React, draw, ...mod };
+};
+
+const OPEN_NEED = { id: 'n1', recipient: 'bb', displayLabel: 'The Okafor family', type: 'meals', dates: ['2026-10-20', '2026-10-21'] };
+const baseCare = (over = {}) => ({
+  care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa', needs: [OPEN_NEED],
+    slots: [], skips: [], avail: [], fill() {}, clearFill() {}, skip() {}, clearSkip() {} },
+  churchRosters: [], safeguard: { isMinor: false, minors: [] }, minorState: 'adult', ...over });
+
+test('CareCard renders nothing on Today (non-embedded), even for a maximally-actionable member', () => {
+  const { draw, CareCard } = careGlobals();
+  const ctx = baseCare({ churchRosters: [{ team: 't1', people: [{ pub: 'aa' }] }] });   // on the roster AND an open need
+  draw(CareCard, { ctx, embedded: false });
+  const words = texts(draw(CareCard, { ctx, embedded: false })).join(' | ');
+  assert.equal(words.trim(), '', 'CareCard drew content on Today (non-embedded). Care must render only on the Care page now. Shown: ' + words);
+});
+
+test('the Care page still shows the sign-up list (the feature moved, it did not vanish)', () => {
+  const { draw, CareCard } = careGlobals();
+  const ctx = baseCare({ careFocus: 'n1' });   // careFocus expands the need into its per-day rows
+  draw(CareCard, { ctx, embedded: true });
+  const tree = draw(CareCard, { ctx, embedded: true });
+  assert.ok(button(tree, 'I’ll help').length >= 1,
+    'the claim-a-day control is gone from the Care page — the sign-up has no home. Shown: ' + texts(tree).join(' | '));
+});
+
+test('careForMe counts the open needs an adult may sign up for — the Today "Care" badge', () => {
+  const { careForMe } = careGlobals();
+  // `open` counts NEEDS that still have a day to take (same count as "If you can help · N"), not single days.
+  assert.equal(careForMe(baseCare()).open, 1, 'an open need was not counted for the badge');
+});
+
+test('careForMe counts 0 once every day is taken (nothing to badge)', () => {
+  const { careForMe } = careGlobals();
+  const ctx = baseCare({ care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa',
+    needs: [OPEN_NEED], slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'cc' }, { needId: 'n1', isoDate: '2026-10-21', pubkey: 'cc' }], skips: [], avail: [] } });
+  assert.equal(careForMe(ctx).open, 0, 'a fully-covered need still lit the badge');
+});
+
+test('careForMe hides team-only needs from a member who is not on the care team', () => {
+  const { careForMe } = careGlobals();
+  const ctx = baseCare({ care: { settings: { enabled: true, visibility: 'team', adminGroupId: 't1' }, myPub: 'aa',
+    needs: [OPEN_NEED], slots: [], skips: [], avail: [] }, churchRosters: [] });
+  assert.equal(careForMe(ctx).open, 0, 'a non-team member was badged for a need a "team" church keeps to its care team');
+});
+
+test('careForMe counts a team-only need for a member who IS on the care team', () => {
+  const { careForMe } = careGlobals();
+  const ctx = baseCare({ care: { settings: { enabled: true, visibility: 'team', adminGroupId: 't1' }, myPub: 'aa',
+    needs: [OPEN_NEED], slots: [], skips: [], avail: [] }, churchRosters: [{ team: 't1', people: [{ pub: 'aa' }] }] });
+  assert.equal(careForMe(ctx).open, 1, 'a care-team member could not see the team needs they are meant to cover');
+});
+
+test('careForMe never badges a child — confirmed, or the cold-start "maybe" window', () => {
+  const { careForMe } = careGlobals();
+  assert.equal(careForMe(baseCare({ safeguard: { isMinor: true, minors: [] }, minorState: 'minor' })).open, 0, 'a confirmed minor was given a sign-up count');
+  assert.equal(careForMe(baseCare({ minorState: 'maybe' })).open, 0, 'the cold-start "maybe" window gave a child a sign-up count');
+  // a minor who already HOLDS a day on a need that still has open days must still count 0 (the held day is
+  // a cancellable commitment shown inside CareCard, not a new sign-up to badge on Today).
+  assert.equal(careForMe(baseCare({ safeguard: { isMinor: true, minors: [] }, minorState: 'minor',
+    care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa', needs: [OPEN_NEED],
+      slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'aa' }], skips: [], avail: [] } })).open, 0,
+    'a minor holding a day on a still-open need was given a sign-up count');
+});
+
+test('careForMe is 0 when practical care is switched off', () => {
+  const { careForMe } = careGlobals();
+  assert.equal(careForMe(baseCare({ care: { settings: { enabled: false }, myPub: 'aa', needs: [OPEN_NEED], slots: [], skips: [], avail: [] } })).open, 0, 'the badge counted needs for a church with care off');
+});
+
+// ── the Today "Care" link (the findability badge) ───────────────────────────────────────────────────
+// The badge renders in CareLink (dropped into the What's happening card by TodayScreen). These render the
+// shipped CareLink, so deleting the badge span reddens them — the point-of-use the lifted careForMe tests alone
+// did not give (CLAUDE.md rule 1).
+test('the open-care COUNT shows as a badge on the card title; the "Care" link stays (owner 2026-10-16)', () => {
+  const { draw, CareCountBadge, CareLink } = careGlobals();
+  assert.match(texts(draw(CareCountBadge, { ctx: baseCare() })).join(' '), /\b1\b/,
+    'the care count badge did not show the open-need count - the findability signal is dead');
+  assert.match(texts(draw(CareLink, { ctx: baseCare() })).join(' '), /Care/, 're-anchor: the Care link is gone from the card');
+});
+
+test('the care count badge is hidden when nothing is open, and when care is off', () => {
+  const { draw, CareCountBadge } = careGlobals();
+  const covered = baseCare({ care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa',
+    needs: [OPEN_NEED], slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'cc' }, { needId: 'n1', isoDate: '2026-10-21', pubkey: 'cc' }], skips: [], avail: [] } });
+  assert.equal(texts(draw(CareCountBadge, { ctx: covered })).join(' ').trim(), '', 'the count badge showed when every day was taken');
+  const off = baseCare({ care: { settings: { enabled: false }, myPub: 'aa', needs: [], slots: [], skips: [], avail: [] } });
+  assert.equal(texts(draw(CareCountBadge, { ctx: off })).join(' ').trim(), '', 'the count badge showed with care off');
+});
+
+test('the Today "Care" link is a plain link (no count) when nothing is open to sign up for', () => {
+  const { draw, CareLink } = careGlobals();
+  const covered = baseCare({ care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa',
+    needs: [OPEN_NEED], slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'cc' }, { needId: 'n1', isoDate: '2026-10-21', pubkey: 'cc' }], skips: [], avail: [] } });
+  const t = texts(draw(CareLink, { ctx: covered })).join(' ');
+  assert.match(t, /Care/, 'the Care link vanished when nothing was open — it should stay a plain link');
+  assert.doesNotMatch(t, /[0-9]/, 'the Care link showed a count when every day was already taken');
+});
+
+test('the care count badge never shows to a child, even one already holding a day', () => {
+  const { draw, CareCountBadge } = careGlobals();
+  const childHolds = baseCare({ safeguard: { isMinor: true, minors: [] }, minorState: 'minor',
+    care: { settings: { enabled: true, visibility: 'all', adminGroupId: 't1' }, myPub: 'aa', needs: [OPEN_NEED],
+      slots: [{ needId: 'n1', isoDate: '2026-10-20', pubkey: 'aa' }], skips: [], avail: [] } });
+  assert.equal(texts(draw(CareCountBadge, { ctx: childHolds })).join(' ').trim(), '', 'a child holding a day was given a care count badge');
+});
+
+test('the Today "Care" link renders nothing when practical care is off', () => {
+  const { draw, CareLink } = careGlobals();
+  const off = baseCare({ care: { settings: { enabled: false }, myPub: 'aa', needs: [], slots: [], skips: [], avail: [] } });
+  assert.equal(texts(draw(CareLink, { ctx: off })).join(' ').trim(), '', 'the Care link rendered with practical care switched off');
+});
+
+test('tapping the Today "Care" link opens the Care page', () => {
+  const { draw, CareLink } = careGlobals();
+  const nav = [];
+  const ctx = baseCare(); ctx.openServing = (tab) => nav.push(tab);
+  const tree = draw(CareLink, { ctx });
+  const span = find(tree, n => n.type === 'span' && n.props && typeof n.props.onClick === 'function')[0];
+  assert.ok(span, 'the Care link has no tappable element');
+  span.props.onClick({ stopPropagation() {} });
+  assert.deepEqual(nav, ['care'], 'tapping the Care link did not open the Care page');
 });

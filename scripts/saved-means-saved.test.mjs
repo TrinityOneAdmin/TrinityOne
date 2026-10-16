@@ -35,11 +35,12 @@ test('the helper card does not list somebody the church was never told about', a
   const body = fnBody(TODAY, 'const save = () => {', 'save');
   const run = (result) => {
     const state = { opt: 'untouched', toasts: [], editing: true };
-    const fn = new Function('care', 'setOpt', 'setEditing', 'ctx', 'tags', 'note',
-      body + '\nreturn save;')(
+    const rangeSrc = fnBody(TODAY, 'function careAvailRange(', 'careAvailRange');
+    const fn = new Function('care', 'setOpt', 'setEditing', 'ctx', 'tags', 'note', 'dFrom', 'dTo',
+      rangeSrc + '\n' + body + '\nreturn save;')(
       { setAvail: async () => result },
       (v) => { state.opt = v; }, (v) => { state.editing = v; },
-      { toast: (t) => state.toasts.push(String(t)) }, ['meal'], 'happy to help');
+      { toast: (t) => state.toasts.push(String(t)) }, ['meal'], 'happy to help', '', '');
     fn();
     return state;
   };

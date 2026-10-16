@@ -430,6 +430,12 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const [text, setText] = React.useState('');
   const [err, setErr] = React.useState('');
   const [menuMsg, setMenuMsg] = React.useState(null);
+  const [dotsMsg, setDotsMsg] = React.useState(null);   // the ⋯ (Reply-only) popup, separate from the right-click menu
+  // SWIPE TO REPLY (APK) — the shared TrinityReplyKit (app/reply-kit.jsx); one row is dragged at a time.
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
   const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
   const inputRef = React.useRef(null);
@@ -445,10 +451,15 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
     if (!ok) { setText(t); setErr('Couldn\u2019t send \u2014 we couldn\u2019t confirm who this conversation reaches. Check your connection and try again.'); }
   };
   const react = async (msgId, emoji) => { setMenuMsg(null); try { await window.StewardMeals.sendCareChat(reqId, requesterPub, '', { reaction: emoji, replyTo: msgId }); } catch (e) {} };
-  const startReply = (m) => { setMenuMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
+  const startReply = (m) => { setMenuMsg(null); setDotsMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
   const textMsgs = msgs.filter(m => m.text);
   const reactionsByMsg = {};
   msgs.filter(m => m.reaction && m.replyTo).forEach(m => { if (!reactionsByMsg[m.replyTo]) reactionsByMsg[m.replyTo] = []; reactionsByMsg[m.replyTo].push(m.reaction); });
+  const canReply = (m) => !!m && !!m.id;
+  const swipe = (m) => isNative && canReply(m)
+    ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
+    : {};
+  const lastId = textMsgs.length ? textMsgs[textMsgs.length - 1].id : '';
   const msgById = {};
   textMsgs.forEach(m => { msgById[m.id] = m; });
   React.useEffect(() => {
@@ -468,9 +479,20 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
             const quoted = m.replyTo && msgById[m.replyTo];
             const copy = () => { try { navigator.clipboard.writeText(m.text); } catch {} };
             return (
-            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', position: 'relative' }}>
-              {quoted ? <div style={{ fontSize: 11, color: 'var(--ink-3)', padding: '3px 9px', margin: '0 3px 2px', borderLeft: '2px solid var(--clay)', borderRadius: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{quoted.text ? quoted.text.slice(0, 80) : ''}</div> : null}
+            <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', position: 'relative', ...(isNative ? TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) : {}) }}>
+              {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
+              {quoted ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: quoted.text ? quoted.text.slice(0, 80) : '' }) : (m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null)}
               <div onContextMenu={e => { e.preventDefault(); setMenuMsg(menuMsg === m.id ? null : m.id); }} style={{ padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
+              {canReply(m) ? (
+                <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={dotsMsg === m.id}
+                  {...TrinityReplyKit.dotsProps(isNative, 24, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={14} /></button>
+              ) : null}
+              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before. */}
+              {dotsMsg === m.id ? (
+                <div data-reply-menu={m.id === lastId ? 'up' : 'down'} ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
+                  <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
+                </div>
+              ) : null}
               {rxns ? <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', margin: '2px 5px 0', justifyContent: m.mine ? 'flex-end' : 'flex-start' }}>{rxns.map((r, i) => <span key={i} style={{ fontSize: 13, lineHeight: 1 }}>{r}</span>)}</div> : null}
               {menuMsg === m.id ? <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', bottom: '100%', [m.mine ? 'right' : 'left']: 0, marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 140 }}>
                 <div style={{ display: 'flex', gap: 4, padding: '4px 6px' }}>{REACTIONS.map(emoji => <button key={emoji} onClick={() => react(m.id, emoji)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 18, padding: '2px 3px', borderRadius: 8 }}>{emoji}</button>)}</div>
@@ -482,10 +504,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
           <div ref={endRef} />
         </div>
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '10px 14px', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--ink)' }}>{err}</div> : null}
-        {replyTo ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ fontWeight: 700 }}>Replying</span> {replyTo.text ? replyTo.text.slice(0, 60) : ''}</div>
-          <button onClick={() => setReplyTo(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2 }}><Icon name="x" size={14} color="currentColor" /></button>
-        </div> : null}
+        {replyTo ? TrinityReplyKit.bar({ variant: 'console', who: replyTo.mine ? 'yourself' : 'them', text: replyTo.text ? replyTo.text.slice(0, 60) : '', onCancel: () => setReplyTo(null) }) : null}
         <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: replyTo ? 'none' : '1px solid var(--line)' }}>
           <input ref={inputRef} value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
           <button onClick={send} aria-label="Send this reply" title="Send this reply" className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
@@ -610,8 +629,14 @@ function StewCareRequests() {
   // as "known" — and the hook's own pre-subscription default was exactly such a payload, so on first paint
   // every request was classed by an empty minors list. That is the bug this gate exists to stop, still
   // happening. `=== true` is the only reading that is safe when the answer is missing.
-  const _minorsKnown = _sg.minorsKnown === true;
-  const isChild = (r) => !_minorsKnown || _minors.has(String(r && r.from || '').toLowerCase());
+  // ALSO FAIL CLOSED FOR A SCOPED DELEGATE WHO IS NOT SHOWN THE CHILDREN LIST. `minorsKnown` turns true for a
+  // care-only steward on EOSE-while-authenticated with an EMPTY minors set (the relay withholds minors: from a
+  // steward who lacks Safeguarding), which would file a child's request with the adults and offer "Set up help" —
+  // publishing a congregation-wide NEED with the child's name on it. readyToHelpCanSeeChildren (the same helper
+  // StewReadyToHelp uses) returns true only when this console can positively say who the children are; on anything
+  // less, every request is held confidential. Users of the helper listed at its definition.
+  const _canSeeChildren = readyToHelpCanSeeChildren(_sg, window.Steward);
+  const isChild = (r) => !_canSeeChildren || _minors.has(String(r && r.from || '').toLowerCase());
   const childReqs = reqs.filter(isChild), adultReqs = reqs.filter(r => !isChild(r));
   // THE CHAT MODAL OUTLIVES THE LIST. A reply makes the request's newest message the team's, which takes a returned
   // row OFF the list — and with it, when it was the last row, this whole component, and so the conversation the
@@ -662,7 +687,7 @@ function StewCareRequests() {
       {halfDone ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', lineHeight: 1.5, margin: '0 0 10px', padding: '9px 12px', borderRadius: 12, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>{halfDone}</div> : null}
       {childReqs.length ? (
         <div style={{ marginBottom: 14 }}>
-          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>{_minorsKnown ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
+          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>{_canSeeChildren ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px', padding: '9px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
             Only people on your <b>cleared list</b> can see these, and nobody on the care rota sees them unless they are cleared too. Reply privately below. There is no “set up help” here on purpose: that publishes a need the whole church reads and signs up to, which is not somewhere a young person’s request belongs. Handle it under your safeguarding policy.
           </div>
@@ -680,6 +705,205 @@ function StewCareRequests() {
     </div>
   );
 }
+
+// WHO HAS SIGNED UP, PER OPEN NEED. The Overview banner counted requests and the need detail named people only
+// once a steward opened it, so a steward never saw WHO had answered. Pure: needs, slots, a name lookup and today.
+// Returns [{ needId, title, names }] for each still-running need that has at least one sign-up, names distinct.
+// Users: the Overview strip in app/stew-dashboard.jsx (window.careSignupSummary) and MealsNeedCard below.
+function careSignupSummary(needs, slots, nameOf, today) {
+  const out = [];
+  for (const n of (needs || [])) {
+    if (!n || (n.endDate && today && n.endDate < today)) continue;
+    const seen = new Set(), names = [];
+    for (const sl of (slots || [])) {
+      if (!sl || sl.needId !== n.id || !sl.pubkey || seen.has(sl.pubkey)) continue;
+      seen.add(sl.pubkey); names.push(nameOf(sl.pubkey));
+    }
+    if (names.length) out.push({ needId: n.id, title: needTitle(n), names });
+  }
+  return out;
+}
+window.careSignupSummary = careSignupSummary;
+
+// Per-meal unit coverage for a care need — shared by every CONSOLE view (careOpenNeeds, MealsNeedCard,
+// MealsNeedDetail) so the invite flow, the card count and the schedule read coverage the SAME per-meal way the
+// member's CareNeedRow does. A meals day splits into its meals; any other need is one unit per day (''). A LEGACY
+// no-meal slot ('') covers the whole day. openDaysFrom(today): days with any meal still unclaimed and not skipped.
+function careUnitCoverage(need, slots, skips) {
+  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate);
+  const skippedDates = new Set((skips || []).filter(s => s && s.needId === need.id).map(s => s.isoDate));
+  const mealsOf = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
+  const unitsOf = (iso) => { const ms = mealsOf(iso); return ms.length ? ms : ['']; };
+  const takenUnit = (iso, m) => (slots || []).some(s => s && s.needId === need.id && s.isoDate === iso && ((s.meal || '') === m || (s.meal || '') === ''));
+  const openDaysFrom = (today) => dates.filter(d => !skippedDates.has(d) && (!today || d >= today) && unitsOf(d).some(m => !takenUnit(d, m)));
+  return { dates, skippedDates, unitsOf, takenUnit, openDaysFrom };
+}
+
+// THE NEEDS A HELPER CAN BE INVITED TO: still running, readable (a sealed need has no name to put in an invite),
+// and with at least one day nobody has taken or skipped. Pure. [{ id, title, type, openCount, openDays }] (openDays = the open ISO dates, ascending as the need lists them).
+function careOpenNeeds(needs, slots, skips, today) {
+  const out = [];
+  for (const n of (needs || [])) {
+    if (!n || n._sealed || (n.endDate && today && n.endDate < today)) continue;
+    const open = careUnitCoverage(n, slots, skips).openDaysFrom(today);
+    if (open.length) out.push({ id: n.id, title: needTitle(n), type: mealsTypeLabel(n), openCount: open.length, openDays: open });
+  }
+  return out;
+}
+window.careOpenNeeds = careOpenNeeds;
+
+// INVITE A HELPER TO A NEED. A plain private message that NAMES the need and asks — it signs nobody onto anything
+// (no slot is written; they sign up themselves, which is their consent). Honest result, because the message is
+// the only thing this does: Steward.sendDM answers the event when it reached a relay, `{_queued:true}` when it
+// is waiting to send, and null when nothing was sent (no key / encrypt failed); it can also throw.
+//   -> { ok:true }  sent;   { ok:true, queued:true }  waiting for a connection;   { ok:false }  NOT sent.
+// A caller must say "invited" only for ok && !queued. Users: StewReadyToHelp.
+//
+// WITH A DAY (2026-10-16, care matching): `day` is one ISO date from need.openDays. The message then names that day
+// and rides the DM envelope's optional `co:{n,d}` (sendDM's 4th argument, meta.careOffer) so the member's thread
+// can draw a one-tap "Accept this day". The sentence in the body still carries every fact, so an older build shows
+// the words. Without `day` the call is byte-for-byte what it was (two arguments to sendDM).
+async function careInvite(sendDM, person, need, day) {
+  const first = String(person && person.name || '').trim().split(/\s+/)[0];
+  if (day && need && need.id) {
+    const dl = careDayLabel(day);
+    const offerBody = (first ? 'Hi ' + first + ', thank you' : 'Thank you') + ' for offering to help. Could you help with ' + need.title + ' (' + need.type + ') on ' + dl + '? Tap “Accept this day” below to sign yourself up, or open Care in the app. No pressure either way.';
+    let r2 = null;
+    try { r2 = await sendDM(person.pubkey, offerBody, null, { careOffer: { needId: need.id, isoDate: day } }); } catch (e) { return { ok: false }; }
+    if (!r2) return { ok: false };
+    return r2._queued ? { ok: true, queued: true } : { ok: true };
+  }
+  const body = (first ? 'Hi ' + first + ', thank you' : 'Thank you') + ' for offering to help. We have a need you might be able to help with: ' + need.title + ' (' + need.type + '), ' + need.openCount + ' ' + (need.openCount === 1 ? 'day' : 'days') + ' still open. If you can, open Care in the app and sign up for a day that suits you. No pressure either way.';
+  let r = null;
+  try { r = await sendDM(person.pubkey, body); } catch (e) { return { ok: false }; }
+  if (!r) return { ok: false };
+  return r._queued ? { ok: true, queued: true } : { ok: true };
+}
+window.careInvite = careInvite;
+
+// "Tue 20 Oct" for an ISO date (UTC-parsed so the weekday never shifts with the viewer's timezone).
+function careDayLabel(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return String(iso || '');
+  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getUTCDay()] + ' ' + (+m[3]) + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[2] - 1];
+}
+// THE DAYS TO OFFER A HELPER: a need's open days, those inside the helper's "when I'm free" window first. If the
+// helper gave a window and some days fall in it, ONLY those are offered (the others would be asking them for a
+// day they said they cannot do); if none fall in it, all open days are offered rather than none. Pure.
+function careOfferDays(need, dates) {
+  const days = (need && need.openDays) || [];
+  if (!dates || !dates.from || !dates.to) return days;
+  const inside = days.filter(d => d >= dates.from && d <= dates.to);
+  return inside.length ? inside : days;
+}
+
+const CARE_AVAIL_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare', prayer: 'Prayer', other: 'Other' };
+const careAvailLabel = (t) => CARE_AVAIL_LABEL[t] || (String(t || '').charAt(0).toUpperCase() + String(t || '').slice(1));
+
+// READY TO HELP — members who tapped "I'm here to help" in the member app. A standing list: no steward surface
+// read it before. Collapsed by default, with a count. A CHILD IS NEVER LISTED (the member app filters minors out
+// of the same list for the same reason: being listed invites contact) — and while the children list has not
+// arrived the whole section stays empty, because an empty minors set answers "no" as confidently as a loaded one.
+// A blocked member is not listed either. The name key may not have arrived (the reader then yields nothing and
+// the section is simply absent — never an empty-looking list drawn as "nobody is ready").
+// CAN THIS CONSOLE POSITIVELY SAY WHO THE CHILDREN ARE? Fails closed. `minorsKnown` is not enough for a SCOPED
+// delegate: the relay withholds minors: from a steward who lacks Safeguarding (and is not a care admin), yet
+// minorsKnown still turns true for them on EOSE-while-authenticated, with an EMPTY set — which then answers
+// "no children" and lists a child. So a scoped steward without the safeguarding cap must have RECEIVED the minors
+// document (minorsDocSeen). Owner console and unscoped steward (caps null) and a safeguarding steward are served it
+// (or honestly have none), so for them minorsKnown stands. `S` is window.Steward. Users: StewReadyToHelp, StewCareRequests.
+function readyToHelpCanSeeChildren(sg, S) {
+  if (!sg || sg.minorsKnown !== true) return false;
+  if (!S || !S.actingChurch) return true;                                   // owner console
+  const caps = S.myStewardCaps ? S.myStewardCaps() : undefined;
+  if (caps === null) return true;                                           // unscoped steward
+  if (Array.isArray(caps) && caps.indexOf('safeguarding') >= 0) return true;
+  return sg.minorsDocSeen === true;                                         // scoped without Safeguarding: only a document we hold
+}
+function StewReadyToHelp() {
+  const allowed = (typeof stewCapState === 'function') ? stewCapState('care').allowed : true;
+  const avail = window.useMealsAvail ? window.useMealsAvail() : [];
+  const dir = window.useStewardDirectory ? window.useStewardDirectory() : {};
+  const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
+  const blocked = new Set((window.useStewardBlocked ? window.useStewardBlocked() : []).map(p => String(p || '').toLowerCase()));
+  const needs = window.useMealsNeeds ? window.useMealsNeeds() : [];
+  const slots = window.useMealsSlots ? window.useMealsSlots() : [];
+  const skips = window.useMealsSkips ? window.useMealsSkips() : [];
+  const [open, setOpen] = React.useState(false);
+  const [picking, setPicking] = React.useState(null);   // pubkey whose "which need?" picker is showing
+  const [status, setStatus] = React.useState({});       // pubkey -> { kind: 'ok'|'queued'|'err'|'busy', text }
+  if (!allowed || sg.minorsKnown !== true) return null;
+  // A SCOPED DELEGATE who cannot be shown the children list: say so, list nothing, count nothing.
+  if (!readyToHelpCanSeeChildren(sg, window.Steward)) {
+    if (!(avail && avail.length)) return null;
+    return <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 14, border: '1px solid var(--line)', fontSize: 13, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>Can’t check which members are children here — this list is hidden. Ask a safeguarding steward.</div>;
+  }
+  const minors = new Set((sg.minors || []).map(x => String(x || '').toLowerCase()));
+  const rows = (avail || []).filter(a => a && a.pubkey && !minors.has(String(a.pubkey).toLowerCase()) && !blocked.has(String(a.pubkey).toLowerCase()));
+  if (!rows.length) return null;
+  const nameOf = (pub) => (dir && dir[pub] && dir[pub].name) || (pub.slice(0, 6) + '…' + pub.slice(-4));
+  const openNeeds = careOpenNeeds(needs, slots, skips, window.todayISO ? window.todayISO() : (typeof todayISO === 'function' ? todayISO() : ''));
+  const invite = (a, need, day) => {
+    setPicking(null);
+    setStatus(st => ({ ...st, [a.pubkey]: { kind: 'busy', text: 'Sending…' } }));
+    const person = { pubkey: a.pubkey, name: (dir && dir[a.pubkey] && dir[a.pubkey].name) || '' };
+    return Promise.resolve(careInvite((pk, body, rt, meta) => (meta ? window.Steward.sendDM(pk, body, rt, meta) : window.Steward.sendDM(pk, body)), person, need, day)).then(r => {
+      setStatus(st => ({ ...st, [a.pubkey]: r.ok && !r.queued ? { kind: 'ok', text: 'Invited — they were sent a message and can sign up themselves' }
+        : r.ok ? { kind: 'queued', text: 'Not delivered yet — it will send when the connection returns' }
+        : { kind: 'err', text: 'Not sent — nothing was delivered. Try again, or use Message.' } }));
+    });
+  };
+  const onInvite = (a) => { if (!openNeeds.length) return; if (openNeeds.length === 1) { const ds = careOfferDays(openNeeds[0], a.dates); if (ds.length === 1) return invite(a, openNeeds[0], ds[0]); } setPicking(p => p === a.pubkey ? null : a.pubkey); };
+  const dm = (a) => { const m = (dir && dir[a.pubkey]) || {}; window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: a.pubkey, npub: m.npub, name: nameOf(a.pubkey), nip05: m.nip05 } })); };
+  return (
+    <div style={{ marginTop: 14, borderRadius: 14, border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', background: 'color-mix(in oklab, var(--sage) 6%, var(--surface))' }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '12px 14px', border: 'none', background: 'none', fontFamily: 'var(--font-ui)' }}>
+        <Icon name="heart" size={16} color="var(--sage)" />
+        <span style={{ flex: 1, fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>Ready to help · {rows.length}</span>
+        <Icon name="chevR" size={15} color="var(--ink-3)" />
+      </button>
+      {open ? (
+        <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rows.map(a => (
+            <div key={a.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '9px 11px', borderRadius: 11, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', overflowWrap: 'anywhere' }}>{nameOf(a.pubkey)}</div>
+                {(a.tags || []).length ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{a.tags.map(t => <span key={t} style={{ fontSize: 11.5, padding: '2px 8px', borderRadius: 99, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-2)' }}>{careAvailLabel(t)}</span>)}</div> : null}
+                {a.dates && a.dates.from && a.dates.to ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4 }}>free {careDayLabel(a.dates.from)}{a.dates.to !== a.dates.from ? ' – ' + careDayLabel(a.dates.to) : ''}</div> : null}
+                {a.note ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.45 }}>{a.note}</div> : null}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => dm(a)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
+                  <button onClick={() => onInvite(a)} disabled={!openNeeds.length || (status[a.pubkey] && status[a.pubkey].kind === 'busy')} title={openNeeds.length ? 'Ask them to help with an open need' : 'No open needs'} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13, opacity: openNeeds.length ? 1 : 0.5 }}>Invite to a need</button>
+                </div>
+                {!openNeeds.length ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'right', lineHeight: 1.35 }}>No open needs yet — Start care to open one</span> : null}
+              </div>
+            </div>
+            {picking === a.pubkey ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '2px 0 4px' }}>
+                <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 700 }}>Which need?</div>
+                {openNeeds.map(n => (
+                  <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <button onClick={() => invite(a, n)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 11px', fontSize: 13, textAlign: 'left' }}>{n.title} · {n.type} · {n.openCount} open</button>
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', paddingLeft: 6 }}>
+                      {careOfferDays(n, a.dates).slice(0, 14).map(d => <button key={d} onClick={() => invite(a, n, d)} title={'Offer ' + careDayLabel(d) + ' — they can accept it in one tap'} className="sk-btn sk-btn--ghost" style={{ padding: '5px 9px', fontSize: 12 }}>Offer {careDayLabel(d)}</button>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {status[a.pubkey] ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.45, color: status[a.pubkey].kind === 'err' ? 'var(--clay-deep, #b4462f)' : status[a.pubkey].kind === 'ok' ? 'var(--sage-ink)' : 'var(--ink-2)' }}>{status[a.pubkey].text}</div> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+window.StewReadyToHelp = StewReadyToHelp;
 
 function DashMeals() {
   const needs = window.useMealsNeeds ? window.useMealsNeeds() : [];
@@ -707,8 +931,10 @@ function DashMeals() {
 
       <StewCareRequests />
 
+      <StewReadyToHelp />
+
       {!detail && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14, marginBottom: 6 }}>
           <button onClick={() => setEditing('new')} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 14 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Start care</button>
         </div>
       )}
@@ -765,11 +991,12 @@ function mealsCoverLabel(dayCount, openCount) {
 }
 
 function MealsNeedCard({ need, slots, skips, onOpen }) {
-  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate);
-  const filledDates = new Set(slots.map(s => s.isoDate));
-  const skippedDates = new Set(skips.map(s => s.isoDate));
-  const open = dates.filter(d => !filledDates.has(d) && !skippedDates.has(d));
-  const filledCount = dates.filter(d => filledDates.has(d)).length;
+  const _cov = careUnitCoverage(need, slots, skips);
+  const dates = _cov.dates;
+  // per-meal: a day only counts covered when EVERY meal it needs is taken, so a half-covered meals day no longer
+  // reads as "covered" on the card. open = days with any meal still open.
+  const open = _cov.openDaysFrom(null);
+  const filledCount = dates.length - open.length;
   const cover = mealsCoverLabel(dates.length, open.length);
   const coverTone = { done: 'var(--sage)', open: 'var(--ink)', empty: 'var(--clay-deep, #b4462f)' };
   return (
@@ -862,6 +1089,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
               </div>
               <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>
                 {skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Covered{skipByDate[iso] && skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
+                  : (need.type === 'meals' && dayMealsOf(iso).length) ? dayMealsOf(iso).map(m => { const mf = fills.filter(f => (f.meal || '') === m || (f.meal || '') === ''); return <span key={m} style={{ marginRight: 12, display: 'inline-block' }}><span style={{ fontWeight: 700, color: 'var(--ink)' }}>{MEAL_SHORT[m] || m}:</span> {mf.length ? mf.map((f, i) => <span key={i}><Icon name="check" size={11} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>) : <span style={{ color: 'var(--ink-3)' }}>Open</span>}</span>; })
                   : fills.length === 0 ? <span style={{ color: 'var(--ink-3)' }}>Open</span>
                   : fills.map((f, i) => <span key={i} style={{ marginRight: 10 }}><Icon name="check" size={12} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>)}
               </div>
@@ -888,7 +1116,17 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const [dates, setDates] = React.useState(need ? (Array.isArray(need.dates) && need.dates.length ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate)) : []);
   const [pick, setPick]   = React.useState('');
   const addDate = () => { if (pick && !dates.includes(pick)) setDates(d => [...d, pick].sort()); setPick(''); };
-  const removeDate = (d) => setDates(ds => ds.filter(x => x !== d));
+  // Add a whole contiguous RANGE at once (owner 2026-10-16) — easier than tapping each day; days stay
+  // individually removable and non-contiguous sets still work via "Add day".
+  const [rangeFrom, setRangeFrom] = React.useState('');
+  const [rangeTo, setRangeTo]     = React.useState('');
+  const rangeOk = !!rangeFrom && !!rangeTo && rangeFrom <= rangeTo;
+  const addRange = () => { if (!rangeOk) return; const span = mealsDateRange(rangeFrom, rangeTo); setDates(d => [...new Set([...d, ...span])].sort()); setRangeFrom(''); setRangeTo(''); };
+  // Optional per-slot drop-off TIMES. Key "<iso>:<meal>" for a meals need, "<iso>" day-level otherwise.
+  const [slotTimes, setSlotTimes] = React.useState(need && need.slotTimes && typeof need.slotTimes === 'object' ? { ...need.slotTimes } : {});
+  const setTimeFor = (key, v) => setSlotTimes(st => { const n = { ...st }; if (v) n[key] = v; else delete n[key]; return n; });
+  // removing a day drops its drop-off times too, so a stale time never rides along on the published need.
+  const removeDate = (d) => { setDates(ds => ds.filter(x => x !== d)); setSlotTimes(st => Object.fromEntries(Object.entries(st).filter(([k]) => k.split(':')[0] !== d))); };
   const [notes, setNotes]   = React.useState(need ? need.notes : '');
   const [recipient, setRecipient] = React.useState(need ? need.recipient : '');
   const [diet, setDiet] = React.useState(need && Array.isArray(need.dietary) ? need.dietary : []);
@@ -926,7 +1164,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         displayLabel: label.trim(), type, dates, notes: notes.trim(),
         recipient: (recipient || '').trim(),
         dietary: type === 'meals' ? diet : [],
-        meals: type === 'meals' ? meals : [], dayMeals: type === 'meals' ? dayMeals : {},
+        meals: type === 'meals' ? meals : [], dayMeals: type === 'meals' ? dayMeals : {}, slotTimes,
       });
       // The sheet closed on a refused publish, so a steward who had just typed a family's name and dates was
       // returned to a needs list they believed carried it. publishNeed now answers null for that.
@@ -963,10 +1201,6 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <input aria-label="Who is this for?" type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Sarah Jones, or “a family in our church”" autoFocus style={{ ...mealsFld, marginBottom: 6 }} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>You decide what reads right. A real name brings the church closer; a discreet label protects dignity. Up to you.</div>
 
-        <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
-        <RecipientPicker members={(members || []).filter(m => !(m && m.pubkey && blockedKeys.has(String(m.pubkey).toLowerCase())))} value={recipient} onChange={setRecipient} />
-        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>If the person uses the app, link them — then <b>they alone</b> can tick off days they’re already covered, so the church doesn’t double up. Leave unlinked if they’re not on the app.</div>
-
         <div style={mealsLbl}>WHAT KIND OF CARE?</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
           {MEALS_TYPES.map(([k, lbl, ic]) => (
@@ -996,32 +1230,62 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         ) : null}
 
         <div style={mealsLbl}>WHICH DAYS?</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: dates.length ? 8 : 6 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           <input type="date" value={pick} min={today} onChange={e => setPick(e.target.value)} style={{ ...mealsFld, flex: 1 }} />
           <button onClick={addDate} disabled={!pick || dates.includes(pick)} className="sk-btn sk-btn--ghost" style={{ padding: '0 15px', fontSize: 13.5, flexShrink: 0, opacity: (pick && !dates.includes(pick)) ? 1 : 0.5 }}><Icon name="plus" size={14} color="currentColor" /> Add day</button>
+        </div>
+        {/* add a whole run of days at once — owner 2026-10-16. Each added day is still removable below. */}
+        <div style={{ display: 'flex', gap: 7, alignItems: 'center', marginBottom: dates.length ? 10 : 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, flexShrink: 0 }}>or a range</span>
+          <input aria-label="Range from" type="date" value={rangeFrom} min={today} onChange={e => setRangeFrom(e.target.value)} style={{ ...mealsFld, flex: 1, height: 40, fontSize: 13, padding: '0 10px' }} />
+          <span style={{ fontSize: 12, color: 'var(--ink-3)', flexShrink: 0 }}>to</span>
+          <input aria-label="Range to" type="date" value={rangeTo} min={rangeFrom || today} onChange={e => setRangeTo(e.target.value)} style={{ ...mealsFld, flex: 1, height: 40, fontSize: 13, padding: '0 10px' }} />
+          <button onClick={addRange} disabled={!rangeOk} className="sk-btn sk-btn--ghost" style={{ padding: '0 13px', fontSize: 13, flexShrink: 0, opacity: rangeOk ? 1 : 0.5 }}>Add</button>
         </div>
         {dates.length ? (type === 'meals' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
             {dates.map(d => (
-              <div key={d} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px 7px 11px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)' }}>
-                <span style={{ fontWeight: 700, fontSize: 12.5, width: 86, flexShrink: 0 }}>{mealsFmtDate(d)}</span>
-                <div style={{ display: 'flex', gap: 4, flex: 1 }}>
-                  {MEAL_KINDS.map(([mk, mlbl]) => { const on = effMeals(d).includes(mk); return (
-                    <button key={mk} onClick={() => toggleDayMeal(d, mk)} title={mlbl} style={{ flex: 1, padding: '6px 2px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mlbl[0]}</button>
-                  ); })}
+              <div key={d} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 8px 8px 11px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontWeight: 700, fontSize: 12.5, width: 86, flexShrink: 0 }}>{mealsFmtDate(d)}</span>
+                  <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+                    {MEAL_KINDS.map(([mk, mlbl]) => { const on = effMeals(d).includes(mk); return (
+                      <button key={mk} onClick={() => toggleDayMeal(d, mk)} title={mlbl} style={{ flex: 1, padding: '6px 2px', borderRadius: 8, border: '1px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 15%, var(--surface))' : 'var(--surface)', color: on ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 700, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mlbl[0]}</button>
+                    ); })}
+                  </div>
+                  <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
                 </div>
-                <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+                {/* optional per-meal drop-off time (owner 2026-10-16) — one input per meal this day needs */}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', paddingLeft: 2 }}>
+                  {effMeals(d).map(mk => { const mlbl = (MEAL_KINDS.find(k => k[0] === mk) || [mk, mk])[1]; return (
+                    <label key={mk} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>
+                      {mlbl} by
+                      <input aria-label={'Drop-off time for ' + mlbl + ' on ' + d} type="time" value={slotTimes[d + ':' + mk] || ''} onChange={e => setTimeFor(d + ':' + mk, e.target.value)} style={{ height: 32, padding: '0 7px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                    </label>
+                  ); })}
+                  <span style={{ fontSize: 10.5, color: 'var(--ink-4, var(--ink-3))' }}>drop-off (optional)</span>
+                </div>
               </div>
             ))}
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
             {dates.map(d => (
-              <button key={d} onClick={() => removeDate(d)} title="Remove this day" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{mealsFmtDate(d)} <Icon name="x" size={11} color="currentColor" /></button>
+              <div key={d} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px 7px 11px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)' }}>
+                <span style={{ fontWeight: 700, fontSize: 12.5, flex: 1, minWidth: 0 }}>{mealsFmtDate(d)}</span>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>by
+                  <input aria-label={'Time on ' + d} type="time" value={slotTimes[d] || ''} onChange={e => setTimeFor(d, e.target.value)} style={{ height: 32, padding: '0 7px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                </label>
+                <button onClick={() => removeDate(d)} title="Remove this day" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 3, flexShrink: 0, display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+              </div>
             ))}
           </div>
         )) : null}
-        <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add as many separate days as you need; tap a day to remove it.` : 'Add each day care is needed — they don’t have to be in a row.'}</div>
+        <div style={{ fontSize: 12, color: dates.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginBottom: 14, lineHeight: 1.45 }}>{dates.length ? `${dates.length} day${dates.length === 1 ? '' : 's'} of care — add single days or a range, set an optional drop-off time, and tap ✕ to remove a day.` : 'Add each day care is needed — single days or a range; they don’t have to be in a row.'}</div>
+
+        <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
+        <RecipientPicker members={(members || []).filter(m => !(m && m.pubkey && blockedKeys.has(String(m.pubkey).toLowerCase())))} value={recipient} onChange={setRecipient} />
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>If the person uses the app, link them — then <b>they alone</b> can tick off days they’re already covered, so the church doesn’t double up. Leave unlinked if they’re not on the app.</div>
 
         <div style={mealsLbl}>NOTES (OPTIONAL)</div>
         <textarea aria-label="Notes (optional)" value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any context the church needs to help well — allergies, drop-off times, the address, who not to ring after 9pm…" style={{ ...mealsFld, height: 'auto', minHeight: 88, padding: '11px 13px', resize: 'vertical' }} />

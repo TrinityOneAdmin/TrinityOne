@@ -611,6 +611,10 @@ function liftPublishAny(settle /* array of {status,value|reason} */) {
   const _PUB_SILENT = rx('_PUB_SILENT', 'var _PUB_SILENT =');
   scope._classify = new Function('_PUB_FAILED', '_PUB_SILENT',
     fnBody(FELLOWSHIP, 'function _classify(r) {', '_classify') + ' return _classify;')(scope._PUB_FAILED, _PUB_SILENT);
+  // Fire-and-forget side-effect the blocking feature added to _publishAny's "blocked" branch; unrelated to the
+  // refusal classification under test here, so it is stubbed (the Proxy below would otherwise throw
+  // "needs a stub for _checkIfBlocked" and the settled refusal would be reported as un-refused).
+  scope._checkIfBlocked = () => {};
   const proxy = new Proxy(scope, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
     get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];

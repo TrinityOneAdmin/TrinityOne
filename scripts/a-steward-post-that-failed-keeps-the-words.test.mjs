@@ -35,7 +35,7 @@ const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 // Slice ONE component out of the console and compile it the way the packaged build does. Same recipe as
 // scripts/a-removed-message-can-still-be-put-back.test.mjs and a-dm-that-never-sent-is-not-sent.test.mjs.
 async function loadConsoleComponent(name, anchor, globals) {
-  const src = fnBody(STEW, anchor, name);
+  const src = fnBody(STEW, anchor, name) + '\n' + fnBody(STEW, 'function groupIcon(', 'groupIcon');   // + the shared room-icon helper the component draws through
   const tmp = join(tmpdir(), 'keepwords-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

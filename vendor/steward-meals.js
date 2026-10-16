@@ -63,6 +63,7 @@
     const CARETEAM_D = NET + "/careteam:";
     const CAREREQ_D = NET + "/carereq:";
     const CARESTATUS_D = NET + "/carereqstatus:";
+    const CAREAVAIL_D = NET + "/careavail:";
     const CARECHAT_D = NET + "/carechat:";
     const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     const now = () => Math.floor(Date.now() / 1e3);
@@ -160,6 +161,11 @@
       const isMeals = type === "meals";
       const meals = isMeals ? normMeals(n.meals).length ? normMeals(n.meals) : ["dinner"] : [];
       const dayMeals = isMeals ? Object.fromEntries(Object.entries(n.dayMeals || {}).filter(([k, v]) => isoDate(k) && days.includes(k) && normMeals(v).join() !== meals.join()).map(([k, v]) => [k, normMeals(v)])) : {};
+      const timeOf = (s) => /^\d{2}:\d{2}$/.test(String(s || "")) ? String(s) : "";
+      const slotTimes = Object.fromEntries(Object.entries(n.slotTimes && typeof n.slotTimes === "object" ? n.slotTimes : {}).filter(([k, v]) => {
+        const parts = String(k).split(":");
+        return isoDate(parts[0]) && days.includes(parts[0]) && (parts.length === 1 || parts.length === 2 && MEALS_OK.includes(parts[1])) && timeOf(v);
+      }).map(([k, v]) => [k, timeOf(v)]));
       return {
         displayLabel: String(n.displayLabel || "").trim(),
         type,
@@ -169,6 +175,7 @@
         dates: days,
         meals,
         dayMeals,
+        slotTimes,
         startDate: days[0] || isoDate(n.startDate),
         endDate: days[days.length - 1] || isoDate(n.endDate),
         recipient: typeof n.recipient === "string" && /^[0-9a-f]{64}$/i.test(n.recipient) ? n.recipient.toLowerCase() : "",
@@ -336,8 +343,9 @@
             const rest = d.slice(prefix.length).split(":");
             const needId = rest[0] || "";
             const isoDate = rest[1] || "";
+            const meal = rest[2] || "";
             if (!needId || !isoDate) return;
-            const key = needId + "|" + isoDate + "|" + e.pubkey;
+            const key = needId + "|" + isoDate + "|" + meal + "|" + e.pubkey;
             const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
             if (deleted) {
               byKey.delete(key);
@@ -346,7 +354,7 @@
             }
             try {
               const obj = JSON.parse(e.content || "{}");
-              byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...normalise(obj) });
+              byKey.set(key, { needId, isoDate, meal, pubkey: e.pubkey, ts: e.created_at, ...normalise(obj) });
               emit();
             } catch (err) {
             }
@@ -557,6 +565,83 @@
         }
       };
     }
+    function careAvailDates(d) {
+      if (!d || typeof d !== "object") return null;
+      const f = String(d.from || ""), t = String(d.to || ""), re = /^\d{4}-\d{2}-\d{2}$/;
+      return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
+    }
+    function subscribeCareAvail(cb) {
+      const cp = activeChurch();
+      if (!S() || !S().subscribeMany || !cp || !S().openChurchDoc) {
+        cb([]);
+        return () => {
+        };
+      }
+      const dtag = CAREAVAIL_D + cp;
+      const byPub = /* @__PURE__ */ new Map(), seenTs = /* @__PURE__ */ new Map(), locked = /* @__PURE__ */ new Map();
+      let eosed = false;
+      const emit = () => {
+        const v = [...byPub.values()];
+        if (!eosed && !v.length) return;
+        try {
+          cb(v);
+        } catch (e) {
+        }
+      };
+      const handlers = {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== dtag) return;
+          const at = e.created_at || 0;
+          if ((seenTs.get(e.pubkey) || 0) > at) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            seenTs.set(e.pubkey, at);
+            locked.delete(e.pubkey);
+            byPub.delete(e.pubkey);
+            emit();
+            return;
+          }
+          let o = null;
+          try {
+            o = S().openChurchDoc(e.content);
+          } catch (x) {
+            return;
+          }
+          if (o === null) {
+            locked.set(e.pubkey, e);
+            return;
+          }
+          seenTs.set(e.pubkey, at);
+          locked.delete(e.pubkey);
+          if (!o.available) {
+            byPub.delete(e.pubkey);
+            emit();
+            return;
+          }
+          byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), dates: careAvailDates(o.dates), ts: at });
+          emit();
+        },
+        oneose() {
+          eosed = true;
+          if (byPub.size) emit();
+        }
+      };
+      const sub = S().subscribeMany([{ kinds: [30078], "#church": [cp], "#d": [dtag] }], handlers);
+      const stopKey = S().onNameKeyRing ? S().onNameKeyRing(() => {
+        for (const e of [...locked.values()]) handlers.onevent(e);
+      }) : () => {
+      };
+      return () => {
+        try {
+          sub.close();
+        } catch (e) {
+        }
+        try {
+          stopKey();
+        } catch (e) {
+        }
+      };
+    }
     function setCareRequestStatus(reqId, requesterPub, opts) {
       if (!S() || !S().publishSigned || !S().churchPub || !reqId) return Promise.resolve(null);
       const o = opts || {};
@@ -735,6 +820,7 @@
       dropPendingCareTeam,
       // "ask for help" requests (console side): triage / approve / decline / thread
       subscribeCareRequests,
+      subscribeCareAvail,
       setCareRequestStatus,
       declineCareRequest,
       approveCareRequest,

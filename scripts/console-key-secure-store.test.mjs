@@ -672,7 +672,10 @@ test('a marker whose blob cannot be fetched is a FAILED unlock, not an open door
   assert.ok(un, 're-anchor: unlock() moved');
   // matched in two parts: the bundler reflows this onto separate lines
   assert.match(un[0], /raw = await encBlobRaw\(\);/, 'unlock() no longer reads through encBlobRaw()');
-  assert.match(un[0], /if \(!raw\) return lsGet\(ENC_LS\) \? false : true;/,
+  // The `!raw` branch reads the marker into a local, then returns `marker ? false : true`: marker => FAILED unlock
+  // (false), no marker => nothing was ever set (true). Anchored on that exact decision, and on the marker coming
+  // from lsGet(ENC_LS), so flipping either arm or reading some other flag fails here.
+  assert.match(un[0], /if \(!raw\) \{\s*const marker = !!lsGet\(ENC_LS\);[^}]*?return marker \? false : true;\s*\}/,
     'unlock() no longer distinguishes "no PIN is set" from "a PIN is set but the hardware store would not ' +
     'open". Treating the second as the first unlocks the console for anyone holding the phone.');
 });

@@ -24,6 +24,7 @@ import { loadConsole, fakeReact, fakeBrowser, fakeSteward, nodes, texts } from '
 import { fnBody } from './test-slice.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+const SS_KEY = BUNDLE.match(/var STAY_SS = "([^"]+)"/)[1];
 const LEGACY = 'trinityone.steward.stayopen';
 const PIN = 'cedar-harbour-lamp-42';
 const SEED = 'fine flash wait silly next awkward charge front scout build damage river';
@@ -39,9 +40,8 @@ const ENGINE_SRC = [constFrom('STAY_LEGACY_LS'), constFrom('STAY_SS'), constFrom
   constFrom('b64e'), constFrom('b64d'),
   fnBody(BUNDLE, 'async function deriveAesBits(', 'deriveAesBits'),
   fnBody(BUNDLE, 'function makeStayOpen(deps) {', 'makeStayOpen')].join('\n');
-const SS_KEY = BUNDLE.match(/var STAY_SS = "([^"]+)"/)[1];
 // the Steward methods the screen calls, out of the shipped object literal
-const METHODS = ['stayOpenStatus() {', 'setStayOpen(pin, on) {', 'clearStayOpen() {', 'async unlockStayOpen() {']
+const METHODS = ['stayOpenStatus() {', 'setStayOpen(pin, on) {', 'clearStayOpen() {', 'async unlockStayOpen() {', 'lock(reason) {']
   .map(a => fnBody(BUNDLE, BUNDLE.indexOf('    ' + a) + 4, a)).join(',\n');
 
 function engine() {
@@ -53,12 +53,18 @@ function engine() {
 function hardwareStore() {
   const map = {};
   const impl = {
-    get: async (k) => (k in map ? map[k] : null),
-    set: async (k, v) => { map[k] = String(v); },
+    get: async (k) => {
+      if (k === SS_KEY && hw.failGet > 0) { hw.failGet--; throw new Error('keystore slow'); }
+      // nullGet: the store ANSWERS with null although the record is there (the suspected rare trigger of #8)
+      if (k === SS_KEY && hw.nullGet > 0) { hw.nullGet--; return null; }
+      if (k === SS_KEY && hw.garbleGet > 0) { hw.garbleGet--; return 'not-what-was-written'; }
+      return k in map ? map[k] : null;
+    },
+    set: async (k, v) => { if (k === SS_KEY && hw.failSet > 0) { hw.failSet--; throw new Error('keystore busy'); } map[k] = String(v); },
     remove: async (k) => { if (hw.failRemove > 0) { hw.failRemove--; if (hw.silent) return; throw new Error('keystore busy'); } delete map[k]; },
   };
   const S = new Proxy(impl, { get: (t, p) => (p in t ? t[p] : (typeof p === 'symbol' ? undefined : () => { throw new Error('"SecureStorage.' + String(p) + '()" is not implemented on android'); })) });
-  const hw = { map, S, failRemove: 0, silent: false };
+  const hw = { map, S, failRemove: 0, silent: false, failGet: 0, nullGet: 0, garbleGet: 0, failSet: 0 };
   return hw;
 }
 
@@ -80,29 +86,38 @@ async function openBlob(pin, blobStr) {
 
 // One "device": a hardware store, a localStorage, a church-key blob and a clock that persist across launches.
 function device({ native = true } = {}) {
-  return { native, hw: hardwareStore(), lsSeed: {}, blob: null, clock: Date.UTC(2026, 9, 10), unlockCalls: 0 };
+  return { native, hw: hardwareStore(), lsSeed: {}, blob: null, clock: Date.UTC(2026, 9, 10), unlockCalls: 0, blobFail: 0, blobFailMode: 'empty' };
 }
 
 // One LAUNCH of the console on that device: a fresh engine (fresh module state), a fresh screen, locked.
-function launch(dev) {
+function launch(dev, { manualTimers = false } = {}) {
   const r = fakeReact();
   const b = fakeBrowser();
+  const timers = [];   // with manualTimers the screen's setTimeout calls are RECORDED, not run: { f, ms }
+  if (manualTimers) { b.window.setTimeout = (f, ms) => { timers.push({ f, ms }); return timers.length; }; b.window.clearTimeout = (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; }; }
   for (const [k, v] of Object.entries(dev.lsSeed)) b.localStorage.setItem(k, v);
   dev.ls = b.localStorage;
   const lib = engine();
   const stay = lib.makeStayOpen({
     secure: async () => ({ S: dev.hw.S }), isNative: () => dev.native, lsRemove: (k) => b.localStorage.removeItem(k),
-    now: () => dev.clock, readBlob: async () => dev.blob || '', deriveBits: lib.deriveAesBits, pubOf: (m) => 'owner:' + m.split(' ')[0],
+    now: () => dev.clock, deriveBits: lib.deriveAesBits, pubOf: (m) => 'owner:' + m.split(' ')[0],
+    // the shipped encBlobRaw answers '' both for "nothing there" and for "the store would not answer", and
+    // THROWS for a lost device key; markerPresent is what tells the first from the second
+    readBlob: async () => { if (dev.blobFail > 0) { dev.blobFail--; if (dev.blobFailMode === 'throw') throw new Error('keystore slow'); return ''; } return dev.blob || ''; },
+    markerPresent: () => !!dev.blob,
   });
   const entered = [];
-  const Steward = fakeSteward({ hasKey: false, locked: true, needsPin: false });
+  const Steward = fakeSteward({ hasKey: false, locked: true, needsPin: false, keyStoreStuck: false, deviceKeyLost: false });
   const enter = (seed) => { entered.push(seed); Steward.hasKey = true; Steward.locked = false; b.window.dispatch('steward-key', { type: 'steward-key' }); };
   Steward.unlock = async (pin) => {
     dev.unlockCalls++;
     try { enter(await openBlob(pin, dev.blob)); return true; } catch (e) { return false; }
   };
   // the SHIPPED wrappers, bound to this launch's engine
-  const shipped = new Function('_stay', '_enterUnlocked', 'return ({ ' + METHODS + ' });')(stay, enter);
+  // lock(reason) is the SHIPPED method; its key-material variables are declared here so it does not leak globals
+  const shipped = new Function('_stay', '_enterUnlocked', 'window', 'lsGet', 'CustomEvent',
+    'const ENC_LS = "enc"; let needsPin = false, sk = null, pub = null, currentMnemonic = null, churchSk = null, churchPub = null; return ({ ' + METHODS + ' });')(
+    stay, enter, b.window, () => (dev.blob ? 'marker' : null), b.window.CustomEvent);
   for (const k of Object.keys(shipped)) Steward[k] = shipped[k].bind(shipped);
   b.window.Steward = Steward;
   const { StewardUnlock } = loadConsole({ React: r.React, window: b.window, expr: '{ StewardUnlock }' });
@@ -119,7 +134,8 @@ function launch(dev) {
     await unlockBtn().props.onClick(); await settle();
   };
   // fresh(): the screen UNMOUNTS and a new instance mounts later, as React does when the lock screen comes back
-  return { Steward, stay, entered, draw, mount, fresh: () => r.fresh(), box, typeAndUnlock, settle, unmount: () => r.unmount(), lsKeys: () => [...Array(b.localStorage.length)].map((_, i) => b.localStorage.key(i)) };
+  const idleLock = () => { Steward.lock('idle'); b.window.dispatch('steward-key', { type: 'steward-key' }); };
+  return { Steward, stay, entered, idleLock, window: b.window, timers, vis: () => b.window.document.dispatch('visibilitychange', {}), draw, mount, fresh: () => r.fresh(), box, typeAndUnlock, settle, unmount: () => r.unmount(), lsKeys: () => [...Array(b.localStorage.length)].map((_, i) => b.localStorage.key(i)) };
 }
 const persist = (dev) => { dev.lsSeed = {}; for (let i = 0; i < dev.ls.length; i++) { const k = dev.ls.key(i); dev.lsSeed[k] = dev.ls.getItem(k); } };
 
@@ -161,10 +177,11 @@ test('(c) after a lock the box shows TICKED; untick + unlock deletes the record'
   await L.mount();                                       // relaunch: replayed and open
   assert.equal(L.Steward.hasKey, true, 're-anchor: the relaunch did not replay');
   L.fresh();
-  // the idle lock: the same launch, the screen comes back as a NEW instance
+  // a lock that does NOT re-arm replay (the engine latch is still used up from the cold start; a real idle lock
+  // now re-arms it, see test (i)): the same launch, the screen comes back as a NEW instance
   L.Steward.hasKey = false; L.Steward.locked = true;
   await L.mount();
-  assert.equal(L.Steward.hasKey, false, 'a lock later in the same launch reopened by itself — the lock does nothing');
+  assert.equal(L.Steward.hasKey, false, 'a lock that did not re-arm replay reopened by itself — the once-per-mount latch is gone');
   assert.ok(L.box(), 're-anchor: no box after a lock');
   assert.equal(L.box().props.checked, true, 'THE DEFECT: stay-open is active and the box draws UNTICKED');
   await L.typeAndUnlock(PIN, false);
@@ -346,5 +363,357 @@ test('(h) POINT OF USE: untick + unlock when the first removal fails still ends 
   await L.typeAndUnlock(PIN, false);
   assert.equal(L.Steward.hasKey, true, 're-anchor: the PIN did not unlock');
   assert.equal(dev.hw.map[SS_KEY], undefined, 'the steward unticked the box, the first removal failed, and the key stayed in the Keystore');
+  L.unmount();
+});
+
+// ── (i) an IDLE lock reopens from the live record (owner decision 2026-10-15) ─────────────────────────────────
+// Device-confirmed on a Pixel: stay-open survived a hard restart but not the idle auto-lock, because a
+// backgrounded WebView keeps the module alive and the once-per-launch latch stayed used up. The record was alive
+// and valid, and unlockStayOpen() answered null ("skipped") over it.
+test('(i) POINT OF USE: tick + unlock, then the IDLE lock — the console reopens by itself from the record, no PIN typed', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L = launch(dev); await L.mount(); await L.typeAndUnlock(PIN, true);
+  assert.ok(dev.hw.map[SS_KEY], 're-anchor: no record was made');
+  assert.equal(L.entered.length, 1);
+  dev.unlockCalls = 0;
+  L.idleLock();                                  // the SHIPPED lock('idle'): same module, same latch, same launch
+  assert.equal(L.Steward.hasKey, false, 're-anchor: the idle lock did not lock');
+  L.fresh(); await L.mount();
+  assert.equal(L.Steward.hasKey, true, 'THE DEFECT: after an idle lock the console stays on the PIN prompt although the stay-open record is alive');
+  assert.deepEqual(L.entered, [SEED, SEED], 'the idle replay entered with the wrong seed');
+  assert.equal(dev.unlockCalls, 0, 'the idle replay went through unlock(pin)');
+  assert.ok(dev.hw.map[SS_KEY], 'the idle replay deleted the record');
+  // and it keeps working: a SECOND idle lock reopens again
+  L.idleLock(); L.fresh(); await L.mount();
+  assert.equal(L.Steward.hasKey, true, 'a second idle lock did not reopen');
+  L.unmount();
+});
+
+test('(i) a lock that is NOT idle still locks (only lock("idle") re-arms replay)', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L = launch(dev); await L.mount(); await L.typeAndUnlock(PIN, true);
+  L.Steward.lock(); L.window.dispatch('steward-key', {});
+  L.fresh(); await L.mount();
+  assert.equal(L.Steward.hasKey, false, 'a lock with no reason reopened by itself');
+  assert.equal(L.box().props.checked, true, 'the box is not ticked after a plain lock');
+  L.unmount();
+});
+
+test('(i) POINT OF USE: the console idle timer (StewardRoot) calls lock("idle")', () => {
+  const r = fakeReact(), b = fakeBrowser(), calls = [], timers = [];
+  b.window.setTimeout = (f, ms) => { timers.push({ f, ms }); return timers.length; }; b.window.clearTimeout = () => {};
+  b.window.Steward = fakeSteward({ hasKey: true, locked: false, needsPin: false, hasPinLock: () => true, lock: (...a) => { calls.push(a); }, selfRegister: async () => {} });
+  const { StewardRoot } = loadConsole({ React: r.React, window: b.window, expr: '{ StewardRoot }' });
+  r.reset(); StewardRoot({}); r.flush();
+  const idle = timers.filter(t => t.ms === 10 * 60 * 1000);
+  assert.equal(idle.length >= 1, true, 're-anchor: StewardRoot armed no 10-minute idle timer');
+  idle[idle.length - 1].f();
+  assert.deepEqual(calls, [['idle']], 'THE POINT OF USE: the idle timer did not lock with the reason "idle", so the lock cannot re-arm stay-open');
+  r.unmount();
+});
+
+// ── (j) a store that did not answer is not a dead record ──────────────────────────────────────────────────────
+for (const mode of ['store-throws', 'blob-empty', 'blob-throws']) {
+  test('(j) transient miss (' + mode + ') on resume: the record SURVIVES, the box stays ticked, and a retry reopens with no PIN', async () => {
+    const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+    const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+    const before = dev.hw.map[SS_KEY]; dev.unlockCalls = 0;
+    if (mode === 'store-throws') dev.hw.failGet = 2; else { dev.blobFail = 2; dev.blobFailMode = mode === 'blob-throws' ? 'throw' : 'empty'; }
+    const L = launch(dev, { manualTimers: true });
+    await L.mount();
+    assert.equal(L.Steward.hasKey, false, 're-anchor: the failing read opened the console');
+    assert.equal(dev.hw.map[SS_KEY], before, 'THE DEFECT: a slow Keystore read DELETED the live 30-day record');
+    assert.equal(L.box().props.checked, true, 'the box was unticked over a record that is still alive');
+    assert.ok(L.timers.some(t => t.ms === 1000), 'no retry was scheduled after a transient miss');
+    dev.hw.failGet = 0; dev.blobFail = 0;
+    L.timers.shift().f(); await L.settle();       // the first backoff fires; the store answers now
+    assert.equal(L.Steward.hasKey, true, 'the retry did not reopen the console');
+    assert.deepEqual(L.entered, [SEED]);
+    assert.equal(dev.unlockCalls, 0, 'the retry went through unlock(pin)');
+    assert.equal(dev.hw.map[SS_KEY], before, 'the retry changed the record');
+    L.unmount();
+  });
+}
+
+test('(j) a transient miss is also retried when the app comes back to the foreground', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  dev.hw.failGet = 2;   // status() and replay() each read once
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  assert.equal(L.Steward.hasKey, false);
+  L.vis(); await L.settle();
+  assert.equal(L.Steward.hasKey, true, 'visibilitychange→visible did not retry the stay-open replay');
+  L.unmount();
+});
+
+test('(j) a transient miss that never clears: bounded backoff 1s/2s/4s/8s, then the PIN prompt — record untouched, the PIN still works', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY];
+  dev.hw.failGet = 1e6;
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  const waited = [];
+  for (let i = 0; i < 10 && L.timers.length; i++) { const t = L.timers.shift(); waited.push(t.ms); t.f(); await L.settle(); }
+  assert.deepEqual(waited, [1000, 2000, 4000, 8000], 'the retry budget is not 1s,2s,4s,8s');
+  L.draw();
+  assert.equal(L.Steward.hasKey, false);
+  assert.equal(dev.hw.map[SS_KEY], before, 'running out of retries deleted the record');
+  assert.equal(L.box().props.checked, true, 'running out of retries unticked the box');
+  dev.hw.failGet = 0;
+  await L.typeAndUnlock(PIN);                   // the prompt is usable: the typed PIN opens it
+  assert.equal(L.Steward.hasKey, true, 'after the budget the PIN prompt did not work');
+  L.unmount();
+});
+
+// ── (k) a record that is DEFINITELY dead is still deleted, and the prompt shows ───────────────────────────────
+test('(k) malformed record, wrong version, and an unreadable-JSON record are deleted at once (not retried)', async () => {
+  for (const spoil of ['not json', JSON.stringify({ v: 9 })]) {
+    const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+    const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+    dev.hw.map[SS_KEY] = spoil;
+    const L = launch(dev, { manualTimers: true }); await L.mount();
+    assert.equal(L.Steward.hasKey, false);
+    assert.equal(dev.hw.map[SS_KEY], undefined, 'a dead record (' + spoil + ') was kept');
+    assert.equal(L.timers.length, 0, 'a dead record was retried');
+    assert.equal(L.box().props.checked, false, 'a dead record leaves the box ticked');
+    L.unmount();
+  }
+});
+
+test('(k) a blob that WAS read, with a different salt, is dead: record deleted (the engine asked the store and it answered)', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  dev.blob = await makeBlob(PIN, SEED);          // same PIN, new salt
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'a salt mismatch against a readable blob was kept');
+  assert.equal(L.timers.length, 0);
+  assert.equal(L.box().props.checked, false);
+  L.unmount();
+});
+
+// ── (l) a typed wrong PIN is exactly what it was ──────────────────────────────────────────────────────────────
+test('(l) a wrong TYPED PIN counts toward the guard, says so, and does not touch a live stay-open record', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY];
+  dev.hw.failGet = 1e6;                          // keep it on the prompt: the store never answers
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  while (L.timers.length) { L.timers.shift().f(); await L.settle(); }
+  dev.hw.failGet = 0;
+  for (let i = 1; i <= 2; i++) {
+    await L.typeAndUnlock('not-the-pin-' + i);
+    assert.equal(L.Steward.hasKey, false, 'a wrong PIN unlocked');
+    assert.equal(JSON.parse(dev.ls.getItem('trinityone.steward.pinguard')).fails, i, 'the failed-attempt counter did not move');
+    assert.match(texts(L.draw()).join(' '), /Wrong PIN/, 'no wrong-PIN message');
+    assert.equal(dev.hw.map[SS_KEY], before, 'a wrong typed PIN touched the stay-open record');
+  }
+  L.unmount();
+});
+
+// ── (m) a failed replay does not loop ─────────────────────────────────────────────────────────────────────────
+test('(m) a failed (dead) replay runs once: no retry timer, no re-run on visibilitychange, record gone, prompt shown', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const rec = JSON.parse(dev.hw.map[SS_KEY]); rec.k = Buffer.from(new Uint8Array(32)).toString('base64'); dev.hw.map[SS_KEY] = JSON.stringify(rec);
+  const L = launch(dev, { manualTimers: true });
+  let calls = 0; const real = L.Steward.unlockStayOpen; L.Steward.unlockStayOpen = (...a) => { calls++; return real(...a); };
+  await L.mount();
+  L.vis(); await L.settle(); L.vis(); await L.settle();
+  assert.equal(calls, 1, 'a failed replay was run again (' + calls + ' calls)');
+  assert.equal(L.timers.length, 0, 'a failed replay scheduled a retry');
+  assert.equal(dev.hw.map[SS_KEY], undefined);
+  assert.equal(L.Steward.hasKey, false);
+  assert.equal(L.box().props.checked, false);
+  // and the idle path cannot loop it either: re-arm finds no record
+  L.Steward.lock('idle'); L.fresh(); await L.mount();
+  assert.equal(calls, 1, 'the idle re-arm replayed a record that was already deleted');
+  assert.equal(L.Steward.hasKey, false);
+  L.unmount();
+});
+
+// ── (n) a typed PIN beats the automatic replay (the box was dead for ~15s after an idle resume) ───────────────
+// The replay owns `busy` while it backs off 1s/2s/4s/8s; the button was disabled for that whole time, so a
+// steward who typed the PIN straight away could not submit it. Now the typed PIN cancels the replay (deleting
+// nothing) and unlocks at once. Driven through the real StewardUnlock, with the shipped engine behind it.
+const mainButton = (L) => nodes(L.draw()).find(n => n.type === 'button' && /Unlock|Reopening|Unlocking/.test(texts(n).join(' ')));
+test('(n) POINT OF USE: while the replay is backing off, a typed PIN unlocks at once — no timers drained, record untouched, no retry left', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY];
+  dev.hw.failGet = 2;
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  assert.equal(L.Steward.hasKey, false);
+  assert.ok(L.timers.some(t => t.ms === 1000), 'not in the replay backoff: the test is not at the point of the defect');
+  dev.hw.failGet = 0;
+  const pinField = () => nodes(L.draw()).find(n => n.type === 'input' && n.props['aria-label'] === 'Your console PIN or passphrase');
+  assert.equal(mainButton(L).props.disabled, true, 're-anchor: with no PIN typed the button is disabled');
+  assert.match(texts(L.draw()).join(' '), /Reopening automatically/, 'the hint is missing');
+  pinField().props.onChange({ target: { value: PIN } });
+  const btn = mainButton(L);
+  assert.equal(btn.props.disabled, false, 'THE DEFECT: a typed PIN could not be submitted while the replay was backing off');
+  assert.match(texts(btn).join(' '), /Unlock/);
+  await btn.props.onClick(); await L.settle();
+  assert.equal(L.Steward.hasKey, true, 'the typed PIN did not unlock while the replay was pending');
+  assert.equal(dev.hw.map[SS_KEY], before, 'cancelling the replay touched the stay-open record');
+  assert.deepEqual(L.timers.filter(t => !t.cleared), [], 'a retry timer is still pending after the typed PIN cancelled the replay');
+  L.unmount();
+});
+test('(n) a cancelled replay stays off for the mount: a stale timer and a later visibilitychange do nothing; WRONG typed PINs keep the record and 5 misses still lock out', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY];
+  dev.hw.failGet = 1e6;
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  let calls = 0; const real = L.Steward.unlockStayOpen; L.Steward.unlockStayOpen = (...a) => { calls++; return real(...a); };
+  const pending = L.timers.slice();
+  for (let i = 1; i <= 5; i++) {
+    await L.typeAndUnlock('wrong-pin-' + i);
+    assert.equal(L.Steward.hasKey, false);
+    assert.equal(JSON.parse(dev.ls.getItem('trinityone.steward.pinguard')).fails, i, 'miss ' + i + ' not counted');
+    assert.equal(dev.hw.map[SS_KEY], before, 'a wrong typed PIN touched the live record');
+    L.draw();
+  }
+  assert.match(texts(L.draw()).join(' '), /Too many attempts|Locked/, 'the 5th miss did not lock out');
+  for (const t of pending) t.f();               // a stale timer firing after the cancel
+  L.vis(); await L.settle();
+  assert.equal(calls, 0, 'the replay ran again after a typed PIN cancelled it');
+  assert.equal(dev.hw.map[SS_KEY], before);
+  L.unmount();
+});
+
+// ── (o) BUG #8: a NULL read of the live record must never DELETE it ───────────────────────────────────────────
+// The Keystore sometimes answers a get() with null although the record is there. status() then said "no record",
+// the box drew unticked, the steward typed the correct PIN, and submit's `want = stayAvail && stayOpen` (false)
+// ran setStayOpen(pin, false) -> clear(): a live 30-day record deleted by someone who never touched the box.
+// Fixed by: only a TOUCHED untick deletes; status() is three-valued; save() clears only on a present-but-wrong
+// readback. The point of use is the shipped StewardUnlock, with the shipped engine behind it.
+const lifted = (dev, L) => liftMethod('async unlock(pin) {', {
+  window: L.window, encBlobRaw: async () => dev.blobRaw !== undefined ? dev.blobRaw : dev.blob, lsGet: () => (dev.blob ? 'marker' : null), ENC_LS: 'enc',
+  b64d: (s) => new Uint8Array(Buffer.from(s, 'base64')), PIN_ITER_LEGACY: 210000, crypto: webcrypto, TextDecoder,
+  deriveAes: async (pin, salt, it) => { const base = await webcrypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+    return webcrypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: it, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']); },
+  _enterUnlocked: (seed) => { L.Steward.hasKey = true; L.Steward.locked = false; L.entered.push(seed); L.window.dispatch('steward-key', {}); },
+}).unlock;
+async function withRecord() {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const before = dev.hw.map[SS_KEY]; assert.ok(before, 're-anchor: no record was made');
+  return { dev, before };
+}
+
+test('(o) A, POINT OF USE: the store answers NULL for a live record, the steward types the CORRECT PIN without touching the box -> the record is UNCHANGED and the next idle lock still replays', async () => {
+  const { dev, before } = await withRecord();
+  dev.hw.nullGet = 1;                              // status() reads once and gets null
+  const L = launch(dev); await L.mount();
+  assert.equal(L.box().props.checked, false, 're-anchor: the null read did not draw the box unticked - not at the point of the defect');
+  assert.equal(L.Steward.hasKey, false);
+  await L.typeAndUnlock(PIN);                      // the box is NEVER touched
+  assert.equal(L.Steward.hasKey, true, 're-anchor: the PIN did not unlock');
+  assert.equal(dev.hw.map[SS_KEY], before, 'THE DEFECT (#8): a null read + a correct PIN, box untouched, changed or deleted the live record');
+  L.idleLock(); L.fresh(); await L.mount();
+  assert.equal(L.Steward.hasKey, true, 'the record no longer replays on the next idle lock');
+  assert.deepEqual(L.entered, [SEED, SEED]);
+  L.unmount();
+});
+
+test('(o) B, POINT OF USE: submit BEFORE status resolves (screen state still "unavailable, unticked") keeps the record', async () => {
+  const { dev, before } = await withRecord();
+  const L = launch(dev);
+  L.draw();                                        // no settle: the status promise has not been consumed
+  assert.equal(L.box(), undefined, 're-anchor: status already resolved - this is not the race');
+  await L.typeAndUnlock(PIN);
+  assert.equal(L.Steward.hasKey, true, 're-anchor: the PIN did not unlock');
+  assert.equal(dev.hw.map[SS_KEY], before, 'THE RACE: submitting before status resolved deleted the live record');
+  L.unmount();
+});
+
+test('(o) C: a TOUCHED untick still deletes - even when the first read was a null', async () => {
+  const { dev } = await withRecord();
+  dev.hw.nullGet = 1;
+  const L = launch(dev); await L.mount();
+  assert.equal(L.box().props.checked, false);
+  L.box().props.onChange({ target: { checked: true } }); L.draw();
+  await L.typeAndUnlock(PIN, false);               // tick then untick: the steward asked for it gone
+  assert.equal(L.Steward.hasKey, true);
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'a touched untick no longer deletes the record');
+  L.unmount();
+});
+
+test('(o) D: a WRONG PIN after a null read does not delete the record, still counts, and the guard still fires at 5', async () => {
+  const { dev, before } = await withRecord();
+  dev.hw.nullGet = 1;
+  const L = launch(dev, { manualTimers: true }); await L.mount();
+  for (let i = 1; i <= 5; i++) {
+    await L.typeAndUnlock('wrong-pin-' + i);
+    assert.equal(L.Steward.hasKey, false);
+    assert.equal(JSON.parse(dev.ls.getItem('trinityone.steward.pinguard')).fails, i, 'miss ' + i + ' not counted');
+    assert.equal(dev.hw.map[SS_KEY], before, 'a wrong PIN touched the record');
+    L.draw();
+  }
+  assert.match(texts(L.draw()).join(' '), /Too many attempts|Locked/, 'the 5th miss did not lock out');
+  L.unmount();
+});
+
+test('(o) E: the secure store gives back an EMPTY blob while the marker exists -> says so, NO lockout, NO delete (shipped unlock() lifted)', async () => {
+  const { dev, before } = await withRecord();
+  dev.hw.nullGet = 1;                              // keep the launch on the PIN prompt (no automatic replay)
+  const L = launch(dev); await L.mount();
+  assert.equal(L.Steward.hasKey, false, 're-anchor: the replay opened the console');
+  L.Steward.unlock = lifted(dev, L);
+  dev.blobRaw = '';                                // encBlobRaw answers '' while dev.blob (the marker) exists
+  await L.typeAndUnlock(PIN);
+  assert.equal(L.Steward.unlockStoreMiss, true, 'unlock() did not flag the store miss');
+  assert.equal(L.Steward.hasKey, false);
+  assert.match(texts(L.draw()).join(' '), /didn’t answer/, 'the screen does not say the secure storage did not answer');
+  assert.equal(dev.ls.getItem('trinityone.steward.pinguard'), null, 'a store miss was counted toward the lockout');
+  assert.equal(dev.hw.map[SS_KEY], before, 'a store miss deleted the record');
+  // the next attempt is judged afresh: the store answers, the right PIN opens, and the flag is not latched
+  dev.blobRaw = undefined; await L.typeAndUnlock(PIN);
+  assert.equal(L.Steward.hasKey, true); assert.equal(L.Steward.unlockStoreMiss, false, 'the flag latched');
+  L.unmount();
+});
+
+test('(o) unlock() keeps its boolean contract: no marker -> true (the stuck-locked fix), wrong PIN -> false and NOT a store miss', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L = launch(dev); const unlock = lifted(dev, L);
+  dev.blobRaw = ''; const marker = dev.blob; dev.blob = null;   // empty AND no marker: nothing to unlock
+  assert.equal(await unlock(PIN), true, 'unlock() no longer returns true when there is no marker (stuck-locked bug is back)');
+  assert.equal(L.Steward.unlockStoreMiss, false);
+  dev.blob = marker; dev.blobRaw = undefined;
+  assert.equal(await unlock('wrong'), false); assert.equal(L.Steward.unlockStoreMiss, false, 'a wrong PIN was reported as a store miss');
+  L.unmount();
+});
+
+test('(o) F: a decrypt failure on a PRESENT record still deletes it (a dead record is not a transient one)', async () => {
+  const { dev } = await withRecord();
+  const rec = JSON.parse(dev.hw.map[SS_KEY]); rec.k = Buffer.from(new Uint8Array(32)).toString('base64'); dev.hw.map[SS_KEY] = JSON.stringify(rec);
+  const L = launch(dev); await L.mount();
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'a present record that cannot open the blob was kept');
+  L.unmount();
+});
+
+test('(o) status() is three-valued: a throw is `unknown` (not active:false); no record is plainly inactive', async () => {
+  const { dev } = await withRecord();
+  const L = launch(dev);
+  dev.hw.failGet = 1;
+  assert.deepEqual(await L.stay.status(), { available: true, active: false, unknown: true });
+  assert.deepEqual(await L.stay.status(), { available: true, active: true, unknown: false });
+  delete dev.hw.map[SS_KEY];
+  assert.deepEqual(await L.stay.status(), { available: true, active: false, unknown: false });
+  L.unmount();
+});
+
+test('(o) save(pin,true) clears ONLY on a present-but-WRONG readback: a thrown set() and a null readback keep the old record', async () => {
+  const { dev, before } = await withRecord();
+  const L = launch(dev);
+  dev.hw.failSet = 1;
+  assert.equal(await L.stay.save(PIN, true), false);
+  assert.equal(dev.hw.map[SS_KEY], before, 'a thrown set() deleted the old record');
+  dev.hw.nullGet = 1;                              // the only SS_KEY get in save() is the readback
+  assert.equal(await L.stay.save(PIN, true), false);
+  assert.ok(dev.hw.map[SS_KEY], 'a null readback deleted the record');
+  dev.hw.garbleGet = 1;
+  assert.equal(await L.stay.save(PIN, true), false);
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'a corrupt (present, wrong) readback was kept');
   L.unmount();
 });

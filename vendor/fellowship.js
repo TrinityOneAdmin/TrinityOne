@@ -11443,22 +11443,34 @@
     // Backward compatible in BOTH directions: every DM ever sent is a bare string, so a body that does not
     // parse as an envelope is simply the message; and an older build receiving an envelope shows the JSON
     // rather than losing the words. Hence `t` carries the full text and nothing is stored only in the wrapper.
-    _dmWrap(text, replyTo) {
-      if (!replyTo || !replyTo.id) return text;
+    // `meta` (church event messages, 2026-10-14) ADDS two optional fields to the same v:1 envelope: `nr:1` =
+    // "announcement, no replies" and `ev` = the event id it is about. Additive only: an older build reads `t`
+    // and ignores the rest; a body with neither a reply nor meta is still the bare string.
+    _dmWrap(text, replyTo, meta) {
+      const hasR = !!(replyTo && replyTo.id);
+      const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : "";
+      const cx = meta && meta.careOffer;
+      const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || "")) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
+      if (!hasR && !nr && !ev && !co) return text;
       try {
-        return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) });
+        const o = { v: 1, t: String(text) };
+        if (hasR) o.r = String(replyTo.id).slice(0, 64);
+        if (nr) o.nr = 1;
+        if (ev) o.ev = ev;
+        if (co) o.co = co;
+        return JSON.stringify(o);
       } catch (e) {
         return text;
       }
     },
     _dmUnwrap(body) {
-      if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null };
+      if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
       try {
         const o = JSON.parse(body);
-        if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null };
+        if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || "")) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null };
       } catch (e) {
       }
-      return { text: body, replyTo: null };
+      return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
     },
     async sendDM(peerPub, content, replyTo) {
       if (!sk) await window.Fellowship.ready;
@@ -11526,7 +11538,7 @@
           content = "\u{1F512} (could not decrypt)";
         }
         const un = window.Fellowship._dmUnwrap(content);
-        const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, ts: e.created_at, pubkey: e.pubkey };
+        const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, ts: e.created_at, pubkey: e.pubkey };
         msgs.set(e.id, m);
         push(m);
       };
@@ -13647,7 +13659,7 @@
               sealed = !s2;
             }
             const f = s2 ? { ...c, ...s2 } : c;
-            _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || "meals"], startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at }, _trust);
+            _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || "meals"], startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, slotTimes: f.slotTimes && typeof f.slotTimes === "object" ? f.slotTimes : {}, ts: e.created_at }, _trust);
             emit();
           } catch {
           }
@@ -13689,16 +13701,16 @@
         onevent(e, d) {
           if (!d.startsWith(prefix)) return;
           const rest = d.slice(prefix.length).split(":");
-          const needId = rest[0] || "", isoDate = rest[1] || "";
+          const needId = rest[0] || "", isoDate = rest[1] || "", meal = rest[2] || "";
           if (!needId || !isoDate) return;
-          const key = needId + "|" + isoDate + "|" + e.pubkey;
+          const key = needId + "|" + isoDate + "|" + meal + "|" + e.pubkey;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byKey.delete(key);
             emit();
             return;
           }
           try {
-            byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || "{}")) });
+            byKey.set(key, { needId, isoDate, meal, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || "{}")) });
             emit();
           } catch {
           }
@@ -14210,7 +14222,7 @@
         }
       };
     },
-    async fillCareSlot(careId, iso, note) {
+    async fillCareSlot(careId, iso, note, meal) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -14221,7 +14233,9 @@
       if (!sk || !cp || !careId || !iso) return null;
       const _me = _sgMine(cp);
       if (_me && _me.isMinor) return { ok: false, reason: "minor" };
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || "").trim() }) }, sk);
+      const _meal = String(meal || "").trim();
+      const _slotD = CARESLOT_D + careId + ":" + iso + (_meal ? ":" + _meal : "");
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || "").trim() }) }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14230,7 +14244,7 @@
       }
       return { ok: true, evt };
     },
-    async clearCareSlot(careId, iso) {
+    async clearCareSlot(careId, iso, meal) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -14239,7 +14253,9 @@
         }
       }
       if (!sk || !cp || !careId || !iso) return null;
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      const _meal = String(meal || "").trim();
+      const _slotD = CARESLOT_D + careId + ":" + iso + (_meal ? ":" + _meal : "");
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14435,7 +14451,11 @@
               emit();
               return;
             }
-            byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), ts: e.created_at });
+            byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), dates: (() => {
+              const d2 = o.dates;
+              const f = String(d2 && d2.from || ""), t = String(d2 && d2.to || ""), re = /^\d{4}-\d{2}-\d{2}$/;
+              return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
+            })(), ts: e.created_at });
             emit();
           } catch {
           }
@@ -14448,7 +14468,7 @@
       });
     },
     // publish (or refresh) my availability. tags = short list like ['meals','lifts','visits','prayer','childcare'].
-    async setCareAvail(tags, note) {
+    async setCareAvail(tags, note, dates) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -14459,7 +14479,11 @@
       if (!sk || !cp) return null;
       if (!(_nameKeys.get(cp) || [])[0]) return { ok: false, reason: "no-key" };
       const clean4 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }) }, sk);
+      const availDates = (() => {
+        const f = String(dates && dates.from || ""), t = String(dates && dates.to || ""), re = /^\d{4}-\d{2}-\d{2}$/;
+        return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
+      })();
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, Object.assign({ available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }, availDates ? { dates: availDates } : {})) }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {

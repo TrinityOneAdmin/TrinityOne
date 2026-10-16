@@ -13,6 +13,27 @@
 // `// }` comment cuts the body in half and produces a syntax error that looks like a code fault (that has
 // happened here too — see the note in name-key-integrity.test.mjs).
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+
+// A slice of a screen that calls the shared reply pieces (app/reply-kit.jsx -> `TrinityReplyKit`) can't run
+// without them, and the slice-and-compile tests hand-list their globals. Rather than edit every one of them,
+// the first slice that mentions the kit installs the REAL kit (compiled from app/reply-kit.jsx, never a mirror)
+// on globalThis. It is built with a private React/Icon, so nothing else leaks onto the global scope; only the
+// hook-free pieces (handlers, style, cue, quote, bar) are meaningful here — useSwipe needs the caller's React.
+function withReplyKit(body) {
+  if (body.includes('TrinityReplyKit') && !globalThis.TrinityReplyKit) {
+    const root = new URL('../', import.meta.url).pathname;
+    const js = execFileSync(join(root, 'node_modules/.bin/esbuild'), [join(root, 'app/reply-kit.jsx'), '--jsx=transform', '--log-level=error'], { encoding: 'utf8' });
+    const React = { createElement: (type, props, ...kids) => ({ type, props: props || {}, kids }) };
+    const Icon = () => null;
+    // `window` for the kit's replyOnlyDots(): a POINTER device unless a test sets globalThis.__trinityTouch = true
+    // (the matchMedia the kit asks is '(hover: hover) and (pointer: fine)', so a touch phone answers false).
+    const win = { matchMedia: () => ({ matches: !globalThis.__trinityTouch }) };
+    globalThis.TrinityReplyKit = new Function('React', 'Icon', 'window', js + '\nreturn TrinityReplyKit;')(React, Icon, win);
+  }
+  return body;
+}
 
 // The complete construct that STARTS at `anchor` — from the anchor to the brace that closes its first block.
 export function fnBody(src, anchor, what = anchor) {
@@ -71,7 +92,7 @@ export function fnBody(src, anchor, what = anchor) {
     if (c === '/' && src[i + 1] === '/') { const nl = src.indexOf('\n', i); if (nl === -1) break; i = nl; continue; }
     if (c === '/' && src[i + 1] === '*') { const e = src.indexOf('*/', i); if (e === -1) break; i = e + 1; continue; }
     if (c === '{') depth++;
-    else if (c === '}' && --depth === 0) return src.slice(at, i + 1);
+    else if (c === '}' && --depth === 0) return withReplyKit(src.slice(at, i + 1));
   }
   assert.fail(`could not find the end of ${what} — the source may be malformed`);
 }

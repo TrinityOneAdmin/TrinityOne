@@ -79,38 +79,115 @@ function careCoverLabel(dayCount, openCount) {
 function careNeedDays(need, slots, skips) {
   const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
   const skipSet = new Set((skips || []).filter(k => k.needId === need.id).map(k => k.isoDate));
-  const taken = (iso) => (slots || []).some(s => s.needId === need.id && s.isoDate === iso);
-  const openDays = dates.filter(d => !skipSet.has(d) && !taken(d));
-  return { dates, openDays, covered: dates.length > 0 && openDays.length === 0 };
+  // A meals need splits a day into its meals; each (day, meal) is a unit that needs its own helper. Any other
+  // need is one unit per day (''). A LEGACY slot with no meal ('') covers EVERY meal of its day, so sign-ups
+  // written before per-meal slots still read as covered. `unitsOf`/`takenUnit` are returned so the row and the
+  // badge count the same way the coverage does.
+  const mealsOf = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
+  const unitsOf = (iso) => { const ms = mealsOf(iso); return ms.length ? ms : ['']; };
+  const takenUnit = (iso, m) => (slots || []).some(s => s.needId === need.id && s.isoDate === iso && ((s.meal || '') === m || (s.meal || '') === ''));
+  let openUnits = 0, totalUnits = 0;
+  for (const d of dates) { if (skipSet.has(d)) continue; for (const m of unitsOf(d)) { totalUnits++; if (!takenUnit(d, m)) openUnits++; } }
+  const openDays = dates.filter(d => !skipSet.has(d) && unitsOf(d).some(m => !takenUnit(d, m)));
+  return { dates, openDays, openUnits, totalUnits, unitsOf, takenUnit, covered: totalUnits > 0 && openUnits === 0 };
+}
+
+// "WHEN I'M FREE" on a member's availability. Both ends blank = no window (null, the doc is written exactly as
+// before). Both ends set and from <= to = {from,to}. Anything else (one end only, or from after to) is NOT a
+// window and must not be written. Returns { ok, dates }.
+function careAvailRange(from, to) {
+  const f = String(from || '').trim(), t = String(to || '').trim();
+  if (!f && !t) return { ok: true, dates: null };
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  if (!re.test(f) || !re.test(t) || f > t) return { ok: false, dates: null };
+  return { ok: true, dates: { from: f, to: t } };
+}
+// A short "free 20–25 Oct" label for a {from,to} window; '' when there is none.
+function careAvailRangeLabel(d) {
+  if (!d || !d.from || !d.to) return '';
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const p = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso); return m ? { y: m[1], mo: +m[2] - 1, d: +m[3] } : null; };
+  const a = p(d.from), b = p(d.to); if (!a || !b) return '';
+  if (d.from === d.to) return 'free ' + a.d + ' ' + M[a.mo];
+  if (a.mo === b.mo && a.y === b.y) return 'free ' + a.d + '–' + b.d + ' ' + M[b.mo];
+  return 'free ' + a.d + ' ' + M[a.mo] + ' – ' + b.d + ' ' + M[b.mo];
 }
 
 function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, canVolunteer }) {
   const myPub = care.myPub || '';
-  const { dates, openDays } = careNeedDays(need, slots, skips);
+  // PER-MEAL UNITS (owner 2026-10-16). A meals need splits each day into its meals; every (day, meal) is its
+  // own claimable unit with its own helper, drop-off time and "what I'm bringing" note. Any other need stays
+  // one unit per day (meal ''). careNeedDays owns the unit maths and the legacy rule (a slot with no meal
+  // covers the whole day), so the row and the coverage never disagree.
+  const { dates, openDays, unitsOf, takenUnit, openUnits, totalUnits } = careNeedDays(need, slots, skips);
+  const doneUnits = Math.max(0, totalUnits - openUnits);
   const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
-  const fillsFor = (iso) => slots.filter(s => s.needId === need.id && s.isoDate === iso);
+  // slots covering a unit: that meal, or a legacy whole-day slot ('').
+  const coversUnit = (iso, meal) => slots.filter(s => s.needId === need.id && s.isoDate === iso && ((s.meal || '') === meal || (s.meal || '') === ''));
+  const myFillFor = (iso, meal) => coversUnit(iso, meal).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()) || null;
+  const dayHasFill = (iso) => unitsOf(iso).some(m => coversUnit(iso, m).length > 0);
   const isRecipient = !!need.recipient && need.recipient === myPub.toLowerCase();
   const cover = careCoverLabel(dates.length, openDays.length);
-  const filledDays = dates.filter(d => fillsFor(d).length > 0).length;
   const accent = 'var(--sage)';
-  // per-day meals (meals tasks): the day's override, else the need default
   const MEAL_SHORT = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' };
   const mealsFor = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
-  // "what I'm bringing" — editable note on the helper's own slot (so two people don't bring the same dish)
+  // steward-set optional drop-off time for a unit: keyed "<iso>:<meal>" for a meal, "<iso>" day-level.
+  const timeFor = (iso, meal) => (need.slotTimes && (need.slotTimes[meal ? iso + ':' + meal : iso])) || '';
+  const fmtTime = (t) => { const m = /^(\d{2}):(\d{2})$/.exec(String(t || '')); if (!m) return ''; let h = +m[1]; const ap = h < 12 ? 'am' : 'pm'; h = h % 12 || 12; return h + (m[2] === '00' ? '' : ':' + m[2]) + ap; };
+  // "what I'm bringing" — editable note on the helper's own slot, keyed per unit so Lunch and Dinner differ.
   const [noteDraft, setNoteDraft] = React.useState({});
   const [savedFlash, setSavedFlash] = React.useState({});
-  const myNoteFor = (iso) => { const f = fillsFor(iso).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()); return f ? (f.note || '') : ''; };
-  // "✓ Saved" WAS DRAWN BEFORE THE ANSWER CAME BACK. The note ("bringing a lasagne, no nuts") is the one
-  // field here that other people act on, and the flash fired synchronously whatever happened — so the batch
-  // that added a failure toast on 2026-09-04 put a green tick beside its own error message. Audit same day.
-  const saveNote = (iso) => {
-    const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso);
-    // ⚠ `r && r.ok`, NEVER `if (r)`. fillCareSlot now answers an OBJECT — { ok, reason } — and an object is
-    // always truthy, so a plain truthiness test paints the green "✓ Saved" tick over every failure, which is
-    // the trap markSafe set. The toast beside it comes from care.setNote in app.jsx.
-    Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim()))
-      .then(r => { if (r && r.ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
+  const uKey = (iso, meal) => iso + '|' + meal;
+  const myNoteFor = (iso, meal) => { const f = myFillFor(iso, meal); return f ? (f.note || '') : ''; };
+  // "✓ Saved" must wait for the answer — fillCareSlot returns { ok, reason }, an always-truthy object, so a
+  // plain truthiness test would tick over a failure. The note is saved on MY slot's own meal (legacy '' if my
+  // slot predates per-meal), so the right document is replaced.
+  const saveNote = (iso, meal) => {
+    const k = uKey(iso, meal);
+    const mine = myFillFor(iso, meal);
+    const slotMeal = mine ? (mine.meal || '') : meal;
+    const cur = noteDraft[k] !== undefined ? noteDraft[k] : myNoteFor(iso, meal);
+    Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim(), slotMeal))
+      .then(r => { if (r && r.ok) setSavedFlash(f => ({ ...f, [k]: true })); })
       .catch(() => {});
+  };
+  // one unit (a day's meal, or a whole non-meals day). `showMeal` labels the meal; the day header above owns
+  // the date and the recipient's day-level skip.
+  const unitRow = (iso, meal, skipped) => {
+    const fills = coversUnit(iso, meal);
+    const mine = myFillFor(iso, meal);
+    const mineFilled = !!mine;
+    const t = fmtTime(timeFor(iso, meal));
+    const k = uKey(iso, meal);
+    return (
+      <React.Fragment key={k}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
+          <div style={{ minWidth: meal ? 78 : 96 }}>
+            {meal ? <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{MEAL_SHORT[meal] || meal}</div> : null}
+            {t ? <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>by {t}</div> : null}
+          </div>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
+            {skipped ? <span>{mineFilled ? 'They’re covered — no need, thanks 🙏' : 'Not needed'}</span>
+              : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
+              : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
+          </div>
+          {/* ONE HELPER PER UNIT. A unit someone else has taken reads as covered and offers no second sign-up,
+              so two people never bring the same meal; my own stays cancellable; only a genuinely Open unit
+              offers "I'll help". A child (canVolunteer === false) is never offered it. */}
+          {!skipped && !isRecipient && (mineFilled
+            ? <button onClick={() => care.clearFill(need.id, iso, mine.meal || '')} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
+            : fills.length
+            ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
+            : (canVolunteer === false ? null : <button onClick={() => care.fill(need.id, iso, undefined, meal)} style={careBtnHelp}>I’ll help</button>))}
+        </div>
+        {mineFilled && !skipped && need.type === 'meals' ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
+            <input value={noteDraft[k] !== undefined ? noteDraft[k] : myNoteFor(iso, meal)} onChange={e => { const v = e.target.value; setNoteDraft(nd => ({ ...nd, [k]: v })); setSavedFlash(f => ({ ...f, [k]: false })); }} onBlur={() => saveNote(iso, meal)} onKeyDown={e => { if (e.key === 'Enter') { saveNote(iso, meal); e.currentTarget.blur(); } }} placeholder="What are you bringing?" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+            <button onClick={() => saveNote(iso, meal)} style={{ flexShrink: 0, padding: '7px 13px', borderRadius: 9, border: 'none', background: savedFlash[k] ? 'color-mix(in oklab, var(--sage) 20%, var(--surface))' : 'var(--clay)', color: savedFlash[k] ? 'var(--sage)' : '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{savedFlash[k] ? '✓ Saved' : 'Save'}</button>
+          </div>
+        ) : null}
+      </React.Fragment>
+    );
   };
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden', background: 'var(--surface)' }}>
@@ -120,7 +197,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, 
           <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
           <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{careTypeLabel(need)} · {cover.text}</div>
         </div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: cover.done ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: cover.done ? accent : 'var(--ink-3)' }}>{doneUnits}/{totalUnits}</div>
         <Icon name={expanded ? 'chevD' : 'chevR'} size={16} color="var(--ink-3)" />
       </button>
       {expanded && (
@@ -133,42 +210,20 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, 
           ) : null}
           {dates.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '8px 0' }}>No dates set yet.</div> : dates.map(iso => {
             const skipped = skipSet.has(iso);
-            const fills = fillsFor(iso);
-            const mineFilled = fills.some(f => f.pubkey && f.pubkey.toLowerCase() === myPub.toLowerCase());
-            const dayMeals = mealsFor(iso);
+            const units = unitsOf(iso);
+            const perMeal = need.type === 'meals' && mealsFor(iso).length > 0;
+            const fills = dayHasFill(iso);
+            // recipient / care-team day-level control — per DAY, not per meal (owner 2026-10-16)
+            const dayCtl = (isRecipient || (canManage && !fills)) ? (skipped
+              ? <button onClick={() => care.clearSkip(need.id, iso, need._skipEnc, need._by)} style={careBtnGhost}>Undo</button>
+              : <button onClick={() => care.skip(need.id, iso, '', need._skipEnc, need._by)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills ? 'Thanks — I’m covered' : 'I’m covered') : 'Skip'}</button>) : null;
             return (
               <div key={iso} style={{ borderTop: '1px solid color-mix(in oklab, var(--line) 60%, transparent)', opacity: skipped ? 0.55 : 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
-                  <div style={{ minWidth: 96 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{careFmtDate(iso)}</div>
-                    {dayMeals.length ? <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMeals.map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
-                    {skipped ? <span>{mineFilled ? 'They’re covered — no need, thanks 🙏' : 'Not needed this day'}</span>
-                      : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
-                      : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
-                  </div>
-                  {/* ONE HELPER PER DAY. The middle column already names who is bringing what; offering "I'll
-                      help" on a day someone ELSE has taken let two people sign up for the same slot and turn up
-                      with the same meal — the exact thing the help page promises the app prevents ("it shows as
-                      covered so two people don't turn up for the same slot"), and a simulated member did it by
-                      accident. So: my own signup stays cancellable; a day taken by someone else reads as
-                      covered and does not offer a second signup; only a genuinely Open day offers "I'll help". */}
-                  {!skipped && !isRecipient && (mineFilled
-                    ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
-                    : fills.length
-                    ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
-                    : (canVolunteer === false ? null : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>))}
-                  {(isRecipient || (canManage && fills.length === 0)) && (skipped
-                    ? <button onClick={() => care.clearSkip(need.id, iso, need._skipEnc, need._by)} style={careBtnGhost}>Undo</button>
-                    : <button onClick={() => care.skip(need.id, iso, '', need._skipEnc, need._by)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills.length ? 'Thanks — I’m covered' : 'I’m covered') : 'Skip'}</button>)}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0 3px' }}>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{careFmtDate(iso)}</div>
+                  {dayCtl}
                 </div>
-                {mineFilled && !skipped && need.type === 'meals' ? (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
-                    <input value={noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso)} onChange={e => { const v = e.target.value; setNoteDraft(nd => ({ ...nd, [iso]: v })); setSavedFlash(f => ({ ...f, [iso]: false })); }} onBlur={() => saveNote(iso)} onKeyDown={e => { if (e.key === 'Enter') { saveNote(iso); e.currentTarget.blur(); } }} placeholder="What are you bringing?" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-                    <button onClick={() => saveNote(iso)} style={{ flexShrink: 0, padding: '7px 13px', borderRadius: 9, border: 'none', background: savedFlash[iso] ? 'color-mix(in oklab, var(--sage) 20%, var(--surface))' : 'var(--clay)', color: savedFlash[iso] ? 'var(--sage)' : '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{savedFlash[iso] ? '✓ Saved' : 'Save'}</button>
-                  </div>
-                ) : null}
+                {perMeal ? units.map(m => unitRow(iso, m, skipped)) : unitRow(iso, '', skipped)}
               </div>
             );
           })}
@@ -476,6 +531,11 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [menuMsg, setMenuMsg] = React.useState(null);
+  const [dotsMsg, setDotsMsg] = React.useState(null);   // the ⋯ (Reply-only) popup, separate from the right-click menu
+  // SWIPE TO REPLY — the shared TrinityReplyKit (app/reply-kit.jsx); one row is dragged at a time.
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
   const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
   const inputRef = React.useRef(null);
@@ -501,13 +561,18 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
     setMenuMsg(null);
     try { await window.Fellowship.sendCareChat(reqId, requesterPub, '', { reaction: emoji, replyTo: msgId }); } catch (e) {}
   };
-  const startReply = (m) => { setMenuMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
+  const startReply = (m) => { setMenuMsg(null); setDotsMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
   const textMsgs = msgs.filter(m => m.text);
   const reactionsByMsg = {};
   msgs.filter(m => m.reaction && m.replyTo).forEach(m => {
     if (!reactionsByMsg[m.replyTo]) reactionsByMsg[m.replyTo] = [];
     reactionsByMsg[m.replyTo].push(m.reaction);
   });
+  const canReply = (m) => !!m && !!m.id;
+  const swipe = (m) => canReply(m)
+    ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
+    : {};
+  const lastId = textMsgs.length ? textMsgs[textMsgs.length - 1].id : '';
   const msgById = {};
   textMsgs.forEach(m => { msgById[m.id] = m; });
   return (
@@ -526,10 +591,21 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
             const rxns = reactionsByMsg[m.id];
             const quoted = m.replyTo && msgById[m.replyTo];
             return (
-            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', position: 'relative' }}>
+            <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', position: 'relative', ...TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) }}>
+              {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
               {!m.mine ? <div style={{ fontSize: 11, color: 'var(--ink-3)', margin: '0 0 2px 11px' }}>{careName(m.from, '')}</div> : null}
-              {quoted ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', padding: '4px 10px', margin: '0 4px 2px', borderLeft: '2px solid var(--clay)', borderRadius: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{quoted.text ? quoted.text.slice(0, 80) : ''}</div> : null}
+              {quoted ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: '100%', text: quoted.text ? quoted.text.slice(0, 80) : '' }) : (m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null)}
               <div onContextMenu={e => { e.preventDefault(); setMenuMsg(menuMsg === m.id ? null : m.id); }} onClick={e => { if (menuMsg && menuMsg !== m.id) { setMenuMsg(null); e.stopPropagation(); } }} style={{ padding: '9px 13px', borderRadius: 15, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text', WebkitUserSelect: 'text' }}>{m.text}</div>
+              {canReply(m) ? (
+                <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={dotsMsg === m.id}
+                  {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -36, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={14} /></button>
+              ) : null}
+              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before. */}
+              {dotsMsg === m.id ? (
+                <div data-reply-menu={m.id === lastId ? 'up' : 'down'} ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
+                  <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
+                </div>
+              ) : null}
               {rxns ? <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', margin: '2px 6px 0', justifyContent: m.mine ? 'flex-end' : 'flex-start' }}>{rxns.map((r, i) => <span key={i} style={{ fontSize: 14, lineHeight: 1 }}>{r}</span>)}</div> : null}
               {menuMsg === m.id ? <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', bottom: '100%', [m.mine ? 'right' : 'left']: 0, marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 140 }}>
                 <div style={{ display: 'flex', gap: 4, padding: '4px 6px' }}>{REACTIONS.map(emoji => <button key={emoji} onClick={() => react(m.id, emoji)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, padding: '2px 4px', borderRadius: 8 }}>{emoji}</button>)}</div>
@@ -543,10 +619,7 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
           <div ref={endRef} />
         </div>
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', padding: '10px 14px', flexShrink: 0 }}>{err}</div> : null}
-        {replyTo ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)', flexShrink: 0 }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ fontWeight: 700 }}>Replying</span> {replyTo.text ? replyTo.text.slice(0, 60) : ''}</div>
-          <button onClick={() => setReplyTo(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2 }}><Icon name="x" size={14} color="currentColor" /></button>
-        </div> : null}
+        {replyTo ? TrinityReplyKit.bar({ variant: 'dm', who: replyTo.mine ? 'yourself' : careName(replyTo.from, '') || 'them', text: replyTo.text ? replyTo.text.slice(0, 60) : '', onCancel: () => setReplyTo(null) }) : null}
         <div style={{ display: 'flex', gap: 8, padding: '12px 14px calc(12px + env(safe-area-inset-bottom))', borderTop: replyTo ? 'none' : '1px solid var(--line)', flexShrink: 0 }}>
           <input ref={inputRef} value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
           <button onClick={send} disabled={busy || !text.trim()} aria-label="Send" style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 999, border: 'none', background: text.trim() ? 'var(--clay)' : 'var(--surface-2)', color: text.trim() ? '#fff' : 'var(--ink-3)', cursor: text.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="send" size={18} color="currentColor" /></button>
@@ -988,15 +1061,13 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   );
 }
 
-// linkOnly = the Today screen. Today shows the ask as a LINK to the Care page and opens no sheet of its own.
-// Not a style preference: Today wraps this section in `animation: trinityFade … both`, and the identity
-// transform an animation leaves behind becomes the containing block for `position: absolute`. Both sheets
-// below are absolute+inset:0 backdrops — the house pattern, correct in 48 other places — so on Today they were
-// trapped inside the card's own 122px box, drawn over the "Practical care" heading with their content cut off
-// mid-word. Measured on the OPPO, 2026-08-27: overlay 324x107 at top 429 instead of full screen.
-// The card only moved to Today in af7824b, because three members hunted for care inside "Serving & events"
-// and never found it. Keep that discoverability; open the form where its backdrop still works.
-function AskForHelp({ ctx, linkOnly }) {
+// AskForHelp lives on the Care page only (owner 2026-10-16 moved care off Today). Both sheets it opens are
+// absolute+inset:0 backdrops — the house pattern — and the Care page's overlay is their containing block, so
+// they draw full-screen. (On Today, where this used to also render, the card's `animation: trinityFade` left an
+// identity transform that trapped those backdrops in a 122px box over the "Practical care" heading — the
+// reason the Today copy only ever LINKED to Care. Today now reaches Care through the badged "Care" link on the
+// What's happening card instead; see careForMe.)
+function AskForHelp({ ctx }) {
   const care = ctx.care || {};
   const myPub = (care.myPub || '').toLowerCase();
   const careOn = !!(care.settings && care.settings.enabled);
@@ -1046,8 +1117,8 @@ function AskForHelp({ ctx, linkOnly }) {
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>
-      {mine.map(r => <MyRequestRow key={r.id} r={r} isMinor={neutralWords} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: (neutralWords ? 'Your church' : 'Your care team') }); }} />)}
-      {!linkOnly && chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
+      {mine.map(r => <MyRequestRow key={r.id} r={r} isMinor={neutralWords} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: (neutralWords ? 'Your church' : 'Your care team') }); }} />)}
+      {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
       {isMinor && (audience !== undefined) && (!audience || !audience.length) ? (
         // NO FORM. Not a disabled button either — a greyed-out control invites tapping it and reads as a fault
         // with their phone. A plain, calm sentence, and the one thing they can actually do.
@@ -1063,7 +1134,7 @@ function AskForHelp({ ctx, linkOnly }) {
           </div>
         </div>
       ) : (
-      <button onClick={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setOpen(true); }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+      <button onClick={() => { setOpen(true); }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
@@ -1074,7 +1145,7 @@ function AskForHelp({ ctx, linkOnly }) {
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
       )}
-      {!linkOnly && open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
+      {open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
     </div>
   );
 }
@@ -1119,10 +1190,12 @@ function CareAvailability({ ctx, part }) {
   const [editing, setEditing] = React.useState(false);
   const [tags, setTags] = React.useState(() => (mine && mine.tags) || []);
   const [note, setNote] = React.useState(() => (mine && mine.note) || '');
+  const [dFrom, setDFrom] = React.useState(() => (mine && mine.dates && mine.dates.from) || '');
+  const [dTo, setDTo] = React.useState(() => (mine && mine.dates && mine.dates.to) || '');
   const [opt, setOpt] = React.useState(null);   // optimistic listed-state; null = follow the relay
   const listed = opt === null ? !!mine : opt;
   // keep the draft in step with my published availability when I'm not editing; drop the optimistic override once the relay agrees
-  React.useEffect(() => { if (!editing) { setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); } if (opt !== null && !!mine === opt) setOpt(null); }, [mine ? mine.ts : 0, editing]);
+  React.useEffect(() => { if (!editing) { setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); setDFrom((mine && mine.dates && mine.dates.from) || ''); setDTo((mine && mine.dates && mine.dates.to) || ''); } if (opt !== null && !!mine === opt) setOpt(null); }, [mine ? mine.ts : 0, editing]);
   const toggleTag = (id) => setTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
   const [custom, setCustom] = React.useState('');
   const addCustom = () => { const v = custom.trim().slice(0, 24); if (v && !tags.includes(v)) setTags(t => [...t, v]); setCustom(''); };
@@ -1138,8 +1211,10 @@ function CareAvailability({ ctx, part }) {
   // really is what we know: the relay's own answer is the truth, and claiming either state over it would be
   // the same guess in a new direction. Saving again is safe (fixed d-tag `careavail:<churchPub>`).
   const save = () => {
+    const range = careAvailRange(dFrom, dTo);
+    if (!range.ok) { ctx.toast('Check your dates — “free from” needs to be on or before “free until” (or leave both blank).', { error: true }); return; }
     setEditing(false);
-    Promise.resolve(care.setAvail ? care.setAvail(tags, note) : null)
+    Promise.resolve(care.setAvail ? care.setAvail(tags, note, range.dates) : null)
       .then((r) => {
         if (r && r.ok) { setOpt(true); return; }
         setOpt(null);
@@ -1186,7 +1261,7 @@ function CareAvailability({ ctx, part }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 150 }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={14} color="var(--sage)" stroke={3} /> You’re ready to help</div>
-                {showTags && showTags.length ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 2 }}>{showTags.map(careOfferLabel).join(' · ')}</div> : null}
+                {showTags && showTags.length ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 2 }}>{showTags.map(careOfferLabel).join(' · ')}{mine && mine.dates ? ' · ' + careAvailRangeLabel(mine.dates) : ''}</div> : null}
               </div>
               <button onClick={() => setEditing(true)} style={careBtnGhost}>Edit</button>
               <button onClick={turnOff} style={careBtnGhost}>Take a break</button>
@@ -1203,9 +1278,16 @@ function CareAvailability({ ctx, part }) {
                 <button onClick={addCustom} disabled={!custom.trim()} style={{ ...chipStyle(false), opacity: custom.trim() ? 1 : 0.5 }}>Add</button>
               </div>
               <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Anything to add? e.g. “Weekday evenings are easiest for me”" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical' }} />
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', margin: '10px 0 4px' }}>When are you free? (optional)</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input type="date" aria-label="Free from" value={dFrom} onChange={e => setDFrom(e.target.value)} style={{ flex: 1, minWidth: 120, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                <span style={{ fontSize: 12, color: 'var(--ink-2)' }}>to</span>
+                <input type="date" aria-label="Free until" value={dTo} onChange={e => setDTo(e.target.value)} style={{ flex: 1, minWidth: 120, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                {(dFrom || dTo) ? <button onClick={() => { setDFrom(''); setDTo(''); }} style={{ ...careBtnGhost, padding: '6px 10px', fontSize: 12 }}>Clear dates</button> : null}
+              </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button onClick={save} style={{ ...careBtnHelp, padding: '9px 16px', fontSize: 13 }}>{listed ? 'Save' : 'I’m available'}</button>
-                <button onClick={() => { setEditing(false); setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); }} style={{ ...careBtnGhost, padding: '9px 14px', fontSize: 13 }}>Cancel</button>
+                <button onClick={() => { setEditing(false); setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); setDFrom((mine && mine.dates && mine.dates.from) || ''); setDTo((mine && mine.dates && mine.dates.to) || ''); }} style={{ ...careBtnGhost, padding: '9px 14px', fontSize: 13 }}>Cancel</button>
               </div>
             </div>
           ) : (
@@ -1221,6 +1303,59 @@ function CareAvailability({ ctx, part }) {
       ) : null}
     </div>
   );
+}
+
+// careForMe — the single read of "what care is there for THIS member right now", used by the Today "Care"
+// link badge on the What's happening card (how many open days they can sign up for). It mirrors CareCard's
+// own gating on purpose: the church visibility setting ('team' hides needs from non-team members), the
+// care-roster read, and the child filter (a confirmed minor, or the 'maybe' cold-start window before their
+// clearance lands, is never offered someone else's need). Access is still enforced inside CareCard and at the
+// relay, so a drift between the two can only mis-count the badge, never open a door. `open` counts live needs
+// with a day still to take that this member may claim.
+function careForMe(ctx) {
+  const care = (ctx && ctx.care) || {};
+  const s = care.settings || {};
+  if (!s.enabled) return { open: 0, mine: 0, onRoster: false };
+  const today = todayISO();
+  const myPub = (care.myPub || '').toLowerCase();
+  const onRoster = (() => {
+    const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId);
+    return !!(roster && (roster.people || []).some(p => p && (p.pub || '').toLowerCase() === myPub));
+  })();
+  const split = splitCareNeeds({ needs: care.needs, today, visibility: s.visibility, onCareRoster: onRoster, myPub });
+  const minorHere = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  const canVolunteer = !minorHere && ctx.minorState !== 'minor' && ctx.minorState !== 'maybe';
+  const heldByMe = (n) => (care.slots || []).some(sl => sl && sl.needId === n.id && String(sl.pubkey || '').toLowerCase() === myPub);
+  const liveShown = canVolunteer ? split.others : split.others.filter(heldByMe);
+  // The badge is a "sign up for a day" invitation, so it counts only when this member MAY volunteer. A child
+  // (or the cold-start 'maybe' window) gets 0 even while holding a day — that commitment is shown and
+  // cancelled inside CareCard, it is not a new sign-up to advertise on the Today link.
+  const open = canVolunteer ? liveShown.filter(n => !careNeedDays(n, care.slots || [], care.skips || []).covered).length : 0;
+  return { open, mine: split.mine.length, onRoster };
+}
+
+// The "Care" entry on the Today "What's happening" card: a link to the Care page that BOLDS and shows a
+// count when there are open needs this member can sign up for (careForMe). It renders here, as its own
+// component, so the badge has a point-of-use test; TodayScreen just drops it into the card's subtitle.
+function CareLink({ ctx }) {
+  const care = (ctx && ctx.care) || {};
+  if (!(care.settings && care.settings.enabled)) return null;
+  const open = careForMe(ctx).open;
+  return (
+    <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)', fontWeight: open > 0 ? 800 : 600, whiteSpace: 'nowrap' }}> {'·'} Care</span>
+  );
+}
+
+// The count of open care days a member can sign up for — a clay pill on the "What's happening" card's TITLE
+// line (owner 2026-10-16: "put the number of cares up the top of the card"), so it sits beside the heading
+// instead of wrapping under the "Care" link below. Hidden when there is nothing open. Same careForMe count as
+// CareLink's bolding, so the pill and the bold link agree.
+function CareCountBadge({ ctx }) {
+  const care = (ctx && ctx.care) || {};
+  if (!(care.settings && care.settings.enabled)) return null;
+  const open = careForMe(ctx).open;
+  if (!(open > 0)) return null;
+  return <span title="Open care days you can sign up for" style={{ marginLeft: 7, flexShrink: 0, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{open}</span>;
 }
 
 function CareCard({ ctx, embedded }) {
@@ -1325,18 +1460,12 @@ function CareCard({ ctx, embedded }) {
       </React.Fragment>
     );
   }
-  // TODAY VARIANT. Show only when this member has something actionable — on the care roster, or the church
-  // has a need arranged for them, or there are open needs they can volunteer for / are signed up for.
-  // Everyone else reaches Care via the "Care" link on the Serving & events card.
-  if (!onCareRoster && !mineNeeds.length && !liveShown.length) return null;
-  return (
-    <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
-      <SectionLabel>Practical care</SectionLabel>
-      <AskForHelp ctx={ctx} linkOnly />
-      {mineBlock}
-      {live.length ? needsBlock : null}
-    </div>
-  );
+  // CARE IS NO LONGER RENDERED ON TODAY (owner 2026-10-16). A member reaches it through the "Care" link on the
+  // What's happening card, which lights up with a count when there are open days to sign up for (see careForMe
+  // and the badge in TodayScreen); a recipient is pointed there by the "Your church is caring for you" banner.
+  // This component now only renders inside the Serving "Care" tab (embedded above). A non-embedded render is
+  // inert rather than a half-built Today card.
+  return null;
 }
 
 // Emergency "mark as safe" banner — shown at the very top of Today when the church has an active safety
@@ -2171,6 +2300,10 @@ function TodayScreen({ ctx }) {
   // deliberate: an unreadable or unrecognised value falls to the default, never to the old one.
   const [votdMin, setVotdMin] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-min') !== '0'; } catch { return true; } });
   const toggleVotd = () => setVotdMin(v => { const nv = !v; try { localStorage.setItem('trinityone.votd-min', nv ? '1' : '0'); } catch {} return nv; });
+  // "Your church is reading" folds to one line behind a chevron and remembers it (owner 2026-10-15). Its own key:
+  // it is NOT the "What's happening" card's dismiss key and does not touch it.
+  const [churchReadingFolded, setChurchReadingFolded] = useStateT(() => { try { return lsGet('trinityone.churchReadingFolded', false) === true; } catch (e) { return false; } });
+  const toggleChurchReading = () => setChurchReadingFolded(v => { const nv = !v; try { lsSet('trinityone.churchReadingFolded', nv); } catch (e) {} return nv; });
 
   // ⚠ `now` IS STILL HERE FOR THE VERSE OF THE DAY, WHICH PICKS BY DAY-OF-YEAR. Deleting it with the
   // greeting below blanked the whole Today screen ("now is not defined") — the silent-blank shape, caught by
@@ -2278,12 +2411,21 @@ function TodayScreen({ ctx }) {
   const contChap = loc ? loc.chap : 1;
   const contMax = loc ? Bible.maxChapter(loc.book) : 1;
   const contPct = contMax ? contChap / contMax : 0;
+  // Keep reading: up to 4 EARLIER places (the live one is the main row), from the history app.jsx writes.
+  const [histOpen, setHistOpen] = React.useState(false);
+  const histOthers = (() => {
+    let h = []; try { h = lsGet('trinityone.readHistory.' + String(Bible.activeVersion || ''), []); } catch (e) {}
+    if (!Array.isArray(h)) return [];
+    return h.filter(e => e && Bible.bookName(e.book) && !(loc && Number(e.book) === Number(loc.book) && Number(e.chap) === Number(loc.chap))).slice(0, 4);
+  })();
 
   // active reading plan — from real persisted progress
   const started = D.PLANS.filter(p => (ctx.planProgress[p.id] || []).length > 0);
   const plan = started.sort((a, b) => (ctx.planProgress[b.id] || []).length - (ctx.planProgress[a.id] || []).length)[0] || D.PLANS[0];
   const pDone = (ctx.planProgress[plan.id] || []).length;
   const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
+  // how far along the plan line the marker sits: days done / days in the plan, as a percentage kept inside 0..100
+  const planPct = plan.len ? Math.round(Math.min(1, Math.max(0, pDone / plan.len)) * 10000) / 100 : 0;
 
   // am I being cared for right now? (a live care need names me as the recipient) → gentle banner near the top
   const _care = ctx.care || {};
@@ -2305,6 +2447,16 @@ function TodayScreen({ ctx }) {
   const servNext = ctx.servNext;
   // (top bar sits just below the status bar; care + serving cards, then the verse — see the ScreenScroll top below)
   const servPendingN = (ctx.servPending || []).length;
+  // "You're serving" strip can be dismissed with an X (owner 2026-10-15), snoozed per SLOT: a new or changed slot
+  // changes the key and the strip returns. A pending "can you serve?" ask is never dismissable (hiding it = a
+  // silent drop). Same key as ServingEntry in screens-chat.jsx so one X clears both surfaces.
+  const [servDismissTick, setServDismissTick] = React.useState(0);
+  const servKey = servNext ? [servNext.id || '', servNext.date || '', servNext.teamName || '', servNext.role || ''].join('|') : '';
+  const servStripDismissed = React.useMemo(() => {
+    if (!servKey) return false;
+    try { return localStorage.getItem('trinityone.servStripDismiss') === servKey; } catch { return false; }
+  }, [servKey, servDismissTick]);
+  const dismissServStrip = (e) => { if (e) e.stopPropagation(); try { if (servKey) localStorage.setItem('trinityone.servStripDismiss', servKey); } catch {} setServDismissTick(t => t + 1); };
   // how many things the church has posted, that THIS member is served, since they last opened this card.
   // `ctx.servingSeenTs` is the per-church mark; app/app.jsx stamps it forward from ctx.openServing().
   const servNew = servingNewCount(ctx, ctx.servingSeenTs);
@@ -2399,15 +2551,16 @@ function TodayScreen({ ctx }) {
                 <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", minWidth: 0 }}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
                   <ServingNewDot n={servNew} />
+                  <CareCountBadge ctx={ctx} />
                 </div>
-                <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing("care"); }} style={{ color: "var(--clay)" }}> {"·"} Care</span> : null}</div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota<CareLink ctx={ctx} /></div>
               </div>
               <Icon name="chevR" size={18} color="var(--ink-3)" />
             </div>
             {/* SINGLE-LINE SERVING NOTICE (owner 2026-10-14): "You’re serving" / "Can you serve?" folded onto the
                 What’s happening card as ONE line under it, not a separate alternate card. Pending is prioritised
                 and gold; otherwise the next serving slot. nowrap + ellipsis keeps it to one line. */}
-            {(servNext || servPendingN) ? (
+            {(servPendingN || (servNext && !servStripDismissed)) ? (
               <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", borderTop: "1px solid var(--line)",
                 background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 8%, var(--surface))",
                 color: servPendingN ? "#8a6717" : "var(--sage)", fontSize: 12.5, fontWeight: 700, minWidth: 0 }}>
@@ -2415,6 +2568,7 @@ function TodayScreen({ ctx }) {
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{servPendingN
                   ? <React.Fragment>{servPendingN} request{servPendingN > 1 ? "s" : ""} waiting for your reply</React.Fragment>
                   : <React.Fragment>You{"’"}re serving {"·"} {servNext.teamName} {"·"} {servNext.role} {"·"} {fmtServe(servNext.date)}</React.Fragment>}</span>
+                {!servPendingN ? <button onClick={dismissServStrip} aria-label="Dismiss" title="Dismiss — it comes back for your next slot" style={{ flexShrink: 0, width: 40, height: 40, margin: "-13px -8px -13px auto", borderRadius: 999, border: "none", background: "transparent", color: "var(--ink-3)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, lineHeight: 1 }}>{"✕"}</button> : null}
               </div>
             ) : null}
           </div>
@@ -2476,9 +2630,9 @@ function TodayScreen({ ctx }) {
         </div>
       ) : null}
 
-      {/* Practical care: back on Today, gated on the church having switched it on. Three members failed to
-          find it inside Serving & events and all three read Today first; the full tab still exists. */}
-      <CareCard ctx={ctx} />
+      {/* Practical care is NOT on Today any more (owner 2026-10-16) — it lives on the Care page, reached via
+          the "Care" link on the What's happening card above, which shows a count when there are open days to
+          sign up for. The "Your church is caring for you" banner above points a recipient there. */}
 
       {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages. */}
       {ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {
@@ -2506,7 +2660,14 @@ function TodayScreen({ ctx }) {
       })() : null}
 
       {/* Church verse prompt — steward-pushed verse for the whole congregation */}
-      {vpPage && vpVisible ? (
+      {vpPage && vpVisible && churchReadingFolded ? (
+        <button type="button" onClick={toggleChurchReading} aria-expanded={false} aria-label="Expand Your church is reading" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 16, cursor: 'pointer', background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)', color: '#fff', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+          <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Your church is reading · {vpPage.ref}</div>
+          <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+        </button>
+      ) : null}
+      {vpPage && vpVisible && !churchReadingFolded ? (
         <div
           onTouchStart={(e) => { vpTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
           onTouchEnd={(e) => {
@@ -2529,6 +2690,7 @@ function TodayScreen({ ctx }) {
           <div style={{ position: 'absolute', right: -20, bottom: -28, opacity: .12 }}>
             <Icon name="book" size={150} stroke={1.2} color="#fff" />
           </div>
+          <button type="button" onClick={(e) => { e.stopPropagation(); toggleChurchReading(); }} aria-expanded={true} aria-label="Collapse Your church is reading" title="Collapse" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1, border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevU" size={16} color="#fff" /></button>
           <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => { const vl = Bible.parseRef(vpPage.ref); if (vl) ctx.gotoRef(vl.book, vl.chap, vl.verse); }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .88 }}>
               <Icon name="sparkle" size={14} stroke={2} /> Your church is reading
@@ -2618,9 +2780,27 @@ function TodayScreen({ ctx }) {
           </div>
         </div>
         <div style={{ width: 38, height: 38, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Icon name="play" size={16} color="#fff" />
+          <Icon name="book" size={18} color="#fff" />
         </div>
+        {histOthers.length ? (
+          <button type="button" aria-label={histOpen ? 'Hide earlier places' : 'Show earlier places'} aria-expanded={histOpen}
+            onClick={(e) => { e.stopPropagation(); setHistOpen(!histOpen); }}
+            style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer' }}>
+            <Icon name={histOpen ? 'chevU' : 'chevD'} size={16} />
+          </button>
+        ) : null}
       </div>
+      {histOpen && histOthers.length ? (
+        <div style={{ marginTop: -14, marginBottom: 22, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {histOthers.map(e => (
+            <button type="button" key={e.book + ':' + e.chap} onClick={() => ctx.gotoRef(e.book, e.chap, e.verse)}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minHeight: 44, padding: '8px 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 14.5, fontWeight: 600, cursor: 'pointer', textAlign: 'left' }}>
+              <span>{Bible.bookName(e.book)} {e.chap}</span>
+              <Icon name="play" size={13} color="var(--clay)" />
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {/* Plan + (real) devotional cards */}
       <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel>
@@ -2629,10 +2809,18 @@ function TodayScreen({ ctx }) {
           flex: 1, padding: 16, borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)',
           boxShadow: 'var(--shadow)', cursor: 'pointer',
         }}>
-          <ProgressRing value={plan.len ? pDone / plan.len : 0} />
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 10 }}>Reading plan</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Reading plan</div>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, lineHeight: 1.15, marginTop: 2 }}>{plan.title}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 4 }}>Day {pNext.d} of {plan.len}</div>
+          {/* ONE LINE, with a marker that sits further along it the more of the plan is done (owner 2026-10-14).
+              The 7px side margin is half the marker's width, so the marker never hangs off the card at 0% or 100%. */}
+          <div data-plan-line="" style={{ position: 'relative', height: 18, margin: '12px 7px 0' }}>
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 8, height: 3, borderRadius: 2, background: 'var(--line)' }} />
+            <div data-plan-fill="" style={{ position: 'absolute', left: 0, top: 8, height: 3, borderRadius: 2, background: 'var(--clay)', width: `${planPct}%` }} />
+            <div data-plan-marker="" role="img" aria-label={`${pDone} of ${plan.len} days done`} style={{ position: 'absolute', top: 2, left: `${planPct}%`, marginLeft: -7, width: 14, height: 14, borderRadius: 999, background: 'var(--clay)', boxShadow: '0 0 0 3px var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="chevR" size={10} stroke={3} color="#fff" />
+            </div>
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>Day {pNext.d} of {plan.len}</div>
         </div>
         {churchDevo ? (
           <div onClick={() => ctx.openChurchDevo(churchDevo)} style={{

@@ -101,6 +101,16 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
 
 window.Icon = Icon;
 
+// THE ICONS A STEWARD MAY GIVE A CHAT ROOM (any kind: group, team, broadcast). A fixed allowlist, never free
+// text: `icon` arrives in a church-signed document but is only ever a NAME looked up in Icon above, so an
+// unknown value must fall back to the room's per-kind default rather than draw nothing. It includes the
+// icons the team presets (app/stew-data.jsx) already publish, so no existing team loses its icon. Both the
+// console and the member app read it here (both pages load this file). Validate on READ with roomIconOk.
+const ROOM_ICONS = ['chat', 'send', 'shield', 'pray', 'heart', 'hand', 'music', 'coffee', 'gift', 'globe', 'child', 'bank', 'sliders', 'book', 'sun', 'flame', 'sparkle', 'users', 'bell', 'calendar'];
+const roomIconOk = (name) => (typeof name === 'string' && ROOM_ICONS.indexOf(name) >= 0) ? name : '';
+window.ROOM_ICONS = ROOM_ICONS;
+window.roomIconOk = roomIconOk;
+
 // TrinityOne "Halo" mark — one ring, three breaks, a gold spark
 function Halo({ size = 28, color = 'currentColor', spark = 'var(--gold)', open = false, style = {} }) {
   return (

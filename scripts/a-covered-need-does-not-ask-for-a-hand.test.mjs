@@ -11,8 +11,8 @@
 //
 // POINT OF USE (CLAUDE.md rules 1 and 3): CareCard is compiled from app/screens-today.jsx and DRAWN through
 // the miniature React (scripts/render-jsx-screen.mjs); every assertion reads the drawn tree. Users of the
-// changed code: CareCard (mounted on Today in app/screens-today.jsx, and embedded on the Serving page's Care
-// tab in app/screens-serving.jsx) and CareNeedRow, which now takes its day list from the same helper.
+// changed code: CareCard (rendered on the Serving page's Care tab, embedded; care was moved OFF Today by the
+// owner 2026-10-16) and CareNeedRow, which takes its day list from the same helper.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, texts } from './render-jsx-screen.mjs';
@@ -23,7 +23,7 @@ const HELPER = 'c'.repeat(64);
 const ASK = /could use a hand/i;
 const COVERED = /all covered/i;
 
-function card({ needs, slots = [], skips = [], embedded = false }) {
+function card({ needs, slots = [], skips = [], embedded = true }) {
   const { React, draw } = miniReact();
   const Icon = ({ name }) => React.createElement('i', { 'data-icon': name });
   const Stub = (n) => function S(p) { return React.createElement('div', { 'data-stub': n }, p && p.children); };

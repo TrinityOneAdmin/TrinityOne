@@ -48,6 +48,9 @@ function LibraryScreen({ ctx }) {
 
 function LibraryHome({ ctx }) {
   const D = window.TrinityData;
+  // Which Library sections are folded shut (default: none). Session-only.
+  const [folded, setFolded] = React.useState({});
+  const fold = (id) => () => setFolded((f) => ({ ...f, [id]: !f[id] }));
   // honest module counts from what's actually installed (was hardcoded "12 versions / 8 sets / 3 entries" fakes)
   const inst = (window.Bible && window.Bible.installedMap && window.Bible.installedMap()) || {};
   const byCat = {}; for (const v of Object.values(inst)) { const c = (v && v.category) || 'bibles'; byCat[c] = (byCat[c] || 0) + 1; }
@@ -76,18 +79,18 @@ function LibraryHome({ ctx }) {
         )}
       </div>
 
-      <SectionLabel>Modules</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'lumenFade .5s ease .1s both' }}>
+      <SectionLabel collapsed={!!folded.modules} onToggle={fold('modules')}>Modules</SectionLabel>
+      {!folded.modules && <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 24, animation: 'lumenFade .5s ease .1s both' }}>
         {D.MODULES.map((m) => <ModuleTile key={m.id} m={{ ...m, count: countFor(m.id) }} onClick={() =>
           m.id === 'bibles' ? ctx.openStore('language', 'bibles')
           : m.id === 'dictionaries' ? ctx.openStore('featured', 'dictionaries')
           : m.id === 'commentaries' ? ctx.openStore('featured', 'commentaries')
           : ctx.openModule(m)
         } />)}
-      </div>
+      </div>}
 
-      <SectionLabel>Listen</SectionLabel>
-      <div style={{ marginBottom: 24, animation: 'lumenFade .5s ease .12s both' }}>
+      <SectionLabel collapsed={!!folded.listen} onToggle={fold('listen')}>Listen</SectionLabel>
+      {!folded.listen && <div style={{ marginBottom: 24, animation: 'lumenFade .5s ease .12s both' }}>
         <button onClick={() => ctx.openAudioBibles()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow)', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
           <div style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="headphones" size={22} color="currentColor" /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -96,10 +99,10 @@ function LibraryHome({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </button>
-      </div>
+      </div>}
 
-      <SectionLabel action="+ New" onAction={() => ctx.newJournal()}>Recent journal</SectionLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 11, animation: 'lumenFade .5s ease .15s both' }}>
+      <SectionLabel action="+ New" onAction={() => ctx.newJournal()} collapsed={!!folded.journal} onToggle={fold('journal')}>Recent journal</SectionLabel>
+      {!folded.journal && <div style={{ display: 'flex', flexDirection: 'column', gap: 11, animation: 'lumenFade .5s ease .15s both' }}>
         {(ctx.journalEntries || D.JOURNAL).length === 0 ? (
           <button onClick={() => ctx.newJournal()} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '30px 20px', borderRadius: 18,
             border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>
@@ -122,7 +125,7 @@ function LibraryHome({ ctx }) {
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{j.body}</p>
           </div>
         )}
-      </div>
+      </div>}
     </React.Fragment>);
 
 }
@@ -567,7 +570,10 @@ function CollectionView({ coll, open, onClose, ctx }) {
   const [adding, setAdding] = React.useState(false);
   const [pWho, setPWho] = React.useState('');
   const [pText, setPText] = React.useState('');
-  React.useEffect(() => { if (open) { setQ(''); setAdding(false); setPWho(''); setPText(''); } }, [open, coll && coll.id]);
+  // Notes only: the note being edited (the MyData item) and its draft text.
+  const [editNote, setEditNote] = React.useState(null);
+  const [noteText, setNoteText] = React.useState('');
+  React.useEffect(() => { if (open) { setEditNote(null); setQ(''); setAdding(false); setPWho(''); setPText(''); } }, [open, coll && coll.id]);
   React.useEffect(() => MD.on(() => force(x => x + 1)), []);
   if (!coll) return null;
 
@@ -583,6 +589,16 @@ function CollectionView({ coll, open, onClose, ctx }) {
     prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
 
   const jump = (it) => { if (!it.ref) return; onClose(); setTimeout(() => ctx.openReader(), 200); ctx.toast('Jumping to ' + it.ref); };
+  // Tapping a NOTE opens an editor (the reader's verse card no longer has a Note tile, so this is the way
+  // back to an existing note). Highlights and bookmarks still jump to the reader.
+  const tap = (it) => { if (isNotes) { setEditNote(it); setNoteText(it.text || ''); } else jump(it); };
+  // Saves through the same MyData path as ctx.setNote in app.jsx (put keyed by id; empty text removes).
+  const saveNote = () => {
+    if (!editNote) return;
+    const t = noteText.trim();
+    if (t) MD.put('notes', { ...editNote, text: t }); else MD.remove('notes', editNote.id);
+    setEditNote(null); ctx.toast(t ? 'Note saved' : 'Note removed');
+  };
   const del = (it) => { MD.remove(coll.id, it.id); ctx.toast('Removed'); };
   const toggleVis = (it) => MD.setVisibility(coll.id, it.id, it.visibility === 'private' ? 'public' : 'private');
   const savePrayer = () => {
@@ -637,8 +653,8 @@ function CollectionView({ coll, open, onClose, ctx }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             {items.map((it) => (
-              <div key={it.id || it.ref} onClick={() => !isPrayer && jump(it)} style={{
-                padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: it.ref && !isPrayer ? 'pointer' : 'default', boxShadow: 'var(--shadow)',
+              <div key={it.id || it.ref} onClick={() => !isPrayer && tap(it)} style={{
+                padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: (it.ref || isNotes) && !isPrayer ? 'pointer' : 'default', boxShadow: 'var(--shadow)',
                 position: 'relative', overflow: 'hidden', paddingLeft: it.color ? 18 : 15, opacity: it.answered ? .62 : 1 }}>
                 {it.color ? <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 5, background: it.color }} /> : null}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5, gap: 8 }}>
@@ -680,6 +696,19 @@ function CollectionView({ coll, open, onClose, ctx }) {
           </div>
         )}
       </div>
+      {isNotes ? (
+        <BottomSheet open={!!editNote} onClose={() => setEditNote(null)}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Note on</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{editNote ? (window.verseRefLabel ? window.verseRefLabel(editNote.ref) : editNote.ref) : ''}</div></div>
+            <button onClick={saveNote} aria-label="Save note" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
+              padding: '10px 18px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Save</button>
+          </div>
+          <textarea autoFocus aria-label="Note text" value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="What is God showing you here?" style={{
+            width: '100%', boxSizing: 'border-box', minHeight: 150, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface-2)',
+            padding: 15, fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.5, color: 'var(--ink)', resize: 'none', outline: 'none' }} />
+        </BottomSheet>
+      ) : null}
     </Overlay>);
 
 }
@@ -712,7 +741,7 @@ function StoreRow({ item, catIcon, ctx }) {
   };
   const onOpen = () => {
     // an installed bible: make it active and jump to the reader
-    if (item.kind !== 'dict') { const v = window.Bible.versions().find(x => x.name === item.name); if (v) window.Bible.setActive(v.abbr); ctx.go('read'); ctx.closeStore(); }
+    if (item.kind !== 'dict' && item.kind !== 'worddef' && item.kind !== 'original') { const v = window.Bible.versions().find(x => x.name === item.name); if (v) window.Bible.setActive(v.abbr); ctx.go('read'); ctx.closeStore(); }
     else ctx.toast(`${item.abbr || item.name} is active`);
   };
 

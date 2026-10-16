@@ -40,21 +40,22 @@ test('there is exactly ONE reaction set, and it has a thumbs up and a laugh', ()
 
 test('a message can be swiped to reply, in group rooms AND in direct messages', () => {
   const src = stripComments(CHAT);
-  // Group rooms: on Row, so a verse, a poll and an ordinary message all behave the same.
+  // The swipe is ONE shared copy now (app/reply-kit.jsx). Both surfaces must still own the gesture through it —
+  // the behaviour itself is driven, not matched, in a-direct-message-can-be-answered / reply-kit-adoption tests.
   assert.match(src, /function Row\(/, 're-anchor: Row has moved');
-  assert.match(src, /onTouchStart=\{onTS\} onTouchEnd=\{onTE\}/, 'the bubble row must own the gesture');
-  // Direct messages: their own wrapper, since a DM bubble has no Row.
   assert.match(src, /function DMSwipe\(/, 'direct messages need the gesture too — the ask was every chat window');
   assert.match(src, /<DMSwipe /, 'and it has to actually wrap the bubbles');
-  // A vertical drag must release the gesture, or the message list stops scrolling.
-  const guards = src.match(/if \(Math\.abs\(ddy\) > Math\.abs\(ddx\)\)/g) || [];
-  assert.equal(guards.length, 2,
-    'both surfaces must let go on a mostly-vertical drag, or swiping to reply breaks scrolling');
+  const uses = src.match(/TrinityReplyKit\.useSwipe\(/g) || [];
+  assert.equal(uses.length, 2, 'both Row and DMSwipe must take their swipe from the shared kit');
+  // A vertical drag must release the gesture, or the message list stops scrolling — one guard, in the kit.
+  const kit = stripComments(readFileSync(new URL('../app/reply-kit.jsx', import.meta.url), 'utf8'));
+  const guards = kit.match(/if \(Math\.abs\(ddy\) > Math\.abs\(ddx\)\)/g) || [];
+  assert.equal(guards.length, 1, 'the shared swipe must let go on a mostly-vertical drag, or swiping to reply breaks scrolling');
 });
 
 test('a DM reply is carried INSIDE the encryption, not in a public tag', () => {
   const src = stripComments(FEL);
-  assert.match(src, /_dmWrap\(text, replyTo\)/, 'the reply reference is wrapped into the body');
+  assert.match(src, /_dmWrap\(text, replyTo(, meta)?\)/, 'the reply reference is wrapped into the body');
   assert.match(src, /_dmUnwrap\(body\)/, 'and unwrapped on read');
   assert.match(src, /const body = window\.Fellowship\._dmWrap\(content, replyTo\)/,
     'sendDM must encrypt the WRAPPED body — wrapping after encryption would do nothing');
@@ -66,7 +67,7 @@ test('a DM reply is carried INSIDE the encryption, not in a public tag', () => {
   // Old messages are bare strings and must keep working.
   const un = src.slice(src.indexOf('_dmUnwrap(body)'), src.indexOf('_dmUnwrap(body)') + 500);
   assert.match(un, /body\[0\] !== '\{'/, 'every DM ever sent is a bare string — it must still read as text');
-  assert.match(un, /return \{ text: body, replyTo: null \}/, 'and unparseable content must not lose the words');
+  assert.match(un, /return \{ text: body, replyTo: null(, noReply: false, eventId: null(, careOffer: null)?)? \}/, 'and unparseable content must not lose the words');
 });
 
 test('the 12-word check lets you try again when you get it wrong', () => {

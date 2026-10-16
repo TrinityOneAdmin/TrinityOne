@@ -497,7 +497,7 @@ test('a rota that moved under the removal is reported as that, not as a relay re
 
 // ── the Groups screen: the REAL DashGroups, sharing the REAL removal flow ──────────────────────────────────────
 async function loadConsoleComponent(name, anchor, globals) {
-  const src = fnBody(STEW, anchor, name) + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
+  const src = fnBody(STEW, anchor, name) + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients', 'groupIcon'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
   const tmp = join(tmpdir(), 'delteam-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

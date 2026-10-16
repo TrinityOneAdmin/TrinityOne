@@ -80,7 +80,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
       <span
         onClick={(e) => {
           const sup = e.target.closest && e.target.closest('sup.st');
-          if (sup) { e.stopPropagation(); onWord((sup.dataset.s || '').split(',')[0]); }
+          if (sup) { e.stopPropagation(); onWord((sup.dataset.s || '').split(',')[0], n); }
           else { onSelect(n); }
         }}
         style={{
@@ -154,52 +154,53 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
   const acts = isMulti ? [
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
+    { ic: 'book', label: 'Define', fn: ctx._define },
   ] : [
-    { ic: 'pen', label: 'Note', fn: onNote },
     { ic: 'bookmark', label: bookmarked ? 'Saved' : 'Bookmark', fn: ctx._bm, active: bookmarked },
     { ic: 'copy', label: 'Copy', fn: ctx._copy },
     { ic: 'share', label: 'Share', fn: ctx._share },
+    { ic: 'book', label: 'Define', fn: ctx._define },
     ...(hasNote ? [{ ic: 'pen', label: 'Share note', fn: ctx._shareNote }] : []),
-    { ic: 'link', label: 'Cross-refs', fn: onCross },
-    { ic: 'comment', label: 'Commentary', fn: onCommentary },
   ];
   return (
     <BottomSheet open={open} onClose={onClose} passthrough>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <div>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ minWidth: 0, flexShrink: 1 }}>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{isMulti ? multi + ' verses selected' : 'Verse selected'}</div>
-          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
         </div>
+        <div data-testid="verse-extent" style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 12, flexShrink: 0 }}>
+          <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
+          <button onClick={ctx._extend} title="Add the next verse" style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
+        </div>
+        <div style={{ flex: 1 }} />
         <IconBtn name="x" onClick={onClose} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
-        <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
-        <button onClick={ctx._extend} title="Add the next verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
-      </div>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
-      <div style={{ display: 'flex', gap: 11, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         {HL_COLORS.map(c => (
           <button key={c.id} onClick={() => onColor(curColor === c.v ? null : c.v)}
             aria-label={(curColor === c.v ? 'Remove ' : 'Highlight ') + c.id}
             title={(curColor === c.v ? 'Remove ' : 'Highlight ') + c.id} style={{
-            width: 44, height: 44, borderRadius: 999, background: c.v, cursor: 'pointer',
+            width: 33, height: 33, borderRadius: 999, background: c.v, cursor: 'pointer',
             border: curColor === c.v ? '2.5px solid var(--ink)' : '2px solid var(--line)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>{curColor === c.v ? <Icon name="check" size={18} stroke={2.6} color="var(--ink)" /> : null}</button>
+          }}>{curColor === c.v ? <Icon name="check" size={13.5} stroke={2.6} color="var(--ink)" /> : null}</button>
         ))}
         <button onClick={() => onColor(null)} style={{
-          width: 44, height: 44, borderRadius: 999, background: 'var(--surface-2)', cursor: 'pointer',
+          width: 33, height: 33, borderRadius: 999, background: 'var(--surface-2)', cursor: 'pointer',
           border: '2px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)',
-        }}><Icon name="x" size={18} /></button>
+        }}><Icon name="x" size={13.5} /></button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
+      {/* 4 tiles sit in one row; 3 or 5 (with "Share note") keep the three-column grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(' + (acts.length === 4 ? 4 : 3) + ',1fr)', gap: 10 }}>
         {acts.map(a => (
           <button key={a.label} onClick={a.fn} style={{
             border: '1px solid var(--line)', background: a.active ? 'var(--clay-soft)' : 'var(--surface-2)',
-            borderRadius: 16, padding: '14px 6px', cursor: 'pointer', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: 7, color: a.active ? 'var(--clay-ink)' : 'var(--ink)',
+            borderRadius: 16, padding: '10.5px 4.5px', cursor: 'pointer', display: 'flex',
+            flexDirection: 'column', alignItems: 'center', gap: 5, color: a.active ? 'var(--clay-ink)' : 'var(--ink)',
           }}>
-            <Icon name={a.ic} size={21} fill={a.active} /><span style={{ fontSize: 12, fontWeight: 600 }}>{a.label}</span>
+            <Icon name={a.ic} size={15.75} fill={a.active} /><span style={{ fontSize: 9, fontWeight: 600 }}>{a.label}</span>
           </button>
         ))}
       </div>
@@ -207,9 +208,267 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
   );
 }
 
+// ── original language (STEPBible TAGNT / TAHOT, optional download-on-demand modules; CC BY 4.0) ──
+// "Show the original (download)": finds the catalogue's original module for this language and installs it through the
+// same installModule every other module uses. Never automatic. The engine notifies subscribers when it lands.
+function OriginalOffer({ lang }) {
+  const [st, setSt] = useS('idle');
+  const go = async () => {
+    setSt('busy');
+    try {
+      const cat = await window.Bible.getCatalog();
+      let item = null;
+      for (const c of ((cat && cat.categories) || [])) for (const it of (c.items || [])) if (it.kind === 'original' && String(it.lang).toLowerCase() === lang) item = it;
+      if (!item) throw new Error('not in the catalogue');
+      await window.Bible.installModule(item);
+      setSt('idle');
+    } catch (err) { setSt('failed'); }
+  };
+  return (
+    <div data-testid="original-offer">
+      <button onClick={go} disabled={st === 'busy'} style={{ border: '1px solid var(--clay)', background: 'var(--clay-soft)', color: 'var(--clay-ink)', borderRadius: 999, padding: '8px 14px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+        {st === 'busy' ? 'Downloading…' : 'Show the original (download)'}
+      </button>
+      {st === 'failed' ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 6 }}>Couldn't download it. It needs a connection the first time.</div> : null}
+    </div>
+  );
+}
+// the licence pill, like WordNet's: a small button, the full text behind a tap
+function OriginalLicencePill() {
+  const [open, setOpen] = useS(false);
+  const list = window.Bible.originalList ? window.Bible.originalList() : [];
+  const licence = (list[0] && list[0].license) || 'STEPBible.org CC BY';
+  const full = 'Original-language text and tagging: STEPBible.org (Tyndale House, Cambridge), licensed CC BY 4.0. ' + licence;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button data-testid="original-licence-pill" onClick={() => setOpen(o => !o)} aria-expanded={open} title={full} style={{ border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', borderRadius: 999, padding: '2px 9px', fontSize: 10.5, fontWeight: 600, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>STEPBible licence</button>
+      {open ? <div data-testid="original-licence-text" style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 8 }}>{full}</div> : null}
+    </div>
+  );
+}
+// The verse's original words (STEPBible), each opening its lexicon entry. This is the second page of the
+// Define sheet (swipe right from the English meanings).
+
+// ── plain-English morphology (STEPBible tags Greek with Robinson codes, Hebrew with OpenScriptures codes) ──
+// "V-AAI-3S" -> "verb · aorist · active · indicative · 3rd person · singular"; "N-NSF" -> "noun · nominative ·
+// singular · feminine". A reader who doesn't know the codes can read the grammar. Unknown pieces fall back to the
+// raw code rather than inventing a meaning.
+const GK_POS = { N: 'noun', A: 'adjective', T: 'article', V: 'verb', P: 'personal pronoun', R: 'relative pronoun', C: 'reciprocal pronoun', D: 'demonstrative pronoun', K: 'correlative pronoun', I: 'interrogative pronoun', X: 'indefinite pronoun', F: 'reflexive pronoun', S: 'possessive pronoun', Q: 'correlative pronoun', ADV: 'adverb', CONJ: 'conjunction', COND: 'conditional', PRT: 'particle', PREP: 'preposition', INJ: 'interjection', ARAM: 'Aramaic word', HEB: 'Hebrew word', 'N-PRI': 'proper noun', 'A-NUI': 'numeral' };
+const GK_CASE = { N: 'nominative', G: 'genitive', D: 'dative', A: 'accusative', V: 'vocative' };
+const GK_NUM = { S: 'singular', P: 'plural' };
+const GK_GEN = { M: 'masculine', F: 'feminine', N: 'neuter' };
+const GK_TENSE = { P: 'present', I: 'imperfect', F: 'future', A: 'aorist', X: 'perfect', Y: 'pluperfect', R: 'perfect' };
+const GK_VOICE = { A: 'active', M: 'middle', P: 'passive', E: 'middle or passive', D: 'deponent', O: 'deponent', N: 'deponent' };
+const GK_MOOD = { I: 'indicative', S: 'subjunctive', O: 'optative', M: 'imperative', N: 'infinitive', P: 'participle' };
+const ORD = { '1': '1st person', '2': '2nd person', '3': '3rd person' };
+function greekMorph(code) {
+  const parts = code.split('-');
+  const pos = parts[0];
+  if (pos === 'V') {
+    const out = ['verb'];
+    // STEP prefixes 2nd-aorist/perfect/future with a digit (V-2API-3S): it is not a tense letter, drop it
+    const tvm = (parts[1] || '').replace(/^\d/, '');
+    if (GK_TENSE[tvm[0]]) out.push(GK_TENSE[tvm[0]]);
+    if (GK_VOICE[tvm[1]]) out.push(GK_VOICE[tvm[1]]);
+    const mood = tvm[2]; if (GK_MOOD[mood]) out.push(GK_MOOD[mood]);
+    const tail = parts[2] || '';
+    if (mood === 'P') { if (GK_CASE[tail[0]]) out.push(GK_CASE[tail[0]]); if (GK_NUM[tail[1]]) out.push(GK_NUM[tail[1]]); if (GK_GEN[tail[2]]) out.push(GK_GEN[tail[2]]); }
+    else if (mood !== 'N') { if (ORD[tail[0]]) out.push(ORD[tail[0]]); if (GK_NUM[tail[1]]) out.push(GK_NUM[tail[1]]); }
+    return out.join(' · ');
+  }
+  const base = GK_POS[code] || GK_POS[pos];
+  let cng = parts[1] || '';
+  const out = [];
+  if (base) out.push(base);
+  // pronouns lead with a person digit (P-1NS, P-2DP): say it, then read case/number/gender after it
+  if (/^[1-3]/.test(cng) && /^[PSRCDKQIXF]$/.test(pos)) { out.push(ORD[cng[0]]); cng = cng.slice(1); }
+  if (GK_CASE[cng[0]]) out.push(GK_CASE[cng[0]]);
+  if (GK_NUM[cng[1]]) out.push(GK_NUM[cng[1]]);
+  if (GK_GEN[cng[2]]) out.push(GK_GEN[cng[2]]);
+  return out.length ? out.join(' · ') : (base || code);
+}
+const HEB_POS = { N: 'noun', V: 'verb', A: 'adjective', P: 'pronoun', R: 'preposition', C: 'conjunction', D: 'adverb', T: 'particle', S: 'suffix' };
+const HEB_GEN = { m: 'masculine', f: 'feminine', c: 'common', b: 'both' };
+const HEB_NUM = { s: 'singular', p: 'plural', d: 'dual' };
+const HEB_STATE = { a: 'absolute', c: 'construct', d: 'determined' };
+const HEB_STEM = { q: 'qal', N: 'niphal', p: 'piel', P: 'pual', h: 'hiphil', H: 'hophal', t: 'hithpael' };
+const HEB_ASPECT = { p: 'perfect', q: 'perfect', i: 'imperfect', w: 'sequential', h: 'cohortative', j: 'jussive', v: 'imperative', r: 'participle', s: 'passive participle', a: 'infinitive absolute', c: 'infinitive construct' };
+function hebrewMorphSeg(seg) {
+  const pos = seg[0];
+  const base = HEB_POS[pos];
+  if (!base) return seg;
+  const out = [base];
+  if (pos === 'N') { if (HEB_GEN[seg[2]]) out.push(HEB_GEN[seg[2]]); if (HEB_NUM[seg[3]]) out.push(HEB_NUM[seg[3]]); if (HEB_STATE[seg[4]]) out.push(HEB_STATE[seg[4]]); }
+  else if (pos === 'V') { if (HEB_STEM[seg[1]]) out.push(HEB_STEM[seg[1]]); if (HEB_ASPECT[seg[2]]) out.push(HEB_ASPECT[seg[2]]); if (ORD[seg[3]]) out.push(ORD[seg[3]]); if (HEB_GEN[seg[4]]) out.push(HEB_GEN[seg[4]]); if (HEB_NUM[seg[5]]) out.push(HEB_NUM[seg[5]]); }
+  else if (pos === 'A') { if (HEB_GEN[seg[2]]) out.push(HEB_GEN[seg[2]]); if (HEB_NUM[seg[3]]) out.push(HEB_NUM[seg[3]]); }
+  return out.join(' · ');
+}
+// Display form: the same decode with the technical Greek verb terms explained in brackets, so a reader who has never
+// met "aorist" or "optative" can still read the line. Hebrew keeps morphText as is (its terms differ in meaning).
+function morphPlain(code, lang) {
+  const t = morphText(code, lang);
+  if (lang === 'hebrew') return t;
+  const GLOSS = { pluperfect: 'pluperfect (finished before another past event)', imperfect: 'imperfect (ongoing past)', perfect: 'perfect (finished, with a lasting result)', aorist: 'aorist (simple past)', optative: 'optative (a wish or possibility)', subjunctive: 'subjunctive (possible or intended)', middle: 'middle (done to or for oneself)' };
+  return t.replace(/\b(pluperfect|imperfect|perfect|aorist|optative|subjunctive|middle(?! or))\b/g, m => GLOSS[m]);
+}
+function morphText(code, lang) {
+  code = String(code || '').trim();
+  if (!code) return '';
+  if (lang === 'hebrew') return code.replace(/^[HA]/, '').split('/').map(s => hebrewMorphSeg(s)).filter(Boolean).join('  +  ');
+  return greekMorph(code);
+}
+// Does an original word's English gloss answer to the English word the reader picked? Loose: an exact token or a
+// shared stem ("loved" finds gloss "loved"/"love", "nations" finds "nation"). It only LINKS the pill to its word;
+// it never gates showing the verse — a miss just shows the whole verse.
+const _normW = s => String(s || '').toLowerCase().replace(/[^a-z']/g, '');
+const _stemW = s => _normW(s).replace(/('s|ing|edly|ed|es|eth|est|en|ly|s)$/, '');
+function glossMatchesPill(gloss, pill) {
+  const p = _normW(pill), ps = _stemW(pill);
+  if (!p) return false;
+  return String(gloss || '').split(/\s+/).some(tok => { const t = _normW(tok); return t && (t === p || (ps.length >= 3 && _stemW(t) === ps)); });
+}
+
+// The original words of the selected passage, as the Define sheet's second page. When the reader has picked an
+// English word pill, the matching original word(s) LEAD with full details (form, transliteration, English gloss,
+// plain-English grammar) so the English and original sides line up; the rest of the verse follows. With no pill
+// (dictionary not installed) or no match, the whole verse shows. Each word opens its full lexicon entry.
+// `verses` = the passage's verses [{book,chap,v}]; `pill` = the picked English word (or null). Language from the
+// first verse (OT book <= 39 -> Hebrew, else Greek). On a tagged Bible the exact word for a tapped superscript is
+// still one tap away in WordStudySheet.
+function OriginalWords({ verses, pill, onWord }) {
+  const [, force] = useS(0);
+  useE(() => (window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), []);
+  const B = window.Bible;
+  const list = (verses || []).filter(Boolean);
+  const lang = list.length && list[0].book <= 39 ? 'hebrew' : 'greek';
+  const installed = B.hasOriginal ? B.hasOriginal(lang) : false;
+  const all = list.flatMap(vv => (B.getOriginal ? B.getOriginal(vv.book, vv.chap, vv.v, lang) : []).map(w => ({ vv, w })));
+  if (!all.length) {
+    return installed
+      ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px' }}>No original text for this passage.</p>
+      : <div data-testid="define-original" style={{ padding: '4px 0 12px' }}>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', margin: '0 0 12px' }}>The {lang === 'hebrew' ? 'Hebrew' : 'Greek'} text is an optional download.</p>
+          <OriginalOffer lang={lang} />
+        </div>;
+  }
+  const matched = pill ? all.filter(x => glossMatchesPill(x.w.g, pill)) : [];
+  const sidOf = w => { const m = /^([GH])0*(\d+)/i.exec(String(w.s || '')); return m ? m[1].toUpperCase() + m[2] : ''; };
+  const head = (x, big) => {
+    const w = x.w, mt = morphPlain(w.m, lang);
+    return <React.Fragment>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: 'var(--font-read)', fontSize: big ? 30 : 24, fontWeight: 500 }}>{w.w}</span>
+        <span style={{ fontFamily: 'var(--font-read)', fontSize: big ? 16 : 15, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t}</span>
+        {list.length > 1 ? <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginLeft: 'auto' }}>{'v' + x.vv.v}</span> : null}
+      </div>
+      {w.g ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, color: 'var(--ink-2)', marginTop: 2 }}>{w.g}</div> : null}
+      {mt ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', marginTop: 3 }}>{mt}</div> : null}
+    </React.Fragment>;
+  };
+  // Pill matched: the matched word(s) with the full lexicon definition LISTED INLINE beneath each — the original
+  // side now mirrors the English side (pick a word, read its meaning) without opening a second sheet.
+  if (matched.length) {
+    return (
+      <div data-testid="define-original">
+        <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 10 }}>{'"' + pill + '" in the original'}</div>
+        {matched.map((x, i) => (
+          <div key={i} data-testid="define-original-word" style={{ marginBottom: 18 }}>
+            {head(x, true)}
+            <div style={{ marginTop: 6 }}><LexDetail id={sidOf(x.w)} onWord={onWord} showLemma /></div>
+          </div>
+        ))}
+        <OriginalLicencePill />
+      </div>
+    );
+  }
+  // No pill (dictionary not installed) or no match: the whole verse, each word tappable into its lexicon entry.
+  return (
+    <div data-testid="define-original">
+      {pill ? <div data-testid="define-original-head" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>{'There is no one-word match for "' + pill + '" in the original. Here is the whole verse:'}</div> : null}
+      {all.map((x, i) => { const sid = sidOf(x.w); return (
+        <button key={i} data-testid="define-original-word" disabled={!sid} onClick={() => sid && onWord && onWord(sid, x.vv.v)} style={{
+          display: 'block', width: '100%', textAlign: 'left', border: '1px solid var(--line)', background: 'var(--surface-2)',
+          color: 'var(--ink)', borderRadius: 14, padding: '11px 14px', marginBottom: 8, cursor: sid ? 'pointer' : 'default' }}>
+          {head(x, false)}
+        </button>
+      ); })}
+      <OriginalLicencePill />
+    </div>
+  );
+}
+
 // ── word study (real lexicon via window.Bible.lex) ──
-function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack }) {
+// The lexicon definition for a Strong's id: the short gloss, the full definition, the derivation (with tappable
+// cross-references), the KJV usage and the occurrence count. Shared by WordStudySheet (its sheet body) and the
+// Define sheet's original page (listed inline UNDER the word the English pill matched), so the two never drift.
+// `onWord(id)` follows a derivation cross-reference. Returns null with no id.
+function LexDetail({ id, onWord, showLemma }) {
   const e = id ? window.Bible.lex(id) : null;
+  if (!e) return null;
+  if (e.missing) return (
+    <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink-2)', margin: '18px 0 6px', textWrap: 'pretty' }}>
+      No entry in the built-in lexicon for this number. A dictionary module from the Library would supply the full definition.
+    </p>
+  );
+  return (
+    <React.Fragment>
+      {e.short ? (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
+          padding: '6px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, margin: '16px 0 14px' }}>
+          <Icon name="sparkle" size={15} stroke={2} /> {e.short}
+        </div>
+      ) : <div style={{ height: 16 }} />}
+      {showLemma && e.lemma ? (
+        <div data-testid="lex-lemma" style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, color: 'var(--ink-2)', margin: '-4px 0 10px' }}>
+          Dictionary form: <span style={{ fontSize: 20, fontWeight: 500, color: 'var(--ink)' }}>{e.lemma}</span>{e.translit ? <span style={{ fontStyle: 'italic' }}>{'  ' + e.translit}</span> : null}
+        </div>
+      ) : null}
+      <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 16px', textWrap: 'pretty' }}>{e.def || e.gloss}</p>
+      {e.deriv ? (
+        <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>Derivation</div>
+          <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+            {/* turn each Strong's cross-reference (G3956 / H1234) into a tappable link to that entry */}
+            {e.deriv.split(/([GH]\d{1,5})/).map((part, i) => (
+              /^[GH]\d{1,5}$/.test(part) && onWord && !window.Bible.lex(part).missing
+                ? <span key={i} onClick={() => onWord(part)} style={{ color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in oklab, var(--clay) 45%, transparent)', textUnderlineOffset: 2 }}>{part}</span>
+                : part
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {e.kjv ? (
+        <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>KJV translates it</div>
+          <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{e.kjv}</div>
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', gap: 10 }}>
+        {e.occ ? (
+          <div style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 16, padding: '13px 15px' }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, color: 'var(--clay)' }}>{e.occ}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>occurrences in scripture</div>
+          </div>
+        ) : null}
+        {/* a LABEL for which language this word is from — not a control (nothing happens on tap), so it is drawn flat */}
+        <div data-testid="lex-root-label" style={{ flex: 1, background: 'transparent', border: '1px dashed var(--line)', color: 'var(--ink-2)', borderRadius: 16,
+          fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex',
+          flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '13px 15px', gap: 2 }}>
+          <Icon name="study" size={18} color="var(--ink-3)" /> {e.lang === 'HEBREW' ? 'Hebrew' : 'Greek'} root
+        </div>
+      </div>
+    </React.Fragment>
+  );
+}
+
+function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack, verse }) {
+  const e = id ? window.Bible.lex(id) : null;
+  const [, force] = useS(0);
+  useE(() => (open && window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), [open]);
+  // `verse` = { book, chap, v }: where the tap happened. Without it (the app-level sheet) there is no original to show.
+  const origLang = e && /^H/i.test(String(e.id)) ? 'hebrew' : 'greek';
+  const origWords = open && e && verse && window.Bible.getOriginal ? window.Bible.getOriginal(verse.book, verse.chap, verse.v, origLang, e.id) : [];
+  const origOffer = open && e && verse && !origWords.length && window.Bible.hasOriginal && !window.Bible.hasOriginal(origLang);
   return (
     <BottomSheet open={open} onClose={onClose} docked={docked}>
       {e ? <div style={{ paddingBottom: 6 }}>
@@ -228,52 +487,118 @@ function WordStudySheet({ id, open, onClose, docked, onWord, canBack, onBack }) 
           </div>
           <IconBtn name="x" onClick={onClose} />
         </div>
-        {e.missing ? (
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink-2)', margin: '18px 0 6px', textWrap: 'pretty' }}>
-            No entry in the built-in lexicon for this number. A dictionary module (<span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>.dct.mybible</span>) would supply the full definition.
-          </p>
-        ) : <React.Fragment>
-          {e.short ? (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
-              padding: '6px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, margin: '16px 0 14px' }}>
-              <Icon name="sparkle" size={15} stroke={2} /> {e.short}
-            </div>
-          ) : <div style={{ height: 16 }} />}
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 18, lineHeight: 1.6, color: 'var(--ink)', margin: '0 0 16px', textWrap: 'pretty' }}>{e.def || e.gloss}</p>
-          {e.deriv ? (
-            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>Derivation</div>
-              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-                {/* turn each Strong's cross-reference (G3956 / H1234) into a tappable link to that entry */}
-                {e.deriv.split(/([GH]\d{1,5})/).map((part, i) => (
-                  /^[GH]\d{1,5}$/.test(part) && onWord && !window.Bible.lex(part).missing
-                    ? <span key={i} onClick={() => onWord(part)} style={{ color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in oklab, var(--clay) 45%, transparent)', textUnderlineOffset: 2 }}>{part}</span>
-                    : part
-                ))}
+        {origWords.length ? (
+          <div data-testid="original-words" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginTop: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>In this verse</div>
+            {origWords.map((w, i) => (
+              <div key={i} data-testid="original-word" style={{ marginTop: i ? 8 : 0 }}>
+                <span style={{ fontFamily: 'var(--font-read)', fontSize: 24, fontWeight: 500 }}>{w.w}</span>
+                <span style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, fontStyle: 'italic', color: 'var(--ink-2)' }}>{w.t ? '  ' + w.t : ''}</span>
+                {w.m ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{morphPlain(w.m, origLang)}</div> : null}
               </div>
-            </div>
-          ) : null}
-          {e.kjv ? (
-            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 14, padding: '11px 14px', marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 3 }}>KJV translates it</div>
-              <div style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{e.kjv}</div>
-            </div>
-          ) : null}
-          <div style={{ display: 'flex', gap: 10 }}>
-            {e.occ ? (
-              <div style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 16, padding: '13px 15px' }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, color: 'var(--clay)' }}>{e.occ}</div>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600 }}>occurrences in scripture</div>
-              </div>
-            ) : null}
-            <div style={{ flex: 1, background: 'var(--ink)', color: 'var(--paper)', borderRadius: 16,
-              fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', display: 'flex',
-              flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '13px 15px', gap: 2 }}>
-              <Icon name="study" size={18} color="var(--paper)" /> {e.lang === 'HEBREW' ? 'Hebrew' : 'Greek'} root
+            ))}
+            <OriginalLicencePill />
+          </div>
+        ) : origOffer ? <div style={{ marginTop: 14 }}><OriginalOffer lang={origLang} /></div> : null}
+        <LexDetail id={e.id} onWord={onWord} />
+      </div> : null}
+    </BottomSheet>
+  );
+}
+
+// ── define (the one word-study sheet; English meanings + the original-language words of the passage) ──
+// Works on ANY English text, tagged or not — it is the path for BSB, which has no Strong's numbers. Two pages
+// sit under the word pills and swipe left/right: ENGLISH (the WordNet/Webster meaning of the picked word) is the
+// default, and the ORIGINAL page (STEPBible Greek/Hebrew for the selected verses) is a swipe to the right. The
+// per-word Strong's path still lives in WordStudySheet (tapping a tagged superscript opens the exact word);
+// this sheet is the home for the plain-English meaning and the verse-level original.
+const POS_NAME = { n: 'noun', v: 'verb', adj: 'adjective', adv: 'adverb' };
+function DefineSheet({ label, text, verses, open, onClose, onWord }) {
+  const [, force] = useS(0);
+  const [pick, setPick] = useS(0);
+  const [page, setPage] = useS(0);             // 0 = English meaning, 1 = original language; the pager scrolls between them
+  const [licOpen, setLicOpen] = useS(false);   // the WordNet licence is a pill; tapping it shows the full text (the attribution stays reachable)
+  const scroller = useR(null);
+  useE(() => (window.Bible.subscribe ? window.Bible.subscribe(() => force(x => x + 1)) : undefined), []);
+  useE(() => { if (open) { setPick(0); setPage(0); try { if (scroller.current) scroller.current.scrollLeft = 0; } catch (e) {} } }, [open, text]);
+  const B = window.Bible;
+  // Opening the sheet again after a failed download is a deliberate retry (a retry on every render would loop).
+  useE(() => { if (open && B.worddefsState && B.worddefsState() === 'failed') B.retryWorddefs(); }, [open]);
+  const words = open && B.defineText ? B.defineText(text).slice(0, 80) : [];
+  const state = B.worddefsState ? B.worddefsState() : 'ready';
+  const cur = words.length ? words[Math.min(pick, words.length - 1)] : null;
+  const licence = (cur && cur.license) || (B.worddefsLicense && B.worddefsLicense()) || '';   // the licence of the dictionary that ANSWERED, not just the first one loaded
+  const sourceLabel = (cur && cur.label) || 'WordNet';
+  const note = { fontFamily: 'var(--font-read)', fontSize: 16, color: 'var(--ink-2)', padding: '8px 0 16px', lineHeight: 1.5 };
+  const vlist = (verses || []).filter(Boolean);
+  const origLabel = vlist.length && vlist[0].book <= 39 ? 'Hebrew' : 'Greek';       // the page-two tab reads the passage's testament
+  const goPage = (i) => { setPage(i); try { const el = scroller.current; if (el && el.scrollTo) el.scrollTo({ left: i * el.clientWidth, behavior: 'smooth' }); else if (el) el.scrollLeft = i * el.clientWidth; } catch (e) {} };
+  const onScroll = () => { try { const el = scroller.current; if (el && el.clientWidth) setPage(Math.round(el.scrollLeft / el.clientWidth)); } catch (e) {} };
+  const englishBody = (
+    <React.Fragment>
+      {words.length ? (
+        <div data-testid="define-senses">
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
+            {cur.word}{cur.head !== cur.word ? <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}>{' → ' + cur.head}</span> : null}
+          </div>
+          {cur.senses.map((s, i) => (
+            <p key={i} style={{ fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', margin: '0 0 9px' }}>
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, fontWeight: 700, color: 'var(--clay)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{(POS_NAME[s.pos] || s.pos) + ' · '}</span>{s.gloss}
+            </p>
+          ))}
+        </div>
+      ) : state === 'failed' ? (
+        <div style={note}>
+          <p style={{ margin: '0 0 12px' }}>Couldn't download the dictionary. It needs a connection the first time; after that it works offline.</p>
+          <button onClick={() => B.retryWorddefs && B.retryWorddefs()} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '10px 18px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Try again</button>
+        </div>
+      ) : state !== 'ready' ? (
+        <p style={note}>Downloading dictionary…</p>
+      ) : (
+        <p style={note}>No common words to define in this passage.</p>
+      )}
+      {licence ? (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <button data-testid="define-licence-pill" data-source={sourceLabel} onClick={() => setLicOpen(o => !o)} aria-expanded={licOpen} title={licence} style={{ border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-3)', borderRadius: 999, padding: '2px 9px', fontSize: 10.5, fontWeight: 600, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{sourceLabel + ' licence'}</button>
+          {licOpen ? <div data-testid="define-licence-text" style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 8 }}>{licence}</div> : null}
+        </div>
+      ) : null}
+    </React.Fragment>
+  );
+  const seg = (on) => ({ flex: 1, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface-2)',
+    color: on ? 'var(--on-clay)' : 'var(--ink-2)', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer' });
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Define a word</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div></div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {words.length ? (
+        <div data-testid="define-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 7, maxHeight: 128, overflowY: 'auto', marginBottom: 14 }}>
+          {words.map((w, i) => {
+            const on = cur === w;
+            return <button key={w.word} onClick={() => setPick(i)} aria-pressed={on} style={{
+              border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), background: on ? 'var(--clay)' : 'var(--surface-2)',
+              color: on ? 'var(--on-clay)' : 'var(--ink)', borderRadius: 999, padding: '7px 13px', fontSize: 14, fontWeight: 600,
+              fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{w.word}</button>;
+          })}
+        </div>
+      ) : null}
+      {vlist.length ? (
+        <React.Fragment>
+          <div data-testid="define-pager-tabs" style={{ display: 'flex', gap: 7, marginBottom: 12 }}>
+            <button onClick={() => goPage(0)} aria-selected={page === 0} style={seg(page === 0)}>In English</button>
+            <button onClick={() => goPage(1)} aria-selected={page === 1} style={seg(page === 1)}>{'In the original (' + origLabel + ')'}</button>
+          </div>
+          <div ref={scroller} onScroll={onScroll} data-testid="define-pager" style={{ display: 'flex', overflowX: 'auto', scrollSnapType: 'x mandatory', scrollbarWidth: 'none', margin: '0 -2px' }}>
+            <div data-testid="define-page-english" style={{ flex: '0 0 100%', scrollSnapAlign: 'start', padding: '0 2px', boxSizing: 'border-box' }}>{englishBody}</div>
+            <div data-testid="define-page-original" style={{ flex: '0 0 100%', scrollSnapAlign: 'start', padding: '0 2px', boxSizing: 'border-box' }}>
+              <OriginalWords verses={vlist} pill={cur ? cur.word : null} onWord={onWord} />
             </div>
           </div>
-        </React.Fragment>}
-      </div> : null}
+        </React.Fragment>
+      ) : englishBody}
     </BottomSheet>
   );
 }
@@ -678,19 +1003,70 @@ function ChapterVerseMenu({ open, onClose, anchor, loc, version, onPick }) {
 function CommentaryEdge({ open, onToggle }) {
   if (open) return null;
   return (
-    <button onClick={onToggle} aria-label="Open commentary" style={{
+    <button onClick={onToggle} aria-label="Open study panel" style={{
       position: 'absolute', right: 0, top: '40%', zIndex: 18, border: 'none', cursor: 'pointer',
       background: 'var(--clay)', color: 'var(--on-clay)', padding: '13px 5px 13px 7px', borderRadius: '13px 0 0 13px',
       boxShadow: '0 6px 18px rgba(34,28,16,.18)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
     }}>
       <Icon name="comment" size={17} color="#fff" />
-      <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 10, fontWeight: 800, letterSpacing: '1px', fontFamily: 'var(--font-ui)' }}>NOTES</span>
+      <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: 10, fontWeight: 800, letterSpacing: '1px', fontFamily: 'var(--font-ui)' }}>STUDY</span>
     </button>
   );
 }
-function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
-  const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
+// A cross-reference preview: read the verse in place, then choose to open it in the reader (owner 2026-10-14,
+// consistent with the Library page's preview-then-jump). Text comes from the active translation if it has that
+// chapter loaded; a same-chapter range shows all its verses. Never fabricates — an empty result says so.
+function XrefPreviewSheet({ refStr, open, onClose, onGo, version }) {
+  const loc = refStr ? window.Bible.parseRef(refStr) : null;
+  let text = '';
+  if (loc) {
+    try {
+      const rows = window.Bible.getVerses(loc.book, loc.chap, version) || [];
+      const from = loc.verse || 1, to = loc.verseEnd || from;
+      text = rows.filter(r => r.v >= from && r.v <= to).map(r => r.text).join(' ');
+    } catch (e) { text = ''; }
+  }
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Cross reference</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{refStr || ''}</div>
+        </div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {!loc ? (
+        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16, padding: '6px 0 14px' }}>Couldn’t read that reference.</p>
+      ) : (
+        <React.Fragment>
+          {text
+            ? <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: '4px 0 16px', textWrap: 'pretty' }}>{text}</p>
+            : <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>Open it in the reader to read the full verse.</p>}
+          <button onClick={() => onGo(loc)} style={{
+            width: '100%', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '12px 18px',
+            borderRadius: 13, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <Icon name="book" size={16} color="currentColor" /> Open in reader
+          </button>
+        </React.Fragment>
+      )}
+    </BottomSheet>
+  );
+}
+
+function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, readerVerse }) {
+  const panelScrollRef = useR(null);
+  // Scroll the cross-ref list so verse N's group sits near the top — how the panel "follows" the reader.
+  const scrollToVerse = (v) => {
+    const sc = panelScrollRef.current; if (!sc || v == null) return;
+    const el = sc.querySelector('#xr-' + v); if (!el) return;
+    try { sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 10; } catch (e) {}
+  };
+  const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs' | 'bookmarks'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
+  const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
+  const [xrefPreview, setXrefPreview] = useS(null);   // a cross-reference being previewed before jumping to it
+  const [xrefOpen, setXrefOpen] = useS({});           // verse -> show all its cross-refs (past the first 4)
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
   // Written under the SAME key the verse card uses, so the note shows on its verse as well as in this list. A
   // verse that already has a note gets this one added under it, never replaced by it.
@@ -715,6 +1091,26 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
   }, [open, loc.book, loc.chap, ctx.version]);
+  // Cross references: read ONLY when the tab is open, so the ~3 MB module downloads on first use, not on
+  // every panel open. getCrossRefs() lazily installs the default set and fires notify() when it lands, so
+  // subscribe() re-reads and the empty list fills in. Not version-dependent — cross-refs are translation-agnostic.
+  useE(() => {
+    if (!open || view !== 'crossrefs') return;
+    setXrefOpen({});   // a new chapter collapses every group back to its first few
+    const read = () => { try { setXrefs(window.Bible.getCrossRefs ? window.Bible.getCrossRefs(loc.book, loc.chap) : {}); } catch (e) { setXrefs({}); } };
+    read();
+    return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
+  }, [open, view, loc.book, loc.chap]);
+  // Follow the reader: register the scroll handler and align to the reader's current verse whenever the Cross
+  // refs tab is shown or its list fills. On a phone the panel is an overlay, so this aligns on open; when the
+  // panel is docked beside the reader, the reader's onScroll calls the same handler live.
+  useE(() => {
+    if (!open || view !== 'crossrefs') { if (syncRef) syncRef.current = null; return; }
+    if (syncRef) syncRef.current = scrollToVerse;
+    const v = readerVerse ? readerVerse() : null;
+    if (v != null) { scrollToVerse(v); setTimeout(() => scrollToVerse(v), 60); }
+    return () => { if (syncRef) syncRef.current = null; };
+  }, [open, view, loc.book, loc.chap, xrefs]);
   // SWIPE-TO-CLOSE ONLY COUNTS WHEN THE SWIPE IS MOSTLY SIDEWAYS. This measured the finger's rightward travel
   // alone: end more than 56px right of where it started and the panel closed. A long thumb-scroll down these
   // notes is rarely vertical — 60px of drift over 400px of scrolling counted as a swipe, and the panel slid
@@ -728,8 +1124,26 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
   const myNotes = Object.keys(chapNotes).filter(k => k.indexOf(prefix) === 0 && /^\d+$/.test(k.slice(prefix.length)))
     .map(k => ({ ref: k, v: parseInt(k.slice(prefix.length), 10) || 0, text: chapNotes[k] }))
     .sort((a, b) => a.v - b.v);
-  const seg = (k, lbl) => (
-    <button onClick={() => setView(k)} style={{ flex: 1, padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>{lbl}</button>
+  // THE MEMBER'S BOOKMARKS (every chapter, not just this one), read from ctx.bookmarks — the same list the verse
+  // card's Bookmark button toggles (keys are "book.chap.verse"; an older spelling like "John 1:4" is folded in by
+  // noteKeyOf). Sorted in reading order. `raw` is the key as stored, so removing hands toggleBookmark exactly what
+  // was put there. A key that cannot be placed on a verse is left out (nothing to jump to).
+  const myMarks = (() => {
+    const seen = {}, out = [];
+    (ctx.bookmarks || []).forEach(raw => {
+      const c = noteKeyOf(raw), m = /^(\d+)\.(\d+)\.(\d+)$/.exec(c);
+      if (!m || seen[c]) return;
+      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3] });
+    });
+    return out.sort((x, y) => (x.b - y.b) || (x.c - y.c) || (x.v - y.v));
+  })();
+  // Tabs never squish: TWO ROWS OF TWO (a 2x2 grid, data-tab-grid), every tab the same generous width and always
+  // reachable without sideways scrolling, and a count is a small BADGE (data-tab-count) rather than a "· N" text suffix.
+  const seg = (k, lbl, n) => (
+    <button onClick={() => setView(k)} data-tab={k} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, whiteSpace: 'nowrap', padding: '9px 12px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>
+      {lbl}
+      {n ? <span data-tab-count={n} aria-label={n + ' saved'} style={{ minWidth: 17, height: 17, padding: '0 5px', borderRadius: 999, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10.5, fontWeight: 800, lineHeight: 1, background: view === k ? 'rgba(255,255,255,.28)' : 'color-mix(in oklab, var(--clay) 18%, var(--surface))', color: view === k ? '#fff' : 'var(--clay)' }}>{n}</span> : null}
+    </button>
   );
   return (
     <React.Fragment>
@@ -755,11 +1169,62 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
             {docked ? null : <IconBtn name="chevR" onClick={onClose} />}
           </div>
           <div style={{ display: 'flex', gap: 3, padding: '0 14px 10px' }}>
-            <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
+            <div data-tab-grid="2x2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, flex: 1, minWidth: 0, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', 'Notes', myNotes.length)}{seg('bookmarks', 'Bookmarks', myMarks.length)}</div>
           </div>
         </div>
-        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
-          {view === 'notes' ? (
+        <div ref={panelScrollRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
+          {view === 'crossrefs' ? (
+            Object.keys(xrefs).length ? (
+              <React.Fragment>
+                {Object.keys(xrefs).map(n => parseInt(n, 10)).sort((a, b) => a - b).map(v => (
+                  <div key={v} id={'xr-' + v} style={{ marginBottom: 16 }}>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 8 }}>{label}:{v}</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {(xrefOpen[v] ? xrefs[v] : xrefs[v].slice(0, 4)).map((r, i) => (
+                        <button key={i} onClick={() => setXrefPreview(r)} style={{
+                          border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', cursor: 'pointer',
+                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {r}<Icon name="chevR" size={13} color="var(--ink-3)" />
+                        </button>
+                      ))}
+                      {xrefs[v].length > 4 ? (
+                        <button onClick={() => setXrefOpen(o => ({ ...o, [v]: !o[v] }))} style={{
+                          border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', color: 'var(--clay-ink)', cursor: 'pointer',
+                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          {xrefOpen[v] ? 'Show fewer' : `${xrefs[v].length - 4} more`}
+                          <Icon name={xrefOpen[v] ? 'chevU' : 'chevD'} size={14} color="var(--clay)" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+                {window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? (
+                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>{window.Bible.crossrefLicense()}</div>
+                ) : null}
+              </React.Fragment>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+                <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="link" size={24} /></div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? `No cross references for ${label}` : 'Gathering cross references…'}</div>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? 'This chapter has none in the set yet.' : 'Fetching the cross-reference set the first time — a moment on a new phone, then it is saved.'}</p>
+              </div>
+            )
+          ) : view === 'bookmarks' ? (
+            myMarks.length ? myMarks.map(bm => (
+              <div key={bm.key} data-bookmark={bm.key} style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+                <button onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 9, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
+                  <Icon name="bookmark" size={15} color="var(--clay)" fill /> {verseRefLabel(bm.key)}
+                </button>
+                <button onClick={() => ctx.toggleBookmark(bm.raw)} aria-label={'Remove bookmark ' + verseRefLabel(bm.key)} title="Remove bookmark" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 8 }}><Icon name="x" size={16} /></button>
+              </div>
+            )) : (
+              <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+                <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="bookmark" size={24} /></div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No bookmarks yet</div>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap a verse, then <b>Bookmark</b>. The verses you save gather here.</p>
+              </div>
+            )
+          ) : view === 'notes' ? (
             <React.Fragment>
               {composing ? (
                 <div style={{ marginBottom: 14, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid var(--clay)', boxShadow: 'var(--shadow)' }}>
@@ -786,7 +1251,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
               <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
                 <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--gold) 14%, var(--surface))', color: 'var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="note" size={24} /></div>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No notes here yet</div>
-                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap a verse → <b>Note</b> to jot a thought. Your notes for {label} gather here.</p>
+                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 270, margin: '0 auto' }}>Tap <b>New note</b> to jot a thought. Your notes for {label} gather here.</p>
               </div>
             )}
             </React.Fragment>
@@ -825,6 +1290,9 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
           )}
         </div>
       </div>
+      <XrefPreviewSheet refStr={xrefPreview} open={!!xrefPreview} version={ctx.version}
+        onClose={() => setXrefPreview(null)}
+        onGo={(t) => { setXrefPreview(null); onClose(); ctx.gotoRef(t.book, t.chap, t.verse); }} />
     </React.Fragment>
   );
 }
@@ -870,6 +1338,29 @@ function ReadScreen({ ctx }) {
   const [narrateState, setNarrateState] = useS('idle');   // idle | playing | paused
   const [narrateV, setNarrateV] = useS(null);              // verse number currently being spoken
   const scrollRef = useR();
+  // Cross-reference panel follows the reader: track the verse at the top of the reader, and let the panel
+  // register a "scroll your list to verse N" callback so it can align to where the reader is (owner 2026-10-14).
+  const topVerseRef = useR(null);
+  const panelSyncRef = useR(null);
+  const syncRaf = useR(null);
+  const readerTopVerse = () => {
+    const sc = scrollRef.current; if (!sc) return null;
+    const line = sc.getBoundingClientRect().top + 140;   // just below the sticky header
+    let v = null;
+    const els = sc.querySelectorAll('[id^="rv-"]');
+    for (let i = 0; i < els.length; i++) {
+      if (els[i].getBoundingClientRect().top <= line) v = parseInt(els[i].id.slice(3), 10); else break;
+    }
+    return v;
+  };
+  const onReaderScroll = () => {
+    if (syncRaf.current) return;
+    syncRaf.current = requestAnimationFrame(() => {
+      syncRaf.current = null;
+      const v = readerTopVerse();
+      if (v != null) { topVerseRef.current = v; if (commentaryOpen && panelSyncRef.current) try { panelSyncRef.current(v); } catch (e) {} }
+    });
+  };
   const synth = (typeof window !== 'undefined' && window.speechSynthesis) || null;
   const stopNarration = () => { if (synth) try { synth.cancel(); } catch (e) {} setNarrateState('idle'); setNarrateV(null); };
   // stop speaking when the passage changes or the screen unmounts
@@ -936,7 +1427,8 @@ function ReadScreen({ ctx }) {
   // card and leave the verses selected and unseen, so the next tap added to them (sim item 37). Copy and
   // Share still use plain `close` — they finish the job and have never cleared the selection.
   const dismiss = () => { setSel([]); setCarry([]); setArrived(null); setSheet(null); };
-  const openWord = (id) => { setWordStack([id]); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
+  const [wordVerse, setWordVerse] = useS(null);   // { book, chap, v, from } where the Strong's was opened, so its original form can be found
+  const openWord = (id, n, from) => { setWordStack([id]); setWordVerse(n == null ? null : { book: loc.book, chap: loc.chap, v: n, from: from || null }); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
   const pushWord = (id) => { setWordStack(s => [...s, id]); };                    // follow a cross-reference, keeping history
   const backWord = () => setWordStack(s => s.length > 1 ? s.slice(0, -1) : s);    // return to the previous definition
 
@@ -995,6 +1487,7 @@ function ReadScreen({ ctx }) {
     _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
+    _define: () => setSheet('define'),
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: notes[keyOf(sel0)] || '' }); },
     // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
     // before" and "+ after", and the comment that lived on this line said they were needed because "the
@@ -1095,7 +1588,7 @@ function ReadScreen({ ctx }) {
   //
   // Nothing here collides with the reader's other horizontal gesture. CommentaryPanel closes on a swipe
   // right, but only while it is OPEN, and while it is open its own backdrop (absolute, inset 0, z-index 24)
-  // covers the scripture so no touch reaches this element at all. The NOTES tab (CommentaryEdge) is a
+  // covers the scripture so no touch reaches this element at all. The STUDY tab (CommentaryEdge) is a
   // sibling of this container, not a child, so a drag begun on that tab is simply not a chapter turn.
   // How far a finger must travel ACROSS the page to be a chapter turn, and by how much it must beat its own
   // vertical travel. 60px is a deliberate gesture on a 360px screen; 1.7 keeps a diagonal scroll out. Kept
@@ -1129,7 +1622,7 @@ function ReadScreen({ ctx }) {
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
         onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
-      <div ref={scrollRef} className="no-scrollbar"
+      <div ref={scrollRef} className="no-scrollbar" onScroll={onReaderScroll}
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
         style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
@@ -1197,10 +1690,11 @@ function ReadScreen({ ctx }) {
         onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setArrived(null); setSheet(null); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
-      <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
+      <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
+      <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} verses={sheet === 'define' ? passage.flatMap(p => p.verses.map(v => ({ book: p.book, chap: p.chap, v }))) : []} open={sheet === 'define'} onClose={() => setSheet('action')} onWord={(sid, v) => openWord(sid, v, 'define')} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
-      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />}
+      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
       <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
         onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
@@ -1235,4 +1729,4 @@ const navBtnStyle = {
   cursor: 'pointer', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
 };
 
-Object.assign(window, { ReadScreen, verseRefLabel, WordStudySheet });
+Object.assign(window, { ReadScreen, verseRefLabel, WordStudySheet, DefineSheet, OriginalWords });

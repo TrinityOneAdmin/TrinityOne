@@ -1,0 +1,96 @@
+// THE "KEEP IT GOING" PLAN CARD IS ONE LINE WITH A MARKER THAT SITS FURTHER ALONG IT AS THE PLAN IS READ.
+// Run: node --test scripts/keep-it-going-is-a-line-with-a-marker.test.mjs
+//
+// Owner, 2026-10-14: the reading-plan progress card on Today (under "Keep it going") was a ring. It is now a
+// single horizontal line with a marker whose position is days-done / days-in-plan.
+//
+// POINT OF USE (CLAUDE.md rule 1): the REAL TodayScreen is compiled and rendered through the miniature React,
+// once per completion count. The marker's `left` and the fill's `width` are read off the rendered tree.
+// Delete the line from the screen, or detach the marker from the completion count, and this goes red.
+// RULE 3: nothing here matches text in app/*.jsx.
+// NOT TESTABLE HERE: how it looks (no geometry in the miniature React) — the owner's device check covers that.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+
+const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
+const DAYS = Array.from({ length: 10 }, (_, i) => ({ d: i + 1, ref: 'John ' + (i + 1) }));
+
+function today(doneCount, planLen = 10) {
+  const { React, draw } = miniReact();
+  const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
+  const date = new Date('2026-09-30T09:00:00Z');
+  const localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+  const days = DAYS.slice(0, planLen);
+  const win = {
+    addEventListener() {}, removeEventListener() {}, innerWidth: 360, localStorage,
+    Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] },
+    ChurchBadge: Stub('ChurchBadge'),
+    TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', title: 'John in ten days', len: days.length, days }],
+      VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world.' }] },
+    Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1,
+      activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) },
+  };
+  const globals = {
+    React, window: win, localStorage,
+    document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
+    setTimeout, clearTimeout, setInterval, clearInterval, console,
+    Icon, ChurchBadge: Stub('ChurchBadge'),
+    lsGet: (k, d) => d, lsSet: () => {},
+    cx: (...a) => a.filter(Boolean).join(' '),
+    SectionLabel: Stub('SectionLabel'), Halo: Stub('Halo'), Sheet: Stub('Sheet'), IconBtn: Stub('IconBtn'),
+    useTrinityAudio: () => ({ track: null, playing: false }),
+    todayISO: () => date.toISOString().slice(0, 10),
+    Date: class extends Date { constructor(...a) { super(...(a.length ? a : [date])); } static now() { return date.getTime(); } },
+    fetch: async () => ({ ok: false, json: async () => ({}) }),
+  };
+  const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
+  const ctx = {
+    church: { name: 'Grace', initials: 'SB', npub: 'np1' },
+    openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
+    toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet() {}, openPlan() {},
+    planProgress: doneCount ? { p1: days.slice(0, doneCount).map(d => d.d) } : {},
+    plans: [], bookmarks: [], notes: {}, highlights: {},
+  };
+  const tree = draw(TodayScreen, { ctx });
+  const line = find(tree, n => n.props && 'data-plan-line' in n.props);
+  const marker = find(tree, n => n.props && 'data-plan-marker' in n.props);
+  const fill = find(tree, n => n.props && 'data-plan-fill' in n.props);
+  const pct = s => (s ? parseFloat(String(s)) : NaN);
+  return { tree, line, marker, fill,
+    markerLeft: marker[0] && pct(marker[0].props.style.left), fillWidth: fill[0] && pct(fill[0].props.style.width) };
+}
+
+test('the plan card shows ONE line with ONE marker, and no ring', () => {
+  const s = today(3);
+  assert.equal(s.line.length, 1, 'the plan progress line is not on Today');
+  assert.equal(s.marker.length, 1, 'the plan progress marker is not on Today');
+  assert.equal(find(s.tree, n => n.props && 'strokeDashoffset' in n.props).length, 0, 'the old progress ring is still on the card');
+});
+
+test('the marker sits at days-done / days-in-plan, and further along when more is done', () => {
+  const none = today(0), some = today(3), most = today(8), all = today(10);
+  assert.equal(none.markerLeft, 0);
+  assert.equal(some.markerLeft, 30);
+  assert.equal(most.markerLeft, 80);
+  assert.equal(all.markerLeft, 100);
+  assert.ok(none.markerLeft < some.markerLeft && some.markerLeft < most.markerLeft, 'the marker does not advance with progress');
+});
+
+test('the filled part of the line ends where the marker is', () => {
+  for (const n of [0, 3, 8, 10]) {
+    const s = today(n);
+    assert.equal(s.fillWidth, s.markerLeft, `fill and marker disagree at ${n} days done`);
+  }
+});
+
+test('the position is a fraction of THIS plan, not of ten', () => {
+  const s = today(2, 4);
+  assert.equal(s.markerLeft, 50, '2 of a 4-day plan should be halfway');
+});
+
+test('the card still says which day is next', () => {
+  const words = texts(today(3).tree).join(' | ');
+  assert.match(words, /Day\s*\|?\s*4\s*\|?\s*of\s*\|?\s*10/);
+});

@@ -5224,17 +5224,31 @@ window.Fellowship = {
   // Backward compatible in BOTH directions: every DM ever sent is a bare string, so a body that does not
   // parse as an envelope is simply the message; and an older build receiving an envelope shows the JSON
   // rather than losing the words. Hence `t` carries the full text and nothing is stored only in the wrapper.
-  _dmWrap(text, replyTo) {
-    if (!replyTo || !replyTo.id) return text;
-    try { return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) }); } catch (e) { return text; }
+  // `meta` (church event messages, 2026-10-14) ADDS two optional fields to the same v:1 envelope: `nr:1` =
+  // "announcement, no replies" and `ev` = the event id it is about. Additive only: an older build reads `t`
+  // and ignores the rest; a body with neither a reply nor meta is still the bare string.
+  _dmWrap(text, replyTo, meta) {
+    const hasR = !!(replyTo && replyTo.id);
+    const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : '';
+    const cx = meta && meta.careOffer;   // care offer: self-contained here (no helper) so a test can lift this function alone
+    const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || '')) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
+    if (!hasR && !nr && !ev && !co) return text;
+    try {
+      const o = { v: 1, t: String(text) };
+      if (hasR) o.r = String(replyTo.id).slice(0, 64);
+      if (nr) o.nr = 1;
+      if (ev) o.ev = ev;
+      if (co) o.co = co;
+      return JSON.stringify(o);
+    } catch (e) { return text; }
   },
   _dmUnwrap(body) {
-    if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null };
+    if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
     try {
       const o = JSON.parse(body);
-      if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null };
+      if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || '')) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null };
     } catch (e) {}
-    return { text: body, replyTo: null };
+    return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
   },
   async sendDM(peerPub, content, replyTo) {
     if (!sk) await window.Fellowship.ready;
@@ -5304,7 +5318,7 @@ window.Fellowship = {
       const mine = e.pubkey === pub;
       let content = ''; try { content = await _dmDecrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
       const un = window.Fellowship._dmUnwrap(content);
-      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, ts: e.created_at, pubkey: e.pubkey };
+      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, ts: e.created_at, pubkey: e.pubkey };
       msgs.set(e.id, m); push(m);
     };
     const deliverRx = (e) => {
@@ -7224,7 +7238,7 @@ window.Fellowship = {
           let s2 = null, sealed = false;
           if (c.enc) { s2 = _careOpen(pubk, c.enc); sealed = !s2; }
           const f = s2 ? { ...c, ...s2 } : c;
-          _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || '', displayLabel: f.displayLabel || '', type: f.type || 'meals', types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || 'meals'], startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, ts: e.created_at }, _trust); emit();
+          _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || '', displayLabel: f.displayLabel || '', type: f.type || 'meals', types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || 'meals'], startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, slotTimes: (f.slotTimes && typeof f.slotTimes === 'object') ? f.slotTimes : {}, ts: e.created_at }, _trust); emit();
         } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
@@ -7248,11 +7262,13 @@ window.Fellowship = {
       onevent(e, d) {
         if (!d.startsWith(prefix)) return;
         const rest = d.slice(prefix.length).split(':');
-        const needId = rest[0] || '', isoDate = rest[1] || '';
+        const needId = rest[0] || '', isoDate = rest[1] || '', meal = rest[2] || '';
         if (!needId || !isoDate) return;
-        const key = needId + '|' + isoDate + '|' + e.pubkey;
+        // meal is part of the identity so a day's Lunch and Dinner are separate entries; '' is the legacy
+        // whole-day slot (and every careskip:, which has no meal).
+        const key = needId + '|' + isoDate + '|' + meal + '|' + e.pubkey;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byKey.delete(key); emit(); return; }
-        try { byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || '{}')) }); emit(); } catch {}
+        try { byKey.set(key, { needId, isoDate, meal, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || '{}')) }); emit(); } catch {}
       },
       oneose() { eosed = true; if (byKey.size) emit(); },   // sticky: don't blank slots/skips on a reconnect's empty EOSE; genuine clears come via the delete path
     });
@@ -7766,7 +7782,7 @@ window.Fellowship = {
     });
     return () => { emit.cancel(); try { sub.close(); } catch {} };   // cancel the queued emit: it would otherwise fire a tick after teardown
   },
-  async fillCareSlot(careId, iso, note) {
+  async fillCareSlot(careId, iso, note, meal) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
@@ -7777,7 +7793,12 @@ window.Fellowship = {
     // (an owner decision), so a modified build can still write one straight at the relay.
     const _me = _sgMine(cp);
     if (_me && _me.isMinor) return { ok: false, reason: 'minor' };
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
+    // PER-MEAL SLOTS (owner 2026-10-16). A meals need splits each day into its meals; the meal rides in the
+    // d-tag so Lunch and Dinner are two distinct replaceable docs that never overwrite each other. ADDITIVE:
+    // an empty meal is the legacy whole-day slot, so every slot written before this keeps meaning "the day".
+    const _meal = String(meal || '').trim();
+    const _slotD = CARESLOT_D + careId + ':' + iso + (_meal ? ':' + _meal : '');
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || '').trim() }) }, sk);
     // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
     // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.
     //
@@ -7790,11 +7811,13 @@ window.Fellowship = {
     catch (e) { console.warn('[fellowship] care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
-  async clearCareSlot(careId, iso) {
+  async clearCareSlot(careId, iso, meal) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
+    const _meal = String(meal || '').trim();
+    const _slotD = CARESLOT_D + careId + ':' + iso + (_meal ? ':' + _meal : '');
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
     // still the only name against that day. Same three outcomes, same fixed d-tag, so the same safe retry.
     try { await _publishAny(publishSetFor(cp), evt); }
@@ -7964,7 +7987,7 @@ window.Fellowship = {
           const o = _openChurchDoc(pubk, e.content || '{}');
           if (o === null) return;
           if (!o.available) { byPub.delete(e.pubkey); emit(); return; }
-          byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || '').trim(), ts: e.created_at });
+          byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || '').trim(), dates: (() => { const d = o.dates; const f = String(d && d.from || ''), t = String(d && d.to || ''), re = /^\d{4}-\d{2}-\d{2}$/; return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null; })(), ts: e.created_at });
           emit();
         } catch {}
       },
@@ -7972,13 +7995,15 @@ window.Fellowship = {
     });
   },
   // publish (or refresh) my availability. tags = short list like ['meals','lifts','visits','prayer','childcare'].
-  async setCareAvail(tags, note) {
+  async setCareAvail(tags, note, dates) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp) return null;
     if (!(_nameKeys.get(cp) || [])[0]) return { ok: false, reason: 'no-key' };
     const clean = Array.isArray(tags) ? tags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 8) : [];
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }) }, sk);
+    // "when I'm free": written ONLY when it is a real window (both ends YYYY-MM-DD, from <= to); otherwise the doc is exactly what it always was
+    const availDates = (() => { const f = String(dates && dates.from || ''), t = String(dates && dates.to || ''), re = /^\d{4}-\d{2}-\d{2}$/; return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null; })();
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: _sealChurchDocMember(cp, Object.assign({ available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }, availDates ? { dates: availDates } : {})) }, sk);
     // A SEND THAT LANDED NOWHERE IS NOT A LISTING. The same shape batch 7 fixed for the serving reply, the
     // RSVP and leaving a church — this pair was not in the plan's list, so batch 15's screen fix ("Couldn't
     // list you") could never fire: the engine handed back the event whatever happened. Found by the

@@ -3105,11 +3105,61 @@ function _minorsLastClear(keep) {
     for (const k of ks) localStorage.removeItem(k);
   } catch (e) {}
 }
-function _noteBlockedList(cp, epoch, list, at) {
+// WHEN THIS DEVICE LEARNED EACH REMEMBERED BLOCK, so a lift can tell a NEWER unblock from an older one. The device copy
+// above is a bare array with no clock, which is why a remembered block could never be lifted: nothing could say an
+// unblock was newer than the block. The stamps live in a SIBLING key ({ "<hex>": created_at }), not inside
+// `blockedlast`, so that key keeps its shape (an older build still reads it) and a copy with no stamps — every
+// device before this change — reads as 0 for everyone: any explicit unblock is newer than that.
+const BLOCKED_SINCE_LS = 'trinityone.steward.blockedsince.';
+function _blockedSinceGet(cp) {
+  try { const o = JSON.parse(lsGet(BLOCKED_SINCE_LS + cp) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; }
+  catch (e) { return {}; }
+}
+// `pks` were named by a church list written at `at` (a list we read, or the one a Block made here publishes): each keeps
+// the NEWEST such time. Stamps for people no longer remembered are dropped. Call after the device copy is written.
+function _blockedSinceStamp(cp, pks, at) {
+  const o = _blockedSinceGet(cp), keep = _blockedLastSet(cp); let ch = false;
+  for (const raw of (pks || [])) { const k = String(raw).toLowerCase(); if (keep.has(k) && (o[k] || 0) < (at || 0)) { o[k] = at || 0; ch = true; } }
+  for (const k of Object.keys(o)) if (!keep.has(k)) { delete o[k]; ch = true; }
+  if (ch) lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(o));
+}
+// THE ONLY WAY A REMEMBERED BLOCK IS LIFTED BY A READ (owner, 2026-10-15): an authentic church-signed blocklist event that
+// NAMES the person in an `unblocked` tag, and is newer than when this device learned they were blocked. A newer list that
+// merely LEAVES THEM OUT lifts nothing — that is also what a relay that missed the block, or a second steward who never
+// knew of it, looks like, and the safe side wins. Returns whom it lifted. A person lifted here leaves `_localBlocked`, the
+// device copy, and any rotation still waiting to take them out — what setBlocked does on the relay's yes.
+// ACCEPTED, BOUNDED RESIDUAL (owner, 2026-10-15): church blocks P (T0), unblocks P (T1), RE-blocks P (T2). A device offline
+// across T1/T2 that can reach only a relay still serving the stale unblock E1@T1 (the relay with the re-block E2@T2 is down or
+// split off) lifts P, because E1 really is an authentic, newer-than-T0 explicit unblock; nothing reachable says otherwise.
+// That is a network partition and cannot be closed from here. It is bounded: (1) it SELF-HEALS — the moment this device reaches
+// ANY relay carrying E2, _noteBlockedList puts P back in _localBlocked and re-stamps them, so P is withheld every key written
+// after that (it does not pull a key P already received — only the Block control rotates that); (2) the console's Block/Unblock
+// is the steward's manual backstop; (3) the since-stamp already rejects a replay older than the block this device knows.
+// It is far likelier in a messy multi-relay test setup than on stable pilot relays. Tested: the last two rows of
+// scripts/a-remembered-block-lifts-only-on-an-explicit-unblock.test.mjs. Do not "fix" it by trusting omissions: that reopens
+// the frozen-out/seized-relay cases this rule exists for.
+function _liftRememberedBlock(cp, epoch, pks, at) {
+  if (!_stillOn(cp, epoch)) return [];
+  const since = _blockedSinceGet(cp), held = _blockedLastSet(cp), lifted = [];
+  for (const raw of (pks || [])) {
+    const p = String(raw).toLowerCase();
+    if (!((at || 0) > (since[p] || 0))) continue;           // not newer than what this device knows: no
+    if (!held.has(p) && !_localBlocked.has(p)) continue;    // nothing remembered to lift
+    held.delete(p); _localBlocked.delete(p); delete since[p]; lifted.push(p);
+  }
+  if (!lifted.length) return lifted;
+  lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([...held]));
+  lsSet(BLOCKED_SINCE_LS + cp, JSON.stringify(since));
+  try { const o = _pendingRotAll(cp); let moved = false; for (const k of Object.keys(o)) { const before = (o[k].drop || []).length; o[k].drop = (o[k].drop || []).filter(x => lifted.indexOf(x) === -1); if (o[k].drop.length !== before) moved = true; if (!o[k].drop.length) delete o[k]; } if (moved) lsSet(PENDINGROT_LS + cp, JSON.stringify(o)); } catch (x) {}
+  for (const f of [..._membersReask]) { try { f(); } catch (e) {} }   // they were withheld while blocked; ask for the member list again
+  return lifted;
+}
+function _noteBlockedList(cp, epoch, list, at, asserted) {
   if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;   // another church now, or older than what we hold
   _localBlocked = new Set((list || []).map(p => String(p).toLowerCase()));
   _localBlockedAt = at || 0;
   lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([..._localBlocked]));
+  _blockedSinceStamp(cp, asserted || list, at || 0);   // `asserted`: what the church list itself names (the floor adds more, which keep their older stamp)
 }
 // WHO MAY CREATE AN EVENT IN A GROUP. Order matters: index 0 is the default and is never written to the
 // document, so a church that has not touched this setting publishes exactly the group definition it always
@@ -3974,7 +4024,13 @@ const STAY_SS = 'trinityone.steward.stayopen.v2';         // SecureStorage key (
 const STAY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 function makeStayOpen(deps) {
   const { secure, isNative, lsRemove, now, readBlob, deriveBits, pubOf } = deps;
-  let replayed = false;   // the record is replayed ONCE per launch: a lock later in the session really locks
+  // true while a replay is running or has been used up. It stops duplicate/concurrent replays within one mount.
+  // rearm() clears it: an IDLE lock (a backgrounded WebView keeps this module alive, so the latch used to stay
+  // true for ever) must let the still-valid record reopen the console. A typed PIN (save) sets it: nothing to replay.
+  let replayed = false;
+  // Is there a church-key marker on this device? An empty blob read while it exists means the store did not
+  // answer, not that the key is gone. Optional dep: absent → "no marker", i.e. an empty read is definitive.
+  const markerPresent = deps.markerPresent || (() => false);
   const purgeLegacy = () => { try { lsRemove(STAY_LEGACY_LS); } catch (e) {} };
   // → TRUE only when the record is verifiably GONE (read back, like save() reads back a write). It used to
   // return nothing and swallow a failed removal, so save(pin, false) - the steward UNTICKING the box, which on
@@ -3991,9 +4047,14 @@ function makeStayOpen(deps) {
       return false;
     } catch (e) { console.warn('[steward] stay-open clear failed', e); return false; }
   };
+  // TRI-STATE: a blob → usable; null → definitively no usable blob (read fine, but malformed); TRANSIENT → the
+  // read threw, or came back empty while the church-key marker exists (the Keystore did not answer).
+  const TRANSIENT = { transient: true };
   const blobOf = async () => {
-    try { const raw = await readBlob(); const b = raw ? JSON.parse(raw) : null; return b && b.ct && b.iv && b.salt ? b : null; }
-    catch (e) { return null; }
+    let raw;
+    try { raw = await readBlob(); } catch (e) { return TRANSIENT; }
+    if (!raw) { let m = false; try { m = !!markerPresent(); } catch (e) {} return m ? TRANSIENT : null; }
+    try { const b = JSON.parse(raw); return b && b.ct && b.iv && b.salt ? b : null; } catch (e) { return null; }
   };
   const openBlob = async (bits, blob) => {
     const key = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['decrypt']);
@@ -4001,14 +4062,18 @@ function makeStayOpen(deps) {
   };
   // The live record and the blob it is for, or null. Anything expired, malformed, or made for a different
   // blob (a PIN change, a restore) is DELETED here, at the read, so no caller has to remember to.
+  // A TRANSIENT miss (the store threw, or the blob read did not answer) returns TRANSIENT and deletes NOTHING:
+  // a slow Keystore on resume used to delete the live 30-day record.
   const read = async () => {
     purgeLegacy();
     if (!isNative()) return null;
-    let rec = null;
-    try { const { S } = await secure(); const s = await S.get(STAY_SS); if (!s) return null; rec = JSON.parse(String(s)); }
-    catch (e) { await clear(); return null; }
+    let rec = null, s;
+    try { const { S } = await secure(); s = await S.get(STAY_SS); } catch (e) { return TRANSIENT; }
+    if (!s) return null;
+    try { rec = JSON.parse(String(s)); } catch (e) { await clear(); return null; }
     if (!rec || rec.v !== 1 || typeof rec.k !== 'string' || typeof rec.salt !== 'string' || typeof rec.owner !== 'string' || !(rec.until > now())) { await clear(); return null; }
     const blob = await blobOf();
+    if (blob === TRANSIENT) return TRANSIENT;
     if (!blob || blob.salt !== rec.salt) { await clear(); return null; }
     return { rec, blob };
   };
@@ -4016,13 +4081,19 @@ function makeStayOpen(deps) {
     available: () => !!isNative(),
     purgeLegacy,
     clear,
-    async status() { const r = await read(); return { available: !!isNative(), active: !!r }; },
-    // → { seed } on success; { seed: null, skipped: true } after the first try this launch; otherwise
-    // { seed: null } with any record deleted. The owner check: the seed must be the church the record names.
+    // THREE-VALUED. `unknown` = the store did not answer (the read is TRANSIENT): we cannot say whether a record
+    // exists, so the caller must NOT treat it as "no record". `active` is true only for a record we have read.
+    async status() { const r = await read(); const unknown = r === TRANSIENT; return { available: !!isNative(), active: !!r && !unknown, unknown }; },
+    // Re-arm replay after an IDLE lock (see `replayed`).
+    rearm() { replayed = false; },
+    // → { seed } on success; { seed: null, skipped: true } while a replay is running or used up; { seed: null,
+    // retry: true } when the store did not answer (record KEPT, latch released so a retry can run); otherwise
+    // { seed: null } with any dead record deleted. The owner check: the seed must be the church the record names.
     async replay() {
       if (replayed) return { seed: null, skipped: true };
       replayed = true;
       const r = await read();
+      if (r === TRANSIENT) { replayed = false; return { seed: null, retry: true }; }
       if (!r) return { seed: null };
       try {
         const seed = await openBlob(b64d(r.rec.k), r.blob);
@@ -4036,7 +4107,7 @@ function makeStayOpen(deps) {
       replayed = true;   // the steward typed the PIN this launch; nothing left to replay
       if (!on || !isNative()) { const gone = await clear(); return !on && gone; }
       const blob = await blobOf();
-      if (!blob) return false;
+      if (!blob || blob === TRANSIENT) return false;
       try {
         const bits = await deriveBits(pin, b64d(blob.salt), blob.it || PIN_ITER_LEGACY);
         const seed = await openBlob(bits, blob);   // proves these bytes open THIS blob before anything is kept
@@ -4044,9 +4115,13 @@ function makeStayOpen(deps) {
         const { S } = await secure();
         await S.set(STAY_SS, payload);
         const back = await S.get(STAY_SS);
-        if (back == null || String(back) !== payload) { await clear(); return false; }
+        // Clear ONLY on a readback that is PRESENT and WRONG (a corrupt write). A NULL readback is the store not
+        // answering, and a THROWN set() means the old record may still be intact and valid: deleting either
+        // destroyed a good 30-day record on a transient miss. Both just report "not saved".
+        if (back == null) return false;
+        if (String(back) !== payload) { await clear(); return false; }
         return true;
-      } catch (e) { console.warn('[steward] stay-open save failed', e); await clear(); return false; }
+      } catch (e) { console.warn('[steward] stay-open save failed', e); return false; }
     },
   };
 }
@@ -4081,7 +4156,7 @@ function _enterUnlocked(seed) {
 }
 const _stay = makeStayOpen({
   secure: _secureStore, isNative: _isNative, lsRemove: (k) => localStorage.removeItem(k), now: () => Date.now(),
-  readBlob: encBlobRaw, deriveBits: deriveAesBits, pubOf: (m) => getPublicKey(privateKeyFromSeedWords(m)),
+  readBlob: encBlobRaw, markerPresent: () => !!lsGet(ENC_LS), deriveBits: deriveAesBits, pubOf: (m) => getPublicKey(privateKeyFromSeedWords(m)),
 });
 // HANDOFF-2026-07-31 (1). nostr-tools does NOT reject when it cannot open the socket — SimplePool.publish
 // RESOLVES that relay's promise with the plain string `"connection failure: " + err`. A resolution satisfies
@@ -4263,14 +4338,27 @@ const _dmDecrypt = async (sk, peerPub, ct) => { try { return nip44d(ct, nip44ck(
 // decrypted but never UNWRAPPED, so a member's reply showed as raw JSON in the thread. Backward compatible both
 // ways: a plain message (no reply) stays a bare string, and a body that is not a v:1 envelope is shown as its
 // own words rather than lost — so old builds and the member app read either direction unchanged.
-const _dmWrap = (text, replyTo) => {
-  if (!replyTo || !replyTo.id) return text;
-  try { return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) }); } catch (e) { return text; }
+// `meta` ({noReply, eventId}) ADDS optional `nr:1` / `ev` to the same v:1 envelope (event messages, 2026-10-14).
+// Older builds read `t` and ignore the rest. Keep in step with Fellowship._dmWrap.
+const _dmWrap = (text, replyTo, meta) => {
+  const hasR = !!(replyTo && replyTo.id);
+  const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : '';
+  const cx = meta && meta.careOffer;   // care offer: self-contained here (no helper) so a test can lift this function alone
+  const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || '')) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
+  if (!hasR && !nr && !ev && !co) return text;
+  try {
+    const o = { v: 1, t: String(text) };
+    if (hasR) o.r = String(replyTo.id).slice(0, 64);
+    if (nr) o.nr = 1;
+    if (ev) o.ev = ev;
+    if (co) o.co = co;
+    return JSON.stringify(o);
+  } catch (e) { return text; }
 };
 const _dmUnwrap = (body) => {
-  if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null };
-  try { const o = JSON.parse(body); if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null }; } catch (e) {}
-  return { text: body, replyTo: null };
+  if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
+  try { const o = JSON.parse(body); if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || '')) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null }; } catch (e) {}
+  return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
 };
 const _sOutKey = () => 'trinityone.steward.outbox:' + (pub || '');
 let _sOutbox = [];
@@ -5940,10 +6028,13 @@ window.Steward = {
     // sending the steward off to re-restore a key that was never broken. Worse, the caller returns before the
     // failed-attempt counter, so the escalating lockout stayed disabled for the rest of the session.
     window.Steward.deviceKeyLost = false;
+    window.Steward.unlockStoreMiss = false;   // reports THIS attempt only; the screen reads it beside keyStoreStuck
     let raw;
     try { raw = await encBlobRaw(); }
     catch (e) { if (e && e.deviceKeyMissing) { window.Steward.deviceKeyLost = true; return false; } throw e; }
-    if (!raw) return lsGet(ENC_LS) ? false : true;   // S6: a marker we cannot open is a FAILED unlock, not an open door
+    // An empty read while the marker exists = the store did not answer, NOT a wrong PIN: flag it so the screen says
+    // so and does not count it toward the lockout. The return value is unchanged (true with no marker, false with one).
+    if (!raw) { const marker = !!lsGet(ENC_LS); if (marker) window.Steward.unlockStoreMiss = true; return marker ? false : true; }   // S6: a marker we cannot open is a FAILED unlock, not an open door
     try {
       const o = JSON.parse(raw);
       const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
@@ -5955,15 +6046,16 @@ window.Steward = {
   stayOpenStatus() { return _stay.status(); },        // -> { available, active }; deletes a dead record
   setStayOpen(pin, on) { return _stay.save(pin, !!on); },
   clearStayOpen() { return _stay.clear(); },
-  // Replay the stored key ONCE per launch. true = unlocked; false = no usable record (any record deleted);
-  // null = already tried this launch, so a lock later in the session stays locked.
+  // Replay the stored key. true = unlocked; false = no usable record (a dead record is deleted); null = a replay
+  // is running or was used up (a typed PIN, or already tried since the last idle lock); 'retry' = the store did
+  // not answer, the record is KEPT, ask again.
   async unlockStayOpen() {
     const r = await _stay.replay();
-    if (!r.seed) return r.skipped ? null : false;
+    if (!r.seed) return r.retry ? 'retry' : r.skipped ? null : false;
     _enterUnlocked(r.seed);
     return true;
   },
-  lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
+  lock(reason) {                                   // forget the in-memory key (idle / manual); seed stays encrypted
     // "seed stays encrypted" is only true once it HAS been encrypted. While needsPin is set — after createKey,
     // restoreKey, adoptChurch or removeLock — the seed exists nowhere but `currentMnemonic`, so forgetting it
     // is not locking, it is destroying the church. The 10-minute idle timer in steward-root.jsx fires on a
@@ -5975,6 +6067,8 @@ window.Steward = {
     churchSk = null; churchPub = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
     window.Steward.locked = !!lsGet(ENC_LS);
+    // Only an IDLE lock re-arms the stay-open replay, so the lock screen reopens from the live record.
+    if (reason === 'idle') { try { _stay.rearm(); } catch (e) {} }
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
   },
   // verify a PIN against the encrypted seed at rest, with NO side effects (gates removing the lock).
@@ -7494,7 +7588,12 @@ window.Steward = {
   },
   // Post a kind-1 message into a group as the church. MUST carry ['p', churchPub] — the member's
   // subscribeGroup scopes by it, so without it the post is invisible to members (was the bug).
-  publishPost(content, group) {
+  //
+  // `replyTo` ({id, by}) makes it a reply, in the member app's exact shape (screens-chat.jsx send): an
+  // ['e', id, '', 'reply'] and a ['p', author]. They are APPENDED after ['p', pub] — which must stay first
+  // and present, because subscribeGroupChat/subscribeGroup scope on it. The relay scopes a kind-1 by the
+  // group's ['t'] tag (GROUP_CHURCH), not by p-tags, so these tags change neither church nor membership gate.
+  publishPost(content, group, replyTo) {
     if (!sk) return Promise.resolve(null);
     let body = content || '', encTag = [];
     const gkey = group && (_skeys[group] || [])[0];
@@ -7504,7 +7603,7 @@ window.Steward = {
       console.warn('[steward] refusing plaintext post into sealed room — no key for', group);
       return Promise.resolve(null);
     }
-    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag], content: body }));
+    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : [])], content: body }));
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
   // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
@@ -7597,8 +7696,13 @@ window.Steward = {
     // and it must never become a way for a congregation to read what a steward removed.
     const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(m => {
       // ONE pass: a second .map that re-read `rx` would put the reactions back on a removed message.
-      if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || '', removed: true, text: '', reactions: [], myReaction: '' };
-      const r = rx.get(m.id); return { ...m, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
+      if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || '', removed: true, text: '', replyTo: '', quote: null, reactions: [], myReaction: '' };
+      // A reply's quote is the message it answers, resolved here (as the member app does from its own list).
+      // A REMOVED message is never quoted: that would reprint, one row down, the words the steward took away.
+      // quote is null when the target is not loaded (older than the window) — the UI says "an earlier message".
+      const q = m.replyTo ? byId.get(m.replyTo) : null;
+      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind } : null;
+      const r = rx.get(m.id); return { ...m, quote, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
     });
     const emit = () => onMsgs(attach());
     // resolve sender names in one batched kind-0 sub (debounced) — avoids a sub per author (relay cap)
@@ -7631,7 +7735,7 @@ window.Steward = {
           for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
           if (!ok) return;
         }
-        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '' });
+        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();
       },
@@ -7647,9 +7751,9 @@ window.Steward = {
   },
 
   // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
-  async sendDM(peerHex, content, replyTo) {
+  async sendDM(peerHex, content, replyTo, meta) {
     if (!sk || !peerHex) return null;
-    let enc = ''; try { enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo)); } catch { return null; }   // NIP-44 + reply envelope, as the member app sends
+    let enc = ''; try { enc = _dmEncrypt(sk, peerHex, _dmWrap(content, replyTo, meta)); } catch { return null; }   // NIP-44 + reply envelope, as the member app sends
     const evt = finalizeEvent(_monotonic({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }), sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule the member app follows. If the publish fails the words are
     // still here, and the retry sends this exact event with its original id, so nothing duplicates.
@@ -7684,9 +7788,9 @@ window.Steward = {
       const mine = e.pubkey === pub; const other = mine ? peerHex : e.pubkey;
       // NIP-44 first, then NIP-04 (_dmDecrypt). On total failure SHOW A PLACEHOLDER rather than `return`: a
       // message that vanishes from the thread with no trace is how the church never learns somebody wrote.
-      let text = '', replyTo = null, undecryptable = false;
-      try { const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content)); text = un.text; replyTo = un.replyTo; } catch { text = '🔒 (could not decrypt)'; undecryptable = true; }
-      byId.set(e.id, { id: e.id, mine, text, replyTo, ts: e.created_at, undecryptable }); emit();
+      let text = '', replyTo = null, undecryptable = false, noReply = false, eventId = null;
+      try { const un = _dmUnwrap(await _dmDecrypt(sk, other, e.content)); text = un.text; replyTo = un.replyTo; noReply = !!un.noReply; eventId = un.eventId || null; } catch { text = '🔒 (could not decrypt)'; undecryptable = true; }
+      byId.set(e.id, { id: e.id, mine, text, replyTo, noReply, eventId, ts: e.created_at, undecryptable }); emit();
     };
     const takeRx = (e) => {
       const tid = (e.tags.find(t => t[0] === 'e') || [])[1]; if (!tid) return;
@@ -8230,12 +8334,16 @@ window.Steward = {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
       if (d !== BLOCKED_D + cp0) return false;
       if (_authFuture(e) || !_byChurch(e)) return false;   // owner-only; drop forgeries + future-dated pins
+      // AN EXPLICIT UNBLOCK LIFTS A REMEMBERED BLOCK (owner, 2026-10-15). setBlocked names whom an Unblock let back in on
+      // `unblocked` tags of the event it publishes. Read BEFORE the newest-wins test: a marker is authentic and stamped
+      // on its own, and _liftRememberedBlock only acts when it is newer than when this device learned of the block.
+      try { const un = e.tags.filter(t => t[0] === 'unblocked' && t[1]).map(t => t[1]); if (un.length) _liftRememberedBlock(cp0, _tag.epoch, un, e.created_at); } catch (x) {}
       // NEWEST WINS. This is a replaceable doc and we read it from every relay, so without this the copy
       // that ARRIVES last wins rather than the one that was WRITTEN last — a relay holding an older
       // blocklist silently reinstates blocks the owner has already lifted.
       if (e.created_at < latest) return false; latest = e.created_at;
       try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
-      if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
+      if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
       return true;
     };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
@@ -8246,7 +8354,7 @@ window.Steward = {
     // what lets the distributor tell "blocked" from "dropped by a rotation run from a partial list".
     const stopRead = _freshDocRead(cp0, [BLOCKED_D + cp0],
       (e) => { if (take(e)) onBlocked(cur); },
-      (how) => { genuine = true; floored = !!(how && how.without && how.without.length); tok.genuine = true; tok.at = Date.now(); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest); onBlocked(cur); _keysReadSignal('blocked'); });
+      (how) => { genuine = true; floored = !!(how && how.without && how.without.length); tok.genuine = true; tok.at = Date.now(); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur); onBlocked(cur); _keysReadSignal('blocked'); });
     return () => { tok.live = false; try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
@@ -8365,7 +8473,13 @@ window.Steward = {
     _localBlocked = new Set([..._localBlocked, ...low]);
     _localBlockedAt = now();
     lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));   // what this console just blocked, kept (HIGH 2)
+    const stampAt = _localBlockedAt;
+    _blockedSinceStamp(cp0, low, stampAt);                               // the list published below names them at this time
     const content = JSON.stringify({ pubkeys: list });
+    // WHO THIS ACTION LET BACK IN rides on the event as `unblocked` tags (additive — the relay and every older build read
+    // only d, t and content.pubkeys): it is how another console, which remembers the block and may never see an empty
+    // list, tells a genuine unblock from a relay that merely missed the block (_liftRememberedBlock).
+    const unTags = [...off].filter(p => !low.includes(p)).map(p => ['unblocked', p]);
     // ALL RELAYS, NOT THE FIRST TO ANSWER — see setMinors for the full reasoning. A red-team insider proved
     // this one on 2026-08-18: their ban reached only one of the three relays their app connected to, and on
     // the two that lacked the block they AUTHENTICATED and read the entire adult group. The relay refuses to
@@ -8377,7 +8491,7 @@ window.Steward = {
     // the name and care keys, though nothing was saved. So the people it lets back in leave `_localBlocked` and the
     // device copy only once every relay written to accepted it — and only for the newest call, on the church it
     // was made for. Nothing else is touched then: a list that arrived meanwhile keeps what it added.
-    const sent = _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk));
+    const sent = _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET], ...unTags], content }), sk));
     return _landed('blocked list', Promise.resolve(sent).then((ok) => {
       if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
         for (const p of drop) _localBlocked.delete(p);
@@ -8457,22 +8571,27 @@ window.Steward = {
     // Same shape as clearedKnown, for the same reason: bare EOSE also fires on a 4.4s client timeout and on a
     // dropped socket, so it is evidence only WHILE AUTHENTICATED. Audit 2026-09-02 #3.
     const minorsKnown = () => sawMinors || (sawEose && _isRelayAuthed());
+    // `minorsDocSeen`: the minors DOCUMENT itself arrived (sawMinors), exposed on its own. ADDITIVE; `minorsKnown`
+    // keeps its meaning. A SCOPED DELEGATE without Safeguarding is never served minors:, yet minorsKnown turns true
+    // for them via EOSE-while-authed, so for them it says "the relay finished" and NOT "we know who the children are".
+    // A screen that must be SURE (Ready to help) asks this one for such a console.
+    // Users of the field: StewReadyToHelp (via readyToHelpCanSeeChildren). No other consumer reads it.
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; sawApproved = true; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
           // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
           // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped
           // every clearance date permanently, because the wipe then echoed back as the truth. A church with
           // two stewards and one stale browser tab would have lost its history. Keep what we hold.
           if (_a.cleared && typeof _a.cleared === 'object') cleared = _a.cleared;
-          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
+          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -8480,7 +8599,7 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); },
+      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -9064,6 +9183,12 @@ window.Steward = {
     return '';
   },
   nameKeyReady() { return _nameKeyReady(); },
+  // Open a document sealed under the church name key (cleartext ones pass straight through); null = sealed and we
+  // hold no key for it YET. onNameKeyRing(fn) fires when the ring changes, so a reader can retry what it could not
+  // open — StewardMeals.subscribeCareAvail is the user (steward-meals is a separate bundle and cannot see the
+  // module-private _openChurchDoc / _onNameKeyRing).
+  openChurchDoc(content) { return _openChurchDoc(content); },
+  onNameKeyRing(fn) { return _onNameKeyRing(fn); },
   // Is this team's roster on show only as a copy this console cannot open? StewardMeals.publishCareTeam refuses then.
   rosterLocked(teamId) { return !!teamId && _addrLocked(ROSTER_D + teamId); },
   // Why the last calendar save (roster, rota, service, run sheet, room, booking) came back null — see _saveFailed.
