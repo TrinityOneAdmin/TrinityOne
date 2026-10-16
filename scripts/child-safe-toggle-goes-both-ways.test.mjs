@@ -96,6 +96,7 @@ async function groupsTab() {
     React, window: win, CustomEvent, setTimeout, clearTimeout,
     location: { search: '', hostname: 'x' }, document: { addEventListener() {}, removeEventListener() {} },
     ListPanel: function ListPanel(p) { captured = p; return null; },
+    groupIcon: () => 'chat',
     Icon: Stub('Icon'), SkPill: Stub('SkPill'), SkConfirm: Stub('SkConfirm'),
     NewGroupModal: Stub('NewGroupModal'), CategoriesModal: Stub('CategoriesModal'),
     GroupChatModal: Stub('GroupChatModal'), GroupLeadersModal: Stub('GroupLeadersModal'),

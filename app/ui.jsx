@@ -507,7 +507,7 @@ function Toast({ msg }) {
   return (
     <div role={bad ? 'alert' : 'status'} style={{
       position: 'absolute', bottom: 92, left: 16, right: 16, marginInline: 'auto', width: 'fit-content', maxWidth: 'calc(100% - 32px)',
-      zIndex: 80, background: 'var(--ink)', color: 'var(--paper)',
+      zIndex: 80, pointerEvents: 'none', background: 'var(--ink)', color: 'var(--paper)',
       padding: '11px 18px', borderRadius: 14, fontSize: 13.5, fontWeight: 600, lineHeight: 1.35, textAlign: 'center',
       fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow-lg)',
       animation: 'trinityScale .3s ease both', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
