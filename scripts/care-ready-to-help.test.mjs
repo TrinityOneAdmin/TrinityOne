@@ -163,6 +163,10 @@ test('(A) Ready to help: collapsed shows only the count; opened shows name, tag 
   assert.ok(!/Margaret/.test(closed.all), 'the list is meant to start collapsed');
   const r = renderReady({ avail: [offer(ADULT), offer(SECOND)], open: true });
   assert.match(r.all, /Margaret/); assert.match(r.all, /Tomas/);
+  // a long name must BREAK inside its own box, never overflow onto the Message button (device bug, APK width 2026-10-16)
+  const nameNode = r.nodes.find(n => n.type === 'div' && (n.kids || []).includes('Margaret'));
+  assert.ok(nameNode && nameNode.props.style && nameNode.props.style.overflowWrap === 'anywhere',
+    'the ready-to-help name has no word-break — a long name overflows its box and draws over the Message button');
   assert.match(r.all, /Meals/); assert.match(r.all, /Prayer/);
   assert.match(r.all, /Free on weekday evenings/);
   const msg = r.buttons.filter(b => /Message/.test(texts([b].concat(r.nodes.filter(n => b.kids.includes(n))))));

@@ -855,9 +855,9 @@ function StewReadyToHelp() {
         <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           {rows.map(a => (
             <div key={a.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '9px 11px', borderRadius: 11, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{nameOf(a.pubkey)}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', overflowWrap: 'anywhere' }}>{nameOf(a.pubkey)}</div>
                 {(a.tags || []).length ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{a.tags.map(t => <span key={t} style={{ fontSize: 11.5, padding: '2px 8px', borderRadius: 99, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-2)' }}>{careAvailLabel(t)}</span>)}</div> : null}
                 {a.dates && a.dates.from && a.dates.to ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4 }}>free {careDayLabel(a.dates.from)}{a.dates.to !== a.dates.from ? ' – ' + careDayLabel(a.dates.to) : ''}</div> : null}
                 {a.note ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.45 }}>{a.note}</div> : null}
