@@ -726,7 +726,7 @@ function careSignupSummary(needs, slots, nameOf, today) {
 window.careSignupSummary = careSignupSummary;
 
 // THE NEEDS A HELPER CAN BE INVITED TO: still running, readable (a sealed need has no name to put in an invite),
-// and with at least one day nobody has taken or skipped. Pure. [{ id, title, type, openCount }].
+// and with at least one day nobody has taken or skipped. Pure. [{ id, title, type, openCount, openDays }] (openDays = the open ISO dates, ascending as the need lists them).
 function careOpenNeeds(needs, slots, skips, today) {
   const out = [];
   for (const n of (needs || [])) {
@@ -734,7 +734,7 @@ function careOpenNeeds(needs, slots, skips, today) {
     const dates = (Array.isArray(n.dates) && n.dates.length) ? n.dates : mealsDateRange(n.startDate, n.endDate);
     const taken = new Set([...(slots || []).filter(x => x && x.needId === n.id).map(x => x.isoDate), ...(skips || []).filter(x => x && x.needId === n.id).map(x => x.isoDate)]);
     const open = dates.filter(d => !taken.has(d) && (!today || d >= today));
-    if (open.length) out.push({ id: n.id, title: needTitle(n), type: mealsTypeLabel(n), openCount: open.length });
+    if (open.length) out.push({ id: n.id, title: needTitle(n), type: mealsTypeLabel(n), openCount: open.length, openDays: open });
   }
   return out;
 }
@@ -746,8 +746,21 @@ window.careOpenNeeds = careOpenNeeds;
 // is waiting to send, and null when nothing was sent (no key / encrypt failed); it can also throw.
 //   -> { ok:true }  sent;   { ok:true, queued:true }  waiting for a connection;   { ok:false }  NOT sent.
 // A caller must say "invited" only for ok && !queued. Users: StewReadyToHelp.
-async function careInvite(sendDM, person, need) {
+//
+// WITH A DAY (2026-10-16, care matching): `day` is one ISO date from need.openDays. The message then names that day
+// and rides the DM envelope's optional `co:{n,d}` (sendDM's 4th argument, meta.careOffer) so the member's thread
+// can draw a one-tap "Accept this day". The sentence in the body still carries every fact, so an older build shows
+// the words. Without `day` the call is byte-for-byte what it was (two arguments to sendDM).
+async function careInvite(sendDM, person, need, day) {
   const first = String(person && person.name || '').trim().split(/\s+/)[0];
+  if (day && need && need.id) {
+    const dl = careDayLabel(day);
+    const offerBody = (first ? 'Hi ' + first + ', thank you' : 'Thank you') + ' for offering to help. Could you help with ' + need.title + ' (' + need.type + ') on ' + dl + '? Tap “Accept this day” below to sign yourself up, or open Care in the app. No pressure either way.';
+    let r2 = null;
+    try { r2 = await sendDM(person.pubkey, offerBody, null, { careOffer: { needId: need.id, isoDate: day } }); } catch (e) { return { ok: false }; }
+    if (!r2) return { ok: false };
+    return r2._queued ? { ok: true, queued: true } : { ok: true };
+  }
   const body = (first ? 'Hi ' + first + ', thank you' : 'Thank you') + ' for offering to help. We have a need you might be able to help with: ' + need.title + ' (' + need.type + '), ' + need.openCount + ' ' + (need.openCount === 1 ? 'day' : 'days') + ' still open. If you can, open Care in the app and sign up for a day that suits you. No pressure either way.';
   let r = null;
   try { r = await sendDM(person.pubkey, body); } catch (e) { return { ok: false }; }
@@ -755,6 +768,23 @@ async function careInvite(sendDM, person, need) {
   return r._queued ? { ok: true, queued: true } : { ok: true };
 }
 window.careInvite = careInvite;
+
+// "Tue 20 Oct" for an ISO date (UTC-parsed so the weekday never shifts with the viewer's timezone).
+function careDayLabel(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return String(iso || '');
+  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getUTCDay()] + ' ' + (+m[3]) + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[2] - 1];
+}
+// THE DAYS TO OFFER A HELPER: a need's open days, those inside the helper's "when I'm free" window first. If the
+// helper gave a window and some days fall in it, ONLY those are offered (the others would be asking them for a
+// day they said they cannot do); if none fall in it, all open days are offered rather than none. Pure.
+function careOfferDays(need, dates) {
+  const days = (need && need.openDays) || [];
+  if (!dates || !dates.from || !dates.to) return days;
+  const inside = days.filter(d => d >= dates.from && d <= dates.to);
+  return inside.length ? inside : days;
+}
 
 const CARE_AVAIL_LABEL = { meals: 'Meals', rides: 'Rides', moving: 'Moving', errands: 'Errands', diy: 'DIY', visits: 'Visits', childcare: 'Childcare', prayer: 'Prayer', other: 'Other' };
 const careAvailLabel = (t) => CARE_AVAIL_LABEL[t] || (String(t || '').charAt(0).toUpperCase() + String(t || '').slice(1));
@@ -802,17 +832,17 @@ function StewReadyToHelp() {
   if (!rows.length) return null;
   const nameOf = (pub) => (dir && dir[pub] && dir[pub].name) || (pub.slice(0, 6) + '…' + pub.slice(-4));
   const openNeeds = careOpenNeeds(needs, slots, skips, window.todayISO ? window.todayISO() : (typeof todayISO === 'function' ? todayISO() : ''));
-  const invite = (a, need) => {
+  const invite = (a, need, day) => {
     setPicking(null);
     setStatus(st => ({ ...st, [a.pubkey]: { kind: 'busy', text: 'Sending…' } }));
     const person = { pubkey: a.pubkey, name: (dir && dir[a.pubkey] && dir[a.pubkey].name) || '' };
-    return Promise.resolve(careInvite((pk, body) => window.Steward.sendDM(pk, body), person, need)).then(r => {
+    return Promise.resolve(careInvite((pk, body, rt, meta) => (meta ? window.Steward.sendDM(pk, body, rt, meta) : window.Steward.sendDM(pk, body)), person, need, day)).then(r => {
       setStatus(st => ({ ...st, [a.pubkey]: r.ok && !r.queued ? { kind: 'ok', text: 'Invited — they were sent a message and can sign up themselves' }
         : r.ok ? { kind: 'queued', text: 'Not delivered yet — it will send when the connection returns' }
         : { kind: 'err', text: 'Not sent — nothing was delivered. Try again, or use Message.' } }));
     });
   };
-  const onInvite = (a) => { if (!openNeeds.length) return; if (openNeeds.length === 1) return invite(a, openNeeds[0]); setPicking(p => p === a.pubkey ? null : a.pubkey); };
+  const onInvite = (a) => { if (!openNeeds.length) return; if (openNeeds.length === 1) { const ds = careOfferDays(openNeeds[0], a.dates); if (ds.length === 1) return invite(a, openNeeds[0], ds[0]); } setPicking(p => p === a.pubkey ? null : a.pubkey); };
   const dm = (a) => { const m = (dir && dir[a.pubkey]) || {}; window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: a.pubkey, npub: m.npub, name: nameOf(a.pubkey), nip05: m.nip05 } })); };
   return (
     <div style={{ marginTop: 14, borderRadius: 14, border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', background: 'color-mix(in oklab, var(--sage) 6%, var(--surface))' }}>
@@ -829,6 +859,7 @@ function StewReadyToHelp() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{nameOf(a.pubkey)}</div>
                 {(a.tags || []).length ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{a.tags.map(t => <span key={t} style={{ fontSize: 11.5, padding: '2px 8px', borderRadius: 99, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-2)' }}>{careAvailLabel(t)}</span>)}</div> : null}
+                {a.dates && a.dates.from && a.dates.to ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4 }}>free {careDayLabel(a.dates.from)}{a.dates.to !== a.dates.from ? ' – ' + careDayLabel(a.dates.to) : ''}</div> : null}
                 {a.note ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.45 }}>{a.note}</div> : null}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
@@ -842,7 +873,14 @@ function StewReadyToHelp() {
             {picking === a.pubkey ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '2px 0 4px' }}>
                 <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 700 }}>Which need?</div>
-                {openNeeds.map(n => <button key={n.id} onClick={() => invite(a, n)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 11px', fontSize: 13, textAlign: 'left' }}>{n.title} · {n.type} · {n.openCount} open</button>)}
+                {openNeeds.map(n => (
+                  <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <button onClick={() => invite(a, n)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 11px', fontSize: 13, textAlign: 'left' }}>{n.title} · {n.type} · {n.openCount} open</button>
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', paddingLeft: 6 }}>
+                      {careOfferDays(n, a.dates).slice(0, 14).map(d => <button key={d} onClick={() => invite(a, n, d)} title={'Offer ' + careDayLabel(d) + ' — they can accept it in one tap'} className="sk-btn sk-btn--ghost" style={{ padding: '5px 9px', fontSize: 12 }}>Offer {careDayLabel(d)}</button>)}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : null}
             {status[a.pubkey] ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.45, color: status[a.pubkey].kind === 'err' ? 'var(--clay-deep, #b4462f)' : status[a.pubkey].kind === 'ok' ? 'var(--sage-ink)' : 'var(--ink-2)' }}>{status[a.pubkey].text}</div> : null}

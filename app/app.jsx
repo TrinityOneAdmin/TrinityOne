@@ -2359,7 +2359,7 @@ function App() {
       // `r && r.ok`, never `if (r)` — both answer an object now and an object is always truthy, so a plain
       // truthiness test would thank a member for a listing the church never received. The failure wording
       // lives on the card in app/screens-today.jsx (CareAvailability), which is where a member is looking.
-      setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r && r.ok) toast('You’re listed — thank you for being ready to help'); return r; }),
+      setAvail: (tags, note, dates) => window.Fellowship.setCareAvail(tags, note, dates).then(r => { if (r && r.ok) toast('You’re listed — thank you for being ready to help'); return r; }),
       clearAvail: () => window.Fellowship.clearCareAvail().then(r => { if (r && r.ok) toast('You’re off the list'); return r; }),
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)

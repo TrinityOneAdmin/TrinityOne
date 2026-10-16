@@ -56,8 +56,8 @@ function makeScope({ withKey = true } = {}) {
 }
 
 function liftSetCareAvail(scope) {
-  const body = fnBody(FELLOWSHIP, 'async setCareAvail(tags, note) {', 'setCareAvail');
-  return new Function('scope', `with (scope) { return (async function setCareAvail(tags, note) ${body.slice(body.indexOf('{'))}); }`)(
+  const body = fnBody(FELLOWSHIP, 'async setCareAvail(tags, note, dates) {', 'setCareAvail');
+  return new Function('scope', `with (scope) { return (async function setCareAvail(tags, note, dates) ${body.slice(body.indexOf('{'))}); }`)(
     new Proxy(scope, {
       has: (t, k) => (k in t) || !(String(k) in globalThis),
       get: (t, k) => {

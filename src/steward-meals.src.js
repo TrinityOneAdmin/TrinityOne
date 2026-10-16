@@ -523,8 +523,13 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   // tagged ['church', cp], member-signed, SEALED under the church name key. Before this reader NO console
   // surface showed it. Opening goes through Steward.openChurchDoc (the name-key ring); null = sealed and the
   // key has not arrived — LEAVE the person as they are (never delete on null) and retry when the ring changes,
-  // exactly as the member-side subscribeCareAvail does. Emits [{ pubkey, tags, note, ts }]. Minors are NOT
+  // exactly as the member-side subscribeCareAvail does. Emits [{ pubkey, tags, note, dates, ts }] (dates = {from,to} or null). Minors are NOT
   // filtered here — the surface does it (it holds the children list); this is a plain reader.
+  function careAvailDates(d) {
+    if (!d || typeof d !== 'object') return null;
+    const f = String(d.from || ''), t = String(d.to || ''), re = /^\d{4}-\d{2}-\d{2}$/;
+    return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
+  }
   function subscribeCareAvail(cb) {
     const cp = activeChurch();
     if (!S() || !S().subscribeMany || !cp || !S().openChurchDoc) { cb([]); return () => {}; }
@@ -543,7 +548,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
         if (o === null) { locked.set(e.pubkey, e); return; }   // key not here yet — leave as-is, retried on key arrival
         seenTs.set(e.pubkey, at); locked.delete(e.pubkey);
         if (!o.available) { byPub.delete(e.pubkey); emit(); return; }
-        byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || '').trim(), ts: at });
+        byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || '').trim(), dates: careAvailDates(o.dates), ts: at });
         emit();
       },
       oneose() { eosed = true; if (byPub.size) emit(); },

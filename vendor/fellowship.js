@@ -11449,25 +11449,28 @@
     _dmWrap(text, replyTo, meta) {
       const hasR = !!(replyTo && replyTo.id);
       const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : "";
-      if (!hasR && !nr && !ev) return text;
+      const cx = meta && meta.careOffer;
+      const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || "")) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
+      if (!hasR && !nr && !ev && !co) return text;
       try {
         const o = { v: 1, t: String(text) };
         if (hasR) o.r = String(replyTo.id).slice(0, 64);
         if (nr) o.nr = 1;
         if (ev) o.ev = ev;
+        if (co) o.co = co;
         return JSON.stringify(o);
       } catch (e) {
         return text;
       }
     },
     _dmUnwrap(body) {
-      if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null };
+      if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
       try {
         const o = JSON.parse(body);
-        if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null };
+        if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || "")) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null };
       } catch (e) {
       }
-      return { text: body, replyTo: null, noReply: false, eventId: null };
+      return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
     },
     async sendDM(peerPub, content, replyTo) {
       if (!sk) await window.Fellowship.ready;
@@ -11535,7 +11538,7 @@
           content = "\u{1F512} (could not decrypt)";
         }
         const un = window.Fellowship._dmUnwrap(content);
-        const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, ts: e.created_at, pubkey: e.pubkey };
+        const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, eventId: un.eventId || null, careOffer: un.careOffer || null, ts: e.created_at, pubkey: e.pubkey };
         msgs.set(e.id, m);
         push(m);
       };
@@ -14444,7 +14447,11 @@
               emit();
               return;
             }
-            byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), ts: e.created_at });
+            byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), dates: (() => {
+              const d2 = o.dates;
+              const f = String(d2 && d2.from || ""), t = String(d2 && d2.to || ""), re = /^\d{4}-\d{2}-\d{2}$/;
+              return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
+            })(), ts: e.created_at });
             emit();
           } catch {
           }
@@ -14457,7 +14464,7 @@
       });
     },
     // publish (or refresh) my availability. tags = short list like ['meals','lifts','visits','prayer','childcare'].
-    async setCareAvail(tags, note) {
+    async setCareAvail(tags, note, dates) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -14468,7 +14475,11 @@
       if (!sk || !cp) return null;
       if (!(_nameKeys.get(cp) || [])[0]) return { ok: false, reason: "no-key" };
       const clean4 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }) }, sk);
+      const availDates = (() => {
+        const f = String(dates && dates.from || ""), t = String(dates && dates.to || ""), re = /^\d{4}-\d{2}-\d{2}$/;
+        return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
+      })();
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, Object.assign({ available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }, availDates ? { dates: availDates } : {})) }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {

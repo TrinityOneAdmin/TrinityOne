@@ -67,7 +67,7 @@ test('a DM reply is carried INSIDE the encryption, not in a public tag', () => {
   // Old messages are bare strings and must keep working.
   const un = src.slice(src.indexOf('_dmUnwrap(body)'), src.indexOf('_dmUnwrap(body)') + 500);
   assert.match(un, /body\[0\] !== '\{'/, 'every DM ever sent is a bare string — it must still read as text');
-  assert.match(un, /return \{ text: body, replyTo: null(, noReply: false, eventId: null)? \}/, 'and unparseable content must not lose the words');
+  assert.match(un, /return \{ text: body, replyTo: null(, noReply: false, eventId: null(, careOffer: null)?)? \}/, 'and unparseable content must not lose the words');
 });
 
 test('the 12-word check lets you try again when you get it wrong', () => {
