@@ -1342,8 +1342,20 @@ function CareLink({ ctx }) {
   if (!(care.settings && care.settings.enabled)) return null;
   const open = careForMe(ctx).open;
   return (
-    <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)', fontWeight: open > 0 ? 800 : 600 }}> {'·'} Care{open > 0 ? <span style={{ marginLeft: 4, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 10.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', verticalAlign: 'middle' }}>{open}</span> : null}</span>
+    <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)', fontWeight: open > 0 ? 800 : 600, whiteSpace: 'nowrap' }}> {'·'} Care</span>
   );
+}
+
+// The count of open care days a member can sign up for — a clay pill on the "What's happening" card's TITLE
+// line (owner 2026-10-16: "put the number of cares up the top of the card"), so it sits beside the heading
+// instead of wrapping under the "Care" link below. Hidden when there is nothing open. Same careForMe count as
+// CareLink's bolding, so the pill and the bold link agree.
+function CareCountBadge({ ctx }) {
+  const care = (ctx && ctx.care) || {};
+  if (!(care.settings && care.settings.enabled)) return null;
+  const open = careForMe(ctx).open;
+  if (!(open > 0)) return null;
+  return <span title="Open care days you can sign up for" style={{ marginLeft: 7, flexShrink: 0, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{open}</span>;
 }
 
 function CareCard({ ctx, embedded }) {
@@ -2539,6 +2551,7 @@ function TodayScreen({ ctx }) {
                 <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", minWidth: 0 }}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
                   <ServingNewDot n={servNew} />
+                  <CareCountBadge ctx={ctx} />
                 </div>
                 <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota<CareLink ctx={ctx} /></div>
               </div>
