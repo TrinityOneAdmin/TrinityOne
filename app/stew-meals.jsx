@@ -629,8 +629,14 @@ function StewCareRequests() {
   // as "known" — and the hook's own pre-subscription default was exactly such a payload, so on first paint
   // every request was classed by an empty minors list. That is the bug this gate exists to stop, still
   // happening. `=== true` is the only reading that is safe when the answer is missing.
-  const _minorsKnown = _sg.minorsKnown === true;
-  const isChild = (r) => !_minorsKnown || _minors.has(String(r && r.from || '').toLowerCase());
+  // ALSO FAIL CLOSED FOR A SCOPED DELEGATE WHO IS NOT SHOWN THE CHILDREN LIST. `minorsKnown` turns true for a
+  // care-only steward on EOSE-while-authenticated with an EMPTY minors set (the relay withholds minors: from a
+  // steward who lacks Safeguarding), which would file a child's request with the adults and offer "Set up help" —
+  // publishing a congregation-wide NEED with the child's name on it. readyToHelpCanSeeChildren (the same helper
+  // StewReadyToHelp uses) returns true only when this console can positively say who the children are; on anything
+  // less, every request is held confidential. Users of the helper listed at its definition.
+  const _canSeeChildren = readyToHelpCanSeeChildren(_sg, window.Steward);
+  const isChild = (r) => !_canSeeChildren || _minors.has(String(r && r.from || '').toLowerCase());
   const childReqs = reqs.filter(isChild), adultReqs = reqs.filter(r => !isChild(r));
   // THE CHAT MODAL OUTLIVES THE LIST. A reply makes the request's newest message the team's, which takes a returned
   // row OFF the list — and with it, when it was the last row, this whole component, and so the conversation the
@@ -681,7 +687,7 @@ function StewCareRequests() {
       {halfDone ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', lineHeight: 1.5, margin: '0 0 10px', padding: '9px 12px', borderRadius: 12, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>{halfDone}</div> : null}
       {childReqs.length ? (
         <div style={{ marginBottom: 14 }}>
-          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>{_minorsKnown ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
+          <div style={{ ...mealsLbl, color: 'var(--clay-deep, #b4462f)' }}>{_canSeeChildren ? 'FROM A YOUNG PERSON · ' + childReqs.length + ' · CONFIDENTIAL' : 'CHECKING WHO THESE ARE FROM · ' + childReqs.length + ' · HELD CONFIDENTIAL'}</div>
           <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 9px', padding: '9px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))' }}>
             Only people on your <b>cleared list</b> can see these, and nobody on the care rota sees them unless they are cleared too. Reply privately below. There is no “set up help” here on purpose: that publishes a need the whole church reads and signs up to, which is not somewhere a young person’s request belongs. Handle it under your safeguarding policy.
           </div>
@@ -764,7 +770,7 @@ const careAvailLabel = (t) => CARE_AVAIL_LABEL[t] || (String(t || '').charAt(0).
 // minorsKnown still turns true for them on EOSE-while-authenticated, with an EMPTY set — which then answers
 // "no children" and lists a child. So a scoped steward without the safeguarding cap must have RECEIVED the minors
 // document (minorsDocSeen). Owner console and unscoped steward (caps null) and a safeguarding steward are served it
-// (or honestly have none), so for them minorsKnown stands. `S` is window.Steward. Users: StewReadyToHelp.
+// (or honestly have none), so for them minorsKnown stands. `S` is window.Steward. Users: StewReadyToHelp, StewCareRequests.
 function readyToHelpCanSeeChildren(sg, S) {
   if (!sg || sg.minorsKnown !== true) return false;
   if (!S || !S.actingChurch) return true;                                   // owner console
