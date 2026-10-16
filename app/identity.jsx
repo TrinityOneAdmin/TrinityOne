@@ -1669,10 +1669,11 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
               CHURCH read as though the member belonged to none — after joining, nothing in the app ever named it
               again: not on arrival, not here. Tapping it opens the church, which is also where leaving lives. */}
           {ctx.church && ctx.church.name ? (
-            <Row icon="home" label={ctx.church.name} sub="Your church — open it to see people, groups and serving"
+            <Row icon="users" label={ctx.church.name} sub="Your church — open it to see people, groups and serving"
               accent="var(--sage, #4f7a5e)" onClick={() => { ctx.openChurchSwitcher('list'); }} />
-          ) : null}
-          <Row icon="users" label="Your churches" sub="The churches you follow — switch, or follow another" accent="var(--clay)" onClick={() => { ctx.openChurchSwitcher('list'); }} />
+          ) : (
+            <Row icon="users" label="Join a church" sub="Follow your church to see people, groups and serving" accent="var(--clay)" onClick={() => { ctx.openChurchSwitcher('follow'); }} />
+          )}
           <DirectoryToggle identity={identity} onSave={onSave} ctx={ctx} />
         </Group>
 

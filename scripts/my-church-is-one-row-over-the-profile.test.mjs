@@ -1,21 +1,20 @@
-// A member who taps "Your churches" (or the church-name row) in the profile must land the church switcher OVER
-// the profile, not over the home tab behind it. The two handlers used to call onClose() first, which closed the
-// ProfileSheet and dropped the app back to whatever tab was behind it (Today/Community) BEFORE the switcher
-// opened. DEVICE-CONFIRMED on the Oppo 2026-10-16: the sheet opened over the Today home page, losing the profile
-// context. The fix removes onClose() from both handlers so the switcher (z=60) simply stacks over the profile
-// (z=55); back/escape already return to the profile.
+// The MY CHURCH section of the profile is ONE row (owner 2026-10-16):
+//   - joined: it is labelled with the church NAME and opens the switcher LIST (switch / follow another live inside it);
+//   - not joined: it reads "Join a church" and opens the FOLLOW flow.
+// There is no second "Your churches" row. The care batch left a duplicate — two rows that both opened the same
+// switcher list — which is what the owner saw on both phones. Either state opens the switcher OVER the profile:
+// the handler does NOT call onClose() first, so the switcher (z60) stacks over the profile (z55) instead of
+// closing it and landing over the home tab. DEVICE-CONFIRMED on the Oppo 2026-10-16.
 //
-// POINT OF USE (CLAUDE.md rule 1): this drives the REAL ProfileSheet rows off the rendered tree and asserts
-// onClose is never called when the switcher opens. Restoring onClose() in either handler makes the recorded log
-// start with 'close' and this test goes red. It does NOT text-match app/*.jsx for behaviour (rule 3): the row's
-// own onClick is invoked.
+// POINT OF USE (CLAUDE.md rule 1): drives the REAL ProfileSheet rows off the rendered tree and asserts the row
+// count, the switcher mode, and that onClose is never called. No app/*.jsx text-match for behaviour (rule 3).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, texts } from './render-jsx-screen.mjs';
 
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-function renderProfile() {
+function renderProfile(church) {
   const { React, draw } = miniReact();
   const log = [];
   const ls = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -40,8 +39,7 @@ function renderProfile() {
   };
   const mod = loadScreen('app/identity.jsx', ['ProfileSheet'], globals);
   const ctx = {
-    church: { id: 'c1', name: "St Chad's", npub: 'npub1' + 'c'.repeat(58) },
-    safeguard: {}, toast() {}, openHelp() {},
+    church, safeguard: {}, toast() {}, openHelp() {},
     openChurchSwitcher(mode) { log.push('switcher:' + mode); },
     openNotifSettings() {}, openCurrency() {}, openShareApp() {}, openWallet() {},
     openRelays() {}, openBackup() {}, openAbout() {},
@@ -65,21 +63,23 @@ function rowClick(tree, label) {
   return hit;
 }
 
-test('tapping "Your churches" opens the switcher OVER the profile, not the home tab', () => {
-  const { tree, log } = renderProfile();
-  const click = rowClick(tree, 'Your churches');
-  assert.ok(click, 're-anchor: the "Your churches" row was not found in the rendered ProfileSheet');
-  click();
-  assert.deepEqual(log, ['switcher:list'],
-    'the "Your churches" row closed the profile before opening the switcher, so the sheet lands over the home ' +
-    'tab behind it rather than the profile it was launched from (onClose must not be called first)');
-});
-
-test('the church-name row also opens the switcher without first closing the profile', () => {
-  const { tree, log } = renderProfile();
+test('joined: the single church-name row opens the switcher LIST over the profile (no duplicate)', () => {
+  const church = { id: 'c1', name: "St Chad's", npub: 'npub1' + 'c'.repeat(58) };
+  const { tree, log } = renderProfile(church);
   const click = rowClick(tree, "St Chad's");
   assert.ok(click, 're-anchor: the church-name row was not found in the rendered ProfileSheet');
   click();
   assert.deepEqual(log, ['switcher:list'],
-    'the church-name row closed the profile before opening the switcher');
+    'the church-name row closed the profile before opening the switcher — it lands over the home tab, not the profile');
+  assert.ok(!rowClick(tree, 'Your churches'),
+    'the duplicate "Your churches" row is back — the MY CHURCH section must be a single row');
+});
+
+test('not joined: a "Join a church" row opens the FOLLOW flow over the profile', () => {
+  const { tree, log } = renderProfile(null);
+  const click = rowClick(tree, 'Join a church');
+  assert.ok(click, 're-anchor: the "Join a church" row was not found when no church is joined');
+  click();
+  assert.deepEqual(log, ['switcher:follow'],
+    'the "Join a church" row did not open the follow flow without first closing the profile');
 });
