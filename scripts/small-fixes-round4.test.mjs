@@ -59,28 +59,16 @@ test('V2 — "Removed" is not claimed over a removal that cannot happen', () => 
     'removeModule is async and must be awaited before its result is believed');
 });
 
-test('the Care card is mounted on Today, and shows the ask even with no open needs', () => {
-  // Owner's decision 2026-08-23: "Only on the today screen when Care is switched on."
-  //
-  // CareCard already had a Today variant and it was DEAD CODE — mounted in exactly one place
-  // (screens-serving.jsx, `embedded`), the other branch commented "Today-card variant (currently unused)".
-  // Three members failed to find Care; all three read Today first. Verity, 71, with a broken wrist:
-  // "I'd never have thought to look for it under Serving & events. If I'd needed help badly I'd have
-  // telephoned Miriam."
-  //
-  // The old branch returned null on `!live.length`, which would have hidden it in exactly her situation:
-  // nobody had asked yet, and she was the one needing to ask.
-  assert.match(TODAY, /<CareCard ctx=\{ctx\} \/>/,
-    'the Today variant of CareCard is still not mounted anywhere');
-  // This used to end at '\n// Emergency' — a COMMENT, which only survived stripping because the stripper
-  // derailed on an apostrophe in JSX text earlier in the file. With that hole closed the anchor vanishes and
-  // the slice runs to end-of-file, so the second assertion below could match some other function entirely.
+test('the Care card is NOT on Today — it moved to the Care page (owner 2026-10-16)', () => {
+  // SUPERSEDES the 2026-08-23 "only on the today screen" decision. Care was put on Today because three members
+  // couldn't find it behind the Serving & events link; the owner then found it "too much" on Today and moved it
+  // to the Care page, with a badged "Care" link on the What's happening card for findability. CareCard renders
+  // only embedded now. today-care-is-a-link.test.mjs holds the new behaviour at point of use.
+  assert.doesNotMatch(TODAY, /<CareCard ctx=\{ctx\} \/>/,
+    'the Today variant of CareCard is mounted again — care was moved off Today');
   const fn = fnBody(TODAY, 'function CareCard');
-  assert.equal(/if \(!live\.length\) return null;/.test(fn), false,
-    'the Today card still hides itself when nobody has asked for help yet — the one moment somebody needs ' +
-    'to ask');
   assert.match(fn, /if \(!s\.enabled\) return null;/,
-    'it must still stay hidden for a church that has not switched care on');
+    'care must still stay hidden for a church that has not switched it on');
 });
 
 test('M1 — Today says you are waiting for approval', () => {

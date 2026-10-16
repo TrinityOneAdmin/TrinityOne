@@ -379,7 +379,8 @@ test('…and is NOT rolled back when we simply could not tell', async () => {
   // under a sign-up that probably landed, and the row is what another volunteer looks at before offering.
   const { fn, optCare } = runCareAction('fill', { lands: false, reason: 'unconfirmed' });
   await fn('care-1', '2026-09-10', '');
-  assert.deepEqual(Object.keys(optCare), ['care-1|2026-09-10'],
+  // the optimistic key is needId|iso|meal now (per-meal slots, 2026-10-16); this fill passes no meal, so ''.
+  assert.deepEqual(Object.keys(optCare), ['care-1|2026-09-10|'],
     'an unconfirmed sign-up un-ticked itself. The toast says "it may well have" and the row beside it says ' +
     'the opposite, so the member believes the row.');
 });
