@@ -2054,11 +2054,14 @@ function dmFailWording(evt) {
 //   · care must be switched on, and a known child is never offered a sign-up.
 // SENDER IDENTITY IS NOT CHECKED (it is not reliably known member-side). Worst case a forged offer lets a member
 // sign THEMSELVES up for a real, open day they could have signed up for on the Care screen anyway.
-// Pure: (offer {needId,isoDate}, care = ctx.care, today, isMinor) -> { show, reason }.
-function careOfferVerdict(offer, care, today, isMinor) {
+// Pure: (offer {needId,isoDate}, care = ctx.care, today, minorState) -> { show, reason }.
+// minorState (NOT bare safeguard.isMinor): 'minor'|'maybe'|'adult'. Fail CLOSED on 'maybe' — isMinor is false for the
+// whole async loading window (app.jsx, see minorState), so gating on it would show a loading child the button. Mirrors
+// canVolunteer on the Care screen (screens-today.jsx). The engine fillCareSlot backstop also fails open on a cold start.
+function careOfferVerdict(offer, care, today, minorState) {
   const no = (reason) => ({ show: false, reason });
   if (!offer || !offer.needId || !offer.isoDate) return no('none');
-  if (isMinor) return no('minor');
+  if (minorState === 'minor' || minorState === 'maybe') return no('minor');
   if (!care || !care.settings || !care.settings.enabled) return no('care-off');
   if (offer.isoDate < today) return no('day-past');
   const need = (care.needs || []).find(n => n && n.id === offer.needId);
@@ -2079,13 +2082,13 @@ function CareOfferAccept({ offer, ctx }) {
   const [busy, setBusy] = useC(false);
   const care = (ctx && ctx.care) || {};
   const today = (typeof todayISO === 'function') ? todayISO() : '';
-  const v = careOfferVerdict(offer, care, today, !!(ctx && ctx.safeguard && ctx.safeguard.isMinor));
+  const v = careOfferVerdict(offer, care, today, (ctx && ctx.minorState) || 'maybe');
   const note = st ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.45, margin: '4px 4px 0', maxWidth: 274, color: st.kind === 'err' || st.kind === 'gone' ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{st.text}</div> : null;
   if (!v.show) return note;
   const accept = async () => {
     if (busy) return;
     // re-decide at the moment of the tap: the day may have been taken while this screen sat open
-    const now = careOfferVerdict(offer, (ctx && ctx.care) || {}, (typeof todayISO === 'function') ? todayISO() : '', !!(ctx && ctx.safeguard && ctx.safeguard.isMinor));
+    const now = careOfferVerdict(offer, (ctx && ctx.care) || {}, (typeof todayISO === 'function') ? todayISO() : '', (ctx && ctx.minorState) || 'maybe');
     if (!now.show) { setSt({ kind: 'gone', text: 'That day’s just been taken — nothing was signed up.' }); return; }
     setBusy(true);
     let r = null;

@@ -231,7 +231,7 @@ function loadToday() {
 }
 const { careNeedDays } = loadToday();
 
-function memberDM({ offer = { needId: 'n1', isoDate: '2026-10-21' }, care = {}, fill, safeguard = { isMinor: false, minors: [] }, mineMsg = false, today = TODAY } = {}) {
+function memberDM({ offer = { needId: 'n1', isoDate: '2026-10-21' }, care = {}, fill, safeguard = { isMinor: false, minors: [] }, minorState = 'adult', mineMsg = false, today = TODAY } = {}) {
   const { React, draw } = miniReact();
   const fills = [];
   const F = {
@@ -254,7 +254,7 @@ function memberDM({ offer = { needId: 'n1', isoDate: '2026-10-21' }, care = {}, 
     BottomSheet: ({ open, children }) => (open ? children : null),
     safeCssColor: (c) => c, relTime: () => 'now', D: { GROUPS: [], RELAYS: [] },
   });
-  const ctx = { toast() {}, canDMPeer: () => true, connTick: 0, openDM() {}, safeguard,
+  const ctx = { toast() {}, canDMPeer: () => true, connTick: 0, openDM() {}, safeguard, minorState,
     care: { settings: { enabled: true }, needs: [NEED], slots: [], skips: [], avail: [], myPub: ME,
       fill: fill || (async (...a) => { fills.push(a); return { ok: true, evt: {} }; }), ...care } };
   if (fill) ctx.care.fill = (...a) => { fills.push(a); return fill(...a); };
@@ -299,7 +299,12 @@ test('MEMBER ACCEPT (expiry): no button once the offered day has passed, or my o
   assert.ok(memberDM({ care: { avail: [{ ...over, dates: null }] } }).accept(), 'CONTROL: an availability with no window never expires the offer');
 });
 test('MEMBER ACCEPT: a known child is never offered the button (and the engine backstop is the second line)', () => {
-  assert.equal(memberDM({ safeguard: { isMinor: true, minors: [ME] } }).accept(), undefined);
+  assert.equal(memberDM({ minorState: 'minor', safeguard: { isMinor: true, minors: [ME] } }).accept(), undefined);
+});
+test('MEMBER ACCEPT: a child still LOADING (minorState "maybe", safeguard.isMinor STILL false) gets NO button — fail closed through the window', () => {
+  // safeguard.isMinor is false for the whole ~1.2s clearance-loading window; gating on it would flash the button at a child.
+  assert.equal(memberDM({ minorState: 'maybe', safeguard: { isMinor: false, minors: [] } }).accept(), undefined, 'a loading child was shown Accept while isMinor was still false');
+  assert.ok(memberDM({ minorState: 'adult' }).accept(), 'CONTROL: a resolved adult is still offered the button');
 });
 test('MEMBER ACCEPT: the RETURNED object decides the wording, not its truthiness', async () => {
   const cases = [
@@ -352,10 +357,11 @@ test('PURE careOfferVerdict: every reason, in the order the rules read', () => {
   const v = mod.careOfferVerdict;
   const care = { settings: { enabled: true }, needs: [NEED], slots: [], skips: [], avail: [], myPub: ME };
   const O = { needId: 'n1', isoDate: '2026-10-21' };
-  assert.deepEqual(v(O, care, TODAY, false), { show: true, reason: '' });
-  const why = (o, c, t = TODAY, m = false) => v(o, c, t, m).reason;
+  assert.deepEqual(v(O, care, TODAY, 'adult'), { show: true, reason: '' });
+  const why = (o, c, t = TODAY, m = 'adult') => v(o, c, t, m).reason;
   assert.equal(why(null, care), 'none'); assert.equal(why({ needId: 'n1' }, care), 'none');
-  assert.equal(why(O, care, TODAY, true), 'minor');
+  assert.equal(why(O, care, TODAY, 'minor'), 'minor');
+  assert.equal(why(O, care, TODAY, 'maybe'), 'minor');   // loading window = fail closed
   assert.equal(why(O, { ...care, settings: {} }), 'care-off');
   assert.equal(why(O, care, '2026-10-22'), 'day-past');
   assert.equal(why({ needId: 'zz', isoDate: '2026-10-21' }, care), 'need-gone');
