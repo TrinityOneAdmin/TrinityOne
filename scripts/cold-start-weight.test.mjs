@@ -60,7 +60,10 @@ test('the first-paint payload has not quietly grown', () => {
   assert.ok(files > 10, 'only ' + files + ' shell files found — this test is measuring nothing, re-anchor it');
   // Ratchet raised 3.0 -> 3.06 MB (2026-10-15, owner task #6): first paint measured 3.05 MB; raised just above
   // current so it still catches future growth. Owner chose to raise, not trim; the drift cause was not chased down.
-  const MB = 3.06;
+  // Raised 3.06 -> 3.1 MB (2026-10-16): the care-matching (availability dates + offer/accept), event attendance
+  // card and RSVP toast/close features (all owner-approved this cycle) took first paint just over 3.06; owner
+  // chose RAISE again. ~0.04 MB headroom; still a ratchet, not a budget.
+  const MB = 3.1;
   assert.ok(total <= MB * 1024 * 1024,
     'the first-paint shell is now ' + (total / 1048576).toFixed(2) + ' MB across ' + files + ' files, over the ' +
     MB + ' MB ratchet. At the 20 kB/s this product is built for, every extra megabyte is another ~50 seconds ' +
