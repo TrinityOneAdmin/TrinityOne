@@ -272,3 +272,19 @@ test('setRsvp RETURNS false when there is no engine to send with', async () => {
   s.scope.window = {};
   assert.equal(await s.tap('going'), false, 'no engine, yet it claimed a confirmed answer');
 });
+
+// ── THE CONFIRMED "NO" IS A SUCCESS AND MUST NOT BE STYLED AS AN ERROR ───────────────────────────────────
+// "Marked can’t make it" matched toastKind's failure words, so a CONFIRMED answer rendered red with the alert
+// shield and role=alert. The shipped toastKind is lifted from app/ui.jsx and run on what setRsvp really toasts.
+test('a confirmed Going / Maybe / No toast is styled OK, never as an error', async () => {
+  const UI = readFileSync(new URL('../app/ui.jsx', import.meta.url), 'utf8');
+  const words = UI.match(/const TOAST_FAILURE_WORDS = [^\n]+/)[0];
+  const toastKind = new Function(words + '\n' + fnBody(UI, 'function toastKind(', 'toastKind') + '\nreturn toastKind;')();
+  assert.equal(toastKind('We couldn’t confirm your answer reached your church'), 'error', 'control: toastKind still flags failures');
+  for (const v of ['going', 'maybe', 'no']) {
+    const s = screen({ results: [OK] });
+    await s.tap(v);
+    assert.equal(s.toasts.length, 1, v + ': ' + JSON.stringify(s.toasts));
+    assert.equal(toastKind(s.toasts[0]), 'ok', v + ': a CONFIRMED answer toasted as an error: ' + s.toasts[0]);
+  }
+});
