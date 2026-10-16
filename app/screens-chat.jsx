@@ -2091,8 +2091,16 @@ function CareOfferAccept({ offer, ctx }) {
     const now = careOfferVerdict(offer, (ctx && ctx.care) || {}, (typeof todayISO === 'function') ? todayISO() : '', (ctx && ctx.minorState) || 'maybe');
     if (!now.show) { setSt({ kind: 'gone', text: 'That day’s just been taken — nothing was signed up.' }); return; }
     setBusy(true);
+    // Claim each MEAL still open on this day — not the whole day. A legacy whole-day slot ('') reads as
+    // covering EVERY meal, so it would double-book a meal another helper already took (the exact thing this
+    // invite exists to prevent). careNeedDays splits a meals day into its meals; a non-meals day is a single
+    // '' unit, so this stays one fill. (owner 2026-10-16 / audit fix)
+    const _need = (care.needs || []).find(n => n && n.id === offer.needId) || {};
+    const _nd = careNeedDays(_need, care.slots || [], care.skips || []);
+    const _open = (_nd.unitsOf ? _nd.unitsOf(offer.isoDate) : ['']).filter(m => !(_nd.takenUnit && _nd.takenUnit(offer.isoDate, m)));
     let r = null;
-    try { r = await care.fill(offer.needId, offer.isoDate, ''); } catch (e) { r = null; }
+    if (!_open.length) { setBusy(false); setSt({ kind: 'gone', text: 'That day’s just been taken — nothing was signed up.' }); return; }
+    for (const _m of _open) { try { r = await care.fill(offer.needId, offer.isoDate, '', _m); } catch (e) { r = null; } if (!(r && r.ok)) break; }
     setBusy(false);
     // the RETURNED OBJECT decides, never its truthiness: fillCareSlot answers { ok, reason } and an object is always truthy
     if (r && r.ok && !r._queued) setSt({ kind: 'ok', text: 'You’re signed up for that day — thank you.' });

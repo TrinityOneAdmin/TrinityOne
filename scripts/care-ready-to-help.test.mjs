@@ -148,7 +148,7 @@ function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], min
   const helpers = ['const CARE_AVAIL_LABEL', 'const careAvailLabel'].map(a => { const i = MEALS_JSX.indexOf(a); return MEALS_JSX.slice(i, MEALS_JSX.indexOf('\n', i)); }).join('\n');
   delete scope.CARE_AVAIL_LABEL;
   const lift = (a) => fnBody(MEALS_JSX, a, a);
-  const src = helpers + `\nconst needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');\n` + lift('function readyToHelpCanSeeChildren(') + '\n' + lift('function mealsDateRange(') + '\n' + lift('function careOpenNeeds(') + '\n' + lift('function careDayLabel(') + '\n' + lift('function careOfferDays(') + '\n' + lift('async function careInvite(') + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
+  const src = helpers + `\nconst needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');\n` + lift('function readyToHelpCanSeeChildren(') + '\n' + lift('function mealsDateRange(') + '\n' + lift('function careUnitCoverage(') + '\n' + lift('function careOpenNeeds(') + '\n' + lift('function careDayLabel(') + '\n' + lift('function careOfferDays(') + '\n' + lift('async function careInvite(') + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
   const Comp = new Function('scope', `with (scope) { ${compile(src, 'StewReadyToHelp')} }`)(permissive(scope));
   const tree = Comp();
   const seen = reach(tree);
@@ -342,7 +342,7 @@ test('(C) the day picker prefers the helper\'s free window; with no day inside i
   })();
 });
 test('(C) careOpenNeeds returns openDays beside openCount (closed / taken / skipped / past days left out)', () => {
-  const src = fnBody(MEALS_JSX, 'function mealsDateRange(', 'mealsDateRange') + '\n' + fnBody(MEALS_JSX, 'function careOpenNeeds(', 'careOpenNeeds');
+  const src = fnBody(MEALS_JSX, 'function mealsDateRange(', 'mealsDateRange') + '\n' + fnBody(MEALS_JSX, 'function careUnitCoverage(', 'careUnitCoverage') + '\n' + fnBody(MEALS_JSX, 'function careOpenNeeds(', 'careOpenNeeds');
   const f = new Function('needTitle', 'mealsTypeLabel', src + '\nreturn careOpenNeeds;')((n) => n.displayLabel, () => 'Rides');
   const out = f([NEED1], [{ needId: 'n1', isoDate: '2026-10-20' }], [{ needId: 'n1', isoDate: '2026-10-22' }], '2026-10-15');
   assert.deepEqual(out[0].openDays, ['2026-10-21']); assert.equal(out[0].openCount, 1);

@@ -265,12 +265,23 @@ function memberDM({ offer = { needId: 'n1', isoDate: '2026-10-21' }, care = {}, 
   return { fills, redraw, accept, read: () => reads(redraw()), mod, ctx };
 }
 
-test('MEMBER ACCEPT: a live offer draws "Accept this day"; tapping it signs MY slot via care.fill(needId, iso, "") and says so', async () => {
+test('MEMBER ACCEPT: a live offer draws "Accept this day"; tapping it claims the day\'s open meal via care.fill and says so', async () => {
   const d = memberDM();
   assert.ok(d.accept(), 'no Accept button for a valid offer. Screen: ' + d.read());
   await d.accept().props.onClick(); await tick();
-  assert.deepEqual(d.fills, [['n1', '2026-10-21', '']]);
+  // NEED has no per-meal breakdown -> one '' unit, so one fill with meal=''.
+  assert.deepEqual(d.fills, [['n1', '2026-10-21', '', '']]);
   assert.match(d.read(), /You’re signed up for that day/);
+});
+
+test('MEMBER ACCEPT: on a meals day with one meal already taken, accept claims only the OPEN meal — never a whole-day slot that would double-book', async () => {
+  const mealsNeed = { id: 'n1', type: 'meals', displayLabel: 'Verity — meals', dates: ['2026-10-20', '2026-10-21', '2026-10-22'], meals: ['lunch', 'dinner'] };
+  const lunchTaken = { needId: 'n1', isoDate: '2026-10-21', pubkey: 'z'.repeat(64), meal: 'lunch' };
+  const d = memberDM({ care: { needs: [mealsNeed], slots: [lunchTaken] } });
+  assert.ok(d.accept(), 'Dinner is open, so the day should still offer Accept. Screen: ' + d.read());
+  await d.accept().props.onClick(); await tick();
+  assert.deepEqual(d.fills, [['n1', '2026-10-21', '', 'dinner']],
+    'accept must claim ONLY the open Dinner (meal="dinner"), never a legacy whole-day slot that covers the taken Lunch. Got: ' + JSON.stringify(d.fills));
 });
 test('MEMBER ACCEPT: an ordinary message, and an offer I SENT myself, get no button', () => {
   assert.equal(memberDM({ offer: null }).accept(), undefined, 'a plain message grew an Accept button');

@@ -725,20 +725,27 @@ function careSignupSummary(needs, slots, nameOf, today) {
 }
 window.careSignupSummary = careSignupSummary;
 
+// Per-meal unit coverage for a care need — shared by every CONSOLE view (careOpenNeeds, MealsNeedCard,
+// MealsNeedDetail) so the invite flow, the card count and the schedule read coverage the SAME per-meal way the
+// member's CareNeedRow does. A meals day splits into its meals; any other need is one unit per day (''). A LEGACY
+// no-meal slot ('') covers the whole day. openDaysFrom(today): days with any meal still unclaimed and not skipped.
+function careUnitCoverage(need, slots, skips) {
+  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate);
+  const skippedDates = new Set((skips || []).filter(s => s && s.needId === need.id).map(s => s.isoDate));
+  const mealsOf = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
+  const unitsOf = (iso) => { const ms = mealsOf(iso); return ms.length ? ms : ['']; };
+  const takenUnit = (iso, m) => (slots || []).some(s => s && s.needId === need.id && s.isoDate === iso && ((s.meal || '') === m || (s.meal || '') === ''));
+  const openDaysFrom = (today) => dates.filter(d => !skippedDates.has(d) && (!today || d >= today) && unitsOf(d).some(m => !takenUnit(d, m)));
+  return { dates, skippedDates, unitsOf, takenUnit, openDaysFrom };
+}
+
 // THE NEEDS A HELPER CAN BE INVITED TO: still running, readable (a sealed need has no name to put in an invite),
 // and with at least one day nobody has taken or skipped. Pure. [{ id, title, type, openCount, openDays }] (openDays = the open ISO dates, ascending as the need lists them).
 function careOpenNeeds(needs, slots, skips, today) {
   const out = [];
   for (const n of (needs || [])) {
     if (!n || n._sealed || (n.endDate && today && n.endDate < today)) continue;
-    const dates = (Array.isArray(n.dates) && n.dates.length) ? n.dates : mealsDateRange(n.startDate, n.endDate);
-    // per-meal: a day is still OPEN while any meal it needs is unclaimed (a legacy no-meal slot covers the whole
-    // day). Mirrors careNeedDays on the member side so the invite flow and the member's list agree.
-    const skipped = new Set((skips || []).filter(x => x && x.needId === n.id).map(x => x.isoDate));
-    const mealsOf = (iso) => (n.type === 'meals') ? ((n.dayMeals && n.dayMeals[iso] && n.dayMeals[iso].length) ? n.dayMeals[iso] : (Array.isArray(n.meals) ? n.meals : [])) : [];
-    const unitsOf = (iso) => { const ms = mealsOf(iso); return ms.length ? ms : ['']; };
-    const takenUnit = (iso, m) => (slots || []).some(x => x && x.needId === n.id && x.isoDate === iso && ((x.meal || '') === m || (x.meal || '') === ''));
-    const open = dates.filter(d => !skipped.has(d) && (!today || d >= today) && unitsOf(d).some(m => !takenUnit(d, m)));
+    const open = careUnitCoverage(n, slots, skips).openDaysFrom(today);
     if (open.length) out.push({ id: n.id, title: needTitle(n), type: mealsTypeLabel(n), openCount: open.length, openDays: open });
   }
   return out;
@@ -984,11 +991,12 @@ function mealsCoverLabel(dayCount, openCount) {
 }
 
 function MealsNeedCard({ need, slots, skips, onOpen }) {
-  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : mealsDateRange(need.startDate, need.endDate);
-  const filledDates = new Set(slots.map(s => s.isoDate));
-  const skippedDates = new Set(skips.map(s => s.isoDate));
-  const open = dates.filter(d => !filledDates.has(d) && !skippedDates.has(d));
-  const filledCount = dates.filter(d => filledDates.has(d)).length;
+  const _cov = careUnitCoverage(need, slots, skips);
+  const dates = _cov.dates;
+  // per-meal: a day only counts covered when EVERY meal it needs is taken, so a half-covered meals day no longer
+  // reads as "covered" on the card. open = days with any meal still open.
+  const open = _cov.openDaysFrom(null);
+  const filledCount = dates.length - open.length;
   const cover = mealsCoverLabel(dates.length, open.length);
   const coverTone = { done: 'var(--sage)', open: 'var(--ink)', empty: 'var(--clay-deep, #b4462f)' };
   return (
@@ -1081,6 +1089,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
               </div>
               <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>
                 {skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Covered{skipByDate[iso] && skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
+                  : (need.type === 'meals' && dayMealsOf(iso).length) ? dayMealsOf(iso).map(m => { const mf = fills.filter(f => (f.meal || '') === m || (f.meal || '') === ''); return <span key={m} style={{ marginRight: 12, display: 'inline-block' }}><span style={{ fontWeight: 700, color: 'var(--ink)' }}>{MEAL_SHORT[m] || m}:</span> {mf.length ? mf.map((f, i) => <span key={i}><Icon name="check" size={11} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>) : <span style={{ color: 'var(--ink-3)' }}>Open</span>}</span>; })
                   : fills.length === 0 ? <span style={{ color: 'var(--ink-3)' }}>Open</span>
                   : fills.map((f, i) => <span key={i} style={{ marginRight: 10 }}><Icon name="check" size={12} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>)}
               </div>
