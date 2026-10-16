@@ -867,7 +867,7 @@ function StewReadyToHelp() {
                   <button onClick={() => dm(a)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
                   <button onClick={() => onInvite(a)} disabled={!openNeeds.length || (status[a.pubkey] && status[a.pubkey].kind === 'busy')} title={openNeeds.length ? 'Ask them to help with an open need' : 'No open needs'} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13, opacity: openNeeds.length ? 1 : 0.5 }}>Invite to a need</button>
                 </div>
-                {!openNeeds.length ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>No open needs</span> : null}
+                {!openNeeds.length ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'right', lineHeight: 1.35 }}>No open needs yet — Start care to open one</span> : null}
               </div>
             </div>
             {picking === a.pubkey ? (

@@ -288,7 +288,7 @@ const inviteBtn = (r, i = 0) => r.buttons.filter(b => /Invite to a need/.test(bt
 test('(C) ZERO open needs: the button is disabled and says why', () => {
   const none = renderReady({ avail: [offer(ADULT)], open: true, needs: [] });
   assert.equal(inviteBtn(none).props.disabled, true);
-  assert.match(none.all, /No open needs/);
+  assert.match(none.all, /No open needs yet — Start care to open one/);   // the grayed state points the steward at how to open one
   // a fully-covered need and a closed one are not open either
   const covered = renderReady({ avail: [offer(ADULT)], open: true, needs: [{ ...NEED1 }, { ...NEED2, endDate: '2026-09-01', dates: ['2026-09-01'] }],
     slots: [{ needId: 'n1', isoDate: '2026-10-20' }, { needId: 'n1', isoDate: '2026-10-21' }], skips: [{ needId: 'n1', isoDate: '2026-10-22' }] });
