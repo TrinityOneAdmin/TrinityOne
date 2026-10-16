@@ -558,6 +558,11 @@
         }
       };
     }
+    function careAvailDates(d) {
+      if (!d || typeof d !== "object") return null;
+      const f = String(d.from || ""), t = String(d.to || ""), re = /^\d{4}-\d{2}-\d{2}$/;
+      return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
+    }
     function subscribeCareAvail(cb) {
       const cp = activeChurch();
       if (!S() || !S().subscribeMany || !cp || !S().openChurchDoc) {
@@ -606,7 +611,7 @@
             emit();
             return;
           }
-          byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), ts: at });
+          byPub.set(e.pubkey, { pubkey: e.pubkey, tags: Array.isArray(o.tags) ? o.tags : [], note: String(o.note || "").trim(), dates: careAvailDates(o.dates), ts: at });
           emit();
         },
         oneose() {

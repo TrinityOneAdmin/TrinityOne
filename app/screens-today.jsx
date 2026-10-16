@@ -84,6 +84,27 @@ function careNeedDays(need, slots, skips) {
   return { dates, openDays, covered: dates.length > 0 && openDays.length === 0 };
 }
 
+// "WHEN I'M FREE" on a member's availability. Both ends blank = no window (null, the doc is written exactly as
+// before). Both ends set and from <= to = {from,to}. Anything else (one end only, or from after to) is NOT a
+// window and must not be written. Returns { ok, dates }.
+function careAvailRange(from, to) {
+  const f = String(from || '').trim(), t = String(to || '').trim();
+  if (!f && !t) return { ok: true, dates: null };
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  if (!re.test(f) || !re.test(t) || f > t) return { ok: false, dates: null };
+  return { ok: true, dates: { from: f, to: t } };
+}
+// A short "free 20–25 Oct" label for a {from,to} window; '' when there is none.
+function careAvailRangeLabel(d) {
+  if (!d || !d.from || !d.to) return '';
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const p = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso); return m ? { y: m[1], mo: +m[2] - 1, d: +m[3] } : null; };
+  const a = p(d.from), b = p(d.to); if (!a || !b) return '';
+  if (d.from === d.to) return 'free ' + a.d + ' ' + M[a.mo];
+  if (a.mo === b.mo && a.y === b.y) return 'free ' + a.d + '–' + b.d + ' ' + M[b.mo];
+  return 'free ' + a.d + ' ' + M[a.mo] + ' – ' + b.d + ' ' + M[b.mo];
+}
+
 function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, canVolunteer }) {
   const myPub = care.myPub || '';
   const { dates, openDays } = careNeedDays(need, slots, skips);
@@ -1137,10 +1158,12 @@ function CareAvailability({ ctx, part }) {
   const [editing, setEditing] = React.useState(false);
   const [tags, setTags] = React.useState(() => (mine && mine.tags) || []);
   const [note, setNote] = React.useState(() => (mine && mine.note) || '');
+  const [dFrom, setDFrom] = React.useState(() => (mine && mine.dates && mine.dates.from) || '');
+  const [dTo, setDTo] = React.useState(() => (mine && mine.dates && mine.dates.to) || '');
   const [opt, setOpt] = React.useState(null);   // optimistic listed-state; null = follow the relay
   const listed = opt === null ? !!mine : opt;
   // keep the draft in step with my published availability when I'm not editing; drop the optimistic override once the relay agrees
-  React.useEffect(() => { if (!editing) { setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); } if (opt !== null && !!mine === opt) setOpt(null); }, [mine ? mine.ts : 0, editing]);
+  React.useEffect(() => { if (!editing) { setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); setDFrom((mine && mine.dates && mine.dates.from) || ''); setDTo((mine && mine.dates && mine.dates.to) || ''); } if (opt !== null && !!mine === opt) setOpt(null); }, [mine ? mine.ts : 0, editing]);
   const toggleTag = (id) => setTags(t => t.includes(id) ? t.filter(x => x !== id) : [...t, id]);
   const [custom, setCustom] = React.useState('');
   const addCustom = () => { const v = custom.trim().slice(0, 24); if (v && !tags.includes(v)) setTags(t => [...t, v]); setCustom(''); };
@@ -1156,8 +1179,10 @@ function CareAvailability({ ctx, part }) {
   // really is what we know: the relay's own answer is the truth, and claiming either state over it would be
   // the same guess in a new direction. Saving again is safe (fixed d-tag `careavail:<churchPub>`).
   const save = () => {
+    const range = careAvailRange(dFrom, dTo);
+    if (!range.ok) { ctx.toast('Check your dates — “free from” needs to be on or before “free until” (or leave both blank).', { error: true }); return; }
     setEditing(false);
-    Promise.resolve(care.setAvail ? care.setAvail(tags, note) : null)
+    Promise.resolve(care.setAvail ? care.setAvail(tags, note, range.dates) : null)
       .then((r) => {
         if (r && r.ok) { setOpt(true); return; }
         setOpt(null);
@@ -1204,7 +1229,7 @@ function CareAvailability({ ctx, part }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 150 }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={14} color="var(--sage)" stroke={3} /> You’re ready to help</div>
-                {showTags && showTags.length ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 2 }}>{showTags.map(careOfferLabel).join(' · ')}</div> : null}
+                {showTags && showTags.length ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 2 }}>{showTags.map(careOfferLabel).join(' · ')}{mine && mine.dates ? ' · ' + careAvailRangeLabel(mine.dates) : ''}</div> : null}
               </div>
               <button onClick={() => setEditing(true)} style={careBtnGhost}>Edit</button>
               <button onClick={turnOff} style={careBtnGhost}>Take a break</button>
@@ -1221,9 +1246,16 @@ function CareAvailability({ ctx, part }) {
                 <button onClick={addCustom} disabled={!custom.trim()} style={{ ...chipStyle(false), opacity: custom.trim() ? 1 : 0.5 }}>Add</button>
               </div>
               <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Anything to add? e.g. “Weekday evenings are easiest for me”" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)', resize: 'vertical' }} />
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', margin: '10px 0 4px' }}>When are you free? (optional)</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input type="date" aria-label="Free from" value={dFrom} onChange={e => setDFrom(e.target.value)} style={{ flex: 1, minWidth: 120, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                <span style={{ fontSize: 12, color: 'var(--ink-2)' }}>to</span>
+                <input type="date" aria-label="Free until" value={dTo} onChange={e => setDTo(e.target.value)} style={{ flex: 1, minWidth: 120, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                {(dFrom || dTo) ? <button onClick={() => { setDFrom(''); setDTo(''); }} style={{ ...careBtnGhost, padding: '6px 10px', fontSize: 12 }}>Clear dates</button> : null}
+              </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button onClick={save} style={{ ...careBtnHelp, padding: '9px 16px', fontSize: 13 }}>{listed ? 'Save' : 'I’m available'}</button>
-                <button onClick={() => { setEditing(false); setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); }} style={{ ...careBtnGhost, padding: '9px 14px', fontSize: 13 }}>Cancel</button>
+                <button onClick={() => { setEditing(false); setTags((mine && mine.tags) || []); setNote((mine && mine.note) || ''); setDFrom((mine && mine.dates && mine.dates.from) || ''); setDTo((mine && mine.dates && mine.dates.to) || ''); }} style={{ ...careBtnGhost, padding: '9px 14px', fontSize: 13 }}>Cancel</button>
               </div>
             </div>
           ) : (

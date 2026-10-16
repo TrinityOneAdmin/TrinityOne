@@ -2045,6 +2045,69 @@ function dmFailWording(evt) {
   return 'Not delivered. Private messages with this person are limited for safeguarding — a steward can help if you need to reach them.';
 }
 
+// CARE OFFER (2026-10-16): a steward offered this member one open day of a care need. Whether the "Accept this
+// day" button is drawn is decided HERE, at render, from live data — no timer, no stored state:
+//   · the offer must name a need that exists in the church's list (an invented or deleted one shows nothing);
+//   · that need must not be sealed or past its endDate, and the day must be one of its days and still OPEN
+//     (not taken by anyone, not skipped) — careNeedDays is the same answer the Care screen gives;
+//   · the day must not have passed, and the member's own "when I'm free" window must not have ended;
+//   · care must be switched on, and a known child is never offered a sign-up.
+// SENDER IDENTITY IS NOT CHECKED (it is not reliably known member-side). Worst case a forged offer lets a member
+// sign THEMSELVES up for a real, open day they could have signed up for on the Care screen anyway.
+// Pure: (offer {needId,isoDate}, care = ctx.care, today, minorState) -> { show, reason }.
+// minorState (NOT bare safeguard.isMinor): 'minor'|'maybe'|'adult'. Fail CLOSED on 'maybe' — isMinor is false for the
+// whole async loading window (app.jsx, see minorState), so gating on it would show a loading child the button. Mirrors
+// canVolunteer on the Care screen (screens-today.jsx). The engine fillCareSlot backstop also fails open on a cold start.
+function careOfferVerdict(offer, care, today, minorState) {
+  const no = (reason) => ({ show: false, reason });
+  if (!offer || !offer.needId || !offer.isoDate) return no('none');
+  if (minorState === 'minor' || minorState === 'maybe') return no('minor');
+  if (!care || !care.settings || !care.settings.enabled) return no('care-off');
+  if (offer.isoDate < today) return no('day-past');
+  const need = (care.needs || []).find(n => n && n.id === offer.needId);
+  if (!need || need._sealed) return no('need-gone');
+  if (need.endDate && need.endDate < today) return no('need-past');
+  const { dates, openDays } = careNeedDays(need, care.slots || [], care.skips || []);
+  if (!dates.includes(offer.isoDate)) return no('not-a-day');
+  if (!openDays.includes(offer.isoDate)) return no('day-taken');
+  const myPub = String(care.myPub || '').toLowerCase();
+  const mine = (care.avail || []).find(a => String(a && a.pubkey || '').toLowerCase() === myPub);
+  if (mine && mine.dates && mine.dates.to && mine.dates.to < today) return no('my-window-over');
+  return { show: true, reason: '' };
+}
+
+// The one-tap button under an offer bubble. Signs the member's OWN sign-up through the existing care.fill path.
+function CareOfferAccept({ offer, ctx }) {
+  const [st, setSt] = useC(null);   // { kind: 'ok'|'waiting'|'err'|'gone', text }
+  const [busy, setBusy] = useC(false);
+  const care = (ctx && ctx.care) || {};
+  const today = (typeof todayISO === 'function') ? todayISO() : '';
+  const v = careOfferVerdict(offer, care, today, (ctx && ctx.minorState) || 'maybe');
+  const note = st ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.45, margin: '4px 4px 0', maxWidth: 274, color: st.kind === 'err' || st.kind === 'gone' ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{st.text}</div> : null;
+  if (!v.show) return note;
+  const accept = async () => {
+    if (busy) return;
+    // re-decide at the moment of the tap: the day may have been taken while this screen sat open
+    const now = careOfferVerdict(offer, (ctx && ctx.care) || {}, (typeof todayISO === 'function') ? todayISO() : '', (ctx && ctx.minorState) || 'maybe');
+    if (!now.show) { setSt({ kind: 'gone', text: 'That day’s just been taken — nothing was signed up.' }); return; }
+    setBusy(true);
+    let r = null;
+    try { r = await care.fill(offer.needId, offer.isoDate, ''); } catch (e) { r = null; }
+    setBusy(false);
+    // the RETURNED OBJECT decides, never its truthiness: fillCareSlot answers { ok, reason } and an object is always truthy
+    if (r && r.ok && !r._queued) setSt({ kind: 'ok', text: 'You’re signed up for that day — thank you.' });
+    else if (r && (r._queued || r.reason === 'unconfirmed')) setSt({ kind: 'waiting', text: 'Waiting — we couldn’t confirm that reached your church. It may well have; check Care before tapping again.' });
+    else if (r && r.reason === 'minor') setSt({ kind: 'err', text: 'This account can’t sign up for care days.' });
+    else setSt({ kind: 'err', text: 'That didn’t reach your church — you’re NOT signed up. Try again in a moment.' });
+  };
+  return (
+    <div style={{ margin: '5px 0 0' }}>
+      {st && st.kind !== 'err' ? null : <button onClick={accept} disabled={busy} className="sk-btn" style={{ padding: '8px 14px', fontSize: 13.5, fontWeight: 700, borderRadius: 999, border: 'none', background: 'var(--sage)', color: '#fff', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, fontFamily: 'var(--font-ui)' }}>{busy ? 'Signing up…' : 'Accept this day'}</button>}
+      {note}
+    </div>
+  );
+}
+
 function DMThread({ peer, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
@@ -2169,6 +2232,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                   defect ships. */}
               <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, lineHeight: 1.45, margin: 0, textWrap: 'pretty', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{m.content}</p>
             </div>
+            {m.careOffer && !m.mine ? <CareOfferAccept offer={m.careOffer} ctx={ctx} /> : null}
             {/* THE STATE THE COMMIT CLAIMED AND DID NOT SHIP. c2aacf7 queued a failed private message and
                 computed _pending/_failed for it — and then drew neither, so a message still waiting to send
                 looked exactly like one that had arrived. That is worse than the bug it replaced: the words are

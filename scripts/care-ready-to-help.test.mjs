@@ -70,7 +70,7 @@ test('(A) it asks the relay for careavail:<church> docs tagged for this church, 
   const r = loadReader(); r.giveKey();
   assert.deepEqual(r.filters(), [{ kinds: [30078], '#church': [CP], '#d': [AVAIL_D] }]);
   r.send(r.ev(ADULT, { available: true, tags: ['meals', 'rides'], note: ' happy to drive ' }, 100)); r.eose();
-  assert.deepEqual(r.last(), [{ pubkey: ADULT, tags: ['meals', 'rides'], note: 'happy to drive', ts: 100 }]);
+  assert.deepEqual(r.last(), [{ pubkey: ADULT, tags: ['meals', 'rides'], note: 'happy to drive', dates: null, ts: 100 }]);   // dates:null = the doc carries no "when I'm free" (care matching 2026-10-16)
 });
 
 test('(A) a doc sealed with a key that has not arrived yields NOTHING — and appears once the key lands', () => {
@@ -148,7 +148,7 @@ function renderReady({ avail, minors = [], minorsKnown = true, blocked = [], min
   const helpers = ['const CARE_AVAIL_LABEL', 'const careAvailLabel'].map(a => { const i = MEALS_JSX.indexOf(a); return MEALS_JSX.slice(i, MEALS_JSX.indexOf('\n', i)); }).join('\n');
   delete scope.CARE_AVAIL_LABEL;
   const lift = (a) => fnBody(MEALS_JSX, a, a);
-  const src = helpers + `\nconst needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');\n` + lift('function readyToHelpCanSeeChildren(') + '\n' + lift('function mealsDateRange(') + '\n' + lift('function careOpenNeeds(') + '\n' + lift('async function careInvite(') + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
+  const src = helpers + `\nconst needTitle = (need) => need._sealed ? 'Details hidden' : (need.displayLabel || 'A member in our church');\n` + lift('function readyToHelpCanSeeChildren(') + '\n' + lift('function mealsDateRange(') + '\n' + lift('function careOpenNeeds(') + '\n' + lift('function careDayLabel(') + '\n' + lift('function careOfferDays(') + '\n' + lift('async function careInvite(') + '\n' + fnBody(MEALS_JSX, 'function StewReadyToHelp()', 'StewReadyToHelp');
   const Comp = new Function('scope', `with (scope) { ${compile(src, 'StewReadyToHelp')} }`)(permissive(scope));
   const tree = Comp();
   const seen = reach(tree);
@@ -291,18 +291,59 @@ test('(C) ZERO open needs: the button is disabled and says why', () => {
   assert.equal(inviteBtn(covered).props.disabled, true, 'covered / past needs were offered as open');
 });
 
-test('(C) ONE open need: one tap sends a private message that NAMES the need, to that person, and writes no sign-up', async () => {
-  const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1] });
+const NEED1_ONEDAY = { ...NEED1, startDate: '2026-10-20', endDate: '2026-10-20' };
+test('(C) ONE open need with ONE open day: one tap sends a private message that NAMES the need and the day, to that person, and writes no sign-up', async () => {
+  const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1_ONEDAY] });
   assert.ok(!inviteBtn(r).props.disabled);
   await inviteBtn(r).props.onClick();
   assert.equal(r.sent.length, 1, 'one tap must send exactly one message');
   assert.equal(r.sent[0][0], ADULT);
-  assert.match(r.sent[0][1], /Margaret/); assert.match(r.sent[0][1], /Verity — a lift/); assert.match(r.sent[0][1], /3 days still open/);
-  assert.match(r.sent[0][1], /sign up for a day that suits you/, 'the message must leave the sign-up to them');
+  assert.match(r.sent[0][1], /Margaret/); assert.match(r.sent[0][1], /Verity — a lift/); assert.match(r.sent[0][1], /Tue 20 Oct/);
+  assert.match(r.sent[0][1], /Accept this day/, 'the message must point at the one-tap accept');
+  assert.deepEqual(r.sent[0][3], { careOffer: { needId: 'n1', isoDate: '2026-10-20' } }, 'the offer must ride the DM envelope meta');
   // the ONLY thing the screen may call is sendDM: no slot writer, no rota/need publisher is even in scope
   assert.deepEqual(Object.keys(r.scope.window.Steward).filter(k => k !== 'actingChurch' && k !== 'myStewardCaps'), ['sendDM']);
 });
 
+test('(C) ONE open need with SEVERAL open days: a tap shows the day picker (nothing sent); a day button sends THAT day, the need button asks without a day', async () => {
+  const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1] });
+  await inviteBtn(r).props.onClick();
+  assert.equal(r.sent.length, 0, 'three open days: the steward must choose one');
+  const picker = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1], picking: ADULT });
+  const dayBtns = picker.buttons.filter(b => /^Offer /.test(btnText(b)));
+  assert.deepEqual(dayBtns.map(btnText), ['Offer Tue 20 Oct', 'Offer Wed 21 Oct', 'Offer Thu 22 Oct']);
+  await dayBtns[1].props.onClick();
+  assert.equal(picker.sent.length, 1);
+  assert.deepEqual(picker.sent[0][3], { careOffer: { needId: 'n1', isoDate: '2026-10-21' } });
+  assert.match(picker.sent[0][1], /Wed 21 Oct/);
+  // the plain "ask" button is the old behaviour: no day, two arguments, the old sentence
+  const plain = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1], picking: ADULT });
+  const ask = plain.buttons.filter(b => /Verity — a lift · Rides?|Verity — a lift · /.test(btnText(b)) && !/^Offer /.test(btnText(b)));
+  assert.equal(ask.length, 1);
+  await ask[0].props.onClick();
+  assert.equal(plain.sent[0].length, 2, 'asking without a day must not carry offer meta');
+  assert.match(plain.sent[0][1], /3 days still open/); assert.match(plain.sent[0][1], /sign up for a day that suits you/);
+});
+test('(C) the day picker prefers the helper\'s free window; with no day inside it, every open day is offered', () => {
+  const inWin = renderReady({ avail: [offer(ADULT, { dates: { from: '2026-10-21', to: '2026-10-22' } })], open: true, needs: [NEED1], picking: ADULT });
+  assert.deepEqual(inWin.buttons.filter(b => /^Offer /.test(btnText(b))).map(btnText), ['Offer Wed 21 Oct', 'Offer Thu 22 Oct']);
+  assert.match(inWin.all, /free\s*\|\s*Wed 21 Oct\s*\|\s*–\s*Thu 22 Oct/, 'the row must show when they are free');
+  const none = renderReady({ avail: [offer(ADULT, { dates: { from: '2026-12-01', to: '2026-12-02' } })], open: true, needs: [NEED1], picking: ADULT });
+  assert.equal(none.buttons.filter(b => /^Offer /.test(btnText(b))).length, 3);
+  // a window that leaves exactly one day open on the only need makes it a one-tap invite
+  return (async () => {
+    const one = renderReady({ avail: [offer(ADULT, { dates: { from: '2026-10-22', to: '2026-10-30' } })], open: true, needs: [NEED1] });
+    await inviteBtn(one).props.onClick();
+    assert.equal(one.sent.length, 1); assert.equal(one.sent[0][3].careOffer.isoDate, '2026-10-22');
+  })();
+});
+test('(C) careOpenNeeds returns openDays beside openCount (closed / taken / skipped / past days left out)', () => {
+  const src = fnBody(MEALS_JSX, 'function mealsDateRange(', 'mealsDateRange') + '\n' + fnBody(MEALS_JSX, 'function careOpenNeeds(', 'careOpenNeeds');
+  const f = new Function('needTitle', 'mealsTypeLabel', src + '\nreturn careOpenNeeds;')((n) => n.displayLabel, () => 'Rides');
+  const out = f([NEED1], [{ needId: 'n1', isoDate: '2026-10-20' }], [{ needId: 'n1', isoDate: '2026-10-22' }], '2026-10-15');
+  assert.deepEqual(out[0].openDays, ['2026-10-21']); assert.equal(out[0].openCount, 1);
+  assert.deepEqual(f([NEED1], [], [], '2026-10-21')[0].openDays, ['2026-10-21', '2026-10-22'], 'a day before today was offered');
+});
 test('(C) MULTIPLE open needs: a tap shows a picker (no send yet); choosing a need sends that one', async () => {
   const two = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1, NEED2] });
   await inviteBtn(two).props.onClick();
@@ -364,7 +405,7 @@ test('(D) the Care page puts space above "Start care"', () => {
 });
 
 test('(C) the status the row records matches what happened: sent -> ok, waiting -> queued, nothing sent -> err (never ok)', async () => {
-  const kinds = async (sendDM) => { const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1], sendDM }); await inviteBtn(r).props.onClick(); return r.statusLog.map(l => l[ADULT].kind); };
+  const kinds = async (sendDM) => { const r = renderReady({ avail: [offer(ADULT)], open: true, needs: [NEED1_ONEDAY], sendDM }); await inviteBtn(r).props.onClick(); return r.statusLog.map(l => l[ADULT].kind); };
   assert.deepEqual(await kinds(async () => ({ id: 'e' })), ['busy', 'ok']);
   assert.deepEqual(await kinds(async () => ({ id: 'e', _queued: true })), ['busy', 'queued']);
   assert.deepEqual(await kinds(async () => null), ['busy', 'err'], 'a send that did not happen was confirmed');
@@ -410,4 +451,43 @@ test('(A4-6) RACE: the minors doc arrives after first paint -- the child is neve
   assert.ok(!/Ellie|Margaret/.test(dflt.all), 'an absent minorsDocSeen must fail closed');
   const after = renderReady({ avail, minors: [CHILD], minorsKnown: true, minorsDocSeen: true, acting: true, caps: ['care'], open: true });
   assert.ok(!/Ellie/.test(after.all)); assert.match(after.all, /Margaret/);
+});
+
+// ── (E) CARE MATCHING (2026-10-16): the console reads "when I'm free" and offers a specific DAY ───────────────
+test('(E) the console reader carries dates; a doc without them reads dates:null; a backwards window reads as none', () => {
+  const r = loadReader(); r.giveKey();
+  r.send(r.ev(ADULT, { available: true, tags: [], note: '', dates: { from: '2026-10-20', to: '2026-10-25' } }, 100));
+  r.send(r.ev(SECOND, { available: true, tags: [], note: '' }, 100));
+  r.send(r.ev(CHILD, { available: true, tags: [], note: '', dates: { from: '2026-10-25', to: '2026-10-20' } }, 100)); r.eose();
+  const by = (p) => r.last().find(x => x.pubkey === p);
+  assert.deepEqual(by(ADULT).dates, { from: '2026-10-20', to: '2026-10-25' });
+  assert.equal(by(SECOND).dates, null, 'a doc with no dates must read dates:null');
+  assert.equal(by(CHILD).dates, null);
+});
+
+test('(E) a child and a blocked member get NO row and NO Offer button, even with an open need; an adult does', () => {
+  const avail = [offer(CHILD), offer(SECOND), offer(ADULT)];
+  const r = renderReady({ avail, minors: [CHILD], blocked: [SECOND], open: true, needs: [NEED1], picking: ADULT });
+  const offers = r.buttons.filter(b => /^Offer /.test(btnText(b)));
+  assert.equal(offers.length, 3, 'CONTROL: the adult must have the three day buttons (otherwise the absences below are vacuous)');
+  assert.equal(inviteBtn(r, 1), undefined, 'a second row (child/blocked) has an Invite button');
+  assert.ok(!/Ellie|Tomas/.test(r.all), 'a child or blocked member is on the list');
+  for (const who of [CHILD, SECOND]) {
+    const x = renderReady({ avail, minors: [CHILD], blocked: [SECOND], open: true, needs: [NEED1], picking: who });
+    assert.equal(x.buttons.filter(b => /^Offer /.test(btnText(b))).length, 0, 'the day picker opened for ' + who);
+  }
+});
+
+test('(E) careInvite with a day passes meta.careOffer as the 4th argument; without a day it is the old two-argument call; the honest contract holds', async () => {
+  const f = new Function('window', fnBody(MEALS_JSX, 'function careDayLabel(', 'careDayLabel') + '\n' + fnBody(MEALS_JSX, 'async function careInvite(', 'careInvite') + '\nreturn careInvite;')({});
+  const P = { pubkey: ADULT, name: 'Margaret' }; const N = { id: 'n1', title: 'Verity — a lift', type: 'Rides', openCount: 2, openDays: ['2026-10-20', '2026-10-21'] };
+  let args = null; const rec = (ret) => async (...a) => { args = a; return ret; };
+  assert.deepEqual(await f(rec({ id: 'e' }), P, N, '2026-10-21'), { ok: true });
+  assert.deepEqual(args[3], { careOffer: { needId: 'n1', isoDate: '2026-10-21' } }); assert.equal(args[0], ADULT);
+  assert.match(args[1], /Wed 21 Oct/); assert.match(args[1], /Verity — a lift/);
+  assert.deepEqual(await f(rec({ id: 'e', _queued: true }), P, N, '2026-10-21'), { ok: true, queued: true });
+  assert.deepEqual(await f(rec(null), P, N, '2026-10-21'), { ok: false });
+  assert.deepEqual(await f(async () => { throw new Error('x'); }, P, N, '2026-10-21'), { ok: false });
+  await f(rec({ id: 'e' }), P, N);
+  assert.equal(args.length, 2, 'no day: must stay the old two-argument call');
 });

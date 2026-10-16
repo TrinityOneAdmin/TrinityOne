@@ -63,7 +63,7 @@ for (const [who, e] of [['member app', fel], ['console', stw]]) {
 }
 test('BACKWARDS COMPAT: old messages (bare, and v:1 reply) unwrap with noReply false in BOTH engines', () => {
   for (const u of [fel._dmUnwrap, stw._dmUnwrap]) {
-    assert.deepEqual(u('plain words'), { text: 'plain words', replyTo: null, noReply: false, eventId: null });
+    assert.deepEqual(u('plain words'), { text: 'plain words', replyTo: null, noReply: false, eventId: null, careOffer: null });
     const r = u(JSON.stringify({ v: 1, t: 'old reply', r: 'xyz' }));
     assert.equal(r.text, 'old reply'); assert.equal(r.replyTo, 'xyz'); assert.equal(r.noReply, false);
     assert.equal(u('{not json').text, '{not json');

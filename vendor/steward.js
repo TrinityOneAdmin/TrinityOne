@@ -18414,25 +18414,28 @@ zoo`.split("\n");
   var _dmWrap = (text, replyTo, meta) => {
     const hasR = !!(replyTo && replyTo.id);
     const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : "";
-    if (!hasR && !nr && !ev) return text;
+    const cx = meta && meta.careOffer;
+    const co = cx && cx.needId && /^\d{4}-\d{2}-\d{2}$/.test(String(cx.isoDate || "")) ? { n: String(cx.needId).slice(0, 64), d: String(cx.isoDate) } : null;
+    if (!hasR && !nr && !ev && !co) return text;
     try {
       const o = { v: 1, t: String(text) };
       if (hasR) o.r = String(replyTo.id).slice(0, 64);
       if (nr) o.nr = 1;
       if (ev) o.ev = ev;
+      if (co) o.co = co;
       return JSON.stringify(o);
     } catch (e) {
       return text;
     }
   };
   var _dmUnwrap = (body) => {
-    if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null };
+    if (typeof body !== "string" || body[0] !== "{") return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
     try {
       const o = JSON.parse(body);
-      if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null };
+      if (o && o.v === 1 && typeof o.t === "string") return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null, careOffer: o.co && o.co.n && /^\d{4}-\d{2}-\d{2}$/.test(String(o.co.d || "")) ? { needId: String(o.co.n).slice(0, 64), isoDate: String(o.co.d) } : null };
     } catch (e) {
     }
-    return { text: body, replyTo: null, noReply: false, eventId: null };
+    return { text: body, replyTo: null, noReply: false, eventId: null, careOffer: null };
   };
   var _sOutKey = () => "trinityone.steward.outbox:" + (pub || "");
   var _sOutbox = [];
