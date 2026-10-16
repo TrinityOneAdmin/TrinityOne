@@ -652,6 +652,22 @@ window.HelpData = {
       ],
     },
     {
+      id: 'console-care',
+      illo: 'heart',
+      title: 'Care: a request, then a need',
+      summary: 'A request is someone asking you privately. Turn it into a need, and the church can sign up — then you can invite the people who offered.',
+      minutes: 2,
+      blocks: [
+        { type: 'p', text: 'The Care page has two different things on it, and they come in order.' },
+        { type: 'list', items: [
+          { lead: 'A request for help', text: 'Someone has asked you, privately — only cleared stewards see it, never the church. You answer it: set up help, message them, or close it.' },
+          { lead: 'A need', text: 'The visible version — a task with days the whole church can see and sign up to. You make one by tapping “Set up help” on a request, or “Start care” to open one from scratch (a meal train, lifts, visits). Pick the days and it goes up.' },
+        ] },
+        { type: 'p', text: '“Ready to help” lists members who tapped “I’m here to help”. “Invite to a need” asks one of them to take a day of an open need — so it stays greyed until a need with a free day exists. Nothing open yet? Start care, or set up help on a request, first.' },
+        { type: 'note', text: 'A young person’s request is never turned into a need: it has no “Set up help” and stays confidential to cleared stewards. A need is a notice board the whole church reads — a child’s disclosure never belongs there.' },
+      ],
+    },
+    {
       id: 'console-family-safety',
       illo: 'people',
       title: 'Keeping young people safe — what you set here',
