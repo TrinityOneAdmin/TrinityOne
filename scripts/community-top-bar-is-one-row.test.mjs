@@ -156,9 +156,9 @@ async function rects(i) {
     const bar = q('[data-top-bar]');
     const btn = t => q('[title="' + t + '"]');
     const icons = ${JSON.stringify(ICONS)};
-    const sel = bar ? [...bar.querySelectorAll('button')].find(b => !icons.includes(b.getAttribute('title'))) : null;
-    const nameEl = [...document.querySelectorAll('button div, button span')].find(e => e.children.length === 0 && e.textContent.trim() === ${JSON.stringify(LONG)});
-    const banner = q('button[style*="aspect-ratio"]');
+    const sel = bar ? bar.querySelector('[data-church-pill]') : null;
+    const nameEl = [...document.querySelectorAll('[data-church-pill] div, [data-church-pill] span')].find(e => e.children.length === 0 && e.textContent.trim() === ${JSON.stringify(LONG)});
+    const banner = q('[data-church-pill][style*="aspect-ratio"]');
     return JSON.stringify({ vw: document.documentElement.clientWidth, mode: bar && bar.getAttribute('data-top-bar'),
       bar: box(bar), sel: box(sel), banner: box(banner), search: box(btn('Search')), dm: box(btn('Direct messages')), me: box(btn('Your anonymous identity')),
       nameBox: box(nameEl), reach: [btn('Search'), btn('Direct messages'), btn('Your anonymous identity')].map(b => { if (!b) return false; const r = b.getBoundingClientRect(); const t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!t && b.contains(t); }),

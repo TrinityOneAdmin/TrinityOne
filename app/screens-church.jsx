@@ -97,7 +97,8 @@ function ChurchBadge({ church, size = 46, radius = 14 }) {
 }
 window.ChurchBadge = ChurchBadge;
 
-// compact header pill used at the top of Chat — shows current church, opens switcher
+// header shown at the top of Chat — shows the current church. Display only: switching and following a
+// church moved to You -> “Follow a church” (owner 2026-10-16), so this no longer opens the switcher.
 function ChurchPill({ ctx }) {
   const c = ctx.church;
   if (!c) return null;
@@ -107,10 +108,9 @@ function ChurchPill({ ctx }) {
     const bf = (typeof c.bannerFade === 'number') ? Math.max(0, Math.min(80, c.bannerFade)) : 16;   // steward-set fade %; default 16 = the original look (cap 80 matches the console slider)
     const bmask = bf > 0 ? `linear-gradient(to bottom, #000 ${100 - bf}%, transparent)` : 'none';
     return (
-      <button onClick={ctx.openChurchSwitcher} style={{
+      <div data-church-pill="1" style={{
         position: 'relative', display: 'block', width: '100%',
-        overflow: 'hidden', cursor: 'pointer', textAlign: 'left',
-        border: 'none', background: 'transparent', padding: 0, margin: 0, appearance: 'none', WebkitAppearance: 'none',   // full-bleed banner: no default button border/background/padding (that was the faint frame)
+        overflow: 'hidden', textAlign: 'left',
         aspectRatio: '3 / 1',
       }}>
         {/* image + legibility scrim on a MASKED layer — the steward's fade blends THIS into the page.
@@ -119,26 +119,23 @@ function ChurchPill({ ctx }) {
           <span style={{ position: 'absolute', inset: 0, background: `center/cover no-repeat url("${banner}")` }} />
           <span style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.62), rgba(0,0,0,0) 62%)' }} />
         </span>
-        <span style={{ position: 'absolute', right: 12, bottom: 12, width: 30, height: 30, borderRadius: 999, background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={18} stroke={2.4} color="#fff" /></span>
         <span data-banner-name="1" style={{ position: 'absolute', left: 14, top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 156, display: 'flex', alignItems: 'center', gap: 11 }}>
           <ChurchBadge church={c} size={40} radius={12} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: c.titleColor || '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
         </span>
-      </button>
+      </div>
     );
   }
-  // compact single-line pill — the badge + chevron already say "tap to switch church",
-  // so the old two-line "Your church" caption is dropped to save vertical space.
+  // compact single-line header — display only (the chevron/switch tap moved to You -> Follow a church).
   return (
-    <button onClick={ctx.openChurchSwitcher} style={{
+    <div data-church-pill="1" style={{
       display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, border: '1px solid var(--line)',
-      background: 'var(--surface)', borderRadius: 14, padding: '7px 11px', cursor: 'pointer',
+      background: 'var(--surface)', borderRadius: 14, padding: '7px 11px',
       boxShadow: 'var(--shadow)', textAlign: 'left',
     }}>
       <ChurchBadge church={c} size={30} radius={9} />
       <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>{c.name}</div>
-      <Icon name="chevD" size={18} stroke={2.2} color="var(--ink-3)" />
-    </button>
+    </div>
   );
 }
 window.ChurchPill = ChurchPill;
