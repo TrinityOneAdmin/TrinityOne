@@ -79,9 +79,17 @@ function careCoverLabel(dayCount, openCount) {
 function careNeedDays(need, slots, skips) {
   const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
   const skipSet = new Set((skips || []).filter(k => k.needId === need.id).map(k => k.isoDate));
-  const taken = (iso) => (slots || []).some(s => s.needId === need.id && s.isoDate === iso);
-  const openDays = dates.filter(d => !skipSet.has(d) && !taken(d));
-  return { dates, openDays, covered: dates.length > 0 && openDays.length === 0 };
+  // A meals need splits a day into its meals; each (day, meal) is a unit that needs its own helper. Any other
+  // need is one unit per day (''). A LEGACY slot with no meal ('') covers EVERY meal of its day, so sign-ups
+  // written before per-meal slots still read as covered. `unitsOf`/`takenUnit` are returned so the row and the
+  // badge count the same way the coverage does.
+  const mealsOf = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
+  const unitsOf = (iso) => { const ms = mealsOf(iso); return ms.length ? ms : ['']; };
+  const takenUnit = (iso, m) => (slots || []).some(s => s.needId === need.id && s.isoDate === iso && ((s.meal || '') === m || (s.meal || '') === ''));
+  let openUnits = 0, totalUnits = 0;
+  for (const d of dates) { if (skipSet.has(d)) continue; for (const m of unitsOf(d)) { totalUnits++; if (!takenUnit(d, m)) openUnits++; } }
+  const openDays = dates.filter(d => !skipSet.has(d) && unitsOf(d).some(m => !takenUnit(d, m)));
+  return { dates, openDays, openUnits, totalUnits, unitsOf, takenUnit, covered: totalUnits > 0 && openUnits === 0 };
 }
 
 // "WHEN I'M FREE" on a member's availability. Both ends blank = no window (null, the doc is written exactly as
@@ -107,31 +115,79 @@ function careAvailRangeLabel(d) {
 
 function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, canVolunteer }) {
   const myPub = care.myPub || '';
-  const { dates, openDays } = careNeedDays(need, slots, skips);
+  // PER-MEAL UNITS (owner 2026-10-16). A meals need splits each day into its meals; every (day, meal) is its
+  // own claimable unit with its own helper, drop-off time and "what I'm bringing" note. Any other need stays
+  // one unit per day (meal ''). careNeedDays owns the unit maths and the legacy rule (a slot with no meal
+  // covers the whole day), so the row and the coverage never disagree.
+  const { dates, openDays, unitsOf, takenUnit, openUnits, totalUnits } = careNeedDays(need, slots, skips);
+  const doneUnits = Math.max(0, totalUnits - openUnits);
   const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
-  const fillsFor = (iso) => slots.filter(s => s.needId === need.id && s.isoDate === iso);
+  // slots covering a unit: that meal, or a legacy whole-day slot ('').
+  const coversUnit = (iso, meal) => slots.filter(s => s.needId === need.id && s.isoDate === iso && ((s.meal || '') === meal || (s.meal || '') === ''));
+  const myFillFor = (iso, meal) => coversUnit(iso, meal).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()) || null;
+  const dayHasFill = (iso) => unitsOf(iso).some(m => coversUnit(iso, m).length > 0);
   const isRecipient = !!need.recipient && need.recipient === myPub.toLowerCase();
   const cover = careCoverLabel(dates.length, openDays.length);
-  const filledDays = dates.filter(d => fillsFor(d).length > 0).length;
   const accent = 'var(--sage)';
-  // per-day meals (meals tasks): the day's override, else the need default
   const MEAL_SHORT = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' };
   const mealsFor = (iso) => (need.type === 'meals') ? ((need.dayMeals && need.dayMeals[iso] && need.dayMeals[iso].length) ? need.dayMeals[iso] : (Array.isArray(need.meals) ? need.meals : [])) : [];
-  // "what I'm bringing" — editable note on the helper's own slot (so two people don't bring the same dish)
+  // steward-set optional drop-off time for a unit: keyed "<iso>:<meal>" for a meal, "<iso>" day-level.
+  const timeFor = (iso, meal) => (need.slotTimes && (need.slotTimes[meal ? iso + ':' + meal : iso])) || '';
+  const fmtTime = (t) => { const m = /^(\d{2}):(\d{2})$/.exec(String(t || '')); if (!m) return ''; let h = +m[1]; const ap = h < 12 ? 'am' : 'pm'; h = h % 12 || 12; return h + (m[2] === '00' ? '' : ':' + m[2]) + ap; };
+  // "what I'm bringing" — editable note on the helper's own slot, keyed per unit so Lunch and Dinner differ.
   const [noteDraft, setNoteDraft] = React.useState({});
   const [savedFlash, setSavedFlash] = React.useState({});
-  const myNoteFor = (iso) => { const f = fillsFor(iso).find(x => x.pubkey && x.pubkey.toLowerCase() === myPub.toLowerCase()); return f ? (f.note || '') : ''; };
-  // "✓ Saved" WAS DRAWN BEFORE THE ANSWER CAME BACK. The note ("bringing a lasagne, no nuts") is the one
-  // field here that other people act on, and the flash fired synchronously whatever happened — so the batch
-  // that added a failure toast on 2026-09-04 put a green tick beside its own error message. Audit same day.
-  const saveNote = (iso) => {
-    const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso);
-    // ⚠ `r && r.ok`, NEVER `if (r)`. fillCareSlot now answers an OBJECT — { ok, reason } — and an object is
-    // always truthy, so a plain truthiness test paints the green "✓ Saved" tick over every failure, which is
-    // the trap markSafe set. The toast beside it comes from care.setNote in app.jsx.
-    Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim()))
-      .then(r => { if (r && r.ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
+  const uKey = (iso, meal) => iso + '|' + meal;
+  const myNoteFor = (iso, meal) => { const f = myFillFor(iso, meal); return f ? (f.note || '') : ''; };
+  // "✓ Saved" must wait for the answer — fillCareSlot returns { ok, reason }, an always-truthy object, so a
+  // plain truthiness test would tick over a failure. The note is saved on MY slot's own meal (legacy '' if my
+  // slot predates per-meal), so the right document is replaced.
+  const saveNote = (iso, meal) => {
+    const k = uKey(iso, meal);
+    const mine = myFillFor(iso, meal);
+    const slotMeal = mine ? (mine.meal || '') : meal;
+    const cur = noteDraft[k] !== undefined ? noteDraft[k] : myNoteFor(iso, meal);
+    Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim(), slotMeal))
+      .then(r => { if (r && r.ok) setSavedFlash(f => ({ ...f, [k]: true })); })
       .catch(() => {});
+  };
+  // one unit (a day's meal, or a whole non-meals day). `showMeal` labels the meal; the day header above owns
+  // the date and the recipient's day-level skip.
+  const unitRow = (iso, meal, skipped) => {
+    const fills = coversUnit(iso, meal);
+    const mine = myFillFor(iso, meal);
+    const mineFilled = !!mine;
+    const t = fmtTime(timeFor(iso, meal));
+    const k = uKey(iso, meal);
+    return (
+      <React.Fragment key={k}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
+          <div style={{ minWidth: meal ? 78 : 96 }}>
+            {meal ? <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{MEAL_SHORT[meal] || meal}</div> : null}
+            {t ? <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>by {t}</div> : null}
+          </div>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
+            {skipped ? <span>{mineFilled ? 'They’re covered — no need, thanks 🙏' : 'Not needed'}</span>
+              : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
+              : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
+          </div>
+          {/* ONE HELPER PER UNIT. A unit someone else has taken reads as covered and offers no second sign-up,
+              so two people never bring the same meal; my own stays cancellable; only a genuinely Open unit
+              offers "I'll help". A child (canVolunteer === false) is never offered it. */}
+          {!skipped && !isRecipient && (mineFilled
+            ? <button onClick={() => care.clearFill(need.id, iso, mine.meal || '')} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
+            : fills.length
+            ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
+            : (canVolunteer === false ? null : <button onClick={() => care.fill(need.id, iso, undefined, meal)} style={careBtnHelp}>I’ll help</button>))}
+        </div>
+        {mineFilled && !skipped && need.type === 'meals' ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
+            <input value={noteDraft[k] !== undefined ? noteDraft[k] : myNoteFor(iso, meal)} onChange={e => { const v = e.target.value; setNoteDraft(nd => ({ ...nd, [k]: v })); setSavedFlash(f => ({ ...f, [k]: false })); }} onBlur={() => saveNote(iso, meal)} onKeyDown={e => { if (e.key === 'Enter') { saveNote(iso, meal); e.currentTarget.blur(); } }} placeholder="What are you bringing?" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+            <button onClick={() => saveNote(iso, meal)} style={{ flexShrink: 0, padding: '7px 13px', borderRadius: 9, border: 'none', background: savedFlash[k] ? 'color-mix(in oklab, var(--sage) 20%, var(--surface))' : 'var(--clay)', color: savedFlash[k] ? 'var(--sage)' : '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{savedFlash[k] ? '✓ Saved' : 'Save'}</button>
+          </div>
+        ) : null}
+      </React.Fragment>
+    );
   };
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden', background: 'var(--surface)' }}>
@@ -141,7 +197,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, 
           <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>{need.displayLabel || 'A member in our church'}</div>
           <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 1 }}>{careTypeLabel(need)} · {cover.text}</div>
         </div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: cover.done ? accent : 'var(--ink-3)' }}>{filledDays}/{dates.length}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: cover.done ? accent : 'var(--ink-3)' }}>{doneUnits}/{totalUnits}</div>
         <Icon name={expanded ? 'chevD' : 'chevR'} size={16} color="var(--ink-3)" />
       </button>
       {expanded && (
@@ -154,42 +210,20 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, 
           ) : null}
           {dates.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '8px 0' }}>No dates set yet.</div> : dates.map(iso => {
             const skipped = skipSet.has(iso);
-            const fills = fillsFor(iso);
-            const mineFilled = fills.some(f => f.pubkey && f.pubkey.toLowerCase() === myPub.toLowerCase());
-            const dayMeals = mealsFor(iso);
+            const units = unitsOf(iso);
+            const perMeal = need.type === 'meals' && mealsFor(iso).length > 0;
+            const fills = dayHasFill(iso);
+            // recipient / care-team day-level control — per DAY, not per meal (owner 2026-10-16)
+            const dayCtl = (isRecipient || (canManage && !fills)) ? (skipped
+              ? <button onClick={() => care.clearSkip(need.id, iso, need._skipEnc, need._by)} style={careBtnGhost}>Undo</button>
+              : <button onClick={() => care.skip(need.id, iso, '', need._skipEnc, need._by)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills ? 'Thanks — I’m covered' : 'I’m covered') : 'Skip'}</button>) : null;
             return (
               <div key={iso} style={{ borderTop: '1px solid color-mix(in oklab, var(--line) 60%, transparent)', opacity: skipped ? 0.55 : 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
-                  <div style={{ minWidth: 96 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{careFmtDate(iso)}</div>
-                    {dayMeals.length ? <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMeals.map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
-                    {skipped ? <span>{mineFilled ? 'They’re covered — no need, thanks 🙏' : 'Not needed this day'}</span>
-                      : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
-                      : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
-                  </div>
-                  {/* ONE HELPER PER DAY. The middle column already names who is bringing what; offering "I'll
-                      help" on a day someone ELSE has taken let two people sign up for the same slot and turn up
-                      with the same meal — the exact thing the help page promises the app prevents ("it shows as
-                      covered so two people don't turn up for the same slot"), and a simulated member did it by
-                      accident. So: my own signup stays cancellable; a day taken by someone else reads as
-                      covered and does not offer a second signup; only a genuinely Open day offers "I'll help". */}
-                  {!skipped && !isRecipient && (mineFilled
-                    ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
-                    : fills.length
-                    ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
-                    : (canVolunteer === false ? null : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>))}
-                  {(isRecipient || (canManage && fills.length === 0)) && (skipped
-                    ? <button onClick={() => care.clearSkip(need.id, iso, need._skipEnc, need._by)} style={careBtnGhost}>Undo</button>
-                    : <button onClick={() => care.skip(need.id, iso, '', need._skipEnc, need._by)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills.length ? 'Thanks — I’m covered' : 'I’m covered') : 'Skip'}</button>)}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0 3px' }}>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{careFmtDate(iso)}</div>
+                  {dayCtl}
                 </div>
-                {mineFilled && !skipped && need.type === 'meals' ? (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
-                    <input value={noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso)} onChange={e => { const v = e.target.value; setNoteDraft(nd => ({ ...nd, [iso]: v })); setSavedFlash(f => ({ ...f, [iso]: false })); }} onBlur={() => saveNote(iso)} onKeyDown={e => { if (e.key === 'Enter') { saveNote(iso); e.currentTarget.blur(); } }} placeholder="What are you bringing?" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-                    <button onClick={() => saveNote(iso)} style={{ flexShrink: 0, padding: '7px 13px', borderRadius: 9, border: 'none', background: savedFlash[iso] ? 'color-mix(in oklab, var(--sage) 20%, var(--surface))' : 'var(--clay)', color: savedFlash[iso] ? 'var(--sage)' : '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{savedFlash[iso] ? '✓ Saved' : 'Save'}</button>
-                  </div>
-                ) : null}
+                {perMeal ? units.map(m => unitRow(iso, m, skipped)) : unitRow(iso, '', skipped)}
               </div>
             );
           })}

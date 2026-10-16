@@ -128,7 +128,7 @@ function fill({ self }) {
     _sgSelf: sgSelf, _mePub: () => ME,
     _sgMine: new Function('_sgSelf', '_mePub', fnBody(BUNDLE, 'function _sgMine(cp)', '_sgMine') + '\nreturn _sgMine;')(sgSelf, () => ME),
   };
-  const body = fnBody(BUNDLE, 'async fillCareSlot(careId, iso, note) {', 'fillCareSlot');
+  const body = fnBody(BUNDLE, 'async fillCareSlot(careId, iso, note, meal) {', 'fillCareSlot');
   scope[(body.match(/\b(finalizeEvent\d*)\(/) || [])[1]] = scope.finalizeEvent;
   const proxy = new Proxy(scope, {
     has: (t, k) => (k in t) || !(k in globalThis),

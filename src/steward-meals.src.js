@@ -145,6 +145,13 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
           .filter(([k, v]) => isoDate(k) && days.includes(k) && normMeals(v).join() !== meals.join())
           .map(([k, v]) => [k, normMeals(v)]))
       : {};
+    // optional per-slot drop-off TIMES (owner 2026-10-16): key "<iso>" (day-level, e.g. a ride) or "<iso>:<meal>"
+    // for a meals need; value "HH:MM". CLEAR like dates/meals (not PII), so an unkeyed member still sees when to
+    // turn up. Bounded by `days` (<=90) x 3 meals.
+    const timeOf = (s) => /^\d{2}:\d{2}$/.test(String(s || '')) ? String(s) : '';
+    const slotTimes = Object.fromEntries(Object.entries((n.slotTimes && typeof n.slotTimes === 'object') ? n.slotTimes : {})
+      .filter(([k, v]) => { const parts = String(k).split(':'); return isoDate(parts[0]) && days.includes(parts[0]) && (parts.length === 1 || (parts.length === 2 && MEALS_OK.includes(parts[1]))) && timeOf(v); })
+      .map(([k, v]) => [k, timeOf(v)]));
     return {
       displayLabel: String(n.displayLabel || '').trim(),
       type,
@@ -154,6 +161,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
       dates: days,
       meals,
       dayMeals,
+      slotTimes,
       startDate: days[0] || isoDate(n.startDate),
       endDate:   days[days.length - 1] || isoDate(n.endDate),
       recipient: (typeof n.recipient === 'string' && /^[0-9a-f]{64}$/i.test(n.recipient)) ? n.recipient.toLowerCase() : '',
@@ -338,13 +346,14 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
           const rest = d.slice(prefix.length).split(':');
           const needId  = rest[0] || '';
           const isoDate = rest[1] || '';
+          const meal    = rest[2] || '';   // per-meal slot identity; '' = legacy whole-day slot and every skip
           if (!needId || !isoDate) return;
-          const key = needId + '|' + isoDate + '|' + e.pubkey;
+          const key = needId + '|' + isoDate + '|' + meal + '|' + e.pubkey;
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
           if (deleted) { byKey.delete(key); emit(); return; }
           try {
             const obj = JSON.parse(e.content || '{}');
-            byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...normalise(obj) });
+            byKey.set(key, { needId, isoDate, meal, pubkey: e.pubkey, ts: e.created_at, ...normalise(obj) });
             emit();
           } catch (err) {}
         },

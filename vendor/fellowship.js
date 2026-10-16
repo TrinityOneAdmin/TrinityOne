@@ -13659,7 +13659,7 @@
               sealed = !s2;
             }
             const f = s2 ? { ...c, ...s2 } : c;
-            _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || "meals"], startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, ts: e.created_at }, _trust);
+            _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || "", displayLabel: f.displayLabel || "", type: f.type || "meals", types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || "meals"], startDate: f.startDate || "", endDate: f.endDate || "", recipient: (f.recipient || "").toLowerCase(), notes: f.notes || "", dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: f.dayMeals && typeof f.dayMeals === "object" ? f.dayMeals : {}, slotTimes: f.slotTimes && typeof f.slotTimes === "object" ? f.slotTimes : {}, ts: e.created_at }, _trust);
             emit();
           } catch {
           }
@@ -13701,16 +13701,16 @@
         onevent(e, d) {
           if (!d.startsWith(prefix)) return;
           const rest = d.slice(prefix.length).split(":");
-          const needId = rest[0] || "", isoDate = rest[1] || "";
+          const needId = rest[0] || "", isoDate = rest[1] || "", meal = rest[2] || "";
           if (!needId || !isoDate) return;
-          const key = needId + "|" + isoDate + "|" + e.pubkey;
+          const key = needId + "|" + isoDate + "|" + meal + "|" + e.pubkey;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byKey.delete(key);
             emit();
             return;
           }
           try {
-            byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || "{}")) });
+            byKey.set(key, { needId, isoDate, meal, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || "{}")) });
             emit();
           } catch {
           }
@@ -14222,7 +14222,7 @@
         }
       };
     },
-    async fillCareSlot(careId, iso, note) {
+    async fillCareSlot(careId, iso, note, meal) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -14233,7 +14233,9 @@
       if (!sk || !cp || !careId || !iso) return null;
       const _me = _sgMine(cp);
       if (_me && _me.isMinor) return { ok: false, reason: "minor" };
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || "").trim() }) }, sk);
+      const _meal = String(meal || "").trim();
+      const _slotD = CARESLOT_D + careId + ":" + iso + (_meal ? ":" + _meal : "");
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || "").trim() }) }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14242,7 +14244,7 @@
       }
       return { ok: true, evt };
     },
-    async clearCareSlot(careId, iso) {
+    async clearCareSlot(careId, iso, meal) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -14251,7 +14253,9 @@
         }
       }
       if (!sk || !cp || !careId || !iso) return null;
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      const _meal = String(meal || "").trim();
+      const _slotD = CARESLOT_D + careId + ":" + iso + (_meal ? ":" + _meal : "");
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {

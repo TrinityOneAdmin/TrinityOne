@@ -7238,7 +7238,7 @@ window.Fellowship = {
           let s2 = null, sealed = false;
           if (c.enc) { s2 = _careOpen(pubk, c.enc); sealed = !s2; }
           const f = s2 ? { ...c, ...s2 } : c;
-          _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || '', displayLabel: f.displayLabel || '', type: f.type || 'meals', types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || 'meals'], startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, ts: e.created_at }, _trust); emit();
+          _absorbById(versions, byId, id, { id, _by: e.pubkey, _sealed: sealed, _skipEnc: c.skipEnc || '', displayLabel: f.displayLabel || '', type: f.type || 'meals', types: Array.isArray(f.types) && f.types.length ? f.types : [f.type || 'meals'], startDate: f.startDate || '', endDate: f.endDate || '', recipient: (f.recipient || '').toLowerCase(), notes: f.notes || '', dietary: Array.isArray(f.dietary) ? f.dietary : [], dates: Array.isArray(f.dates) ? f.dates : [], meals: Array.isArray(f.meals) ? f.meals : [], dayMeals: (f.dayMeals && typeof f.dayMeals === 'object') ? f.dayMeals : {}, slotTimes: (f.slotTimes && typeof f.slotTimes === 'object') ? f.slotTimes : {}, ts: e.created_at }, _trust); emit();
         } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
@@ -7262,11 +7262,13 @@ window.Fellowship = {
       onevent(e, d) {
         if (!d.startsWith(prefix)) return;
         const rest = d.slice(prefix.length).split(':');
-        const needId = rest[0] || '', isoDate = rest[1] || '';
+        const needId = rest[0] || '', isoDate = rest[1] || '', meal = rest[2] || '';
         if (!needId || !isoDate) return;
-        const key = needId + '|' + isoDate + '|' + e.pubkey;
+        // meal is part of the identity so a day's Lunch and Dinner are separate entries; '' is the legacy
+        // whole-day slot (and every careskip:, which has no meal).
+        const key = needId + '|' + isoDate + '|' + meal + '|' + e.pubkey;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byKey.delete(key); emit(); return; }
-        try { byKey.set(key, { needId, isoDate, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || '{}')) }); emit(); } catch {}
+        try { byKey.set(key, { needId, isoDate, meal, pubkey: e.pubkey, ts: e.created_at, ...map(JSON.parse(e.content || '{}')) }); emit(); } catch {}
       },
       oneose() { eosed = true; if (byKey.size) emit(); },   // sticky: don't blank slots/skips on a reconnect's empty EOSE; genuine clears come via the delete path
     });
@@ -7780,7 +7782,7 @@ window.Fellowship = {
     });
     return () => { emit.cancel(); try { sub.close(); } catch {} };   // cancel the queued emit: it would otherwise fire a tick after teardown
   },
-  async fillCareSlot(careId, iso, note) {
+  async fillCareSlot(careId, iso, note, meal) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
@@ -7791,7 +7793,12 @@ window.Fellowship = {
     // (an owner decision), so a modified build can still write one straight at the relay.
     const _me = _sgMine(cp);
     if (_me && _me.isMinor) return { ok: false, reason: 'minor' };
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
+    // PER-MEAL SLOTS (owner 2026-10-16). A meals need splits each day into its meals; the meal rides in the
+    // d-tag so Lunch and Dinner are two distinct replaceable docs that never overwrite each other. ADDITIVE:
+    // an empty meal is the legacy whole-day slot, so every slot written before this keeps meaning "the day".
+    const _meal = String(meal || '').trim();
+    const _slotD = CARESLOT_D + careId + ':' + iso + (_meal ? ':' + _meal : '');
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || '').trim() }) }, sk);
     // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
     // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.
     //
@@ -7804,11 +7811,13 @@ window.Fellowship = {
     catch (e) { console.warn('[fellowship] care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
-  async clearCareSlot(careId, iso) {
+  async clearCareSlot(careId, iso, meal) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
+    const _meal = String(meal || '').trim();
+    const _slotD = CARESLOT_D + careId + ':' + iso + (_meal ? ':' + _meal : '');
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
     // still the only name against that day. Same three outcomes, same fixed d-tag, so the same safe retry.
     try { await _publishAny(publishSetFor(cp), evt); }
