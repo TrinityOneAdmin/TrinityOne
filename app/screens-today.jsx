@@ -1027,15 +1027,13 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   );
 }
 
-// linkOnly = the Today screen. Today shows the ask as a LINK to the Care page and opens no sheet of its own.
-// Not a style preference: Today wraps this section in `animation: trinityFade … both`, and the identity
-// transform an animation leaves behind becomes the containing block for `position: absolute`. Both sheets
-// below are absolute+inset:0 backdrops — the house pattern, correct in 48 other places — so on Today they were
-// trapped inside the card's own 122px box, drawn over the "Practical care" heading with their content cut off
-// mid-word. Measured on the OPPO, 2026-08-27: overlay 324x107 at top 429 instead of full screen.
-// The card only moved to Today in af7824b, because three members hunted for care inside "Serving & events"
-// and never found it. Keep that discoverability; open the form where its backdrop still works.
-function AskForHelp({ ctx, linkOnly }) {
+// AskForHelp lives on the Care page only (owner 2026-10-16 moved care off Today). Both sheets it opens are
+// absolute+inset:0 backdrops — the house pattern — and the Care page's overlay is their containing block, so
+// they draw full-screen. (On Today, where this used to also render, the card's `animation: trinityFade` left an
+// identity transform that trapped those backdrops in a 122px box over the "Practical care" heading — the
+// reason the Today copy only ever LINKED to Care. Today now reaches Care through the badged "Care" link on the
+// What's happening card instead; see careForMe.)
+function AskForHelp({ ctx }) {
   const care = ctx.care || {};
   const myPub = (care.myPub || '').toLowerCase();
   const careOn = !!(care.settings && care.settings.enabled);
@@ -1085,8 +1083,8 @@ function AskForHelp({ ctx, linkOnly }) {
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>
-      {mine.map(r => <MyRequestRow key={r.id} r={r} isMinor={neutralWords} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: (neutralWords ? 'Your church' : 'Your care team') }); }} />)}
-      {!linkOnly && chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
+      {mine.map(r => <MyRequestRow key={r.id} r={r} isMinor={neutralWords} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: (neutralWords ? 'Your church' : 'Your care team') }); }} />)}
+      {chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
       {isMinor && (audience !== undefined) && (!audience || !audience.length) ? (
         // NO FORM. Not a disabled button either — a greyed-out control invites tapping it and reads as a fault
         // with their phone. A plain, calm sentence, and the one thing they can actually do.
@@ -1102,7 +1100,7 @@ function AskForHelp({ ctx, linkOnly }) {
           </div>
         </div>
       ) : (
-      <button onClick={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setOpen(true); }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
+      <button onClick={() => { setOpen(true); }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 18, border: '1px solid color-mix(in oklab, var(--clay) 28%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
@@ -1113,7 +1111,7 @@ function AskForHelp({ ctx, linkOnly }) {
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
       )}
-      {!linkOnly && open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
+      {open ? <AskForHelpForm ctx={ctx} onClose={() => setOpen(false)} onSent={(res) => { setOpen(false); ctx.toast && ctx.toast(careSentWording(res)); }} /> : null}
     </div>
   );
 }
@@ -1273,6 +1271,32 @@ function CareAvailability({ ctx, part }) {
   );
 }
 
+// careForMe — the single read of "what care is there for THIS member right now", used by the Today "Care"
+// link badge on the What's happening card (how many open days they can sign up for). It mirrors CareCard's
+// own gating on purpose: the church visibility setting ('team' hides needs from non-team members), the
+// care-roster read, and the child filter (a confirmed minor, or the 'maybe' cold-start window before their
+// clearance lands, is never offered someone else's need). Access is still enforced inside CareCard and at the
+// relay, so a drift between the two can only mis-count the badge, never open a door. `open` counts live needs
+// with a day still to take that this member may claim.
+function careForMe(ctx) {
+  const care = (ctx && ctx.care) || {};
+  const s = care.settings || {};
+  if (!s.enabled) return { open: 0, mine: 0, onRoster: false };
+  const today = todayISO();
+  const myPub = (care.myPub || '').toLowerCase();
+  const onRoster = (() => {
+    const roster = (ctx.churchRosters || []).find(r => r.team === s.adminGroupId);
+    return !!(roster && (roster.people || []).some(p => p && (p.pub || '').toLowerCase() === myPub));
+  })();
+  const split = splitCareNeeds({ needs: care.needs, today, visibility: s.visibility, onCareRoster: onRoster, myPub });
+  const minorHere = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  const canVolunteer = !minorHere && ctx.minorState !== 'minor' && ctx.minorState !== 'maybe';
+  const heldByMe = (n) => (care.slots || []).some(sl => sl && sl.needId === n.id && String(sl.pubkey || '').toLowerCase() === myPub);
+  const liveShown = canVolunteer ? split.others : split.others.filter(heldByMe);
+  const open = liveShown.filter(n => !careNeedDays(n, care.slots || [], care.skips || []).covered).length;
+  return { open, mine: split.mine.length, onRoster };
+}
+
 function CareCard({ ctx, embedded }) {
   const care = ctx.care || {};
   // The Care tab's own framing is read by children too, and for them "your care team" is not who receives it.
@@ -1375,18 +1399,12 @@ function CareCard({ ctx, embedded }) {
       </React.Fragment>
     );
   }
-  // TODAY VARIANT. Show only when this member has something actionable — on the care roster, or the church
-  // has a need arranged for them, or there are open needs they can volunteer for / are signed up for.
-  // Everyone else reaches Care via the "Care" link on the Serving & events card.
-  if (!onCareRoster && !mineNeeds.length && !liveShown.length) return null;
-  return (
-    <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
-      <SectionLabel>Practical care</SectionLabel>
-      <AskForHelp ctx={ctx} linkOnly />
-      {mineBlock}
-      {live.length ? needsBlock : null}
-    </div>
-  );
+  // CARE IS NO LONGER RENDERED ON TODAY (owner 2026-10-16). A member reaches it through the "Care" link on the
+  // What's happening card, which lights up with a count when there are open days to sign up for (see careForMe
+  // and the badge in TodayScreen); a recipient is pointed there by the "Your church is caring for you" banner.
+  // This component now only renders inside the Serving "Care" tab (embedded above). A non-embedded render is
+  // inert rather than a half-built Today card.
+  return null;
 }
 
 // Emergency "mark as safe" banner — shown at the very top of Today when the church has an active safety
@@ -2354,6 +2372,8 @@ function TodayScreen({ ctx }) {
   const _careToday = todayISO();
   const myCareNeed = (_care.settings && _care.settings.enabled) ? (_care.needs || []).find(n => n.recipient && n.recipient.toLowerCase() === _myPub && (!n.endDate || n.endDate >= _careToday)) : null;
   const beingCaredFor = !!myCareNeed;
+  // Today's "Care" link lights up with a count of days still open to sign up for (owner 2026-10-16).
+  const _careOpenForMe = careForMe(ctx).open;
   // the recipient can dismiss the care banner with ✕; it snoozes until the need changes (new id or edited ts)
   const [careDismissTick, setCareDismissTick] = React.useState(0);
   const careBannerDismissed = React.useMemo(() => {
@@ -2473,7 +2493,7 @@ function TodayScreen({ ctx }) {
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
                   <ServingNewDot n={servNew} />
                 </div>
-                <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing("care"); }} style={{ color: "var(--clay)" }}> {"·"} Care</span> : null}</div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing("care"); }} style={{ color: "var(--clay)", fontWeight: _careOpenForMe > 0 ? 800 : 600 }}> {"·"} Care{_careOpenForMe > 0 ? <span style={{ marginLeft: 4, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 999, background: "var(--clay)", color: "var(--on-clay)", fontSize: 10.5, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center", verticalAlign: "middle" }}>{_careOpenForMe}</span> : null}</span> : null}</div>
               </div>
               <Icon name="chevR" size={18} color="var(--ink-3)" />
             </div>
@@ -2550,9 +2570,9 @@ function TodayScreen({ ctx }) {
         </div>
       ) : null}
 
-      {/* Practical care: back on Today, gated on the church having switched it on. Three members failed to
-          find it inside Serving & events and all three read Today first; the full tab still exists. */}
-      <CareCard ctx={ctx} />
+      {/* Practical care is NOT on Today any more (owner 2026-10-16) — it lives on the Care page, reached via
+          the "Care" link on the What's happening card above, which shows a count when there are open days to
+          sign up for. The "Your church is caring for you" banner above points a recipient there. */}
 
       {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages. */}
       {ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {
