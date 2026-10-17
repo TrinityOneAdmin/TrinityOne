@@ -1074,7 +1074,7 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
           : (need.notes ? <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{need.notes}</div> : null)}
       </div>
 
-      <div style={{ marginTop: 14, ...mealsLbl }}>SCHEDULE</div>
+      <div style={{ ...mealsLbl, marginTop: 22 }}>SCHEDULE</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {dates.length === 0 ? (
           <div style={{ padding: 18, borderRadius: 12, border: '1px dashed var(--line)', color: 'var(--ink-2)', textAlign: 'center', fontSize: 13.5 }}>Add a start and end date to lay out the schedule.</div>
@@ -1082,14 +1082,14 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
           const skipped = isSkipped(iso);
           const fills = slotsByDate[iso] || [];
           return (
-            <div key={iso} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 13px', borderRadius: 11, border: '1px solid var(--line)', background: skipped ? 'var(--surface-2)' : 'var(--surface)', opacity: skipped ? 0.55 : 1 }}>
-              <div style={{ minWidth: 104, flexShrink: 0 }}>
+            <div key={iso} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '12px 13px', borderRadius: 11, border: '1px solid var(--line)', background: skipped ? 'var(--surface-2)' : 'var(--surface)', opacity: skipped ? 0.55 : 1 }}>
+              <div style={{ width: 104, flexShrink: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{mealsFmtDate(iso)}</div>
                 {need.type === 'meals' ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMealsOf(iso).map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
               </div>
               <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>
                 {skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Covered{skipByDate[iso] && skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
-                  : (need.type === 'meals' && dayMealsOf(iso).length) ? dayMealsOf(iso).map(m => { const mf = fills.filter(f => (f.meal || '') === m || (f.meal || '') === ''); return <span key={m} style={{ marginRight: 12, display: 'inline-block' }}><span style={{ fontWeight: 700, color: 'var(--ink)' }}>{MEAL_SHORT[m] || m}:</span> {mf.length ? mf.map((f, i) => <span key={i}><Icon name="check" size={11} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>) : <span style={{ color: 'var(--ink-3)' }}>Open</span>}</span>; })
+                  : (need.type === 'meals' && dayMealsOf(iso).length) ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{dayMealsOf(iso).map(m => { const mf = fills.filter(f => (f.meal || '') === m || (f.meal || '') === ''); return <div key={m} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}><span style={{ fontWeight: 700, color: 'var(--ink)', width: 76, flexShrink: 0 }}>{MEAL_SHORT[m] || m}:</span><span style={{ width: 84, flexShrink: 0 }}>{mf.length ? <span style={{ color: 'var(--sage)', fontWeight: 600 }}>Covered</span> : <span style={{ color: 'var(--ink-3)' }}>Open</span>}</span><span style={{ width: 120, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' }}>{mf.map(f => nameOf(f.pubkey)).join(', ')}</span><span style={{ flex: 1, minWidth: 0, color: 'var(--ink-2)' }}>{mf.map(f => f.note).filter(Boolean).join(', ')}</span></div>; })}</div>
                   : fills.length === 0 ? <span style={{ color: 'var(--ink-3)' }}>Open</span>
                   : fills.map((f, i) => <span key={i} style={{ marginRight: 10 }}><Icon name="check" size={12} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>)}
               </div>

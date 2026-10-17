@@ -45,3 +45,14 @@ test('MealsNeedDetail: the schedule shows who has each meal and which meals are 
   assert.match(t, /Dinner/, 'the schedule does not label the Dinner meal');
   assert.match(t, /Open/, 'the still-open Dinner is not shown as Open — a steward would think the day is handled. Shown: ' + t);
 });
+
+test('MealsNeedDetail schedule layout (owner 2026-10-17): a covered meal reads "Covered" (no bare tick), the dish shows WITHOUT brackets, open reads "Open"', () => {
+  const { flush, mod } = mount('{ MealsNeedDetail }');
+  const tree = mod.MealsNeedDetail({ need: NEED, slots: [LUNCH_SLOT], skips: [], onClose() {}, onEdit() {} });
+  flush();
+  const t = texts(tree).join(' | ');
+  assert.match(t, /Covered/, 'a covered meal no longer reads "Covered" — the console should say Covered like the member app, not a bare tick');
+  assert.match(t, /Lasagne/, 're-anchor: the dish (note) did not render at all');
+  assert.doesNotMatch(t, /\(Lasagne\)/, 'the dish is still wrapped in brackets — it should sit in its own column with no brackets');
+  assert.match(t, /Open/, 'the still-open Dinner is not shown as Open');
+});
