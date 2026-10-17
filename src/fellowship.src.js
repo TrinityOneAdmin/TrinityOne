@@ -7798,7 +7798,7 @@ window.Fellowship = {
     // an empty meal is the legacy whole-day slot, so every slot written before this keeps meaning "the day".
     const _meal = String(meal || '').trim();
     const _slotD = CARESLOT_D + careId + ':' + iso + (_meal ? ':' + _meal : '');
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || '').trim() }) }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || '').trim() }) }), sk);
     // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
     // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.
     //
@@ -7817,7 +7817,7 @@ window.Fellowship = {
     if (!sk || !cp || !careId || !iso) return null;
     const _meal = String(meal || '').trim();
     const _slotD = CARESLOT_D + careId + ':' + iso + (_meal ? ':' + _meal : '');
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', _slotD], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }), sk);
     // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
     // still the only name against that day. Same three outcomes, same fixed d-tag, so the same safe retry.
     try { await _publishAny(publishSetFor(cp), evt); }
@@ -7940,7 +7940,7 @@ window.Fellowship = {
       }
       else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
     } catch (e) {} }
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, signingKey);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }), signingKey);
     try { await _publishBounded(publishSetFor(cp), evt); evt._delivered = true; }
     catch (e) { console.warn('[fellowship] care skip publish failed', e); evt._delivered = false; }
     return evt;
@@ -7960,7 +7960,7 @@ window.Fellowship = {
       }
       else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
     } catch (e) {} }
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, signingKey);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }), signingKey);
     try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
@@ -8003,7 +8003,7 @@ window.Fellowship = {
     const clean = Array.isArray(tags) ? tags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 8) : [];
     // "when I'm free": written ONLY when it is a real window (both ends YYYY-MM-DD, from <= to); otherwise the doc is exactly what it always was
     const availDates = (() => { const f = String(dates && dates.from || ''), t = String(dates && dates.to || ''), re = /^\d{4}-\d{2}-\d{2}$/; return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null; })();
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: _sealChurchDocMember(cp, Object.assign({ available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }, availDates ? { dates: availDates } : {})) }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp]], content: _sealChurchDocMember(cp, Object.assign({ available: true, tags: clean, note: String(note || '').trim().slice(0, 240) }, availDates ? { dates: availDates } : {})) }), sk);
     // A SEND THAT LANDED NOWHERE IS NOT A LISTING. The same shape batch 7 fixed for the serving reply, the
     // RSVP and leaving a church — this pair was not in the plan's list, so batch 15's screen fix ("Couldn't
     // list you") could never fire: the engine handed back the event whatever happened. Found by the
@@ -8020,7 +8020,7 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp) return null;
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }), sk);
     // …and coming OFF the list must not be claimed either: a member who thinks they withdrew, and did not,
     // is still being counted on. Same three outcomes, same fixed d-tag, so the same safe retry.
     try { await _publishAny(publishSetFor(cp), evt); }

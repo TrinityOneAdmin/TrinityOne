@@ -26,6 +26,7 @@
 // _publishAny that rejects exactly the way the real one does.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { liftMonotonicF } from './lift-monotonic.mjs';
 import { readFileSync } from 'node:fs';
 
 const BUNDLE = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
@@ -89,7 +90,7 @@ function runner(name, { publishFails, how }) {
   // an injected outcome cannot catch a dead classifier.
   const names  = ['finalizeEvent2', '_publishAny', 'churchRelays', 'publishSetFor', 'window', 'sk', 'pub', 'NET', '_pubReason',
                   'CAREREQ_D', 'CAREREQSTATUS_D', 'CARESLOT_D', 'CARESKIP_D', 'CARE_D', 'String',
-                  'Date', 'JSON', 'Math', 'console', '_sgMine'];
+                  'Date', 'JSON', 'Math', 'console', '_sgMine', '_monotonicF'];
   const values = [finalizeEvent2, _publishAny, churchRelays, publishSetFor, window, 'sk-bytes', 'me-pub', 'trinityone', _pubReason,
                   'carereq:', 'carereqstatus:', 'careslot:', 'careskip:', 'care:', String,
                   Date, JSON, Math,
@@ -98,7 +99,7 @@ function runner(name, { publishFails, how }) {
                   // scripts/a-child-is-not-offered-care-sign-up.test.mjs, which lifts the REAL one). Here the
                   // question is about publish OUTCOMES, so the answer is "nothing known about this member",
                   // which is what a cold start gives and what must never block an adult.
-                  () => null];
+                  () => null, liftMonotonicF()];
   const obj = new Function(...names, 'return ' + src)(...values);
   return { fn: obj[name], calls };
 }

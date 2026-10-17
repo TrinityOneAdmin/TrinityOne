@@ -23,7 +23,7 @@ test('markCareSkip derives a throwaway signing key for sealed needs', () => {
     'markCareSkip does not derive a throwaway signing key — the recipient\'s own pubkey appears on the skip event');
   assert.match(body, /let signingKey/,
     'markCareSkip does not use a separate signingKey variable — it signs everything with the member\'s key');
-  assert.match(body, /}, signingKey\)/,
+  assert.match(body, /\}\)?, signingKey\)/,
     'markCareSkip passes sk, not signingKey, to finalizeEvent — the throwaway key is derived but not used');
 });
 
@@ -33,7 +33,7 @@ test('clearCareSkip derives the same throwaway key and sends skiptok', () => {
     'clearCareSkip does not derive a throwaway key — Undo is signed with the recipient\'s key, which the relay refuses');
   assert.match(body, /skiptok/,
     'clearCareSkip does not send a skiptok — the relay refuses the Undo');
-  assert.match(body, /}, signingKey\)/,
+  assert.match(body, /\}\)?, signingKey\)/,
     'clearCareSkip passes sk, not signingKey, to finalizeEvent');
 });
 

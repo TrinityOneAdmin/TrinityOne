@@ -38,6 +38,7 @@ const SRC_FN = {
   announce: fnBody(SHIP, 'async announceMembership(npubOrHex)', 'announceMembership'),
   leave: fnBody(SHIP, 'async leaveMembership(npubOrHex)', 'leaveMembership'),
   pubReason: fnBody(SHIP, 'function _pubReason(e)', '_pubReason'),
+  fill: fnBody(SHIP, 'async fillCareSlot(careId, iso, note, meal)', 'fillCareSlot'),
 };
 
 const CHURCH = getPublicKey(generateSecretKey());
@@ -59,7 +60,9 @@ function phone(T, { stamp = 'real' } = {}) {
     Date: FakeDate,
     Math, JSON, Number, String, Array, Object, Promise, console, Boolean,
     toPub: (x) => (x ? CHURCH : null),
-    window: { Fellowship: { ready: Promise.resolve() } },
+    window: { Fellowship: { ready: Promise.resolve(), churchPub: CHURCH } },
+    _sgMine: () => null,   // fillCareSlot asks if this member is a marked child; a cold adult is null
+    CARESLOT_D: 'careslot:',
     localStorage: { getItem: (k) => (kv.has(k) ? kv.get(k) : null), setItem: (k, v) => kv.set(k, String(v)), removeItem: (k) => kv.delete(k) },
     finalizeEvent2: (t, key) => finalizeEvent(t, key),
     _lastStampF: lastStamp,
@@ -90,7 +93,7 @@ function phone(T, { stamp = 'real' } = {}) {
   scope._monotonicF = stamp === 'real'
     ? new Function('scope', 'with (scope) { return (' + SRC_FN.monotonic.replace(/^function _monotonicF/, 'function') + '); }')(proxy)
     : (t) => t;   // CONTROL ONLY: the stamp removed
-  const writers = { ...lift(SRC_FN.rsvp), ...lift(SRC_FN.announce), ...lift(SRC_FN.leave) };
+  const writers = { ...lift(SRC_FN.rsvp), ...lift(SRC_FN.announce), ...lift(SRC_FN.leave), ...lift(SRC_FN.fill) };
   return { writers, store, results, tick: () => {} };
 }
 
@@ -144,7 +147,23 @@ const leaveScenario = async (p) => {
   return out;
 };
 
-for (const [name, scenario] of [['an RSVP changed within the second', rsvpScenario], ['a join and its heartbeat in the same second', joinScenario], ['a join and a leave in the same second', leaveScenario]]) {
+// ── CARE: sign up for a meal, then save its "what are you bringing" note in the same second (owner 2026-10-16) ──
+// fillCareSlot/clearCareSlot and the care skip/availability toggles were the documented gap in _monotonicF's
+// coverage (the stamp's own comment named them). The note-save is a re-write of the same careslot d-tag, so a
+// same-second save was refused and the member got "that note didn't reach your church" over a note that saved.
+const careNoteScenario = async (p) => {
+  const a = await asOutcome(() => p.writers.fillCareSlot('care-1', '2026-09-10', '', 'dinner'));        // I'll help
+  const b = await asOutcome(() => p.writers.fillCareSlot('care-1', '2026-09-10', 'lasagne', 'dinner')); // the note, same second
+  const out = [a, b];
+  out.check = (pp) => {
+    const held = pp.store.query({ kinds: [30078], authors: [getPublicKey(MEMBER_SK)] });
+    assert.equal(held.length, 1, 'the care slot is one document');
+    assert.equal(JSON.parse(held[0].content).note, 'lasagne', 'the note (the second write) must be the one the relay keeps');
+  };
+  return out;
+};
+
+for (const [name, scenario] of [['an RSVP changed within the second', rsvpScenario], ['a join and its heartbeat in the same second', joinScenario], ['a join and a leave in the same second', leaveScenario], ['a care sign-up then its meal note in the same second', careNoteScenario]]) {
   test(`CONTROL (validates the instrument): ${name} IS refused in some seconds when the stamp is removed`, async () => {
     const bad = await sweep('none', scenario);
     assert.ok(bad.length >= 5,

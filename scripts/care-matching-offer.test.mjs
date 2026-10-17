@@ -15,6 +15,7 @@
 // the commit message).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { liftMonotonicF } from './lift-monotonic.mjs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadScreen, miniReact, texts, find, button, reads } from './render-jsx-screen.mjs';
@@ -32,6 +33,7 @@ const TODAY = '2026-10-16';
 function liftSetCareAvail() {
   const published = [];
   const scope = {
+    _monotonicF: liftMonotonicF(),
     sk: new Uint8Array(32).fill(3), _nameKeys: new Map([[CHURCH, ['k']]]),
     publishSetFor: () => [], _publishAny: async (_s, evt) => { published.push(evt); }, _pubReason: () => 'x',
     _sealChurchDocMember: (_cp, obj) => JSON.stringify(obj),   // the seal is not under test; the CONTENT is
@@ -62,6 +64,7 @@ test('ENGINE: setCareAvail writes {dates} only for a real window; a 2-argument c
 test('ENGINE: Fellowship.subscribeCareAvail rows carry dates; a doc WITHOUT dates reads dates:null (backwards compat)', () => {
   let handlers = null;
   const scope = {
+    _monotonicF: liftMonotonicF(),
     toPub: (x) => x, CAREAVAIL_D: 'trinityone/careavail:',
     _onChurchDocs: (_pk, h) => { handlers = h; return () => {}; },
     _openChurchDoc: (_pk, c) => JSON.parse(c),
