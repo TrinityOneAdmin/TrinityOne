@@ -15,6 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { liftMonotonicF } from './lift-monotonic.mjs';
 import { readFileSync } from 'node:fs';
 import { fnBody } from './test-slice.mjs';
 
@@ -28,6 +29,7 @@ function makeScope({ withKey = true } = {}) {
   return {
     published,
     scope: {
+      _monotonicF: liftMonotonicF(),
       toPub: (x) => x,
       sk: 'deadbeef',
       finalizeEvent: (tmpl, _sk) => { const e = { ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }; return e; },

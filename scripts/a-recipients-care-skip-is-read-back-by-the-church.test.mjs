@@ -21,6 +21,7 @@
 //     wrong token is still refused.
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { liftMonotonicF } from './lift-monotonic.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -69,6 +70,7 @@ const doc = (k, d, content, extra) => finalizeEvent({ kind: 30078, created_at: n
 async function shippedSkip(forChurch) {
   const published = [];
   const scope = {
+    _monotonicF: liftMonotonicF(),
     sk: recipient.sk, NET: 'trinityone', CARESKIP_D: 'trinityone/careskip:',
     window: { Fellowship: { churchPub: forChurch, ready: Promise.resolve() } },
     // the need's skipEnc is sealed to the recipient; sealing is not under test, so "decrypt" hands back the plaintext
@@ -91,6 +93,7 @@ async function shippedSkip(forChurch) {
 function shippedHubFilters(cp) {
   let captured = null;
   const scope = {
+    _monotonicF: liftMonotonicF(),
     _hubSince: () => 0, NET: 'trinityone', relaysForChurch: () => [],
     pool: { subscribeMany: (_relays, filters) => { captured = filters; return { close() {} }; } },
     Math, Date, JSON, console,

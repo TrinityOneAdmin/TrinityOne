@@ -14235,7 +14235,7 @@
       if (_me && _me.isMinor) return { ok: false, reason: "minor" };
       const _meal = String(meal || "").trim();
       const _slotD = CARESLOT_D + careId + ":" + iso + (_meal ? ":" + _meal : "");
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || "").trim() }) }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, meal: _meal, note: String(note || "").trim() }) }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14255,7 +14255,7 @@
       if (!sk || !cp || !careId || !iso) return null;
       const _meal = String(meal || "").trim();
       const _slotD = CARESLOT_D + careId + ":" + iso + (_meal ? ":" + _meal : "");
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", _slotD], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14376,7 +14376,7 @@
         } catch (e) {
         }
       }
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, signingKey);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }), signingKey);
       try {
         await _publishBounded(publishSetFor(cp), evt);
         evt._delivered = true;
@@ -14408,7 +14408,7 @@
         } catch (e) {
         }
       }
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }, signingKey);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }), signingKey);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14483,7 +14483,7 @@
         const f = String(dates && dates.from || ""), t = String(dates && dates.to || ""), re = /^\d{4}-\d{2}-\d{2}$/;
         return re.test(f) && re.test(t) && f <= t ? { from: f, to: t } : null;
       })();
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, Object.assign({ available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }, availDates ? { dates: availDates } : {})) }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, Object.assign({ available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }, availDates ? { dates: availDates } : {})) }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14501,7 +14501,7 @@
         }
       }
       if (!sk || !cp) return null;
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {

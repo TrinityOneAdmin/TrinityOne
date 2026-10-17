@@ -21,6 +21,7 @@
 // RULE 3: nothing here matches text in app/*.jsx. Every claim is about a rendered tree or a lifted function.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { liftMonotonicF } from './lift-monotonic.mjs';
 import { readFileSync } from 'node:fs';
 import { loadScreen, miniReact, texts, find, button } from './render-jsx-screen.mjs';
 import { fnBody } from './test-slice.mjs';
@@ -119,6 +120,7 @@ function fill({ self }) {
   const published = [];
   const sgSelf = self ? { cp: CP, me: ME, isMinor: !!self.isMinor, known: !!self.known } : { cp: '', me: '', isMinor: false, known: false };
   const scope = {
+    _monotonicF: liftMonotonicF(),
     window: { Fellowship: { churchPub: CP, ready: Promise.resolve() } },
     sk: new Uint8Array(32), NET: 'trinityone', CARESLOT_D: 'trinityone/careslot:',
     finalizeEvent: (t) => ({ ...t, id: 'ev' }),
