@@ -136,7 +136,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, 
   const fmtTime = (t) => { const m = /^(\d{2}):(\d{2})$/.exec(String(t || '')); if (!m) return ''; let h = +m[1]; const ap = h < 12 ? 'am' : 'pm'; h = h % 12 || 12; return h + (m[2] === '00' ? '' : ':' + m[2]) + ap; };
   // "what I'm bringing" — editable note on the helper's own slot, keyed per unit so Lunch and Dinner differ.
   const [noteDraft, setNoteDraft] = React.useState({});
-  const [savedFlash, setSavedFlash] = React.useState({});
+  const [editing, setEditing] = React.useState({});   // #4: a saved note collapses to the status line; tapping the pencil reopens the input
   const uKey = (iso, meal) => iso + '|' + meal;
   const myNoteFor = (iso, meal) => { const f = myFillFor(iso, meal); return f ? (f.note || '') : ''; };
   // "✓ Saved" must wait for the answer — fillCareSlot returns { ok, reason }, an always-truthy object, so a
@@ -148,7 +148,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, 
     const slotMeal = mine ? (mine.meal || '') : meal;
     const cur = noteDraft[k] !== undefined ? noteDraft[k] : myNoteFor(iso, meal);
     Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim(), slotMeal))
-      .then(r => { if (r && r.ok) setSavedFlash(f => ({ ...f, [k]: true })); })
+      .then(r => { if (r && r.ok) setEditing(e => ({ ...e, [k]: false })); })
       .catch(() => {});
   };
   // one unit (a day's meal, or a whole non-meals day). `showMeal` labels the meal; the day header above owns
@@ -168,22 +168,34 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, 
           </div>
           <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
             {skipped ? <span>{mineFilled ? 'They’re covered — no need, thanks 🙏' : 'Not needed'}</span>
-              : fills.length ? fills.map((f, i) => <span key={i} style={{ marginRight: 8 }}><Icon name="check" size={11} color="var(--sage)" /> {careName(f.pubkey, myPub)}{f.note ? ' — ' + f.note : ''}</span>)
+              : fills.length ? fills.map((f, i) => {
+                  const isMine = f.pubkey && myPub && f.pubkey.toLowerCase() === myPub.toLowerCase();
+                  const fnote = f.note || '';
+                  // My own fill shows just the DISH (the "Helping" label beside it already says it's mine) — the
+                  // "✓ You" was excess (owner 2026-10-17); the dish is editable (pencil), and nothing shows until I add one.
+                  // Others keep their NAME: it is the only thing that says who is covering a meal / ride / errand.
+                  return isMine
+                    ? (fnote && !editing[k]
+                        ? <button key={i} onClick={() => { setNoteDraft(nd => ({ ...nd, [k]: fnote })); setEditing(e => ({ ...e, [k]: true })); }} title="Edit what you’re bringing" style={{ marginRight: 8, display: 'inline-flex', alignItems: 'center', gap: 4, padding: 0, border: 'none', background: 'none', color: 'var(--ink-2)', fontSize: 12.5, fontFamily: 'var(--font-ui)', cursor: 'pointer', textAlign: 'left' }}>{fnote} <Icon name="pen" size={10} color="var(--ink-3)" /></button>
+                        : null)
+                    : (fnote ? <span key={i} style={{ marginRight: 8 }}>{fnote}</span> : null);   // others: just the dish ("Covered" says it's covered; no name, owner 2026-10-17)
+                })
               : <span style={{ color: 'var(--ink-3)' }}>Open</span>}
           </div>
           {/* ONE HELPER PER UNIT. A unit someone else has taken reads as covered and offers no second sign-up,
               so two people never bring the same meal; my own stays cancellable; only a genuinely Open unit
               offers "I'll help". A child (canVolunteer === false) is never offered it. */}
           {!skipped && !isRecipient && (mineFilled
-            ? <button onClick={() => care.clearFill(need.id, iso, mine.meal || '')} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
+            ? <button onClick={() => care.clearFill(need.id, iso, mine.meal || '')} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> Helping</button>
             : fills.length
             ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
             : (canVolunteer === false ? null : <button onClick={() => care.fill(need.id, iso, undefined, meal)} style={careBtnHelp}>I’ll help</button>))}
         </div>
-        {mineFilled && !skipped && need.type === 'meals' ? (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '0 0 7px' }}>
-            <input value={noteDraft[k] !== undefined ? noteDraft[k] : myNoteFor(iso, meal)} onChange={e => { const v = e.target.value; setNoteDraft(nd => ({ ...nd, [k]: v })); setSavedFlash(f => ({ ...f, [k]: false })); }} onBlur={() => saveNote(iso, meal)} onKeyDown={e => { if (e.key === 'Enter') { saveNote(iso, meal); e.currentTarget.blur(); } }} placeholder="What are you bringing?" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-            <button onClick={() => saveNote(iso, meal)} style={{ flexShrink: 0, padding: '7px 13px', borderRadius: 9, border: 'none', background: savedFlash[k] ? 'color-mix(in oklab, var(--sage) 20%, var(--surface))' : 'var(--clay)', color: savedFlash[k] ? 'var(--sage)' : '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{savedFlash[k] ? '✓ Saved' : 'Save'}</button>
+        {mineFilled && !skipped && need.type === 'meals' && (!myNoteFor(iso, meal) || editing[k]) ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '2px 0 7px', marginLeft: meal ? 88 : 0 }}>
+            <input value={noteDraft[k] !== undefined ? noteDraft[k] : myNoteFor(iso, meal)} onChange={e => { const v = e.target.value; setNoteDraft(nd => ({ ...nd, [k]: v })); }} onBlur={() => saveNote(iso, meal)} onKeyDown={e => { if (e.key === 'Enter') { saveNote(iso, meal); e.currentTarget.blur(); } }} placeholder="What are you bringing?" autoFocus={!!editing[k]} style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '7px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+            {/* minimal "enter" affordance — a small tick to save (blur/Enter also save) */}
+            <button onClick={() => saveNote(iso, meal)} aria-label="Save" title="Save" style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="check" size={16} stroke={2.6} color="var(--sage)" /></button>
           </div>
         ) : null}
       </React.Fragment>
@@ -272,7 +284,7 @@ function CloseMyNeedButton({ need }) {
 }
 const careBtnHelp = { flexShrink: 0, padding: '6px 11px', borderRadius: 9, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
 const careBtnGhost = { flexShrink: 0, padding: '6px 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
-const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 11px', borderRadius: 9, border: '1px solid var(--sage)', background: 'color-mix(in oklab, var(--sage) 15%, var(--surface))', color: 'var(--sage)', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };
+const careBtnMine = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 2px', border: 'none', background: 'none', color: 'var(--sage)', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)' };   // #2: quiet text, not a loud pill
 
 // ── "I'm here to help" availability — a member signals they're glad to help, so anyone who needs
 // something is encouraged to ask. Shown only inside the Care tab (embedded).

@@ -271,46 +271,57 @@ test('the optimistic tick is still rolled back as well as explained', async () =
 
 // ── AND THE GREEN TICK BESIDE THE NOTE, WHICH THE SHAPE CHANGE PUT ONE CHARACTER FROM LYING ──────────────
 //
-// "bringing a lasagne, no nuts" is the one field on this row other people act on. The Save button turns into
-// "✓ Saved" from `savedFlash`, and that was set by `if (ok)` over a writer that returned an EVENT or NULL.
-// fillCareSlot now answers { ok, reason } — and a failure object is TRUTHY — so a plain truthiness test
-// would tick every failure green. Exactly the markSafe trap, on a control that had no screen test at all
-// until this one; the sabotage of `r && r.ok` -> `r` was caught by nothing on 2026-09-16.
+// "bringing a lasagne, no nuts" is the one field on this row other people act on. It autosaves on blur and
+// then the editor COLLAPSES to show the dish on the row (the old Save button + "✓ Saved" tick are gone,
+// 2026-10-17). fillCareSlot answers { ok, reason } — and a failure object is TRUTHY — so collapsing on a
+// plain truthiness test would confirm every failure. Exactly the markSafe trap, on a control that had no
+// screen test at all until this one; the sabotage of `r && r.ok` -> `r` was caught by nothing on 2026-09-16.
 const NEED = { id: 'care-1', type: 'meals', dates: ['2026-09-10'], meals: ['dinner'], displayLabel: 'A family' };
 const ME = 'm'.repeat(64);
 
-function needRow(setNote) {
+function needRow(saveResult) {
   const { draw, CareNeedRow } = screen();
-  const care = { myPub: ME, slots: [{ needId: 'care-1', isoDate: '2026-09-10', pubkey: ME, note: '' }], skips: [], setNote, fill: setNote };
+  const slot = { needId: 'care-1', isoDate: '2026-09-10', pubkey: ME, note: '' };
+  // The note autosaves on blur now (the Save button was removed): a real setNote updates the slot on success,
+  // which collapses the editor and shows the dish on the row; a FAILURE must leave the editor OPEN (no false confirm).
+  const setNote = async (id, iso, note) => { const r = await saveResult(); if (r && r.ok) slot.note = note; return r; };
+  const care = { myPub: ME, slots: [slot], skips: [], setNote, fill: setNote };
   const props = { need: NEED, slots: care.slots, skips: [], care, canManage: false, expanded: true, onToggle: () => {} };
   let tree = draw(CareNeedRow, props);
   const redraw = () => (tree = draw(CareNeedRow, props));
+  const editor = () => find(tree, n => n.type === 'input' && /bringing/.test(String((n.props || {}).placeholder || '')));
   return {
     redraw,
-    save: async () => {
-      const b = button(tree, 'Save');
-      assert.ok(b.length, 'no Save control beside the "what I\'m bringing" note — re-anchor this test');
-      await b[b.length - 1].props.onClick({ stopPropagation() {} });
+    save: async (dish = 'lasagne') => {
+      let inp = editor();
+      assert.ok(inp.length, 'no "what are you bringing" input beside the meal — re-anchor this test');
+      // type, then re-render so the draft is in the next render's closure (as a real keystroke does), THEN blur to autosave
+      inp[0].props.onChange({ target: { value: dish } });
+      redraw();
+      inp = editor();
+      await inp[0].props.onBlur();
       await new Promise(r => setTimeout(r, 0));
       return redraw();
     },
     labels: () => texts(tree).join(' | '),
+    editorOpen: () => editor().length > 0,
   };
 }
 
-test('the note’s green “✓ Saved” tick is not painted over a save that failed', async () => {
+test('a note-save no relay acknowledged does NOT falsely confirm — the editor stays open', async () => {
   const c = needRow(async () => ({ ok: false, reason: 'unconfirmed' }));
-  await c.save();
-  assert.doesNotMatch(c.labels(), /✓ Saved/,
-    'the note said "✓ Saved" over a write no relay acknowledged. fillCareSlot answers an OBJECT now, and an ' +
-    'object is always truthy — `if (r)` ticks every failure green, which is the markSafe trap exactly.');
+  await c.save('lasagne');
+  assert.ok(c.editorOpen(),
+    'a failed note-save collapsed the editor as if the dish had reached the church. fillCareSlot answers an ' +
+    'OBJECT now, and an object is always truthy — collapsing on `if (r)` would confirm every failure, the markSafe trap.');
 });
 
-test('CONTROL: an accepted note save DOES show “✓ Saved”', async () => {
-  // Without this, deleting savedFlash altogether would pass the row above.
+test('CONTROL: an accepted note-save collapses the editor and shows the dish', async () => {
+  // Without this, collapsing the editor unconditionally would pass the row above.
   const c = needRow(async () => ({ ok: true, evt: { id: 'e' } }));
-  await c.save();
-  assert.match(c.labels(), /✓ Saved/, 'a note the church accepted no longer confirms itself to the member');
+  await c.save('lasagne');
+  assert.ok(!c.editorOpen(), 'an accepted note-save left the editor open, so the member never sees it confirmed');
+  assert.match(c.labels(), /lasagne/, 'the accepted dish does not appear on the row, so nobody knows what is being brought');
 });
 
 // ── "I'M SORTED — CLOSE THIS": ONE MESSAGE FOR THREE DIFFERENT THINGS ────────────────────────────────────
@@ -491,7 +502,7 @@ test('skip: a TRUTHY result with _delivered false is still a failure', async () 
 test('after an unconfirmed sign-up the row’s button CANCELS — this is what the message must not contradict', () => {
   const c = needRow(async () => ({ ok: false, reason: 'unconfirmed' }));
   const labels = c.labels();
-  assert.match(labels, /You’re helping|You're helping/,
+  assert.match(labels, /Helping/,
     'CONTROL: with a slot of mine on the need, the row should show me as helping — if it does not, the row '
     + 'below is measuring the wrong state and proves nothing');
   assert.doesNotMatch(labels, /I’ll help|I'll help/,
@@ -511,8 +522,8 @@ test('after an unconfirmed sign-up the row’s button CANCELS — this is what t
     setNote: () => Promise.resolve({ ok: true }),
   };
   const tree = draw(CareNeedRow, { need: NEED, slots: care.slots, skips: [], care, canManage: false, expanded: true, onToggle: () => {} });
-  const helping = button(tree, 'You’re helping').concat(button(tree, "You're helping"));
-  assert.equal(helping.length, 1, 'expected exactly one "You\'re helping" control on the row, found ' + helping.length);
+  const helping = button(tree, 'Helping');
+  assert.equal(helping.length, 1, 'expected exactly one "Helping" (cancel) control on the row, found ' + helping.length);
   helping[0].props.onClick({ stopPropagation() {} });
   assert.deepEqual(called, ['clearFill'],
     'the button a member sees after an unconfirmed sign-up does NOT cancel. That is the whole premise of ' +
