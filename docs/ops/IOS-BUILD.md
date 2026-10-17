@@ -37,7 +37,8 @@ The bundle identifier and app name already match Android:
 - **App ID / bundle id:** `com.trinityone.app`
 - **App name / display name:** `TrinityOne`
 - **webDir:** `www` (shared with Android; defined in `capacitor.config.json`)
-- **Min iOS:** 13.0 (Capacitor 6 default, set in `ios/App/Podfile`)
+- **Min iOS:** 15.0 (raised from the Capacitor 6 default of 13.0 by `scripts/ios-fixup.sh`
+  — Xcode 26+ refuses deployment targets below 15.0; see **Xcode 26+ compatibility** below)
 
 ---
 
@@ -50,7 +51,10 @@ The bundle identifier and app name already match Android:
   - `ios/App/Podfile` already lists all 5 Capacitor plugins (see below).
   - `ios/App/App/Info.plist` with the iOS usage strings the app needs.
   - Web assets copied into `ios/App/App/public` via `npx cap sync ios`.
-- `Info.plist` usage strings added:
+- `Info.plist` usage strings + the Xcode 26+ fixes are applied by
+  **`scripts/ios-fixup.sh`** (run after `cap add/sync ios` — see **Xcode 26+
+  compatibility** below). `ios/` is gitignored and regenerated, so these are NOT
+  committed; the script re-creates them every time. The usage strings it adds:
   - `NSCameraUsageDescription` — in-app QR scanning to join a church
     (`getUserMedia` + `BarcodeDetector`), mirroring the Android `CAMERA` permission.
   - `NSPhotoLibraryAddUsageDescription` — saving an encrypted backup file through
@@ -97,8 +101,15 @@ npm run sync:web
 
 # 3. Copy www/ into the iOS project and refresh the native plugin list.
 npx cap sync ios
-#    On a Mac this ALSO runs `pod install` automatically. If it does not, run it
-#    manually:
+
+# 3b. Re-apply the fixes the default Capacitor 6 scaffold is missing for Xcode 26+
+#     (deployment target -> 15.0, UIScene lifecycle / SceneDelegate, Info.plist
+#     usage strings). ios/ is gitignored and regenerated, so this MUST run after
+#     every `cap add ios` / `cap sync ios`. It is idempotent.
+npm run fixup:ios                 # == bash scripts/ios-fixup.sh
+
+# 3c. Install pods. `cap add` already ran pod install once, but step 3b changed the
+#     Podfile (deployment target), so run it again to pick that up.
 cd ios/App && pod install && cd ../..
 
 # 4. Open the workspace in Xcode (NOT the .xcodeproj).
@@ -127,11 +138,49 @@ Any time the web app changes, rebuild `www/` and re-sync:
 ```sh
 npm run sync:web      # rebuild www/
 npx cap sync ios      # copy into ios/ (+ pod install if plugins changed)
+npm run fixup:ios     # re-apply the Xcode 26+ fixes (cap sync can rewrite the Podfile)
+cd ios/App && pod install && cd ../..
 ```
 
 `sync:web` already calls `npx cap sync android` at the end when `android/` exists;
 the iOS equivalent (`npx cap sync ios`) is intentionally a separate manual step so
 the Linux box (which has no CocoaPods) doesn't fail the script. Run it on the Mac.
+
+---
+
+## Xcode 26+ compatibility (`scripts/ios-fixup.sh`)
+
+`npx cap add ios` scaffolds a **Capacitor 6** iOS project that does **not** build or
+run on **Xcode 26 / 27** (iOS 26+ SDK) as-is. Because `ios/` is gitignored and
+regenerated on every machine and in CI, the fixes can't just be committed once —
+they're re-applied by `scripts/ios-fixup.sh`, which is **idempotent** and wired into
+`.github/workflows/ios.yml` (it runs between `cap sync ios` and `pod install` in both
+the archive job and the simulator-smoke job). Run it locally the same way.
+
+It applies three fixes, each a hard failure of the default scaffold:
+
+1. **Deployment target 13.0 → 15.0.** Xcode 26+ refuses to build for a deployment
+   target below 15.0 (`BUILD FAILED … supported deployment target versions is 15.0
+   to …`). The script bumps the app target in `project.pbxproj`, the `platform :ios`
+   line in the `Podfile`, and adds a `post_install` hook that forces every **pod**
+   target to 15.0 (CocoaPods otherwise leaves each pod at its own lower podspec min).
+
+2. **UIScene lifecycle adoption.** The iOS 26+ SDK **hard-crashes on launch** any app
+   that hasn't adopted the scene lifecycle — `EXC_BREAKPOINT` in
+   `_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption`. Capacitor 6 ships
+   no `SceneDelegate`. The script adds a `UIApplicationSceneManifest` to `Info.plist`
+   pointing at `$(PRODUCT_MODULE_NAME).SceneDelegate`, and appends a `SceneDelegate`
+   (plus the `configurationForConnecting` hook) to `AppDelegate.swift` whose scene
+   root view controller is the Capacitor bridge (`CAPBridgeViewController`). This is
+   exactly what Capacitor 7 generates. NOTE: a *storyboard-only* or empty scene
+   manifest is not enough — it launches but the WKWebView never starts (black screen).
+
+3. **Info.plist usage strings** — `NSCameraUsageDescription` and
+   `NSPhotoLibraryAddUsageDescription` (see above).
+
+**When TrinityOne upgrades to Capacitor 7+:** fixes 1 and 2 are expected to be built
+into the scaffold. Re-check, and trim `scripts/ios-fixup.sh` down to just the usage
+strings (or delete it and add the strings another way).
 
 ---
 
