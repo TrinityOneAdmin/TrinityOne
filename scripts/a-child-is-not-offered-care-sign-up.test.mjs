@@ -110,7 +110,7 @@ test('a slot a child ALREADY holds stays visible and cancellable — but no OTHE
   // Signed up before being marked, or by another route: withdrawing must still be possible.
   const slots = [{ needId: 'n1', isoDate: '2026-10-05', pubkey: ME }];
   const c = card({ minorState: 'minor', isMinor: true, slots });
-  assert.match(c.words, /You’re helping/, 'a child lost the control that lets them withdraw an existing sign-up. Screen read: ' + c.words);
+  assert.match(c.words, /Helping/, 'a child lost the control that lets them withdraw an existing sign-up. Screen read: ' + c.words);
   assert.equal(button(c.tree, 'I’ll help').length, 0, 'the day they hold is cancellable, but the OTHER day offered "I’ll help"');
 });
 
