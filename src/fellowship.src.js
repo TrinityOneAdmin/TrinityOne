@@ -1561,11 +1561,12 @@ let _needAuth = true;
 // The console has had this since it was written (`_monotonic` in src/steward.src.js, applied inside
 // _publishSigned). This is the same rule for the member app, and it is kept deliberately narrow — only the
 // writes a person (or a launch) can genuinely repeat inside a second.
-// CALLERS (rule 2, complete, grepped 2026-10-03): the four moderation writes (pinPost, unpin,
-// hideMessage, unhideMessage), and since sim item 19 setEventRsvp, announceMembership (the join AND its
-// heartbeat) and leaveMembership. Other toggles that write one fixed d-tag (serving replies, unavailability,
-// care sign-ups/skips/availability) have the same exposure and are NOT stamped here (noticed 2026-10-03,
-// left alone: outside the two writers the sim reported).
+// CALLERS (rule 2, grepped 2026-10-03; care writers added 2026-10-16): the four moderation writes (pinPost,
+// unpin, hideMessage, unhideMessage), and since sim item 19 setEventRsvp, announceMembership (the join AND its
+// heartbeat) and leaveMembership; and since 2026-10-16 the six care writers — fillCareSlot, clearCareSlot,
+// markCareSkip, clearCareSkip, setCareAvail, clearCareAvail — after the owner hit the same-second refusal on a
+// care meal-note (they were listed below as the unstamped gap until then). Other toggles that write one fixed
+// d-tag (serving replies, unavailability) have the same exposure and are NOT stamped here (noticed 2026-10-03).
 //
 // The +600s bound is OURS, not the relay's — the relay refuses past +900s (event-store.mjs) and the console
 // uses 600 in `_monotonic`. Two programs that must agree keep the tighter number; 700 undos in one second
