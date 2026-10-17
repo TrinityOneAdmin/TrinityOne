@@ -1765,7 +1765,7 @@ let _wsBytesIn = 0, _wsBytesOut = 0;
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
 const TRUSTED_RELAYS = new Map(); // churchpub -> Set(relay pubkeys the church authorised as trusted infra — may pull the FULL corpus)
-const PEER_URLS = new Map();      // churchpub -> Set(relay URLs to sync this church WITH, from the same church-signed doc)
+const PEER_URLS = new Map();      // churchpub -> Map(relay URL -> that relay's pubkey), from the same church-signed doc; the pubkey lets syncAllChurches skip our OWN entry by identity key
 const SYNC_CURSOR_FILE = join(DATA_DIR,'sync-cursors.json');   // { "<cp>@<peerUrl>": lastCreatedAt } — resumable, idempotent
 let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
 let _cursorsDirty = false;   // written once per sync pass, atomically (tmp+rename) — see saveCursors()
@@ -3478,9 +3478,9 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (!_hydrating) rebuildNetworks();
   }
   else if (d === RELAYS_D && CHURCH_PUBS.has(e.pubkey)) {   // the church's trusted-relays list (resync peers + full-corpus authorisation)
-    const cp = e.pubkey; const pubs = new Set(), urls = new Set();
-    if (!removed) { let list = []; try { list = JSON.parse(e.content); } catch {} for (const r of (Array.isArray(list) ? list : [])) { if (r && r.pubkey) pubs.add(String(r.pubkey)); if (r && r.url) urls.add(String(r.url)); } }
-    TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, urls);
+    const cp = e.pubkey; const pubs = new Set(), peerMap = new Map();   // peerMap: url -> that relay's pubkey, so syncAllChurches can skip OUR OWN entry by identity key (not by ORIGIN)
+    if (!removed) { let list = []; try { list = JSON.parse(e.content); } catch {} for (const r of (Array.isArray(list) ? list : [])) { if (r && r.pubkey) pubs.add(String(r.pubkey)); if (r && r.url) peerMap.set(String(r.url), r && r.pubkey ? String(r.pubkey) : ''); } }
+    TRUSTED_RELAYS.set(cp, pubs); PEER_URLS.set(cp, peerMap);
   }
   // B3: scoped — a network key may only define groups for a church that declared it, not for any church.
   // EVERY CAPABILITY GATE BELOW ASKS 'any', NOT A SPECIFIC ROLE — pre-push audit, 2026-08-25.
@@ -8330,15 +8330,31 @@ async function syncMediaFromPeer(cp, peerBase) {
   }
   return pulled;
 }
+// The hosts THIS box answers to (its own declared addresses), as a Set. syncAllChurches uses it to skip a
+// church-listed relay that is actually us — derived from _declaredAddresses() (the same list the address
+// declaration uses), NOT from ORIGIN. ORIGIN is the box's UPDATE SOURCE: on a Suite box that is the community
+// relay, not this box, so keying "self" off it made a Suite relay skip its own home relay and never
+// back-fill. See sync-does-not-treat-the-update-source-as-self.test.mjs.
+function _ownSyncHosts() {
+  const hosts = new Set();
+  let list = []; try { list = _declaredAddresses(); } catch {}
+  for (const a of list) {
+    const base = String(a || '').replace(/^ws/i, 'http').replace(/\/+$/, '');
+    try { hosts.add(new URL(base).host); } catch {}
+  }
+  return hosts;
+}
 async function syncAllChurches() {
   if (!CHURCH_PUBS.size) return 0;
-  let self = ''; try { self = ORIGIN ? new URL(ORIGIN).host : ''; } catch {}
+  const selfHosts = _ownSyncHosts();   // recognise ourselves by identity key + declared address, NOT by ORIGIN (the update source)
   let total = 0;
   for (const cp of CHURCH_PUBS) {
     const peers = PEER_URLS.get(cp); if (!peers || !peers.size) continue;
-    for (const peer of peers) {
+    for (const [peer, peerPub] of peers) {
+      if (peerPub && RELAY_PUB && peerPub === RELAY_PUB) continue;   // our OWN identity key in the church's list — never sync from ourselves
       const base = String(peer).replace(/^ws/i, 'http').replace(/\/+$/, '');
-      try { if (self && new URL(base).host === self) continue; } catch { continue; }   // never sync from self
+      let host = ''; try { host = new URL(base).host; } catch { continue; }
+      if (selfHosts.has(host)) continue;   // …or an address we ourselves declare (covers a list entry that carries a url but no pubkey)
       try { const r = await syncChurchFromPeer(cp, base); if (r.ok && r.imported) { total += r.imported; console.log(`[sync] +${r.imported} from ${base} for church ${cp.slice(0, 8)}`); } } catch {}
       try { const g = await reconcileChurchWithPeer(cp, base); if (g) { total += g; console.log(`[sync] +${g} via reconcile from ${base} for church ${cp.slice(0, 8)}`); } } catch {}   // negentropy: backfill any old gaps the cursor missed
       try { const m = await syncMediaFromPeer(cp, base); if (m) console.log(`[sync] +${m} media from ${base} for church ${cp.slice(0, 8)}`); } catch {}   // paced media pass

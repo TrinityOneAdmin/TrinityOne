@@ -128,17 +128,21 @@ async function waitForStatus(port, proc, label, ms = 25000) {
 //   churches  — array of church pubkeys (hex) this relay is configured to hold, via CHURCH_NPUB
 //   entry     — which gateway.mjs to run (defaults to the working tree's; startOldRelay passes an old copy)
 //   env       — extra environment
+//   origin    — the box's update source (its `origin` file). Defaults to the box's OWN base, which is what
+//               a dev/server relay has. Pass another relay's base to model a Suite box, whose origin is the
+//               COMMUNITY/update source (app.trinityone.church) and NOT its own address.
 // Returns a relay handle. `relayPub` is the box's own identity key, which is what a church authorises as a
 // sync peer — NOT the church key, and not the URL. Two URLs can be one box; two boxes can share a URL.
-export async function startRelay({ name = 'relay', churches = [], entry = join(ROOT, 'scripts/gateway.mjs'), env = {}, dataDir: reuseDir = '' } = {}) {
+export async function startRelay({ name = 'relay', churches = [], entry = join(ROOT, 'scripts/gateway.mjs'), env = {}, dataDir: reuseDir = '', origin = '' } = {}) {
   const port = await freePort(name);
   // `reuseDir` is moveRelay()'s: the SAME box coming back at a new address, so it keeps its identity key.
   const dataDir = reuseDir || mkdtempSync(join(tmpdir(), `trin-net-${name}-`));
   tempDirs.add(dataDir);
   const base = `http://127.0.0.1:${port}`;
-  // ORIGIN is how syncAllChurches recognises ITSELF in a church's relay list and skips it. Without it a relay
-  // pulls from its own /sync every pass — harmless, but it muddies "who asked whom" in a network test.
-  writeFileSync(join(dataDir, 'origin'), base);
+  // The box's update source. For a dev/server relay it IS the box's own address; for a Suite box it is the
+  // community download source (a DIFFERENT host). syncAllChurches must recognise itself by its identity key /
+  // declared address, NOT by its update source — see sync-does-not-treat-the-update-source-as-self.test.mjs.
+  writeFileSync(join(dataDir, 'origin'), origin || base);
   const proc = spawn(process.execPath, [entry, String(port)], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: {
