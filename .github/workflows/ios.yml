@@ -43,6 +43,9 @@ jobs:
       - name: Sync web + plugins into the iOS project
         run: npx cap sync ios
 
+      - name: Apply iOS SDK fixes (deployment target, UIScene lifecycle, usage strings)
+        run: bash scripts/ios-fixup.sh   # ios/ is regenerated above; re-apply the Xcode 26+ fixes before pods
+
       - name: Install CocoaPods
         working-directory: ios/App
         run: pod install
@@ -152,6 +155,9 @@ jobs:
 
       - name: Sync web + plugins into the iOS project
         run: npx cap sync ios
+
+      - name: Apply iOS SDK fixes (deployment target, UIScene lifecycle, usage strings)
+        run: bash scripts/ios-fixup.sh   # ios/ is regenerated above; re-apply the Xcode 26+ fixes before pods
 
       - name: Install CocoaPods
         working-directory: ios/App

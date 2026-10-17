@@ -10,6 +10,7 @@
     "build:fellowship": "bash scripts/build-fellowship.sh",
     "build:bundles": "bash scripts/build-identity.sh && bash scripts/build-fellowship.sh",
     "sync:web": "bash scripts/sync-web.sh",
+    "fixup:ios": "bash scripts/ios-fixup.sh",
     "catalog:ebible": "python3 scripts/build-ebible-catalog.py",
     "catalog:videos": "python3 scripts/build-trinity-videos.py",
     "smoke": "bash scripts/smoke.sh",
