@@ -365,7 +365,7 @@ window.safeImgUrl = function (v) {
     s = s.replace(/<RF[^>]*>([\s\S]*?)<Rf>/g, '<span class="fn">[$1]</span>');
     s = s.replace(/<FR>/g, '<span class="red">').replace(/<Fr>/g, "</span>");
     s = s.replace(/<FI>/g, '<i class="sup">').replace(/<Fi>/g, "</i>");
-    s = s.replace(/<CM>\s*/g, "<br><br>").replace(/<CL>\s*/g, "<br>").replace(/¶\s*/g, "<br><br>");
+    s = s.replace(/<CM>\s*/g, '<span class="pp"></span>').replace(/<CL>\s*/g, "<br>").replace(/¶\s*/g, '<span class="pp"></span>');
     s = s.replace(/<\/?el>/g, "");
     return s;
   }
@@ -460,7 +460,7 @@ window.safeImgUrl = function (v) {
       // dropped from `text` with the headings.
       if((m = line.match(/^\\qa\b ?([\s\S]*)$/))){ add('<br><span class="sec qa">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
       if((m = line.match(/^\\(q\d?|qm\d?)\b ?([\s\S]*)$/))){ const lvl = (m[1].match(/\d/)||["1"])[0]; add("<br>" + (lvl >= "2" ? "&emsp;" : "") + (m[2]||"")); continue; }
-      if((m = line.match(/^\\(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr)\b ?([\s\S]*)$/))){ add("<br><br>" + (m[1]||"")); continue; }
+      if((m = line.match(/^\\(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr)\b ?([\s\S]*)$/))){ add('<span class="pp"></span>' + (m[1]||"")); continue; }
       if(/^\\b\b/.test(line)){ add("<br>"); continue; }
       if(/^\\/.test(line)){ const rest = line.replace(/^\\\S+ ?/, ""); if(vbuf != null && rest) vbuf += " " + rest; continue; }
       if(vbuf != null) vbuf += " " + line;
@@ -632,7 +632,7 @@ window.safeImgUrl = function (v) {
       .replace(/\\f\b[\s\S]*?\\f\*/g, "")          // USFM footnotes
       .replace(/\\x\b[\s\S]*?\\x\*/g, "")          // USFM cross-references
       .replace(/<X?W[GH]\d+>/g, "")                // Strong's tags
-      .replace(/<(?:CM|CL|PF|PI|PG|TS\d?|Q\d?)[^>]*>|¶/gi, " ") // block breaks → space
+      .replace(/<(?:CM|CL|PF|PI|PG|TS\d?|Q\d?)[^>]*>|¶|<span class="pp"><\/span>/gi, " ") // block breaks → space
       .replace(/<[^>]+>/g, "")                     // any remaining markup tags
       .replace(/\\\+?[a-z]+\d?\*?/gi, "")          // remaining USFM codes
       .replace(/\s{2,}/g, " ").trim();
