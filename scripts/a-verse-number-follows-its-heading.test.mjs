@@ -147,9 +147,9 @@ test('splitVerseLead: only a heading run AT THE START is split off; nested spans
   assert.notEqual(at, -1, 'splitVerseLead is gone from app/screens-read.jsx — re-anchor this test');
   const split = new Function(SRC.slice(at, SRC.indexOf('\n}\n', at) + 2) + '; return splitVerseLead;')();
   // the shipped BSB's Psalm 3:1, as the engine writes it: heading, parallel reference, Psalm title, then the words
-  const ps3 = '<br><span class="sec">Deliver Me, O LORD!</span><br><span class="parref">(2 Samuel 15:13–29)</span><br><span class="sec d">A Psalms of David, when he fled from his son Absalom.</span> <br><br>O LORD, how my foes have increased! <br>&emsp;How many rise up against me!';
+  const ps3 = '<br><span class="sec">Deliver Me, O LORD!</span><br><span class="parref">(2 Samuel 15:13–29)</span><br><span class="sec d">A Psalms of David, when he fled from his son Absalom.</span> <span class="pp"></span>O LORD, how my foes have increased! <br>&emsp;How many rise up against me!';
   const [lead, body] = split(ps3);
-  assert.ok(lead.endsWith('Absalom.</span> <br><br>'), 'the heading run (and the breaks after it) did not come off whole: ' + JSON.stringify(lead));
+  assert.ok(lead.endsWith('Absalom.</span> <span class="pp"></span>'), 'the heading run (and the paragraph spacer after it) did not come off whole: ' + JSON.stringify(lead));
   assert.ok(body.startsWith('O LORD, how my foes'), 'the verse did not start with its own words: ' + JSON.stringify(body));
   assert.equal(lead + body, ps3, 'the split lost or added something');
   const cases = [
@@ -160,6 +160,7 @@ test('splitVerseLead: only a heading run AT THE START is split off; nested spans
     ['<span class="sec">The <span class="nd">Lord</span> Reigns</span><br>Words', '<span class="sec">The <span class="nd">Lord</span> Reigns</span><br>', 'a nested span inside the heading is kept whole'],
     ['<span class="sec">Head <span class="nd">oops</span>Words', '', 'an unbalanced heading leaves everything in the body, as before'],
     ['<br><span class="sec qa">ALEPH</span><br>Blessed', '<br><span class="sec qa">ALEPH</span><br>', 'a two-class heading (an acrostic letter) counts'],
+    ['<br><span class="sec">H</span><span class="pp"></span>Words', '<br><span class="sec">H</span><span class="pp"></span>', 'a paragraph spacer after a heading is consumed into the lead'],
   ];
   for (const [html, wantLead, why] of cases) {
     const [l, b] = split(html);

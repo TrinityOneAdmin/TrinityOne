@@ -58,7 +58,7 @@ function splitVerseLead(html) {
   let i = 0, sawHead = false;
   while (i < s.length) {
     const rest = s.slice(i);
-    const gap = rest.match(/^(?:\s+|<br\s*\/?>)/i);
+    const gap = rest.match(/^(?:\s+|<br\s*\/?>|<span class="pp"><\/span>)/i);
     if (gap) { i += gap[0].length; continue; }
     const open = rest.match(/^<span class="([^"]*)">/);
     if (!open || !isHead(open[1])) break;
