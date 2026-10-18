@@ -632,7 +632,7 @@ window.safeImgUrl = function (v) {
       .replace(/\\f\b[\s\S]*?\\f\*/g, "")          // USFM footnotes
       .replace(/\\x\b[\s\S]*?\\x\*/g, "")          // USFM cross-references
       .replace(/<X?W[GH]\d+>/g, "")                // Strong's tags
-      .replace(/<(?:CM|CL|PF|PI|PG|TS\d?|Q\d?)[^>]*>|¶/gi, " ") // block breaks → space
+      .replace(/<(?:CM|CL|PF|PI|PG|TS\d?|Q\d?)[^>]*>|¶|<span class="pp"><\/span>/gi, " ") // block breaks → space
       .replace(/<[^>]+>/g, "")                     // any remaining markup tags
       .replace(/\\\+?[a-z]+\d?\*?/gi, "")          // remaining USFM codes
       .replace(/\s{2,}/g, " ").trim();
