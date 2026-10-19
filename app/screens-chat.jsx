@@ -1248,10 +1248,14 @@ function GroupEventComposer({ group, ctx, onClose }) {
 // group.memberPubs and resolve names ourselves: that path has no gate and would hand a child the names of
 // other children and uncleared adults, defeating the relay gate.
 //
-// COLD-START FAILS SAFE. Until the reader's clearance is known (ctx.safeguard.clearanceKnown) we answer no
-// safeguarding question: the roster is empty and the panel says it is still checking, exactly as the console
-// care list fails closed while its lists load. An absent clearance answer is treated as "a minor", never as
-// "an adult".
+// WHO THE READER IS uses the same three-answer shape ChatScreen uses — isMinor OR the `assumeMinor` engine
+// answer — NOT clearanceKnown alone. clearanceKnown is set only by this member's own sealed clearance, so in
+// a church that never uses safeguarding it never becomes true, and gating the list on it would hang it on
+// "Checking…" for every member of such a church for ever. assumeMinor answers false when the church clears
+// nobody (the list simply shows) and true when safeguarding is in use and this member is unheard-of or the
+// relay is unreachable (assume a minor). The genuine assumed-minor window (iAmMinor but clearance not yet
+// confirmed) still FAILS SAFE: ctx.canDMPeer can be answering from an empty approved-list there, so the
+// roster is withheld and the panel says it is still checking, rather than trusting a gate that can fail open.
 function GroupInfo({ group, open, onClose, ctx }) {
   const FS = window.Fellowship;
   const churchNpub = ctx.church && ctx.church.npub;
@@ -1265,13 +1269,37 @@ function GroupInfo({ group, open, onClose, ctx }) {
     const off = FS.subscribeChurchMembers(churchNpub, (list) => setMembers(list || []));
     return () => { try { off && off(); } catch (e) {} };
   }, [open, churchNpub]);
+  // WHO IS THE READER? Mirrors ChatScreen's own derivation (the `assumeMinor` engine answer + `iAmMinor`).
+  // `clearanceKnown` ALONE is not a usable gate: it is set only by this member's OWN sealed clearance, and a
+  // church that has never used safeguarding publishes none for anybody, so it never becomes true there — a
+  // panel gated on it would hang on "Checking…" for every member of such a church for ever (see
+  // src/fellowship.src.js _assumeMinor). So ask the engine, which answers false when the church clears
+  // nobody (→ the list simply shows), and true when safeguarding is in use and this member is unheard-of or
+  // offline (→ assume a minor, fail safe). Start from what we already know so nothing flickers.
+  const [assumeMinor, setAssumeMinor] = useC(false);
+  useCE(() => {
+    let live = true;
+    const np = ctx.church && ctx.church.npub;
+    if (!open || !np || !(FS && FS.assumeMinor)) return undefined;
+    Promise.resolve(FS.assumeMinor(np))
+      .then(v => { if (live) setAssumeMinor(!!v); })
+      .catch(() => { if (live) setAssumeMinor(true); });
+    return () => { live = false; };
+  }, [open, ctx.church && ctx.church.npub, ctx.safeguard && ctx.safeguard.clearanceKnown, ctx.safeguard && ctx.safeguard.isMinor]);
   if (!group) return null;
 
-  // WHO IS THE READER? Unknown clearance ⇒ treat as a minor (fail safe). Used only to fail the roster CLOSED
-  // when no DM gate is available to consult; the gate that actually decides is ctx.canDMPeer below.
   const clearanceKnown = !!(ctx.safeguard && ctx.safeguard.clearanceKnown);
-  const iAmMinor = !clearanceKnown || !!(ctx.safeguard && ctx.safeguard.isMinor);
-  const canSee = (pk) => clearanceKnown && (ctx.canDMPeer ? !!ctx.canDMPeer(pk) : !iAmMinor);
+  const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor) || assumeMinor;
+  // ctx.canDMPeer is the gate that actually decides who a reader may see: for a confirmed minor it returns
+  // true only for cleared adults + their guardian (+ the church). We can trust it once this member's
+  // safeguarding state is loaded. When we are only ASSUMING the reader might be a minor and have NOT confirmed
+  // it (clearance not yet known), canDMPeer can still be answering from an empty approved-list and fail open,
+  // so we do not trust it — the roster fails CLOSED and the panel says it is still checking.
+  const minorUnconfirmed = iAmMinor && !clearanceKnown;
+  const canSee = (pk) => {
+    if (minorUnconfirmed) return false;                       // might be a minor and the DM gate is not yet trustworthy
+    return ctx.canDMPeer ? !!ctx.canDMPeer(pk) : !iAmMinor;   // the real gate; no gate available ⇒ fail closed for a minor
+  };
 
   // THE MEMBERS LIST SOURCE EXPRESSION — the gated directory ∩ this group's membership. An OPEN room has no
   // allowlist (groupSet === null) and therefore no enumerated roster: it keeps the honest "Open to your
@@ -1323,7 +1351,7 @@ function GroupInfo({ group, open, onClose, ctx }) {
           <div style={{ width: 72, height: 72, borderRadius: 22, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent) }}>
             <Icon name={group.broadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={34} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, lineHeight: 1.15 }}>{group.name}</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-3)', fontWeight: 600 }}>{typeLabel}{hasRoster ? ' · ' + roster.length + (roster.length === 1 ? ' member' : ' members') : ' · Open to your church'}</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', fontWeight: 600 }}>{typeLabel}{!hasRoster ? ' · Open to your church' : minorUnconfirmed ? '' : ' · ' + roster.length + (roster.length === 1 ? ' member' : ' members')}</div>
           {group.sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 360, marginTop: 2 }}>{group.sub}</div> : null}
           {indicators.length ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 6 }}>
@@ -1338,7 +1366,7 @@ function GroupInfo({ group, open, onClose, ctx }) {
         {hasRoster ? (
           <div style={{ marginTop: 6 }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' }}>MEMBERS</div>
-            {!clearanceKnown ? (
+            {minorUnconfirmed ? (
               <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>Checking who you can see…</div>
             ) : (
               <React.Fragment>
@@ -1769,9 +1797,13 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             </div>
           </div>
           <IconBtn name="shield" onClick={() => ctx.toast('Private to your church — only members can see this room.')} />
-          <GroupInfo group={group} open={infoOpen} onClose={() => setInfoOpen(false)} ctx={ctx} />
         </div>
       </div>
+      {/* GROUP INFO renders at the ROOM ROOT, never inside the header above. That header sets
+          backdrop-filter, and a backdrop-filter ancestor becomes the containing block for the overlay's
+          `position: fixed/absolute; inset: 0` — nesting GroupInfo there would clip the whole panel to the
+          thin header strip. Kept a sibling so it fills the screen; the header's tap only flips `infoOpen`. */}
+      <GroupInfo group={group} open={infoOpen} onClose={() => setInfoOpen(false)} ctx={ctx} />
       {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
 
       {/* WHO SPEAKS IN THIS ROOM, SAID ONCE, AT THE TOP. Hiding the composer is not an explanation: a
