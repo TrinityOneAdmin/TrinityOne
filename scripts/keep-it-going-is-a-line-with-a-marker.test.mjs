@@ -72,16 +72,16 @@ test('the plan card shows ONE line with ONE marker, and no ring', () => {
 });
 
 test('the marker sits at days-done / days-in-plan, and further along when more is done', () => {
-  const none = today(0), some = today(3), most = today(8), all = today(10);
-  assert.equal(none.markerLeft, 0);
+  const some = today(3), most = today(8), all = today(10), one = today(1);
+  assert.equal(one.markerLeft, 10);   // (0 days done = no started plan = no card at all since 2026-10-19; see builtin-plans-are-steward-pushed-only)
   assert.equal(some.markerLeft, 30);
   assert.equal(most.markerLeft, 80);
   assert.equal(all.markerLeft, 100);
-  assert.ok(none.markerLeft < some.markerLeft && some.markerLeft < most.markerLeft, 'the marker does not advance with progress');
+  assert.ok(one.markerLeft < some.markerLeft && some.markerLeft < most.markerLeft, 'the marker does not advance with progress');
 });
 
 test('the filled part of the line ends where the marker is', () => {
-  for (const n of [0, 3, 8, 10]) {
+  for (const n of [1, 3, 8, 10]) {
     const s = today(n);
     assert.equal(s.fillWidth, s.markerLeft, `fill and marker disagree at ${n} days done`);
   }
@@ -112,9 +112,10 @@ test('a church-uploaded plan read most recently is the one shown', () => {
   assert.match(s.title, /Church advent plan/);
 });
 
-test('with no stamps (older data) it still falls back to most days done; with nothing read it is John', () => {
+test('with no stamps (older data) it still falls back to most days done; with nothing read the card is hidden (no John fallback)', () => {
   const a = today(0, 10, { plans: [P2], ctx: { planProgress: { p1: [1], p2: [1, 2] } } });
   assert.match(a.title, /Psalms for rest/);
   const b = today(0, 10, { plans: [P2], ctx: { planProgress: {} } });
-  assert.match(b.title, /John in ten days/);
+  assert.equal(b.line.length, 0, 'a member who started nothing still sees a plan card');
+  assert.equal(b.title, '');
 });

@@ -209,7 +209,10 @@ function PlansScreen({ ctx }) {
   const [discoverOpen, setDiscoverOpen] = useP(false);   // collapse the Discover-plans grid in Browse
   const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
   const churchName = (ctx.church && ctx.church.name) || 'your church';
-  const allPlans = [...churchPlans, ...D.PLANS];
+  // owner 2026-10-19: the built-in plans (D.PLANS) are steward-pushed only; a member is offered just what the church shared.
+  // (A built-in the member already has progress on still resolves via PlanDetail/Today, which read D.PLANS directly.)
+  // A built-in the member ALREADY follows stays in My Plans (nothing they had is taken away); none is offered fresh.
+  const allPlans = [...churchPlans, ...((D.PLANS || []).filter(p => (ctx.plansFollowed || []).includes(p.id)))];
   const isChurch = (p) => churchPlans.some(c => c.id === p.id);
   const followed = ctx.plansFollowed || [], hidden = ctx.plansHidden || [];
   // My Plans = church plans (unless the member removed one) + discover plans the member added
@@ -288,7 +291,7 @@ function PlansScreen({ ctx }) {
           {!featured ? (
             <div style={{ textAlign: 'center', padding: '20px 16px 28px', color: 'var(--ink-2)' }}>
               <Icon name="read" size={40} stroke={1.4} color="var(--ink-3)" />
-              <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '8px auto 14px' }}>No plans yet. Browse and add one to start reading a little every day.</p>
+              <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '8px auto 14px' }}>No plans yet. When your church shares a reading plan, you can add it here.</p>
               <button onClick={() => setTab('browse')} style={{ padding: '11px 18px', borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Browse plans</button>
             </div>
           ) : null}
@@ -327,14 +330,11 @@ function PlansScreen({ ctx }) {
               </div>
             </CollapsibleSection>
           ) : null}
-          <SectionLabel>Discover plans</SectionLabel>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
-            {(discoverOpen ? D.PLANS : D.PLANS.slice(0, 4)).map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
-          </div>
-          {D.PLANS.length > 4 ? (
-            <button onClick={() => setDiscoverOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%', marginTop: 12, padding: '12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-              {discoverOpen ? 'Show fewer' : `Show all ${D.PLANS.length} plans`} <Icon name={discoverOpen ? 'chevU' : 'chevD'} size={17} color="var(--clay)" />
-            </button>
+          {!churchPlans.length ? (
+            <div data-plans-empty="" style={{ textAlign: 'center', padding: '30px 16px 28px', color: 'var(--ink-2)', animation: 'trinityFade .5s ease both' }}>
+              <Icon name="read" size={40} stroke={1.4} color="var(--ink-3)" />
+              <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 270, margin: '10px auto 0' }}>{churchName === 'your church' ? 'Your church' : churchName} hasn’t shared a reading plan yet. When they do, it’ll show up here.</p>
+            </div>
           ) : null}
         </React.Fragment>
       )}
