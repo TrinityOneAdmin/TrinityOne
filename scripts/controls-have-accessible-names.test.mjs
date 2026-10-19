@@ -228,21 +228,23 @@ test('the rota-visibility button announces what it governs, and is not announced
   assert.match(SCHED_CODE, /visBtnRef\.current\.focus\(\)/, 'focus is not returned to the control that opened it');
 });
 
-// Pinned to the exact expressions, as the giving toggle above is: `aria-pressed={false}` and
-// `aria-pressed={!it.childsafe}` both mention the state and both announce the wrong one.
+// PHASE 1 (2026-10-19): the Child-safe and Encrypt controls moved off the row and into the group-settings
+// panel, where they are now checkboxes (`checked={!!g.…}` is a checkbox's accessible state) that still carry
+// an aria-label naming the group and its real state. Pinned to the exact state expression, as the giving
+// toggle above is: `checked={false}` or `checked={!g.childsafe}` would both announce the wrong one.
 test('the Child-safe and Encrypt toggles report their REAL state and name their group', () => {
-  const cs = lineWith(DASH_CODE, 'childsafe: !it.childsafe');
-  assert.match(cs, /aria-pressed=\{!!it\.childsafe\}/,
+  const cs = lineWith(DASH_CODE, 'childsafe: !g.childsafe');
+  assert.match(cs, /checked=\{!!g\.childsafe\}/,
     'Child-safe does not announce whether it is on — check it is not negated or pinned to a constant');
-  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !it.childsafe'), { it: { name: 'Youth', childsafe: true } }),
+  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !g.childsafe'), { g: { name: 'Youth', childsafe: true } }),
     'Youth — child-safe is on. Press to restrict it to adults');
-  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !it.childsafe'), { it: { name: '', childsafe: false } }),
+  assert.equal(announce(ariaExpr(DASH_CODE, 'childsafe: !g.childsafe'), { g: { name: '', childsafe: false } }),
     'This group — child-safe is off. Press to let members marked as a child join');
 
-  const en = lineWith(DASH_CODE, 'onClick={() => toggleEncrypt(it)}');
-  assert.match(en, /aria-pressed=\{!!it\.encrypted\}/,
+  const en = lineWith(DASH_CODE, 'toggleEncrypt(g)');
+  assert.match(en, /checked=\{!!g\.encrypted\}/,
     'Encrypt does not announce whether it is on — check it is not negated or pinned to a constant');
-  assert.equal(announce(ariaExpr(DASH_CODE, 'onClick={() => toggleEncrypt(it)}'), { it: { name: 'Youth', encrypted: false } }),
+  assert.equal(announce(ariaExpr(DASH_CODE, 'toggleEncrypt(g)'), { g: { name: 'Youth', encrypted: false } }),
     'Youth — encryption is off. Press to seal it end-to-end');
 });
 
@@ -348,14 +350,18 @@ const lum = (h) => { const [r, g, b] = chan(h).map(c => c <= 0.04045 ? c / 12.92
 const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
 const tint = (a, b, p) => '#' + chan(a).map((v, i) => Math.round((v * p + chan(b)[i] * (1 - p)) * 255).toString(16).padStart(2, '0')).join('');
 
-test('the Child-safe and Encrypt toggles are legible in the state that protects someone', () => {
-  // The ON states are the ones that matter — "yes, this room is safe for under-18s" has to read at a glance —
-  // and they were the ones failing, at 3.5:1 and 3.9:1 against a 4.5:1 minimum for small bold text.
-  for (const [what, ink, base] of [['Child-safe', 'sage-ink', 'sage'], ['Encrypt', 'clay-ink', 'clay']]) {
+// PHASE 1 (2026-10-19): the tinted Child-safe/Encrypt ROW pills moved into the group-settings panel, where
+// their labels now read as plain bold text on the surface (legible by construction, no tint behind them). The
+// ink-on-tint pattern this test guards survives on the Groups row in the People (clay-ink on a clay tint) and
+// Leaders (sage-ink) controls, so the WCAG invariant is pinned to those instead. The token-contrast loop is a
+// true, still-used fact: a church reads these controls at a glance.
+test('the Groups row’s ink-on-tint controls meet WCAG AA', () => {
+  // These were once failing at 3.5:1 and 3.9:1 against a 4.5:1 minimum for small bold text.
+  for (const [what, ink, base] of [['Leaders', 'sage-ink', 'sage'], ['People/Chat', 'clay-ink', 'clay']]) {
     const bg = tint(tok(base), tok('surface'), 0.08);
     const r = contrast(tok(ink), bg);
-    assert.ok(r >= 4.5, `${what} ON is ${r.toFixed(2)}:1 on its own tint — WCAG AA needs 4.5:1`);
+    assert.ok(r >= 4.5, `${what} is ${r.toFixed(2)}:1 on its own tint — WCAG AA needs 4.5:1`);
   }
-  assert.match(lineWith(DASH_CODE, 'childsafe: !it.childsafe'), /var\(--sage-ink\)/, 'Child-safe ON went back to the unreadable sage');
-  assert.match(lineWith(DASH_CODE, 'toggleEncrypt(it)'), /var\(--clay-ink\)/, 'Encrypt ON went back to the unreadable clay');
+  assert.match(lineWith(DASH_CODE, 'Members who help run this group'), /var\(--sage-ink\)/, 'the Leaders pill went back to the unreadable sage');
+  assert.match(lineWith(DASH_CODE, 'setEditMembersFor(raw(it))'), /var\(--clay-ink\)/, 'the People pill went back to the unreadable clay');
 });

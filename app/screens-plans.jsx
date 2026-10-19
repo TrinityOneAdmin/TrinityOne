@@ -455,39 +455,107 @@ function parseDevoDays(src) {
   return { weeks: weeks.filter(w => w.days.length), days, count: days.length, multiWeek: weeks.filter(w => w.days.length).length > 1 };
 }
 
-// open a devotional's "read:" passage in the Bible reader, landing on the verse. Closes the devotional
-// overlays first so the reader is in front. Returns false if the ref can't be resolved.
-function openDevoPassage(ctx, rawRef) {
-  const ref = String(rawRef || '').replace(/^\s*read\s*:?\s*/i, '').trim();
-  if (!ref) return false;
-  const loc = window.Bible.parseRef(ref);
-  if (!loc) { ctx.toast('Couldn’t open ' + ref); return false; }
-  if (!window.Bible.books().includes(loc.book)) { ctx.toast(ref + ' isn’t in this translation'); return false; }
-  if (ctx.openChurchDevo) ctx.openChurchDevo(null);   // close the devotional reader/index
-  ctx.gotoRef(loc.book, loc.chap, loc.verse || 1);
-  return true;
+// A scripture reference opens as a CARD over the plan/devotional and NEVER navigates away (owner 2026-10-18:
+// card-only, "never leave the plan"). screens-plans is a classic script and cannot import screens-read's
+// XrefPreviewSheet, so its resolve-and-preview is re-created here, locally. Resolution uses the active
+// translation: a whole-chapter reading (no verse) shows the whole chapter (scrollable), a range joins its
+// verses, a single verse shows just that verse. It never fabricates text — an unreadable reference says so and
+// an empty result offers a graceful line. Dismiss is the BottomSheet's own tested swipe-down/backdrop plus the
+// explicit X. Rendered via BottomSheet (app/ui.jsx).
+function DevoVerseSheet({ refStr, open, onClose }) {
+  const ref = String(refStr || '').replace(/^\s*read\s*:?\s*/i, '').trim();
+  const loc = ref ? window.Bible.parseRef(ref) : null;
+  let verses = [];
+  if (loc) {
+    try {
+      const rows = window.Bible.getVerses(loc.book, loc.chap, window.Bible.activeVersion) || [];
+      const from = loc.verse || 1;
+      const to = loc.verseEnd || (loc.verse ? loc.verse : Infinity);   // no verse = the whole chapter
+      verses = rows.filter(r => r.v >= from && r.v <= to);
+    } catch (e) { verses = []; }
+  }
+  const multi = verses.length > 1;
+  return (
+    // Isolate the card's touches: it renders INSIDE DevoDayReader's day-swipe scroll div, and a horizontal
+    // swipe on the card/backdrop would otherwise bubble up and turn the day (audit 2026-10-19). Stop touch
+    // events here so a swipe on the open card never marks-read/advances. The sheet's own swipe-down dismiss
+    // is unaffected (it is handled inside BottomSheet, deeper than this wrapper).
+    <div onTouchStart={e => e.stopPropagation()} onTouchMove={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()}>
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Scripture</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ref || ''}</div>
+        </div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {!loc ? (
+        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16, padding: '6px 0 14px' }}>Couldn't read that reference.</p>
+      ) : verses.length ? (
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: '4px 0 16px', textWrap: 'pretty' }}>
+          {verses.map((r, i) => (
+            <React.Fragment key={r.v}>
+              {multi ? <sup style={{ color: 'var(--clay)', fontWeight: 700, fontSize: 11, marginRight: 3 }}>{r.v}</sup> : null}{r.text}{i < verses.length - 1 ? ' ' : ''}
+            </React.Fragment>
+          ))}
+        </p>
+      ) : (
+        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>That passage isn't in this translation yet.</p>
+      )}
+    </BottomSheet>
+    </div>
+  );
 }
-// a tappable scripture chip: opens the passage in the reader
+// a tappable scripture chip: opens the passage as a CARD over the current view (never navigates to the reader).
+// The card open-state is the chip's own, so every DevoRefChip call site (DevoDayReader, the plain ChurchDevoView)
+// gets the card with no extra wiring. `ctx` is retained for call-site compatibility.
 function DevoRefChip({ refText, ctx, style }) {
+  const [cardOpen, setCardOpen] = React.useState(false);
   if (!refText) return null;
   return (
-    <button onClick={() => openDevoPassage(ctx, refText)} title={'Open ' + refText + ' in the Bible'} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999, cursor: 'pointer',
-      border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))',
-      color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, ...(style || {}) }}>
-      <Icon name="read" size={14} color="var(--clay)" /> {refText} <Icon name="chevR" size={14} color="var(--clay)" />
-    </button>
+    <React.Fragment>
+      <button onClick={() => setCardOpen(true)} title={'Read ' + refText} style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999, cursor: 'pointer',
+        border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))',
+        color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, ...(style || {}) }}>
+        <Icon name="read" size={14} color="var(--clay)" /> {refText} <Icon name="chevR" size={14} color="var(--clay)" />
+      </button>
+      <DevoVerseSheet refStr={refText} open={cardOpen} onClose={() => setCardOpen(false)} />
+    </React.Fragment>
   );
 }
 
 // ── one day of a multi-day devotional (prose + ref + mark-read), opened over the index ──
 function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
+  // SWIPE TO TURN THE DAY (owner 2026-10-18): swipe LEFT = mark read (NEVER un-mark) + go to next; swipe RIGHT
+  // = go to previous (navigation only, never changes read status). LEFT = forwards now MATCHES the reader's
+  // chapter-turn (screens-read: left = forwards). Thresholds mirror the reader:
+  // 60px of mostly-horizontal travel, so a diagonal scroll and a text-selection drag are left alone. These
+  // consts are declared INSIDE the component and the ref is a plain useRef: app/*.jsx are classic scripts
+  // sharing one global scope, and a duplicate top-level name blanks the whole APK, so nothing here is a new
+  // top-level global. The ref is ABOVE the early return so hook order stays stable (no-hook-after-early-return).
+  const DEVO_SWIPE_MIN = 60, DEVO_SWIPE_DOMINANCE = 1.7;
+  const devoSwipe = React.useRef(null);
   if (!day) return null;
   const doneSet = new Set((ctx.devoProgress && ctx.devoProgress[devo.id]) || []);
   const isDone = doneSet.has(day.d);
   const idx = parsed.days.findIndex(x => x.d === day.d);
   const prev = idx > 0 ? parsed.days[idx - 1] : null;
   const next = idx < parsed.days.length - 1 ? parsed.days[idx + 1] : null;
+  const onDaySwipeStart = (e) => {
+    if (!e.touches || e.touches.length !== 1) { devoSwipe.current = null; return; }
+    devoSwipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+  const onDaySwipeMove = (e) => { if (e.touches && e.touches.length > 1) devoSwipe.current = null; };
+  const onDaySwipeEnd = (e) => {
+    const s = devoSwipe.current; devoSwipe.current = null;
+    if (!s || (e.touches && e.touches.length) || !e.changedTouches || !e.changedTouches.length) return;
+    const dx = e.changedTouches[0].clientX - s.x, dy = e.changedTouches[0].clientY - s.y;
+    if (Math.abs(dx) < DEVO_SWIPE_MIN || Math.abs(dx) < Math.abs(dy) * DEVO_SWIPE_DOMINANCE) return;
+    try { const t = window.getSelection && window.getSelection(); if (t && String(t).trim()) return; } catch (err) {}
+    if (dx < 0) { if (!isDone) ctx.toggleDevoDay(devo.id, day.d); if (next) ctx.openChurchDevoDay(next); }   // left: mark read + next (owner 2026-10-19: flipped)
+    else if (prev) ctx.openChurchDevoDay(prev);                                                             // right: previous, no mark
+  };
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
@@ -499,7 +567,7 @@ function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
           </div>
         </div>
       </div>
-      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
+      <div className="no-scrollbar" onTouchStart={onDaySwipeStart} onTouchMove={onDaySwipeMove} onTouchEnd={onDaySwipeEnd} style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '22px 22px 40px' }}>
           {day.ref ? <div style={{ marginBottom: 16 }}><DevoRefChip refText={day.ref} ctx={ctx} /></div> : null}
           {renderMarkdown(day.body)}

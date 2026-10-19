@@ -380,7 +380,7 @@ function ChatScreen({ ctx }) {
     ? realGroups
         .filter(g => g.visibility !== 'invite' || (Array.isArray(g.members) && myPub && g.members.includes(myPub)))
         .filter(g => !iAmMinor || g.childsafe)
-        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, category: g.category, icon: g.icon,
+        .map(g => ({ id: g.id, name: g.name, kind: g.kind === 'broadcast' ? 'Broadcast' : g.kind === 'team' ? 'Team' : 'Group', broadcast: g.kind === 'broadcast', team: g.kind === 'team', sub: g.sub, accent: accentFor(g.id), prayer: g.kind === 'prayer' || /prayer/i.test(g.name || ''), invite: g.visibility === 'invite', encrypted: !!g.encrypted, childsafe: !!g.childsafe, category: g.category, icon: g.icon,
           // CARRY THE PERMISSION FIELDS. This map builds a NEW object from an explicit list, so anything
           // not named here is dropped — and `members` below is deliberately turned into a COUNT. The
           // event-permission check needs the church's chosen tier, the group's named leaders and, for an
@@ -1225,6 +1225,222 @@ function GroupEventComposer({ group, ctx, onClose }) {
   );
 }
 
+// GROUP INFO + MEMBERS (phase 1, read-only). Opened by tapping a group's header. Shows the group's identity
+// (icon, name, description, type) and its protection indicators, then — for an invite-only group — a SEARCHABLE
+// members list and a read-only card on tap. Per-member actions (message / make-leader) are phase 2 and are
+// deliberately absent here; in-chat message search is phase 3.
+//
+// SAFEGUARDING ASSUMPTIONS, stated and checked against reference/DOMAIN.md before coding:
+//   · A young person can reach this screen by several routes (parent-minted, self-joined, marked-after-the-
+//     fact, a reseated device). The gate below is keyed on WHO THE READER IS, never on how they got here.
+//   · "You do not see what you are not part of, and you are not told what you are missing." (DOMAIN,
+//     ESTABLISHED 2026-09-01.) So the list is silent absence — a child simply has a shorter list — with no
+//     placeholder naming who was withheld.
+//   · A church may deliberately run NO group rooms for its children, and an OPEN room has no per-group roster
+//     at all; neither is a fault, so an open room shows "Open to your church" and NO enumerated list or count.
+//
+// THE GATING RULE (owner-approved). The members a reader sees =
+//     (people the reader is ALREADY permitted to see: subscribeChurchMembers ∩ ctx.canDMPeer)
+//       ∩ (this group's membership: the invite allowlist group.memberPubs, or — for a team — its roster).
+// subscribeChurchMembers is the gated church directory — the relay withholds blocked/hidden rows and, for a
+// child, uncleared adults and other children; ctx.canDMPeer narrows it to people this reader may contact
+// (for a child that is cleared adults + their guardian + the church, and nobody else). We NEVER enumerate
+// group.memberPubs and resolve names ourselves: that path has no gate and would hand a child the names of
+// other children and uncleared adults, defeating the relay gate.
+//
+// WHO THE READER IS uses the same three-answer shape ChatScreen uses — isMinor OR the `assumeMinor` engine
+// answer — NOT clearanceKnown alone. clearanceKnown is set only by this member's own sealed clearance, so in
+// a church that never uses safeguarding it never becomes true, and gating the list on it would hang it on
+// "Checking…" for every member of such a church for ever. assumeMinor answers false when the church clears
+// nobody (the list simply shows) and true when safeguarding is in use and this member is unheard-of or the
+// relay is unreachable (assume a minor). The genuine assumed-minor window (iAmMinor but clearance not yet
+// confirmed) still FAILS SAFE: ctx.canDMPeer can be answering from an empty approved-list there, so the
+// roster is withheld and the panel says it is still checking, rather than trusting a gate that can fail open.
+function GroupInfo({ group, open, onClose, ctx }) {
+  const FS = window.Fellowship;
+  const churchNpub = ctx.church && ctx.church.npub;
+  const [members, setMembers] = useC([]);
+  const [q, setQ] = useC('');            // starts-with people search
+  const [selected, setSelected] = useC(null);   // a member's pubkey whose read-only card is open, or null
+  const [listOpen, setListOpen] = useC(false);   // owner 2026-10-19: the roster hides behind the count button until tapped
+  // The gated church directory arrives over a subscription — same source and shape VerseShareSheet uses.
+  useCE(() => {
+    setMembers([]); setQ(''); setSelected(null); setListOpen(false);
+    if (!open || !churchNpub || !(FS && FS.subscribeChurchMembers)) return undefined;
+    const off = FS.subscribeChurchMembers(churchNpub, (list) => setMembers(list || []));
+    return () => { try { off && off(); } catch (e) {} };
+  }, [open, churchNpub]);
+  // WHO IS THE READER? Mirrors ChatScreen's own derivation (the `assumeMinor` engine answer + `iAmMinor`).
+  // `clearanceKnown` ALONE is not a usable gate: it is set only by this member's OWN sealed clearance, and a
+  // church that has never used safeguarding publishes none for anybody, so it never becomes true there — a
+  // panel gated on it would hang on "Checking…" for every member of such a church for ever (see
+  // src/fellowship.src.js _assumeMinor). So ask the engine, which answers false when the church clears
+  // nobody (→ the list simply shows), and true when safeguarding is in use and this member is unheard-of or
+  // offline (→ assume a minor, fail safe). Start from what we already know so nothing flickers.
+  const [assumeMinor, setAssumeMinor] = useC(false);
+  useCE(() => {
+    let live = true;
+    const np = ctx.church && ctx.church.npub;
+    if (!open || !np || !(FS && FS.assumeMinor)) return undefined;
+    Promise.resolve(FS.assumeMinor(np))
+      .then(v => { if (live) setAssumeMinor(!!v); })
+      .catch(() => { if (live) setAssumeMinor(true); });
+    return () => { live = false; };
+  }, [open, ctx.church && ctx.church.npub, ctx.safeguard && ctx.safeguard.clearanceKnown, ctx.safeguard && ctx.safeguard.isMinor]);
+  if (!group) return null;
+
+  const clearanceKnown = !!(ctx.safeguard && ctx.safeguard.clearanceKnown);
+  const iAmMinor = !!(ctx.safeguard && ctx.safeguard.isMinor) || assumeMinor;
+  // ctx.canDMPeer is the gate that actually decides who a reader may see: for a confirmed minor it returns
+  // true only for cleared adults + their guardian (+ the church). We can trust it once this member's
+  // safeguarding state is loaded. When we are only ASSUMING the reader might be a minor and have NOT confirmed
+  // it (clearance not yet known), canDMPeer can still be answering from an empty approved-list and fail open,
+  // so we do not trust it — the roster fails CLOSED and the panel says it is still checking.
+  const minorUnconfirmed = iAmMinor && !clearanceKnown;
+  const canSee = (pk) => {
+    if (minorUnconfirmed) return false;                       // might be a minor and the DM gate is not yet trustworthy
+    return ctx.canDMPeer ? !!ctx.canDMPeer(pk) : !iAmMinor;   // the real gate; no gate available ⇒ fail closed for a minor
+  };
+
+  // THE MEMBERS LIST SOURCE EXPRESSION — the gated directory ∩ this group's membership. The membership set
+  // depends on the kind of room:
+  //   · an INVITE group carries its allowlist as group.memberPubs;
+  //   · a TEAM carries its people on the church's roster (ctx.churchRosters, fed by F.subscribeChurchRosters
+  //     — the SAME cleartext, member-readable data a member already sees on the serving cards; roster.people
+  //     are chat pubkeys under `.pub`). roster.team === the team's group id (app/app.jsx _roleName/myRosterTeams).
+  //   · an OPEN non-team group has neither, so groupSet is null and it keeps the honest "Open to your church"
+  //     context with no roster.
+  // No relay/read gate is widened: this reads data the member app already holds, then applies the SAME gated
+  // intersection + canSee() as an invite group. A team with no roster yet yields an empty set (not null), so
+  // it shows a "0 members" button, never "Open to your church" (openToChurch already excludes teams).
+  const teamRoster = group.team ? (ctx.churchRosters || []).find(r => r && r.team === group.id) : null;
+  const groupSet = group.team
+    ? new Set((((teamRoster && teamRoster.people) || []).map(p => p && (p.pub || p.pubkey)).filter(Boolean)))
+    : (Array.isArray(group.memberPubs) ? new Set(group.memberPubs) : null);
+  const inGroup = groupSet
+    ? (members || []).filter(m => m && m.pubkey && groupSet.has(m.pubkey) && canSee(m.pubkey))
+    : [];
+  const hasRoster = !!groupSet;
+
+  // Resolve each member to a display name/@handle via displayFor (respecting the kind-0 `hidden` opt-out,
+  // which subscribeChurchMembers already withholds). displayFor is the one place names are resolved for the
+  // member app, so this cannot drift from the rest of the screen.
+  const resolve = (m) => {
+    const d = (FS && FS.displayFor) ? FS.displayFor(m.pubkey) : { handle: m.name || 'Member', name: m.name || 'Member', color: '#5E8C6A', picture: '', nip05: '' };
+    return { pubkey: m.pubkey, name: (m.name && m.name.trim()) || d.name || d.handle || 'Member', handle: d.handle || '', nip05: (m.nip05 || d.nip05 || ''), color: d.color, picture: d.picture };
+  };
+  const roster = inGroup.map(resolve);
+  // STARTS-WITH search, the owner's chosen semantics (copied member-side from the console bundle, which is
+  // not importable): a row matches when any WORD of the name begins with the query, OR the @handle begins
+  // with it. A mid-word substring matches nobody.
+  const ql = q.trim().toLowerCase();
+  const matches = (r) => !ql
+    || (r.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql))
+    || (r.handle || '').toLowerCase().replace(/^@/, '').startsWith(ql);
+  const shown = ql ? roster.filter(matches) : roster;
+  const selectedRow = selected ? roster.find(r => r.pubkey === selected) : null;
+
+  // The room's identity + protections.
+  const typeLabel = group.broadcast ? 'Broadcast' : group.team ? 'Team' : group.invite ? 'Private group' : 'Group';
+  const indicators = [];
+  if (group.invite) indicators.push({ icon: 'lock', label: 'Invite-only' });
+  if (group.encrypted) indicators.push({ icon: 'shield', label: 'Encrypted' });
+  if (group.childsafe) indicators.push({ icon: 'heart', label: 'Child-safe' });
+
+  const chipStyle = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' };
+  const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left' };
+
+  return (
+    <Overlay open={open} onClose={onClose}>
+      <div style={{ padding: '10px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0 14px' }}>
+          <IconBtn name="chevL" onClick={onClose} title="Back" />
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Group info</div>
+        </div>
+
+        {/* IDENTITY */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 8, padding: '6px 0 14px' }}>
+          <div style={{ width: 72, height: 72, borderRadius: 22, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent) }}>
+            <Icon name={group.broadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={34} /></div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, lineHeight: 1.15 }}>{group.name}</div>
+          {/* Identity line carries the TYPE and, for an open room, the honest "open to your church". The
+              member COUNT is deliberately NOT here — it is the tappable button below, so the default screen
+              stays clean (owner 2026-10-19). */}
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', fontWeight: 600 }}>{typeLabel}{!hasRoster ? ' · Open to your church' : ''}</div>
+          {group.sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 360, marginTop: 2 }}>{group.sub}</div> : null}
+          {indicators.length ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 6 }}>
+              {indicators.map(i => (
+                <span key={i.label} style={chipStyle}><Icon name={i.icon} size={13} /> {i.label}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        {/* MEMBERS — only for a room with a real roster. An open room keeps silent absence: no count, no list.
+            Owner 2026-10-19: the default screen is clean (identity + indicators + a "N members" button); the
+            search + roster open only when that button is tapped. The count on the button is the GATED roster
+            length (what the reader may see), so it is consistent with the list it opens — never the raw
+            group.members. A genuine assumed-minor window shows "Checking…" where the button would be. */}
+        {hasRoster ? (
+          <div style={{ marginTop: 6 }}>
+            {minorUnconfirmed ? (
+              <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>Checking who you can see…</div>
+            ) : (
+              <React.Fragment>
+                <button onClick={() => setListOpen(o => { if (o) setSelected(null); return !o; })} aria-expanded={listOpen}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' }}>
+                  <Icon name="users" size={20} color="var(--ink-2)" />
+                  <div style={{ flex: 1, fontWeight: 700, fontSize: 14.5 }}>{roster.length} {roster.length === 1 ? 'member' : 'members'}</div>
+                  <Icon name={listOpen ? 'chevD' : 'chevR'} size={17} color="var(--ink-3)" />
+                </button>
+                {listOpen ? (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 40, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 10 }}>
+                      <Icon name="search" size={15} color="var(--ink-3)" />
+                      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search members…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {!roster.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one to show here.</div> : null}
+                      {roster.length && !shown.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one matches that.</div> : null}
+                      {shown.map(r => (
+                        <button key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={rowStyle}>
+                          <Avatar handle={r.name} color={r.color} src={r.picture} size={40} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                            {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
+                          </div>
+                          <Icon name="chevR" size={16} color="var(--ink-3)" />
+                        </button>
+                      ))}
+                    </div>
+                    {/* READ-ONLY MEMBER CARD (phase 1). No actions — message / leader controls are phase 2. */}
+                    {selectedRow ? (
+                      <div role="dialog" aria-label={'Member — ' + selectedRow.name} style={{ marginTop: 16, padding: 16, borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px' }}>MEMBER</div>
+                          <IconBtn name="x" onClick={() => setSelected(null)} title="Close" />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+                          <Avatar handle={selectedRow.name} color={selectedRow.color} src={selectedRow.picture} size={54} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{selectedRow.name}</div>
+                            {selectedRow.nip05 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>@{String(selectedRow.nip05).split('@')[0]}</div> : null}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </React.Fragment>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </Overlay>
+  );
+}
+
 function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [msgs, setMsgs] = useC([]);
   const [draft, setDraft] = useC('');
@@ -1254,6 +1470,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [pin, setPin] = useC(null);              // the group's pinned message { msgId, text, by, ts } or null
   const [hidden, setHidden] = useC(null);        // Set of removed message ids (null until first load)
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
+  const [infoOpen, setInfoOpen] = useC(false);   // the Group info + members overlay (opened by tapping the header)
   // TAP OFF A POP-OVER TO CLOSE IT (owner 2026-10-15). The reactions picker and the leader ⋯ menu stayed open
   // on a phone until tapped again — there is no "click elsewhere" the way a mouse gives one. The rule for
   // "off" is shared (TrinityReplyKit.tapOffHandler); the effect is local so it uses this screen's own React
@@ -1591,16 +1808,29 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           {!docked ? <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} /> : null}
-          <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent), flexShrink: 0 }}>
-            <Icon name={isBroadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={22} /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
-            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} members` : (group.openToChurch ? 'Open to your church' : 'Members only')} · private to your church</div>
+          {/* TAP THE HEADER FOR GROUP INFO + MEMBERS. The icon, name and status line are one tap target that
+              opens the GroupInfo overlay (WhatsApp-style). It is a role="button" rather than a <button> so it
+              can carry the same flex layout the header always had without a nested-button problem with the
+              shield control beside it. */}
+          <div role="button" tabIndex={0} title="Group info" aria-label={'Group info — ' + (group.name || '')}
+            onClick={() => setInfoOpen(true)}
+            style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer' }}>
+            <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent), flexShrink: 0 }}>
+              <Icon name={isBroadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={22} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{group.name}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sage)' }} /> {group.members ? `${group.members} members` : (group.openToChurch ? 'Open to your church' : 'Members only')} · private to your church</div>
+            </div>
           </div>
           <IconBtn name="shield" onClick={() => ctx.toast('Private to your church — only members can see this room.')} />
         </div>
       </div>
+      {/* GROUP INFO renders at the ROOM ROOT, never inside the header above. That header sets
+          backdrop-filter, and a backdrop-filter ancestor becomes the containing block for the overlay's
+          `position: fixed/absolute; inset: 0` — nesting GroupInfo there would clip the whole panel to the
+          thin header strip. Kept a sibling so it fills the screen; the header's tap only flips `infoOpen`. */}
+      <GroupInfo group={group} open={infoOpen} onClose={() => setInfoOpen(false)} ctx={ctx} />
       {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
 
       {/* WHO SPEAKS IN THIS ROOM, SAID ONCE, AT THE TOP. Hiding the composer is not an explanation: a
