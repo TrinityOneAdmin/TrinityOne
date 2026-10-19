@@ -3758,7 +3758,11 @@ function NewGroupModal({ open, onClose }) {
     if (!name.trim() || busy) return;
     const g = { name: name.trim(), kind, sub: sub.trim() };
     if (category) g.category = category;
-    if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
+    // INVITE-ONLY WORKS FOR BROADCAST TOO (phase 2): a broadcast stays steward-post-only; invite-only just
+    // restricts who can READ it. The relay keys its read gate on visibility==='invite' regardless of kind
+    // (GROUP_VIS/GROUP_MEMBERS in scripts/gateway.mjs) — the broadcast write gate is separate — so no relay
+    // change is needed. Encryption below stays group-only on purpose (owner-locked).
+    if (inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
     if (childsafe) g.childsafe = true;
     const sealed = kind === 'group' && encrypted;
     // A ROOM THE STEWARD CHOSE TO ENCRYPT IS NEVER CREATED WITHOUT ITS KEY (new church, 2026-10-02). This used to
@@ -3841,17 +3845,21 @@ function NewGroupModal({ open, onClose }) {
             <input type="checkbox" checked={childsafe} onChange={e => setChildsafe(e.target.checked)} style={{ marginTop: 2 }} />
             <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>👶 Child-safe</b> — members marked as a child can see and join this group. Groups that aren’t child-safe are hidden from children.</span>
           </label>
+          {/* INVITE-ONLY applies to BROADCAST as well as group (phase 2): it restricts who can READ. The
+              ENCRYPTED checkbox stays inside the kind==='group' wrapper below — encryption is group-only. */}
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
+            <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
+            <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list; only the people you choose can see it (the relay enforces it).</span>
+          </label>
           {kind === 'group' ? (
             <React.Fragment>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
-                <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
-                <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list, and only the members you choose can post (the relay enforces it).</span>
-              </label>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '12px 0 0', cursor: 'pointer' }}>
                 <input type="checkbox" checked={encrypted} onChange={e => setEncrypted(e.target.checked)} style={{ marginTop: 2 }} />
                 <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>🔒 Encrypted</b> — messages are sealed end-to-end; not even the relay can read them. {inviteOnly ? 'Keyed to the chosen members.' : 'Keyed to everyone in the church.'} New members can read past messages.</span>
               </label>
-              {inviteOnly ? (
+            </React.Fragment>
+          ) : null}
+          {inviteOnly ? (
                 <div style={{ marginTop: 14 }}>
                   <div style={lbl}>WHO’S IN · {sel.size}</div>
                   {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members have joined yet — create the group, then add people here once they’re in.</div> : (
@@ -3872,8 +3880,6 @@ function NewGroupModal({ open, onClose }) {
                   )}
                 </div>
               ) : null}
-            </React.Fragment>
-          ) : null}
         </div>
         {note ? <div role="status" style={{ padding: '14px 26px 0', fontSize: 13, color: busy ? 'var(--ink-2)' : 'var(--clay-ink)', lineHeight: 1.45, fontWeight: busy ? 500 : 600 }}>{note}</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
@@ -3889,7 +3895,7 @@ function NewGroupModal({ open, onClose }) {
 // group with the new member set — the relay then enforces posting + the read-gate against it.
 // `getCurrent` (optional) returns the group document AS IT IS NOW (null if it was deleted); save() publishes on top of that, so another steward's
 // change made while this dialog was open (childsafe, encryption, category, leaders) is not reverted by a stale snapshot.
-function EditGroupMembersModal({ group, getCurrent, onClose }) {
+function EditGroupMembersModal({ group, getCurrent, onClose, seed }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   // WHAT IS OFFERED: not people still waiting to join, not the blocked (sim A2 #7) — but whoever is ALREADY in
   // the group stays listed so they can be un-ticked. `members` stays the full list for `known`/`orphans` and the
@@ -3900,7 +3906,13 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
   // is how a church ends up with a care team the relay treats as empty.
   const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
   const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';
-  const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
+  // `seed` (phase 2, optional) only pre-ticks the picker when an OPEN group is being turned invite-only from
+  // the settings panel — it does NOT change the save() delta, which still reads `group.members` as the true
+  // baseline (empty for an open group, so everyone left ticked is ADDED). From-the-row opens pass no seed, so
+  // an invite-only group keeps starting from its own allowlist exactly as before.
+  const [sel, setSel] = React.useState(() => new Set(
+    (Array.isArray(group.members) && group.members.length) ? group.members
+      : (Array.isArray(seed) ? seed : (Array.isArray(group.members) ? group.members : []))));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [q, setQ] = React.useState('');   // view-only name/@handle filter; save()/orphans/known read `sel`, not this
@@ -4491,6 +4503,8 @@ function DashGroups() {
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
+  const [editMembersSeed, setEditMembersSeed] = React.useState(null); // phase 2: pre-tick set when turning an OPEN group invite-only (null = from-the-row, start from its own allowlist)
+  const [unrestricting, setUnrestricting] = React.useState(null);     // phase 2: { g } → confirm before opening an invite-only group to the whole church (exposes its history)
   const [settingsFor, setSettingsFor] = React.useState(null);       // APK: group whose settings sheet is open
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
@@ -4622,7 +4636,7 @@ function DashGroups() {
             <span role="img" aria-label={(it.name || 'This group') + (it.childsafe ? ' — child-safe: members marked as a child can join' : ' — adults only: hidden from children')} title={it.childsafe ? 'Child-safe — members marked as a child can join' : 'Adults only — hidden from children'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 30%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface-2)', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={13} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Adults only'}</span>
             {/* READ-ONLY sealed status — shown only when encrypted. No onClick; sealing is toggled in the panel. */}
             {it.encrypted ? <span role="img" aria-label={(it.name || 'This group') + ' — sealed end-to-end'} title="Sealed end-to-end" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name="lock" size={13} color="currentColor" /> Sealed</span> : null}
-            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(raw(it))} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> People · {(it.members || []).length}</button> : null}
+            {it.visibility === 'invite' ? <button onClick={() => { setEditMembersSeed(null); setEditMembersFor(raw(it)); }} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> People · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders{(it.leaders || []).length ? ' · ' + it.leaders.length : ''}</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
             <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="sliders" size={15} color="currentColor" /> Settings</button>
@@ -4653,7 +4667,7 @@ function DashGroups() {
         </div>
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
-      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
+      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} seed={editMembersSeed} onClose={() => { setEditMembersFor(null); setEditMembersSeed(null); }} /> : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
@@ -4714,8 +4728,23 @@ function DashGroups() {
                 </div>
               ) : null}
 
+              {/* INVITE-ONLY ON/OFF (phase 2). Not for a team — a team's membership comes from its roster, and
+                  invite-only is not a concept there. OFF→ON opens the member picker seeded from everyone
+                  currently eligible (EditGroupMembersModal.save() publishes visibility:'invite'); ON→OFF goes
+                  through a confirm because it exposes the whole history to the church. Works for a broadcast
+                  too: the relay keys its read gate on visibility==='invite' regardless of kind. */}
+              {g.kind !== 'team' ? (
+                <div style={sToggle}>
+                  <div style={sLabel}><Icon name="lock" size={18} color={g.visibility === 'invite' ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>Invite-only</div><div style={sSub}>{g.visibility === 'invite' ? 'Only the people you choose can see it' : 'Anyone in the church can see and join it'}</div></div></div>
+                  <input type="checkbox" className="sw" checked={g.visibility === 'invite'} aria-label={(g.name || 'This group') + ' — invite-only is ' + (g.visibility === 'invite' ? 'on. Press to open it to the whole church' : 'off. Press to restrict who can see it')} onChange={() => {
+                    if (g.visibility === 'invite') { setUnrestricting({ g: raw(g) }); setSettingsFor(null); }
+                    else { setEditMembersSeed(recipsFor(g) || []); setEditMembersFor(raw(g)); setSettingsFor(null); }
+                  }} />
+                </div>
+              ) : null}
+
               {g.visibility === 'invite' ? (
-                <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setEditMembersFor(raw(g)); setSettingsFor(null); }}>
+                <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setEditMembersSeed(null); setEditMembersFor(raw(g)); setSettingsFor(null); }}>
                   <div style={sLabel}><Icon name="lock" size={18} color="var(--clay-ink)" /><div><div style={sName}>Invite-only members</div><div style={sSub}>{(g.members || []).length} member{(g.members || []).length === 1 ? '' : 's'}</div></div></div>
                   <Icon name="chevR" size={16} color="var(--ink-3)" />
                 </div>
@@ -4750,6 +4779,16 @@ function DashGroups() {
         );
       })() : null}
       {sealing ? <SkConfirm icon="lock" title={(sealing.on ? 'Seal "' : 'Unseal "') + sealing.g.name + '"?'} confirmLabel={sealing.busy ? 'Sealing…' : (sealing.on ? 'Seal it' : 'Unseal')} busy={!!sealing.busy} err={sealing.err || ''} body={sealing.on ? 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages already posted stay as they are.' : 'New messages become readable by the relay again. Messages already sealed stay sealed.'} onConfirm={doSeal} onCancel={() => { if (!sealing.busy) setSealing(null); }} /> : null}
+      {/* ON→OFF: opening an invite-only room to the whole church EXPOSES its history. publishGroup with
+          visibility/members cleared lands it in the relay's open branch. The confirm body names the exposure
+          plainly; for an also-encrypted room it adds that new members can't read the old sealed messages —
+          a warning, not a block (owner decision). No relay change: the relay already reads an absent
+          visibility as open. */}
+      {unrestricting ? <SkConfirm icon="globe" title={'Open "' + (unrestricting.g.name || 'this group') + '" to the whole church?'} confirmLabel="Open it up"
+        body={'It is invite-only now. If you open it up, every message posted in it so far becomes readable by anyone in your church, and anyone can join.'
+          + (unrestricting.g.encrypted ? '\n\nThis group is also encrypted: new members will not be able to read the old encrypted messages, only new ones.' : '')}
+        onConfirm={() => { const g = unrestricting.g; pubOr(window.Steward.publishGroup({ ...raw(g), visibility: undefined, members: undefined }), 'Couldn’t open “' + (g.name || 'this group') + '” to the church — the relay didn’t accept it, so it stays invite-only.'); setUnrestricting(null); }}
+        onCancel={() => setUnrestricting(null)} /> : null}
     </div>
   );
 }
