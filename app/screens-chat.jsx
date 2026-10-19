@@ -1262,9 +1262,10 @@ function GroupInfo({ group, open, onClose, ctx }) {
   const [members, setMembers] = useC([]);
   const [q, setQ] = useC('');            // starts-with people search
   const [selected, setSelected] = useC(null);   // a member's pubkey whose read-only card is open, or null
+  const [listOpen, setListOpen] = useC(false);   // owner 2026-10-19: the roster hides behind the count button until tapped
   // The gated church directory arrives over a subscription — same source and shape VerseShareSheet uses.
   useCE(() => {
-    setMembers([]); setQ(''); setSelected(null);
+    setMembers([]); setQ(''); setSelected(null); setListOpen(false);
     if (!open || !churchNpub || !(FS && FS.subscribeChurchMembers)) return undefined;
     const off = FS.subscribeChurchMembers(churchNpub, (list) => setMembers(list || []));
     return () => { try { off && off(); } catch (e) {} };
@@ -1351,7 +1352,10 @@ function GroupInfo({ group, open, onClose, ctx }) {
           <div style={{ width: 72, height: 72, borderRadius: 22, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent) }}>
             <Icon name={group.broadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={34} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 21, lineHeight: 1.15 }}>{group.name}</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-3)', fontWeight: 600 }}>{typeLabel}{!hasRoster ? ' · Open to your church' : minorUnconfirmed ? '' : ' · ' + roster.length + (roster.length === 1 ? ' member' : ' members')}</div>
+          {/* Identity line carries the TYPE and, for an open room, the honest "open to your church". The
+              member COUNT is deliberately NOT here — it is the tappable button below, so the default screen
+              stays clean (owner 2026-10-19). */}
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', fontWeight: 600 }}>{typeLabel}{!hasRoster ? ' · Open to your church' : ''}</div>
           {group.sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 360, marginTop: 2 }}>{group.sub}</div> : null}
           {indicators.length ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 6 }}>
@@ -1362,51 +1366,63 @@ function GroupInfo({ group, open, onClose, ctx }) {
           ) : null}
         </div>
 
-        {/* MEMBERS — only for a room with a real roster. An open room keeps silent absence: no list, no count. */}
+        {/* MEMBERS — only for a room with a real roster. An open room keeps silent absence: no count, no list.
+            Owner 2026-10-19: the default screen is clean (identity + indicators + a "N members" button); the
+            search + roster open only when that button is tapped. The count on the button is the GATED roster
+            length (what the reader may see), so it is consistent with the list it opens — never the raw
+            group.members. A genuine assumed-minor window shows "Checking…" where the button would be. */}
         {hasRoster ? (
           <div style={{ marginTop: 6 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '4px 0 10px' }}>MEMBERS</div>
             {minorUnconfirmed ? (
               <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>Checking who you can see…</div>
             ) : (
               <React.Fragment>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 40, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 10 }}>
-                  <Icon name="search" size={15} color="var(--ink-3)" />
-                  <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search members…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {!roster.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one to show here.</div> : null}
-                  {roster.length && !shown.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one matches that.</div> : null}
-                  {shown.map(r => (
-                    <button key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={rowStyle}>
-                      <Avatar handle={r.name} color={r.color} src={r.picture} size={40} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
-                        {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
+                <button onClick={() => setListOpen(o => { if (o) setSelected(null); return !o; })} aria-expanded={listOpen}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left', boxShadow: 'var(--shadow)' }}>
+                  <Icon name="users" size={20} color="var(--ink-2)" />
+                  <div style={{ flex: 1, fontWeight: 700, fontSize: 14.5 }}>{roster.length} {roster.length === 1 ? 'member' : 'members'}</div>
+                  <Icon name={listOpen ? 'chevD' : 'chevR'} size={17} color="var(--ink-3)" />
+                </button>
+                {listOpen ? (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 40, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 10 }}>
+                      <Icon name="search" size={15} color="var(--ink-3)" />
+                      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search members…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {!roster.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one to show here.</div> : null}
+                      {roster.length && !shown.length ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 0' }}>No one matches that.</div> : null}
+                      {shown.map(r => (
+                        <button key={r.pubkey} onClick={() => setSelected(r.pubkey)} style={rowStyle}>
+                          <Avatar handle={r.name} color={r.color} src={r.picture} size={40} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                            {r.nip05 ? <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>@{String(r.nip05).split('@')[0]}</div> : null}
+                          </div>
+                          <Icon name="chevR" size={16} color="var(--ink-3)" />
+                        </button>
+                      ))}
+                    </div>
+                    {/* READ-ONLY MEMBER CARD (phase 1). No actions — message / leader controls are phase 2. */}
+                    {selectedRow ? (
+                      <div role="dialog" aria-label={'Member — ' + selectedRow.name} style={{ marginTop: 16, padding: 16, borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px' }}>MEMBER</div>
+                          <IconBtn name="x" onClick={() => setSelected(null)} title="Close" />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+                          <Avatar handle={selectedRow.name} color={selectedRow.color} src={selectedRow.picture} size={54} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{selectedRow.name}</div>
+                            {selectedRow.nip05 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>@{String(selectedRow.nip05).split('@')[0]}</div> : null}
+                          </div>
+                        </div>
                       </div>
-                      <Icon name="chevR" size={16} color="var(--ink-3)" />
-                    </button>
-                  ))}
-                </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </React.Fragment>
             )}
-          </div>
-        ) : null}
-
-        {/* READ-ONLY MEMBER CARD (phase 1). No actions — message / leader controls are phase 2. */}
-        {selectedRow ? (
-          <div role="dialog" aria-label={'Member — ' + selectedRow.name} style={{ marginTop: 16, padding: 16, borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px' }}>MEMBER</div>
-              <IconBtn name="x" onClick={() => setSelected(null)} title="Close" />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-              <Avatar handle={selectedRow.name} color={selectedRow.color} src={selectedRow.picture} size={54} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{selectedRow.name}</div>
-                {selectedRow.nip05 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>@{String(selectedRow.nip05).split('@')[0]}</div> : null}
-              </div>
-            </div>
           </div>
         ) : null}
       </div>

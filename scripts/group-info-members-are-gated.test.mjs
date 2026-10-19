@@ -2,9 +2,10 @@
 // Run: node --test scripts/group-info-members-are-gated.test.mjs
 //
 // Phase 1 of the WhatsApp-style group info: tapping a group's header opens a read-only panel with the group's
-// identity (icon, name, description, type), its protection indicators (invite-only / encrypted / child-safe),
-// and — for an invite-only room — a searchable members list with a read-only card on tap. Per-member actions
-// (message / make-leader) are phase 2; in-chat message search is phase 3.
+// identity (icon, name, description, type) and its protection indicators (invite-only / encrypted /
+// child-safe). The members list is NOT inline (owner 2026-10-19): the default screen is clean and shows a
+// "N members" BUTTON; the search box + roster + read-only member card open only when that button is tapped.
+// Per-member actions (message / make-leader) are phase 2; in-chat message search is phase 3.
 //
 // THE SAFEGUARDING RULE UNDER TEST. The members a reader sees =
 //     (the gated church directory: subscribeChurchMembers ∩ ctx.canDMPeer) ∩ (this group's membership).
@@ -13,7 +14,9 @@
 // shape ChatScreen uses — isMinor OR the `assumeMinor` engine answer — not `clearanceKnown` alone (which is
 // never set in a church that does not use safeguarding, so gating on it would hang the list on "Checking…"
 // for ever). A genuine assumed-minor window still fails SAFE: the roster is withheld until clearance is
-// confirmed. An OPEN room has no per-group roster, so it shows "Open to your church" and no list/count.
+// confirmed. An OPEN room has no per-group roster, so it shows "Open to your church" and NO count button and
+// NO list. The count on the button is the GATED roster length — consistent with the list it opens, never the
+// raw group.members.
 //
 // HOW IT ASSERTS (CLAUDE.md §1 + §3). app/*.jsx ships UNBUNDLED, so a `false && ` in front of a condition
 // leaves every word in place and a text match still passes. Nothing here matches text in app/*.jsx: ChatRoom
@@ -50,8 +53,12 @@ const displayFor = (p) => {
 const row = (p) => ({ pubkey: p, name: NAMES[p].name, nip05: NAMES[p].nip05 });
 const flush = () => Promise.resolve().then(() => Promise.resolve());   // let an assumeMinor microtask settle
 
-// ── mount ChatRoom, open the info panel, return the rendered tree ───────────────────────────────────────────
-async function openInfo(group, { gatedSource = [], canDM = () => true, safeguard = { clearanceKnown: true, isMinor: false }, assumeMinor, click = true } = {}) {
+// the "N members" button is the only control carrying aria-expanded
+const countBtn = (tree) => find(tree, n => n.type === 'button' && n.props && ('aria-expanded' in n.props));
+const btnWords = (b) => texts(b).join(' ').replace(/\s+/g, ' ').trim();   // whitespace-collapsed, for a count match
+
+// ── mount ChatRoom, open the info panel, optionally open the members list, return the rendered tree ─────────
+async function openInfo(group, { gatedSource = [], canDM = () => true, safeguard = { clearanceKnown: true, isMinor: false }, assumeMinor, click = true, openList = false } = {}) {
   const { React, draw } = miniReact();
   const Fellowship = {
     myPubkey: pk('me'), relays: ['wss://relay.example'], relayReady: () => true,
@@ -111,6 +118,12 @@ async function openInfo(group, { gatedSource = [], canDM = () => true, safeguard
   render();           // GroupInfo mounts; its subscribeChurchMembers + assumeMinor effects run after this draw
   await flush();      // let the assumeMinor promise settle
   tree = render();    // …and this draw sees the members + the resolved assumeMinor verdict
+  if (openList) {     // tap the "N members" button to reveal the roster + search + card
+    const cb = countBtn(tree);
+    assert.equal(cb.length, 1, 'there is no "N members" count button to open the list — re-anchor this test');
+    cb[0].props.onClick();
+    tree = render();
+  }
   return { tree, render };
 }
 
@@ -125,11 +138,11 @@ const memberRow = (tree, name) => find(tree, n => n.type === 'button' && texts(n
 // ── 1. tapping the header opens the info panel ──────────────────────────────────────────────────────────────
 test('CONTROL: before the tap, the info panel is not on screen', async () => {
   // The header carries a "Group info" title on its tap affordance, so that string is present even closed;
-  // the panel's DESCRIPTION and MEMBERS list are rendered only inside the (closed) overlay, so they are the
+  // the panel's DESCRIPTION and count button are rendered only inside the (closed) overlay, so they are the
   // honest signal that the panel itself is not yet open.
   const { tree } = await openInfo(INVITE([pk('ada')]), { gatedSource: [pk('ada')], click: false });
   assert.doesNotMatch(panelText(tree), /A small group that prays together/, 'the info panel is open before anything was tapped — re-anchor');
-  assert.equal(memberRow(tree, 'Ada Lovelace').length, 0, 'a members list is on screen before the panel was opened — re-anchor');
+  assert.equal(countBtn(tree).length, 0, 'the members count button is on screen before the panel was opened — re-anchor');
 });
 
 test('tapping the group header opens a panel with the name, description, type and protection indicators', async () => {
@@ -143,12 +156,28 @@ test('tapping the group header opens a panel with the name, description, type an
   assert.match(t, /Child-safe/, 'the child-safe protection indicator is missing');
 });
 
+// ── 1b. (OWNER CHANGE) the roster is behind the count button; the button shows the GATED count ──────────────
+test('the members list is hidden until the "N members" button is tapped, and the button shows the gated count', async () => {
+  // gated directory ∩ group = Ada + Ben (2). The default panel shows a "2 members" button and NO rows; the
+  // rows appear only after the button is tapped.
+  const { tree, render } = await openInfo(INVITE([pk('ada'), pk('ben')]), { gatedSource: [pk('ada'), pk('ben')] });
+  const cb = countBtn(tree);
+  assert.equal(cb.length, 1, 'there is no single "N members" count button');
+  assert.match(btnWords(cb[0]), /\b2 members\b/, 'the count button does not show the gated roster count (2)');
+  assert.equal(memberRow(tree, 'Ada Lovelace').length, 0, 'a member row is shown before the count button was tapped — the list should be collapsed by default');
+  assert.equal(find(tree, n => n.type === 'input').length, 0, 'the search box is shown before the list was opened');
+  cb[0].props.onClick();
+  const after = render();
+  assert.ok(memberRow(after, 'Ada Lovelace').length, 'tapping the count button did not reveal the roster');
+  assert.ok(find(after, n => n.type === 'input' && /Search members/i.test(String(n.props.placeholder || ''))).length, 'tapping the count button did not reveal the search box');
+});
+
 // ── 2. the list is the GATED SOURCE ∩ group membership ──────────────────────────────────────────────────────
 test('the members list is the gated directory ∩ this group’s membership — nothing else', async () => {
   // directory the reader is served: Ada, Ben, Cath.   group allowlist: Ada, Ben, plus a stranger pubkey NOT
   // in the directory. Expect exactly Ada + Ben: Cath is in the directory but not the group, the stranger is
   // in the group but not the directory.
-  const { tree } = await openInfo(INVITE([pk('ada'), pk('ben'), pk('str')]), { gatedSource: [pk('ada'), pk('ben'), pk('cat')] });
+  const { tree } = await openInfo(INVITE([pk('ada'), pk('ben'), pk('str')]), { gatedSource: [pk('ada'), pk('ben'), pk('cat')], openList: true });
   assert.ok(memberRow(tree, 'Ada Lovelace').length, 'a member in both the directory and the group is missing');
   assert.ok(memberRow(tree, 'Ben Carter').length, 'a member in both the directory and the group is missing');
   assert.equal(memberRow(tree, 'Cath Rowe').length, 0, 'someone in the church directory but NOT this group was listed');
@@ -161,7 +190,7 @@ test('a directory member this reader may NOT contact (canDMPeer rejects) is not 
   // relay would refuse a DM; a blocked/uncleared peer). The `&& canSee(...)` narrowing at the point of use is
   // the only thing that drops them. Delete it and this test reds (measured at the foot of this file).
   const canDM = (p) => p !== pk('blk');
-  const { tree } = await openInfo(INVITE([pk('ada'), pk('blk')]), { gatedSource: [pk('ada'), pk('blk')], canDM });
+  const { tree } = await openInfo(INVITE([pk('ada'), pk('blk')]), { gatedSource: [pk('ada'), pk('blk')], canDM, openList: true });
   assert.ok(memberRow(tree, 'Ada Lovelace').length, 're-anchor: the contactable member is missing too, so this proves nothing');
   assert.equal(memberRow(tree, 'Bad Actor').length, 0, 'a member ctx.canDMPeer rejects was listed — the point-of-use narrowing is not applied');
   assert.doesNotMatch(panelText(tree), /Bad Actor/, 'the rejected member’s name leaked into the panel text');
@@ -177,21 +206,24 @@ test('a CHILD is never shown another child or an uncleared adult, even though bo
   const canDM = (p) => p === pk('ada') || p === pk('gdn');   // a child may only reach a cleared adult + guardian
   const { tree } = await openInfo(
     INVITE([pk('ada'), pk('gdn'), pk('kid'), pk('unc')]),         // group membership includes a child + an uncleared adult
-    { gatedSource: [pk('ada'), pk('gdn')], canDM, safeguard: child });
+    { gatedSource: [pk('ada'), pk('gdn')], canDM, safeguard: child, openList: true });
   assert.ok(memberRow(tree, 'Ada Lovelace').length, 'the cleared adult is missing — the child has a blank screen, not a safe one');
   assert.ok(memberRow(tree, 'Mo Khan').length, 'the child’s own guardian is missing');
   assert.equal(memberRow(tree, 'Mia Khan').length, 0, 'ANOTHER CHILD was named to a child');
   assert.equal(memberRow(tree, 'Roy Platt').length, 0, 'an UNCLEARED ADULT was named to a child');
   assert.doesNotMatch(panelText(tree), /Mia Khan|Roy Platt/, 'a withheld name leaked into the panel text');
+  // the count button is itself the gated count: a child sees 2 (cleared adult + guardian), never 4
+  const cb = find(tree, n => n.type === 'button' && n.props && ('aria-expanded' in n.props));
+  assert.ok(cb.length && /\b2 members\b/.test(btnWords(cb[0])), 'the count button showed more than the gated roster to a child');
 });
 
-// ── 4. an OPEN room keeps the honest context, with no enumerated roster or count ────────────────────────────
-test('an OPEN room shows "Open to your church" and NO enumerated members / fake count', async () => {
+// ── 4. an OPEN room keeps the honest context, with no count button and no roster ────────────────────────────
+test('an OPEN room shows "Open to your church" and NO count button / list', async () => {
   const { tree } = await openInfo(OPEN, { gatedSource: [pk('ada'), pk('ben'), pk('cat')] });
   const t = panelText(tree);
   assert.match(t, /Open to your church/, 'an open room no longer carries its honest "open to your church" context');
+  assert.equal(countBtn(tree).length, 0, 'an open room drew a members count button — it has no per-group roster to count');
   assert.equal(memberRow(tree, 'Ada Lovelace').length, 0, 'an open room synthesised a per-group member list — it has no roster to show');
-  assert.doesNotMatch(t, /\bMEMBERS\b/, 'an open room drew a MEMBERS section it has no roster for');
 });
 
 // ── 5. starts-with search: name-word prefix OR @handle prefix; a mid-word substring matches nobody ──────────
@@ -205,19 +237,19 @@ test('search matches a name-word prefix and an @handle prefix, but not a mid-wor
     return render();
   };
   // "lov" is a prefix of the WORD "Lovelace" in "Ada Lovelace" → matches Ada only
-  let { tree, render } = await openInfo(group, { gatedSource: source });
+  let { tree, render } = await openInfo(group, { gatedSource: source, openList: true });
   let r = type(render, tree, 'lov');
   assert.ok(memberRow(r, 'Ada Lovelace').length, 'a name-word prefix ("lov" → "Lovelace") did not match');
   assert.equal(memberRow(r, 'Ben Carter').length, 0, 'search returned a non-matching member');
 
   // "ove" is a MID-WORD substring of "Lovelace" (not a word start) → matches nobody
-  ({ tree, render } = await openInfo(group, { gatedSource: source }));
+  ({ tree, render } = await openInfo(group, { gatedSource: source, openList: true }));
   r = type(render, tree, 'ove');
   assert.equal(memberRow(r, 'Ada Lovelace').length, 0, 'a mid-word substring ("ove") matched — the search is substring, not starts-with');
   assert.doesNotMatch(panelText(r), /Ada Lovelace|Ben Carter|Cath Rowe/, 'a mid-word substring matched someone');
 
   // "ada" is Ada's @handle prefix (and also her name-word) → matches
-  ({ tree, render } = await openInfo(group, { gatedSource: source }));
+  ({ tree, render } = await openInfo(group, { gatedSource: source, openList: true }));
   r = type(render, tree, 'ada');
   assert.ok(memberRow(r, 'Ada Lovelace').length, 'an @handle prefix did not match');
 });
@@ -226,30 +258,35 @@ test('search matches a name-word prefix and an @handle prefix, but not a mid-wor
 test('a church that clears nobody (clearanceKnown never true) still shows the members list to an adult', async () => {
   // This is the normal, permanent state of most churches: nobody is ever cleared, so the member's own
   // clearanceKnown never becomes true. The engine's assumeMinor answers FALSE ("this church clears nobody"),
-  // so the reader is treated as an adult and the gated list must SHOW — not hang on "Checking…" for ever.
-  const { tree } = await openInfo(INVITE([pk('ada'), pk('ben')]),
+  // so the reader is treated as an adult and the gated list must open — not hang on "Checking…" for ever.
+  const { tree, render } = await openInfo(INVITE([pk('ada'), pk('ben')]),
     { gatedSource: [pk('ada'), pk('ben')], canDM: () => true, safeguard: { isMinor: false }, assumeMinor: false });
   assert.doesNotMatch(panelText(tree), /Checking who you can see/i,
-    'the members list hung on "Checking…" in a church that never uses safeguarding — the feature is dead for most churches');
-  assert.ok(memberRow(tree, 'Ada Lovelace').length, 'the gated members list did not render for an adult in a non-safeguarding church');
-  assert.ok(memberRow(tree, 'Ben Carter').length, 'the gated members list did not render for an adult in a non-safeguarding church');
+    'the members section hung on "Checking…" in a church that never uses safeguarding — the feature is dead for most churches');
+  const cb = countBtn(tree);
+  assert.equal(cb.length, 1, 'no "N members" button rendered for an adult in a non-safeguarding church');
+  cb[0].props.onClick();
+  const after = render();
+  assert.ok(memberRow(after, 'Ada Lovelace').length, 'the gated members list did not open for an adult in a non-safeguarding church');
+  assert.ok(memberRow(after, 'Ben Carter').length, 'the gated members list did not open for an adult in a non-safeguarding church');
 });
 
 // ── 6b. cold start fails safe (genuine unknown-minor ⇒ treated as a minor, roster withheld) ─────────────────
 test('a genuine unknown reader (assumeMinor true, clearance not confirmed) fails closed and says it is checking', async () => {
   // Safeguarding IS in use here and the engine has not heard about this member, so assumeMinor is TRUE while
   // clearanceKnown is still false. Even with a full gated directory and a permissive canDMPeer (which can be
-  // answering from an empty approved-list in this window), NO name may show.
+  // answering from an empty approved-list in this window), NO name and NO count button may show.
   const { tree } = await openInfo(INVITE([pk('ada'), pk('ben'), pk('kid')]),
     { gatedSource: [pk('ada'), pk('ben'), pk('kid')], canDM: () => true, safeguard: { isMinor: false }, assumeMinor: true });
   const t = panelText(tree);
   assert.match(t, /Checking who you can see/i, 'a genuine unknown reader got no honest "still checking" account');
+  assert.equal(countBtn(tree).length, 0, 'a count button was shown while the reader might be a minor and clearance was unconfirmed');
   assert.doesNotMatch(t, /Ada Lovelace|Ben Carter|Mia Khan/, 'a member name was shown while the reader might be a minor and clearance was unconfirmed — an absent answer is not a "no"');
 });
 
 // ── the read-only card (phase 1): tap a member, get a card, and NO per-member action ────────────────────────
 test('tapping a member opens a read-only card — no message / leader action in phase 1', async () => {
-  const { tree, render } = await openInfo(INVITE([pk('ada'), pk('ben')]), { gatedSource: [pk('ada'), pk('ben')] });
+  const { tree, render } = await openInfo(INVITE([pk('ada'), pk('ben')]), { gatedSource: [pk('ada'), pk('ben')], openList: true });
   const r = memberRow(tree, 'Ada Lovelace');
   assert.ok(r.length, 'no member row to tap');
   r[0].props.onClick();
@@ -264,12 +301,13 @@ test('tapping a member opens a read-only card — no message / leader action in 
 // ── measured red/green, 2026-10-19, this file against app/screens-chat.jsx ──────────────────────────────────
 // Each sabotage was scoped to the GroupInfo slice (anchor asserted exactly once) per CLAUDE.md "sabotage must
 // be scoped". Measured on this machine:
-//   · the fixed screen                                                         10 pass / 0 fail
-//   · the header tap affordance removed (onClick → no-op)                       9 pass / 1 fail  (the tap-opens-panel test reds)
-//   · the list source switched to raw group.memberPubs + displayFor            8 pass / 2 fail  (intersection + the CHILD test red: a child is shown Mia Khan + Roy Platt)
-//   · `&& canSee(m.pubkey)` deleted from the list source                       9 pass / 1 fail  (the canDMPeer-narrowing test reds: Bad Actor is listed)
-//   · `iAmMinor` gated on `clearanceKnown` alone again (the original bug)       9 pass / 1 fail  (the non-safeguarding-church test reds: list hangs on "Checking…")
-//   · `minorUnconfirmed` forced false (assumed minor trusts a failing-open gate) 9 pass / 1 fail (the genuine-unknown fail-safe test reds)
-//   · the starts-with matcher replaced with includes()                         9 pass / 1 fail  (the search test reds on the "ove" mid-word case)
+//   · the fixed screen                                                          11 pass / 0 fail
+//   · the roster rendered inline (list not gated behind the count button)       10 pass / 1 fail  (the "hidden until tapped" test reds)
+//   · the count button showing raw group.members instead of roster.length       10 pass / 1 fail  (the gated-count test reds: a child would see 4, not 2)
+//   · the list source switched to raw group.memberPubs + displayFor              9 pass / 2 fail  (intersection + the CHILD test red: a child is shown Mia Khan + Roy Platt)
+//   · `&& canSee(m.pubkey)` deleted from the list source                        10 pass / 1 fail  (the canDMPeer-narrowing test reds: Bad Actor is listed)
+//   · `iAmMinor` gated on `clearanceKnown` alone again (the original bug)        10 pass / 1 fail  (the non-safeguarding-church test reds: section hangs on "Checking…")
+//   · `minorUnconfirmed` forced false (assumed minor trusts a failing-open gate) 10 pass / 1 fail  (the genuine-unknown fail-safe test reds)
+//   · the starts-with matcher replaced with includes()                          10 pass / 1 fail  (the search test reds on the "ove" mid-word case)
 // The source-switch sabotage is the one that matters most: it is the exact anti-pattern the owner's rule
 // forbids, and the CHILD test turns red the moment it is applied.
