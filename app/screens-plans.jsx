@@ -521,9 +521,9 @@ function DevoRefChip({ refText, ctx, style }) {
 
 // ── one day of a multi-day devotional (prose + ref + mark-read), opened over the index ──
 function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
-  // SWIPE TO TURN THE DAY (owner 2026-10-18): swipe RIGHT = mark read (NEVER un-mark) + go to next; swipe LEFT
-  // = go to previous (navigation only, never changes read status). This is the OPPOSITE hand to the reader's
-  // chapter-turn (screens-read: left = forwards) ON PURPOSE — do not "align" it. Thresholds mirror the reader:
+  // SWIPE TO TURN THE DAY (owner 2026-10-18): swipe LEFT = mark read (NEVER un-mark) + go to next; swipe RIGHT
+  // = go to previous (navigation only, never changes read status). LEFT = forwards now MATCHES the reader's
+  // chapter-turn (screens-read: left = forwards). Thresholds mirror the reader:
   // 60px of mostly-horizontal travel, so a diagonal scroll and a text-selection drag are left alone. These
   // consts are declared INSIDE the component and the ref is a plain useRef: app/*.jsx are classic scripts
   // sharing one global scope, and a duplicate top-level name blanks the whole APK, so nothing here is a new
@@ -547,8 +547,8 @@ function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
     const dx = e.changedTouches[0].clientX - s.x, dy = e.changedTouches[0].clientY - s.y;
     if (Math.abs(dx) < DEVO_SWIPE_MIN || Math.abs(dx) < Math.abs(dy) * DEVO_SWIPE_DOMINANCE) return;
     try { const t = window.getSelection && window.getSelection(); if (t && String(t).trim()) return; } catch (err) {}
-    if (dx > 0) { if (!isDone) ctx.toggleDevoDay(devo.id, day.d); if (next) ctx.openChurchDevoDay(next); }   // right: mark read + next
-    else if (prev) ctx.openChurchDevoDay(prev);                                                             // left: previous, no mark
+    if (dx < 0) { if (!isDone) ctx.toggleDevoDay(devo.id, day.d); if (next) ctx.openChurchDevoDay(next); }   // left: mark read + next (owner 2026-10-19: flipped)
+    else if (prev) ctx.openChurchDevoDay(prev);                                                             // right: previous, no mark
   };
   return (
     <Overlay open={open} onClose={onClose}>

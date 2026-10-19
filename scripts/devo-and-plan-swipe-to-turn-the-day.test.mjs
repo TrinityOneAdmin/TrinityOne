@@ -1,4 +1,4 @@
-// DEVOTIONAL DAY VIEW: SWIPE RIGHT = MARK READ + NEXT, SWIPE LEFT = PREVIOUS. (Reading plans get NO swipe.)
+// DEVOTIONAL DAY VIEW: SWIPE LEFT = MARK READ + NEXT, SWIPE RIGHT = PREVIOUS (owner flip 2026-10-19). (Reading plans get NO swipe.)
 // Run: node --test scripts/devo-and-plan-swipe-to-turn-the-day.test.mjs
 //
 // Owner 2026-10-18 (revised after review): the swipe-to-turn-the-day gesture is for DEVOTIONALS only. A
@@ -65,30 +65,30 @@ function devoWorld(progress) {
   return { h, st, opened, scroll };
 }
 
-test('devo: swipe RIGHT on a middle day marks it read once and advances to the next day', () => {
+test('devo: swipe LEFT on a middle day marks it read once and advances to the next day', () => {
   const w = devoWorld();
-  drag(w.scroll(1), 80, 0);            // day 2 of 3
+  drag(w.scroll(1), -80, 0);           // day 2 of 3 (left = mark+next)
   assert.deepEqual(w.st.devos, { d1: [2] }, 'did not mark day 2 read');
   assert.deepEqual(w.opened, [3], 'did not advance to day 3');
 });
 
-test('devo: swipe LEFT goes to the previous day and does NOT mark anything read', () => {
+test('devo: swipe RIGHT goes to the previous day and does NOT mark anything read', () => {
   const w = devoWorld();
-  drag(w.scroll(1), -80, 0);
-  assert.deepEqual(w.st.devos, {}, 'a left swipe changed read status');
+  drag(w.scroll(1), 80, 0);
+  assert.deepEqual(w.st.devos, {}, 'a right swipe changed read status');
   assert.deepEqual(w.opened, [1], 'did not go back to day 1');
 });
 
-test('devo: swipe RIGHT on an already-read day advances but NEVER un-marks it', () => {
+test('devo: swipe LEFT on an already-read day advances but NEVER un-marks it', () => {
   const w = devoWorld([2]);            // day 2 already done
-  drag(w.scroll(1), 80, 0);
+  drag(w.scroll(1), -80, 0);
   assert.deepEqual(w.st.devos, { d1: [2] }, 'un-marked a day that was already read');
   assert.deepEqual(w.opened, [3], 'did not advance');
 });
 
-test('devo: the last day marks read with no advance on a right swipe', () => {
+test('devo: the last day marks read with no advance on a left swipe', () => {
   const w = devoWorld();
-  drag(w.scroll(2), 80, 0);            // day 3 of 3
+  drag(w.scroll(2), -80, 0);           // day 3 of 3
   assert.deepEqual(w.st.devos, { d1: [3] }, 'did not mark the last day read');
   assert.deepEqual(w.opened, [], 'advanced past the last day');
 });
