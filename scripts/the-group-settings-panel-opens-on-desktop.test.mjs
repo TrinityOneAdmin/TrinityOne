@@ -109,16 +109,26 @@ test('DESKTOP: the row has a Settings gear, and clicking it opens a panel with N
   assert.notEqual(desc.props.value, LIVE_SUB, 'the description field shows the live subtitle, not the real description');
 });
 
-test('DESKTOP: editing the name publishes { name } carrying the RAW sub, not the live subtitle', async () => {
+test('DESKTOP: the name save publishes the group AS IT IS NOW — the document, not the opened snapshot', async () => {
+  // Modelled on group-dialogs-publish-the-document-not-the-row: MOVE the underlying group after the panel
+  // opens, then save. The publish must carry the LIVE doc (raw(g)), not the snapshot taken at open — so this
+  // bites if the handler is `{ ...g, name }` (g.sub is the stale open-time description) instead of
+  // `{ ...raw(g), name }`. It also pins that the live subtitle never reaches the wire.
   const s = await screen();
   s.openPanel();
-  const name = s.input(s.panel(), 'Group name');
+  s.panel();   // panel open; the snapshot (ROOM.sub, no order) is taken now
+  // another steward changes the description AND the order underneath, after the panel opened
+  s.setGroups([{ ...ROOM, sub: 'Rewritten by another steward', order: 7 }]);
+  const name = s.input(s.panel(), 'Group name');   // re-read from the post-move render
   await name.props.onBlur({ target: { value: 'Pastoral team' } });
   for (let i = 0; i < 6; i++) await tick();
   assert.equal(s.published.length, 1, 'editing the name published nothing');
   assert.equal(s.published[0].name, 'Pastoral team', 'publishGroup did not receive the new name');
-  assert.equal(s.published[0].sub, ROOM.sub, 'the published sub is not the group’s real description: ' + s.published[0].sub);
+  assert.equal(s.published[0].sub, 'Rewritten by another steward', 'the save used the STALE open-time snapshot sub, not the live document — publish-the-document-not-the-row is broken: ' + s.published[0].sub);
+  assert.notEqual(s.published[0].sub, ROOM.sub, 'the save reverted the description another steward had changed');
   assert.notEqual(s.published[0].sub, LIVE_SUB, 'the live subtitle was published over the real description');
+  assert.equal(s.published[0].order, 7, 'a field another steward changed (order) was reverted by the name save — it is not building on the live document');
+  assert.deepEqual(s.published[0].members, ROOM.members, 'the invite-only members list was not carried from the live document');
 });
 
 test('DESKTOP: a blank name is NOT published', async () => {
@@ -155,10 +165,11 @@ test('DESKTOP (regression): child-safe is still reachable from the panel and pub
   assert.equal(s.published[0].childsafe, true, 'child-safe was not flipped on');
 });
 
-test('DESKTOP row is decluttered: People, Leaders, Chat, Settings gear + Delete — no category/icon/child-safe/encrypt pills', async () => {
+test('DESKTOP row is decluttered: People, Leaders, Chat, gear + Delete + read-only status; the CLICKABLE toggles are gone', async () => {
   const s = await screen();
-  const it = s.row();
-  const right = texts(s.captured().renderRight(it)).join(' ').replace(/\s+/g, ' ');   // normalise: join()/separate text nodes add spaces
+  const it = s.row();   // ROOM: not child-safe, not encrypted, invite-only
+  const rightNode = s.captured().renderRight(it);
+  const right = texts(rightNode).join(' ').replace(/\s+/g, ' ');   // normalise: join()/separate text nodes add spaces
   const aside = texts(s.captured().renderAside(it)).join(' ').replace(/\s+/g, ' ');
   // KEPT ('.' tolerates the middle-dot separator char)
   assert.match(right, /People . 2/, 're-anchor: the invite-only People button is gone, so the checks below are vacuous');
@@ -168,10 +179,60 @@ test('DESKTOP row is decluttered: People, Leaders, Chat, Settings gear + Delete 
   assert.match(right, /sliders/, 'the Settings gear (sliders icon) must render on the desktop row');
   assert.match(right, /Settings/, 'the Settings gear must be labelled for the desktop row');
   assert.match(aside, /trash/, 'Delete (trash icon) must stay in renderAside');
-  // REMOVED (these moved into the panel; cats is non-empty so the OLD row would have shown a <select>)
-  const selects = find(s.captured().renderRight(it), n => n.type === 'select');
-  assert.equal(selects.length, 0, 'the category <select> is still on the desktop row — it must move into the panel');
-  assert.doesNotMatch(right, /Child-safe/, 'the Child-safe pill is still on the desktop row');
-  assert.doesNotMatch(right, /Encrypt/, 'the Encrypt pill is still on the desktop row');
+  // READ-ONLY status is back (ROOM is not child-safe → "Adults only")
+  assert.match(right, /Adults only/, 'the read-only child-safe status indicator is missing from the row');
+  // REMOVED: the clickable action TOGGLES moved into the panel (cats is non-empty, so the OLD row would have shown a <select>)
+  assert.equal(find(rightNode, n => n.type === 'select').length, 0, 'the category <select> is still on the desktop row — it must move into the panel');
+  const btnSig = find(rightNode, n => n.type === 'button').map(b => String((b.props || {})['aria-label'] || '') + ' | ' + texts(b).join(' '));
+  assert.ok(!btnSig.some(l => /child-safe is (on|off)\. Press|Child-safe\?/.test(l)), 'the old CLICKABLE Child-safe toggle button is still on the row — only the read-only status may remain');
+  assert.ok(!btnSig.some(l => /encryption is (on|off)\. Press|Encrypt\?|Encrypted/.test(l)), 'the old CLICKABLE Encrypt toggle button is still on the row');
+  assert.doesNotMatch(right, /Encrypt/, 'the row still says "Encrypt" — the sealed status reads "Sealed", and the toggle lives in the panel');
   assert.doesNotMatch(right, /Change icon/, 'the icon button is still on the desktop row');
+});
+
+test('DESKTOP row status indicators: child-safe reflects the flag, the lock shows only when sealed, and both are READ-ONLY', async () => {
+  const s = await screen();
+  const rr = s.captured();
+  const childSafeInd = (node) => find(node, n => n.type !== 'function' && /(child-safe|adults only)/i.test(String((n.props || {})['aria-label'] || '')));
+  const lockInd = (node) => find(node, n => n.type !== 'function' && /sealed end-to-end/i.test(String((n.props || {})['aria-label'] || '')));
+
+  const safe = rr.renderRight({ id: 'cs1', name: 'Youth', kind: 'group', visibility: 'open', childsafe: true });
+  const adult = rr.renderRight({ id: 'cs2', name: 'Elders', kind: 'group', visibility: 'open', childsafe: false });
+  const onInd = childSafeInd(safe), offInd = childSafeInd(adult);
+  assert.equal(onInd.length, 1, 'a child-safe room shows no child-safe status indicator');
+  assert.equal(offInd.length, 1, 'a non-child-safe room shows no status indicator — "which rooms are adults-only" must be visible too');
+  assert.match(onInd[0].props['aria-label'], /child-safe/i, 'the ON indicator does not name the child-safe state');
+  assert.match(offInd[0].props['aria-label'], /adults only/i, 'the OFF indicator does not name the adults-only state');
+  assert.notEqual(onInd[0].props['aria-label'], offInd[0].props['aria-label'], 'the two states are not distinguishable');
+  // READ-ONLY: not a button, no onClick — it is NOT the old toggle
+  assert.notEqual(onInd[0].type, 'button', 'the child-safe status is a button — it must be read-only, not the old toggle');
+  assert.equal(onInd[0].props.onClick, undefined, 'the child-safe status has an onClick — it must be read-only');
+  assert.ok(onInd[0].props.title, 'the child-safe status has no title');
+
+  const sealed = rr.renderRight({ id: 'e1', name: 'Secret', kind: 'group', visibility: 'open', encrypted: true });
+  const plain = rr.renderRight({ id: 'e2', name: 'Open', kind: 'group', visibility: 'open', encrypted: false });
+  const lock = lockInd(sealed);
+  assert.equal(lock.length, 1, 'the Sealed indicator must show when the group is encrypted');
+  assert.equal(lockInd(plain).length, 0, 'the Sealed indicator must NOT show when the group is not encrypted');
+  assert.notEqual(lock[0].type, 'button', 'the Sealed status is a button — it must be read-only');
+  assert.equal(lock[0].props.onClick, undefined, 'the Sealed status has an onClick — it must be read-only');
+});
+
+test('DESKTOP: closing the panel (Escape / Back / backdrop / ×) flushes a typed-but-unblurred name', async () => {
+  // FIX 1: useStewDialog closes by UNMOUNTING, and React fires no onBlur on a removed element, so Escape/Back
+  // dropped the edit. The × / backdrop / Escape / Back all route through flushSettingsAndClose. Drive the ×
+  // (same handler) after typing via onChange only — NO blur — and the name must still be published.
+  const s = await screen();
+  s.openPanel();
+  const name = s.input(s.panel(), 'Group name');
+  await name.props.onChange({ target: { value: 'Renamed room' } });   // type, do NOT blur
+  const dlg = s.panel();   // redraw: the snapshot now holds the typed name
+  const closeBtn = find(dlg, n => n.type === 'button' && String((n.props || {}).title || '') === 'Close')[0];
+  assert.ok(closeBtn, 'the panel has no Close control');
+  await closeBtn.props.onClick();
+  for (let i = 0; i < 6; i++) await tick();
+  assert.equal(s.published.length, 1, 'closing the panel dropped the typed name — the close does not flush the pending edit');
+  assert.equal(s.published[0].name, 'Renamed room', 'the flushed name is wrong');
+  assert.equal(s.published[0].sub, ROOM.sub, 'the flush did not carry the group’s real description');
+  assert.equal(s.dialog().length, 0, 'the panel did not close after flushing');
 });

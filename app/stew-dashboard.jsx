@@ -4544,7 +4544,25 @@ function DashGroups() {
   const stewNarrow = useStewNarrow();   // phone/narrow → the settings panel is a bottom sheet; wide/desktop → a centered dialog
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
   const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
-  const settingsDlgRef = useStewDialog(() => setSettingsFor(null), !!settingsFor);  // a11y: group-settings panel (Escape + focus trap + modal count), now on desktop too
+  // CLOSING THE SETTINGS PANEL MUST SAVE A TYPED-BUT-UNBLURRED NAME/DESCRIPTION. useStewDialog closes by
+  // UNMOUNTING, and React fires no onBlur on a removed element — so Escape and Android Back dropped an edit the
+  // field's own onBlur would have saved. (A backdrop or × click is safe because mousedown blurs the input
+  // first, but these route through here too for one consistent path.) Flush both changed fields in ONE publish
+  // against the LIVE document (rawById at save time), never two racing writes, then close.
+  const flushSettingsAndClose = () => {
+    const g = settingsFor;
+    if (!g) { setSettingsFor(null); return; }
+    const rawDoc = rawByIdRef.current.get(g.id);
+    if (!rawDoc) { setSettingsFor(null); return; }   // deleted meanwhile → just close, publish nothing
+    const patch = {};
+    const name = (g.name || '').trim().slice(0, 60);
+    if (name && name !== (rawDoc.name || '')) patch.name = name;   // never publish a blank name
+    const sub = (g.sub || '').trim();
+    if (sub !== (rawDoc.sub || '')) patch.sub = sub;
+    if (Object.keys(patch).length) pubOr(window.Steward.publishGroup({ ...rawDoc, ...patch }), 'Couldn’t save the changes to “' + (rawDoc.name || 'this group') + '” — the relay didn’t accept them, so they are unchanged.');
+    setSettingsFor(null);
+  };
+  const settingsDlgRef = useStewDialog(flushSettingsAndClose, !!settingsFor);  // a11y: group-settings panel (Escape + focus trap + modal count), now on desktop too — and flushes a pending edit on close
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       {pendingDelete ? (
@@ -4590,14 +4608,20 @@ function DashGroups() {
         renderInline={(it) => (
           <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sliders" size={16} /></button>
         )}
-        /* Desktop row, decluttered (PHASE 1): the category select, icon button, child-safe toggle, encrypt
-           toggle and the standalone leader-count pill now live ONLY in the settings panel. The row keeps the
-           read-only Broadcast / Team tags, the People button (invite-only), Leaders (count folded into its
-           label), Chat, and the settings gear — Delete stays in renderAside. */
+        /* Desktop row, decluttered (PHASE 1): the category select, icon button, the clickable child-safe and
+           encrypt TOGGLES and the standalone leader-count pill now live ONLY in the settings panel. The row
+           keeps the read-only Broadcast / Team tags, a read-only child-safe + sealed STATUS indicator (so a
+           steward sees a room's protection state at a glance — the toggles are in the panel), the People
+           button (invite-only), Leaders (count folded in), Chat, and the settings gear — Delete is in
+           renderAside. The status indicators are NOT buttons and carry no onClick: they only report. */
         renderRight={(it) => isNative ? null : (
           <React.Fragment>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
+            {/* READ-ONLY child-safe status — both states shown and named; "which rooms are adults-only" is itself safety-relevant. No onClick; the toggle is in the panel. */}
+            <span role="img" aria-label={(it.name || 'This group') + (it.childsafe ? ' — child-safe: members marked as a child can join' : ' — adults only: hidden from children')} title={it.childsafe ? 'Child-safe — members marked as a child can join' : 'Adults only — hidden from children'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 30%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface-2)', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={13} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Adults only'}</span>
+            {/* READ-ONLY sealed status — shown only when encrypted. No onClick; sealing is toggled in the panel. */}
+            {it.encrypted ? <span role="img" aria-label={(it.name || 'This group') + ' — sealed end-to-end'} title="Sealed end-to-end" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name="lock" size={13} color="currentColor" /> Sealed</span> : null}
             {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(raw(it))} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> People · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders{(it.leaders || []).length ? ' · ' + it.leaders.length : ''}</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
@@ -4648,12 +4672,12 @@ function DashGroups() {
         const sFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
         const sLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
         return (
-          <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: stewNarrow ? 'flex-end' : 'safe center', justifyContent: 'center', ...(stewNarrow ? null : { overflowY: 'auto', padding: 24 }) }}>
+          <div onClick={flushSettingsAndClose} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: stewNarrow ? 'flex-end' : 'safe center', justifyContent: 'center', ...(stewNarrow ? null : { overflowY: 'auto', padding: 24 }) }}>
             <div ref={settingsDlgRef} role="dialog" aria-modal="true" aria-label={(g.name || 'Group') + ' settings'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: stewNarrow ? '22px 22px 0 0' : 22, border: stewNarrow ? 'none' : '1px solid var(--line)', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={groupIcon(g)} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{g.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{g.kind === 'team' ? 'Team' : g.kind === 'broadcast' ? 'Broadcast' : 'Group'} settings</div></div>
-                <button onClick={() => setSettingsFor(null)} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+                <button onClick={flushSettingsAndClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
               </div>
 
               {/* Name + description. Save on blur, publishing against raw(g) — NOT the display row, whose `sub`
