@@ -3348,6 +3348,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   const [groupsOpen, setGroupsOpen] = React.useState(true);   // the Groups & rooms card's body, folded by its header chevron
   const [activityOpen, setActivityOpen] = React.useState(true);   // likewise the Recent activity card
+  const [signupsOpen, setSignupsOpen] = React.useState(true);   // the "People have signed up to help" card's name lines; its chevron folds them away (one flag, all three layouts)
   const [joinOpen, setJoinOpen] = React.useState(true);   // the Joining code card's body; the chevron in its header folds it away
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3416,9 +3417,13 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>People have signed up to help</div>
-        {careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>)}
+        {signupsOpen ? careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>) : null}
       </div>
-      <Icon name="chevR" size={15} color="var(--ink-3)" />
+      {/* a span, not a button: the whole card is already a button, and a button inside a button is invalid. stopPropagation so folding does not also open Care. */}
+      <span role="button" tabIndex={0} aria-expanded={signupsOpen} aria-label={signupsOpen ? 'Collapse sign-ups' : 'Expand sign-ups'} title={signupsOpen ? 'Collapse' : 'Expand'}
+        onClick={(e) => { e.stopPropagation(); setSignupsOpen(o => !o); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setSignupsOpen(o => !o); } }}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 40, height: 40, margin: '-10px -10px -10px 0', borderRadius: 999, cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name={signupsOpen ? 'chevD' : 'chevU'} size={18} color="currentColor" /></span>
     </button>
   ) : null;
   const careReqBanner = (openCareReqs || careNewMsgs) ? (
@@ -5544,7 +5549,9 @@ function ago(ts) {
   return new Date(ts * 1000).toLocaleDateString();
 }
 
-function NewPlanModal({ onClose }) {
+// Create a reading plan, or EDIT one: passing `editing` (a plan from the shared list) pre-fills the form and re-publishes
+// under the SAME id with `created` carried through, so it replaces the plan in place and keeps its place in the list.
+function NewPlanModal({ onClose, editing }) {
   const [mode, setMode] = React.useState('manual');   // manual | upload | pick
   const [picked, setPicked] = React.useState([]);   // readings added with the Book/Chapter picker
   const [rpBook, setRpBook] = React.useState('');
@@ -5575,13 +5582,16 @@ function NewPlanModal({ onClose }) {
   };
   const rpRemove = (idx) => setPicked(prev => prev.filter((_, i) => i !== idx));
   const rpSel = { height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
-  const [name, setName] = React.useState('');
-  const [tag, setTag] = React.useState('');
-  const [blurb, setBlurb] = React.useState('');
-  const [text, setText] = React.useState('');
+  const [name, setName] = React.useState(editing ? editing.title || '' : '');
+  const [tag, setTag] = React.useState(editing ? editing.tag || '' : '');
+  const [blurb, setBlurb] = React.useState(editing ? editing.blurb || '' : '');
+  const editDays = editing && Array.isArray(editing.days) ? editing.days : [];
+  const [text, setText] = React.useState(editing ? editDays.map(d => d.ref).join('\n') : '');
+  const [saveErr, setSaveErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
   const [parsedDays, setParsedDays] = React.useState(null);   // [{ d, ref, label }] from file upload
   const [fileName, setFileName] = React.useState('');
-  const [schedAt, setSchedAt] = React.useState(0);
+  const [schedAt, setSchedAt] = React.useState(editing && editing.publishAt && editing.publishAt * 1000 > Date.now() ? editing.publishAt : 0);
   const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
@@ -5630,10 +5640,28 @@ function NewPlanModal({ onClose }) {
   const manualLines = text.split('\n').map(s => s.trim()).filter(Boolean);
   const activeDays = mode === 'upload' && parsedDays ? parsedDays
     : mode === 'pick' ? picked.map((ref, i) => ({ d: i + 1, ref, label: ref }))
-    : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
-  const canPublish = name.trim() && activeDays.length > 0;
+    : manualLines.map((ref, i) => ({ d: i + 1, ref, label: editLabel(ref, i) }));
+  const canPublish = name.trim() && activeDays.length > 0 && !busy;
+  // Editing keeps each day's own label ("Day 3 - Faith") whenever its reading is unchanged (or merely moved); a new or retyped
+  // reading is labelled by the reading itself, as a typed plan always was. Never flattens an untouched day.
+  const isLive = !!editing && !editing.draft;
+  const daysChanged = !!editing && JSON.stringify(activeDays.map(d => d.ref)) !== JSON.stringify(editDays.map(d => d.ref));
+  const warnDays = isLive && daysChanged;   // owner: warn, then allow
+  function editLabel(ref, i) {
+    if (!editing) return ref;
+    const same = editDays[i] && editDays[i].ref === ref ? editDays[i] : editDays.find(d => d.ref === ref);
+    return same && same.label ? same.label : ref;
+  }
   const create = (asDraft) => {
     if (!canPublish) return;
+    if (editing) {
+      setBusy(true); setSaveErr('');
+      const sub = (editing.sub && !daysChanged) ? editing.sub : activeDays.length + ' day' + (activeDays.length === 1 ? '' : 's');
+      Promise.resolve(window.Steward.publishPlan({ ...editing, id: editing.id, created: Number(editing.created) || Number(editing.ts) || undefined, title: name.trim(), sub, tag: tag.trim() || 'Custom', blurb: blurb.trim(), days: activeDays, publishAt: isLive ? 0 : (isFuture ? schedAt : 0), draft: !!asDraft }))
+        .then(res => { if (!res || !res.ts) { setBusy(false); setSaveErr('Not saved - try again. Your changes are still here.'); return; } onClose(); },
+              () => { setBusy(false); setSaveErr('Not saved - try again. Your changes are still here.'); });
+      return;
+    }
     window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: activeDays.length + ' day' + (activeDays.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: blurb.trim(), days: activeDays, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
     onClose();
   };
@@ -5643,15 +5671,15 @@ function NewPlanModal({ onClose }) {
   const dlgRef = useStewDialog(onClose);
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit reading plan' : 'Create a reading plan'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
         <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>Pick verses, type them, or upload a file.</p>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit reading plan' : 'Create a reading plan'}</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>{editing ? 'Change the name, details or readings (one per line).' : 'Pick verses, type them, or upload a file.'}</p>
+        {editing ? null : <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           {modeBtn('manual', 'Type it', 'pen')}
           {modeBtn('pick', 'Pick verses', 'read')}
           {modeBtn('upload', 'Upload file', 'share')}
-        </div>
+        </div>}
         {mode === 'upload' ? (
           <React.Fragment>
             <div onClick={() => inputRef.current && inputRef.current.click()} style={{ border: '2px dashed var(--line)', borderRadius: 14, background: 'var(--surface-2)', padding: '18px 16px', textAlign: 'center', cursor: 'pointer', marginBottom: 14 }}>
@@ -5730,7 +5758,8 @@ function NewPlanModal({ onClose }) {
             </div>
           </React.Fragment>
         ) : null}
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 6px' }}>Release</div>
+        {warnDays ? <div data-testid="plan-days-warning" role="alert" style={{ margin: '12px 0 0', padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold, #c9a227) 14%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink)' }}>This plan is live. You are changing its days. Members who have already started keep their ticks by day number, so a tick may now sit against a different reading. Saving applies it straight away.</div> : null}
+        {editing && isLive ? null : <React.Fragment><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 6px' }}>Release</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: !schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (!schedAt ? 'var(--clay)' : 'var(--line)'), color: !schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Now</button>
           <button type="button" onClick={() => setSchedAt(schedAt || Math.floor(Date.now() / 1000) + 7 * 86400)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (schedAt ? 'var(--clay)' : 'var(--line)'), color: schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Schedule...</button>
@@ -5740,12 +5769,17 @@ function NewPlanModal({ onClose }) {
             <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', margin: '8px 0 6px' }} />
             <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)' }}>{isFuture ? 'Hidden from members until ' + new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.' : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
-        ) : null}
+        ) : null}</React.Fragment>}
         </div>
+        {saveErr ? <div role="alert" style={{ padding: '8px 28px 0', fontSize: 12.5, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{saveErr}</div> : null}
         <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
-          <button onClick={() => create(true)} disabled={!canPublish} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }} title="Hold it — members won't see it until you publish">Save as draft</button>
-          <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
+          {editing && isLive
+            ? <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> Save changes</button>
+            : <React.Fragment>
+              <button onClick={() => create(true)} disabled={!canPublish} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }} title="Hold it — members won't see it until you publish">Save as draft</button>
+              <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
+            </React.Fragment>}
         </div>
       </div>
     </div>
@@ -5868,6 +5902,19 @@ function DashVersePrompt() {
     var combined = remaining.map(function(s) { return s.ref; }).filter(Boolean).join('; ');
     window.Steward.publishVersePrompt(combined, '', remaining).then(function() {
       setMsg('Removed'); setTimeout(function() { setMsg(''); }, 3000);
+    }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
+  };
+  // Take ONE unscheduled ("now") passage down. The prompt is one replaceable document, so this republishes it
+  // without that passage (members follow the replacement); the last one going is the same as Clear.
+  var removeNowEntry = function(idx) {
+    if (!vp || !vp.ref) return;
+    var parts = vp.ref.split('; ').filter(Boolean);
+    var remaining = parts.filter(function(_, i) { return i !== idx; });
+    if (remaining.length === 0) { clear(); return; }
+    setBusy(true);
+    window.Steward.publishVersePrompt(remaining.join('; '), '', undefined).then(function(sent) {
+      if (sent && typeof sent.ts === 'number') setVp(function(prev) { return prev && typeof prev.ts === 'number' && prev.ts > sent.ts ? prev : sent; });
+      setMsg('Taken down'); setTimeout(function() { setMsg(''); }, 3000);
     }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
   };
   var pvIdxState = _s(0), pvIdx = pvIdxState[0], setPvIdx = pvIdxState[1];
@@ -5995,6 +6042,13 @@ function DashVersePrompt() {
     // unless the prompt already carries a schedule (members read only the schedule then, so it is kept as a past entry)
     var nowMs = Date.now();
     var anyFuture = refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > nowMs; });
+    // An existing unscheduled passage is visible to members only because the prompt has NO schedule; the moment a
+    // schedule exists members read the schedule alone. So when this push adds a scheduled passage, carry the live
+    // one(s) into the schedule as already-due entries, or they silently vanish from members.
+    if (anyFuture && existingSchedule.length === 0 && vp && vp.ref) {
+      var dueAt = Math.min(Number(vp.ts) || 0, Math.floor(nowMs / 1000) - 1) || Math.floor(nowMs / 1000) - 1;
+      existingSchedule = vp.ref.split('; ').filter(Boolean).map(function(r) { return { at: dueAt, ref: r, note: '' }; });
+    }
     var keepPast = anyFuture || existingSchedule.length > 0;
     var isSched = function(r) { return r.date && r.time && (keepPast || new Date(r.date + 'T' + r.time).getTime() > nowMs); };
     var newSchedule = refs.filter(isSched).map(function(r) {
@@ -6071,7 +6125,15 @@ function DashVersePrompt() {
               </div>;
             })}
             <button type="button" onClick={function() { setEditSch(vpSch.map(function(s) { return { ref: s.ref, at: s.at, note: s.note || '' }; })); }} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', cursor: 'pointer', padding: '4px 0', color: statusColor, fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>Edit schedule</button>
-          </div>) : <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--ink)' }}>{vp.ref}</div>}
+          </div>) : <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {vpVerses.map(function(v, i) {
+              return <div key={i + v} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 10, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.3px', padding: '2px 7px', borderRadius: 99, background: 'var(--sage-soft)', color: 'var(--sage-ink)' }}>LIVE</span>
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{v}</span>
+                <button type="button" onClick={function() { removeNowEntry(i); }} disabled={busy} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', flexShrink: 0 }} title="Take down" aria-label={'Take down ' + v}><Icon name="x" size={14} color="currentColor" /></button>
+              </div>;
+            })}
+          </div>}
         </div>;
       })() : null}
 
@@ -6194,6 +6256,7 @@ window.DashVersePrompt = DashVersePrompt;
 function DashPlans() {
   const shared = window.useStewardPlans();          // plans currently shared with the church
   const [creating, setCreating] = React.useState(false);
+  const [editingPlan, setEditingPlan] = React.useState(null);   // the shared plan open in the edit form
   const [planErr, setPlanErr] = React.useState({});   // plan id -> short "didn't save" note beside its Website switch
   // Flip "Show on website". The switch reads p.public from the plans subscription, so it only moves once the
   // new copy has really landed; a refused publish (publishPlan resolves with no ts) leaves it where it was.
@@ -6201,6 +6264,12 @@ function DashPlans() {
     const note = (m) => setPlanErr(prev => { const n = Object.assign({}, prev); if (m) n[p.id] = m; else delete n[p.id]; return n; });
     note('');
     Promise.resolve(window.Steward.publishPlan({ ...p, public: p.public === false })).then(r => { if (!r || !r.ts) note('Not saved'); }, () => note('Not saved'));
+  };
+  // Unshare moves a live plan BACK TO DRAFTS (same id, days and created kept) - it is not deleted. Only Delete on a draft row removes it.
+  const unshare = (p) => {
+    const note = (m) => setPlanErr(prev => { const n = Object.assign({}, prev); if (m) n[p.id] = m; else delete n[p.id]; return n; });
+    note('');
+    Promise.resolve(window.Steward.publishPlan({ ...p, draft: true })).then(r => { if (!r || !r.ts) note('Not saved'); }, () => note('Not saved'));
   };
   const sharedIds = new Set(shared.map(p => p.id));
   const library = (window.SK && window.SK.planLibrary) || [];
@@ -6219,14 +6288,18 @@ function DashPlans() {
       </div>
       {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
       {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
+      {isShared ? <button onClick={() => setEditingPlan(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Edit this plan" aria-label={'Edit ' + p.title}><Icon name="pen" size={13} color="currentColor" /> Edit</button> : null}
       {isShared
-        ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
+        ? (p.draft
+          ? <button onClick={() => { if (confirm('Delete "' + p.title + '" for good? This cannot be undone.')) window.Steward.removePlan(p.id); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Delete this draft plan for good">Delete</button>
+          : <button onClick={() => unshare(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Stop sharing: members and your website stop seeing it, and it moves to drafts">Unshare</button>)
         : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
     </div>
   );
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%' }}>
       {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
+      {editingPlan ? <NewPlanModal editing={editingPlan} onClose={() => setEditingPlan(null)} /> : null}
       {/* single scroll container so a long drafts list can't push the library off the bottom */}
       <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 }}>
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}

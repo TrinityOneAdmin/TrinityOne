@@ -6043,8 +6043,9 @@ window.Fellowship = {
         if (d !== 'trinityone/verse-prompt') return;
         if (!_trust(e)) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
-        if (current && current.ts >= e.created_at) return;
-        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at }; cb(current); } catch {}
+        // Never let an OLDER copy overwrite a newer one; on an exact same-second tie the RELAY keeps the lowest event id, so do the same.
+        if (current && (current.ts > e.created_at || (current.ts === e.created_at && String(current.id || '') <= String(e.id || '')))) return;
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at, id: e.id }; cb(current); } catch {}
       },
       oneose() { cb(current); },
     });

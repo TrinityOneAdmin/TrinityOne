@@ -12378,10 +12378,10 @@
             }
             return;
           }
-          if (current && current.ts >= e.created_at) return;
+          if (current && (current.ts > e.created_at || current.ts === e.created_at && String(current.id || "") <= String(e.id || ""))) return;
           try {
             const j = JSON.parse(e.content);
-            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at };
+            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at, id: e.id };
             cb(current);
           } catch {
           }
