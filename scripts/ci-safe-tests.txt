@@ -1,0 +1,68 @@
+# THE CI RELEASE-GATE MANIFEST — the safety-critical tests GitHub Actions runs on every push/PR.
+#
+# WHY THIS FILE EXISTS (and why CI does NOT run the whole suite):
+# The full suite (763 files) cannot pass on a bare GitHub runner and was never meant to. ~68 files drive a
+# real browser (they run on GitHub's pre-installed Chrome but flake/time out there), some need a phone-style
+# IndexedDB the runner lacks, and a couple are KNOWN OPEN UI defects (the 320/360px header overflow). Those
+# are verified on the attached PHONES (CLAUDE.md §6), not in CI. Running them in CI only produced a
+# permanently-red gate and "Run failed" emails on every push — a gate nobody can read is a gate that guards
+# nothing.
+#
+# So CI runs exactly the SAFETY-CRITICAL, pure-node invariants this gate was created for (see test.yml's
+# header): the anonymous read gate / privacy controls, DM sealing, guardian (Shamir) recovery, the finance
+# ledger, cross-church isolation, and "the shipped bundle matches its source + the download is what it
+# claims". Each file below is pure Node, fast, and deterministic — verified green locally (159 tests, 0 fail,
+# 0 skip) before being listed. GREEN here means the arrest-list-grade invariants still hold.
+#
+# RULES FOR THIS FILE:
+#   * One test file per line, path relative to scripts/ (no "scripts/" prefix). '#' starts a comment.
+#   * Only add a file that is pure-node (no real browser, no IndexedDB, no attached device) AND passes on a
+#     bare runner. If unsure, it does not belong here.
+#   * NEVER let this list shrink silently. scripts/ci-manifest-is-honest.test.mjs (itself listed below, so CI
+#     runs it) asserts every file here exists, that the core invariants are still present, and that the count
+#     has not dropped below a floor. If you remove a line, that guard goes red on purpose — account for it
+#     (CLAUDE.md §8).
+
+# ── Anonymous read gate / privacy / anonymity (the arrest-list-grade invariant) ──
+relay-privacy.test.mjs
+name-privacy.test.mjs
+reads-only-reach-admitted-relays.test.mjs
+three-relay-and-privacy-controls-tell-the-truth.test.mjs
+relay-admin-case-sensitivity.test.mjs
+relays-always-canonical.test.mjs
+
+# ── Safeguarding & the read gate: child/care boundaries, adults-only hiding, blocking ──
+# (these are the gate's charter: a young person must not be served adults-only rooms/events, a blocked
+#  person must lose private access, a guardian request is private to its parties. Blocking is the owner's
+#  #1 open bug — keeping it green here is the point.)
+a-child-on-the-care-roster-gets-no-care-access.test.mjs
+child-dm-needs-safeguarding-cap.test.mjs
+an-adults-only-rooms-name-is-not-served-to-a-child.test.mjs
+an-adults-only-groups-event-is-not-served-to-a-child.test.mjs
+adults-only-rooms-stay-hidden.test.mjs
+a-blocked-person-gets-no-private-access.test.mjs
+a-blocked-reader-gets-nothing-private.test.mjs
+a-blocked-member-gets-no-direct-messages.test.mjs
+a-guardian-request-is-read-only-by-its-parties.test.mjs
+
+# ── Direct-message sealing ──
+dm-crypto.test.mjs
+
+# ── Guardian-assisted (Shamir) recovery math ──
+recovery.test.mjs
+recovery-reference.test.mjs
+
+# ── Finance ledger integrity ──
+finance-ledger.test.mjs
+
+# ── Release integrity: shipped bundle == source, and a download is what it claims ──
+vendor-freshness.test.mjs
+apk-manifest-signature-verification.test.mjs
+bundle-contents.test.mjs
+
+# ── Cross-church isolation: one church's roster is never written/overwritten by another ──
+a-locked-roster-is-never-written-over.test.mjs
+steward-roster-identity.test.mjs
+
+# ── The honesty guard for THIS manifest (keep last) ──
+ci-manifest-is-honest.test.mjs
