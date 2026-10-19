@@ -4706,7 +4706,7 @@ function DashGroups() {
 
               <div style={sToggle}>
                 <div style={sLabel}><Icon name={g.childsafe ? 'check' : 'pray'} size={18} color={g.childsafe ? 'var(--sage)' : 'var(--ink-3)'} /><div><div style={sName}>Child-safe</div><div style={sSub}>{g.childsafe ? 'Members marked as a child can join' : 'Hidden from children'}</div></div></div>
-                <input type="checkbox" className="sw" checked={!!g.childsafe} aria-label={(g.name || 'This group') + ' — child-safe is ' + (g.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe on "' + (g.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
+                <input type="checkbox" className="sw" title="Child-safe: on lets members marked as a child join this group; off keeps it adults only" checked={!!g.childsafe} aria-label={(g.name || 'This group') + ' — child-safe is ' + (g.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe on "' + (g.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
               </div>
 
               <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setSettingsFor({ ...g, icon: ic }); }} />
@@ -4714,7 +4714,7 @@ function DashGroups() {
               {g.kind !== 'team' ? (
                 <div style={sToggle}>
                   <div style={sLabel}><Icon name="lock" size={18} color={g.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>End-to-end encrypted</div><div style={sSub}>{g.encrypted ? 'Sealed — not even the relay can read it' : 'Messages are readable by the relay'}</div></div></div>
-                  <input type="checkbox" className="sw" checked={!!g.encrypted} aria-label={(g.name || 'This group') + ' — encryption is ' + (g.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
+                  <input type="checkbox" className="sw" title="Encrypted: on seals this group's messages so only its members can read them" checked={!!g.encrypted} aria-label={(g.name || 'This group') + ' — encryption is ' + (g.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
                 </div>
               ) : null}
 
@@ -4736,7 +4736,7 @@ function DashGroups() {
               {g.kind !== 'team' ? (
                 <div style={sToggle}>
                   <div style={sLabel}><Icon name="lock" size={18} color={g.visibility === 'invite' ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>Invite-only</div><div style={sSub}>{g.visibility === 'invite' ? 'Only the people you choose can see it' : 'Anyone in the church can see and join it'}</div></div></div>
-                  <input type="checkbox" className="sw" checked={g.visibility === 'invite'} aria-label={(g.name || 'This group') + ' — invite-only is ' + (g.visibility === 'invite' ? 'on. Press to open it to the whole church' : 'off. Press to restrict who can see it')} onChange={() => {
+                  <input type="checkbox" className="sw" title="Invite-only: on hides the group from the church list so people need an invitation" checked={g.visibility === 'invite'} aria-label={(g.name || 'This group') + ' — invite-only is ' + (g.visibility === 'invite' ? 'on. Press to open it to the whole church' : 'off. Press to restrict who can see it')} onChange={() => {
                     if (g.visibility === 'invite') { setUnrestricting({ g: raw(g) }); setSettingsFor(null); }
                     else { setEditMembersSeed(recipsFor(g) || []); setEditMembersFor(raw(g)); setSettingsFor(null); }
                   }} />
@@ -6080,7 +6080,7 @@ function DashVersePrompt() {
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Pick a verse or range. Add multiple passages, then push them all to the church at once.</div>
         {bibleVersions.length > 1 ? <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TRANSLATION</div>
-          <select value={bibleVersion} onChange={function(e) { setBibleVersion(e.target.value); }} style={Object.assign({}, selStyle, { width: 'auto', minWidth: 140 })} aria-label="Translation">
+          <select value={bibleVersion} onChange={function(e) { setBibleVersion(e.target.value); }} style={Object.assign({}, selStyle, { width: 'auto', minWidth: 140 })} title="Which Bible translation to show" aria-label="Translation">
             {bibleVersions.map(function(v) { return <option key={v} value={v}>{v}</option>; })}
           </select>
         </div> : null}
@@ -6088,28 +6088,28 @@ function DashVersePrompt() {
         <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'end' }}>
           <div style={{ flex: '1 1 180px', maxWidth: 240 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>BOOK</div>
-            <select value={book} onChange={function(e) { setBook(e.target.value); setChap(''); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="Book">
+            <select value={book} onChange={function(e) { setBook(e.target.value); setChap(''); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} title="Choose the book of the Bible" aria-label="Book">
               <option value="">Choose a book</option>
               {VP_BOOKS.map(function(b) { return <option key={b[0]} value={b[0]}>{b[0]}</option>; })}
             </select>
           </div>
           {book ? <div style={{ flex: '0 0 80px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>CHAPTER</div>
-            <select value={chap} onChange={function(e) { setChap(e.target.value); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="Chapter">
+            <select value={chap} onChange={function(e) { setChap(e.target.value); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} title="Choose the chapter" aria-label="Chapter">
               <option value="">Ch.</option>
               {chapList.map(function(c) { return <option key={c} value={String(c)}>{c}</option>; })}
             </select>
           </div> : null}
           {chap ? <div style={{ flex: '0 0 118px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>FROM</div>
-            <select value={fromV} onChange={function(e) { setFrom(e.target.value); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="From verse">
+            <select value={fromV} onChange={function(e) { setFrom(e.target.value); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} title="First verse to include" aria-label="From verse">
               <option value="">Whole chapter</option>
               {verseList.map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
             </select>
           </div> : null}
           {fromV ? <div style={{ flex: '0 0 80px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TO</div>
-            <select value={toV} onChange={function(e) { setTo(e.target.value); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="To verse (optional)">
+            <select value={toV} onChange={function(e) { setTo(e.target.value); }} style={Object.assign({}, selStyle, { width: '100%' })} title="Last verse to include. Leave blank for a single verse." aria-label="To verse (optional)">
               <option value="">{'\u2014'}</option>
               {verseList.filter(function(v) { return v >= Number(fromV); }).map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
             </select>
@@ -6174,11 +6174,11 @@ function DashVersePrompt() {
               <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px', marginTop: 4 }}>{pvRef}{bibleVersion ? ' · ' + bibleVersion : ''}</div>
             </div>
             {pvRefs.length > 1 ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14, position: 'relative', zIndex: 2 }}>
-              <button type="button" onClick={function() { setPvIdx(function(i) { return i > 0 ? i - 1 : pvRefs.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevL" size={14} color="#fff" /></button>
+              <button type="button" title="Show the previous verse in the preview" onClick={function() { setPvIdx(function(i) { return i > 0 ? i - 1 : pvRefs.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevL" size={14} color="#fff" /></button>
               <div style={{ display: 'flex', gap: 6 }}>
                 {pvRefs.map(function(_, i) { return <div key={i} onClick={function() { setPvIdx(i); }} style={{ width: i === pvSafeIdx ? 18 : 7, height: 7, borderRadius: 99, background: i === pvSafeIdx ? '#fff' : 'rgba(255,255,255,.4)', cursor: 'pointer', transition: 'all .2s ease' }} />; })}
               </div>
-              <button type="button" onClick={function() { setPvIdx(function(i) { return i < pvRefs.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevR" size={14} color="#fff" /></button>
+              <button type="button" title="Show the next verse in the preview" onClick={function() { setPvIdx(function(i) { return i < pvRefs.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevR" size={14} color="#fff" /></button>
             </div> : null}
           </div>
         </div> : null}

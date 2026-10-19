@@ -1194,7 +1194,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={18} color="var(--sage)" /></div>
           <div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{isEdit ? 'Edit care need' : 'Start care'}</div>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }} aria-label="Close"><Icon name="x" size={14} color="currentColor" /></button>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 13 }} title="Close" aria-label="Close"><Icon name="x" size={14} color="currentColor" /></button>
         </div>
 
         <div style={mealsLbl}>WHO IS THIS FOR?</div>
