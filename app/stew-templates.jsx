@@ -80,10 +80,10 @@ const TMPL_ESC = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replac
 // ── the devotional fill-in block (verbatim from the design) ──
 const DEVO_TPL =
 '══════════════════ WEEK [N] — COPY FROM HERE ══════════════════\n\n' +
-'Title: [Series Name] — Week [N]: [Week Theme]\n' +
+'Title: [Plan Name] — Week [N]: [Week Theme]\n' +
 'Summary: [One or two sentences describing this week. Shows in previews and feeds.]\n' +
 'Tags: [topic], [topic], [topic]\n\n' +
-'# [Series Name] — Week [N]: [Week Theme]\n\n' +
+'# [Plan Name] — Week [N]: [Week Theme]\n\n' +
 '*[Optional one-paragraph intro for the week, in italics. Delete if not needed.]*\n\n' +
 '### Day [X] — [Short, vivid title]\n' +
 '**[Scripture reference, e.g. Book 1:1–5]**\n\n' +
@@ -186,7 +186,7 @@ function devoDocHtml() {
   <div class="doc">
     <div class="top"><span class="pill">${HALO_SVG(13, 'var(--clay-ink)', 'var(--clay-ink)')} Long-form · NIP-23</span></div>
     <h1>Devotional series — contributor template</h1>
-    <p class="sub">A reusable template for writing a weekly devotional series and posting it to the church as long-form content. Copy the block, fill it in, post one week at a time. The app splits it into day-by-day reading for members.</p>
+    <p class="sub">A reusable template for writing a devotional plan and posting it to the church as long-form content. Copy the block for each week into one file, fill it in, and upload that file as a single plan. The app splits it into day-by-day reading for members.</p>
     <h2>How it works</h2>
     <ul>
       <li><b>One week = one block.</b> A full series is several weeks pasted one after another into a single <code>.md</code> file, then uploaded in Resources › Devotionals.</li>
@@ -201,6 +201,25 @@ function devoDocHtml() {
       <li><b>One Scripture per day</b>, bolded under the title. Reference and paraphrase rather than quoting long passages.</li>
       <li><b>End each day with a single italic closing line</b> — a question, a challenge, or a one-line prayer.</li>
       <li>Pick the number of days per week (7 default; fewer is fine).</li>
+    </ul>
+    <h2>Numbering</h2>
+    <ul>
+      <li>Number weeks 1, 2, 3 straight through the file. Never restart inside one file.</li>
+      <li>Number days straight through the file too (Day 7, then Day 8 in Week 2). Weeks can have fewer than 7 days; keep counting.</li>
+      <li>Joining several series into one file? Keep numbers running and put the series name in the week theme.</li>
+    </ul>
+    <h2>Title</h2>
+    <ul>
+      <li>Format: <code>[Plan Name] — Week [N]: [Week Theme]</code></li>
+      <li>The app list shows only "Week N · Theme", so make the theme clear on its own.</li>
+    </ul>
+    <h2>Bulk upload</h2>
+    <ul>
+      <li>One file is one plan. Name files so they sort in order (01-..., 02-...).</li>
+      <li>In Resources › Devotionals, choose Bulk upload and select all files.</li>
+      <li>Check the preview, then confirm. Each file becomes its own plan.</li>
+      <li>Numbering restarts in each file.</li>
+      <li>Every week must sit between the <code>COPY FROM HERE / COPY TO HERE</code> markers.</li>
     </ul>
     <div class="rule">Fill-in block · copy for each week</div>
     <div class="block"><pre>${devoTplHtml()}</pre></div>
