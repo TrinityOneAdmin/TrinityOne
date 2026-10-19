@@ -6235,6 +6235,12 @@ function DashPlans() {
     note('');
     Promise.resolve(window.Steward.publishPlan({ ...p, public: p.public === false })).then(r => { if (!r || !r.ts) note('Not saved'); }, () => note('Not saved'));
   };
+  // Unshare moves a live plan BACK TO DRAFTS (same id, days and created kept) - it is not deleted. Only Delete on a draft row removes it.
+  const unshare = (p) => {
+    const note = (m) => setPlanErr(prev => { const n = Object.assign({}, prev); if (m) n[p.id] = m; else delete n[p.id]; return n; });
+    note('');
+    Promise.resolve(window.Steward.publishPlan({ ...p, draft: true })).then(r => { if (!r || !r.ts) note('Not saved'); }, () => note('Not saved'));
+  };
   const sharedIds = new Set(shared.map(p => p.id));
   const library = (window.SK && window.SK.planLibrary) || [];
   const available = library.filter(p => !sharedIds.has(p.id));
@@ -6253,7 +6259,9 @@ function DashPlans() {
       {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
       {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
       {isShared
-        ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
+        ? (p.draft
+          ? <button onClick={() => { if (confirm('Delete "' + p.title + '" for good? This cannot be undone.')) window.Steward.removePlan(p.id); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Delete this draft plan for good">Delete</button>
+          : <button onClick={() => unshare(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Stop sharing: members and your website stop seeing it, and it moves to drafts">Unshare</button>)
         : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
     </div>
   );
