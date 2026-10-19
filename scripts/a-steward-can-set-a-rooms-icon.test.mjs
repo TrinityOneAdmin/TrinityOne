@@ -110,7 +110,7 @@ async function groupsTab(rooms = ROOMS, native = true) {
     ListPanel: function ListPanel(p) { captured = p; return null; },
     Icon: IconEl, SkPill: Stub('SkPill'), SkConfirm: Stub('SkConfirm'), NewGroupModal: Stub('NewGroupModal'), CategoriesModal: Stub('CategoriesModal'),
     GroupChatModal: Stub('GroupChatModal'), GroupLeadersModal: Stub('GroupLeadersModal'), EditGroupMembersModal: Stub('EditGroupMembersModal'),
-    KeyDistributor: Stub('KeyDistributor'), useRealMemberCount: () => 5, useStewDialog: () => ({}),
+    KeyDistributor: Stub('KeyDistributor'), useRealMemberCount: () => 5, useStewDialog: () => ({}), useStewNarrow: () => false,
   }, '\n' + stewKeys);
   let tree = draw(mod.DashGroups, {});
   assert.ok(captured && Array.isArray(captured.items), 'DashGroups no longer renders its rows through ListPanel - re-anchor');
@@ -155,37 +155,12 @@ test('console picker, driven from the sheet: picking publishes the WHOLE raw doc
   }
 });
 
-// WEB console (no Capacitor): the row has no Settings sheet, so the icon picker is an inline row control that opens
-// the SAME GroupIconPicker and publishes through the SAME path as the APK sheet.
-function openWebPicker(g, id) {
-  const it = g.captured().items.find(i => i.id === id);
-  const btn = find(g.captured().renderRight(it), n => n.type === 'button' && /^Change icon for /.test(String((n.props || {})['aria-label'] || '')));
-  assert.equal(btn.length, 1, 'the web row has no Change-icon control for ' + id);
-  btn[0].props.onClick({ stopPropagation() {} });
-  return g.redraw();
-}
-test('WEB console row: carries a Change-icon control showing the room icon, and no Settings sheet', async () => {
-  const g = await groupsTab(ROOMS, false);
-  assert.equal(g.captured().renderInline, undefined, 'the web row grew a Settings sheet control - re-anchor');
-  for (const id of Object.keys(WANT)) {
-    const it = g.captured().items.find(i => i.id === id);
-    const btn = find(g.captured().renderRight(it), n => n.type === 'button' && /^Change icon for /.test(String((n.props || {})['aria-label'] || '')));
-    assert.equal(btn.length, 1, id);
-    assert.deepEqual(find(btn[0], n => n.type === IconEl).map(n => n.props.name), [WANT[id]], id + ' control does not draw the room icon');
-  }
-});
-test('WEB console picker, driven from the row: opens the real picker; picking publishes the WHOLE raw document with only the icon changed', async () => {
-  for (const id of ['g-plain', 't-set', 'b-plain', 'g-bad']) {
-    const g = await groupsTab(ROOMS, false);
-    assert.equal(find(g.redraw(), n => n.type === g.mod.GroupIconPicker).length, 0, 'picker open before it was asked for');
-    const picker = find(openWebPicker(g, id), n => n.type === g.mod.GroupIconPicker);
-    assert.equal(picker.length, 1, id + ': the web control opened no icon picker');
-    picker[0].props.onPick('flame');
-    assert.equal(g.published.length, 1, 'picking an icon published nothing');
-    assert.deepEqual(g.published[0], { ...ROOMS.find(r => r.id === id), icon: 'flame' });
-    assert.equal(find(g.redraw(), n => n.type === g.mod.GroupIconPicker)[0].props.group.icon, 'flame', 'the open picker does not show the new choice');
-  }
-});
+// PHASE 1 (console group-admin, 2026-10-19): the WEB console used to carry its OWN inline Change-icon control
+// opening a separate iconFor modal. That has been removed — the icon now lives ONLY in the group-settings
+// panel, which phase 1 makes open on the desktop too (the gear renders on every row). So icon editing is one
+// path for both surfaces, already covered by the two "console settings sheet" tests above (the picker is
+// rendered in the panel, and picking publishes the raw document + icon). The two WEB-only tests that drove the
+// deleted inline control + modal were removed here (test count 15 -> 13); their behaviour is the panel tests'.
 
 test('the picker itself: one button per allowlisted icon, the current one pressed, a press reports its name', async () => {
   const g = await groupsTab();

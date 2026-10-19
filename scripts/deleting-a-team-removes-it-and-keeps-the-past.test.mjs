@@ -530,11 +530,14 @@ async function groupsScreen(b) {
     ListPanel: function ListPanel(p) { captured = p; return null; },
     Icon: Stub('Icon'), SkPill: Stub('SkPill'), SkConfirm: Stub('SkConfirm'), NewGroupModal: Stub('NewGroupModal'), CategoriesModal: Stub('CategoriesModal'),
     GroupChatModal: Stub('GroupChatModal'), GroupLeadersModal: Stub('GroupLeadersModal'), EditGroupMembersModal: Stub('EditGroupMembersModal'),
-    KeyDistributor: Stub('KeyDistributor'), useRealMemberCount: () => 5, useStewDialog: () => ({}), groupLiveSub: () => '1 member',
+    KeyDistributor: Stub('KeyDistributor'), GroupIconPicker: Stub('GroupIconPicker'), useRealMemberCount: () => 5, useStewDialog: () => ({}), useStewNarrow: () => false, groupLiveSub: () => '1 member',
   });
   draw(Comp, {});
   return { Comp, draw, removed, item: () => captured.items.find(x => x.id === 't1'), items: () => captured.items,
-    aside: (it) => find(captured.renderAside(it), n => n.type === 'button' && /^Remove team /.test(String((n.props || {})['aria-label'] || ''))) };
+    // The row bin is gone; delete now lives in the settings panel. Open it via the row's gear (renderInline),
+    // re-draw, and find the Delete control by its aria-label.
+    openPanel: (it) => { const gear = find(captured.renderInline(it), n => n.type === 'button' && typeof (n.props || {}).onClick === 'function')[0]; gear.props.onClick(); return draw(Comp, {}); },
+    panelDel: (tree) => find(tree, n => /^Delete (team|group) /.test(String((n.props || {})['aria-label'] || '')))[0] };
 }
 
 test('THE GROUPS SCREEN OFFERS DELETE FOR A TEAM, and it goes through the same strong confirm + undo — not the old one-step group delete', async () => {
@@ -543,12 +546,11 @@ test('THE GROUPS SCREEN OFFERS DELETE FOR A TEAM, and it goes through the same s
   const { removed, draw, Comp } = g;
   const item = g.item();
   assert.ok(item, 'the team is not in the Groups list');
-  const del = g.aside(item);
-  assert.equal(del.length, 1, 'the Groups screen offers no delete for a team');
-  assert.equal(del[0].props.title, 'Remove team', 'the control no longer carries its own tooltip');
-  del[0].props.onClick();
-  assert.equal(b.TeamRemoval.state().asking && b.TeamRemoval.state().asking.id, 't1', 'the Groups delete did not open the strong team confirm');
-  assert.deepEqual(removed, [], 'the Groups screen deleted the group straight away, leaving the roster and rotas behind');
+  const del = g.panelDel(g.openPanel(item));
+  assert.ok(del, 'the settings panel offers no delete for a team');
+  del.props.onClick();
+  assert.equal(b.TeamRemoval.state().asking && b.TeamRemoval.state().asking.id, 't1', 'the panel delete did not open the strong team confirm');
+  assert.deepEqual(removed, [], 'the panel deleted the group straight away, leaving the roster and rotas behind');
   b.TeamRemoval.confirm();
   await b.clk.advance(8999);
   assert.deepEqual(b.calls, [], 'something was sent inside the undo window');
@@ -564,16 +566,14 @@ test('THE GROUPS SCREEN DOES NOT OFFER DELETE FOR THE CARE TEAM EITHER: disabled
   b.draw();   // the hook both screens share is what learns which team is the care team
   assert.equal(b.TeamRemoval.state().careTeamId, 't1', 'the shared removal flow never learned which team is the care team');
   const g = await groupsScreen(b);
-  const del = g.aside(g.item());
-  assert.equal(del.length, 1, 'no delete control for the care team to check - re-anchor this test');
-  assert.equal(del[0].props.disabled, true, 'the Groups screen offers a live delete for the care team');
-  assert.equal(del[0].props.title, CARE_COPY, 'the disabled control does not say why');
-  assert.match(String(del[0].props['aria-label']), /edit its members instead/, 'a screen reader is told nothing about why it is dead');
-  // pressed anyway: the shared flow refuses it, opens no confirm, and never falls through to the one-step delete
-  del[0].props.onClick();
+  const del = g.panelDel(g.openPanel(g.item()));
+  assert.ok(del, 'no delete control for the care team to check - re-anchor this test');
+  assert.equal(del.props['aria-disabled'], true, 'the panel offers a live delete for the care team');
+  assert.equal(del.props.onClick, undefined, 'the care-team delete is clickable — it must be inert, offering no action');
+  assert.match(String(del.props['aria-label']), /edit its members instead/, 'a screen reader is told nothing about why it is dead');
+  // there is NO onClick to press: the care team can never reach the removal flow or the one-step delete from here
   assert.equal(b.TeamRemoval.state().asking, null, 'the strong confirm opened for the care team');
-  assert.match(b.TeamRemoval.state().err, /Every church needs a care team; edit its members instead\./);
-  assert.deepEqual(g.removed, [], 'the Groups screen deleted the care group straight away');
+  assert.deepEqual(g.removed, [], 'the panel deleted the care group straight away');
   await b.clk.advance(60_000);
   assert.deepEqual(b.calls, [], 'the care team was removed anyway');
 });

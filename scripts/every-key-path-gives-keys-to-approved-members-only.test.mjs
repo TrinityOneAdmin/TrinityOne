@@ -132,9 +132,15 @@ test('…and while approval cannot be told, nothing is created and the dialog sa
 async function sealOne(w) {
   const { mod, draw } = load(w);
   let tree = draw(mod.DashGroups, {});
-  const enc = find(tree, n => n.type === 'button' && /Press to seal it/.test((n.props || {})['aria-label'] || ''))[0];
-  assert.ok(enc, 're-anchor: no Encrypt? button on the room row');
-  enc.props.onClick();
+  // PHASE 1 (2026-10-19): the encrypt control moved off the row into the group-settings panel. Open the panel
+  // from the row's settings gear, then flip its encryption checkbox — it runs the same toggleEncrypt → confirm.
+  const gear = find(tree, n => n.type === 'button' && /^Settings for /.test((n.props || {})['aria-label'] || ''))[0];
+  assert.ok(gear, 're-anchor: no settings gear on the room row to open the panel');
+  gear.props.onClick();
+  tree = draw(mod.DashGroups, {});
+  const enc = find(tree, n => n.type === 'input' && (n.props || {}).type === 'checkbox' && /Press to seal it/.test((n.props || {})['aria-label'] || ''))[0];
+  assert.ok(enc, 're-anchor: no Encrypt control in the settings panel');
+  enc.props.onChange();
   tree = draw(mod.DashGroups, {});
   const ok = button(tree, 'Seal it')[0];
   assert.ok(ok, 're-anchor: the seal confirmation did not open');

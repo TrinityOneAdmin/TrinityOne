@@ -3694,9 +3694,9 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
               {compact
                 ? <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, overflow: 'hidden' }}><span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{it.name}</span>{renderInline ? <span style={{ flexShrink: 0, display: 'flex' }}>{renderInline(it)}</span> : null}{it.sub ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>· {it.sub}</span> : null}</div>
                 : <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>}
+              {renderRight && !compact ? <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>{renderRight(it)}</div> : null}
               {renderAside ? <div style={{ flexShrink: 0 }}>{renderAside(it)}</div> : null}
             </div>
-            {renderRight && !compact ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: canDrag ? 82 : 51 }}>{renderRight(it)}</div> : null}
           </div>
           );
         })}
@@ -3714,6 +3714,7 @@ function NewGroupModal({ open, onClose }) {
   const [encrypted, setEncrypted] = React.useState(false);
   const [childsafe, setChildsafe] = React.useState(false);
   const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter for the pick list — does NOT touch `sel`
   const [category, setCategory] = React.useState('');   // chosen category id ('' = uncategorised)
   const [busy, setBusy] = React.useState(false);   // an encrypted room is being made: key first, then the room (createEncryptedGroup)
   const [note, setNote] = React.useState('');      // what the dialog says while that happens, or why it could not
@@ -3742,7 +3743,7 @@ function NewGroupModal({ open, onClose }) {
   const allGroupsForDefault = window.useStewardGroups ? window.useStewardGroups() : [];
   const encByDefault = (!church.features || church.features.encryptComms !== false)
     && !(allGroupsForDefault || []).some(g => g && g.kind === 'group' && !g.encrypted);
-  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setBusy(false); setNote(''); } }, [open]);
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setQ(''); setBusy(false); setNote(''); } }, [open]);
   // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
   // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
   // always mounted with `open` toggling, so opening it changed the hook count and React threw #310 and
@@ -3757,7 +3758,11 @@ function NewGroupModal({ open, onClose }) {
     if (!name.trim() || busy) return;
     const g = { name: name.trim(), kind, sub: sub.trim() };
     if (category) g.category = category;
-    if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
+    // INVITE-ONLY WORKS FOR BROADCAST TOO (phase 2): a broadcast stays steward-post-only; invite-only just
+    // restricts who can READ it. The relay keys its read gate on visibility==='invite' regardless of kind
+    // (GROUP_VIS/GROUP_MEMBERS in scripts/gateway.mjs) — the broadcast write gate is separate — so no relay
+    // change is needed. Encryption below stays group-only on purpose (owner-locked).
+    if (inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
     if (childsafe) g.childsafe = true;
     const sealed = kind === 'group' && encrypted;
     // A ROOM THE STEWARD CHOSE TO ENCRYPT IS NEVER CREATED WITHOUT ITS KEY (new church, 2026-10-02). This used to
@@ -3807,6 +3812,10 @@ function NewGroupModal({ open, onClose }) {
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrow the shown rows by name or @handle; `sel` is untouched, so a
+  // ticked member scrolled out of view by a search still saves. nameHandle(m) is the shared @handle helper.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? pickList.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : pickList;
   return (
     <div style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 50, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 30,
       background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -3836,34 +3845,41 @@ function NewGroupModal({ open, onClose }) {
             <input type="checkbox" checked={childsafe} onChange={e => setChildsafe(e.target.checked)} style={{ marginTop: 2 }} />
             <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>👶 Child-safe</b> — members marked as a child can see and join this group. Groups that aren’t child-safe are hidden from children.</span>
           </label>
+          {/* INVITE-ONLY applies to BROADCAST as well as group (phase 2): it restricts who can READ. The
+              ENCRYPTED checkbox stays inside the kind==='group' wrapper below — encryption is group-only. */}
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
+            <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
+            <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list; only the people you choose can see it (the relay enforces it).</span>
+          </label>
           {kind === 'group' ? (
             <React.Fragment>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
-                <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
-                <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list, and only the members you choose can post (the relay enforces it).</span>
-              </label>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '12px 0 0', cursor: 'pointer' }}>
                 <input type="checkbox" checked={encrypted} onChange={e => setEncrypted(e.target.checked)} style={{ marginTop: 2 }} />
                 <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>🔒 Encrypted</b> — messages are sealed end-to-end; not even the relay can read them. {inviteOnly ? 'Keyed to the chosen members.' : 'Keyed to everyone in the church.'} New members can read past messages.</span>
               </label>
-              {inviteOnly ? (
+            </React.Fragment>
+          ) : null}
+          {inviteOnly ? (
                 <div style={{ marginTop: 14 }}>
                   <div style={lbl}>WHO’S IN · {sel.size}</div>
                   {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members have joined yet — create the group, then add people here once they’re in.</div> : (
-                    <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {pickList.map(m => { const on = sel.has(m.pubkey); return (
+                    <React.Fragment>
+                      <input type="search" aria-label="Search members for this group" placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ ...fld, height: 40, fontSize: 14, marginBottom: 8 }} />
+                      {ql && visible.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members match “{q}”.</div> : (
+                      <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {visible.map(m => { const on = sel.has(m.pubkey); return (
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to add this person to the group, untick to leave them out" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
                           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
                           <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: nameHandle(m) ? 700 : 400, fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
                         </button>
                       ); })}
-                    </div>
+                      </div>
+                      )}
+                    </React.Fragment>
                   )}
                 </div>
               ) : null}
-            </React.Fragment>
-          ) : null}
         </div>
         {note ? <div role="status" style={{ padding: '14px 26px 0', fontSize: 13, color: busy ? 'var(--ink-2)' : 'var(--clay-ink)', lineHeight: 1.45, fontWeight: busy ? 500 : 600 }}>{note}</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
@@ -3879,7 +3895,7 @@ function NewGroupModal({ open, onClose }) {
 // group with the new member set — the relay then enforces posting + the read-gate against it.
 // `getCurrent` (optional) returns the group document AS IT IS NOW (null if it was deleted); save() publishes on top of that, so another steward's
 // change made while this dialog was open (childsafe, encryption, category, leaders) is not reverted by a stale snapshot.
-function EditGroupMembersModal({ group, getCurrent, onClose }) {
+function EditGroupMembersModal({ group, getCurrent, onClose, seed }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   // WHAT IS OFFERED: not people still waiting to join, not the blocked (sim A2 #7) — but whoever is ALREADY in
   // the group stays listed so they can be un-ticked. `members` stays the full list for `known`/`orphans` and the
@@ -3890,12 +3906,23 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
   // is how a church ends up with a care team the relay treats as empty.
   const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
   const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';
-  const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
+  // `seed` (phase 2, optional) only pre-ticks the picker when an OPEN group is being turned invite-only from
+  // the settings panel — it does NOT change the save() delta, which still reads `group.members` as the true
+  // baseline (empty for an open group, so everyone left ticked is ADDED). From-the-row opens pass no seed, so
+  // an invite-only group keeps starting from its own allowlist exactly as before.
+  const [sel, setSel] = React.useState(() => new Set(
+    (Array.isArray(group.members) && group.members.length) ? group.members
+      : (Array.isArray(seed) ? seed : (Array.isArray(group.members) ? group.members : []))));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter; save()/orphans/known read `sel`, not this
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const known = new Set(members.map(m => m.pubkey));
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrows the displayed rows only. save()/orphans/known read `sel`, so a
+  // ticked member filtered out of view is still saved. nameHandle(m) is the shared @handle helper.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? pickList.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : pickList;
   const save = () => {
     setBusy(true); setErr('');
     // THE DIALOG'S DELTA, applied to the group AS IT IS NOW (not the list seeded at open): someone another steward
@@ -3983,6 +4010,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
       .catch((e) => { clearTimeout(guard); clearTimeout(outer); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
+  const fld = { width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const dlgRef = useStewDialog(() => { if (!busy) onClose(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={() => !busy && onClose()} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 96, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -3995,13 +4023,18 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={lbl}>MEMBERS · {sel.size}</div>
-          {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : pickList.map(m => { const on = sel.has(m.pubkey); return (
+          {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : (
+            <React.Fragment>
+              <input type="search" aria-label={'Search members in “' + group.name + '”'} placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ ...fld, marginBottom: 8 }} />
+              {ql && visible.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members match “{q}”.</div> : visible.map(m => { const on = sel.has(m.pubkey); return (
             <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to keep this person in the group, untick to remove them" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
               <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
               <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
             </button>
           ); })}
+            </React.Fragment>
+          )}
           {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
         </div>
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, padding: '8px 24px 0', lineHeight: 1.45 }}>{err}</div> : null}
@@ -4470,8 +4503,9 @@ function DashGroups() {
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
+  const [editMembersSeed, setEditMembersSeed] = React.useState(null); // phase 2: pre-tick set when turning an OPEN group invite-only (null = from-the-row, start from its own allowlist)
+  const [unrestricting, setUnrestricting] = React.useState(null);     // phase 2: { g } → confirm before opening an invite-only group to the whole church (exposes its history)
   const [settingsFor, setSettingsFor] = React.useState(null);       // APK: group whose settings sheet is open
-  const [iconFor, setIconFor] = React.useState(null);               // WEB: group whose icon picker is open (the APK uses the settings sheet)
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -4521,8 +4555,28 @@ function DashGroups() {
     clearTimeout(undoTimer.current); setUndo(null);
   };
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const stewNarrow = useStewNarrow();   // phone/narrow → the settings panel is a bottom sheet; wide/desktop → a centered dialog
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
   const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
+  // CLOSING THE SETTINGS PANEL MUST SAVE A TYPED-BUT-UNBLURRED NAME/DESCRIPTION. useStewDialog closes by
+  // UNMOUNTING, and React fires no onBlur on a removed element — so Escape and Android Back dropped an edit the
+  // field's own onBlur would have saved. (A backdrop or × click is safe because mousedown blurs the input
+  // first, but these route through here too for one consistent path.) Flush both changed fields in ONE publish
+  // against the LIVE document (rawById at save time), never two racing writes, then close.
+  const flushSettingsAndClose = () => {
+    const g = settingsFor;
+    if (!g) { setSettingsFor(null); return; }
+    const rawDoc = rawByIdRef.current.get(g.id);
+    if (!rawDoc) { setSettingsFor(null); return; }   // deleted meanwhile → just close, publish nothing
+    const patch = {};
+    const name = (g.name || '').trim().slice(0, 60);
+    if (name && name !== (rawDoc.name || '')) patch.name = name;   // never publish a blank name
+    const sub = (g.sub || '').trim();
+    if (sub !== (rawDoc.sub || '')) patch.sub = sub;
+    if (Object.keys(patch).length) pubOr(window.Steward.publishGroup({ ...rawDoc, ...patch }), 'Couldn’t save the changes to “' + (rawDoc.name || 'this group') + '” — the relay didn’t accept them, so they are unchanged.');
+    setSettingsFor(null);
+  };
+  const settingsDlgRef = useStewDialog(flushSettingsAndClose, !!settingsFor);  // a11y: group-settings panel (Escape + focus trap + modal count), now on desktop too — and flushes a pending edit on close
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       {pendingDelete ? (
@@ -4562,38 +4616,33 @@ function DashGroups() {
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
         compact={isNative}
-        renderInline={isNative ? (it) => (
+        /* The settings gear shows on EVERY row. ListPanel only renders renderInline in its compact (native)
+           branch — on the APK the gear sits inline by the name — so the web/desktop row gets its own gear in
+           renderRight below (ListPanel's web branch does not consume renderInline). */
+        renderInline={(it) => (
           <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sliders" size={16} /></button>
-        ) : undefined}
+        )}
+        /* Desktop row, decluttered (PHASE 1): the category select, icon button, the clickable child-safe and
+           encrypt TOGGLES and the standalone leader-count pill now live ONLY in the settings panel. The row
+           keeps the read-only Broadcast / Team tags, a read-only child-safe + sealed STATUS indicator (so a
+           steward sees a room's protection state at a glance — the toggles are in the panel), the People
+           button (invite-only), Leaders (count folded in), Chat, and the settings gear — Delete is in
+           renderAside. The status indicators are NOT buttons and carry no onClick: they only report. */
         renderRight={(it) => isNative ? null : (
           <React.Fragment>
-            {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), 'Couldn\'t move "' + (it.name || 'that group') + '" into that category — the relay didn\'t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-                <option value="">No category</option>
-                {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            ) : null}
-            <button onClick={(e) => { e.stopPropagation(); setIconFor(raw(it)); }} title="Change icon" aria-label={'Change icon for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center' }}><Icon name={groupIcon(it)} size={15} color="currentColor" /></button>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
-            {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn\'t change child-safe on "' + (it.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
-            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can\'t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
-            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(raw(it))} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
-            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
+            {/* READ-ONLY child-safe status — both states shown and named; "which rooms are adults-only" is itself safety-relevant. No onClick; the toggle is in the panel. */}
+            <span role="img" aria-label={(it.name || 'This group') + (it.childsafe ? ' — child-safe: members marked as a child can join' : ' — adults only: hidden from children')} title={it.childsafe ? 'Child-safe — members marked as a child can join' : 'Adults only — hidden from children'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 30%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface-2)', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={13} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Adults only'}</span>
+            {/* READ-ONLY sealed status — shown only when encrypted. No onClick; sealing is toggled in the panel. */}
+            {it.encrypted ? <span role="img" aria-label={(it.name || 'This group') + ' — sealed end-to-end'} title="Sealed end-to-end" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name="lock" size={13} color="currentColor" /> Sealed</span> : null}
+            {it.visibility === 'invite' ? <button onClick={() => { setEditMembersSeed(null); setEditMembersFor(raw(it)); }} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> People · {(it.members || []).length}</button> : null}
+            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders{(it.leaders || []).length ? ' · ' + it.leaders.length : ''}</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
+            <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="sliders" size={15} color="currentColor" /> Settings</button>
           </React.Fragment>
         )}
-        renderAside={(it) => {
-          // THE CARE TEAM IS NOT OFFERED FOR DELETION (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE
-          // DELETED"), here as on the Rota page: disabled, with the reason in the tooltip and in the label a
-          // screen reader reads, rather than a confirm dialog that cannot complete. `careTeamId` comes from the
-          // shared removal flow (useTeamRemoval), and TeamRemoval.ask and Steward.removeTeam refuse it as well.
-          const noCare = it.kind === 'team' && !!trs.careTeamId && it.id === trs.careTeamId;
-          return (
-          <button onClick={() => (it.kind === 'team' && window.TeamRemoval ? window.TeamRemoval.ask(it) : setPendingDelete(it))} disabled={noCare} title={noCare ? (trs.careWhy || '') : (it.kind === 'team' ? 'Remove team' : 'Remove group')} aria-label={(it.kind === 'team' ? 'Remove team ' : 'Remove group ') + (it.name || '') + (noCare ? ' — ' + (trs.careWhy || '') : '')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: noCare ? 'default' : 'pointer', opacity: noCare ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-          );
-        }} />
+        />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {catsOpen ? <CategoriesModal cats={cats} groups={all} onClose={() => setCatsOpen(false)} /> : null}
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
@@ -4618,40 +4667,46 @@ function DashGroups() {
         </div>
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
-      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
-      {iconFor ? (() => {
-        // WEB console: the same GroupIconPicker + the same publish the APK sheet uses (raw document, only `icon` changed).
-        const g = iconFor;
-        return (
-          <div onClick={() => setIconFor(null)} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
-            <div role="dialog" aria-modal="true" aria-label={'Icon for ' + g.name} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '18px 22px 22px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{g.name}</div>
-                <button onClick={() => setIconFor(null)} title="Close" aria-label="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
-              </div>
-              <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setIconFor({ ...g, icon: ic }); }} />
-            </div>
-          </div>
-        );
-      })() : null}
+      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} seed={editMembersSeed} onClose={() => { setEditMembersFor(null); setEditMembersSeed(null); }} /> : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
         const sLabel = { display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 };
         const sName = { fontWeight: 700, fontSize: 14 };
         const sSub = { fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.4 };
+        const sFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
+        const sLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
         return (
-          <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-            <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
+          <div onClick={flushSettingsAndClose} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: stewNarrow ? 'flex-end' : 'safe center', justifyContent: 'center', ...(stewNarrow ? null : { overflowY: 'auto', padding: 24 }) }}>
+            <div ref={settingsDlgRef} role="dialog" aria-modal="true" aria-label={(g.name || 'Group') + ' settings'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: stewNarrow ? '22px 22px 0 0' : 22, border: stewNarrow ? 'none' : '1px solid var(--line)', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={groupIcon(g)} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{g.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{g.kind === 'team' ? 'Team' : g.kind === 'broadcast' ? 'Broadcast' : 'Group'} settings</div></div>
-                <button onClick={() => setSettingsFor(null)} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+                <button onClick={flushSettingsAndClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+              </div>
+
+              {/* Name + description. Save on blur, publishing against raw(g) — NOT the display row, whose `sub`
+                  groupLiveSub overwrites (see "PUBLISH THE DOCUMENT, NOT THE ROW"). A blank name is never
+                  published (the field snaps back to the current name); names cap at 60 to match the relay's
+                  GROUP_NAMES truncation. onBlur reads e.target.value so a save needs no intervening re-render. */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={sLbl}>NAME</div>
+                <input aria-label="Group name" value={g.name || ''} maxLength={60}
+                  onChange={(e) => setSettingsFor({ ...g, name: e.target.value })}
+                  onBlur={(e) => { const next = (e.target.value || '').trim().slice(0, 60); if (!next) { setSettingsFor({ ...g, name: raw(g).name }); return; } if (next === (raw(g).name || '')) return; pubOr(window.Steward.publishGroup({ ...raw(g), name: next }), 'Couldn’t rename “' + (raw(g).name || 'this group') + '” — the relay didn’t accept it, so it is unchanged.'); setSettingsFor({ ...g, name: next }); }}
+                  style={sFld} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={sLbl}>DESCRIPTION</div>
+                <input aria-label="Group description" value={g.sub || ''} placeholder="Optional — e.g. Whole church"
+                  onChange={(e) => setSettingsFor({ ...g, sub: e.target.value })}
+                  onBlur={(e) => { const next = (e.target.value || '').trim(); if (next === (raw(g).sub || '')) return; pubOr(window.Steward.publishGroup({ ...raw(g), sub: next }), 'Couldn’t update the description — the relay didn’t accept it, so it is unchanged.'); setSettingsFor({ ...g, sub: next }); }}
+                  style={{ ...sFld, fontWeight: 400 }} />
               </div>
 
               <div style={sToggle}>
                 <div style={sLabel}><Icon name={g.childsafe ? 'check' : 'pray'} size={18} color={g.childsafe ? 'var(--sage)' : 'var(--ink-3)'} /><div><div style={sName}>Child-safe</div><div style={sSub}>{g.childsafe ? 'Members marked as a child can join' : 'Hidden from children'}</div></div></div>
-                <input type="checkbox" className="sw" checked={!!g.childsafe} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe — the relay didn\'t accept it.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
+                <input type="checkbox" className="sw" checked={!!g.childsafe} aria-label={(g.name || 'This group') + ' — child-safe is ' + (g.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe on "' + (g.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
               </div>
 
               <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setSettingsFor({ ...g, icon: ic }); }} />
@@ -4659,7 +4714,7 @@ function DashGroups() {
               {g.kind !== 'team' ? (
                 <div style={sToggle}>
                   <div style={sLabel}><Icon name="lock" size={18} color={g.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>End-to-end encrypted</div><div style={sSub}>{g.encrypted ? 'Sealed — not even the relay can read it' : 'Messages are readable by the relay'}</div></div></div>
-                  <input type="checkbox" className="sw" checked={!!g.encrypted} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
+                  <input type="checkbox" className="sw" checked={!!g.encrypted} aria-label={(g.name || 'This group') + ' — encryption is ' + (g.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
                 </div>
               ) : null}
 
@@ -4673,8 +4728,23 @@ function DashGroups() {
                 </div>
               ) : null}
 
+              {/* INVITE-ONLY ON/OFF (phase 2). Not for a team — a team's membership comes from its roster, and
+                  invite-only is not a concept there. OFF→ON opens the member picker seeded from everyone
+                  currently eligible (EditGroupMembersModal.save() publishes visibility:'invite'); ON→OFF goes
+                  through a confirm because it exposes the whole history to the church. Works for a broadcast
+                  too: the relay keys its read gate on visibility==='invite' regardless of kind. */}
+              {g.kind !== 'team' ? (
+                <div style={sToggle}>
+                  <div style={sLabel}><Icon name="lock" size={18} color={g.visibility === 'invite' ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>Invite-only</div><div style={sSub}>{g.visibility === 'invite' ? 'Only the people you choose can see it' : 'Anyone in the church can see and join it'}</div></div></div>
+                  <input type="checkbox" className="sw" checked={g.visibility === 'invite'} aria-label={(g.name || 'This group') + ' — invite-only is ' + (g.visibility === 'invite' ? 'on. Press to open it to the whole church' : 'off. Press to restrict who can see it')} onChange={() => {
+                    if (g.visibility === 'invite') { setUnrestricting({ g: raw(g) }); setSettingsFor(null); }
+                    else { setEditMembersSeed(recipsFor(g) || []); setEditMembersFor(raw(g)); setSettingsFor(null); }
+                  }} />
+                </div>
+              ) : null}
+
               {g.visibility === 'invite' ? (
-                <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setEditMembersFor(raw(g)); setSettingsFor(null); }}>
+                <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setEditMembersSeed(null); setEditMembersFor(raw(g)); setSettingsFor(null); }}>
                   <div style={sLabel}><Icon name="lock" size={18} color="var(--clay-ink)" /><div><div style={sName}>Invite-only members</div><div style={sSub}>{(g.members || []).length} member{(g.members || []).length === 1 ? '' : 's'}</div></div></div>
                   <Icon name="chevR" size={16} color="var(--ink-3)" />
                 </div>
@@ -4690,14 +4760,35 @@ function DashGroups() {
                 <Icon name="chevR" size={16} color="var(--ink-3)" />
               </div>
 
-              <div style={{ ...sToggle, borderBottom: 'none', cursor: 'pointer' }} onClick={() => { setPendingDelete(raw(g)); setSettingsFor(null); }}>
-                <div style={sLabel}><Icon name="trash" size={18} color="var(--clay-ink)" /><div><div style={{ ...sName, color: 'var(--clay-ink)' }}>Delete {g.kind === 'team' ? 'team' : 'group'}</div></div></div>
-              </div>
+              {(() => {
+                // Delete lives ONLY here now (the row bin was removed). The care team is never offered for
+                // deletion (reference/DOMAIN.md "CARE TEAM CANNOT BE DELETED"); a team routes through the
+                // shared TeamRemoval flow, everything else through the group-delete confirm.
+                const noCareG = g.kind === 'team' && !!trs.careTeamId && g.id === trs.careTeamId;
+                return (
+                <div style={{ ...sToggle, borderBottom: 'none', cursor: noCareG ? 'default' : 'pointer', opacity: noCareG ? 0.55 : 1 }}
+                  role="button" tabIndex={noCareG ? -1 : 0} aria-disabled={noCareG || undefined}
+                  aria-label={(g.kind === 'team' ? 'Delete team ' : 'Delete group ') + (g.name || '') + (noCareG ? ' \u2014 ' + (trs.careWhy || 'the care team cannot be deleted') : '')}
+                  onClick={noCareG ? undefined : () => { if (g.kind === 'team' && window.TeamRemoval) { window.TeamRemoval.ask(raw(g)); } else { setPendingDelete(raw(g)); } setSettingsFor(null); }}>
+                  <div style={sLabel}><Icon name="trash" size={18} color={noCareG ? 'var(--ink-3)' : 'var(--clay-ink)'} /><div><div style={{ ...sName, color: noCareG ? 'var(--ink-3)' : 'var(--clay-ink)' }}>Delete {g.kind === 'team' ? 'team' : 'group'}</div>{noCareG ? <div style={sSub}>{trs.careWhy || 'The care team cannot be deleted.'}</div> : null}</div></div>
+                </div>
+                );
+              })()}
             </div>
           </div>
         );
       })() : null}
       {sealing ? <SkConfirm icon="lock" title={(sealing.on ? 'Seal "' : 'Unseal "') + sealing.g.name + '"?'} confirmLabel={sealing.busy ? 'Sealing…' : (sealing.on ? 'Seal it' : 'Unseal')} busy={!!sealing.busy} err={sealing.err || ''} body={sealing.on ? 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages already posted stay as they are.' : 'New messages become readable by the relay again. Messages already sealed stay sealed.'} onConfirm={doSeal} onCancel={() => { if (!sealing.busy) setSealing(null); }} /> : null}
+      {/* ON→OFF: opening an invite-only room to the whole church EXPOSES its history. publishGroup with
+          visibility/members cleared lands it in the relay's open branch. The confirm body names the exposure
+          plainly; for an also-encrypted room it adds that new members can't read the old sealed messages —
+          a warning, not a block (owner decision). No relay change: the relay already reads an absent
+          visibility as open. */}
+      {unrestricting ? <SkConfirm icon="globe" title={'Open "' + (unrestricting.g.name || 'this group') + '" to the whole church?'} confirmLabel="Open it up"
+        body={'It is invite-only now. If you open it up, every message posted in it so far becomes readable by anyone in your church, and anyone can join.'
+          + (unrestricting.g.encrypted ? '\n\nThis group is also encrypted: new members will not be able to read the old encrypted messages, only new ones.' : '')}
+        onConfirm={() => { const g = unrestricting.g; pubOr(window.Steward.publishGroup({ ...raw(g), visibility: undefined, members: undefined }), 'Couldn’t open “' + (g.name || 'this group') + '” to the church — the relay didn’t accept it, so it stays invite-only.'); setUnrestricting(null); }}
+        onCancel={() => setUnrestricting(null)} /> : null}
     </div>
   );
 }
@@ -4715,6 +4806,7 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
   const [saving, setSaving] = React.useState(false);
   const [notTold, setNotTold] = React.useState([]);   // new leaders the "you're now a leader" DM never reached
   const [saveErr, setSaveErr] = React.useState('');   // the leadership change itself did not reach any relay
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter; `sel` (the leaders that save) is independent
   // WHAT THE RELAY ACTUALLY HOLDS, and WHO HAS ACTUALLY BEEN TOLD — both of which move when Save succeeds,
   // and neither of which the `group` PROP ever hears about. `before` was read from that prop, and this modal
   // deliberately stays open after a partial success, so a second Save re-computed "newly added" from the
@@ -4728,6 +4820,10 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
   // Save that would publish an empty leader list (console audit 2026-09-19 §C). The precondition is named where
   // the list would be, and Save waits until there is someone to tick or a different option is chosen.
   const nobodyToTick = members.length === 0;
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrows the displayed rows only; `sel` (the leaders that save) and
+  // `nobodyToTick`/`saveBlocked` read the full `members`, so a ticked leader filtered out of view still saves.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? members.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : members;
   const saveBlocked = pol === 'leaders' && nobodyToTick;
   const save = async () => {
     if (saveBlocked) return;
@@ -4826,9 +4922,11 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
             <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>This group is marked <strong>child-safe</strong>, so children can read it. Whoever you allow above, only adults on your <strong>cleared list</strong> can actually add an event here — and no child can, ever. That is enforced for you.</div>
           </div>
         ) : null}
+        {!nobodyToTick ? <input type="search" aria-label="Search members for group leaders" placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 10 }} /> : null}
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7 }}>
           {nobodyToTick ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>Nobody has joined your church on the app yet, so there is no one to tick.</div>
-            : members.map(m => {
+            : (ql && visible.length === 0) ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No members match “{q}”.</div>
+            : visible.map(m => {
               const on = sel.has(m.pubkey);
               const nm = m.name || ('Anon · ' + (m.npub || m.pubkey).slice(-6));
               return (
