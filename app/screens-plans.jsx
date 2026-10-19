@@ -476,6 +476,11 @@ function DevoVerseSheet({ refStr, open, onClose }) {
   }
   const multi = verses.length > 1;
   return (
+    // Isolate the card's touches: it renders INSIDE DevoDayReader's day-swipe scroll div, and a horizontal
+    // swipe on the card/backdrop would otherwise bubble up and turn the day (audit 2026-10-19). Stop touch
+    // events here so a swipe on the open card never marks-read/advances. The sheet's own swipe-down dismiss
+    // is unaffected (it is handled inside BottomSheet, deeper than this wrapper).
+    <div onTouchStart={e => e.stopPropagation()} onTouchMove={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()}>
     <BottomSheet open={open} onClose={onClose}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <div style={{ minWidth: 0 }}>
@@ -498,6 +503,7 @@ function DevoVerseSheet({ refStr, open, onClose }) {
         <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>That passage isn't in this translation yet.</p>
       )}
     </BottomSheet>
+    </div>
   );
 }
 // a tappable scripture chip: opens the passage as a CARD over the current view (never navigates to the reader).

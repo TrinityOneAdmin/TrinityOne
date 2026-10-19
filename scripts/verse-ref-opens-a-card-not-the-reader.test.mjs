@@ -53,7 +53,7 @@ function world() {
   return { React, draw, win, ...plans };
 }
 
-const panel = (tree) => find(tree, n => n.type === 'div' && n.props.onTouchStart)[0];
+const panel = (tree) => find(tree, n => n.type === 'div' && n.props.onTouchStart && n.props.style && n.props.style.transform != null)[0];
 
 test('a devotional ref chip: tapping opens the card with the range joined, and never navigates to the reader', () => {
   const w = world();
@@ -101,6 +101,20 @@ test('the explicit X closes the card', () => {
   assert.equal(x.length, 1, 'no explicit close (X) button on the card');
   x[0].props.onClick();
   assert.equal(panel(render()).props.style.transform, 'translateY(102%)', 'the X did not close the card');
+});
+
+test('the open card isolates its touches: a swipe on the card does not bubble to the day swipe', () => {
+  const w = world();
+  const render = () => w.draw(w.DevoRefChip, { refText: 'John 3:16-17', ctx: { toast() {} } });
+  find(render(), n => n.type === 'button' && texts(n).join(' ').includes('John 3:16-17'))[0].props.onClick();
+  // The card's OUTER wrapper (handlers only, no style) stops touch propagation so a horizontal swipe on the
+  // card/backdrop cannot bubble up to DevoDayReader's day-swipe and mark-read/advance the day (audit fix).
+  const wrap = find(render(), n => n.type === 'div' && n.props.onTouchEnd && !n.props.style)[0];
+  assert.ok(wrap, 'no touch-isolating wrapper around the open card');
+  let stopped = 0;
+  wrap.props.onTouchStart({ stopPropagation: () => { stopped++; }, touches: [{ clientX: 0, clientY: 0 }] });
+  wrap.props.onTouchEnd({ stopPropagation: () => { stopped++; }, changedTouches: [{ clientX: 0, clientY: 0 }] });
+  assert.equal(stopped, 2, 'the open card does not stop touch propagation — a swipe on it could turn the day');
 });
 
 const PLAN = { id: 'p1', title: 'John', sub: '3 days', len: 3,
