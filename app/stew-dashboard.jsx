@@ -5875,6 +5875,19 @@ function DashVersePrompt() {
       setMsg('Removed'); setTimeout(function() { setMsg(''); }, 3000);
     }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
   };
+  // Take ONE unscheduled ("now") passage down. The prompt is one replaceable document, so this republishes it
+  // without that passage (members follow the replacement); the last one going is the same as Clear.
+  var removeNowEntry = function(idx) {
+    if (!vp || !vp.ref) return;
+    var parts = vp.ref.split('; ').filter(Boolean);
+    var remaining = parts.filter(function(_, i) { return i !== idx; });
+    if (remaining.length === 0) { clear(); return; }
+    setBusy(true);
+    window.Steward.publishVersePrompt(remaining.join('; '), '', undefined).then(function(sent) {
+      if (sent && typeof sent.ts === 'number') setVp(function(prev) { return prev && typeof prev.ts === 'number' && prev.ts > sent.ts ? prev : sent; });
+      setMsg('Taken down'); setTimeout(function() { setMsg(''); }, 3000);
+    }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
+  };
   var pvIdxState = _s(0), pvIdx = pvIdxState[0], setPvIdx = pvIdxState[1];
   var bibleTickState = _s(0), bibleTick = bibleTickState[0], setBibleTick = bibleTickState[1];
   var versionState = _s(''), bibleVersion = versionState[0], setBibleVersion = versionState[1];
@@ -6000,6 +6013,13 @@ function DashVersePrompt() {
     // unless the prompt already carries a schedule (members read only the schedule then, so it is kept as a past entry)
     var nowMs = Date.now();
     var anyFuture = refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > nowMs; });
+    // An existing unscheduled passage is visible to members only because the prompt has NO schedule; the moment a
+    // schedule exists members read the schedule alone. So when this push adds a scheduled passage, carry the live
+    // one(s) into the schedule as already-due entries, or they silently vanish from members.
+    if (anyFuture && existingSchedule.length === 0 && vp && vp.ref) {
+      var dueAt = Math.min(Number(vp.ts) || 0, Math.floor(nowMs / 1000) - 1) || Math.floor(nowMs / 1000) - 1;
+      existingSchedule = vp.ref.split('; ').filter(Boolean).map(function(r) { return { at: dueAt, ref: r, note: '' }; });
+    }
     var keepPast = anyFuture || existingSchedule.length > 0;
     var isSched = function(r) { return r.date && r.time && (keepPast || new Date(r.date + 'T' + r.time).getTime() > nowMs); };
     var newSchedule = refs.filter(isSched).map(function(r) {
@@ -6076,7 +6096,15 @@ function DashVersePrompt() {
               </div>;
             })}
             <button type="button" onClick={function() { setEditSch(vpSch.map(function(s) { return { ref: s.ref, at: s.at, note: s.note || '' }; })); }} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', cursor: 'pointer', padding: '4px 0', color: statusColor, fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>Edit schedule</button>
-          </div>) : <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--ink)' }}>{vp.ref}</div>}
+          </div>) : <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {vpVerses.map(function(v, i) {
+              return <div key={i + v} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 10, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.3px', padding: '2px 7px', borderRadius: 99, background: 'var(--sage-soft)', color: 'var(--sage-ink)' }}>LIVE</span>
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{v}</span>
+                <button type="button" onClick={function() { removeNowEntry(i); }} disabled={busy} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', flexShrink: 0 }} title="Take down" aria-label={'Take down ' + v}><Icon name="x" size={14} color="currentColor" /></button>
+              </div>;
+            })}
+          </div>}
         </div>;
       })() : null}
 
