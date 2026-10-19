@@ -530,7 +530,7 @@ async function groupsScreen(b) {
     ListPanel: function ListPanel(p) { captured = p; return null; },
     Icon: Stub('Icon'), SkPill: Stub('SkPill'), SkConfirm: Stub('SkConfirm'), NewGroupModal: Stub('NewGroupModal'), CategoriesModal: Stub('CategoriesModal'),
     GroupChatModal: Stub('GroupChatModal'), GroupLeadersModal: Stub('GroupLeadersModal'), EditGroupMembersModal: Stub('EditGroupMembersModal'),
-    KeyDistributor: Stub('KeyDistributor'), useRealMemberCount: () => 5, useStewDialog: () => ({}), groupLiveSub: () => '1 member',
+    KeyDistributor: Stub('KeyDistributor'), useRealMemberCount: () => 5, useStewDialog: () => ({}), useStewNarrow: () => false, groupLiveSub: () => '1 member',
   });
   draw(Comp, {});
   return { Comp, draw, removed, item: () => captured.items.find(x => x.id === 't1'), items: () => captured.items,

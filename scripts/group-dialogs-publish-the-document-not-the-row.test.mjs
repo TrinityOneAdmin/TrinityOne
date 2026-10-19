@@ -1,7 +1,7 @@
 // THE INVITE AND LEADERS DIALOGS MUST PUBLISH THE GROUP DOCUMENT, NOT THE ROW ON SCREEN — AND THE DOCUMENT AS IT IS NOW.
 // Run: node --test scripts/group-dialogs-publish-the-document-not-the-row.test.mjs
 //
-// The desktop row's "Invite · N" and "Leaders" buttons handed the DISPLAY item (whose `sub` is the live string
+// The desktop row's "People · N" and "Leaders" buttons handed the DISPLAY item (whose `sub` is the live string
 // "12 members · invite-only") to EditGroupMembersModal / GroupLeadersModal, which publish `{...group, ...}`;
 // publishGroup writes `sub: group.sub`, so every save overwrote the group's description with the count. And the
 // dialogs held the group as it was when opened, so another steward's change made meanwhile was reverted.
@@ -71,7 +71,7 @@ async function screen() {
     Icon: Stub('Icon'), SkPill: Stub('SkPill'), SkConfirm: Stub('SkConfirm'), SkBadge: Stub('SkBadge'),
     NewGroupModal: Stub('NewGroupModal'), CategoriesModal: Stub('CategoriesModal'),
     GroupChatModal: Stub('GroupChatModal'), KeyDistributor: Stub('KeyDistributor'),
-    useRealMemberCount: () => 5, useStewDialog: () => ({}),
+    useRealMemberCount: () => 5, useStewDialog: () => ({}), useStewNarrow: () => false,   // DashGroups now reads a responsive flag (phase 1 settings panel)
     nameHandle: () => '', shortNpub: () => '', teamPeopleForAllowlist: () => [], publishCareTeamFor: async () => {},
     groupLiveSub: () => '2 members · invite-only',   // the decorated string that replaces the real description in the row
   });
@@ -112,7 +112,7 @@ test('Leaders → Save keeps the group’s own description, not the live count',
 
 test('Invite · N → Save keeps the group’s own description, not the live count', async () => {
   const s = await screen();
-  s.rowButton(/Invite/).props.onClick();
+  s.rowButton(/People/).props.onClick();
   await s.clickSave();
   assert.equal(s.published.length, 1);
   assert.equal(s.published[0].sub, ROOM.sub, 'the description was overwritten with the row’s display string: ' + s.published[0].sub);
@@ -131,7 +131,7 @@ test('Leaders: a child-safe flag set by another steward after the dialog opened 
 
 test('Invite: child-safe and category set by another steward after the dialog opened survive Save', async () => {
   const s = await screen();
-  s.rowButton(/Invite/).props.onClick();
+  s.rowButton(/People/).props.onClick();
   s.redraw();
   s.setGroups([{ ...ROOM, childsafe: true, category: 'kids' }]);
   s.redraw();
@@ -144,7 +144,7 @@ test('Invite: someone another steward removed after the dialog opened is NOT re-
   const s = await screen();
   s.setGroups([{ ...ROOM, encrypted: true }]);
   s.redraw();
-  s.rowButton(/Invite/).props.onClick();
+  s.rowButton(/People/).props.onClick();
   s.redraw();
   s.setGroups([{ ...ROOM, encrypted: true, members: ['aa11'] }]);   // another steward removed bb22
   s.redraw();
@@ -156,7 +156,7 @@ test('Invite: someone another steward removed after the dialog opened is NOT re-
 
 test('Invite: a member another steward added meanwhile is kept', async () => {
   const s = await screen();
-  s.rowButton(/Invite/).props.onClick();
+  s.rowButton(/People/).props.onClick();
   s.redraw();
   s.setGroups([{ ...ROOM, members: ['aa11', 'bb22', 'cc33'] }]);
   s.redraw();
@@ -166,7 +166,7 @@ test('Invite: a member another steward added meanwhile is kept', async () => {
 
 test('Invite: encryption turned on by another steward after open still gets its key, for the new list', async () => {
   const s = await screen();
-  s.rowButton(/Invite/).props.onClick();
+  s.rowButton(/People/).props.onClick();
   s.redraw();
   s.setGroups([{ ...ROOM, encrypted: true }]);
   s.redraw();
@@ -176,7 +176,7 @@ test('Invite: encryption turned on by another steward after open still gets its 
 });
 
 test('Invite and Leaders: a group deleted after the dialog opened is not resurrected, and the steward is told', async () => {
-  for (const which of [/Invite/, /Leaders/]) {
+  for (const which of [/People/, /Leaders/]) {
     const s = await screen();
     s.rowButton(which).props.onClick();
     s.redraw();

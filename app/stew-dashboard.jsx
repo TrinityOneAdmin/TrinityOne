@@ -4492,7 +4492,6 @@ function DashGroups() {
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
   const [settingsFor, setSettingsFor] = React.useState(null);       // APK: group whose settings sheet is open
-  const [iconFor, setIconFor] = React.useState(null);               // WEB: group whose icon picker is open (the APK uses the settings sheet)
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -4542,8 +4541,10 @@ function DashGroups() {
     clearTimeout(undoTimer.current); setUndo(null);
   };
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const stewNarrow = useStewNarrow();   // phone/narrow → the settings panel is a bottom sheet; wide/desktop → a centered dialog
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
   const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
+  const settingsDlgRef = useStewDialog(() => setSettingsFor(null), !!settingsFor);  // a11y: group-settings panel (Escape + focus trap + modal count), now on desktop too
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       {pendingDelete ? (
@@ -4583,26 +4584,24 @@ function DashGroups() {
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
         compact={isNative}
-        renderInline={isNative ? (it) => (
+        /* The settings gear shows on EVERY row. ListPanel only renders renderInline in its compact (native)
+           branch — on the APK the gear sits inline by the name — so the web/desktop row gets its own gear in
+           renderRight below (ListPanel's web branch does not consume renderInline). */
+        renderInline={(it) => (
           <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sliders" size={16} /></button>
-        ) : undefined}
+        )}
+        /* Desktop row, decluttered (PHASE 1): the category select, icon button, child-safe toggle, encrypt
+           toggle and the standalone leader-count pill now live ONLY in the settings panel. The row keeps the
+           read-only Broadcast / Team tags, the People button (invite-only), Leaders (count folded into its
+           label), Chat, and the settings gear — Delete stays in renderAside. */
         renderRight={(it) => isNative ? null : (
           <React.Fragment>
-            {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), 'Couldn\'t move "' + (it.name || 'that group') + '" into that category — the relay didn\'t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-                <option value="">No category</option>
-                {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            ) : null}
-            <button onClick={(e) => { e.stopPropagation(); setIconFor(raw(it)); }} title="Change icon" aria-label={'Change icon for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center' }}><Icon name={groupIcon(it)} size={15} color="currentColor" /></button>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
-            {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn\'t change child-safe on "' + (it.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
-            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can\'t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
             {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(raw(it))} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> People · {(it.members || []).length}</button> : null}
-            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
+            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders{(it.leaders || []).length ? ' · ' + it.leaders.length : ''}</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
+            <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="sliders" size={15} color="currentColor" /> Settings</button>
           </React.Fragment>
         )}
         renderAside={(it) => {
@@ -4640,39 +4639,45 @@ function DashGroups() {
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
       {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
-      {iconFor ? (() => {
-        // WEB console: the same GroupIconPicker + the same publish the APK sheet uses (raw document, only `icon` changed).
-        const g = iconFor;
-        return (
-          <div onClick={() => setIconFor(null)} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
-            <div role="dialog" aria-modal="true" aria-label={'Icon for ' + g.name} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '18px 22px 22px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{g.name}</div>
-                <button onClick={() => setIconFor(null)} title="Close" aria-label="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
-              </div>
-              <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setIconFor({ ...g, icon: ic }); }} />
-            </div>
-          </div>
-        );
-      })() : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
         const sLabel = { display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 };
         const sName = { fontWeight: 700, fontSize: 14 };
         const sSub = { fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.4 };
+        const sFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
+        const sLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
         return (
-          <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-            <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
+          <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: stewNarrow ? 'flex-end' : 'safe center', justifyContent: 'center', ...(stewNarrow ? null : { overflowY: 'auto', padding: 24 }) }}>
+            <div ref={settingsDlgRef} role="dialog" aria-modal="true" aria-label={(g.name || 'Group') + ' settings'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: stewNarrow ? '22px 22px 0 0' : 22, border: stewNarrow ? 'none' : '1px solid var(--line)', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={groupIcon(g)} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{g.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{g.kind === 'team' ? 'Team' : g.kind === 'broadcast' ? 'Broadcast' : 'Group'} settings</div></div>
                 <button onClick={() => setSettingsFor(null)} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
               </div>
 
+              {/* Name + description. Save on blur, publishing against raw(g) — NOT the display row, whose `sub`
+                  groupLiveSub overwrites (see "PUBLISH THE DOCUMENT, NOT THE ROW"). A blank name is never
+                  published (the field snaps back to the current name); names cap at 60 to match the relay's
+                  GROUP_NAMES truncation. onBlur reads e.target.value so a save needs no intervening re-render. */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={sLbl}>NAME</div>
+                <input aria-label="Group name" value={g.name || ''} maxLength={60}
+                  onChange={(e) => setSettingsFor({ ...g, name: e.target.value })}
+                  onBlur={(e) => { const next = (e.target.value || '').trim().slice(0, 60); if (!next) { setSettingsFor({ ...g, name: raw(g).name }); return; } if (next === (raw(g).name || '')) return; pubOr(window.Steward.publishGroup({ ...raw(g), name: next }), 'Couldn’t rename “' + (raw(g).name || 'this group') + '” — the relay didn’t accept it, so it is unchanged.'); setSettingsFor({ ...g, name: next }); }}
+                  style={sFld} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={sLbl}>DESCRIPTION</div>
+                <input aria-label="Group description" value={g.sub || ''} placeholder="Optional — e.g. Whole church"
+                  onChange={(e) => setSettingsFor({ ...g, sub: e.target.value })}
+                  onBlur={(e) => { const next = (e.target.value || '').trim(); if (next === (raw(g).sub || '')) return; pubOr(window.Steward.publishGroup({ ...raw(g), sub: next }), 'Couldn’t update the description — the relay didn’t accept it, so it is unchanged.'); setSettingsFor({ ...g, sub: next }); }}
+                  style={{ ...sFld, fontWeight: 400 }} />
+              </div>
+
               <div style={sToggle}>
                 <div style={sLabel}><Icon name={g.childsafe ? 'check' : 'pray'} size={18} color={g.childsafe ? 'var(--sage)' : 'var(--ink-3)'} /><div><div style={sName}>Child-safe</div><div style={sSub}>{g.childsafe ? 'Members marked as a child can join' : 'Hidden from children'}</div></div></div>
-                <input type="checkbox" className="sw" checked={!!g.childsafe} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe — the relay didn\'t accept it.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
+                <input type="checkbox" className="sw" checked={!!g.childsafe} aria-label={(g.name || 'This group') + ' — child-safe is ' + (g.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe on "' + (g.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
               </div>
 
               <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setSettingsFor({ ...g, icon: ic }); }} />
@@ -4680,7 +4685,7 @@ function DashGroups() {
               {g.kind !== 'team' ? (
                 <div style={sToggle}>
                   <div style={sLabel}><Icon name="lock" size={18} color={g.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>End-to-end encrypted</div><div style={sSub}>{g.encrypted ? 'Sealed — not even the relay can read it' : 'Messages are readable by the relay'}</div></div></div>
-                  <input type="checkbox" className="sw" checked={!!g.encrypted} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
+                  <input type="checkbox" className="sw" checked={!!g.encrypted} aria-label={(g.name || 'This group') + ' — encryption is ' + (g.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
                 </div>
               ) : null}
 

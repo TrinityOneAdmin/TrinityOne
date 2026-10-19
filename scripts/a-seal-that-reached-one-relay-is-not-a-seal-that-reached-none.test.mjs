@@ -234,7 +234,13 @@ async function screen(sealResult) {
     tree = render();
     return r;
   };
-  press(t => /encryption is off/.test(t), 'lock control on the Musicians row');
+  // PHASE 1 (2026-10-19): the lock control moved off the row into the group-settings panel. Open the panel
+  // from the row's settings gear, then flip its encryption checkbox (same toggleEncrypt → confirm path).
+  press(t => /Settings for/.test(t), 'settings gear on the Musicians row');
+  const enc = find(tree, n => n.type === 'input' && (n.props || {}).type === 'checkbox' && /encryption is off/.test((n.props || {})['aria-label'] || ''));
+  assert.equal(enc.length, 1, `re-anchor this test: expected one encryption control in the settings panel, found ${enc.length}`);
+  enc[0].props.onChange();
+  tree = render();
   await press(t => /Seal it/.test(t), '“Seal it” button in the confirm dialog');
   for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0));
   tree = render();

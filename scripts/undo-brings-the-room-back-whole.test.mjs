@@ -71,7 +71,8 @@ async function groupsTab({ publishResult = (g) => Promise.resolve({ ...g, ts: 1 
     NewGroupModal: Stub('NewGroupModal'), CategoriesModal: Stub('CategoriesModal'),
     GroupChatModal: Stub('GroupChatModal'), GroupLeadersModal: Stub('GroupLeadersModal'),
     EditGroupMembersModal: Stub('EditGroupMembersModal'), KeyDistributor: Stub('KeyDistributor'),
-    useRealMemberCount: () => 5, useStewDialog: () => ({}), // the REAL one computes a display string ("2 members · invite-only") that replaces the group's own
+    GroupIconPicker: Stub('GroupIconPicker'),   // the settings panel renders it
+    useRealMemberCount: () => 5, useStewDialog: () => ({}), useStewNarrow: () => false, // the REAL one computes a display string ("2 members · invite-only") that replaces the group's own
     // subtitle in the row. Stub it to do the same, so a control that republishes the ROW instead of the
     // DOCUMENT is caught here rather than on a church's relay.
     groupLiveSub: () => '2 members · invite-only',
@@ -104,7 +105,20 @@ async function groupsTab({ publishResult = (g) => Promise.resolve({ ...g, ts: 1 
     return [captured.renderRight(it), captured.renderAside(it)]
       .flatMap(node => find(node, n => n.type === 'button' && re.test(String((n.props || {}).title || ''))));
   };
-  return { published, redraw, btnByText, btnByTitle, tree: () => tree, captured: () => captured };
+  // PHASE 1 (2026-10-19): child-safe moved off the row into the group-settings panel. Open the panel from the
+  // row's settings gear, then take its child-safe checkbox — the control's new point of use.
+  const childSafeControl = () => {
+    const it = rowItem();
+    const gear = find(captured.renderRight(it), n => n.type === 'button' && /^Settings for /.test(String((n.props || {})['aria-label'] || '')));
+    assert.equal(gear.length, 1, 'the row no longer carries a settings gear to open the panel — re-anchor this test');
+    gear[0].props.onClick();
+    redraw();
+    const box = find(tree, n => n.type === 'input' && (n.props || {}).type === 'checkbox'
+      && /child-safe is (on|off)\./.test(String((n.props || {})['aria-label'] || '')));
+    assert.equal(box.length, 1, 'no child-safe control in the settings panel — re-anchor this test');
+    return box[0];
+  };
+  return { published, redraw, btnByText, btnByTitle, childSafeControl, tree: () => tree, captured: () => captured };
 }
 
 test('CONTROL: the room’s row offers a delete, and deleting offers an Undo', async () => {
@@ -151,9 +165,8 @@ test('A ROW CONTROL THAT DID NOT SAVE SAYS SO INSTEAD OF PAINTING THE NEW STATE'
   // publishGroup resolves null when no relay accepted, and false-y on a partial write. Before the fix every
   // one of these controls discarded that and left the row looking as though it had worked.
   const g = await groupsTab({ publishResult: () => Promise.resolve(null) });
-  const toggle = g.btnByTitle(/child-safe|Child-safe|Hidden from children/);
-  assert.ok(toggle.length, 'no child-safe control on the row — re-anchor this test');
-  await toggle[0].props.onClick();
+  const toggle = g.childSafeControl();
+  await toggle.props.onChange();
   await new Promise(r => setTimeout(r, 5));
   const onScreen = texts(g.redraw()).join(' ');
   assert.match(onScreen, /didn[’']t accept|couldn[’']t|could not/i,
@@ -196,8 +209,8 @@ test('UNDO DOES NOT OVERWRITE THE ROOM’S OWN SUBTITLE WITH A DISPLAY STRING', 
 
 test('…and neither does the child-safe toggle', async () => {
   const g = await groupsTab();
-  const toggle = g.btnByTitle(/child-safe|Child-safe|Hidden from children/);
-  toggle[0].props.onClick();
+  const toggle = g.childSafeControl();
+  toggle.props.onChange();
   await new Promise(r => setTimeout(r, 5));
   assert.equal(g.published[0].sub, 'Weekly prayer for the sick and grieving',
     'toggling child-safe rewrote the group’s subtitle as a member count');

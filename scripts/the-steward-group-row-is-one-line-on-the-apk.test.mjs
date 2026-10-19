@@ -5,13 +5,18 @@
 // icon (a green chat bubble) read as a tappable "open chat" button but was only a type indicator — chat is
 // reached from the group's settings dialog. The APK row is now ONE line: the chat-looking kind icon is gone,
 // a settings gear sits by the NAME (away from the delete button), and the second controls strip is dropped.
-// The WEB console is unchanged (it has ~8 inline controls and no settings dialog to fold them into).
+//
+// PHASE 1 (console group-admin, 2026-10-19): the settings gear now shows on the WEB row too — but through the
+// web controls strip (renderRight), because ListPanel only consumes renderInline in its COMPACT branch. So
+// DashGroups passes renderInline unconditionally (the APK's by-name gear) AND puts a gear in renderRight (the
+// web row's gear); this test models that by passing renderInline always and a gear inside the renderRight strip.
 //
 // Point of use (rule 1), not a text match of the source (rule 3): the REAL ListPanel is sliced from
 // app/stew-dashboard.jsx, compiled with the packaged --jsx=transform, and RENDERED. compact=true is what the
 // native branch passes; compact=false is the web branch. Each assertion fails if its half of the change is
 // reverted: restoring the kind icon in compact makes ICON:chat reappear; deleting the renderInline slot drops
-// the gear; un-gating the controls strip makes WEBCHIP appear in compact.
+// the gear on the APK; un-gating the controls strip makes WEBCHIP appear in compact; dropping the gear from the
+// web controls strip makes GEAR disappear on the web row.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -47,9 +52,11 @@ async function render(compact) {
     title: 'Groups, teams & rooms', addLabel: 'New group', onAdd() {},
     items: [{ id: 'g1', name: 'Main chat', sub: '1 member', ic: 'chat', fg: 'var(--sage)' }],
     compact,
-    renderInline: compact ? () => React.createElement('button', { onClick() {} }, 'GEAR') : undefined,
+    // DashGroups now passes renderInline unconditionally (the APK renders it by the name); the web gear lives
+    // in the renderRight controls strip, since ListPanel only consumes renderInline in its compact branch.
+    renderInline: () => React.createElement('button', { onClick() {} }, 'GEAR'),
     renderAside: () => React.createElement('button', {}, 'TRASH'),
-    renderRight: () => React.createElement('span', {}, 'WEBCHIP'),
+    renderRight: () => React.createElement('span', {}, React.createElement('span', {}, 'WEBCHIP'), React.createElement('button', { onClick() {} }, 'GEAR')),
   };
   return texts(draw(mod.ListPanel, props)).join(' ');
 }
@@ -63,9 +70,9 @@ test('APK (compact): the gear shows, the chat-looking kind icon is gone, the con
   assert.match(t, /1 member/, 'the member count must still show on the compact row');
 });
 
-test('web (not compact): the kind icon stays, there is no inline gear, the controls strip shows', async () => {
+test('web (not compact): the kind icon stays, the controls strip shows, and it now carries the settings gear', async () => {
   const t = await render(false);
   assert.match(t, /ICON:chat/, 'the kind icon must still draw on the web row — the web path must be untouched');
-  assert.doesNotMatch(t, /GEAR/, 'web passes no renderInline, so no inline gear should appear');
   assert.match(t, /WEBCHIP/, 'the web controls strip must still render');
+  assert.match(t, /GEAR/, 'the settings gear must now render on the web row (via the renderRight controls strip)');
 });
