@@ -103,6 +103,25 @@ function devoTplHtml() {
     .replace(/^(Title:|Summary:|Tags:)/gm, '<span class="key">$1</span>');
 }
 
+// ── the reading-plan fill-in block ──
+// A reading plan is flatter than a devotional: a plan name + one Bible reference per day, in order. This is
+// the "full" shape the console's parser (parsePlanFile in app/stew-dashboard.jsx) reads — a "### Day N — Title"
+// line with a "**Read: Reference**" line under it. A bare list of references, one per line, also imports.
+const READPLAN_TPL =
+'# [Plan Name]\n\n' +
+'*[Optional one-line description — shows on the plan card. Delete if not needed.]*\n\n' +
+'### Day 1 — [Short title for the day]\n' +
+'**Read: [Reference, e.g. John 1:1-18]**\n\n' +
+'### Day 2 — [Short title for the day]\n' +
+'**Read: [Reference, e.g. Psalm 23]**\n\n' +
+'( …repeat a Day block for each day of the plan — add as many days as you need… )';
+
+function readPlanTplHtml() {
+  return TMPL_ESC(READPLAN_TPL)
+    .replace(/^(#\s+.+)$/gm, '<span class="key">$1</span>')
+    .replace(/(\*\*Read:[^\n]*\*\*)/g, '<span class="marker">$1</span>');
+}
+
 const HALO_SVG = (sz, color, spark) =>
   `<svg viewBox="0 0 100 100" style="width:${sz}px;height:${sz}px;color:${color}" aria-hidden="true">` +
   `<circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)"/>` +
@@ -241,11 +260,53 @@ function devoDocHtml() {
   </div>`;
 }
 
+// ── the reading-plan contributor doc markup ──
+function readPlanDocHtml() {
+  return `
+  <div class="doc">
+    <div class="top"><span class="pill">${HALO_SVG(13, 'var(--clay-ink)', 'var(--clay-ink)')} Reading plan</span></div>
+    <h1>Reading plan — contributor template</h1>
+    <p class="sub">A reusable template for building a reading plan — one Bible passage for each day — and uploading it to the church. Members start it in their app and track their own progress.</p>
+    <h2>How it works</h2>
+    <ul>
+      <li><b>One file = one plan.</b> Save it as a single <code>.md</code> or <code>.txt</code> file and upload it in Resources › Reading plans (<b>New plan › Upload file</b>), or paste the readings straight into the box there.</li>
+      <li><b>One passage per day, in order.</b> The first reading is Day 1, the next is Day 2, and so on — number them straight through.</li>
+      <li>The first <code>#</code> heading is the plan name. Leave it out and the file name is used instead.</li>
+      <li><b>Markdown.</b> Bold the passage as <code>**Read: Reference**</code>. Avoid tables and raw HTML.</li>
+    </ul>
+    <h2>Two ways to write a plan</h2>
+    <ul>
+      <li><b>Full — with day titles.</b> A <code>### Day N — Title</code> line, then <code>**Read: Reference**</code> on the line under it. The title shows beside the day in the app. This is the block below.</li>
+      <li><b>Simple — just the passages.</b> One Bible reference per line and nothing else — each line becomes the next day. Good for a quick plan with no titles.</li>
+    </ul>
+    <div class="rule">Fill-in block · the full format</div>
+    <div class="block"><pre>${readPlanTplHtml()}</pre></div>
+    <div class="copyrow no-print"><button class="copybtn" onclick="(function(b){navigator.clipboard&&navigator.clipboard.writeText(window.__READPLAN_TPL__||'');b.textContent='Copied';setTimeout(function(){b.textContent='Copy template block'},1400);})(this)">Copy template block</button></div>
+    <h2>Simple list · one reference per line</h2>
+    <div class="block"><pre>John 1:1-18
+Psalm 23
+Isaiah 53
+Luke 15:11-32</pre></div>
+    <h2>House style</h2>
+    <ul>
+      <li><b>Write references the way the Bible reader expects them</b> — <code>Book Chapter</code> for a whole chapter, <code>Book Chapter:verses</code> for part of one (e.g. <code>John 1</code>, <code>Psalm 23</code>, <code>John 1:1-18</code>).</li>
+      <li><b>One passage per day.</b> Keep each day a comfortable sitting — a chapter or a short section, not a whole book.</li>
+      <li><b>Keep the day title short</b> if you use one — it sits on one line in the app.</li>
+    </ul>
+    <h2>Before you share</h2>
+    <div class="check"><span class="b"></span> A plan name (the <code>#</code> heading, or the file name)</div>
+    <div class="check"><span class="b"></span> One reading per day, numbered straight through</div>
+    <div class="check"><span class="b"></span> Every passage opens in the Bible reader</div>
+    <div class="check"><span class="b"></span> No tables or raw HTML</div>
+  </div>`;
+}
+
 // open a clean popup containing the generated document (+ the brand tokens the CSS depends on)
 function tmplOpen(innerHtml, title, { autoPrint = false, injectTpl = false } = {}) {
   const w = window.open('', '_blank', 'width=900,height=1100');
   if (!w) { alert('Allow pop-ups to generate this document.'); return; }
-  const tplJs = injectTpl ? `<script>window.__DEVO_TPL__=${JSON.stringify(DEVO_TPL)};<\/script>` : '';
+  // inject both fill-in blocks; each doc's "Copy template block" button reads the one it needs
+  const tplJs = injectTpl ? `<script>window.__DEVO_TPL__=${JSON.stringify(DEVO_TPL)};window.__READPLAN_TPL__=${JSON.stringify(READPLAN_TPL)};<\/script>` : '';
   const printJs = autoPrint ? `<script>setTimeout(function(){window.focus();window.print();},350);<\/script>` : '';
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${TMPL_ESC(title)}</title>
     <link rel="stylesheet" href="vendor/fonts/fonts.css"/>
@@ -260,6 +321,7 @@ function tmplOpen(innerHtml, title, { autoPrint = false, injectTpl = false } = {
 
 window.TrinityTemplates = {
   DEVO_TPL,
+  READPLAN_TPL,
   // Print a polished A4 join invite (church QR + steps + blank recovery grid). Auto-opens print dialog.
   printInviteSheet({ name, tag, url, qrSvg } = {}) {
     tmplOpen(inviteSheetHtml({ name, tag, url, qrSvg }), (name || 'TrinityOne') + ' — invite', { autoPrint: true });
@@ -275,4 +337,10 @@ window.TrinityTemplates = {
   openDevoTemplate() {
     tmplOpen(devoDocHtml(), 'Devotional template', { injectTpl: true });
   },
+  // Open the reading-plan contributor template (readable + copyable + printable). No auto-print.
+  openReadPlanTemplate() {
+    tmplOpen(readPlanDocHtml(), 'Reading plan template', { injectTpl: true });
+  },
+  // Exposed so a test can read the generated reading-plan doc (CLAUDE.md §3: don't text-match the unbundled source).
+  readPlanDocHtml,
 };
