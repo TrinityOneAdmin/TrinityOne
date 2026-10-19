@@ -98,12 +98,18 @@ async function groupsTab({ publishResult = (g) => Promise.resolve({ ...g, ts: 1 
       'document — re-anchor it rather than deleting it');
     return it;
   };
+  // PHASE 1 (2026-10-19): the row no longer carries a delete bin — delete moved into the settings panel.
+  // Open the panel from the row's settings gear and return its Delete control (a role=button div with an
+  // aria-label), so the delete-then-undo flow below drives the control at its new point of use. `re` is kept
+  // for signature compatibility; the callers all want the group-delete control, which the panel labels "Delete group".
   const btnByTitle = (re) => {
-    assert.ok(captured && typeof captured.renderRight === 'function' && typeof captured.renderAside === 'function',
-      'the Groups tab no longer renders rows through ListPanel’s renderRight/renderAside — re-anchor this test');
+    assert.ok(captured && typeof captured.renderRight === 'function', 'the Groups tab no longer renders rows through ListPanel’s renderRight — re-anchor this test');
     const it = rowItem();
-    return [captured.renderRight(it), captured.renderAside(it)]
-      .flatMap(node => find(node, n => n.type === 'button' && re.test(String((n.props || {}).title || ''))));
+    const gear = find(captured.renderRight(it), n => n.type === 'button' && /^Settings for /.test(String((n.props || {})['aria-label'] || '')));
+    assert.equal(gear.length, 1, 'the row no longer carries a settings gear to open the panel — re-anchor this test');
+    gear[0].props.onClick();
+    redraw();
+    return find(tree, n => /^Delete group /.test(String((n.props || {})['aria-label'] || '')));
   };
   // PHASE 1 (2026-10-19): child-safe moved off the row into the group-settings panel. Open the panel from the
   // row's settings gear, then take its child-safe checkbox — the control's new point of use.
@@ -121,7 +127,7 @@ async function groupsTab({ publishResult = (g) => Promise.resolve({ ...g, ts: 1 
   return { published, redraw, btnByText, btnByTitle, childSafeControl, tree: () => tree, captured: () => captured };
 }
 
-test('CONTROL: the room’s row offers a delete, and deleting offers an Undo', async () => {
+test('CONTROL: the settings panel offers a delete, and deleting offers an Undo', async () => {
   const g = await groupsTab();
   const del = g.btnByTitle(/Remove group/);
   assert.equal(del.length, 1, `expected exactly one delete control on the row, found ${del.length} — re-anchor`);

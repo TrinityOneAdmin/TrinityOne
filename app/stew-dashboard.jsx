@@ -3694,9 +3694,9 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
               {compact
                 ? <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, overflow: 'hidden' }}><span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{it.name}</span>{renderInline ? <span style={{ flexShrink: 0, display: 'flex' }}>{renderInline(it)}</span> : null}{it.sub ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>· {it.sub}</span> : null}</div>
                 : <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>}
+              {renderRight && !compact ? <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>{renderRight(it)}</div> : null}
               {renderAside ? <div style={{ flexShrink: 0 }}>{renderAside(it)}</div> : null}
             </div>
-            {renderRight && !compact ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: canDrag ? 82 : 51 }}>{renderRight(it)}</div> : null}
           </div>
           );
         })}
@@ -4628,16 +4628,7 @@ function DashGroups() {
             <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="sliders" size={15} color="currentColor" /> Settings</button>
           </React.Fragment>
         )}
-        renderAside={(it) => {
-          // THE CARE TEAM IS NOT OFFERED FOR DELETION (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE
-          // DELETED"), here as on the Rota page: disabled, with the reason in the tooltip and in the label a
-          // screen reader reads, rather than a confirm dialog that cannot complete. `careTeamId` comes from the
-          // shared removal flow (useTeamRemoval), and TeamRemoval.ask and Steward.removeTeam refuse it as well.
-          const noCare = it.kind === 'team' && !!trs.careTeamId && it.id === trs.careTeamId;
-          return (
-          <button onClick={() => (it.kind === 'team' && window.TeamRemoval ? window.TeamRemoval.ask(it) : setPendingDelete(it))} disabled={noCare} title={noCare ? (trs.careWhy || '') : (it.kind === 'team' ? 'Remove team' : 'Remove group')} aria-label={(it.kind === 'team' ? 'Remove team ' : 'Remove group ') + (it.name || '') + (noCare ? ' — ' + (trs.careWhy || '') : '')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: noCare ? 'default' : 'pointer', opacity: noCare ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-          );
-        }} />
+        />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {catsOpen ? <CategoriesModal cats={cats} groups={all} onClose={() => setCatsOpen(false)} /> : null}
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
@@ -4740,9 +4731,20 @@ function DashGroups() {
                 <Icon name="chevR" size={16} color="var(--ink-3)" />
               </div>
 
-              <div style={{ ...sToggle, borderBottom: 'none', cursor: 'pointer' }} onClick={() => { setPendingDelete(raw(g)); setSettingsFor(null); }}>
-                <div style={sLabel}><Icon name="trash" size={18} color="var(--clay-ink)" /><div><div style={{ ...sName, color: 'var(--clay-ink)' }}>Delete {g.kind === 'team' ? 'team' : 'group'}</div></div></div>
-              </div>
+              {(() => {
+                // Delete lives ONLY here now (the row bin was removed). The care team is never offered for
+                // deletion (reference/DOMAIN.md "CARE TEAM CANNOT BE DELETED"); a team routes through the
+                // shared TeamRemoval flow, everything else through the group-delete confirm.
+                const noCareG = g.kind === 'team' && !!trs.careTeamId && g.id === trs.careTeamId;
+                return (
+                <div style={{ ...sToggle, borderBottom: 'none', cursor: noCareG ? 'default' : 'pointer', opacity: noCareG ? 0.55 : 1 }}
+                  role="button" tabIndex={noCareG ? -1 : 0} aria-disabled={noCareG || undefined}
+                  aria-label={(g.kind === 'team' ? 'Delete team ' : 'Delete group ') + (g.name || '') + (noCareG ? ' \u2014 ' + (trs.careWhy || 'the care team cannot be deleted') : '')}
+                  onClick={noCareG ? undefined : () => { if (g.kind === 'team' && window.TeamRemoval) { window.TeamRemoval.ask(raw(g)); } else { setPendingDelete(raw(g)); } setSettingsFor(null); }}>
+                  <div style={sLabel}><Icon name="trash" size={18} color={noCareG ? 'var(--ink-3)' : 'var(--clay-ink)'} /><div><div style={{ ...sName, color: noCareG ? 'var(--ink-3)' : 'var(--clay-ink)' }}>Delete {g.kind === 'team' ? 'team' : 'group'}</div>{noCareG ? <div style={sSub}>{trs.careWhy || 'The care team cannot be deleted.'}</div> : null}</div></div>
+                </div>
+                );
+              })()}
             </div>
           </div>
         );

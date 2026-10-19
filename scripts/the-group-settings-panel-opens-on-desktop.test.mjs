@@ -165,12 +165,11 @@ test('DESKTOP (regression): child-safe is still reachable from the panel and pub
   assert.equal(s.published[0].childsafe, true, 'child-safe was not flipped on');
 });
 
-test('DESKTOP row is decluttered: People, Leaders, Chat, gear + Delete + read-only status; the CLICKABLE toggles are gone', async () => {
+test('DESKTOP row is decluttered: People, Leaders, Chat, gear + read-only status; the CLICKABLE toggles AND the delete bin are gone', async () => {
   const s = await screen();
   const it = s.row();   // ROOM: not child-safe, not encrypted, invite-only
   const rightNode = s.captured().renderRight(it);
   const right = texts(rightNode).join(' ').replace(/\s+/g, ' ');   // normalise: join()/separate text nodes add spaces
-  const aside = texts(s.captured().renderAside(it)).join(' ').replace(/\s+/g, ' ');
   // KEPT ('.' tolerates the middle-dot separator char)
   assert.match(right, /People . 2/, 're-anchor: the invite-only People button is gone, so the checks below are vacuous');
   assert.match(right, /Leaders . 1/, 'the Leaders button must stay and fold in its count');
@@ -178,7 +177,8 @@ test('DESKTOP row is decluttered: People, Leaders, Chat, gear + Delete + read-on
   // the row slots are read unexpanded, so the Icon's `name` prop stands in for the rendered glyph
   assert.match(right, /sliders/, 'the Settings gear (sliders icon) must render on the desktop row');
   assert.match(right, /Settings/, 'the Settings gear must be labelled for the desktop row');
-  assert.match(aside, /trash/, 'Delete (trash icon) must stay in renderAside');
+  assert.equal(s.captured().renderAside, undefined, 'the row still passes a renderAside (the delete bin) — delete must live ONLY in the Settings panel now');
+  assert.doesNotMatch(right, /trash/, 'the delete bin is still on the desktop row — it moved into the panel');
   // READ-ONLY status is back (ROOM is not child-safe → "Adults only")
   assert.match(right, /Adults only/, 'the read-only child-safe status indicator is missing from the row');
   // REMOVED: the clickable action TOGGLES moved into the panel (cats is non-empty, so the OLD row would have shown a <select>)

@@ -80,8 +80,8 @@ async function screen() {
   const rowButton = (re) => {
     const it = captured.items.find(x => x.id === ROOM.id);
     assert.notEqual(it.sub, ROOM.sub, 'the row is no longer decorated — re-anchor this test');
-    const hits = [captured.renderRight(it), captured.renderAside(it)]
-      .flatMap(n => find(n, b => b.type === 'button' && re.test(texts(b).join(' '))));
+    const hits = [captured.renderRight(it), captured.renderAside ? captured.renderAside(it) : null]
+      .flatMap(n => n ? find(n, b => b.type === 'button' && re.test(texts(b).join(' '))) : []);
     assert.equal(hits.length, 1, `expected one row button matching ${re}, found ${hits.length} — re-anchor`);
     return hits[0];
   };
