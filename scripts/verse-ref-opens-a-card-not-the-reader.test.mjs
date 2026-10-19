@@ -1,16 +1,18 @@
-// A SCRIPTURE REFERENCE OPENS A CARD OVER THE PLAN/DEVOTIONAL — IT DOES NOT NAVIGATE TO THE READER.
+// A DEVOTIONAL SCRIPTURE REFERENCE OPENS A CARD — AND A READING-PLAN DAY STILL OPENS THE FULL READER.
 // Run: node --test scripts/verse-ref-opens-a-card-not-the-reader.test.mjs
 //
-// Owner 2026-10-18: the verse card is CARD-ONLY ("never leave the plan"). CLAUDE.md rules 1 and 3: this draws
-// the REAL DevoRefChip and the REAL PlanDetail (app/screens-plans.jsx, compiled with esbuild) through the REAL
+// Owner 2026-10-18 (revised after review): the verse card is for DEVOTIONALS only and is CARD-ONLY ("never
+// leave the devotional"). A reading-plan day is "go read the whole chapter", so a plan day row KEEPS opening
+// the full Bible reader via ctx.openPlanDay — no card there. CLAUDE.md rules 1 and 3: this draws the REAL
+// DevoRefChip and the REAL PlanDetail (app/screens-plans.jsx, compiled with esbuild) through the REAL
 // BottomSheet (app/ui.jsx) in scripts/render-jsx-screen.mjs, and fires the real onClick handlers. Nothing
 // asserts by matching source text. The card resolves the reference from the (stubbed) window.Bible exactly as
 // the shipped DevoVerseSheet does.
 //
-// Users of the shared code (rule 2): DevoRefChip (two call sites — DevoDayReader and the plain ChurchDevoView),
-// PlanDetail's day rows (which used to call ctx.openPlanDay and now open the card), and the new file-local
-// DevoVerseSheet. The navigation methods this replaces — ctx.openPlanDay, ctx.gotoRef, ctx.openChurchDevo —
-// must NOT be called; that is the proof the card does not leave the plan.
+// Users of the shared code (rule 2): DevoRefChip (two call sites — DevoDayReader and the plain ChurchDevoView)
+// now opens the file-local DevoVerseSheet card instead of navigating. The card's navigation-free promise is
+// pinned by asserting ctx.gotoRef / ctx.openChurchDevo are NOT called. PlanDetail is UNCHANGED (reverted): its
+// day rows still call ctx.openPlanDay to open the reader — pinned here so the revert cannot silently regress.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
@@ -21,6 +23,7 @@ const Passthrough = function Overlay({ children }) { return children === undefin
 function bibleStub() {
   return {
     activeVersion: 'WEB',
+    books: () => [43],
     parseRef: (r) => {
       const m = /^([\dA-Za-z ]+?)\s+(\d+)(?::(\d+)(?:-(\d+))?)?$/.exec(String(r).trim());
       if (!m) return null;
@@ -103,18 +106,17 @@ test('the explicit X closes the card', () => {
 const PLAN = { id: 'p1', title: 'John', sub: '3 days', len: 3,
   days: [{ d: 1, label: 'Day 1', ref: 'John 3:16-17' }, { d: 2, label: 'Day 2', ref: 'John 2' }, { d: 3, label: 'Day 3', ref: 'John 3' }] };
 
-test('a reading-plan day row opens the SAME card over the plan, and does not open the reader', () => {
+test('a reading-plan day row opens the FULL READER (ctx.openPlanDay) — not a card (revert pinned)', () => {
   const w = world();
-  const ctx = { planProgress: {}, _opd: 0, _goto: 0, openPlanDay() { ctx._opd++; }, togglePlanDay() {}, gotoRef() { ctx._goto++; }, toast() {} };
-  const render = () => w.draw(w.PlanDetail, { plan: PLAN, open: true, onClose() {}, ctx });
+  let closed = 0;
+  const ctx = { planProgress: {}, _opd: 0, _day: null, openPlanDay(p, d) { ctx._opd++; ctx._day = d; }, togglePlanDay() {}, toast() {} };
+  const render = () => w.draw(w.PlanDetail, { plan: PLAN, open: true, onClose() { closed++; }, ctx });
 
-  let t = render();
-  const row = find(t, n => n.type === 'div' && n.props.onClick && texts(n).join(' ').includes('John 3:16-17'));
+  const row = find(render(), n => n.type === 'div' && n.props.onClick && texts(n).join(' ').includes('John 3:16-17'));
   assert.equal(row.length, 1, 'no single Day 1 row');
   row[0].props.onClick();
 
-  const words = texts(render()).join(' ');
-  assert.ok(words.includes('For God so loved the world'), 'the plan day card has no verse text');
-  assert.equal(ctx._opd, 0, 'the plan day opened the reader (ctx.openPlanDay) instead of the card');
-  assert.equal(ctx._goto, 0, 'the plan day navigated (ctx.gotoRef) instead of the card');
+  assert.equal(ctx._opd, 1, 'a plan day did NOT open the reader via ctx.openPlanDay');
+  assert.equal(ctx._day && ctx._day.d, 1, 'the reader opened the wrong plan day');
+  assert.ok(!texts(render()).join(' ').includes('For God so loved the world'), 'a plan day opened a verse card instead of the reader');
 });

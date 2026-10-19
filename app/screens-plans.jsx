@@ -332,36 +332,16 @@ function PlansScreen({ ctx }) {
 
 // ── plan detail overlay ──
 function PlanDetail({ plan, open, onClose, ctx }) {
-  // The day's reading opens as a CARD over the plan (owner 2026-10-18: card-only, "never leave the plan"),
-  // and a day row can be swiped RIGHT to mark it read. PLAN_SWIPE_* and the swipe ref are file-local — a
-  // duplicate top-level name across two classic-script app files blanks the whole APK — and the hooks are
-  // ABOVE the early return so hook order is stable (no-hook-after-early-return guard).
-  const PLAN_SWIPE_MIN = 60, PLAN_SWIPE_DOMINANCE = 1.7;
-  const [cardDay, setCardDay] = React.useState(null);
-  const planSwipe = React.useRef(null);
   if (!plan) return null;
   const doneSet = new Set(doneDays(ctx, plan.id));
   const today = plan.days.find(d => !doneSet.has(d.d));
   const pct = plan.len ? doneSet.size / plan.len : 0;
 
-  // tap a day → open its reading as a card; never navigates to the reader.
-  const openDay = (d) => setCardDay(d);
-  // Reading plans are a LIST, not a one-at-a-time view, so there is no "next/previous day" to navigate to:
-  // the fitting gesture is swipe-a-row-RIGHT to mark that day read (ctx.togglePlanDay, NEVER un-mark, matching
-  // the owner's "right = mark read"). A LEFT swipe has no target in a list and is intentionally a no-op so it
-  // never changes read status. The tick button stays as the accessible non-swipe path.
-  const onRowSwipeStart = (d) => (e) => {
-    if (!e.touches || e.touches.length !== 1) { planSwipe.current = null; return; }
-    planSwipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, d: d.d, done: doneSet.has(d.d) };
-  };
-  const onRowSwipeMove = (e) => { if (e.touches && e.touches.length > 1) planSwipe.current = null; };
-  const onRowSwipeEnd = (e) => {
-    const s = planSwipe.current; planSwipe.current = null;
-    if (!s || (e.touches && e.touches.length) || !e.changedTouches || !e.changedTouches.length) return;
-    const dx = e.changedTouches[0].clientX - s.x, dy = e.changedTouches[0].clientY - s.y;
-    if (Math.abs(dx) < PLAN_SWIPE_MIN || Math.abs(dx) < Math.abs(dy) * PLAN_SWIPE_DOMINANCE) return;
-    try { const t = window.getSelection && window.getSelection(); if (t && String(t).trim()) return; } catch (err) {}
-    if (dx > 0 && !s.done) ctx.togglePlanDay(plan.id, s.d);   // right: mark read, never un-mark; left: no target
+  const openDay = (d) => {
+    const loc = window.Bible.parseRef(d.ref);
+    if (!loc) { ctx.toast('Could not open ' + d.ref); return; }
+    if (!window.Bible.books().includes(loc.book)) { ctx.toast(d.ref + ' isn’t in this translation'); return; }
+    onClose(); ctx.openPlanDay(plan, d);   // opens the reader WITH the plan context, so the reader can offer Mark done / Next
   };
 
   return (
@@ -386,7 +366,7 @@ function PlanDetail({ plan, open, onClose, ctx }) {
           const isDone = doneSet.has(d.d);
           const isToday = today && d.d === today.d;
           return (
-            <div key={d.d} onClick={() => openDay(d)} onTouchStart={onRowSwipeStart(d)} onTouchMove={onRowSwipeMove} onTouchEnd={onRowSwipeEnd} style={{
+            <div key={d.d} onClick={() => openDay(d)} style={{
               display: 'flex', alignItems: 'center', gap: 14, padding: '13px 14px', marginBottom: 9,
               borderRadius: 18, background: isToday ? 'var(--clay-soft)' : 'var(--surface)',
               border: isToday ? '1.5px solid var(--clay)' : '1px solid var(--line)', cursor: 'pointer',
@@ -410,7 +390,6 @@ function PlanDetail({ plan, open, onClose, ctx }) {
           );
         })}
       </div>
-      <DevoVerseSheet refStr={cardDay ? cardDay.ref : null} open={!!cardDay} onClose={() => setCardDay(null)} />
     </Overlay>
   );
 }

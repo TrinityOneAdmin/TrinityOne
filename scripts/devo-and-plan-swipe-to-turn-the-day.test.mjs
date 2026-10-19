@@ -1,19 +1,16 @@
-// SWIPE RIGHT = MARK READ + NEXT, SWIPE LEFT = PREVIOUS — ON THE DEVOTIONAL DAY VIEW AND A PLAN DAY ROW.
+// DEVOTIONAL DAY VIEW: SWIPE RIGHT = MARK READ + NEXT, SWIPE LEFT = PREVIOUS. (Reading plans get NO swipe.)
 // Run: node --test scripts/devo-and-plan-swipe-to-turn-the-day.test.mjs
 //
-// Owner 2026-10-18: right marks the day read (NEVER un-marks) and advances; left goes back (navigation only,
-// never changes read status). CLAUDE.md rules 1 and 3: this draws the REAL DevoDayReader and the REAL
-// PlanDetail (app/screens-plans.jsx, compiled with esbuild) through scripts/render-jsx-screen.mjs and fires the
-// real touch handlers on the real scroll container / day row. The mark-read methods are SLICED OUT of
-// app/app.jsx and run, not re-implemented, so the done-list is the shipped logic.
+// Owner 2026-10-18 (revised after review): the swipe-to-turn-the-day gesture is for DEVOTIONALS only. A
+// reading plan is a list of "go read the whole chapter" days and gets no swipe — that half was reverted, so
+// this file now covers only DevoDayReader. CLAUDE.md rules 1 and 3: this draws the REAL DevoDayReader
+// (app/screens-plans.jsx, compiled with esbuild) through scripts/render-jsx-screen.mjs and fires the real
+// touch handlers on the real scroll container. ctx.toggleDevoDay is SLICED OUT of app/app.jsx and run, not
+// re-implemented, so the done-list is the shipped logic.
 //
 // Users of the shared code (rule 2): ctx.toggleDevoDay (the devotional mark-read button AND now the devo-day
-// swipe), ctx.togglePlanDay (the plan-day tick AND now the plan-row swipe), ctx.openChurchDevoDay (the devo
-// prev/next buttons AND now the devo swipe). DevoDayReader and PlanDetail are the only renderers.
-//
-// The reading plan is a LIST, not a one-at-a-time view: it has no "next/previous day" to navigate to, so the
-// gesture that fits is swipe-a-row-RIGHT to mark that day read. A LEFT swipe on a row has no target and is a
-// deliberate no-op (it must never change read status).
+// swipe), ctx.openChurchDevoDay (the devo prev/next buttons AND now the devo swipe). DevoDayReader is the only
+// renderer.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -42,7 +39,7 @@ function harness() {
     history: { back() {}, pushState() {}, replaceState() {}, state: null }, fetch: async () => ({ ok: false, json: async () => ({}) }) };
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const { BottomSheet, IconBtn } = loadScreen('app/ui.jsx', ['BottomSheet', 'IconBtn'], { ...base, Icon, PhoneFrame() { return null; } });
-  const screen = loadScreen('app/screens-plans.jsx', ['DevoDayReader', 'PlanDetail'],
+  const screen = loadScreen('app/screens-plans.jsx', ['DevoDayReader'],
     { React, window: win, Icon, IconBtn, BottomSheet, Overlay: Passthrough });
   return { React, draw, win, ...screen };
 }
@@ -55,7 +52,6 @@ function drag(el, dx, dy, opts) {
   el.props.onTouchEnd({ changedTouches: [{ clientX: 100 + dx, clientY: 300 + dy }] });
 }
 
-// ─────────────────────────── devotional one-day view ───────────────────────────
 function devoWorld(progress) {
   const h = harness();
   const st = { devos: progress ? { d1: progress.slice() } : {} };
@@ -105,41 +101,4 @@ test('devo: a short, a mostly-vertical, and a text-selection drag all do nothing
   w = devoWorld(); w.h.win.getSelection = () => ({ toString: () => 'copied verse' });
   drag(w.scroll(1), 80, 0);
   assert.deepEqual([w.st.devos, w.opened], [{}, []], 'a drag that left text selected turned the day');
-});
-
-// ─────────────────────────── reading-plan day rows ───────────────────────────
-function planWorld(done) {
-  const h = harness();
-  const st = { plans: done ? { p1: done.slice() } : {} };
-  const settings = { get: (k, d) => (k === 'plans' ? st.plans : d), set: (k, v) => { if (k === 'plans') st.plans = v; } };
-  const togglePlanDay = liftFn('togglePlanDay', { MD: { settings } });
-  const plan = { id: 'p1', title: 'J', sub: '', len: 3, days: [{ d: 1, label: 'Day 1', ref: 'John 1' }, { d: 2, label: 'Day 2', ref: 'John 2' }, { d: 3, label: 'Day 3', ref: 'John 3' }] };
-  const ctx = { get planProgress() { return st.plans; }, togglePlanDay, openPlanDay() {}, toast() {} };
-  const rows = () => swipeable(h.draw(h.PlanDetail, { plan, open: true, onClose() {}, ctx }));
-  return { h, st, rows };
-}
-
-test('plan: swipe a day row RIGHT marks that day read through the shipped togglePlanDay', () => {
-  const w = planWorld();
-  drag(w.rows()[0], 80, 0);            // Day 1
-  assert.deepEqual(w.st.plans, { p1: [1] }, 'swiping a row right did not mark the day read');
-});
-
-test('plan: swipe a day row LEFT changes nothing (no navigation target in a list)', () => {
-  const w = planWorld();
-  drag(w.rows()[0], -80, 0);
-  assert.deepEqual(w.st.plans, {}, 'a left swipe on a plan row changed read status');
-});
-
-test('plan: swipe RIGHT on an already-read row NEVER un-marks it', () => {
-  const w = planWorld([1]);
-  drag(w.rows()[0], 80, 0);
-  assert.deepEqual(w.st.plans, { p1: [1] }, 'a right swipe un-marked an already-read day');
-});
-
-test('plan: a short / mostly-vertical drag on a row does nothing', () => {
-  let w = planWorld(); drag(w.rows()[0], 30, 0);
-  assert.deepEqual(w.st.plans, {}, 'a short drag marked the day');
-  w = planWorld(); drag(w.rows()[0], 80, 80);
-  assert.deepEqual(w.st.plans, {}, 'a mostly-vertical drag marked the day');
 });
