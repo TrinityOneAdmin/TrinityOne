@@ -3348,6 +3348,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   const [groupsOpen, setGroupsOpen] = React.useState(true);   // the Groups & rooms card's body, folded by its header chevron
   const [activityOpen, setActivityOpen] = React.useState(true);   // likewise the Recent activity card
+  const [signupsOpen, setSignupsOpen] = React.useState(true);   // the "People have signed up to help" card's name lines; its chevron folds them away (one flag, all three layouts)
   const [joinOpen, setJoinOpen] = React.useState(true);   // the Joining code card's body; the chevron in its header folds it away
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3416,9 +3417,13 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>People have signed up to help</div>
-        {careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>)}
+        {signupsOpen ? careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>) : null}
       </div>
-      <Icon name="chevR" size={15} color="var(--ink-3)" />
+      {/* a span, not a button: the whole card is already a button, and a button inside a button is invalid. stopPropagation so folding does not also open Care. */}
+      <span role="button" tabIndex={0} aria-expanded={signupsOpen} aria-label={signupsOpen ? 'Collapse sign-ups' : 'Expand sign-ups'} title={signupsOpen ? 'Collapse' : 'Expand'}
+        onClick={(e) => { e.stopPropagation(); setSignupsOpen(o => !o); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setSignupsOpen(o => !o); } }}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 40, height: 40, margin: '-10px -10px -10px 0', borderRadius: 999, cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name={signupsOpen ? 'chevD' : 'chevU'} size={18} color="currentColor" /></span>
     </button>
   ) : null;
   const careReqBanner = (openCareReqs || careNewMsgs) ? (
