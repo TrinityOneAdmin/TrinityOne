@@ -80,10 +80,10 @@ const TMPL_ESC = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replac
 // ── the devotional fill-in block (verbatim from the design) ──
 const DEVO_TPL =
 '══════════════════ WEEK [N] — COPY FROM HERE ══════════════════\n\n' +
-'Title: [Series Name] — Week [N]: [Week Theme]\n' +
+'Title: [Plan Name] — Week [N]: [Week Theme]\n' +
 'Summary: [One or two sentences describing this week. Shows in previews and feeds.]\n' +
 'Tags: [topic], [topic], [topic]\n\n' +
-'# [Series Name] — Week [N]: [Week Theme]\n\n' +
+'# [Plan Name] — Week [N]: [Week Theme]\n\n' +
 '*[Optional one-paragraph intro for the week, in italics. Delete if not needed.]*\n\n' +
 '### Day [X] — [Short, vivid title]\n' +
 '**[Scripture reference, e.g. Book 1:1–5]**\n\n' +
@@ -101,6 +101,26 @@ function devoTplHtml() {
   return TMPL_ESC(DEVO_TPL)
     .replace(/(══+[^\n]*══+)/g, '<span class="marker">$1</span>')
     .replace(/^(Title:|Summary:|Tags:)/gm, '<span class="key">$1</span>');
+}
+
+// ── the reading-plan fill-in block ──
+// A reading plan is flatter than a devotional: a plan name + one Bible reference per day, in order. This is
+// the "full" shape the console's parser (parsePlanFile in app/stew-dashboard.jsx) reads — a "### Day N — Title"
+// line with a "**Read: Reference**" line under it. A bare list of references, one per line, also imports.
+const READPLAN_TPL =
+'# [Plan Name]\n\n' +
+'*[Optional one-line description — shows on the plan card. Delete if not needed.]*\n\n' +
+'## Series 1 of "[Optional tag — groups this plan under a label, e.g. Lent. Delete this line if not needed.]"\n\n' +
+'### Day 1 — [Short title for the day]\n' +
+'**Read: [Reference, e.g. John 1:1-18]**\n\n' +
+'### Day 2 — [Short title for the day]\n' +
+'**Read: [Reference, e.g. Psalm 23]**\n\n' +
+'( …repeat a Day block for each day of the plan — add as many days as you need… )';
+
+function readPlanTplHtml() {
+  return TMPL_ESC(READPLAN_TPL)
+    .replace(/^(#\s+.+)$/gm, '<span class="key">$1</span>')
+    .replace(/(\*\*Read:[^\n]*\*\*)/g, '<span class="marker">$1</span>');
 }
 
 const HALO_SVG = (sz, color, spark) =>
@@ -186,7 +206,7 @@ function devoDocHtml() {
   <div class="doc">
     <div class="top"><span class="pill">${HALO_SVG(13, 'var(--clay-ink)', 'var(--clay-ink)')} Long-form · NIP-23</span></div>
     <h1>Devotional series — contributor template</h1>
-    <p class="sub">A reusable template for writing a weekly devotional series and posting it to the church as long-form content. Copy the block, fill it in, post one week at a time. The app splits it into day-by-day reading for members.</p>
+    <p class="sub">A reusable template for writing a devotional plan and posting it to the church as long-form content. Copy the block for each week into one file, fill it in, and upload that file as a single plan. The app splits it into day-by-day reading for members.</p>
     <h2>How it works</h2>
     <ul>
       <li><b>One week = one block.</b> A full series is several weeks pasted one after another into a single <code>.md</code> file, then uploaded in Resources › Devotionals.</li>
@@ -201,6 +221,25 @@ function devoDocHtml() {
       <li><b>One Scripture per day</b>, bolded under the title. Reference and paraphrase rather than quoting long passages.</li>
       <li><b>End each day with a single italic closing line</b> — a question, a challenge, or a one-line prayer.</li>
       <li>Pick the number of days per week (7 default; fewer is fine).</li>
+    </ul>
+    <h2>Numbering</h2>
+    <ul>
+      <li>Number weeks 1, 2, 3 straight through the file. Never restart inside one file.</li>
+      <li>Number days straight through the file too (Day 7, then Day 8 in Week 2). Weeks can have fewer than 7 days; keep counting.</li>
+      <li>Joining several series into one file? Keep numbers running and put the series name in the week theme.</li>
+    </ul>
+    <h2>Title</h2>
+    <ul>
+      <li>Format: <code>[Plan Name] — Week [N]: [Week Theme]</code></li>
+      <li>The app list shows only "Week N · Theme", so make the theme clear on its own.</li>
+    </ul>
+    <h2>Bulk upload</h2>
+    <ul>
+      <li>One file is one plan. Name files so they sort in order (01-..., 02-...).</li>
+      <li>In Resources › Devotionals, choose Bulk upload and select all files.</li>
+      <li>Check the preview, then confirm. Each file becomes its own plan.</li>
+      <li>Numbering restarts in each file.</li>
+      <li>Every week must sit between the <code>COPY FROM HERE / COPY TO HERE</code> markers.</li>
     </ul>
     <div class="rule">Fill-in block · copy for each week</div>
     <div class="block"><pre>${devoTplHtml()}</pre></div>
@@ -222,11 +261,54 @@ function devoDocHtml() {
   </div>`;
 }
 
+// ── the reading-plan contributor doc markup ──
+function readPlanDocHtml() {
+  return `
+  <div class="doc">
+    <div class="top"><span class="pill">${HALO_SVG(13, 'var(--clay-ink)', 'var(--clay-ink)')} Reading plan</span></div>
+    <h1>Reading plan — contributor template</h1>
+    <p class="sub">A reusable template for building a reading plan — one Bible passage for each day — and uploading it to the church. Members start it in their app and track their own progress.</p>
+    <h2>How it works</h2>
+    <ul>
+      <li><b>One file = one plan.</b> Save it as a single <code>.md</code> or <code>.txt</code> file and upload it in Resources › Reading plans (<b>New plan › Upload file</b>), or paste the readings straight into the box there.</li>
+      <li><b>One passage per day, in order.</b> The first reading is Day 1, the next is Day 2, and so on — number them straight through.</li>
+      <li>The first <code>#</code> heading is the plan name. Leave it out and the file name is used instead.</li>
+      <li><b>Optional series tag.</b> A <code>## Series N of "Tag"</code> line groups the plan under a label (e.g. Lent) in the console. Delete it if you don't need one.</li>
+      <li><b>Markdown.</b> Bold the passage as <code>**Read: Reference**</code>. Avoid tables and raw HTML.</li>
+    </ul>
+    <h2>Two ways to write a plan</h2>
+    <ul>
+      <li><b>Full — with day titles.</b> A <code>### Day N — Title</code> line, then <code>**Read: Reference**</code> on the line under it. The title shows beside the day in the app. This is the block below.</li>
+      <li><b>Simple — just the passages.</b> One Bible reference per line and nothing else — each line becomes the next day. Good for a quick plan with no titles.</li>
+    </ul>
+    <div class="rule">Fill-in block · the full format</div>
+    <div class="block"><pre>${readPlanTplHtml()}</pre></div>
+    <div class="copyrow no-print"><button class="copybtn" onclick="(function(b){navigator.clipboard&&navigator.clipboard.writeText(window.__READPLAN_TPL__||'');b.textContent='Copied';setTimeout(function(){b.textContent='Copy template block'},1400);})(this)">Copy template block</button></div>
+    <h2>Simple list · one reference per line</h2>
+    <div class="block"><pre>John 1:1-18
+Psalm 23
+Isaiah 53
+Luke 15:11-32</pre></div>
+    <h2>House style</h2>
+    <ul>
+      <li><b>Write references the way the Bible reader expects them</b> — <code>Book Chapter</code> for a whole chapter, <code>Book Chapter:verses</code> for part of one (e.g. <code>John 1</code>, <code>Psalm 23</code>, <code>John 1:1-18</code>).</li>
+      <li><b>One passage per day.</b> Keep each day a comfortable sitting — a chapter or a short section, not a whole book.</li>
+      <li><b>Keep the day title short</b> if you use one — it sits on one line in the app.</li>
+    </ul>
+    <h2>Before you share</h2>
+    <div class="check"><span class="b"></span> A plan name (the <code>#</code> heading, or the file name)</div>
+    <div class="check"><span class="b"></span> One reading per day, numbered straight through</div>
+    <div class="check"><span class="b"></span> Every passage opens in the Bible reader</div>
+    <div class="check"><span class="b"></span> No tables or raw HTML</div>
+  </div>`;
+}
+
 // open a clean popup containing the generated document (+ the brand tokens the CSS depends on)
 function tmplOpen(innerHtml, title, { autoPrint = false, injectTpl = false } = {}) {
   const w = window.open('', '_blank', 'width=900,height=1100');
   if (!w) { alert('Allow pop-ups to generate this document.'); return; }
-  const tplJs = injectTpl ? `<script>window.__DEVO_TPL__=${JSON.stringify(DEVO_TPL)};<\/script>` : '';
+  // inject both fill-in blocks; each doc's "Copy template block" button reads the one it needs
+  const tplJs = injectTpl ? `<script>window.__DEVO_TPL__=${JSON.stringify(DEVO_TPL)};window.__READPLAN_TPL__=${JSON.stringify(READPLAN_TPL)};<\/script>` : '';
   const printJs = autoPrint ? `<script>setTimeout(function(){window.focus();window.print();},350);<\/script>` : '';
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${TMPL_ESC(title)}</title>
     <link rel="stylesheet" href="vendor/fonts/fonts.css"/>
@@ -241,6 +323,7 @@ function tmplOpen(innerHtml, title, { autoPrint = false, injectTpl = false } = {
 
 window.TrinityTemplates = {
   DEVO_TPL,
+  READPLAN_TPL,
   // Print a polished A4 join invite (church QR + steps + blank recovery grid). Auto-opens print dialog.
   printInviteSheet({ name, tag, url, qrSvg } = {}) {
     tmplOpen(inviteSheetHtml({ name, tag, url, qrSvg }), (name || 'TrinityOne') + ' — invite', { autoPrint: true });
@@ -256,4 +339,10 @@ window.TrinityTemplates = {
   openDevoTemplate() {
     tmplOpen(devoDocHtml(), 'Devotional template', { injectTpl: true });
   },
+  // Open the reading-plan contributor template (readable + copyable + printable). No auto-print.
+  openReadPlanTemplate() {
+    tmplOpen(readPlanDocHtml(), 'Reading plan template', { injectTpl: true });
+  },
+  // Exposed so a test can read the generated reading-plan doc (CLAUDE.md §3: don't text-match the unbundled source).
+  readPlanDocHtml,
 };

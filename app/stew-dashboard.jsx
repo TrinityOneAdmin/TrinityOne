@@ -6232,6 +6232,7 @@ function DashPlans() {
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
+          <button onClick={() => window.TrinityTemplates.openReadPlanTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The format + house style for a reading plan you can upload"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
           <button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New plan</button>
         </div>}>
         {shared.length === 0
@@ -6657,7 +6658,8 @@ function DashResources() {
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
         <div style={{ ...seg, maxWidth: '100%', overflowX: 'auto' }}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}{btn('media', 'Sermons')}{btn('verse', 'Verse prompt')}</div>
         <div style={{ flex: 1 }} />
-        {(view === 'plans' || view === 'devotionals') ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
+        {/* Bulk upload is devotionals-only. Reading plans go through New plan → Upload file + the Template (one file = one plan). */}
+        {view === 'devotionals' ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : view === 'devotionals' ? <DashDevotionals /> : view === 'verse' ? <DashVersePrompt /> : <DashSermons />}</div>
     </div>
