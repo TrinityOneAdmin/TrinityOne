@@ -3714,6 +3714,7 @@ function NewGroupModal({ open, onClose }) {
   const [encrypted, setEncrypted] = React.useState(false);
   const [childsafe, setChildsafe] = React.useState(false);
   const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter for the pick list — does NOT touch `sel`
   const [category, setCategory] = React.useState('');   // chosen category id ('' = uncategorised)
   const [busy, setBusy] = React.useState(false);   // an encrypted room is being made: key first, then the room (createEncryptedGroup)
   const [note, setNote] = React.useState('');      // what the dialog says while that happens, or why it could not
@@ -3742,7 +3743,7 @@ function NewGroupModal({ open, onClose }) {
   const allGroupsForDefault = window.useStewardGroups ? window.useStewardGroups() : [];
   const encByDefault = (!church.features || church.features.encryptComms !== false)
     && !(allGroupsForDefault || []).some(g => g && g.kind === 'group' && !g.encrypted);
-  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setBusy(false); setNote(''); } }, [open]);
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setQ(''); setBusy(false); setNote(''); } }, [open]);
   // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
   // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
   // always mounted with `open` toggling, so opening it changed the hook count and React threw #310 and
@@ -3807,6 +3808,10 @@ function NewGroupModal({ open, onClose }) {
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrow the shown rows by name or @handle; `sel` is untouched, so a
+  // ticked member scrolled out of view by a search still saves. nameHandle(m) is the shared @handle helper.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? pickList.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : pickList;
   return (
     <div style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 50, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 30,
       background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -3850,15 +3855,20 @@ function NewGroupModal({ open, onClose }) {
                 <div style={{ marginTop: 14 }}>
                   <div style={lbl}>WHO’S IN · {sel.size}</div>
                   {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members have joined yet — create the group, then add people here once they’re in.</div> : (
-                    <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {pickList.map(m => { const on = sel.has(m.pubkey); return (
+                    <React.Fragment>
+                      <input type="search" aria-label="Search members for this group" placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ ...fld, height: 40, fontSize: 14, marginBottom: 8 }} />
+                      {ql && visible.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members match “{q}”.</div> : (
+                      <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {visible.map(m => { const on = sel.has(m.pubkey); return (
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to add this person to the group, untick to leave them out" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
                           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
                           <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: nameHandle(m) ? 700 : 400, fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
                         </button>
                       ); })}
-                    </div>
+                      </div>
+                      )}
+                    </React.Fragment>
                   )}
                 </div>
               ) : null}
@@ -3893,9 +3903,14 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
   const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter; save()/orphans/known read `sel`, not this
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const known = new Set(members.map(m => m.pubkey));
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrows the displayed rows only. save()/orphans/known read `sel`, so a
+  // ticked member filtered out of view is still saved. nameHandle(m) is the shared @handle helper.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? pickList.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : pickList;
   const save = () => {
     setBusy(true); setErr('');
     // THE DIALOG'S DELTA, applied to the group AS IT IS NOW (not the list seeded at open): someone another steward
@@ -3983,6 +3998,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
       .catch((e) => { clearTimeout(guard); clearTimeout(outer); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
+  const fld = { width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const dlgRef = useStewDialog(() => { if (!busy) onClose(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={() => !busy && onClose()} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 96, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -3995,13 +4011,18 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={lbl}>MEMBERS · {sel.size}</div>
-          {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : pickList.map(m => { const on = sel.has(m.pubkey); return (
+          {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : (
+            <React.Fragment>
+              <input type="search" aria-label={'Search members in “' + group.name + '”'} placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ ...fld, marginBottom: 8 }} />
+              {ql && visible.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members match “{q}”.</div> : visible.map(m => { const on = sel.has(m.pubkey); return (
             <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to keep this person in the group, untick to remove them" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
               <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
               <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
             </button>
           ); })}
+            </React.Fragment>
+          )}
           {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
         </div>
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, padding: '8px 24px 0', lineHeight: 1.45 }}>{err}</div> : null}
@@ -4715,6 +4736,7 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
   const [saving, setSaving] = React.useState(false);
   const [notTold, setNotTold] = React.useState([]);   // new leaders the "you're now a leader" DM never reached
   const [saveErr, setSaveErr] = React.useState('');   // the leadership change itself did not reach any relay
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter; `sel` (the leaders that save) is independent
   // WHAT THE RELAY ACTUALLY HOLDS, and WHO HAS ACTUALLY BEEN TOLD — both of which move when Save succeeds,
   // and neither of which the `group` PROP ever hears about. `before` was read from that prop, and this modal
   // deliberately stays open after a partial success, so a second Save re-computed "newly added" from the
@@ -4728,6 +4750,10 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
   // Save that would publish an empty leader list (console audit 2026-09-19 §C). The precondition is named where
   // the list would be, and Save waits until there is someone to tick or a different option is chosen.
   const nobodyToTick = members.length === 0;
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrows the displayed rows only; `sel` (the leaders that save) and
+  // `nobodyToTick`/`saveBlocked` read the full `members`, so a ticked leader filtered out of view still saves.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? members.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : members;
   const saveBlocked = pol === 'leaders' && nobodyToTick;
   const save = async () => {
     if (saveBlocked) return;
@@ -4826,9 +4852,11 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
             <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>This group is marked <strong>child-safe</strong>, so children can read it. Whoever you allow above, only adults on your <strong>cleared list</strong> can actually add an event here — and no child can, ever. That is enforced for you.</div>
           </div>
         ) : null}
+        {!nobodyToTick ? <input type="search" aria-label="Search members for group leaders" placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 10 }} /> : null}
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7 }}>
           {nobodyToTick ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>Nobody has joined your church on the app yet, so there is no one to tick.</div>
-            : members.map(m => {
+            : (ql && visible.length === 0) ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No members match “{q}”.</div>
+            : visible.map(m => {
               const on = sel.has(m.pubkey);
               const nm = m.name || ('Anon · ' + (m.npub || m.pubkey).slice(-6));
               return (
