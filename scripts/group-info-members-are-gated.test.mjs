@@ -58,7 +58,7 @@ const countBtn = (tree) => find(tree, n => n.type === 'button' && n.props && ('a
 const btnWords = (b) => texts(b).join(' ').replace(/\s+/g, ' ').trim();   // whitespace-collapsed, for a count match
 
 // ── mount ChatRoom, open the info panel, optionally open the members list, return the rendered tree ─────────
-async function openInfo(group, { gatedSource = [], canDM = () => true, safeguard = { clearanceKnown: true, isMinor: false }, assumeMinor, click = true, openList = false } = {}) {
+async function openInfo(group, { gatedSource = [], canDM = () => true, safeguard = { clearanceKnown: true, isMinor: false }, assumeMinor, rosters = [], click = true, openList = false } = {}) {
   const { React, draw } = miniReact();
   const Fellowship = {
     myPubkey: pk('me'), relays: ['wss://relay.example'], relayReady: () => true,
@@ -105,6 +105,7 @@ async function openInfo(group, { gatedSource = [], canDM = () => true, safeguard
     toast: () => {},
     church: { npub: 'npub1church', name: 'St Bride’s', id: 'c1' },
     myLeaderGroups: [], churchEvents: [], myPubkey: pk('me'),
+    churchRosters: rosters,   // the member app's team rosters (ctx.churchRosters in app/app.jsx)
     safeguard, canDMPeer: canDM, openDM: () => {},
     joinState: { loaded: true, isPending: false, removed: false, offline: false },
   };
@@ -131,6 +132,10 @@ async function openInfo(group, { gatedSource = [], canDM = () => true, safeguard
 const INVITE = (members) => ({ id: 'g1', name: 'Prayer Partners', sub: 'A small group that prays together', kind: 'Group', invite: true, encrypted: true, childsafe: true, accent: '#7a5', memberPubs: members, members: members.length, openToChurch: false, prayer: false });
 // an open room: no allowlist, church-wide
 const OPEN = { id: 'g2', name: 'Whole Church', sub: 'One room for everyone', kind: 'Group', invite: false, encrypted: false, childsafe: true, accent: '#58c', memberPubs: null, members: null, openToChurch: true, prayer: false };
+// a TEAM room: no memberPubs allowlist; its membership comes from the church roster whose team === id.
+const TEAM = { id: 't1', name: 'Welcome Team', sub: 'Door, coffee and a hello', kind: 'Team', team: true, invite: false, encrypted: false, childsafe: true, accent: '#c84', memberPubs: null, members: null, openToChurch: false, prayer: false };
+// a roster doc as the member app holds it (app/app.jsx reads r.team and r.people[].pub)
+const roster = (teamId, pubs) => ({ team: teamId, people: pubs.map(p => ({ pub: p })) });
 
 const panelText = (tree) => texts(tree).join(' | ');
 const memberRow = (tree, name) => find(tree, n => n.type === 'button' && texts(n).some(t => t === name));
@@ -226,6 +231,54 @@ test('an OPEN room shows "Open to your church" and NO count button / list', asyn
   assert.equal(memberRow(tree, 'Ada Lovelace').length, 0, 'an open room synthesised a per-group member list — it has no roster to show');
 });
 
+// ── 4b. (OWNER) a TEAM shows its roster members, gated the same way as an invite group ──────────────────────
+test('a TEAM lists its ROSTER members (gated), with the count button showing the gated team-roster count', async () => {
+  // Team roster: Ada, Ben, Sid.  Gated directory the reader is served: Ada, Ben, Cath.  So the gated team
+  // roster is Ada + Ben — Sid is on the roster but not in the directory this reader may see, Cath is in the
+  // directory but not on this team. The membership set comes from the ROSTER (ctx.churchRosters), not any
+  // allowlist, and the SAME gated intersection applies.
+  const { tree } = await openInfo(TEAM, {
+    gatedSource: [pk('ada'), pk('ben'), pk('cat')],
+    rosters: [roster('t1', [pk('ada'), pk('ben'), pk('str')])], openList: true });
+  const cb = countBtn(tree);
+  assert.ok(cb.length && /\b2 members\b/.test(btnWords(cb[0])), 'the count button does not show the gated team-roster count (2)');
+  assert.ok(memberRow(tree, 'Ada Lovelace').length, 'a team roster member in the gated directory is missing');
+  assert.ok(memberRow(tree, 'Ben Carter').length, 'a team roster member in the gated directory is missing');
+  assert.equal(memberRow(tree, 'Sid Stone').length, 0, 'a team roster pubkey absent from the gated directory was named directly from the roster');
+  assert.equal(memberRow(tree, 'Cath Rowe').length, 0, 'someone in the directory but NOT on this team was listed');
+  assert.doesNotMatch(panelText(tree), /Open to your church/, 'a team was labelled "Open to your church" — that line is only for open non-team groups');
+});
+
+// ── 4c. (OWNER + SAFEGUARDING) a CHILD on a team sees only cleared adults + guardian from the roster ─────────
+test('a CHILD sees only cleared adults + guardian among a TEAM roster — never another child or uncleared adult', async () => {
+  // The team roster contains a cleared adult, the child's guardian, ANOTHER child, and an uncleared adult.
+  // The relay serves the child a gated directory of the cleared adult + guardian only; canDMPeer rejects the
+  // rest. The membership set is the roster, but the SOURCE is the gated directory — switching to the raw
+  // roster reddens this (measured at the foot of the file).
+  const child = { clearanceKnown: true, isMinor: true };
+  const canDM = (p) => p === pk('ada') || p === pk('gdn');
+  const { tree } = await openInfo(TEAM, {
+    gatedSource: [pk('ada'), pk('gdn')],
+    rosters: [roster('t1', [pk('ada'), pk('gdn'), pk('kid'), pk('unc')])],
+    canDM, safeguard: child, openList: true });
+  assert.ok(memberRow(tree, 'Ada Lovelace').length, 'the cleared adult on the team is missing — a blank screen, not a safe one');
+  assert.ok(memberRow(tree, 'Mo Khan').length, 'the child’s own guardian on the team is missing');
+  assert.equal(memberRow(tree, 'Mia Khan').length, 0, 'ANOTHER CHILD on the team was named to a child');
+  assert.equal(memberRow(tree, 'Roy Platt').length, 0, 'an UNCLEARED ADULT on the team was named to a child');
+  assert.doesNotMatch(panelText(tree), /Mia Khan|Roy Platt/, 'a withheld team-roster name leaked into the panel text');
+  const cb = countBtn(tree);
+  assert.ok(cb.length && /\b2 members\b/.test(btnWords(cb[0])), 'the count button showed more than the gated team roster to a child');
+});
+
+// ── 4d. (OWNER) a team with no roster yet does not crash and is NOT "Open to your church" ───────────────────
+test('a TEAM with no roster shows a 0-member button and empty list, never "Open to your church"', async () => {
+  const { tree } = await openInfo(TEAM, { gatedSource: [pk('ada')], rosters: [], openList: true });
+  const cb = countBtn(tree);
+  assert.ok(cb.length && /\b0 members\b/.test(btnWords(cb[0])), 'a team with no roster did not show a 0-member button');
+  assert.doesNotMatch(panelText(tree), /Open to your church/, 'a team with no roster was labelled "Open to your church"');
+  assert.match(panelText(tree), /No one to show here/, 'an opened empty team list gave no account of itself');
+});
+
 // ── 5. starts-with search: name-word prefix OR @handle prefix; a mid-word substring matches nobody ──────────
 test('search matches a name-word prefix and an @handle prefix, but not a mid-word substring', async () => {
   const group = INVITE([pk('ada'), pk('ben'), pk('cat')]);
@@ -300,14 +353,15 @@ test('tapping a member opens a read-only card — no message / leader action in 
 
 // ── measured red/green, 2026-10-19, this file against app/screens-chat.jsx ──────────────────────────────────
 // Each sabotage was scoped to the GroupInfo slice (anchor asserted exactly once) per CLAUDE.md "sabotage must
-// be scoped". Measured on this machine:
-//   · the fixed screen                                                          11 pass / 0 fail
-//   · the roster rendered inline (list not gated behind the count button)       10 pass / 1 fail  (the "hidden until tapped" test reds)
-//   · the count button showing raw group.members instead of roster.length       10 pass / 1 fail  (the gated-count test reds: a child would see 4, not 2)
-//   · the list source switched to raw group.memberPubs + displayFor              9 pass / 2 fail  (intersection + the CHILD test red: a child is shown Mia Khan + Roy Platt)
-//   · `&& canSee(m.pubkey)` deleted from the list source                        10 pass / 1 fail  (the canDMPeer-narrowing test reds: Bad Actor is listed)
-//   · `iAmMinor` gated on `clearanceKnown` alone again (the original bug)        10 pass / 1 fail  (the non-safeguarding-church test reds: section hangs on "Checking…")
-//   · `minorUnconfirmed` forced false (assumed minor trusts a failing-open gate) 10 pass / 1 fail  (the genuine-unknown fail-safe test reds)
-//   · the starts-with matcher replaced with includes()                          10 pass / 1 fail  (the search test reds on the "ove" mid-word case)
-// The source-switch sabotage is the one that matters most: it is the exact anti-pattern the owner's rule
-// forbids, and the CHILD test turns red the moment it is applied.
+// be scoped". Measured on this machine against the 14-test suite:
+//   · the fixed screen                                                          14 pass / 0 fail
+//   · the list source enumerated directly from the membership SET, no canSee      9 pass / 5 fail
+//        (both CHILD tests red — invite AND team: a child is shown Mia Khan + Roy Platt — plus the two
+//         intersection tests and the canDMPeer-narrowing test. This is the exact anti-pattern the owner's
+//         rule forbids, and it is the one that matters most.)
+//   · the count button showing raw group.members instead of roster.length         (reds the gated-count tests:
+//        a child on a 4-person team would read "4 members", not the gated 2)
+// Carried from the earlier rounds (same slices, still hold): the roster rendered inline (the "hidden until
+// tapped" test reds), `iAmMinor` gated on `clearanceKnown` alone (the non-safeguarding-church test reds on
+// "Checking…"), `minorUnconfirmed` forced false (the genuine-unknown fail-safe test reds), and the
+// starts-with matcher replaced with includes() (the search test reds on the "ove" mid-word case).

@@ -1241,7 +1241,7 @@ function GroupEventComposer({ group, ctx, onClose }) {
 //
 // THE GATING RULE (owner-approved). The members a reader sees =
 //     (people the reader is ALREADY permitted to see: subscribeChurchMembers ∩ ctx.canDMPeer)
-//       ∩ (this group's membership: group.memberPubs, the invite allowlist).
+//       ∩ (this group's membership: the invite allowlist group.memberPubs, or — for a team — its roster).
 // subscribeChurchMembers is the gated church directory — the relay withholds blocked/hidden rows and, for a
 // child, uncleared adults and other children; ctx.canDMPeer narrows it to people this reader may contact
 // (for a child that is cleared adults + their guardian + the church, and nobody else). We NEVER enumerate
@@ -1302,10 +1302,21 @@ function GroupInfo({ group, open, onClose, ctx }) {
     return ctx.canDMPeer ? !!ctx.canDMPeer(pk) : !iAmMinor;   // the real gate; no gate available ⇒ fail closed for a minor
   };
 
-  // THE MEMBERS LIST SOURCE EXPRESSION — the gated directory ∩ this group's membership. An OPEN room has no
-  // allowlist (groupSet === null) and therefore no enumerated roster: it keeps the honest "Open to your
-  // church" context instead.
-  const groupSet = Array.isArray(group.memberPubs) ? new Set(group.memberPubs) : null;
+  // THE MEMBERS LIST SOURCE EXPRESSION — the gated directory ∩ this group's membership. The membership set
+  // depends on the kind of room:
+  //   · an INVITE group carries its allowlist as group.memberPubs;
+  //   · a TEAM carries its people on the church's roster (ctx.churchRosters, fed by F.subscribeChurchRosters
+  //     — the SAME cleartext, member-readable data a member already sees on the serving cards; roster.people
+  //     are chat pubkeys under `.pub`). roster.team === the team's group id (app/app.jsx _roleName/myRosterTeams).
+  //   · an OPEN non-team group has neither, so groupSet is null and it keeps the honest "Open to your church"
+  //     context with no roster.
+  // No relay/read gate is widened: this reads data the member app already holds, then applies the SAME gated
+  // intersection + canSee() as an invite group. A team with no roster yet yields an empty set (not null), so
+  // it shows a "0 members" button, never "Open to your church" (openToChurch already excludes teams).
+  const teamRoster = group.team ? (ctx.churchRosters || []).find(r => r && r.team === group.id) : null;
+  const groupSet = group.team
+    ? new Set((((teamRoster && teamRoster.people) || []).map(p => p && (p.pub || p.pubkey)).filter(Boolean)))
+    : (Array.isArray(group.memberPubs) ? new Set(group.memberPubs) : null);
   const inGroup = groupSet
     ? (members || []).filter(m => m && m.pubkey && groupSet.has(m.pubkey) && canSee(m.pubkey))
     : [];
