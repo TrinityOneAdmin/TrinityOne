@@ -482,6 +482,7 @@ function App() {
   const notes = Object.fromEntries(MD.list('notes').map(n => [n.ref, n.text]));               // {ref: text}
   const bookmarks = MD.list('bookmarks').map(b => b.ref);                                      // [ref]
   const planProgress = MD.settings.get('plans', {});                                           // planId -> [done days]
+  const planLast = MD.settings.get('plansLast', {});                                           // planId -> ms timestamp of the last day marked done
   const devoProgress = MD.settings.get('devos', {});                                            // devoId -> [done days]
   const plansFollowed = MD.settings.get('plansFollowed', []);                                   // discover-plan ids the member added to My Plans
   const plansHidden = MD.settings.get('plansHidden', []);                                       // church-plan ids the member removed from My Plans
@@ -2276,6 +2277,7 @@ function App() {
     notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
+    planLast,
     planRead,
     planChurch: activeChurch,
     devoProgress,
@@ -2583,7 +2585,10 @@ function App() {
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
+      const adding = set.has(day);
       MD.settings.set('plans', { ...prev, [pid]: [...set].sort((a, b) => a - b) });
+      // remember WHEN a day was last marked done (not on undo) so Today's "Keep it going" shows the plan read most recently
+      if (adding) MD.settings.set('plansLast', { ...MD.settings.get('plansLast', {}), [pid]: Date.now() });
     },
     toggleDevoDay: (did, day) => {
       const prev = MD.settings.get('devos', {});

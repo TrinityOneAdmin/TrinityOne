@@ -1624,7 +1624,7 @@ function ReadScreen({ ctx }) {
 
       <div ref={scrollRef} className="no-scrollbar" onScroll={onReaderScroll}
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
-        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
+        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px ' + ((typeof planReadBarShown === 'function' && planReadBarShown(ctx, loc)) ? 184 : 116) + 'px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
@@ -1670,7 +1670,6 @@ function ReadScreen({ ctx }) {
             </div>
           )}
 
-          {typeof PlanReadBar === 'function' ? <PlanReadBar ctx={ctx} loc={loc} /> : null}
           {/* footer nav */}
           <div style={{ display: 'flex', gap: 10, marginTop: 26 }}>
             <button disabled={!prev} onClick={() => prev && ctx.setLoc(prev)} style={{ ...navBtnStyle, opacity: prev ? 1 : .4 }}>
@@ -1684,6 +1683,8 @@ function ReadScreen({ ctx }) {
         {/* room for the floating player: a box, not var() padding — see ScreenScroll in screens-today.jsx */}
         <div aria-hidden="true" data-player-room="" style={{ height: 'max(0px, calc(var(--trinity-player-h, 0px) - 116px))' }} />
       </div>
+      {/* the plan bar FLOATS above the tab bar, outside the scroller (the scroller's bottom padding makes room) */}
+      {typeof PlanReadBar === 'function' ? <PlanReadBar ctx={ctx} loc={loc} /> : null}
 
       <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={dismiss}
         curColor={passageKeys.length && passageKeys.every(k => ctx.highlights[k] === ctx.highlights[passageKeys[0]]) ? ctx.highlights[passageKeys[0]] : null}

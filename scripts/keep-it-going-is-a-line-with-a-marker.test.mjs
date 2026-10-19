@@ -16,7 +16,7 @@ import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const DAYS = Array.from({ length: 10 }, (_, i) => ({ d: i + 1, ref: 'John ' + (i + 1) }));
 
-function today(doneCount, planLen = 10) {
+function today(doneCount, planLen = 10, extra = {}) {
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const date = new Date('2026-09-30T09:00:00Z');
@@ -26,7 +26,7 @@ function today(doneCount, planLen = 10) {
     addEventListener() {}, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] },
     ChurchBadge: Stub('ChurchBadge'),
-    TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', title: 'John in ten days', len: days.length, days }],
+    TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', title: 'John in ten days', len: days.length, days }].concat(extra.plans || []),
       VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world.' }] },
     Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1,
       activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) },
@@ -52,13 +52,15 @@ function today(doneCount, planLen = 10) {
     toast() {}, netUnread: 0, openServing() {}, openListen() {}, openShareSheet() {}, openPlan() {},
     planProgress: doneCount ? { p1: days.slice(0, doneCount).map(d => d.d) } : {},
     plans: [], bookmarks: [], notes: {}, highlights: {},
+    ...(extra.ctx || {}),
   };
   const tree = draw(TodayScreen, { ctx });
   const line = find(tree, n => n.props && 'data-plan-line' in n.props);
   const marker = find(tree, n => n.props && 'data-plan-marker' in n.props);
   const fill = find(tree, n => n.props && 'data-plan-fill' in n.props);
+  const title = find(tree, n => n.props && n.props.onClick && texts(n).includes('Reading plan'))[0];
   const pct = s => (s ? parseFloat(String(s)) : NaN);
-  return { tree, line, marker, fill,
+  return { tree, title: title ? texts(title).join(' | ') : '', line, marker, fill,
     markerLeft: marker[0] && pct(marker[0].props.style.left), fillWidth: fill[0] && pct(fill[0].props.style.width) };
 }
 
@@ -93,4 +95,26 @@ test('the position is a fraction of THIS plan, not of ten', () => {
 test('the card still says which day is next', () => {
   const words = texts(today(3).tree).join(' | ');
   assert.match(words, /Day\s*\|?\s*4\s*\|?\s*of\s*\|?\s*10/);
+});
+
+const P2 = { id: 'p2', title: 'Psalms for rest', len: 3, days: [{ d: 1, ref: 'Psalm 1' }, { d: 2, ref: 'Psalm 2' }, { d: 3, ref: 'Psalm 3' }] };
+const CH = { id: 'c1', title: 'Church advent plan', len: 3, days: P2.days };
+
+test('Keep it going shows the plan read MOST RECENTLY, not the one with most days done', () => {
+  const s = today(0, 10, { plans: [P2], ctx: { planProgress: { p1: [1, 2, 3, 4, 5], p2: [1] }, planLast: { p1: 1000, p2: 2000 } } });
+  assert.match(s.title, /Psalms for rest/);
+  const t = today(0, 10, { plans: [P2], ctx: { planProgress: { p1: [1, 2, 3, 4, 5], p2: [1] }, planLast: { p1: 3000, p2: 2000 } } });
+  assert.match(t.title, /John in ten days/);
+});
+
+test('a church-uploaded plan read most recently is the one shown', () => {
+  const s = today(0, 10, { ctx: { churchPlans: [CH], planProgress: { p1: [1, 2], c1: [1] }, planLast: { p1: 1000, c1: 5000 } } });
+  assert.match(s.title, /Church advent plan/);
+});
+
+test('with no stamps (older data) it still falls back to most days done; with nothing read it is John', () => {
+  const a = today(0, 10, { plans: [P2], ctx: { planProgress: { p1: [1], p2: [1, 2] } } });
+  assert.match(a.title, /Psalms for rest/);
+  const b = today(0, 10, { plans: [P2], ctx: { planProgress: {} } });
+  assert.match(b.title, /John in ten days/);
 });

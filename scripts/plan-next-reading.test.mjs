@@ -45,8 +45,8 @@ function world() {
     parseRef: (r) => { const m = /^John (\d+)(?::(\d+))?/.exec(r); return m ? { book: 43, chap: +m[1], verse: m[2] ? +m[2] : undefined } : null; },
   };
   const win = { Bible, speechSynthesis: null, innerWidth: 360, sanitizeHtml: h => h, getSelection: () => ({ toString: () => '' }), TrinityData: { CROSSREFS: {}, PLANS: [] } };
-  const st = { loc: { book: 43, chap: 9 }, planRead: null, plans: {}, said: [], church: 'A', churchPlans: [PLAN] };
-  const settings = { get: (k, d) => (k === 'plans' ? st.plans : d), set: (k, v) => { if (k === 'plans') st.plans = v; } };
+  const st = { loc: { book: 43, chap: 9 }, planRead: null, plans: {}, last: {}, said: [], church: 'A', churchPlans: [PLAN] };
+  const settings = { get: (k, d) => (k === 'plans' ? st.plans : k === 'plansLast' ? st.last : d), set: (k, v) => { if (k === 'plans') st.plans = v; if (k === 'plansLast') st.last = v; } };
   const toast = m => st.said.push(m);
   // re-lifted per call so the church the app is on NOW is the one the shipped code reads
   const openPlanDay = (plan, day) => lift('openPlanDay', 'openJournal', { Bible, toast, activeChurch: st.church, setPlanRead: v => { st.planRead = v; }, setLoc: v => { st.loc = v; }, setReadView() {}, setTab() {} })(plan, day);
@@ -58,7 +58,7 @@ function world() {
     highlights: {}, notes: {}, bookmarks: [], toggleBookmark() {}, setHighlight() {}, setNote() {},
     openShareSheet() {}, desktop: false, readScale: 1, removeTranslation() {}, addModule() {}, setVersion() {},
   };
-  const plans = loadScreen('app/screens-plans.jsx', ['PlanDetail', 'PlanReadBar'], { React, window: win, Icon, Overlay: Passthrough });
+  const plans = loadScreen('app/screens-plans.jsx', ['PlanDetail', 'PlanReadBar', 'planReadBarShown'], { React, window: win, Icon, Overlay: Passthrough });
   const globals = {
     React, window: win, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
@@ -68,7 +68,7 @@ function world() {
     useTrinityAudio: () => ({ track: null, playing: false }),
     Overlay: Stub('Overlay'), ReadPlansTabs: Stub('ReadPlansTabs'), BottomSheet: Stub('BottomSheet'), useBackLayer: () => {},
     Sheet: Stub('Sheet'), Modal: Stub('Modal'), Pill: Stub('Pill'), Row: Stub('Row'), IconBtn: Stub('IconBtn'), Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
-    PlanReadBar: plans.PlanReadBar,
+    PlanReadBar: plans.PlanReadBar, planReadBarShown: plans.planReadBarShown,
   };
   const { ReadScreen } = loadScreen('app/screens-read.jsx', ['ReadScreen'], globals);
   const reader = () => draw(ReadScreen, { ctx });
@@ -150,4 +150,30 @@ test('a plan that is no longer in the plans list drops the plan bar', () => {
   assert.ok(w.bar());
   w.st.churchPlans = [];
   assert.equal(w.bar(), undefined);
+});
+
+test('the plan bar FLOATS: it is outside the scrolling text, absolutely placed above the tab bar, and the text leaves room for it', () => {
+  const w = world(); w.openDay(1);
+  const tree = w.reader();
+  const bar = find(tree, n => n.props && n.props['data-testid'] === 'plan-read-bar')[0];
+  assert.ok(bar, 'no plan bar');
+  assert.equal(bar.props.style.position, 'absolute');
+  assert.match(String(bar.props.style.bottom), /74px/, 'not offset above the 66px tab bar');
+  assert.match(String(bar.props.style.bottom), /--trinity-player-h/, 'does not rise for the mini-player');
+  const scroller = find(tree, n => n.props && n.props.style && n.props.style.overflowY === 'auto' && n.props.style.position === 'absolute' && n.props.style.inset === 0)[0];
+  assert.ok(scroller, 'reader scroller not found');
+  assert.equal(find(scroller, n => n.props && n.props['data-testid'] === 'plan-read-bar').length, 0, 'the bar is still inside the scrolling text');
+  assert.match(String(scroller.props.style.padding), /184px$/, 'the text leaves no room for the floating bar');
+});
+
+test('togglePlanDay stamps plansLast when a day is marked done, not when it is undone', () => {
+  const w = world();
+  const t0 = Date.now();
+  w.ctx.togglePlanDay('p1', 1);
+  assert.ok(w.st.last.p1 >= t0, 'no timestamp on mark-done');
+  const stamp = w.st.last.p1;
+  w.st.last.p1 = 5;
+  w.ctx.togglePlanDay('p1', 1); // undo
+  assert.equal(w.st.last.p1, 5, 'undo stamped a read');
+  assert.deepEqual(w.st.plans, { p1: [] });
 });

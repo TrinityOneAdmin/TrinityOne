@@ -2432,8 +2432,11 @@ function TodayScreen({ ctx }) {
   })();
 
   // active reading plan — from real persisted progress
-  const started = D.PLANS.filter(p => (ctx.planProgress[p.id] || []).length > 0);
-  const plan = started.sort((a, b) => (ctx.planProgress[b.id] || []).length - (ctx.planProgress[a.id] || []).length)[0] || D.PLANS[0];
+  // the plan read MOST RECENTLY (built-in or church-uploaded); ties / no stamp (older data) fall back to most days done; John only when nothing is started
+  const _last = ctx.planLast || {};
+  const _prog = (p) => (ctx.planProgress[p.id] || []).length;
+  const started = (D.PLANS || []).concat(ctx.churchPlans || []).filter(p => p && p.days && _prog(p) > 0);
+  const plan = started.sort((a, b) => ((_last[b.id] || 0) - (_last[a.id] || 0)) || (_prog(b) - _prog(a)))[0] || D.PLANS[0];
   const pDone = (ctx.planProgress[plan.id] || []).length;
   const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
   // how far along the plan line the marker sits: days done / days in the plan, as a percentage kept inside 0..100

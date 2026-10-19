@@ -6,24 +6,36 @@ function doneDays(ctx, id) { return ctx.planProgress[id] || []; }
 // The bar under a passage that was opened FROM a plan day: "Mark day done" and "Next: Day N+1 · ref".
 // Shown only while the reader is still on that day's passage (so paging elsewhere hides it); null otherwise.
 // Marking done is ctx.togglePlanDay, the same call as the tick in the plan's day list.
-function PlanReadBar({ ctx, loc }) {
+function planReadBarShown(ctx, loc) {
   const pr = ctx.planRead;
-  if (!pr || !pr.plan || !pr.day || !loc) return null;
+  if (!pr || !pr.plan || !pr.day || !loc) return false;
   // the plan context is only for the exact location the plan day opened, in the church it was opened in, while the plan still exists
-  if (pr.loc !== loc || pr.church !== ctx.planChurch) return null;
+  if (pr.loc !== loc || pr.church !== ctx.planChurch) return false;
   const _D = window.TrinityData;
   const still = (ctx.churchPlans || []).concat((_D && _D.PLANS) || []).some(p => p.id === pr.plan.id);
-  if (!still) return null;
+  if (!still) return false;
   const B = window.Bible;
   const at = B && B.parseRef ? B.parseRef(pr.day.ref) : null;
-  if (!at || at.book !== loc.book || at.chap !== loc.chap) return null;
+  if (!at || at.book !== loc.book || at.chap !== loc.chap) return false;
+  return true;
+}
+// FLOATS above the bottom tab bar (owner 2026-10-19), rendered by the reader OUTSIDE its scroller. Tab bar: bottom max(12,safe), 66 tall;
+// 74 = 66 + 8px gap. While audio plays the mini-player sits in that gap, so ride above it (--trinity-player-h, set by MiniPlayer).
+function PlanReadBar({ ctx, loc }) {
+  if (!planReadBarShown(ctx, loc)) return null;
+  const pr = ctx.planRead;
   const days = pr.plan.days || [];
   const idx = days.findIndex(x => x.d === pr.day.d);
   const next = idx >= 0 ? days[idx + 1] : null;
   const isDone = doneDays(ctx, pr.plan.id).indexOf(pr.day.d) >= 0;
   const btn = { flex: '1 1 0', minWidth: 0, padding: '11px 12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   return (
-    <div data-testid="plan-read-bar" style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+    <div data-testid="plan-read-bar" style={{
+      position: 'absolute', left: 12, right: 12, zIndex: 24, display: 'flex', gap: 10, padding: 8, borderRadius: 20,
+      bottom: ctx.desktop ? 16 : 'max(calc(max(12px, env(safe-area-inset-bottom)) + 74px), var(--trinity-player-h, 0px))',
+      background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px) saturate(160%)', WebkitBackdropFilter: 'blur(16px) saturate(160%)',
+      border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)',
+    }}>
       <button onClick={() => ctx.togglePlanDay(pr.plan.id, pr.day.d)} title={isDone ? 'Day ' + pr.day.d + ' is done — tap to undo' : 'Mark day ' + pr.day.d + ' done'}
         style={{ ...btn, background: isDone ? 'var(--clay-soft)' : 'var(--surface)', border: '1.5px solid var(--clay)', color: 'var(--clay)' }}>
         {isDone ? 'Day done' : 'Mark day done'}
@@ -709,4 +721,4 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { PlansScreen, PlanDetail, PlanReadBar, ChurchDevoView, parseDevoDays });
+Object.assign(window, { PlansScreen, PlanDetail, PlanReadBar, planReadBarShown, ChurchDevoView, parseDevoDays });
