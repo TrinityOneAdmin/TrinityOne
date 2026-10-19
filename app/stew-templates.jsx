@@ -110,6 +110,7 @@ function devoTplHtml() {
 const READPLAN_TPL =
 '# [Plan Name]\n\n' +
 '*[Optional one-line description — shows on the plan card. Delete if not needed.]*\n\n' +
+'## Series 1 of "[Optional tag — groups this plan under a label, e.g. Lent. Delete this line if not needed.]"\n\n' +
 '### Day 1 — [Short title for the day]\n' +
 '**Read: [Reference, e.g. John 1:1-18]**\n\n' +
 '### Day 2 — [Short title for the day]\n' +
@@ -272,6 +273,7 @@ function readPlanDocHtml() {
       <li><b>One file = one plan.</b> Save it as a single <code>.md</code> or <code>.txt</code> file and upload it in Resources › Reading plans (<b>New plan › Upload file</b>), or paste the readings straight into the box there.</li>
       <li><b>One passage per day, in order.</b> The first reading is Day 1, the next is Day 2, and so on — number them straight through.</li>
       <li>The first <code>#</code> heading is the plan name. Leave it out and the file name is used instead.</li>
+      <li><b>Optional series tag.</b> A <code>## Series N of "Tag"</code> line groups the plan under a label (e.g. Lent) in the console. Delete it if you don't need one.</li>
       <li><b>Markdown.</b> Bold the passage as <code>**Read: Reference**</code>. Avoid tables and raw HTML.</li>
     </ul>
     <h2>Two ways to write a plan</h2>

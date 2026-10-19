@@ -54,21 +54,26 @@ function loadParsePlanFile() {
 }
 
 // Turn the template's bracket placeholders into the concrete values a steward would type, so the result is a
-// file genuinely produced FROM the template — then import it.
-function fillTemplate(tpl) {
-  return tpl
+// file genuinely produced FROM the template — then import it. `tag` null means the steward DELETED the
+// optional series line (the common case); a string means they kept it and filled in that tag.
+function fillTemplate(tpl, { tag = null } = {}) {
+  let out = tpl
     .replace('[Plan Name]', 'Advent — Light Has Come')
     .replace('*[Optional one-line description — shows on the plan card. Delete if not needed.]*', '*Four days through Advent.*')
     .replace('Day 1 — [Short title for the day]', 'Day 1 — The Word made flesh')
     .replace('**Read: [Reference, e.g. John 1:1-18]**', '**Read: John 1:1-18**')
     .replace('Day 2 — [Short title for the day]', 'Day 2 — A light in the darkness')
     .replace('**Read: [Reference, e.g. Psalm 23]**', '**Read: Isaiah 9:2-7**');
+  if (tag == null) out = out.replace(/## Series[^\n]*\n\n/, '');   // the steward deleted the optional line
+  else out = out.replace(/## Series 1 of "[^\n]*"/, '## Series 1 of "' + tag + '"');
+  return out;
 }
 
 test('a file filled in from the template imports as a reading plan with the right days', () => {
   const { READPLAN_TPL } = loadTemplates();
   const parsePlanFile = loadParsePlanFile();
 
+  // the common case: the optional series line deleted
   const filled = fillTemplate(READPLAN_TPL);
   // the ( …repeat… ) guidance line is the only placeholder we leave — a steward deletes it; the parser ignores it
   const res = parsePlanFile('advent.md', filled);
@@ -81,6 +86,23 @@ test('a file filled in from the template imports as a reading plan with the righ
   assert.equal(res.days[1].d, 2);
   assert.match(res.days[0].label, /The Word made flesh/, 'day 1 lost its title');
   assert.equal(res.blurb, 'Four days through Advent.', 'the *italic* description did not become the blurb');
+  assert.equal(res.tag, 'Custom', 'with no series line the tag should fall back to Custom');
+});
+
+test('keeping the optional series line sets the plan tag', () => {
+  const { READPLAN_TPL } = loadTemplates();
+  const parsePlanFile = loadParsePlanFile();
+
+  // the steward kept the "## Series N of \"Tag\"" line and filled the tag in with Lent
+  const filled = fillTemplate(READPLAN_TPL, { tag: 'Lent' });
+  assert.match(filled, /## Series 1 of "Lent"/, 'the series line was not filled in as the parser expects');
+  const res = parsePlanFile('advent.md', filled);
+
+  assert.equal(res.tag, 'Lent', 'the ## Series line did not set the tag to its quoted value');
+  // the series line must not cost us the days or the plan name
+  assert.equal(res.title, 'Advent — Light Has Come');
+  assert.equal(res.days.length, 2, 'the series line swallowed a Day block');
+  assert.equal(res.days[0].ref, 'John 1:1-18');
 });
 
 test('the simple one-reference-per-line shape the doc documents also imports', () => {
@@ -108,8 +130,14 @@ test('the contributor doc teaches the reading-plan format', () => {
   assert.match(html, /\*\*Read: Reference\*\*/, 'the **Read:** convention is not described');
   assert.match(html, /one Bible reference per line/i, 'the simple one-ref-per-line shape is not described');
 
+  // the optional series/tag line is documented with the EXACT syntax the parser reads (straight quotes)
+  assert.match(html, /## Series N of "Tag"/, 'the optional series/tag line is not documented');
+  assert.match(html, /groups the plan under a label/i, 'the doc does not say what the series line does');
+
   // the embedded fill-in block (the copyable one) must carry the real format the parser reads
   assert.match(html, /# \[Plan Name\]/, 'the fill-in block has no plan-name heading');
+  // (the fill-in block is TMPL_ESC'd, so its straight quote shows as &quot; — match without the quote)
+  assert.match(html, /## Series 1 of /, 'the fill-in block has no optional series line');
   assert.match(html, /Day 1 — \[Short title for the day\]/, 'the fill-in block has no Day block');
   assert.match(html, /\*\*Read:/, 'the fill-in block does not bold the reading');
   // one file = one plan is the headline rule
