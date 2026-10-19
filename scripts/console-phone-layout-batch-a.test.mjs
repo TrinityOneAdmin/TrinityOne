@@ -459,7 +459,7 @@ const DIALOGS = [
   { name: 'Record a transaction', was: 16, open: async () => { await openTab('Finance'); await pressButton(`(x.textContent||'').trim()==='Record a transaction'`, 'Record'); } },
   { name: 'Import a bank statement', was: 16, open: async () => { await openTab('Finance'); await pressButton(`(x.textContent||'').trim()==='Import statement'`, 'Import'); } },
   { name: 'Help', was: 18, open: async () => { await openMenu(); await pressButton(`x.getAttribute('aria-label')==='Help' && x.closest('[role="dialog"]')`, 'Help'); } },
-  { name: 'Bulk upload', was: 30, open: async () => { await openTab('Resources'); await pressButton(`(x.textContent||'').trim()==='Bulk upload'`, 'Bulk upload'); } },
+  { name: 'Bulk upload', was: 30, open: async () => { await openTab('Resources'); await pressButton(`(x.textContent||'').trim()==='Devotionals'`, 'Devotionals view'); await pressButton(`(x.textContent||'').trim()==='Bulk upload'`, 'Bulk upload'); } },
   { name: 'New post', was: 14, open: async () => { await pressButton(`x.getAttribute('aria-label')==='New post'`, 'New post'); } },
 ];
 const PANEL = `(() => { const p = ${DLG}; if (!p) return JSON.stringify({ found: false });

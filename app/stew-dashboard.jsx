@@ -6560,7 +6560,8 @@ function DashResources() {
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
         <div style={{ ...seg, maxWidth: '100%', overflowX: 'auto' }}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}{btn('media', 'Sermons')}{btn('verse', 'Verse prompt')}</div>
         <div style={{ flex: 1 }} />
-        {(view === 'plans' || view === 'devotionals') ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
+        {/* Bulk upload is devotionals-only. Reading plans go through New plan → Upload file + the Template (one file = one plan). */}
+        {view === 'devotionals' ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : view === 'devotionals' ? <DashDevotionals /> : view === 'verse' ? <DashVersePrompt /> : <DashSermons />}</div>
     </div>
