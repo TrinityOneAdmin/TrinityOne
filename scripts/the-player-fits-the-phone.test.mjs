@@ -257,7 +257,7 @@ ${LIVE_FILES.map(f => `<script src="/c/${f}.js"></script>`).join('\n')}
   if (typeof window.todayISO === 'undefined') window.todayISO = () => new Date().toISOString().slice(0, 10);
   const ctx = { church: { name: 'St Bartholomew-the-Great', initials: 'SB', npub: 'np1', audioFeed: null, channel: '' },
     openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false, toast() {}, netUnread: 0,
-    openServing() {}, openListen() {}, openVideo() {}, planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {}, openShareSheet() {} };
+    openServing() {}, openListen() {}, openVideo() {}, planProgress: { p1: [1] }, plans: [], bookmarks: [], notes: {}, highlights: {}, openShareSheet() {} };
   window.__mount = (tab) => {
     const e = React.createElement;
     const Page = tab === 'today' ? TodayScreen : LibraryScreen;   // 'library' = Library home, 'watch' = Library > Watch & Listen
