@@ -3481,6 +3481,13 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // buttons crammed into it — the owner's screenshot after the church went public. Stacked, each card has the
   // pane, the joining card puts its QR above its text (`center`), and the page scrolls like the phone's.
   const stacked = narrow || snug;
+  // The two sign-up/verse banners share a row on a wide window (same `stacked` = narrow || snug gate as the lower
+  // cards); stacked, or with only one of them present, a single full-width column — never a lonely half-width card.
+  const bannerPair = (careSignupBanner || verseBanner) ? (
+    <div style={{ display: 'grid', gridTemplateColumns: (!stacked && careSignupBanner && verseBanner) ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 1fr)', columnGap: 12 }}>
+      {careSignupBanner}{verseBanner}
+    </div>
+  ) : null;
   const fillStyle = stacked ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
   const listStyle = stacked ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
 
@@ -3552,7 +3559,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3561,7 +3568,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3570,9 +3577,8 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       {pendingBanner}
       {careReqBanner}
-      {careSignupBanner}
       {stewardReqBanner}
-      {verseBanner}
+      {bannerPair}
       {stat}
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{groupsPanel}</div>
