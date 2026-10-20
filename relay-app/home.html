@@ -50,7 +50,7 @@
     <div class="upd" id="upd">
       <span class="dot"></span>
       <span class="txt"><b>A new version is available.</b> Download and reinstall to update &mdash; your church data stays put.</span>
-      <a class="dl" id="updDl" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener">Get update</a>
+      <a class="dl" id="updDl" title="Open the download page for the newer version" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener">Get update</a>
       <button class="x" id="updX" title="Dismiss" aria-label="Dismiss">&times;</button>
     </div>
     <!-- THE FIRST RUN IS ONE CARD, NOT TWO DOORS (owner, 2026-09-22, after his own AppImage test: a first-time
@@ -60,15 +60,15 @@
          relay wizard's done step what comes next; the console's done step has "Back to the Suite" on the Suite). -->
     <section class="first" id="firstRun" hidden aria-labelledby="firstRunH">
       <h2 id="firstRunH">First time here? Set this computer up.</h2>
-      <a class="pick pick-primary" id="setupAll" href="/relay-app/control.html?setup=everything">
+      <a class="pick pick-primary" id="setupAll" title="Set up your relay and your church together" href="/relay-app/control.html?setup=everything">
         <span class="pk-t">Set up everything <span class="rec">Recommended</span></span>
         <span class="pk-d">Your relay first, then your church on it &mdash; a few minutes.</span>
       </a>
-      <a class="pick" id="setupRelay" href="/relay-app/control.html?setup=relay">
+      <a class="pick" id="setupRelay" title="Set up only the relay on this computer" href="/relay-app/control.html?setup=relay">
         <span class="pk-t">Just a relay</span>
         <span class="pk-d">This computer keeps the records; the church is run from another device.</span>
       </a>
-      <a class="pick" id="setupConsole" href="/steward.html">
+      <a class="pick" id="setupConsole" title="Open the church console without setting up the relay" href="/steward.html">
         <span class="pk-t">Just the console</span>
         <span class="pk-d">Start your church now &mdash; the relay settings can wait.</span>
       </a>

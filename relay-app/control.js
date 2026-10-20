@@ -508,7 +508,7 @@
   const cfGoHtml = '<div class="wzcard tone-clay"><div class="wz-badge">Not public yet</div>'
     + '<div class="wz-title">Only reachable on this network</div>'
     + '<p class="wz-p">Members outside your building can’t connect. Turn on a secure tunnel — <b>free, no account</b>, no router or port setup.</p>'
-    + '<div class="wz-actions"><button class="btn btn-clay" id="cfGo">Make it public</button> <span class="wz-meta" id="cfMsg"></span></div></div>'
+    + '<div class="wz-actions"><button class="btn btn-clay" id="cfGo" title="Give your relay a secure public web address so members can reach it from anywhere">Make it public</button> <span class="wz-meta" id="cfMsg"></span></div></div>'
     + '<pre id="cfDetail" style="display:none;margin-top:10px;padding:10px 12px;background:var(--surface-2,#f2efe8);border:1px solid var(--line);border-radius:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--ink-3);max-height:180px;overflow:auto"></pre>';
   function wireCfGo() { const cf = document.getElementById('cfGo'); if (cf) cf.onclick = goPublicCloudflare; }
   async function goPublicCloudflare() {
@@ -605,17 +605,17 @@
       if (!codeSrc) {
         if (cur.releaseHost) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
         body.innerHTML = '<b>This box was never told where to get things from</b> — set an update source above. Until then there is nowhere to check for a newer build or pull one from.'
-          + '<button class="btn-clay" id="doUpdate" disabled aria-disabled="true" style="margin-top:8px;display:block;opacity:.55;cursor:not-allowed">Update now</button>';
+          + '<button class="btn-clay" id="doUpdate" title="Install the newer relay version now" disabled aria-disabled="true" style="margin-top:8px;display:block;opacity:.55;cursor:not-allowed">Update now</button>';
         return;
       }
       // The relay checks its code source server-side (cur.latest) — the browser can't be relied on to reach
       // the release host's ts.net funnel. If the server couldn't reach it either, cur.latest is null.
       const latest = cur.latest;
       if (!latest || !latest.version) { body.innerHTML = from + 'Couldn’t reach the code source (' + esc(codeSrc) + ') to check. You can still force an update with the button below.'
-        + '<button class="btn-clay" id="doUpdate" style="margin-top:8px;display:block">Update now</button>'; document.getElementById('doUpdate').onclick = doUpdate; return; }
+        + '<button class="btn-clay" id="doUpdate" title="Install the newer relay version now" style="margin-top:8px;display:block">Update now</button>'; document.getElementById('doUpdate').onclick = doUpdate; return; }
       if (latest.version === cur.version) { body.innerHTML = from + '<span style="color:var(--sage)">✓ Up to date.</span>'; return; }
       body.innerHTML = from + 'A new build is available (' + esc((latest.tag ? latest.tag + ' · ' : '') + (latest.versionShort || '') + (latest.builtAt ? ' · ' + latest.builtAt.slice(0, 10) : '')) + '). '
-        + '<button class="btn-clay" id="doUpdate" style="margin-top:8px">Update now</button>';
+        + '<button class="btn-clay" id="doUpdate" title="Install the newer relay version now" style="margin-top:8px">Update now</button>';
       document.getElementById('doUpdate').onclick = doUpdate;
     } catch (e) { /* relay down — hero card shows it */ }
   }
@@ -912,7 +912,7 @@
     if (s.needsOperator) { gpTag(false, 'Needs a nudge');
       body.innerHTML = wz('gold', 'One step on the relay box', 'The relay can’t manage Tailscale yet',
         '<p class="wz-p">On the relay box, run this once, then refresh:</p><p class="wz-p"><code>sudo tailscale set --operator=trinityone</code></p>' +
-        '<div class="wz-actions"><button class="btn btn-ghost" id="gpRefreshOp">Refresh</button></div>');
+        '<div class="wz-actions"><button class="btn btn-ghost" id="gpRefreshOp" title="Check again whether your relay can be reached">Refresh</button></div>');
       var _rb = document.getElementById('gpRefreshOp'); if (_rb) _rb.onclick = gpTick; return; }
     if (s.funnelOn && s.publicUrl) {
       gpTag(true, 'On · public'); publicBase = s.publicUrl; refreshReach();
@@ -927,7 +927,7 @@
       gpTag(false, 'On your network');
       body.innerHTML = wz('gold', 'Almost there', 'On your network, but not public yet',
         '<p class="wz-p">This relay is on your Tailscale network' + (s.dnsName ? ' as <code>' + esc(s.dnsName) + '</code>' : '') + '. One more click lets members reach it over the internet.</p>' +
-        '<div class="wz-actions"><button class="btn btn-clay" id="gpFunnel">Make it public (HTTPS)</button> <span class="wz-meta" id="gpMsg"></span></div>');
+        '<div class="wz-actions"><button class="btn btn-clay" id="gpFunnel" title="Give your relay a secure public web address">Make it public (HTTPS)</button> <span class="wz-meta" id="gpMsg"></span></div>');
       document.getElementById('gpFunnel').onclick = doFunnel;
       return;
     }
@@ -941,7 +941,7 @@
     }
     gpTag(false, 'Not public yet');
     body.innerHTML = cfGoHtml +
-      '<div class="hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line-2)">Prefer a stable address on your own Tailscale? <button class="btn btn-ghost btn-sm" id="gpUp">Use Tailscale instead</button> <span class="wz-meta" id="gpMsg"></span></div>';
+      '<div class="hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line-2)">Prefer a stable address on your own Tailscale? <button class="btn btn-ghost btn-sm" id="gpUp" title="Use your own Tailscale account for a steadier address">Use Tailscale instead</button> <span class="wz-meta" id="gpMsg"></span></div>';
     wireCfGo();
     document.getElementById('gpUp').onclick = doUp;
   }
@@ -1302,7 +1302,7 @@
         + '<h2 class="rsw-h">Your church goes on next</h2>'
         + '<p class="rsw-sub">Nothing to copy or paste. Open the Steward console on this computer, create your church and give it a name — it will be added to this relay automatically, and its records will live here.</p>'
         + '<div class="rsw-msg" id="rswNpubMsg"></div>'
-        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswById">I already have a church</button><button class="btn btn-clay" id="rswSkip">Continue</button></div>';
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack" title="Go back one step">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswById" title="Use a church you already created">I already have a church</button><button class="btn btn-clay" id="rswSkip" title="Skip this step; you can do it later from Settings">Continue</button></div>';
     }
     return dots
       + '<div class="rsw-ic">' + RSW_IC.church + '</div>'
@@ -1311,7 +1311,7 @@
       + '<div class="rsw-lbl">Church npub</div>'
       + '<input class="rsw-in" id="rswNpub" placeholder="npub1\u2026" autocomplete="off" spellcheck="false" />'
       + '<div class="rsw-msg" id="rswNpubMsg"></div>'
-      + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip">Skip for now</button><button class="btn btn-clay" id="rswAdd">Add &amp; continue</button></div>';
+      + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack" title="Go back one step">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip" title="Skip this step; you can do it later from Settings">Skip for now</button><button class="btn btn-clay" id="rswAdd">Add &amp; continue</button></div>';
   }
   function rswDots() { let s = ''; for (let i = 0; i < 5; i++) s += '<span class="' + (i <= rswStep ? 'on' : '') + '"></span>'; return '<div class="rsw-dots">' + s + '</div>'; }
 
@@ -1325,7 +1325,7 @@
         // this wizard's church step only says so. Promising an "add your church" step that the wizard cannot
         // deliver is how the owner's first run (2026-09-22) ended with no church and no idea why.
         + '<p class="rsw-sub">A relay is the private server that stores your church’s messages, records and media — running right here, on this machine. Two quick things: give it a name, and say whether this computer stays on. Your church is created in the console afterwards. About a minute.</p>'
-        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswSkip">Skip setup</button><div style="flex:1"></div><button class="btn btn-clay" id="rswGo">Get started</button></div>';
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswSkip" title="Skip this step; you can do it later from Settings">Skip setup</button><div style="flex:1"></div><button class="btn btn-clay" id="rswGo" title="Begin setting up your relay">Get started</button></div>';
       document.getElementById('rswGo').onclick = () => { rswStep = 1; renderRSW(); };
       // It used to send a guided path back to the launcher, which is where the person had just come from —
       // so the launcher showed its card again (nothing was set up) and the only way past the wizard was to
@@ -1344,7 +1344,7 @@
         + '<input class="rsw-in" id="rswName" placeholder="e.g. grace-city" autocomplete="off" spellcheck="false" />'
         + '<div class="rsw-msg" id="rswNameMsg"></div>'
         + '<div class="rsw-note">Letters, numbers and hyphens. Others can type this to connect once public access is on — that’s the last step, on the dashboard.</div>'
-        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip">Skip for now</button><button class="btn btn-clay" id="rswClaim">Claim &amp; continue</button></div>';
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack" title="Go back one step">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswSkip" title="Skip this step; you can do it later from Settings">Skip for now</button><button class="btn btn-clay" id="rswClaim">Claim &amp; continue</button></div>';
       const inp = document.getElementById('rswName');
       if (rswHandle) inp.value = rswHandle;
       inp.focus();
@@ -1446,7 +1446,7 @@
         // which is worse than not asking. When chunk 4 gives the answer somewhere to act, delete this line.
         + '<p class="rsw-sub" style="opacity:.8">We\u2019re noting this for later — it doesn\u2019t change anything yet.</p>'
         + '<div class="rsw-msg" id="rswOnMsg"></div>'
-        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswOnNo">No \u2014 it gets switched off</button><button class="btn btn-clay" id="rswOnYes">Yes, it stays on</button></div>';
+        + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack" title="Go back one step">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswOnNo" title="Leave this switched off">No \u2014 it gets switched off</button><button class="btn btn-clay" id="rswOnYes">Yes, it stays on</button></div>';
       const answer = (on) => {
         try { localStorage.setItem('to_relay_always_on', on ? '1' : '0'); } catch (e) {}
         rswStep = 4; renderRSW();
@@ -1470,8 +1470,8 @@
     const foot = nextIsChurch
       ? suiteLink('btn-ghost') + '<div style="flex:1"></div><a class="btn btn-clay" id="rswConsole" href="/steward.html" style="text-decoration:none">Next: open the console</a>'
       : RSW_PATH
-        ? '<button class="btn btn-ghost" id="rswDone">Go to dashboard</button><div style="flex:1"></div>' + suiteLink('btn-clay')
-        : '<div style="flex:1"></div><button class="btn btn-clay" id="rswDone">Go to dashboard</button>';
+        ? '<button class="btn btn-ghost" id="rswDone" title="Finish setup and open the dashboard">Go to dashboard</button><div style="flex:1"></div>' + suiteLink('btn-clay')
+        : '<div style="flex:1"></div><button class="btn btn-clay" id="rswDone" title="Finish setup and open the dashboard">Go to dashboard</button>';
     card.innerHTML = rswDots()
       + '<div class="rsw-ic">' + RSW_IC.check + '</div>'
       + '<h2 class="rsw-h">Your relay is ready</h2>'
@@ -1482,7 +1482,7 @@
           : needsChurch ? 'Now set up your church — it is created in the console, not here.' : 'One more thing worth doing, so members outside your building can connect:') + '</p>'
       + '<div class="rsw-next">'
       +   (needsChurch && !nextIsChurch ? '<a class="rsw-step" id="rswConsole" href="/steward.html" style="text-decoration:none"><span class="si">' + RSW_IC.church + '</span><span style="flex:1"><span class="st">Open the console</span><span class="sd">Create your church there — naming it registers it on this relay.</span></span></a>' : '')
-      +   '<button class="rsw-step" id="rswTunnel"><span class="si">' + RSW_IC.globe + '</span><span style="flex:1"><span class="st">Reach members from anywhere</span><span class="sd">Turn on a secure tunnel — free, no router setup.</span></span></button>'
+      +   '<button class="rsw-step" id="rswTunnel" title="Give your relay a secure public web address"><span class="si">' + RSW_IC.globe + '</span><span style="flex:1"><span class="st">Reach members from anywhere</span><span class="sd">Turn on a secure tunnel — free, no router setup.</span></span></button>'
       + '</div>'
       + '<div class="rsw-foot">' + foot + '</div>';
     const rd = document.getElementById('rswDone'); if (rd) rd.onclick = closeRSW;

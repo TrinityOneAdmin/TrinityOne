@@ -392,7 +392,7 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}>
         <input value={newPerson} onChange={e => setNewPerson(e.target.value)} placeholder="Name" style={schFld} disabled={!!linkPub} />
-        <select value={linkPub} onChange={e => setLinkPub(e.target.value)} aria-label="Link this person to a member account" style={schFld}>
+        <select value={linkPub} onChange={e => setLinkPub(e.target.value)} title="Connect this name to a member so they see their own turns in the app" aria-label="Link this person to a member account" style={schFld}>
           <option value="">…or link a member</option>
           {(members || []).filter(mm => !people.some(p => p.pub && p.pub === mm.pubkey) && !blockedR.has(String(mm.pubkey || '').toLowerCase())).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
         </select>
@@ -501,7 +501,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, p
       {repeat === 'monthly' && setNth ? (
         <React.Fragment>
           <div style={schLbl}>Which week</div>
-          <select aria-label="Which week of the month" value={nth || 1} onChange={e => setNth(+e.target.value)} style={schFld}>
+          <select title="Which week of the month this repeats on" aria-label="Which week of the month" value={nth || 1} onChange={e => setNth(+e.target.value)} style={schFld}>
             {SCH_NTH_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
           {firstOn ? (() => { const p = schParts(firstOn); return <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6 }}>First: {p.dow} {p.day} {p.mon}</div>; })() : null}
@@ -1408,7 +1408,7 @@ const SCH_SHOWN_MISSED = 'The event is saved, but “On the website” wasn’t 
 function SchWebsiteShownRow({ shown, setShown }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: shown ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
-      <input type="checkbox" aria-label="On the website" checked={!!shown} onChange={ev => setShown(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <input type="checkbox" title="Tick to show this on your church website" aria-label="On the website" checked={!!shown} onChange={ev => setShown(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 13.5 }}>On the website</div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>A group’s event stays off the public calendar feed unless you put it there.</div>
@@ -1419,7 +1419,7 @@ function SchWebsiteShownRow({ shown, setShown }) {
 function SchWebsiteHeldRow({ held, setHeld }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: held ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
-      <input type="checkbox" aria-label="Not on the website" checked={!!held} onChange={ev => setHeld(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <input type="checkbox" title="Tick to keep this off your church website" aria-label="Not on the website" checked={!!held} onChange={ev => setHeld(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 13.5 }}>Not on the website</div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Members still see it; it stays off the public calendar feed.</div>
@@ -1853,17 +1853,17 @@ function SchEventEdit({ event, onClose }) {
       {series ? (
         <React.Fragment>
           <div style={schLbl}>Day</div>
-          <select aria-label="Day" value={day} onChange={ev => setDay(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+          <select title="Which day of the week" aria-label="Day" value={day} onChange={ev => setDay(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => <option key={i} value={i}>{d}</option>)}
           </select>
           <div style={schLbl}>Repeats</div>
-          <select aria-label="Repeats" value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+          <select title="How often this repeats" aria-label="Repeats" value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             <option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option>
           </select>
           {recur === 'monthly' ? (
             <React.Fragment>
               <div style={schLbl}>Which week</div>
-              <select aria-label="Which week" value={nth} onChange={ev => setNth(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+              <select title="Which week of the month this repeats on" aria-label="Which week" value={nth} onChange={ev => setNth(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
                 <option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option><option value={-1}>Last</option>
               </select>
             </React.Fragment>
@@ -2286,7 +2286,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
         <div style={{ padding: '20px 24px 6px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{bk.id ? 'Edit booking' : 'Book a room'}</div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 24px' }}>
           <div style={roomLbl}>ROOM</div>
-          <select aria-label="Room" value={roomId} onChange={e => setRoomId(e.target.value)} style={{ ...roomFld, appearance: 'auto', marginBottom: 12 }}>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
+          <select title="Which room this booking is for" aria-label="Room" value={roomId} onChange={e => setRoomId(e.target.value)} style={{ ...roomFld, appearance: 'auto', marginBottom: 12 }}>{rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
           <div style={roomLbl}>WHAT FOR</div>
           <input aria-label="What for" autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Youth group, Wedding rehearsal" style={{ ...roomFld, marginBottom: 12 }} />
           <div style={{ display: 'flex', gap: 10 }}>
