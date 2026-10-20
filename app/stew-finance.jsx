@@ -911,7 +911,7 @@ function DashFinanceBook() {
 
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
-        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bank reconciliation, bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs. TrinityOne charges nothing — <button onClick={() => setDonate(true)} style={{ border: 'none', background: 'transparent', padding: 0, color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5 }}>support the project →</button></div>
+        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bank reconciliation, bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs.</div>
       </div>
 
       {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
