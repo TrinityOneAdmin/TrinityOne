@@ -1659,7 +1659,7 @@ function DashCalendar() {
           <button onClick={() => setView(v => ({ y: v.m === 11 ? v.y + 1 : v.y, m: v.m === 11 ? 0 : v.m + 1 }))} title="Next month" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="chevR" size={16} /></button>
           <div style={{ flex: 1 }} />
           {rooms.length ? <button onClick={() => setShowBookings(v => !v)} title="Show room bookings on the calendar" className="sk-btn sk-btn--ghost" style={{ padding: '8px 11px', fontSize: 12.5, opacity: showBookings ? 1 : 0.55 }}><Icon name="marker" size={14} color="currentColor" /> {showBookings ? 'Rooms on' : 'Rooms off'}</button> : null}
-          <button onClick={() => setAdding('')} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="calPlus" size={15} color="currentColor" /> New event</button>
+          <button onClick={() => setAdding('')} title="Add a new event to the church calendar" className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="calPlus" size={15} color="currentColor" /> New event</button>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 5, marginBottom: 5, flexShrink: 0 }}>
           {SCH_DOW.map(d => <div key={d} style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.4px' }}>{d.toUpperCase()}</div>)}
@@ -2206,7 +2206,7 @@ function DashRooms() {
       <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 8 }}>Spaces</div>
       <div style={{ display: 'flex', gap: 9, marginBottom: 10 }}>
         <input value={newRoom} onChange={e => setNewRoom(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addRoom(); }} placeholder="Add a room — e.g. Main Hall, Room 2, Kitchen" style={roomFld} />
-        <button onClick={addRoom} disabled={roomBusy} className="sk-btn sk-btn--clay" style={{ padding: '0 15px', fontSize: 13, opacity: roomBusy ? 0.55 : 1 }}>{roomBusy ? 'Adding…' : 'Add'}</button>
+        <button onClick={addRoom} disabled={roomBusy} title="Add this room so it can be booked for events" className="sk-btn sk-btn--clay" style={{ padding: '0 15px', fontSize: 13, opacity: roomBusy ? 0.55 : 1 }}>{roomBusy ? 'Adding…' : 'Add'}</button>
       </div>
       <SchNotSaved msg={roomErr} />
       {rooms.length ? (

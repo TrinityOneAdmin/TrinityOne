@@ -126,6 +126,20 @@ function StewCapBlocked({ cap, note }) {
   );
 }
 
+const NAV_TIPS = {
+  overview: 'See what needs your attention and how the church is doing at a glance',
+  groups: 'Create and manage groups, teams and rooms, and their members',
+  rota: 'Plan who is serving when, and manage your serving teams',
+  calendar: 'Add and edit church events and see what is coming up',
+  rooms: 'Add the rooms in your building and book them for events',
+  resources: 'Manage reading plans, devotionals, sermons and the verse prompt',
+  members: 'See who is in your church, approve new people and manage stewards',
+  finance: 'Record giving and expenses, import a bank statement, share a summary',
+  checkin: 'Run the children\'s check-in register',
+  manna: 'Manage Manna',
+  meals: 'Organise meals, practical help and care for people in need',
+  settings: 'Church name, relays, backup and other console settings',
+};
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
@@ -1949,7 +1963,7 @@ function StewSectionsMenu({ nav, tab, onPick, onHelp, onClose }) {
           {nav.map(n => {
             const on = n.key === tab;
             return (
-              <button key={n.key} onClick={() => onPick(n.key)} aria-current={on ? 'page' : undefined} style={{ ...row, background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600 }}>
+              <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => onPick(n.key)} aria-current={on ? 'page' : undefined} style={{ ...row, background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600 }}>
                 <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                 {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
               </button>
@@ -2326,7 +2340,7 @@ function StewDashboard({ initial = 'overview' }) {
             {nav.map(n => {
               const on = n.key === tab;
               return (
-                <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
+                <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => setTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
                   <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                   {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
                 </button>
@@ -3624,7 +3638,7 @@ function DashGiving() {
   );
 }
 
-function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInline, compact, onAdd, empty, reorderable, onReorder, headerExtra, filters }) {
+function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInline, compact, onAdd, empty, reorderable, onReorder, headerExtra, filters, addTip }) {
   const [order, setOrder] = React.useState(null);   // working copy while dragging
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
@@ -3652,7 +3666,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
   const move = (idx, dir) => { const arr = items.slice(); const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; if (onReorder) onReorder(arr); };
   const fld = { width: '100%', boxSizing: 'border-box', height: 40, padding: '0 14px 0 38px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   return (
-    <Panel title={title} action={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerExtra || null}<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> {addLabel}</button></div>} style={{ height: '100%' }} scroll>
+    <Panel title={title} action={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerExtra || null}<button onClick={onAdd} title={addTip} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> {addLabel}</button></div>} style={{ height: '100%' }} scroll>
       {searchable ? (
         <div style={{ position: 'relative', marginBottom: 12, flexShrink: 0 }}>
           <Icon name="search" size={16} color="var(--ink-3)" style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
@@ -4622,7 +4636,7 @@ function DashGroups() {
           <button onClick={() => setRowErr('')} aria-label="Dismiss" className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>Dismiss</button>
         </div>
       ) : null}
-      <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
+      <ListPanel title="Groups, teams & rooms" addLabel="New group" addTip="Create a new group, team or room" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
@@ -6299,7 +6313,7 @@ function DashPlans() {
         ? (p.draft
           ? <button onClick={() => { if (confirm('Delete "' + p.title + '" for good? This cannot be undone.')) window.Steward.removePlan(p.id); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Delete this draft plan for good">Delete</button>
           : <button onClick={() => unshare(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Stop sharing: members and your website stop seeing it, and it moves to drafts">Unshare</button>)
-        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
+        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Publish this plan so members (and your website) can see and follow it"><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
     </div>
   );
   return (
@@ -6728,8 +6742,9 @@ function DashResources() {
   const [view, setView] = React.useState('plans');   // plans | devotionals
   const [bulk, setBulk] = React.useState(false);
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
+  const TAB_TIPS = { plans: 'Reading plans members can follow day by day', devotionals: 'Short devotionals you schedule for members to read', media: 'Sermon recordings and notes for members', verse: 'Set the verse members are prompted with' };
   const btn = (k, label) => (
-    <button onClick={() => setView(k)} style={{ padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay-ink)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
+    <button onClick={() => setView(k)} title={TAB_TIPS[k]} style={{ padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay-ink)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
   );
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
