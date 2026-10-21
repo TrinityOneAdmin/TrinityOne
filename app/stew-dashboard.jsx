@@ -3688,11 +3688,14 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
                 );
               })() : null}
               {compact ? null : <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>}
-              {/* compact (APK): one line — name, then the settings gear (renderInline), then the member count.
-                  The gear sits by the NAME and well away from the delete button on the far right, so a tap for
-                  settings is never a tap for delete (owner 2026-10-14). */}
+              {/* compact (APK / narrow mobile): the name + settings gear sit on the FIRST line; the member count
+                  / invite-only meta drops to a SECOND line below it. Before this, name + gear + meta shared one
+                  line and the meta was flexShrink:0, so a long group name was truncated to make room for the
+                  count — worst on a narrow phone (owner 2026-10-21). The gear still sits by the NAME and well
+                  away from the delete button on the far right, so a tap for settings is never a tap for delete
+                  (owner 2026-10-14). */}
               {compact
-                ? <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, overflow: 'hidden' }}><span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{it.name}</span>{renderInline ? <span style={{ flexShrink: 0, display: 'flex' }}>{renderInline(it)}</span> : null}{it.sub ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>· {it.sub}</span> : null}</div>
+                ? <div style={{ flex: 1, minWidth: 0 }}><div style={{ display: 'flex', alignItems: 'center', gap: 7, overflow: 'hidden' }}><span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{it.name}</span>{renderInline ? <span style={{ flexShrink: 0, display: 'flex' }}>{renderInline(it)}</span> : null}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{it.sub}</div> : null}</div>
                 : <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>}
               {renderAside ? <div style={{ flexShrink: 0 }}>{renderAside(it)}</div> : null}
             </div>
@@ -6119,11 +6122,16 @@ function DashPlans() {
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{p.sub || (p.days ? p.days.length + ' days' : '')}{p.tag ? ' · ' + p.tag : ''}{isShared && p.publishAt && p.publishAt * 1000 > Date.now() ? ' · ' + new Date(p.publishAt * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</div>
       </div>
-      {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
-      {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
-      {isShared
-        ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
-        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
+      {/* Right-side controls stack in a COLUMN so the Website toggle sits UNDER the Unshare button, instead of
+          beside the title. Sharing the row with the title/description squeezed a long content title on a narrow
+          phone (owner 2026-10-21). */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+        {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
+        {isShared
+          ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
+          : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
+        {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
+      </div>
     </div>
   );
   return (
