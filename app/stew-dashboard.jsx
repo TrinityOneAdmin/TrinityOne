@@ -968,9 +968,9 @@ function KeyDistributor() {
       try { const p = window.Steward && window.Steward.autoEnrolRelayNet && window.Steward.autoEnrolRelayNet(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
     };
     const t = setTimeout(run, 4000);
-    window.addEventListener('steward-relay-returned', run);
-    window.addEventListener('focus', run);
-    return () => { clearTimeout(t); window.removeEventListener('steward-relay-returned', run); window.removeEventListener('focus', run); };
+    const EVENTS = ['steward-relay-returned', 'focus'];
+    for (const ev of EVENTS) window.addEventListener(ev, run);
+    return () => { clearTimeout(t); for (const ev of EVENTS) window.removeEventListener(ev, run); };
   }, [unlockTick]);
   // ── end of the own-relay enrolment effect
   // THE THREE KEY SUBSCRIPTIONS FOLLOW THE CHURCH AND THE CONNECTION — [idv, conn, church], like makeSub in

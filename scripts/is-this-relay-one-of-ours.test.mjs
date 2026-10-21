@@ -115,13 +115,14 @@ function consoleWith(deps) {
     // Self-hosting P1 (2026-10-21): the loopback test and the name shape enrolRelayNet now consults.
     stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
     stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),
+    stmt(src, 'var RELAYNET_SEEN = ', 'RELAYNET_SEEN'),
   ].join('\n');
   assert.match(more, /const entries = mine \? parseRelayNet\(mine\.content\) : \[\]/,
     'enrolRelayNet no longer starts from what the church already signed — it would drop offline boxes');
   const f = new Function('verifyEvent', 'verifyEvent2', 'normalizeURL', 'normalizeURL2', 'fetch',
     'location', 'window', 'extraRelays', '_oneComplete', 'publish', 'sk', 'pub', 'now',
     'finalizeEvent', 'finalizeEvent2', 'relays', 'ownRelay', '_boxHostsUs', '_monotonic',
-    'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool',
+    'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool', 'lsGet', 'lsSet',
     body + '\n' + more +
     '\nreturn { enrolRelayNet, relayNetCandidates, relayNetEntries, isNetworkRelay: isNetworkRelay2, _ownOrigin };');
   return f(verifyEvent, verifyEvent, normalizeURL, normalizeURL, globalThis.fetch,
@@ -137,7 +138,10 @@ function consoleWith(deps) {
     // console, nameless, no public address, delivering nowhere" so every older row measures what it did.
     deps.actingChurch || '', (typeof deps.viewingNetwork === 'function') ? deps.viewingNetwork : () => !!deps.viewingNetwork,
     () => deps.selfName || '', () => deps.selfPublic || '',
-    deps.pool || { publish: () => [] });
+    deps.pool || { publish: () => [] },
+    // The console's own localStorage (finding 2's "has this console seen a list?"), fresh per console unless shared.
+    (k) => { const m = deps.store || (deps.store = new Map()); return m.has(k) ? m.get(k) : null; },
+    (k, v) => { const m = deps.store || (deps.store = new Map()); m.set(k, String(v)); });
 }
 
 // ── reading the relay, not the client ───────────────────────────────────────────────────────────────────
@@ -162,7 +166,7 @@ const oneFrom = (relay, church) => async (filters) => {
   let best = null;
   for (const e of evs) if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
   // `answered`/`asked` (2026-10-21, audit finding 2): one real relay, and it answered.
-  return { ev: best, complete: true, answered: 1, asked: 1 };
+  return { ev: best, complete: true, answered: 1, asked: 1, answeredUrls: [relay.wsUrl] };
 };
 // …and the same read on a link where ONE of the two documents never comes back: that filter answers nothing
 // and never reaches the end, the other answers normally.
@@ -676,6 +680,45 @@ test('a list is never rebuilt from scratch unless EVERY relay asked said "nothin
     publish: publishTo(BOX), sk: flock.sk, pub: flock.pub,
   });
   assert.equal((await con2.enrolRelayNet()).published, true, 'every relay answered and still nothing was signed');
+});
+
+test('with the shared relays unreachable, the church\'s OWN box saying "nothing here" starts the list — once (finding 2, refined)', async () => {
+  // The threat model: the shared community relays are blocked or seized. "Every relay must answer" would then
+  // keep a self-hosting church's own box unsigned for ever (measured in a real browser, 2026-10-21). The own
+  // box's own "nothing here" is enough — but only for a console that has never seen this church's list, so a
+  // reinstalled box answering empty while the relays holding the list are down is still refused.
+  const { flock, BOX, location } = await selfHostedChurch('F2b');
+  // Both reads (the list, and the one-time seed) get the same answer: only the own box replied, empty.
+  const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] });
+  const fresh = consoleWith({ location, one: ownOnly, publish: publishTo(BOX), pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
+  const res = await fresh.enrolRelayNet();
+  assert.equal(res.published, true,
+    'A SELF-HOSTING CHURCH WHOSE SHARED RELAYS ARE UNREACHABLE COULD NOT SIGN ITS OWN BOX: ' + JSON.stringify(res));
+
+  // A console that HAS seen a list for this church: the same answer is not enough.
+  const store = new Map([['trinityone.steward.relaynet-seen.' + flock.pub, '1']]);
+  let published = 0;
+  const seen = consoleWith({ location, store, one: ownOnly, publish: async () => { published++; return true; }, pool: poolTo(), sk: flock.sk, pub: flock.pub });
+  const res2 = await seen.enrolRelayNet();
+  assert.equal(res2.unknown, true, 'a console that has seen this church\'s list started a new one from one box\'s "nothing here"');
+  assert.equal(published, 0, 'A LIST WAS STARTED OVER ONE THIS CONSOLE HAD ALREADY SEEN — the reinstalled-box wipe');
+
+  // And a relay that is not the church's own box saying "nothing here" is never enough on its own.
+  let published3 = 0;
+  const other = consoleWith({ location,
+    one: async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: ['wss://somewhere-else.example/relay'] }),
+    publish: async () => { published3++; return true; }, pool: poolTo(), sk: flock.sk, pub: flock.pub });
+  assert.equal((await other.enrolRelayNet()).unknown, true, 'another relay\'s "nothing here" started the list');
+  assert.equal(published3, 0);
+});
+
+test('a console remembers having seen its church\'s list, so a later empty answer is never taken as "no list"', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('SEEN');
+  const store = new Map();
+  const con = consoleWith({ location, store, one: oneFrom(BOX, flock), publish: publishTo(BOX), pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
+  assert.equal((await con.enrolRelayNet()).published, true, 'precondition: the first list was signed');
+  assert.equal(store.get('trinityone.steward.relaynet-seen.' + flock.pub), '1',
+    'the console did not remember signing a list — after a reinstall its own box\'s empty answer would wipe it');
 });
 
 test('a console that switches to a network view mid-enrolment signs nothing (audit finding 6)', async () => {

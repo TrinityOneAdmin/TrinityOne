@@ -169,6 +169,7 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
     stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
     stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),
+    stmt(src, 'var RELAYNET_SEEN = ', 'RELAYNET_SEEN'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function relays()', 'relays'),

@@ -18790,7 +18790,8 @@ zoo`.split("\n");
           } catch {
           }
         }
-        resolve({ ev: best, complete, answered, asked: urls.length });
+        const answeredUrls = [...eosed].filter((u) => !failed.has(u) && !(privateDoc && loginPending(u)));
+        resolve({ ev: best, complete, answered, asked: urls.length, answeredUrls });
       };
       for (const u of urls) {
         try {
@@ -18828,6 +18829,7 @@ zoo`.split("\n");
     const { ev } = await relayNetDoc();
     return ev && ev.pubkey === pub ? parseRelayNet(ev.content) : [];
   }
+  var RELAYNET_SEEN = "trinityone.steward.relaynet-seen.";
   var _isLoopbackRelay = (u) => /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/|$)/i.test(String(u || ""));
   var _RELAY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
   async function enrolRelayNet(opts) {
@@ -18835,9 +18837,32 @@ zoo`.split("\n");
     if (!sk || !pub) throw new Error("No church key on this device");
     if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: "not this church\u2019s own console" };
     const sk0 = sk, pub0 = pub;
-    const { ev: existing, complete, answered, asked } = await relayNetDoc();
+    const { ev: existing, complete, answered, asked, answeredUrls } = await relayNetDoc();
     const mine = existing && existing.pubkey === pub ? existing : null;
-    if (!mine && !(complete && answered === asked)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    const seenKey = RELAYNET_SEEN + (pub || "");
+    let seenBefore = false;
+    try {
+      seenBefore = lsGet(seenKey) === "1";
+    } catch (e) {
+      seenBefore = true;
+    }
+    if (mine) {
+      try {
+        lsSet(seenKey, "1");
+      } catch (e) {
+      }
+    }
+    const ownUrl = relayNetCandidates()[0] || "";
+    const _k = (u) => {
+      try {
+        return normalizeURL2(u);
+      } catch (e) {
+        return String(u || "");
+      }
+    };
+    const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some((u) => _k(u) === _k(ownUrl));
+    const nothingAnywhere = (r) => r.complete && r.answered === r.asked || !seenBefore && ownSaidNothing(r.answeredUrls);
+    if (!mine && !nothingAnywhere({ complete, answered, asked, answeredUrls })) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     const entries = mine ? parseRelayNet(mine.content) : [];
     const before = JSON.stringify(entries);
     let seeded = 0;
@@ -18846,7 +18871,7 @@ zoo`.split("\n");
       try {
         const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
         old = r.ev;
-        oldComplete = r.complete && r.answered === r.asked;
+        oldComplete = !!r.ev || nothingAnywhere(r);
       } catch {
       }
       if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
@@ -18908,6 +18933,12 @@ zoo`.split("\n");
     const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
     const ev = await publish(signed);
     const delivered = await deliver(signed);
+    if (ev || delivered.length) {
+      try {
+        lsSet(seenKey, "1");
+      } catch (e) {
+      }
+    }
     return { published: !!ev || delivered.length > 0, entries, proven, unproven, seeded, delivered };
   }
   var _autoEnrolled = /* @__PURE__ */ new Set();

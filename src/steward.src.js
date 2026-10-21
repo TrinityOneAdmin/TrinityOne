@@ -4942,7 +4942,8 @@ function _oneComplete(filters, ms = 6000, privateDoc = false) {
       for (const u of eosed) if (!failed.has(u) && !(privateDoc && loginPending(u))) answered++;
       const complete = urls.length > 0 && eosed.size === urls.length && answered > 0;
       for (const s of subs) { try { s.close(); } catch {} }
-      resolve({ ev: best, complete, answered, asked: urls.length });
+      const answeredUrls = [...eosed].filter(u => !failed.has(u) && !(privateDoc && loginPending(u)));
+      resolve({ ev: best, complete, answered, asked: urls.length, answeredUrls });
     };
     for (const u of urls) {
       try {
@@ -5012,6 +5013,7 @@ async function relayNetEntries(cp) {
 // its tunnel moves; the pubkey stays the membership. Neither is ever blanked once written: selfRelayName is
 // cleared locally whenever the tunnel is down, and an empty value then must not erase the church's record.
 // A loopback address is never written — it names the steward's own computer, not anything a phone can reach.
+const RELAYNET_SEEN = 'trinityone.steward.relaynet-seen.';   // + church pub: '1' once this console has seen or written its list
 const _isLoopbackRelay = (u) => /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/|$)/i.test(String(u || ''));
 const _RELAY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 async function enrolRelayNet(opts) {
@@ -5019,12 +5021,26 @@ async function enrolRelayNet(opts) {
   if (!sk || !pub) throw new Error('No church key on this device');
   if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: 'not this church’s own console' };
   const sk0 = sk, pub0 = pub;
-  const { ev: existing, complete, answered, asked } = await relayNetDoc();
+  const { ev: existing, complete, answered, asked, answeredUrls } = await relayNetDoc();
   const mine = (existing && existing.pubkey === pub) ? existing : null;
-  // FROM SCRATCH ONLY WHEN EVERY RELAY ASKED HAS SAID "NOTHING HERE" (audit 2026-10-21, finding 2). One empty
-  // answer is not enough: a reinstalled box, or a relay that missed the last write, answers empty while the
-  // relays that DO hold the church's list are down — and a list rebuilt from that drops every box it named.
-  if (!mine && !(complete && answered === asked)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+  // WHEN IS "NO LIST ANYWHERE" TRUE ENOUGH TO START ONE? (audit 2026-10-21, finding 2.) One empty answer is not
+  // enough: a reinstalled box, or a relay that missed the last write, answers empty while the relays that DO
+  // hold the church's list are down — and a list started from that drops every box it named. Two answers are:
+  //  · every relay asked said "nothing here"; or
+  //  · THIS CHURCH'S OWN BOX said "nothing here", and this console has never seen a list for this church.
+  // The second exists because "every relay" includes the shared community relays, and a self-hosting church
+  // whose shared relays are unreachable — blocked, seized, or simply offline (the threat model this feature
+  // is for) — could otherwise never sign its own box at all. Measured in a real browser 2026-10-21: with the
+  // shared hosts unreachable, "every relay" kept the Suite's own box unsigned for ever. The console remembers
+  // having seen a list (RELAYNET_SEEN), so the reinstalled-box case stays refused wherever a list was seen.
+  const seenKey = RELAYNET_SEEN + (pub || '');
+  let seenBefore = false; try { seenBefore = lsGet(seenKey) === '1'; } catch (e) { seenBefore = true; }
+  if (mine) { try { lsSet(seenKey, '1'); } catch (e) {} }
+  const ownUrl = relayNetCandidates()[0] || '';
+  const _k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
+  const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some(u => _k(u) === _k(ownUrl));
+  const nothingAnywhere = (r) => (r.complete && r.answered === r.asked) || (!seenBefore && ownSaidNothing(r.answeredUrls));
+  if (!mine && !nothingAnywhere({ complete, answered, asked, answeredUrls })) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
   const entries = mine ? parseRelayNet(mine.content) : [];
   const before = JSON.stringify(entries);
   let seeded = 0;
@@ -5032,7 +5048,7 @@ async function enrolRelayNet(opts) {
     let old = null, oldComplete = false;
     // trinityone/relays is PRIVATE: an empty answer from a relay still waiting on our login is not an answer, and
     // the seed is trusted only if every relay asked really answered (see _oneComplete's `privateDoc`).
-    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true); old = r.ev; oldComplete = r.complete && r.answered === r.asked; } catch {}
+    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true); old = r.ev; oldComplete = !!r.ev || nothingAnywhere(r); } catch {}
     if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     let arr = [];
     if (old && old.pubkey === pub) { try { arr = JSON.parse(old.content || '[]'); } catch { arr = []; } }
@@ -5093,6 +5109,7 @@ async function enrolRelayNet(opts) {
   const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
   const ev = await publish(signed);
   const delivered = await deliver(signed);
+  if (ev || delivered.length) { try { lsSet(seenKey, '1'); } catch (e) {} }
   return { published: !!ev || delivered.length > 0, entries, proven, unproven, seeded, delivered };
 }
 
