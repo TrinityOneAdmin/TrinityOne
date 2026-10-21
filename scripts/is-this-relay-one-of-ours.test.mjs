@@ -135,7 +135,8 @@ function consoleWith(deps) {
     // Self-hosting P1: B1's guard reads actingChurch/_viewingNetwork; the own box's name and public address
     // come from selfRelayName/selfPublicRelay; B3 delivers over pool.publish. Defaults are "this church's own
     // console, nameless, no public address, delivering nowhere" so every older row measures what it did.
-    deps.actingChurch || '', () => !!deps.viewingNetwork, () => deps.selfName || '', () => deps.selfPublic || '',
+    deps.actingChurch || '', (typeof deps.viewingNetwork === 'function') ? deps.viewingNetwork : () => !!deps.viewingNetwork,
+    () => deps.selfName || '', () => deps.selfPublic || '',
     deps.pool || { publish: () => [] });
 }
 
@@ -160,7 +161,8 @@ const oneFrom = (relay, church) => async (filters) => {
   const evs = await H.readAs(relay, church, filters[0]);
   let best = null;
   for (const e of evs) if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
-  return { ev: best, complete: true };
+  // `answered`/`asked` (2026-10-21, audit finding 2): one real relay, and it answered.
+  return { ev: best, complete: true, answered: 1, asked: 1 };
 };
 // …and the same read on a link where ONE of the two documents never comes back: that filter answers nothing
 // and never reaches the end, the other answers normally.
@@ -627,19 +629,69 @@ test('B3: the signed list reaches the box that just proved itself, even when the
 test('B1: a console helping another church, or viewing a network, signs nothing and sends nothing', async () => {
   const { flock, BOX, location } = await selfHostedChurch('B1');
   for (const who of [{ actingChurch: H.key().pub }, { viewingNetwork: true }]) {
-    let published = 0;
+    let published = 0, reads = 0;
     const pool = poolTo(BOX);
+    const one = oneFrom(BOX, flock);
     const con = consoleWith({
       location, pool, ...who,
-      one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub,
+      one: async (f) => { reads++; return one(f); }, publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub,
     });
     const res = await con.enrolRelayNet();
+    // The guard at the top, not only the re-check before signing: a console that is not this church's own must
+    // not even READ the list under the wrong identity (B1's own words: "before anything else").
+    assert.equal(reads, 0, 'a delegated/network console read the church\'s relay list before refusing: ' + JSON.stringify(who));
     assert.equal(res.published, false, 'a delegated/network console signed a relay list: ' + JSON.stringify(who));
     assert.ok(res.skipped, 'the caller was not told why nothing happened');
     assert.equal(published + pool.sent.length, 0,
       'A CONSOLE THAT IS NOT THIS CHURCH\'S OWN WROTE A RELAY LIST — in delegated mode that is the helper\'s key ' +
       'signing over their own church\'s list (B1): ' + JSON.stringify(who));
   }
+  assert.deepEqual(await storedRelayNet(BOX, flock), [], 'something reached the box');
+});
+
+// ── 15-16. the second audit round (2026-10-21) ───────────────────────────────────────────────────────────
+test('a list is never rebuilt from scratch unless EVERY relay asked said "nothing here" (audit finding 2)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('F2');
+  let published = 0;
+  const pool = poolTo(BOX);
+  // One relay answered empty; the other (the one that holds the church's real list) is down.
+  const con = consoleWith({
+    location, pool,
+    // Only the relay-net read is half-answered. The one-time seed read answers in full, so nothing but the rule
+    // under test can stop the from-scratch rebuild (a first version half-answered both, and the seed's own guard
+    // hid a sabotage of this one).
+    one: async (f) => ((f[0]['#d'] || [])[0] === RELAY_NET_D
+      ? { ev: null, complete: true, answered: 1, asked: 2 }
+      : { ev: null, complete: true, answered: 2, asked: 2 }),
+    publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub,
+  });
+  const res = await con.enrolRelayNet();
+  assert.equal(res.unknown, true, 'one empty answer out of two was taken as "this church has signed nothing"');
+  assert.equal(published + pool.sent.length, 0,
+    'A LIST WAS BUILT FROM SCRATCH WHILE A RELAY THAT MAY HOLD THE REAL ONE WAS DOWN — every box it named is dropped');
+  // …and when both answered, the first list is written.
+  const con2 = consoleWith({
+    location, pool: poolTo(BOX),
+    one: async () => ({ ev: null, complete: true, answered: 2, asked: 2 }),
+    publish: publishTo(BOX), sk: flock.sk, pub: flock.pub,
+  });
+  assert.equal((await con2.enrolRelayNet()).published, true, 'every relay answered and still nothing was signed');
+});
+
+test('a console that switches to a network view mid-enrolment signs nothing (audit finding 6)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('F6');
+  let calls = 0, published = 0;
+  const pool = poolTo(BOX);
+  const con = consoleWith({
+    location, pool,
+    viewingNetwork: () => (calls++ > 0),            // our own church at the guard, a network view by the time we sign
+    one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub,
+  });
+  const res = await con.enrolRelayNet();
+  assert.ok(calls >= 2, 're-anchor: the identity was only checked once');
+  assert.equal(res.unknown, true, 'the caller was not told to try again');
+  assert.equal(published + pool.sent.length, 0,
+    'THE CONSOLE SIGNED AFTER IT HAD SWITCHED AWAY — church A\'s list under another key');
   assert.deepEqual(await storedRelayNet(BOX, flock), [], 'something reached the box');
 });
 

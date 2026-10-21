@@ -18764,16 +18764,25 @@ zoo`.split("\n");
     for (const u of extra || []) add2(u);
     return out;
   }
-  function _oneComplete(filters, ms = 6e3) {
+  function _oneComplete(filters, ms = 6e3, privateDoc = false) {
     return new Promise((resolve) => {
       const urls = relaysRaw();
       let best = null, done = false;
+      const loginPending = (u) => {
+        let k = u;
+        try {
+          k = normalizeURL2(u);
+        } catch (e) {
+        }
+        const r = pool.relays.get(k);
+        return !!r && !!r.challenge && _authAccepted.get(k) !== r;
+      };
       const eosed = /* @__PURE__ */ new Set(), failed = /* @__PURE__ */ new Set(), subs = [];
       const finish = () => {
         if (done) return;
         done = true;
         let answered = 0;
-        for (const u of eosed) if (!failed.has(u)) answered++;
+        for (const u of eosed) if (!failed.has(u) && !(privateDoc && loginPending(u))) answered++;
         const complete = urls.length > 0 && eosed.size === urls.length && answered > 0;
         for (const s of subs) {
           try {
@@ -18781,7 +18790,7 @@ zoo`.split("\n");
           } catch {
           }
         }
-        resolve({ ev: best, complete, answered });
+        resolve({ ev: best, complete, answered, asked: urls.length });
       };
       for (const u of urls) {
         try {
@@ -18825,18 +18834,19 @@ zoo`.split("\n");
     const o = opts || {};
     if (!sk || !pub) throw new Error("No church key on this device");
     if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: "not this church\u2019s own console" };
-    const { ev: existing, complete } = await relayNetDoc();
+    const sk0 = sk, pub0 = pub;
+    const { ev: existing, complete, answered, asked } = await relayNetDoc();
     const mine = existing && existing.pubkey === pub ? existing : null;
-    if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    if (!mine && !(complete && answered === asked)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     const entries = mine ? parseRelayNet(mine.content) : [];
     const before = JSON.stringify(entries);
     let seeded = 0;
     if (!mine) {
       let old = null, oldComplete = false;
       try {
-        const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }]);
+        const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
         old = r.ev;
-        oldComplete = r.complete;
+        oldComplete = r.complete && r.answered === r.asked;
       } catch {
       }
       if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
@@ -18886,6 +18896,7 @@ zoo`.split("\n");
       }
     }
     const changed = JSON.stringify(entries) !== before;
+    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, skipped: "the console changed church while enrolling" };
     const deliver = async (ev2) => {
       const urls = proven.filter((x) => !shared.includes(x.pubkey)).map((x) => x.url);
       if (!ev2 || !urls.length) return [];
@@ -18904,6 +18915,7 @@ zoo`.split("\n");
     if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
     const own = relayNetCandidates()[0] || "";
     if (!own) return null;
+    if (_boxHostsUs !== true) return null;
     const key = pub + "|" + own;
     if (_autoEnrolled.has(key)) return null;
     _autoEnrolled.add(key);
@@ -18913,7 +18925,10 @@ zoo`.split("\n");
     } catch (e) {
       res = null;
     }
-    if (!res || res.unknown) _autoEnrolled.delete(key);
+    const shared = sharedRelayKeys();
+    const proven = res && res.proven || [];
+    const worked = !!res && !res.unknown && proven.length > 0 && (res.published || (res.delivered || []).length > 0 || proven.every((x) => shared.includes(x.pubkey)));
+    if (!worked) _autoEnrolled.delete(key);
     return res;
   }
   function isNetworkRelay2(cp, url) {
@@ -19518,9 +19533,9 @@ zoo`.split("\n");
     // and still reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md).
     // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
     isNetworkRelay: isNetworkRelay2,
-    // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
-    // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
-    // deadlock rule above enrolRelayNet.
+    // What the church has actually signed — [{pubkey, alwaysOn, url, name?}] — and who this console can PROVE.
+    // relayNetCandidates() is the RAW census (location, plus a relay the steward has just consented to), never
+    // relays(): see the deadlock rule above enrolRelayNet.
     relayNet: relayNetEntries,
     relayNetCandidates,
     // Signs the boxes this console can prove into the church's own membership document. Additive: it never
@@ -26875,6 +26890,13 @@ zoo`.split("\n");
       }
     },
     // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
+    // IS THIS ADDRESS ALREADY IN THE RELAY PANEL? → its normalised form, or ''. The Add-a-relay card asks, so a
+    // steward who connects a relay that is already listed (added before consent existed, or offline the first
+    // time) still gets it signed rather than a "please enter an address" error (audit 2026-10-21, finding 1).
+    knownRelay(input) {
+      const url = normRelay(input);
+      return url && extraRelays().includes(url) ? url : "";
+    },
     addRelay(input) {
       const url = normRelay(input);
       if (!url || url === ownRelay()) return false;

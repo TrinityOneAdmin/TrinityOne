@@ -38,14 +38,14 @@ wss.on('connection', () => { /* deliberately never answers a REQ — no EVENT, n
 after(() => { try { wss.close(); } catch {} });
 
 // The shipped reader, lifted, over a REAL pool.
-function reader(urls) {
+function reader(urls, extra = {}) {
   const pool = new SimplePool();
-  const scope = { pool, relaysRaw: () => urls, setTimeout, clearTimeout, Promise, Math, console };
+  const scope = { pool, relaysRaw: () => urls, setTimeout, clearTimeout, Promise, Math, console, ...(typeof extra === 'function' ? extra(pool) : extra) };
   const fn = new Function('scope', 'with (scope) {' +
     // ⚠ `6e3`, NOT `6000` — esbuild rewrites the numeric literal. Anchoring on the source spelling made
     // every test here fail with "_oneComplete is missing", which reads exactly like the function having been
     // deleted. Slice the BUNDLE by what the bundle says.
-    fnBody(SHIP, 'function _oneComplete(filters, ms = 6e3) {', '_oneComplete') +
+    fnBody(SHIP, 'function _oneComplete(filters, ms = 6e3, privateDoc = false) {', '_oneComplete') +
     '\nreturn _oneComplete; }')(new Proxy(scope, {
       has: (t, k) => (k in t) || !(String(k) in globalThis),
       get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
@@ -124,4 +124,62 @@ test('a relay that DOES answer still reports complete, so the fix is not a blank
     assert.equal(complete, true,
       'A RELAY THAT SENT A REAL EOSE WAS RECORDED AS INCOMPLETE — enrolment would never run at all.');
   } finally { try { ok.close(); } catch {} }
+});
+
+// ── the second audit round (2026-10-21) ──────────────────────────────────────────────────────────────────
+// A relay that answers every REQ with an immediate, empty EOSE — what a healthy relay with no copy says, and
+// also what a relay says to a socket that has not logged in when the document is private (finding 3).
+async function emptyRelay(port) {
+  await requireFreePort(port, 'a-failed-read-is-not-an-empty-church.test.mjs (an empty-answering relay)');
+  const w = new WebSocketServer({ port });
+  w.on('connection', (sock) => { sock.on('message', (d) => { const m = JSON.parse(d); if (m[0] === 'REQ') sock.send(JSON.stringify(['EOSE', m[1]])); }); });
+  return w;
+}
+
+test('ONE EMPTY ANSWER AND ONE DEAD RELAY: answered 1 of 2 asked — the caller can see it was not everyone (finding 2)', { timeout: 30000 }, async () => {
+  const w = await emptyRelay(8965);
+  try {
+    const r = reader(['ws://127.0.0.1:8965/', 'ws://127.0.0.1:' + DEAD_PORT + '/']);
+    const { ev, answered, asked } = await r.fn(FILTER, 3000);
+    r.close();
+    assert.equal(ev, null);
+    assert.equal(asked, 2, 'the reader did not say how many relays it asked');
+    assert.equal(answered, 1,
+      'the dead relay was counted as an answer, or the live one was not — enrolment decides "every relay said ' +
+      'nothing here" from exactly these two numbers before it may build a list from scratch');
+  } finally { try { w.close(); } catch {} }
+});
+
+test('A PRIVATE READ: an empty answer after a login challenge we never completed is NOT an answer (finding 3)', { timeout: 30000 }, async () => {
+  // What the relay does when it withholds a private document from a socket that has not logged in: it sends
+  // a challenge and holds its EOSE for 2.5 s; if the login is refused or slower than that, the EOSE goes out
+  // EMPTY. This relay plays exactly that: challenge, then an empty EOSE, and never accepts a login.
+  await requireFreePort(8968, 'a-failed-read-is-not-an-empty-church.test.mjs (a challenging relay)');
+  const w = new WebSocketServer({ port: 8968 });
+  w.on('connection', (sock) => { sock.on('message', (d) => { const m = JSON.parse(d);
+    if (m[0] === 'REQ') { sock.send(JSON.stringify(['AUTH', 'challenge-' + Date.now()])); setTimeout(() => sock.send(JSON.stringify(['EOSE', m[1]])), 50); } }); });
+  const w2 = await emptyRelay(8960);   // a relay that challenges nobody — a church with no such document yet
+  try {
+    const r = reader(['ws://127.0.0.1:8968/'], { normalizeURL: (u) => u, _authAccepted: new Map() });
+    const out = await r.fn(FILTER, 2000, true);
+    r.close();
+    assert.equal(out.answered, 0,
+      'AN EMPTY ANSWER GIVEN WHILE OUR LOGIN WAS STILL PENDING WAS COUNTED — the one-time seed would be skipped for ' +
+      'good and the church\'s trusted sync boxes never carried across');
+    assert.equal(out.complete, false);
+
+    // …a relay that never asked us to log in is believed: a brand-new church's first enrolment must not stall.
+    const r2 = reader(['ws://127.0.0.1:8960/'], { normalizeURL: (u) => u, _authAccepted: new Map() });
+    const out2 = await r2.fn(FILTER, 3000, true);
+    r2.close();
+    assert.equal(out2.answered, 1, 'a relay that never challenged was not believed — a new church could never enrol');
+    assert.equal(out2.complete, true);
+
+    // …and the same challenging relay once our login there WAS accepted: its answer counts.
+    let poolRef = null;
+    const r3 = reader(['ws://127.0.0.1:8968/'], (pool) => { poolRef = pool; return { normalizeURL: (u) => u, _authAccepted: { get: (k) => poolRef.relays.get(k) } }; });
+    const out3 = await r3.fn(FILTER, 2000, true);
+    r3.close();
+    assert.equal(out3.answered, 1, 'a relay whose login was accepted was not believed');
+  } finally { try { w.close(); } catch {} try { w2.close(); } catch {} }
 });

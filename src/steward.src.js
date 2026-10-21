@@ -4852,7 +4852,7 @@ function _one(filters, ms = 4000) {
 // therefore excluded for ever. A self-hosting church would be permanently orphaned from its own machine —
 // the finding that made an earlier version of this plan a no-go.
 //
-// So the census is location, the relay panel's own configured entries, and anything explicitly handed in.
+// So the census is location and anything explicitly handed in (a relay the steward has consented to — B4, 2026-10-21).
 // The filtered list is for PUBLISHING. Using it as the enrolment census is the deadlock.
 
 // The console's own serving origin, or '' when the page was not served by anything that could be a relay.
@@ -4904,7 +4904,17 @@ function relayNetCandidates(extra) {
 //
 // (It reads over relays(), the raw list today. C4 must keep the READER off a filtered list for the same
 // reason enrolment stays off one — see the deadlock rule above.)
-function _oneComplete(filters, ms = 6000) {
+//
+// AUDIT 2026-10-21 (finding 3), corrected on measurement: for a PRIVATE document the relay does not simply answer
+// an anonymous socket "nothing" — when it withholds the document it sends a login challenge and holds its EOSE
+// for EOSE_AUTH_GRACE_MS (gateway.mjs, 2.5 s) while we log in, then replays it. The lie left is a login that is
+// refused or slower than that hold: the held EOSE then goes out empty. So with `privateDoc`, a relay's "nothing
+// here" counts as an answer only if that relay never asked us to log in, or our login on THAT live socket was
+// accepted (_authAccepted, the relay's OK). A brand-new church with no such document is not challenged at all,
+// so its first read still completes. (Asking only already-logged-in sockets was tried first and blocked a new
+// church's first enrolment for ever — nothing had logged in yet.)
+// `asked` is reported so a caller can demand that EVERY relay answered (finding 2).
+function _oneComplete(filters, ms = 6000, privateDoc = false) {
   // B0 STEPS 2-3 (self-hosting P1, 2026-10-21): "complete" now means AT LEAST ONE RELAY GENUINELY ANSWERED and
   // every relay asked has finished one way or the other. A dead port used to count as finished — nostr-tools
   // routes a connection failure through the same oneose a real EOSE uses (handleClose calls handleEose) — so
@@ -4919,14 +4929,20 @@ function _oneComplete(filters, ms = 6000) {
     // church has signed for can never be asked for the signature that admits it.
     const urls = relaysRaw();
     let best = null, done = false;
+    // A relay that challenged us and has not accepted our login: its empty answer may be a withheld document.
+    const loginPending = (u) => {
+      let k = u; try { k = normalizeURL(u); } catch (e) {}
+      const r = pool.relays.get(k);
+      return !!r && !!r.challenge && _authAccepted.get(k) !== r;
+    };
     const eosed = new Set(), failed = new Set(), subs = [];
     const finish = () => {
       if (done) return; done = true;
       let answered = 0;
-      for (const u of eosed) if (!failed.has(u)) answered++;
+      for (const u of eosed) if (!failed.has(u) && !(privateDoc && loginPending(u))) answered++;
       const complete = urls.length > 0 && eosed.size === urls.length && answered > 0;
       for (const s of subs) { try { s.close(); } catch {} }
-      resolve({ ev: best, complete, answered });
+      resolve({ ev: best, complete, answered, asked: urls.length });
     };
     for (const u of urls) {
       try {
@@ -5002,15 +5018,21 @@ async function enrolRelayNet(opts) {
   const o = opts || {};
   if (!sk || !pub) throw new Error('No church key on this device');
   if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: 'not this church’s own console' };
-  const { ev: existing, complete } = await relayNetDoc();
+  const sk0 = sk, pub0 = pub;
+  const { ev: existing, complete, answered, asked } = await relayNetDoc();
   const mine = (existing && existing.pubkey === pub) ? existing : null;
-  if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+  // FROM SCRATCH ONLY WHEN EVERY RELAY ASKED HAS SAID "NOTHING HERE" (audit 2026-10-21, finding 2). One empty
+  // answer is not enough: a reinstalled box, or a relay that missed the last write, answers empty while the
+  // relays that DO hold the church's list are down — and a list rebuilt from that drops every box it named.
+  if (!mine && !(complete && answered === asked)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
   const entries = mine ? parseRelayNet(mine.content) : [];
   const before = JSON.stringify(entries);
   let seeded = 0;
   if (!mine) {
     let old = null, oldComplete = false;
-    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }]); old = r.ev; oldComplete = r.complete; } catch {}
+    // trinityone/relays is PRIVATE: an empty answer from a relay still waiting on our login is not an answer, and
+    // the seed is trusted only if every relay asked really answered (see _oneComplete's `privateDoc`).
+    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true); old = r.ev; oldComplete = r.complete && r.answered === r.asked; } catch {}
     if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     let arr = [];
     if (old && old.pubkey === pub) { try { arr = JSON.parse(old.content || '[]'); } catch { arr = []; } }
@@ -5052,6 +5074,10 @@ async function enrolRelayNet(opts) {
     }
   }
   const changed = JSON.stringify(entries) !== before;
+  // THE IDENTITY MAY HAVE MOVED WHILE WE WAITED (audit 2026-10-21, finding 6). The guard at the top ran before up
+  // to two six-second reads and a proof per box; a switch to a delegated church or a network view in that window
+  // would otherwise sign church A's entries with whatever key is current now. Unknown, so the next run retries.
+  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, skipped: 'the console changed church while enrolling' };
   // B3, the delivery half: send the signed document straight to every box that just proved its key.
   const deliver = async (ev) => {
     const urls = proven.filter(x => !shared.includes(x.pubkey)).map(x => x.url);
@@ -5079,12 +5105,24 @@ async function autoEnrolRelayNet() {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
   const own = relayNetCandidates()[0] || '';
   if (!own) return null;                          // an APK or a static host: there is no own box to sign
+  // ONLY A BOX THAT HOLDS THIS CHURCH (audit 2026-10-21, finding 9). A delegated steward opening the console on
+  // the box of the church they help would otherwise sign THAT box into their own church's list in the moment
+  // before the console switches to the church they help. `_boxHostsUs` is this church's own answer to "does the
+  // serving box hold us" (registration accepted / read back); not yet known → not now, and not remembered.
+  if (_boxHostsUs !== true) return null;
   const key = pub + '|' + own;
   if (_autoEnrolled.has(key)) return null;
   _autoEnrolled.add(key);
   let res = null;
   try { res = await enrolRelayNet(); } catch (e) { res = null; }
-  if (!res || res.unknown) _autoEnrolled.delete(key);
+  // RETRY UNLESS IT ACTUALLY WORKED (audit 2026-10-21, finding 7): unknown, a throw, an own box that proved
+  // nothing, or a signed list that reached no box at all — each is tried again on the next pass.
+  // (A console served by the SHARED relay proves it and has nothing to sign — that is "done", not a failure.)
+  const shared = sharedRelayKeys();
+  const proven = (res && res.proven) || [];
+  const worked = !!res && !res.unknown && proven.length > 0
+    && (res.published || (res.delivered || []).length > 0 || proven.every(x => shared.includes(x.pubkey)));
+  if (!worked) _autoEnrolled.delete(key);
   return res;
 }
 
@@ -5969,9 +6007,9 @@ window.Steward = {
   // and still reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md).
   // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
   isNetworkRelay,
-  // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
-  // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
-  // deadlock rule above enrolRelayNet.
+  // What the church has actually signed — [{pubkey, alwaysOn, url, name?}] — and who this console can PROVE.
+  // relayNetCandidates() is the RAW census (location, plus a relay the steward has just consented to), never
+  // relays(): see the deadlock rule above enrolRelayNet.
   relayNet: relayNetEntries,
   relayNetCandidates,
   // Signs the boxes this console can prove into the church's own membership document. Additive: it never
@@ -13178,6 +13216,10 @@ window.Steward = {
     } catch (e) { return { ok: false, error: (e && e.message) || 'network' }; }
   },
   // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
+  // IS THIS ADDRESS ALREADY IN THE RELAY PANEL? → its normalised form, or ''. The Add-a-relay card asks, so a
+  // steward who connects a relay that is already listed (added before consent existed, or offline the first
+  // time) still gets it signed rather than a "please enter an address" error (audit 2026-10-21, finding 1).
+  knownRelay(input) { const url = normRelay(input); return (url && extraRelays().includes(url)) ? url : ''; },
   addRelay(input) {
     const url = normRelay(input);
     if (!url || url === ownRelay()) return false;
