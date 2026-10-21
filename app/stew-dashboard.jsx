@@ -5161,11 +5161,15 @@ function DashRelaysCard() {
   // REMOVE ALSO UN-SIGNS (owner decision B, 2026-10-21). Connecting a relay signs it into the church's relay list;
   // removing it must take it out again, or a steward's consent could never be withdrawn. Says so when it could not.
   const [dropNote, setDropNote] = React.useState('');
+  // OUT OF THE CHURCH'S LIST FIRST, THEN OFF THIS SCREEN (fourth audit 2026-10-21, finding 2). Removing the row
+  // first left a steward told "remove it again" with no row left to remove — and adding it back to retry signs it
+  // straight back in. So the row stays, with the reason, until the church's list no longer names the relay.
   const dropRelay = async (url) => {
-    setConfirmDrop(null); setDropNote('');
-    try { window.Steward.removeRelay(url); } catch (e) {}
-    let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = null; }
-    setDropNote(dropOutcome(r, url));
+    setConfirmDrop(null); setDropNote('Removing ' + url + '…');
+    let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = { error: String((e && e.message) || e || '') }; }
+    const out = dropOutcome(r, url);
+    if (out.drop) { try { window.Steward.removeRelay(url); } catch (e) {} }
+    setDropNote(out.note);
   };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
@@ -5382,16 +5386,17 @@ function WizAddRelay() {
 // wizard's Add; nothing is added or signed until "Yes, connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
 // relay is the church vouching for it to every member's phone, not a connection test.
 const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
-// WHAT A REMOVE ANSWERED, in a steward's words — '' when the relay is out of the church's signed list, or was never
-// in it. Every other answer says so (third audit, finding 3: a failed write, a throw and a delegated console were
-// silent, so a steward believed their consent withdrawn when it was not).
+// WHAT A REMOVE ANSWERED: whether the row may leave this screen (`drop`), and what to tell the steward (`note`, ''
+// when there is nothing to say). Every answer that is not a success says so (third audit, finding 3), and the row
+// leaves the screen only once the church's list no longer names the relay, or never did (fourth audit, finding 2).
 function dropOutcome(r, url) {
-  if (r && r.removed) return '';
-  if (r && r.notListed && r.proven !== false) return '';   // proved its key, and the church's list never named it
-  if (r && r.shared) return '';                             // a shared relay is never in the church's own list
-  if (r && r.ownBox) return 'Removed from this console. ' + url + ' is the box this console runs on, so it stays in your church’s relay list.';
-  if (r && r.skipped) return 'Removed from this console. Only your church’s own console can take it out of the church’s relay list.';
-  return 'Removed from this console, but your church’s relay list could not be updated right now — it may still name ' + url + '. Remove it again once your relays are answering.';
+  if (r && r.removed) return { drop: true, note: '' };
+  if (r && r.notListed && r.proven !== false) return { drop: true, note: '' };   // proved its key, and the church's list never named it
+  if (r && r.ownBox) return { drop: true, note: 'Removed from this console. ' + url + ' is the box this console runs on, so it stays in your church’s relay list.' };
+  if (r && r.skipped) return { drop: true, note: 'Removed from this console. Only your church’s own console can take it out of the church’s relay list.' };
+  if (r && r.changed) return { drop: false, note: 'This console switched church while removing ' + url + ', so it is still in your church’s relay list. Remove it again.' };
+  if (r && r.error) return { drop: false, note: 'Couldn’t take ' + url + ' out of your church’s relay list (' + r.error + '), so it is still connected.' };
+  return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' };
 }
 const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
 // WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
@@ -5410,7 +5415,7 @@ function signOutcome(r, url) {
   const n = (x) => { let v = String(x || '').trim(); if (v && !/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, ''); return v.replace(/\/+$/, '').toLowerCase(); };
   const p = (r.proven || []).find(x => n(x.url) === n(url)) || null;
   if (!p) return 'It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.';
-  if (p.shared) return 'That is one of TrinityOne’s shared relays. Your church already uses it, so it is never added to your church’s own list.';
+  if (p.shared) return 'That is one of TrinityOne’s shared relays. Your church already uses it, so it doesn’t need adding to your church’s own list.';
   if (!(r.entries || []).some(e => e.pubkey === p.pubkey)) return 'Couldn’t put it in your church’s relay list. Try again.';
   return '';
 }
@@ -5548,7 +5553,8 @@ function DashAddRelayCard() {
       for (const p of (picks || [])) {
         let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(p.url) : null; } catch (e) { r = null; }
         const why = window.Steward.signRelay ? signOutcome(r, p.url) : '';
-        if (why) missed.push((p.name || p.url) + ': ' + why); else added.push(p);
+        // Auto-find will not offer a relay this console already has, so the way to retry is Add a relay (fourth audit, finding 7).
+        if (why) missed.push((p.name || p.url) + ': ' + why + ' To try again, enter ' + p.url + ' under Add a relay.'); else added.push(p);
       }
       const lines = [];
       if (added.length) lines.push('✓ Added ' + added.length + ' relay' + (added.length > 1 ? 's' : '') + ' for backup: ' + added.map(p => p.name || p.url).join(', '));

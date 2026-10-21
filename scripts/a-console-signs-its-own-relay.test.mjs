@@ -551,14 +551,14 @@ test('the outcome lines say only what is true (third audit, findings 2 and 8)', 
   }
 });
 
-function relaysCard(steward) {
+function relaysCard(steward, removed = []) {
   const { React, draw } = miniReact();
   const relays = [{ url: 'wss://relay.grace.example/relay', status: 'on' }, { url: 'wss://second.grace.example/relay', status: 'on' }];
   const win = {
     useStewardRelays: () => relays, useStewardChurch: () => ({ name: 'St Aidan’s' }),
     addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     Steward: { ownRelay: () => 'wss://relay.grace.example/relay', backupState: async () => ({ boxes: 2, online: 2, syncOn: true }),
-      removeRelay: () => true, canRemoveRelay: () => true, relayName: () => '', ...steward },
+      removeRelay: () => { removed.push(1); return true; }, canRemoveRelay: () => true, relayName: () => '', ...steward },
   };
   const globals = {
     React, window: win, localStorage: win.localStorage,
@@ -584,26 +584,33 @@ async function removeSecond(view) {
   return said(view());
 }
 
-test('Remove says so whenever the relay could not be taken out of the church\'s list (third audit, finding 3)', async () => {
-  const WARN = /could not be updated right now|Only your church’s own console can take it out|is the box this console runs on/;
-  for (const [why, unsign, want] of [
-    ['the write failed', async () => ({ removed: false, entries: [] }), /could not be updated right now/],
-    ['it threw (no church key on this device)', async () => { throw new Error('No church key on this device'); }, /could not be updated right now/],
-    ['unknown (a relay is not answering)', async () => ({ removed: false, unknown: true }), /could not be updated right now/],
-    ['not listed, and its key could not be proved', async () => ({ removed: false, notListed: true, proven: false }), /could not be updated right now/],
-    ['a delegated console', async () => ({ removed: false, skipped: 'x' }), /Only your church’s own console can take it out/],
-    ['the box this console runs on', async () => ({ removed: false, ownBox: true }), /is the box this console runs on/],
+test('Remove says so whenever the relay could not be taken out of the church\'s list, and keeps the row (third and fourth audits, findings 3 and 2)', async () => {
+  const WARN = /could not be updated right now|Couldn’t take|switched church|Only your church’s own console can take it out|is the box this console runs on/;
+  // keep: the church's list may still name it, so the row stays on screen for the steward to try again.
+  for (const [why, unsign, want, keep] of [
+    ['the write failed', async () => ({ removed: false, entries: [] }), /could not be updated right now/, true],
+    ['it threw (no church key on this device)', async () => { throw new Error('No church key on this device'); }, /Couldn’t take .* out of your church’s relay list \(No church key on this device\)/, true],
+    ['unknown (a relay is not answering)', async () => ({ removed: false, unknown: true }), /could not be updated right now/, true],
+    ['not listed, and its key could not be proved', async () => ({ removed: false, notListed: true, proven: false }), /could not be updated right now/, true],
+    ['the console switched church mid-removal', async () => ({ removed: false, unknown: true, changed: true }), /switched church while removing/, true],
+    ['a delegated console', async () => ({ removed: false, skipped: 'x' }), /Only your church’s own console can take it out/, false],
+    ['the box this console runs on', async () => ({ removed: false, ownBox: true }), /is the box this console runs on/, false],
   ]) {
-    const text = await removeSecond(relaysCard({ unsignRelay: unsign }));
+    const removed = [];
+    const text = await removeSecond(relaysCard({ unsignRelay: unsign }, removed));
     assert.match(text, want, why + ': REMOVE WAS SILENT — the steward believes their consent withdrawn when the church\'s list still names it');
+    assert.equal(removed.length, keep ? 0 : 1, why + (keep
+      ? ': THE ROW WAS REMOVED ANYWAY — "remove it again" with nothing left to remove, and adding it back signs it in again'
+      : ': the row stayed although nothing more can be done from here'));
   }
   for (const [why, unsign] of [
     ['removed', async () => ({ removed: true, entries: [] })],
     ['never in the list (key proved)', async () => ({ removed: false, notListed: true, proven: true })],
-    ['a shared relay', async () => ({ removed: false, shared: true })],
   ]) {
-    const text = await removeSecond(relaysCard({ unsignRelay: unsign }));
+    const removed = [];
+    const text = await removeSecond(relaysCard({ unsignRelay: unsign }, removed));
     assert.doesNotMatch(text, WARN, why + ': a warning was shown over a removal that worked');
+    assert.equal(removed.length, 1, why + ': the row was not removed');
   }
 });
 
@@ -621,6 +628,7 @@ test('Auto-find reports each relay\'s own result, never "✓ Added" over one tha
   assert.match(all, /✓ Added 1 relay for backup: open-a/, 'the relay that WAS signed is not reported as added');
   assert.doesNotMatch(all, /Added 2 relays/, 'AUTO-FIND SAID BOTH WERE ADDED — one is not in the church\'s list');
   assert.match(all, /open-b: It could not prove it runs TrinityOne yet/, 'the steward was not told which relay was not signed, or why');
+  assert.match(all, /To try again, enter wss:\/\/open-b\.example\/relay under Add a relay/, 'the steward was not told how to retry (Auto-find will not offer it again)');
 });
 
 test('Steward.connectFoundRelays adds every relay it is handed and republishes once — out of the shipped bundle (third audit, finding 4)', async () => {

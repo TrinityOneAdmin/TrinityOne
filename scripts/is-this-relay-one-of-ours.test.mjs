@@ -621,15 +621,19 @@ test('B3: the signed list reaches the box that just proved itself, even when the
   const pool2 = poolTo(TYPED);
   const con2 = consoleWith({
     location: { protocol: 'https:', host: 'app.example.church' }, pool: pool2,
-    one: oneFrom(BOX, flock), publish: async () => { throw new Error('an unchanged list must not be re-signed'); },
+    // Since the fourth audit (finding 1) the unchanged list also goes over publish() — verbatim. Anything else
+    // reaching publish here would be a re-signed copy.
+    one: oneFrom(BOX, flock), publish: async (ev) => { sentB.push(ev); return ev; },
     sk: flock.sk, pub: flock.pub,
   });
+  const sentB = [];
   // Put TYPED in the list first (by hand, signed by the church) so the run below finds nothing to change.
   const doc = finalizeEvent({ kind: 30078, created_at: held[0].created_at + 1, tags: [['d', RELAY_NET_D]],
     content: JSON.stringify([...cores[0][1].parseRelayNet(held[0].content), { pubkey: TYPED.relayPub, alwaysOn: true, url: '' }]) }, flock.sk);
   await H.publishAll(BOX, [doc]);
   const res2 = await con2.enrolRelayNet({ extra: [TYPED.wsUrl] });
   assert.equal(res2.published, false, 'an unchanged list was re-signed');
+  assert.deepEqual(sentB.map(e => e.id), [doc.id], 'an unchanged list was re-signed, or not re-sent verbatim');
   assert.deepEqual(res2.delivered, [TYPED.wsUrl], 'the unchanged document was not re-sent to the proven box');
   const onTyped = await storedRelayNet(TYPED, flock);
   assert.equal(onTyped.length, 1, 'TYPED does not hold the church\'s document');
@@ -764,11 +768,12 @@ test('a console that READS its church\'s list remembers it, so the own box\'s la
   // only thing that can remember the list is the read itself.
   await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }])]);
   const store = new Map();
-  let published = 0;
-  const con = consoleWith({ location, store, boxHostsUs: true, one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
+  const stored = (await storedRelayNet(BOX, flock))[0];
+  const sent = [];   // since the fourth audit an unchanged list is re-sent over publish — verbatim, never re-signed
+  const con = consoleWith({ location, store, boxHostsUs: true, one: oneFrom(BOX, flock), publish: async (ev) => { sent.push(ev.id); return true; }, pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
   const res = await con.enrolRelayNet({ auto: true });
   assert.equal(res.published, false, 'precondition: an unchanged list was re-signed');
-  assert.equal(published, 0);
+  assert.ok(sent.every(id => id === stored.id), 'precondition: an unchanged list was re-signed');
   assert.equal(store.get('trinityone.steward.relaynet-seen.' + flock.pub), '1',
     'A CONSOLE THAT READ ITS CHURCH\'S LIST DID NOT REMEMBER IT — after a reinstall its own box\'s empty answer would restart the list');
   // …and that memory is what refuses the same console later, when only its own box answers, empty.
@@ -878,7 +883,7 @@ test('removing changes nothing unless EVERY relay asked answered — a stale cop
   assert.equal((await storedRelayNet(BOX, flock))[0].id, before[0].id);
 });
 
-test('removing never takes out the box this console runs on, under any address, nor a shared relay (third audit, finding 5)', async () => {
+test('removing never takes out the box this console runs on, under any address (third audit, finding 5)', async () => {
   const { flock, BOX, TYPED, location } = await selfHostedChurch('F5');
   const sharedPub = 'd'.repeat(64);
   await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [
@@ -902,7 +907,6 @@ test('removing never takes out the box this console runs on, under any address, 
     ['the own box under another address (matched by the key it proves)', alias, 'ownBox', location],
     ['the own box\'s own address', BOX.wsUrl, 'ownBox', location],
     ['the own box\'s own address while that box is offline (matched by address)', deadOwn, 'ownBox', { protocol: 'http:', host: '127.0.0.1:1' }],
-    ['a shared relay the old sync list seeded in', 'wss://shared-seed.example/relay', 'shared', location],
   ]) {
     let published = 0;
     const con = consoleWith({ location: at, shared: [sharedPub], one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
@@ -914,6 +918,61 @@ test('removing never takes out the box this console runs on, under any address, 
   await new Promise(r => setTimeout(r, 1100));
   const con = consoleWith({ location, shared: [sharedPub], one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
   assert.equal((await con.unenrolRelayNet(TYPED.wsUrl)).removed, true, 'the refusal blocked an ordinary relay too');
+  // A shared relay the old sync list seeded in is taken out like any other (fourth audit, finding 4): Remove used
+  // to refuse it and the card said nothing, so the list went on naming it after a steward was told it was gone.
+  await new Promise(r => setTimeout(r, 1100));
+  const con2 = consoleWith({ location, shared: [sharedPub], one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
+  assert.equal((await con2.unenrolRelayNet('wss://shared-seed.example/relay')).removed, true, 'a seeded shared relay could not be removed');
+  const d = (await storedRelayNet(BOX, flock)).sort((a, b) => b.created_at - a.created_at);
+  assert.ok(!cores[0][1].parseRelayNet(d[0].content).some(e => e.pubkey === sharedPub), 'the list still names the shared relay');
+});
+
+// ── the fourth audit round (2026-10-21) ────────────────────────────────────────────────────────────────
+test('the church\'s list goes to the shared relays too, verbatim, even when nothing changed (fourth audit, finding 1)', async () => {
+  // A list first signed while the shared relays were unreachable reached only the church's own box. A new browser
+  // asks only relays it knows — never that box — so every one said "nothing here" and Connect rebuilt the list.
+  const { flock, BOX, location } = await selfHostedChurch('F1R');
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }])]);
+  const stored = (await storedRelayNet(BOX, flock))[0];
+  const sent = [];
+  const con = consoleWith({ location, boxHostsUs: true, one: oneFrom(BOX, flock), pool: poolTo(BOX),
+    publish: async (ev, opts) => { sent.push([ev, opts]); return ev; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.enrolRelayNet({ auto: true });
+  assert.equal(res.published, false, 'precondition: an unchanged list was re-signed');
+  assert.equal(sent.length, 1, 'THE CHURCH\'S LIST WAS NOT SENT OVER THE PUBLISH SET — the shared relays never get it, and a new browser finds "nothing here"');
+  assert.equal(sent[0][0].id, stored.id, 'what was sent is not the church\'s own event, byte for byte');
+  assert.equal(sent[0][1] && sent[0][1].background, true, 'a write nobody asked for was sent as if a steward had — a refusal would raise their error banner');
+});
+
+test('a list found on a partial read is passed on, never re-signed — a stale copy cannot undo a Remove (fourth audit, finding 6)', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('F6R');
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }])]);
+  const stored = (await storedRelayNet(BOX, flock))[0];
+  const sent = [];
+  const half = async (f) => ({ ...(await oneFrom(BOX, flock)(f)), answered: 1, asked: 2 });
+  const pool = poolTo(BOX, TYPED);
+  const con = consoleWith({ location, one: half, pool, publish: async (ev) => { sent.push(ev); return ev; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.equal(res.unknown, true, 'the card was not told the answer is unknown: ' + JSON.stringify(res));
+  assert.equal(res.published, false);
+  assert.deepEqual(sent.map(e => e.id), [stored.id], 'A LIST READ FROM ONE OF TWO RELAYS WAS RE-SIGNED — a copy that missed a Remove would put the relay back');
+  const now = await storedRelayNet(BOX, flock);
+  assert.equal(now.length, 1); assert.equal(now[0].id, stored.id, 'the box holds a re-signed list');
+  assert.deepEqual(await storedRelayNet(TYPED, flock).then(d => d.map(e => e.id)), [stored.id], 'the list found was not passed on to the box that proved itself');
+});
+
+test('removing refuses when the console\'s own box cannot say which key is its own (fourth audit, finding 3)', async () => {
+  // The removed address proves a key; the console's own box does not answer, so nothing can rule out that the
+  // address is the own box's alias. Unknown — never removed.
+  const { flock, BOX } = await selfHostedChurch('F3R');
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: 'e'.repeat(64), alwaysOn: true, url: 'wss://other.example/relay' }])]);
+  let published = 0;
+  const con = consoleWith({ location: { protocol: 'http:', host: '127.0.0.1:1' }, one: oneFrom(BOX, flock),
+    publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.unenrolRelayNet(BOX.wsUrl.replace('127.0.0.1', 'localhost'));
+  assert.equal(res.removed, false, 'a relay was removed while the console could not tell its own box\'s key: ' + JSON.stringify(res));
+  assert.equal(res.unknown, true, 'the card was not told to try again');
+  assert.equal(published, 0, 'THE LIST WAS RE-SIGNED WITHOUT A BOX THAT MAY BE THE CHURCH\'S OWN');
 });
 
 test('a typed SHARED relay is reported as shared, so the card can say it needs no signing (third audit, finding 8)', async () => {

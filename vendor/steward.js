@@ -18940,8 +18940,17 @@ zoo`.split("\n");
       const res = await Promise.allSettled(pool.publish(urls, ev2).map((pr) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8e3))])));
       return urls.filter((u, i3) => res[i3] && res[i3].status === "fulfilled" && !(typeof res[i3].value === "string" && res[i3].value.startsWith("connection failure")));
     };
+    const resend = async () => {
+      if (!mine) return [];
+      try {
+        await publish(mine, { background: true });
+      } catch (e) {
+      }
+      return deliver(mine);
+    };
     if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
-    if (!changed) return { published: false, entries, proven, unproven, seeded, delivered: mine ? await deliver(mine) : [] };
+    if (!changed) return { published: false, entries, proven, unproven, seeded, delivered: await resend() };
+    if (mine && !fullAnswer({ complete, answered, asked })) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
     const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
     const ev = await publish(signed);
     const delivered = await deliver(signed);
@@ -18993,9 +19002,8 @@ zoo`.split("\n");
     if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
     const own = relayNetCandidates()[0] || "";
     const ownKey = !own ? "" : _k(own) === _k(u) ? pk : await keyAt(own);
-    const shared = sharedRelayKeys();
     if (own && _k(own) === _k(u) || drop.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
-    if (drop.some((e) => shared.includes(e.pubkey))) return { removed: false, shared: true };
+    if (own && !ownKey && pk && drop.some((e) => e.pubkey === pk)) return { removed: false, unknown: true };
     const keep = entries.filter((e) => !drop.includes(e));
     if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
     const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(keep) }), sk));

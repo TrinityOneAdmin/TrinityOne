@@ -5041,8 +5041,11 @@ async function enrolRelayNet(opts) {
   //  · the automatic pass (`auto`), never a steward's Connect (`extra`): that path waits for every relay; and
   //  · a serving box this church's registration says holds it (_boxHostsUs === true); and
   //  · a serving box that proves a key of its own, not a shared relay's key.
-  // What is left (owner accepted, 2026-10-21): the church's own box reinstalled empty, every other relay
-  // unreachable, and a browser that never saw the list — the list then restarts with the own box in it.
+  // What is left (owner accepted, 2026-10-21; widened by the fourth audit and accepted again the same day): any
+  // box this church is registered on answering "nothing here" — reinstalled empty, or a second Suite machine set
+  // up while the office box is off — with every other relay unreachable, in a browser that never saw the list.
+  // The seen flag is kept per web address, so a quick tunnel's new address counts as never having seen it. The
+  // list then restarts with that box in it; a box it dropped is added back by its own console's next pass.
   const seenKey = RELAYNET_SEEN + (pub || '');
   let seenBefore = false; try { seenBefore = lsGet(seenKey) === '1'; } catch (e) { seenBefore = true; }
   if (mine) { try { lsSet(seenKey, '1'); } catch (e) {} }
@@ -5120,11 +5123,26 @@ async function enrolRelayNet(opts) {
     const res = await Promise.allSettled(pool.publish(urls, ev).map(pr => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))])));
     return urls.filter((u, i) => res[i] && res[i].status === 'fulfilled' && !(typeof res[i].value === 'string' && res[i].value.startsWith('connection failure')));
   };
+  // THE CHURCH'S EXISTING SIGNED LIST, RE-SENT VERBATIM (fourth audit 2026-10-21, finding 1): to the proven boxes,
+  // AND over the ordinary publish set, which includes the shared relays. A list first signed while the shared
+  // relays were unreachable otherwise never reached them, and a new browser — which asks only the relays it knows,
+  // never a church box it has not heard of — found "nothing here" on every one and rebuilt the list from scratch.
+  // Verbatim, so it can never replace anything newer: a relay keeps the newest copy and refuses an older one.
+  // `background`: nobody asked for this write, so a refusal is not a steward's error.
+  const resend = async () => {
+    if (!mine) return [];
+    try { await publish(mine, { background: true }); } catch (e) {}
+    return deliver(mine);
+  };
   // Nothing proved and nothing already signed in: publish NOTHING. An empty document is the church signing
   // "my network is empty", which is a statement, not a silence.
   if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
-  // Unchanged: re-send the church's existing signed document, verbatim, to the proven boxes. Never re-signed.
-  if (!changed) return { published: false, entries, proven, unproven, seeded, delivered: mine ? await deliver(mine) : [] };
+  // Unchanged: re-send the church's existing signed document, verbatim. Never re-signed.
+  if (!changed) return { published: false, entries, proven, unproven, seeded, delivered: await resend() };
+  // A LIST IS RE-SIGNED ONLY ON A FULL ANSWER (fourth audit, finding 6). The list found may be a stale copy — one
+  // that missed a Remove — and re-signing it with a newer stamp would put the removed relay back. So when not every
+  // relay asked answered, the list found is passed on as it is and nothing is signed; the next pass tries again.
+  if (mine && !fullAnswer({ complete, answered, asked })) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
   const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
   const ev = await publish(signed);
   const delivered = await deliver(signed);
@@ -5156,7 +5174,7 @@ function enrolSerial(fn) {
 //
 // THIRD AUDIT 2026-10-21. Finding 6: "read in full" means every relay asked answered, not merely that the read
 // finished — a stale copy edited and re-signed with a newer stamp would replace the church's real list.
-// Finding 5: never the box this console runs on, and never a shared relay. The church's own box can be in the
+// Finding 5: never the box this console runs on. The church's own box can be in the
 // panel a second time under another address (its public tunnel address, a directory name); removing that
 // address proves the own box's key, and taking that key out would drop the church's own box from its own list.
 async function unenrolRelayNet(url) {
@@ -5178,9 +5196,12 @@ async function unenrolRelayNet(url) {
   if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
   const own = relayNetCandidates()[0] || '';
   const ownKey = !own ? '' : (_k(own) === _k(u)) ? pk : await keyAt(own);
-  const shared = sharedRelayKeys();
   if ((own && _k(own) === _k(u)) || drop.some(e => (ownKey && e.pubkey === ownKey))) return { removed: false, ownBox: true };
-  if (drop.some(e => shared.includes(e.pubkey))) return { removed: false, shared: true };
+  // FAIL CLOSED (fourth audit, finding 3): matched by the key it proved, while the console's own box could not
+  // say which key is its own — the removed address may be the own box's alias. Unknown; try again.
+  if (own && !ownKey && pk && drop.some(e => e.pubkey === pk)) return { removed: false, unknown: true };
+  // A shared relay that the one-time seed carried in is taken out like any other (fourth audit, finding 4): the
+  // shared relays are admitted on their own pin, so the church's list naming them changes nothing.
   const keep = entries.filter(e => !drop.includes(e));
   if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
   const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
