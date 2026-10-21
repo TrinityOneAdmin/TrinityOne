@@ -27,7 +27,8 @@ test('adding a relay tells the steward it is not yet registered', () => {
 });
 
 test('the note appears only after a SUCCESSFUL add', () => {
-  const fn = DASH.slice(DASH.indexOf('const addRelay = () =>'));
+  // Re-anchored 2026-10-21: addRelay now takes the consent flag (B4) — `async (confirmed) =>`.
+  const fn = DASH.slice(DASH.indexOf('const addRelay = async (confirmed) =>'));
   const body = fn.slice(0, fn.indexOf('\n  const '));
   assert.match(body, /if \(!r\)[\s\S]{0,160}setAddedNote\(''\)/,
     'a failed add still shows the "added" note, which would tell a steward their relay is in the list when ' +

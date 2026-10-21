@@ -6587,7 +6587,9 @@
       const pubkey = String(e.pubkey || "").toLowerCase();
       if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
       seen.add(pubkey);
-      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+      const entry = { pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" };
+      if (typeof e.name === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(e.name)) entry.name = e.name;
+      out.push(entry);
     }
     return out;
   }
@@ -18759,48 +18761,53 @@ zoo`.split("\n");
     };
     const o = _ownOrigin();
     if (o) add2(o.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") + "/relay");
-    for (const u of extraRelays()) add2(u);
     for (const u of extra || []) add2(u);
     return out;
   }
   function _oneComplete(filters, ms = 6e3) {
     return new Promise((resolve) => {
-      let best = null, complete = false, done = false;
+      const urls = relaysRaw();
+      let best = null, done = false;
+      const eosed = /* @__PURE__ */ new Set(), failed = /* @__PURE__ */ new Set(), subs = [];
       const finish = () => {
         if (done) return;
         done = true;
-        try {
-          sub.close();
-        } catch {
+        let answered = 0;
+        for (const u of eosed) if (!failed.has(u)) answered++;
+        const complete = urls.length > 0 && eosed.size === urls.length && answered > 0;
+        for (const s of subs) {
+          try {
+            s.close();
+          } catch {
+          }
         }
-        resolve({ ev: best, complete });
+        resolve({ ev: best, complete, answered });
       };
-      const sub = pool.subscribeMany(relaysRaw(), filters, {
-        onevent(e) {
-          if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
-        },
-        oneose() {
-          complete = true;
-          finish();
-        },
-        // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — B0 of reference/PLAN-ENROLMENT-GAP-2026-09-02.md,
-        // and the same fix `_newestByD` has carried since AUDIT-8 measured it there.
-        // nostr-tools arms its OWN EOSE timer (default `baseEoseTimeout` 4400ms) and calls `oneose` when it
-        // expires, whether or not any relay ever sent the frame. This function's own bound is 6000ms, so the
-        // library's fake EOSE fired FIRST and set `complete = true` — a failed read reporting a COMPLETED read
-        // of an EMPTY church. That is the input to the doc-wipe chain: `relayNetDoc()` returns
-        // {ev:null, complete:true} while the church's relays are merely down (the a8 update blip is exactly
-        // this), the `!complete` guard does not fire, entries are rebuilt FROM SCRATCH with created_at: now(),
-        // and newest-wins un-admits every box the church had signed, on every member's phone.
-        // Pushing the library's timer well past our own bound means an EOSE arriving inside `ms` is a real one.
-        //
-        // ⚠ THIS ALONE DOES NOT CLOSE B0, and the plan says so in as many words. An UNREACHABLE relay still
-        // reports finished — measured in scripts/a-failed-read-is-not-an-empty-church.test.mjs, which drives a
-        // real socket that never sends EOSE and a genuinely dead port. `complete` means "every relay I could
-        // reach finished", which is not the question enrolment asks. Steps 2-3 of B0 — counting how many relays
-        // GENUINELY answered, and refusing the from-scratch path unless at least one did — are still open.
-        maxWait: ms + 5e3
-      });
+      for (const u of urls) {
+        try {
+          subs.push(pool.subscribeMany([u], filters, {
+            onevent(e) {
+              if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+            },
+            // Deferred one turn so a failing relay's onclose — fired synchronously after its fake oneose — is
+            // recorded before anything is counted.
+            oneose() {
+              eosed.add(u);
+              if (eosed.size === urls.length) setTimeout(finish, 0);
+            },
+            onclose() {
+              failed.add(u);
+            },
+            // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — nostr-tools arms its own EOSE timer and calls
+            // oneose when it expires whether or not any relay sent the frame. Pushing it well past our own bound
+            // means an EOSE arriving inside `ms` is a real one (B0 step 1, measured at ~4421ms before this).
+            maxWait: ms + 5e3
+          }));
+        } catch (e) {
+          failed.add(u);
+          eosed.add(u);
+        }
+      }
       setTimeout(finish, ms);
     });
   }
@@ -18812,9 +18819,12 @@ zoo`.split("\n");
     const { ev } = await relayNetDoc();
     return ev && ev.pubkey === pub ? parseRelayNet(ev.content) : [];
   }
+  var _isLoopbackRelay = (u) => /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/|$)/i.test(String(u || ""));
+  var _RELAY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
   async function enrolRelayNet(opts) {
     const o = opts || {};
     if (!sk || !pub) throw new Error("No church key on this device");
+    if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: "not this church\u2019s own console" };
     const { ev: existing, complete } = await relayNetDoc();
     const mine = existing && existing.pubkey === pub ? existing : null;
     if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
@@ -18846,6 +18856,8 @@ zoo`.split("\n");
       }
     }
     const proven = [], unproven = [];
+    const shared = sharedRelayKeys();
+    const own = relayNetCandidates()[0] || "";
     for (const url of relayNetCandidates(o.extra)) {
       let proof = null;
       try {
@@ -18859,15 +18871,50 @@ zoo`.split("\n");
         continue;
       }
       proven.push({ url, pubkey: p });
+      if (shared.includes(p)) continue;
+      const isOwn = !!own && url === own;
+      const hint = _isLoopbackRelay(url) ? isOwn ? selfPublicRelay() : "" : url;
+      const nm = isOwn ? String(selfRelayName() || "").toLowerCase() : "";
       const cur = entries.find((x) => x.pubkey === p);
       if (cur) {
-        if (url && cur.url !== url) cur.url = url;
-      } else entries.push({ pubkey: p, alwaysOn: true, url });
+        if (hint && cur.url !== hint) cur.url = hint;
+        if (_RELAY_NAME_RE.test(nm) && cur.name !== nm) cur.name = nm;
+      } else {
+        const e = { pubkey: p, alwaysOn: true, url: hint };
+        if (_RELAY_NAME_RE.test(nm)) e.name = nm;
+        entries.push(e);
+      }
     }
     const changed = JSON.stringify(entries) !== before;
-    if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
-    const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk));
-    return { published: !!ev, entries, proven, unproven, seeded };
+    const deliver = async (ev2) => {
+      const urls = proven.filter((x) => !shared.includes(x.pubkey)).map((x) => x.url);
+      if (!ev2 || !urls.length) return [];
+      const res = await Promise.allSettled(pool.publish(urls, ev2).map((pr) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8e3))])));
+      return urls.filter((u, i3) => res[i3] && res[i3].status === "fulfilled" && !(typeof res[i3].value === "string" && res[i3].value.startsWith("connection failure")));
+    };
+    if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
+    if (!changed) return { published: false, entries, proven, unproven, seeded, delivered: mine ? await deliver(mine) : [] };
+    const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
+    const ev = await publish(signed);
+    const delivered = await deliver(signed);
+    return { published: !!ev || delivered.length > 0, entries, proven, unproven, seeded, delivered };
+  }
+  var _autoEnrolled = /* @__PURE__ */ new Set();
+  async function autoEnrolRelayNet() {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
+    const own = relayNetCandidates()[0] || "";
+    if (!own) return null;
+    const key = pub + "|" + own;
+    if (_autoEnrolled.has(key)) return null;
+    _autoEnrolled.add(key);
+    let res = null;
+    try {
+      res = await enrolRelayNet();
+    } catch (e) {
+      res = null;
+    }
+    if (!res || res.unknown) _autoEnrolled.delete(key);
+    return res;
   }
   function isNetworkRelay2(cp, url) {
     return isNetworkRelay(cp, url, {
@@ -19499,7 +19546,16 @@ zoo`.split("\n");
     //    return below is that fix, and with zero callers it has never run outside its test. It is the first
     //    thing to exercise on a real slow link when this is wired in, not the last.
     // Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own.
+    // (Wired 2026-10-21, self-hosting P1: autoEnrolRelayNet on boot/unlock signs this console's own box only;
+    // signRelay signs one relay the steward has consented to on the Add-a-relay card. B0/B1/B3/B4 closed.)
     enrolRelayNet,
+    autoEnrolRelayNet,
+    // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
+    // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.
+    signRelay(url) {
+      const u = normRelay(url);
+      return u ? enrolRelayNet({ extra: [u] }) : Promise.resolve(null);
+    },
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
     publishSigned: _publishSigned,

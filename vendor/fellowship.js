@@ -3820,7 +3820,9 @@
       const pubkey = String(e.pubkey || "").toLowerCase();
       if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
       seen.add(pubkey);
-      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+      const entry = { pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" };
+      if (typeof e.name === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(e.name)) entry.name = e.name;
+      out.push(entry);
     }
     return out;
   }

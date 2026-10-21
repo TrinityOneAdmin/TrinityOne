@@ -167,6 +167,8 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'function _oneComplete', '_oneComplete'),
     fnBody(src, 'function relayNetDoc', 'relayNetDoc'),
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
+    stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
+    stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function relays()', 'relays'),
@@ -175,7 +177,10 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
   ].join('\n');
   assertGateLift(body, 'vendor/steward.js');
   assert.match(body, /const _targets = relays\(\);/, 'vendor/steward.js: publish() no longer assembles through the gated list');
-  assert.match(body, /pool\.subscribeMany\(relaysRaw\(\)/, 'vendor/steward.js: the one-shot reader has been moved onto the FILTERED list — the read-side deadlock');
+  // CHANGED 2026-10-21 (self-hosting P1, B0 steps 2-3): _oneComplete now opens one subscription per relay so a
+  // failure can be told from an answer, so the list it reads is taken once into `urls`. Same property, pinned
+  // inside the reader itself: the list it walks is relaysRaw(), never the filtered relays().
+  assert.match(fnBody(src, 'function _oneComplete', '_oneComplete'), /const urls = relaysRaw\(\);/, 'vendor/steward.js: the one-shot reader has been moved onto the FILTERED list — the read-side deadlock');
   // The tests below warm the gate with `gate.refresh(relaysRaw(), pub)` because that is what the console does
   // the moment it learns which church it is running (setKey). If that call ever leaves setKey, these tests
   // would still pass while a real console published nothing until its first background pass — so the claim is
@@ -205,6 +210,8 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     // in this file measures what it measured before.
     _monotonic: (t) => t,
     setNamedRelays: () => {}, getNamedRelays: () => [],
+    // Self-hosting P1: this church's own console (B1), nameless, no public address.
+    actingChurch: '', _viewingNetwork: () => false, selfRelayName: () => '', selfPublicRelay: () => '',
   });
   store.setItem('trinityone.steward.extra-relays', JSON.stringify(extra));
   // The Add-relay control the steward actually presses, taken as the METHOD it is on window.Steward — the
@@ -453,6 +460,33 @@ test('a never-yet-admitted box on the console\'s own origin is adopted, and the 
     assert.equal(docs.length, 1, BOX.name + ' holds ' + docs.length + ' membership documents, expected 1');
     assert.match(docs[0].content, new RegExp(BOX.relayPub), 'the published document does not name this box');
   } finally { con.close(); BOX.stop(); }
+});
+
+// ── 6b. a console served by the SHARED pool signs nothing — owner decision 6 (self-hosting P1, 2026-10-21) ─
+test('a console served from the shared community relay never signs that relay into a church\'s list', async () => {
+  // A church that does not self-host must be left exactly as it was. Its console is served by the shared
+  // relay, so the "own box" the automatic enrolment would sign IS the shared relay — and a signed list
+  // naming it would make that church look self-hosting to every later rule built on the list.
+  const flock = H.key();
+  const SHARED = await H.startRelay({ name: 'SHARED', churches: [flock.pub] });
+  const con = consoleOn({
+    church: flock, extra: [],
+    origin: { protocol: 'http:', host: SHARED.base.replace(/^https?:\/\//, '') },
+    canonical: [SHARED.wsUrl], pins: { [SHARED.wsUrl]: [SHARED.relayPub] },
+  });
+  try {
+    assert.deepEqual(con.relayNetCandidates(), [SHARED.wsUrl], 'precondition: the census sees the serving box');
+    // Warm the gate the way setKey() does on unlock, so a document WOULD land if one were signed. Without this
+    // the publish set is empty and the row passes whatever enrolRelayNet decides (measured: a sabotage that
+    // removed the skip went uncaught until this line was added).
+    await con.gate.refresh(con.relaysRaw(), flock.pub);
+    assert.ok(con.relays().includes(SHARED.wsUrl), 'precondition: the shared relay is in the publish set');
+    const res = await con.enrolRelayNet();
+    assert.ok(res.proven.some(p => p.pubkey === SHARED.relayPub), 'precondition: the shared relay proved its key');
+    assert.equal(res.published, false, 'a list was signed for a church whose only relay is the shared pool');
+    assert.deepEqual(await storedRelayNet(SHARED, flock), [],
+      'THE SHARED RELAY WAS SIGNED INTO A NON-SELF-HOSTING CHURCH\'S LIST — owner decision 6 says such a church is unaffected');
+  } finally { con.close(); SHARED.stop(); }
 });
 
 // ── 7. a box that MOVED, and an address that changed hands ─────────────────────────────────────────────

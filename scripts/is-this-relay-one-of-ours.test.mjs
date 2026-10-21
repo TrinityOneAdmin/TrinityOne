@@ -112,12 +112,16 @@ function consoleWith(deps) {
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),
     fnBody(src, 'function isNetworkRelay2', 'isNetworkRelay2'),
+    // Self-hosting P1 (2026-10-21): the loopback test and the name shape enrolRelayNet now consults.
+    stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
+    stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),
   ].join('\n');
   assert.match(more, /const entries = mine \? parseRelayNet\(mine\.content\) : \[\]/,
     'enrolRelayNet no longer starts from what the church already signed — it would drop offline boxes');
   const f = new Function('verifyEvent', 'verifyEvent2', 'normalizeURL', 'normalizeURL2', 'fetch',
     'location', 'window', 'extraRelays', '_oneComplete', 'publish', 'sk', 'pub', 'now',
     'finalizeEvent', 'finalizeEvent2', 'relays', 'ownRelay', '_boxHostsUs', '_monotonic',
+    'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool',
     body + '\n' + more +
     '\nreturn { enrolRelayNet, relayNetCandidates, relayNetEntries, isNetworkRelay: isNetworkRelay2, _ownOrigin };');
   return f(verifyEvent, verifyEvent, normalizeURL, normalizeURL, globalThis.fetch,
@@ -127,7 +131,12 @@ function consoleWith(deps) {
     // Stage 3 (SCOPE-RELAY-CORRECTED-TIME-2026-09-26) put enrolRelayNet's write through _monotonic().
     // Identity here: the shipped one returns the template unchanged for a first write, so every row in
     // this file measures what it measured before.
-    (t) => t);
+    (t) => t,
+    // Self-hosting P1: B1's guard reads actingChurch/_viewingNetwork; the own box's name and public address
+    // come from selfRelayName/selfPublicRelay; B3 delivers over pool.publish. Defaults are "this church's own
+    // console, nameless, no public address, delivering nowhere" so every older row measures what it did.
+    deps.actingChurch || '', () => !!deps.viewingNetwork, () => deps.selfName || '', () => deps.selfPublic || '',
+    deps.pool || { publish: () => [] });
 }
 
 // ── reading the relay, not the client ───────────────────────────────────────────────────────────────────
@@ -192,7 +201,9 @@ test('a church signs a relay in, and the console reads that document back off a 
     extraRelays: () => [IN.wsUrl],
     one: oneFrom(IN, church), publish: publishTo(IN, OUT), sk: church.sk, pub: church.pub,
   });
-  const out = await con.enrolRelayNet();
+  // B4 (2026-10-21): a typed relay is signed only on the steward's consent — signRelay(url), which is
+  // enrolRelayNet({ extra: [url] }). The bare call now signs the serving box alone (see test 11).
+  const out = await con.enrolRelayNet({ extra: [IN.wsUrl] });
   assert.equal(out.published, true, 'the console did not publish the membership document');
 
   for (const box of [IN, OUT]) {
@@ -239,7 +250,11 @@ test('a relay that changed address keeps its membership, because membership is t
   const before2 = await storedRelayNet(IN, church);
   assert.equal(before2.length, 1, 'precondition: the church has signed exactly one document');
   const signedUrl = cores[0][1].parseRelayNet(before2[0].content)[0].url;
-  assert.equal(signedUrl, IN.wsUrl, 'precondition: the document records the address the box had when signed');
+  // CHANGED 2026-10-21 (self-hosting P1, rule 8 — same assertion count): the harness relays listen on
+  // 127.0.0.1, and enrolment no longer writes a loopback address into the church's document (it names the
+  // steward's own computer, which no phone can reach). So the hint recorded here is now '' rather than
+  // IN.wsUrl. What this case proves is unchanged: membership survives the move because it is the key.
+  assert.equal(signedUrl, '', 'precondition: a loopback address was written into the church\'s document as a hint');
 
   const moved = await H.moveRelay(IN);          // same box, same key, new port — a tunnel restart in miniature
   IN = moved;
@@ -385,7 +400,7 @@ test('enrolment never drops a box that is merely unreachable, and seeds once fro
     extraRelays: () => [OUT.wsUrl],
     one: oneFrom(OUT, church), publish: publishTo(OUT), sk: church.sk, pub: church.pub,
   });
-  const res = await con.enrolRelayNet();
+  const res = await con.enrolRelayNet({ extra: [OUT.wsUrl] });   // B4: the consent path
   assert.equal(res.published, true, 'nothing was published');
   const entries = cores[1][1].parseRelayNet((await storedRelayNet(OUT, church))[0].content);
   const byPub = new Map(entries.map(e => [e.pubkey, e]));
@@ -447,7 +462,7 @@ test('an older relay stores the church\'s document, but the console will not enr
     extraRelays: () => [OLD.wsUrl],
     one: oneFrom(OLD, flock), publish: publishTo(OLD), sk: flock.sk, pub: flock.pub,
   });
-  const res = await con.enrolRelayNet();
+  const res = await con.enrolRelayNet({ extra: [OLD.wsUrl] });   // B4: the consent path
   assert.deepEqual(res.proven, [], 'a relay with no /relay-identity endpoint somehow produced a possession proof');
   assert.ok(res.unproven.includes(OLD.wsUrl), 'the un-upgraded box was not reported as unproven: ' + JSON.stringify(res.unproven));
   assert.equal(res.published, false, 'the console re-signed the church\'s membership over a box it could not prove');
@@ -474,7 +489,7 @@ test('an unfinished read publishes nothing, rather than a smaller document over 
     extraRelays: () => [OUT.wsUrl],
     one: oneWhere(OUT, church, RELAY_NET_D), publish: publishTo(OUT), sk: church.sk, pub: church.pub,
   });
-  const resA = await conA.enrolRelayNet();
+  const resA = await conA.enrolRelayNet({ extra: [OUT.wsUrl] });   // B4: the consent path
   assert.equal(resA.published, false, 'a console that could not read the church\'s document published one anyway');
   assert.equal(resA.unknown, true, 'the caller was not told the answer is unknown');
   const now2 = await storedRelayNet(OUT, church);
@@ -494,12 +509,138 @@ test('an unfinished read publishes nothing, rather than a smaller document over 
     extraRelays: () => [FRESH.wsUrl],
     one: oneWhere(FRESH, flock, 'trinityone/relays'), publish: publishTo(FRESH), sk: flock.sk, pub: flock.pub,
   });
-  const resB = await conB.enrolRelayNet();
+  const resB = await conB.enrolRelayNet({ extra: [FRESH.wsUrl] });   // B4: the consent path
   assert.equal(resB.published, false, 'the seed read never finished and a membership document was published anyway');
   assert.equal(resB.unknown, true, 'the caller was not told the seed answer is unknown');
   assert.deepEqual(await storedRelayNet(FRESH, flock), [],
     'a membership document was written for a church whose existing trusted-relay list could not be read — ' +
     'the one-time seed has now been spent, and those boxes will never be carried across');
+});
+
+// ── 11-14. SELF-HOSTING PHASE 1 (2026-10-21): what the console signs, and where it sends it ────────────────
+// A console served by its own box, for a fresh church, with two real relays: BOX (the serving box) and TYPED
+// (an address the steward has in the relay panel). Fresh per test so no row leans on another's leftovers.
+async function selfHostedChurch(tag) {
+  const flock = H.key();
+  const [BOX, TYPED] = await Promise.all([
+    H.startRelay({ name: tag + '-BOX', churches: [flock.pub] }),
+    H.startRelay({ name: tag + '-TYPED', churches: [flock.pub] }),
+  ]);
+  return { flock, BOX, TYPED, location: { protocol: 'http:', host: BOX.base.replace(/^https?:\/\//, '') } };
+}
+// pool.publish, as the console's pool answers it: one promise per address, landing the event on that box.
+const poolTo = (...boxes) => ({
+  sent: [],
+  publish(urls, ev) {
+    this.sent.push(...urls);
+    return urls.map(async (u) => { const b = boxes.find(x => x.wsUrl === u); if (!b) throw new Error('connection failure'); await H.publishAll(b, [ev]); return ''; });
+  },
+});
+
+test('B4: the automatic enrolment signs the box that served the console, and never a relay a steward typed', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('B4');
+  const con = consoleWith({
+    location, extraRelays: () => [TYPED.wsUrl],      // typed into the panel, never consented to
+    one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub,
+  });
+  assert.deepEqual(con.relayNetCandidates(), [BOX.wsUrl],
+    'the automatic census enumerates more than the serving box: ' + JSON.stringify(con.relayNetCandidates()));
+  const res = await con.enrolRelayNet();             // what autoEnrolRelayNet calls: no `extra`
+  assert.equal(res.published, true, 'the console did not sign its own box');
+  const signed = cores[1][1].parseRelayNet((await storedRelayNet(BOX, flock))[0].content).map(e => e.pubkey);
+  assert.ok(signed.includes(BOX.relayPub), 'the serving box is not in the church\'s signed list');
+  assert.ok(!signed.includes(TYPED.relayPub),
+    'A RELAY THE STEWARD MERELY TYPED WAS SIGNED AUTOMATICALLY — one paste and every member phone trusts it (B4)');
+  // …and the consent path does sign it.
+  const res2 = await con.enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.equal(res2.published, true, 'the consented relay was not signed');
+  const signed2 = cores[1][1].parseRelayNet((await storedRelayNet(BOX, flock)).sort((a, b) => b.created_at - a.created_at)[0].content).map(e => e.pubkey);
+  assert.ok(signed2.includes(TYPED.relayPub), 'signRelay\'s path did not add the consented relay');
+});
+
+test('the serving box is recorded by its NAME and PUBLIC address — never localhost — and a name is never blanked', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('NAME');
+  const PUBLIC = 'wss://quiet-dove-45.example/relay';
+  const first = consoleWith({
+    location, selfName: 'quiet-dove-45', selfPublic: PUBLIC,
+    one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub,
+  });
+  assert.equal((await first.enrolRelayNet()).published, true, 'nothing was signed');
+  const docs = await storedRelayNet(BOX, flock);
+  for (const [file, api] of cores) {
+    const e = api.parseRelayNet(docs[0].content).find(x => x.pubkey === BOX.relayPub);
+    assert.ok(e, `${file}: the box is not in the list`);
+    assert.equal(e.name, 'quiet-dove-45', `${file}: the box's stable name was not kept — a phone cannot follow it when its tunnel moves`);
+    assert.equal(e.url, PUBLIC, `${file}: the entry does not carry the box's public address`);
+  }
+  assert.doesNotMatch(docs[0].content, /localhost|127\.0\.0\.1/,
+    'a loopback address went into the church\'s signed list — it names the steward\'s own computer, which no phone can reach');
+
+  // The tunnel goes down: selfRelayName/selfPublicRelay are wiped locally. The console re-enrols on unlock.
+  const later = consoleWith({
+    location, selfName: '', selfPublic: '',
+    one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub,
+  });
+  const res = await later.enrolRelayNet();
+  assert.equal(res.published, false, 'an unchanged list was re-signed');
+  const after = (await storedRelayNet(BOX, flock));
+  assert.equal(after.length, 1, 'the church\'s document was rewritten');
+  const e2 = cores[0][1].parseRelayNet(after[0].content).find(x => x.pubkey === BOX.relayPub);
+  assert.equal(e2.name, 'quiet-dove-45', 'THE NAME WAS BLANKED because the tunnel happened to be down at unlock');
+  assert.equal(e2.url, PUBLIC, 'the public address was blanked because the tunnel happened to be down at unlock');
+});
+
+test('B3: the signed list reaches the box that just proved itself, even when the gated publish lands nowhere', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('B3');
+  // (a) The gated publish set holds nothing yet (publish lands nowhere). The box that answered the proof
+  //     must still end up holding the document that admits it.
+  const pool = poolTo(BOX);
+  const con = consoleWith({
+    location, pool,
+    one: oneFrom(BOX, flock), publish: async () => false, sk: flock.sk, pub: flock.pub,
+  });
+  const res = await con.enrolRelayNet();
+  assert.deepEqual(res.delivered, [BOX.wsUrl], 'the document was not sent to the proven box: ' + JSON.stringify(res));
+  const held = await storedRelayNet(BOX, flock);
+  assert.equal(held.length, 1, 'THE CHURCH\'S OWN RELAY DOES NOT HOLD THE DOCUMENT THAT ADMITS IT (B3)');
+
+  // (b) Unchanged list, and a box that missed it: the EXISTING signed event is re-sent byte for byte, never
+  //     re-signed — so it cannot clobber anything newer and costs no new timestamp.
+  const pool2 = poolTo(TYPED);
+  const con2 = consoleWith({
+    location: { protocol: 'https:', host: 'app.example.church' }, pool: pool2,
+    one: oneFrom(BOX, flock), publish: async () => { throw new Error('an unchanged list must not be re-signed'); },
+    sk: flock.sk, pub: flock.pub,
+  });
+  // Put TYPED in the list first (by hand, signed by the church) so the run below finds nothing to change.
+  const doc = finalizeEvent({ kind: 30078, created_at: held[0].created_at + 1, tags: [['d', RELAY_NET_D]],
+    content: JSON.stringify([...cores[0][1].parseRelayNet(held[0].content), { pubkey: TYPED.relayPub, alwaysOn: true, url: '' }]) }, flock.sk);
+  await H.publishAll(BOX, [doc]);
+  const res2 = await con2.enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.equal(res2.published, false, 'an unchanged list was re-signed');
+  assert.deepEqual(res2.delivered, [TYPED.wsUrl], 'the unchanged document was not re-sent to the proven box');
+  const onTyped = await storedRelayNet(TYPED, flock);
+  assert.equal(onTyped.length, 1, 'TYPED does not hold the church\'s document');
+  assert.equal(onTyped[0].id, doc.id, 'the box was handed a re-signed copy instead of the church\'s own event');
+});
+
+test('B1: a console helping another church, or viewing a network, signs nothing and sends nothing', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('B1');
+  for (const who of [{ actingChurch: H.key().pub }, { viewingNetwork: true }]) {
+    let published = 0;
+    const pool = poolTo(BOX);
+    const con = consoleWith({
+      location, pool, ...who,
+      one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub,
+    });
+    const res = await con.enrolRelayNet();
+    assert.equal(res.published, false, 'a delegated/network console signed a relay list: ' + JSON.stringify(who));
+    assert.ok(res.skipped, 'the caller was not told why nothing happened');
+    assert.equal(published + pool.sent.length, 0,
+      'A CONSOLE THAT IS NOT THIS CHURCH\'S OWN WROTE A RELAY LIST — in delegated mode that is the helper\'s key ' +
+      'signing over their own church\'s list (B1): ' + JSON.stringify(who));
+  }
+  assert.deepEqual(await storedRelayNet(BOX, flock), [], 'something reached the box');
 });
 
 // ── 10. teardown, asserted rather than trusted ──────────────────────────────────────────────────────────

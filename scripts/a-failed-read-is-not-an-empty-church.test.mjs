@@ -92,19 +92,20 @@ test('…and the church document is never treated as absent on that basis', { ti
     'document from nothing and publishes it with created_at: now().');
 });
 
-test('A DEAD PORT IS THE RESIDUAL — measured, named, and NOT yet fixed', { timeout: 30000 }, async () => {
-  // ⚠ THIS TEST RECORDS A KNOWN GAP RATHER THAN ASSERTING IT IS CLOSED, and that is deliberate honesty.
-  // B0 step 2 says maxWait alone is NOT sufficient: an unreachable relay still counts as finished, because
-  // `complete` means "every relay I could reach finished" — which is not the question enrolment asks.
-  // Steps 2-3 (count how many relays GENUINELY answered; refuse the from-scratch path unless at least one
-  // did) are still open. When they land, flip this assertion to `false` and delete this comment.
+test('A DEAD PORT IS NOT A COMPLETED READ EITHER — B0 steps 2-3', { timeout: 30000 }, async () => {
+  // FLIPPED 2026-10-21 (self-hosting P1), as this test always said it would be. Until today an unreachable
+  // relay counted as finished — nostr-tools routes a connection failure through the same oneose a real EOSE
+  // uses — so `complete` meant "every relay I could reach finished", not the question enrolment asks.
+  // _oneComplete now subscribes per relay, tells a failure (onclose) from an answer, and reports complete only
+  // when at least one relay GENUINELY answered. The default bound, so nothing here is shortened.
   const r = reader(['ws://127.0.0.1:' + DEAD_PORT + '/']);
-  const { ev, complete } = await r.fn(FILTER, 1500);
+  const { ev, complete, answered } = await r.fn(FILTER, 1500);
   r.close();
   assert.equal(ev, null, 're-anchor: a port nothing is listening on produced an event');
-  assert.equal(complete, true,
-    'THE DEAD-PORT RESIDUAL HAS CHANGED. If it now reports false, B0 steps 2-3 have effectively landed — ' +
-    'update this test and the plan. If it reports something else, measure before trusting either.');
+  assert.equal(answered, 0, 'a port nothing is listening on was counted as a relay that answered');
+  assert.equal(complete, false,
+    'A DEAD PORT REPORTED A COMPLETED READ — enrolment would take "nobody answered" for "the church has signed ' +
+    'nothing", rebuild the document from scratch, and un-admit every box the church had signed.');
 });
 
 test('a relay that DOES answer still reports complete, so the fix is not a blanket "never complete"', { timeout: 30000 }, async () => {

@@ -955,6 +955,18 @@ function KeyDistributor() {
     window.addEventListener('steward-key', onKey);
     return () => window.removeEventListener('steward-key', onKey);
   }, []);
+  // ── SIGN THIS CONSOLE'S OWN RELAY INTO THE CHURCH'S LIST (self-hosting P1, B2). On mount with a key and on
+  //    every unlock. Only the box that served this console is ever signed here (B4) — a typed relay needs the
+  //    steward's Connect on the Add-a-relay card. Deferred so it never competes with the first paint; once per
+  //    (church, box) per page load, decided inside autoEnrolRelayNet. scripts/a-console-signs-its-own-relay
+  //    .test.mjs slices and RUNS this effect, from the line below to the end marker.
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      try { const p = window.Steward && window.Steward.autoEnrolRelayNet && window.Steward.autoEnrolRelayNet(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [unlockTick]);
+  // ── end of the own-relay enrolment effect
   // THE THREE KEY SUBSCRIPTIONS FOLLOW THE CHURCH AND THE CONNECTION — [idv, conn, church], like makeSub in
   // steward-root.jsx. They were mounted with `[]`, so after a church switch they went on reading the PREVIOUS
   // church's envelopes and never read the new one's: switching A→B→A left the name key empty (every member
@@ -1343,17 +1355,24 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   const [relayBusy, setRelayBusy] = React.useState(false);
   const [relayAddr, setRelayAddr] = React.useState('');
   const [addrMsg, setAddrMsg] = React.useState('');
+  const [addrAsk, setAddrAsk] = React.useState(false);   // the consent line is showing (see RelayConsent)
   // The desktop "church-in-a-box" build serves the console from its OWN relay, so there is nothing to add.
   // Was: "did they come through the full-suite door?" — a question about the LAUNCHER. Now: "does this
   // computer actually hold this church?" — a question about the church. See whereChurchLives.
   const isRelayApp = !!(window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted());
-  const addOwnRelay = () => {
+  const addOwnRelay = (confirmed) => {
     const u = (relayAddr || '').trim(); if (!u) return;
+    if (confirmed !== true) { setAddrAsk(true); return; }   // first tap shows what connecting means
+    setAddrAsk(false);
     // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
     // The version of this that shipped before treated every outcome as success, so a leader who typoed their
     // address saw a green tick and walked away believing their church was reachable there.
     const ok = window.Steward.addRelay ? window.Steward.addRelay(u) : false;
-    if (ok) { setAddrMsg('✓ Added — your church now uses this relay too.'); setRelayAddr(''); }
+    if (ok) {
+      setAddrMsg('✓ Added — your church now uses this relay too.'); setRelayAddr('');
+      // Signed into the church's relay list on the steward's consent — the same as the Add-a-relay card.
+      try { const p = window.Steward.signRelay && window.Steward.signRelay(ok); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    }
     else setAddrMsg('✗ Couldn’t add that. Check it starts with wss:// and isn’t one you’ve already added.');
   };
   const phrase = (() => { try { return window.Steward.exportMnemonic() || ''; } catch { return ''; } })();
@@ -1730,9 +1749,10 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
                 <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Have your relay’s <b>address</b>? Add it so your church publishes and reads there as well as on the shared relays.</div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <input value={relayAddr} onChange={e => setRelayAddr(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
-                  <button onClick={addOwnRelay} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
+                  <input value={relayAddr} onChange={e => { setRelayAddr(e.target.value); setAddrAsk(false); }} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
+                  <button onClick={() => addOwnRelay()} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
                 </div>
+                {addrAsk ? <RelayConsent onYes={() => addOwnRelay(true)} onNo={() => setAddrAsk(false)} /> : null}
                 {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{addrMsg}</div> : null}
               </div>
             )}
@@ -5326,6 +5346,22 @@ function DashRelaysCard() {
   );
 }
 
+// THE CONSENT LINE (owner, 2026-10-21). Shown on the first tap of Add relay / Connect; nothing is added or
+// signed until "Connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
+// relay is the church vouching for it to every member's phone, not a connection test.
+const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
+function RelayConsent({ onYes, onNo }) {
+  return (
+    <div role="alertdialog" aria-label="Confirm connecting this relay" style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+      <b style={{ color: 'var(--ink)' }}>{RELAY_CONSENT_TEXT}</b> Only connect a relay your church runs or trusts.
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button onClick={onYes} className="sk-btn sk-btn--clay" style={{ padding: '6px 12px', fontSize: 12 }}>Connect</button>
+        <button onClick={onNo} className="sk-btn sk-btn--ghost" style={{ padding: '6px 12px', fontSize: 12 }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 // ── ADD A RELAY: one page, three ways in — a typed address, auto-find, or the relay's claimed name.
 //    Split off the Relays card 2026-09-09. All three are rare, all three sat expanded on the everyday page,
 //    and between them they were most of its measured 1000px.
@@ -5345,19 +5381,37 @@ function DashAddRelayCard() {
   // Round 9's vicar did exactly that and stopped: "I typed our second office computer's address into the Add
   // relay box and pressed Add relay... Because of that I never got to the bit about keeping the two in step."
   const [addedNote, setAddedNote] = React.useState('');
-  const addRelay = () => {
+  // INFORMED CONSENT BEFORE A RELAY IS SIGNED (owner, 2026-10-21, B4). Connecting a relay signs it into the
+  // church's own relay list, and every member's phone then sends the church's data to it. So the first tap
+  // only shows what that means; the steward's second tap — `confirmed` — is the consent, and only then is the
+  // relay added and signed. `ask` holds which action is waiting: 'add' or 'name'.
+  const [ask, setAsk] = React.useState('');
+  const [signNote, setSignNote] = React.useState('');
+  const signIt = async (url) => {
+    setSignNote('');
+    let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(url) : null; } catch (e) { r = null; }
+    if (r && !r.skipped && !(r.proven || []).length) setSignNote('It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.');
+    return r;
+  };
+  const addRelay = async (confirmed) => {
+    if (!(draft || '').trim()) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+    if (confirmed !== true) { setAsk('add'); return; }
+    setAsk('');
     const r = window.Steward.addRelay && window.Steward.addRelay(draft);
     if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
     setDraft(''); setErr('');
     setAddedNote(String(r));
+    await signIt(String(r));
   };
   // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
   // relay. (Registering write-access still uses the token/pairing below.)
   const [byName, setByName] = React.useState('');
   const [byNameMsg, setByNameMsg] = React.useState(null);
   const RELAY_DIRECTORY = 'https://app.trinityone.church';
-  const connectByName = async () => {
+  const connectByName = async (confirmed) => {
     const n = (byName || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); if (!n) return;   // "Quiet Dove 45" → "quiet-dove-45"
+    if (confirmed !== true) { setAsk('name'); return; }   // the consent line first — see `ask` above
+    setAsk('');
     setByNameMsg({ text: 'Looking up “' + n + '”…' });
     try {
       const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
@@ -5383,6 +5437,7 @@ function DashAddRelayCard() {
         ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
         : { ok: true, text: reg.ok ? ((added ? '✓ Connected to “' : '✓ “') + n + (added ? '” — your church is registered and can post.' : '” was already on your list — your church is registered there and can post.')) : '✓ ' + (added ? 'Added “' : 'Already had “') + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
+      await signIt(j.url);
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };
   // ── end of the connect-by-name flow. scripts/connect-by-name-names-the-church.test.mjs slices this
@@ -5412,13 +5467,15 @@ function DashAddRelayCard() {
             the second box it runs itself; what is gone is the suggestion of anybody else's. */}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 9 }}>
-            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
+            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); setAsk(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
               aria-label="Relay address to add"
               placeholder="wss://relay.yourchurch.org" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-            <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
+            <button onClick={() => addRelay()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+          {ask === 'add' ? <RelayConsent onYes={() => addRelay(true)} onNo={() => setAsk('')} /> : null}
+          {signNote ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7, lineHeight: 1.45 }}>{signNote}</div> : null}
           {/* The step nobody was told about. Says what was added, what it does NOT yet do, and the one thing
               left to do about it — in a steward's words, not the relay's. */}
           {addedNote ? (
@@ -5441,12 +5498,13 @@ function DashAddRelayCard() {
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 4 }}>OR CONNECT BY NAME</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 7, lineHeight: 1.45 }}>The name its operator claimed. It follows the relay’s current address, even when the tunnel URL changes.</div>
             <div style={{ display: 'flex', gap: 9 }}>
-              <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
+              <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); setAsk(''); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
                 placeholder="your relay’s name, e.g. grace-city" spellCheck={false} autoCapitalize="none"
                 aria-label="Relay name to connect to" title="Type the name the relay’s operator claimed (e.g. grace-city). It resolves to the relay’s current address, so it keeps working even after the tunnel URL changes."
                 style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-              <button onClick={connectByName} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
+              <button onClick={() => connectByName()} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
             </div>
+            {ask === 'name' ? <RelayConsent onYes={() => connectByName(true)} onNo={() => setAsk('')} /> : null}
             {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay-ink)' : byNameMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
           </div>
         </div>

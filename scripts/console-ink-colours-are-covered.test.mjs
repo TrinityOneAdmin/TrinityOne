@@ -212,6 +212,10 @@ test('the connect-by-name result is legible whether it worked or failed', async 
     const go = button(card.draw(), 'Connect').filter(b => b.props['aria-label'] === 'Connect to relay by name');
     assert.equal(go.length, 1, 'the Connect button is gone — re-anchor this test');
     go[0].props.onClick();
+    // B4 (2026-10-21): the first tap shows the consent line; its own Connect is the tap that acts.
+    const yes = button(card.draw(), 'Connect').filter(b => b.props['aria-label'] !== 'Connect to relay by name');
+    assert.equal(yes.length, 1, 'the consent line\'s Connect is missing — the steward cannot go on');
+    yes[0].props.onClick();
     await settle();
     const msg = smallest(card.draw(), re);
     assert.ok(msg, `the connect-by-name ${ok ? 'success' : 'failure'} message did not render`);
