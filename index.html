@@ -27,6 +27,11 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css" />
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* iOS Safari / WKWebView paints <button> text in the system accent (blue) by default, so any button
+     whose text does not set its own colour rendered blue on iPhone (e.g. the Community "What's happening"
+     heading) while Android inherits the ink colour and looked correct. Inherit here so buttons match
+     normal text on both. Buttons that set their own colour inline still win. (2026-10-21) */
+  button { color: inherit; }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
     background: #ddd6c8;
