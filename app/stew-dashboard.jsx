@@ -5161,15 +5161,24 @@ function DashRelaysCard() {
   // REMOVE ALSO UN-SIGNS (owner decision B, 2026-10-21). Connecting a relay signs it into the church's relay list;
   // removing it must take it out again, or a steward's consent could never be withdrawn. Says so when it could not.
   const [dropNote, setDropNote] = React.useState('');
+  // THE REMOVAL IN FLIGHT (fifth audit, finding 7): the url being removed, or ''. It is the one source of the
+  // "Removing…" line, shown in the neutral colour (it is progress, not a warning). The ref is the guard: a second tap
+  // on the same relay while it is being removed does nothing (state alone would be stale inside the same frame).
+  const [dropping, setDropping] = React.useState('');
+  const droppingRef = React.useRef('');
   // OUT OF THE CHURCH'S LIST FIRST, THEN OFF THIS SCREEN (fourth audit 2026-10-21, finding 2). Removing the row
   // first left a steward told "remove it again" with no row left to remove — and adding it back to retry signs it
   // straight back in. So the row stays, with the reason, until the church's list no longer names the relay.
   const dropRelay = async (url) => {
-    setConfirmDrop(null); setDropNote('Removing ' + url + '…');
-    let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = { error: String((e && e.message) || e || '') }; }
-    const out = dropOutcome(r, url);
-    if (out.drop) { try { window.Steward.removeRelay(url); } catch (e) {} }
-    setDropNote(out.note);
+    setConfirmDrop(null);
+    if (droppingRef.current === url) return;
+    droppingRef.current = url; setDropping(url); setDropNote('');
+    try {
+      let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = { error: String((e && e.message) || e || '') }; }
+      const out = dropOutcome(r, url);
+      if (out.drop) { try { window.Steward.removeRelay(url); } catch (e) {} }
+      setDropNote(out.note);
+    } finally { droppingRef.current = ''; setDropping(''); }
   };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
@@ -5281,7 +5290,7 @@ function DashRelaysCard() {
               </div>
             );
           })}
-          {dropNote ? <div role="status" style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropNote}</div> : null}
+          {(dropping || dropNote) ? <div role="status" style={{ fontSize: 12, color: dropping ? 'var(--ink-3)' : 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropping ? 'Removing ' + dropping + '…' : dropNote}</div> : null}
         </div>
         {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
             `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct
@@ -5391,7 +5400,11 @@ const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s dat
 // leaves the screen only once the church's list no longer names the relay, or never did (fourth audit, finding 2).
 function dropOutcome(r, url) {
   if (r && r.removed) return { drop: true, note: '' };
-  if (r && r.notListed && r.proven !== false) return { drop: true, note: '' };   // proved its key, and the church's list never named it
+  // Not in the church's list: `notListed` is only answered after the list was read from every relay asked (bar this
+  // one), and it names this relay neither by address nor by the key it proved. A relay that proved no key (a typo, a
+  // relay that is not TrinityOne) leaves too, and the steward is told the plain fact (fifth audit, finding 2: it used
+  // to stay for ever behind a "try again" that could never come true).
+  if (r && r.notListed) return { drop: true, note: r.proven === false ? 'Removed from this console. Your church’s relay list doesn’t name ' + url + '.' : '' };
   if (r && r.ownBox) return { drop: true, note: 'Removed from this console. ' + url + ' is the box this console runs on, so it stays in your church’s relay list.' };
   if (r && r.skipped) return { drop: true, note: 'Removed from this console. Only your church’s own console can take it out of the church’s relay list.' };
   if (r && r.changed) return { drop: false, note: 'This console switched church while removing ' + url + ', so it is still in your church’s relay list. Remove it again.' };

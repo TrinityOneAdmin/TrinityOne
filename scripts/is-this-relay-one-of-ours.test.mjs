@@ -998,7 +998,6 @@ test('the church\'s list goes to the shared relays too, verbatim, even when noth
   assert.equal(res.published, false, 'precondition: an unchanged list was re-signed');
   assert.equal(sent.length, 1, 'THE CHURCH\'S LIST WAS NOT SENT OVER THE PUBLISH SET — the shared relays never get it, and a new browser finds "nothing here"');
   assert.equal(sent[0][0].id, stored.id, 'what was sent is not the church\'s own event, byte for byte');
-  assert.equal(sent[0][1] && sent[0][1].background, true, 'a write nobody asked for was sent as if a steward had — a refusal would raise their error banner');
 });
 
 test('a list found on a partial read is passed on, never re-signed — a stale copy cannot undo a Remove (fourth audit, finding 6)', async () => {

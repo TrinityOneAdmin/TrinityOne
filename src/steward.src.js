@@ -5144,7 +5144,9 @@ async function enrolRelayNet(opts) {
   // relays were unreachable otherwise never reached them, and a new browser — which asks only the relays it knows,
   // never a church box it has not heard of — found "nothing here" on every one and rebuilt the list from scratch.
   // Verbatim, so it can never replace anything newer: a relay keeps the newest copy and refuses an older one.
-  // `background`: nobody asked for this write, so a refusal is not a steward's error.
+  // `background` marks it as a write the console started; on an owner's console publishErrorMessage treats it like
+  // any other, so a refusal by every relay still shows. (Fifth audit, finding 5: this line used to claim a refusal
+  // would not show the steward an error. Nothing tested that, and on an owner's console it is not so.)
   const resend = async () => {
     if (!mine) return [];
     try { await publish(mine, { background: true }); } catch (e) {}

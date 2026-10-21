@@ -557,10 +557,12 @@ function relaysCard(steward, removed = []) {
   const { React, draw } = miniReact();
   const relays = [{ url: 'wss://relay.grace.example/relay', status: 'on' }, { url: 'wss://second.grace.example/relay', status: 'on' }];
   const win = {
-    useStewardRelays: () => relays, useStewardChurch: () => ({ name: 'St Aidan’s' }),
+    useStewardRelays: () => relays.slice(), useStewardChurch: () => ({ name: 'St Aidan’s' }),
     addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     Steward: { ownRelay: () => 'wss://relay.grace.example/relay', backupState: async () => ({ boxes: 2, online: 2, syncOn: true }),
-      removeRelay: () => { removed.push(1); return true; }, canRemoveRelay: () => true, relayName: () => '', ...steward },
+      // Round 6: removeRelay really takes the row out of the panel's list, so a row can be seen to LEAVE THE SCREEN.
+      removeRelay: (u) => { removed.push(1); const i = relays.findIndex(x => x.url === u); if (i >= 0) relays.splice(i, 1); return true; },
+      canRemoveRelay: () => true, relayName: () => '', ...steward },
   };
   const globals = {
     React, window: win, localStorage: win.localStorage,
@@ -594,14 +596,19 @@ test('Remove says so whenever the relay could not be taken out of the church\'s 
     ['it threw (no church key on this device)', async () => { throw new Error('No church key on this device'); }, /Couldn’t take .* out of your church’s relay list \(No church key on this device\)/, true],
     // Fifth audit, finding 1: unknown now means ANOTHER relay is silent, so the steward is told the way out.
     ['unknown (a relay is not answering)', async () => ({ removed: false, unknown: true }), /could not be updated right now.*If a relay you added is gone for good, remove it first/, true],
-    ['not listed, and its key could not be proved', async () => ({ removed: false, notListed: true, proven: false }), /could not be updated right now/, true],
+    // Fifth audit, finding 2: the list was read and does not name it, so it leaves the screen, and the note says why.
+    ['not listed, and its key could not be proved', async () => ({ removed: false, notListed: true, proven: false }), /Removed from this console\. Your church’s relay list doesn’t name wss:\/\/second\.grace\.example\/relay\./, false, /could not be updated right now|Remove it again/],
     ['the console switched church mid-removal', async () => ({ removed: false, unknown: true, changed: true }), /switched church while removing/, true],
     ['a delegated console', async () => ({ removed: false, skipped: 'x' }), /Only your church’s own console can take it out/, false],
     ['the box this console runs on', async () => ({ removed: false, ownBox: true }), /is the box this console runs on/, false],
   ]) {
     const removed = [];
-    const text = await removeSecond(relaysCard({ unsignRelay: unsign }, removed));
+    const view = relaysCard({ unsignRelay: unsign }, removed);
+    const text = await removeSecond(view);
     if (never) assert.doesNotMatch(text, never, why + ': the card said something that does not apply here: ' + text);
+    // THE ROW ITSELF, on the rendered card: still there (its Remove button with it) when kept, gone when not.
+    const trashLeft = find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay').length;
+    assert.equal(trashLeft, keep ? 1 : 0, why + (keep ? ': the row left the screen' : ': THE ROW IS STILL ON THE SCREEN — the steward can never get rid of it'));
     assert.match(text, want, why + ': REMOVE WAS SILENT — the steward believes their consent withdrawn when the church\'s list still names it');
     assert.equal(removed.length, keep ? 0 : 1, why + (keep
       ? ': THE ROW WAS REMOVED ANYWAY — "remove it again" with nothing left to remove, and adding it back signs it in again'
@@ -616,6 +623,33 @@ test('Remove says so whenever the relay could not be taken out of the church\'s 
     assert.doesNotMatch(text, WARN, why + ': a warning was shown over a removal that worked');
     assert.equal(removed.length, 1, why + ': the row was not removed');
   }
+});
+
+test('Remove ignores a second tap while removing, and says so in the neutral colour (fifth audit, finding 7)', async () => {
+  let calls = 0, release;
+  const held = new Promise(r => { release = r; });
+  const removed = [];
+  const view = relaysCard({ unsignRelay: () => { calls++; return held; } }, removed);
+  view(); await settle();
+  const tapRemove = async () => {
+    const trash = find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay');
+    assert.equal(trash.length, 1, 're-anchor: no Remove relay button on the second relay\'s row');
+    trash[0].props.onClick(); await settle();
+    find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0].props.onClick();   // not awaited: it is held
+    await settle();
+  };
+  const note = () => find(view(), n => n.type === 'div' && n.props.role === 'status')[0];
+  await tapRemove();
+  assert.equal(calls, 1, 're-anchor: the first tap did not start a removal');
+  assert.ok(note(), 'nothing on the card says a removal is under way');
+  assert.match(texts(note()).join(''), /Removing wss:\/\/second\.grace\.example\/relay…/, 'the in-progress line is not shown');
+  assert.equal(note().props.style.color, 'var(--ink-3)', '"Removing…" IS SHOWN IN THE WARNING COLOUR — it is progress, not a fault');
+  await tapRemove();
+  assert.equal(calls, 1, 'A SECOND TAP WHILE REMOVING STARTED A SECOND REMOVAL — two signings of the church\'s list for one intent');
+  release({ removed: false, unknown: true });
+  await settle(); await settle();
+  assert.equal(note().props.style.color, 'var(--clay-ink)', 'the outcome of a failed removal is not shown as a warning');
+  assert.doesNotMatch(texts(note()).join(''), /Removing/, 'the in-progress line stayed after the removal finished');
 });
 
 test('Auto-find reports each relay\'s own result, never "✓ Added" over one that was not signed (third audit, finding 4)', async () => {
