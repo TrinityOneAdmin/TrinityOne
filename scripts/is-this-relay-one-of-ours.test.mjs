@@ -111,6 +111,8 @@ function consoleWith(deps) {
     fnBody(src, 'function relayNetDoc', 'relayNetDoc'),
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),
+    fnBody(src, 'async function unenrolRelayNet', 'unenrolRelayNet'),
+    fnBody(src, 'function normRelay(input) {', 'normRelay'),
     fnBody(src, 'function isNetworkRelay2', 'isNetworkRelay2'),
     // Self-hosting P1 (2026-10-21): the loopback test and the name shape enrolRelayNet now consults.
     stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
@@ -124,7 +126,7 @@ function consoleWith(deps) {
     'finalizeEvent', 'finalizeEvent2', 'relays', 'ownRelay', '_boxHostsUs', '_monotonic',
     'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool', 'lsGet', 'lsSet',
     body + '\n' + more +
-    '\nreturn { enrolRelayNet, relayNetCandidates, relayNetEntries, isNetworkRelay: isNetworkRelay2, _ownOrigin };');
+    '\nreturn { enrolRelayNet, unenrolRelayNet, relayNetCandidates, relayNetEntries, isNetworkRelay: isNetworkRelay2, _ownOrigin };');
   return f(verifyEvent, verifyEvent, normalizeURL, normalizeURL, globalThis.fetch,
     deps.location, undefined, deps.extraRelays || (() => []), deps.one, deps.publish, deps.sk, deps.pub,
     () => Math.floor(Date.now() / 1000), finalizeEvent, finalizeEvent,
@@ -719,6 +721,89 @@ test('a console remembers having seen its church\'s list, so a later empty answe
   assert.equal((await con.enrolRelayNet()).published, true, 'precondition: the first list was signed');
   assert.equal(store.get('trinityone.steward.relaynet-seen.' + flock.pub), '1',
     'the console did not remember signing a list — after a reinstall its own box\'s empty answer would wipe it');
+});
+
+// ── the one-time seed read, at the point of use (second audit, findings 4 and 5) ────────────────────────
+// `one` sees the third argument enrolRelayNet passes — privateDoc — and answers the seed read the way the real
+// reader does: an empty answer from a relay still waiting on our login does not count.
+function seedWorld(BOX, seedAnswer) {
+  return async (f, ms, privateDoc) => {
+    if ((f[0]['#d'] || [])[0] === RELAY_NET_D) return { ev: null, complete: true, answered: 1, asked: 1, answeredUrls: [BOX.wsUrl] };
+    return seedAnswer(privateDoc);
+  };
+}
+test('the seed read is asked as PRIVATE, so an answer given while our login is pending never counts (finding 4)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('SEEDP');
+  let published = 0;
+  const con = consoleWith({ location, pool: poolTo(),
+    // The old sync list exists but is withheld: the relay answered empty while our login was still pending.
+    one: seedWorld(BOX, (privateDoc) => privateDoc
+      ? { ev: null, complete: true, answered: 0, asked: 1, answeredUrls: [] }
+      : { ev: null, complete: true, answered: 1, asked: 1, answeredUrls: [BOX.wsUrl] }),
+    publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.enrolRelayNet();
+  assert.equal(res.unknown, true, 'the seed read was not asked as private, so a withheld list read as "none"');
+  assert.equal(published, 0, 'A LIST WAS STARTED WITHOUT THE CHURCH\'S OLD SYNC BOXES — the one-time seed is spent for good');
+});
+test('the seed read must be answered in full, or by the church\'s own box — not by one other relay (finding 5)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('SEEDF');
+  let published = 0;
+  const con = consoleWith({ location, pool: poolTo(),
+    one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, answeredUrls: ['wss://somewhere-else.example/relay'] })),
+    publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+  assert.equal((await con.enrolRelayNet()).unknown, true, 'one other relay\'s empty answer was taken as "no old sync list"');
+  assert.equal(published, 0);
+});
+test('a refused login on a SHARED relay does not block the seed: the church\'s own box answering is enough (finding 9)', async () => {
+  // A socket keeps its last login challenge; if the shared relay refused our login, its answers never count.
+  // The own-box rule means that cannot keep a self-hosting church from signing its box.
+  const { flock, BOX, location } = await selfHostedChurch('SEEDS');
+  const con = consoleWith({ location, pool: poolTo(BOX),
+    one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, answeredUrls: [BOX.wsUrl] })),
+    publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
+  assert.equal((await con.enrolRelayNet()).published, true, 'a refused login on another relay kept the church\'s own box unsigned');
+});
+
+// ── Remove un-signs (owner decision B, 2026-10-21) ──────────────────────────────────────────────────────
+test('removing a relay takes it out of the church\'s signed list — and only that relay', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('UNSIGN');
+  const con = consoleWith({ location, one: oneFrom(BOX, flock), publish: publishTo(BOX), pool: poolTo(BOX, TYPED), sk: flock.sk, pub: flock.pub });
+  await con.enrolRelayNet();
+  await con.enrolRelayNet({ extra: [TYPED.wsUrl] });
+  const latest = async () => { const d = (await storedRelayNet(BOX, flock)).sort((a, b) => b.created_at - a.created_at); return cores[0][1].parseRelayNet(d[0].content).map(e => e.pubkey); };
+  assert.deepEqual(new Set(await latest()), new Set([BOX.relayPub, TYPED.relayPub]), 'precondition: both are signed');
+  await new Promise(r => setTimeout(r, 1100));   // a newer second, so newest-wins can see the change
+  const res = await con.unenrolRelayNet(TYPED.wsUrl);
+  assert.equal(res.removed, true, 'the relay was not removed: ' + JSON.stringify(res));
+  assert.deepEqual(await latest(), [BOX.relayPub],
+    'REMOVE LEFT THE RELAY IN THE CHURCH\'S SIGNED LIST, or took another with it');
+});
+test('a relay that is offline is removed by the address the list recorded for it', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('UNSIGN2');
+  const gone = 'e'.repeat(64);
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: gone, alwaysOn: true, url: 'wss://gone.example/relay' }])]);
+  await new Promise(r => setTimeout(r, 1100));
+  const con = consoleWith({ location, one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
+  assert.equal((await con.unenrolRelayNet('wss://gone.example/relay')).removed, true, 'an offline relay could not be removed');
+  const d = (await storedRelayNet(BOX, flock)).sort((a, b) => b.created_at - a.created_at);
+  assert.deepEqual(cores[0][1].parseRelayNet(d[0].content).map(e => e.pubkey), [BOX.relayPub]);
+});
+test('removing writes nothing when the list could not be read in full, or from a console that is not this church\'s own', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('UNSIGN3');
+  for (const [why, deps] of [
+    ['an unfinished read', { one: async () => ({ ev: null, complete: false, answered: 0, asked: 2, answeredUrls: [] }) }],
+    ['a delegated console', { actingChurch: H.key().pub, one: oneFrom(BOX, flock), mustNotRead: true }],
+    ['a network view', { viewingNetwork: true, one: oneFrom(BOX, flock), mustNotRead: true }],
+  ]) {
+    let published = 0, reads = 0;
+    const one = deps.one;
+    const con = consoleWith({ location, ...deps, one: async (...a) => { reads++; return one(...a); }, publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+    const res = await con.unenrolRelayNet('wss://anything.example/relay');
+    assert.equal(res.removed, false, why + ': something was removed');
+    assert.equal(published, 0, why + ': A RELAY LIST WAS WRITTEN');
+    // The guard at the top, not only the re-check before signing: the wrong identity must not even read the list.
+    if (deps.mustNotRead) assert.equal(reads, 0, why + ': the church\'s relay list was read under the wrong identity');
+  }
 });
 
 test('a console that switches to a network view mid-enrolment signs nothing (audit finding 6)', async () => {

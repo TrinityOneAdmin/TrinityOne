@@ -133,7 +133,7 @@ test('CONTROL: the real relay panels render, and the relay rows reach the screen
   const tree = await paint(relaysCard({ relays: ONE_UP_ONE_DOWN, backup: { boxes: 2, online: 2, syncOn: true } }));
   const all = said(tree);
   assert.match(all, /Where your church publishes/, 'DashRelaysCard no longer renders its blurb — re-anchor this test');
-  assert.match(all, /Three ways to add a relay your church runs/,
+  assert.match(all, /Three ways to add a relay\./,
     'DashAddRelayCard is not in the tree — the add, auto-find and connect-by-name colours below measure nothing');
   assert.match(all, /Copies your church/, 'DashRelayHistoryCard is not in the tree — the clone and sync colours below measure nothing');
   assert.match(all, /wss:\/\/nos\.lol/, 'the relay list is not rendering a row per relay, so nothing below is being measured');

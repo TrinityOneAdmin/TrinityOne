@@ -140,7 +140,8 @@ test('ONE EMPTY ANSWER AND ONE DEAD RELAY: answered 1 of 2 asked — the caller 
   const w = await emptyRelay(8965);
   try {
     const r = reader(['ws://127.0.0.1:8965/', 'ws://127.0.0.1:' + DEAD_PORT + '/']);
-    const { ev, answered, asked } = await r.fn(FILTER, 3000);
+    // The default bound, not a short one: under a loaded box a 3 s window once missed the live relay's answer.
+    const { ev, answered, asked } = await r.fn(FILTER);
     r.close();
     assert.equal(ev, null);
     assert.equal(asked, 2, 'the reader did not say how many relays it asked');

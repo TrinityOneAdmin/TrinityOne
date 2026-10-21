@@ -5158,6 +5158,15 @@ function DashRelaysCard() {
   // has no relay, no name, and an address on screen that may already be stale — and the member app's own
   // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
   const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
+  // REMOVE ALSO UN-SIGNS (owner decision B, 2026-10-21). Connecting a relay signs it into the church's relay list;
+  // removing it must take it out again, or a steward's consent could never be withdrawn. Says so when it could not.
+  const [dropNote, setDropNote] = React.useState('');
+  const dropRelay = async (url) => {
+    setConfirmDrop(null); setDropNote('');
+    try { window.Steward.removeRelay(url); } catch (e) {}
+    let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = null; }
+    if (r && (r.unknown || (r.notListed && r.proven === false))) setDropNote('Removed from this console, but your church’s relay list could not be updated right now — it may still name ' + url + '. Remove it again once your relays are answering.');
+  };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
   // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
@@ -5261,13 +5270,14 @@ function DashRelaysCard() {
                           was written. The whole file already uses ’; this is why. */}
                       Stop sending this church’s data to this relay?{relayName(r.url) ? ' It was added by the name “' + relayName(r.url) + '” — that name is forgotten too, so write it down if you may want it back.' : ' You would need this exact address to add it again.'}
                     </span>
-                    <button onClick={() => { window.Steward.removeRelay(r.url); setConfirmDrop(null); }} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
+                    <button onClick={() => dropRelay(r.url)} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
                     <button onClick={() => setConfirmDrop(null)} title="Keep this relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Keep it</button>
                   </div>
                 ) : null}
               </div>
             );
           })}
+          {dropNote ? <div role="status" style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropNote}</div> : null}
         </div>
         {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
             `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct
@@ -5349,9 +5359,9 @@ function WizAddRelay() {
       // only called added once that is true (audit 2026-10-21, finding 4: it used to say "✓ Added" regardless).
       const p = window.Steward.signRelay ? Promise.resolve().then(() => window.Steward.signRelay(ok)) : Promise.resolve(null);
       return p.then((r) => {
-        if (r && !r.skipped && !(r.proven || []).length) setAddrMsg('✗ It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Add it again once it is online.');
-        else setAddrMsg('✓ Added — your church now uses this relay too.');
-      }, () => setAddrMsg('✗ Couldn’t sign that relay into your church’s list. Try again.'));
+        const why = window.Steward.signRelay ? signOutcome(r, ok) : '';
+        setAddrMsg(why ? '✗ ' + why : '✓ Added — your church now uses this relay too.');
+      }, () => setAddrMsg('✗ ' + signOutcome(null, ok)));
     }
     else setAddrMsg('✗ Couldn’t add that. Check it starts with wss:// and isn’t one you’ve already added.');
   };
@@ -5372,14 +5382,30 @@ function WizAddRelay() {
 // wizard's Add; nothing is added or signed until "Yes, connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
 // relay is the church vouching for it to every member's phone, not a connection test.
 const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
+const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
+// WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
+// the Add-a-relay card and the wizard so neither can say "Added" over a relay that was not signed (second audit,
+// finding 8: a skipped or unknown result used to read as success).
+function signOutcome(r, url) {
+  if (!r) return 'Couldn’t sign that relay into your church’s list. Try again.';
+  if (r.skipped) return 'Added to this console. Only your church’s own console can put it in the church’s relay list.';
+  if (r.unknown) return 'Added, but your church’s relay list could not be read in full just now (a relay isn’t answering), so it isn’t in the list yet. It will be added automatically once they answer — or connect it again.';
+  // Compared the way Steward.signRelay normalises (normRelay: wss:// added, trailing slashes dropped), so a
+  // resolved name or a pasted address with a trailing slash still finds its own proof.
+  const n = (x) => { let v = String(x || '').trim(); if (v && !/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, ''); return v.replace(/\/+$/, '').toLowerCase(); };
+  const p = (r.proven || []).find(x => n(x.url) === n(url)) || null;
+  if (!p) return 'It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.';
+  if (!(r.entries || []).some(e => e.pubkey === p.pubkey)) return 'Couldn’t put it in your church’s relay list. Try again.';
+  return '';
+}
 // `detail` names what is about to be connected (the address a name resolved to, or the relays Auto-find chose),
 // so the steward agrees to a box and not merely to a word (audit 2026-10-21, finding 8). The button says
 // "Yes, connect" so it cannot be confused with the Connect beside the name field (finding 10).
-function RelayConsent({ onYes, onNo, detail }) {
+function RelayConsent({ onYes, onNo, detail, text, note }) {
   return (
     <div role="alertdialog" aria-label="Confirm connecting this relay" style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-      <b style={{ color: 'var(--ink)' }}>{RELAY_CONSENT_TEXT}</b> Only connect a relay your church runs or trusts.
-      {detail ? <div style={{ marginTop: 5, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', wordBreak: 'break-all' }}>{detail}</div> : null}
+      <b style={{ color: 'var(--ink)' }}>{text || RELAY_CONSENT_TEXT}</b> {note || 'Only connect a relay your church runs or trusts.'}
+      {detail ? <div style={{ marginTop: 5, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', wordBreak: 'break-all', whiteSpace: 'pre-line' }}>{detail}</div> : null}
       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
         <button onClick={onYes} className="sk-btn sk-btn--clay" style={{ padding: '6px 12px', fontSize: 12 }}>Yes, connect</button>
         <button onClick={onNo} className="sk-btn sk-btn--ghost" style={{ padding: '6px 12px', fontSize: 12 }}>Cancel</button>
@@ -5416,7 +5442,7 @@ function DashAddRelayCard() {
   const signIt = async (url) => {
     setSignNote('');
     let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(url) : null; } catch (e) { r = null; }
-    if (r && !r.skipped && !(r.proven || []).length) setSignNote('It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.');
+    setSignNote(window.Steward.signRelay ? signOutcome(r, url) : '');
     return r;
   };
   const addRelay = async (confirmed) => {
@@ -5480,15 +5506,27 @@ function DashAddRelayCard() {
   // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
   const [finding, setFinding] = React.useState(false);
   const [findMsg, setFindMsg] = React.useState('');
-  // AUTO-FIND ASKS FIRST TOO (owner, 2026-10-21): it connects relays somebody ELSE runs, which is exactly when
-  // the steward most needs to be told the church's data will go there. The relays it picks are then signed, as
-  // any consented relay is.
+  // AUTO-FIND ASKS FIRST TOO, AND NAMES WHAT IT FOUND (owner decisions, 2026-10-21): it connects relays somebody
+  // ELSE runs, which is exactly when the steward most needs to know where the church's data will go. So it finds
+  // first (adding nothing), shows the relays it found on the consent line, and connects and signs exactly those
+  // on "Yes, connect".
+  const [found, setFound] = React.useState(null);
   const autoFind = async (confirmed) => {
-    if (confirmed !== true) { setAsk('find'); return; }
-    setAsk('');
+    if (confirmed !== true) {
+      setFinding(true); setFindMsg(''); setFound(null);
+      try {
+        const picks = window.Steward.findRelays ? await window.Steward.findRelays(2) : [];
+        if (picks && picks.length) { setFound(picks); setAsk('find'); }
+        else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
+      } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
+      setFinding(false);
+      return;
+    }
+    const chosen = found || [];
+    setAsk(''); setFound(null);
     setFinding(true); setFindMsg('');
     try {
-      const picks = window.Steward.autoPickRelays ? await window.Steward.autoPickRelays(2) : [];
+      const picks = (window.Steward.connectFoundRelays && chosen.length) ? await window.Steward.connectFoundRelays(chosen) : [];
       for (const p of (picks || [])) { try { if (window.Steward.signRelay) await window.Steward.signRelay(p.url); } catch (e) {} }
       if (picks && picks.length) setFindMsg('✓ Added ' + picks.length + ' relay' + (picks.length > 1 ? 's' : '') + ' for backup: ' + picks.map(p => p.name || p.url).join(', '));
       else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
@@ -5497,7 +5535,7 @@ function DashAddRelayCard() {
   };
   return (
       <Panel title="Add a relay">
-        <div className="set-note" style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Three ways to add a relay your church runs. Connecting one sends your church’s data to it; it only stores it once your church is registered there.</div>
+        <div className="set-note" style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Three ways to add a relay. Connecting one sends your church’s data to it; it only stores it once your church is registered there.</div>
         {/* ADD ANOTHER RELAY THIS CHURCH RUNS (redundancy) — never somebody else's.
             The placeholder below used to name two generic public Nostr relays and the error under it named
             a third. A steward who typed one of those in was following the product's own instructions, and
@@ -5531,7 +5569,9 @@ function DashAddRelayCard() {
           ) : null}
           <button onClick={() => autoFind()} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies.</div>
-          {ask === 'find' ? <RelayConsent onYes={() => autoFind(true)} onNo={() => setAsk('')} detail="Relays run by other people that offer to host churches." /> : null}
+          {ask === 'find' && found ? <RelayConsent onYes={() => autoFind(true)} onNo={() => { setAsk(''); setFound(null); }}
+            text={RELAY_CONSENT_FOUND} note="They are run by other people who offer to host churches."
+            detail={found.map(p => (p.name ? p.name + ' — ' : '') + p.url).join('\n')} /> : null}
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
           {/* connect to a relay by its memorable name (resolved via the directory) */}
           <div style={{ marginTop: 13 }}>

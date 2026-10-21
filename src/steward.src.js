@@ -5117,6 +5117,43 @@ async function enrolRelayNet(opts) {
 // calls it when the key is present — on boot with a key, and again on every unlock (KeyDistributor in
 // app/stew-dashboard.jsx). "I don't know yet" (an unfinished read) is not remembered, so the next unlock
 // tries again; a finished run is, so a steward locking and unlocking all afternoon costs one enrolment.
+// ONE SIGNING AT A TIME (second audit 2026-10-21, finding 1). Every change to the church's relay list reads the
+// current list, edits it and signs a new one; newest wins. Two that overlap both read the same old list, and the
+// later signature silently undoes the earlier — an automatic pass finishing after a steward's "Yes, connect"
+// would un-sign the relay they had just been told was connected. So the automatic pass, signRelay and
+// unenrolRelayNet all queue here; each starts only after the one before it has finished (and published).
+let _enrolQueue = Promise.resolve();
+function enrolSerial(fn) {
+  const run = _enrolQueue.then(() => fn(), () => fn());
+  _enrolQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+// TAKE A RELAY OUT OF THE CHURCH'S SIGNED LIST (owner decision B, 2026-10-21): "Remove" on the Relays card
+// must undo what "Yes, connect" did, or the consent could never be withdrawn. The box is identified by the key
+// it proves at that address; if it cannot be reached, by the address the list recorded for it. Nothing is
+// written unless the church's own list was read in full and actually names the relay. Same guards as enrolment:
+// this church's own console only, and the identity re-checked just before signing.
+async function unenrolRelayNet(url) {
+  if (!sk || !pub) throw new Error('No church key on this device');
+  if (actingChurch || _viewingNetwork()) return { removed: false, skipped: 'not this church’s own console' };
+  const u = normRelay(url);
+  if (!u) return { removed: false };
+  const sk0 = sk, pub0 = pub;
+  const { ev: existing, complete } = await relayNetDoc();
+  const mine = (existing && existing.pubkey === pub) ? existing : null;
+  if (!mine) return { removed: false, unknown: !complete, notListed: !!complete };
+  const entries = parseRelayNet(mine.content);
+  let pk = '';
+  try { const proof = await verifyRelayIdentity(u); pk = String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { pk = ''; }
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const keep = entries.filter(e => !((pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u))));
+  if (keep.length === entries.length) return { removed: false, notListed: true, proven: !!pk };
+  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true };
+  const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
+  return { removed: !!ev, entries: keep };
+}
+
 const _autoEnrolled = new Set();
 async function autoEnrolRelayNet() {
   if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
@@ -5131,7 +5168,7 @@ async function autoEnrolRelayNet() {
   if (_autoEnrolled.has(key)) return null;
   _autoEnrolled.add(key);
   let res = null;
-  try { res = await enrolRelayNet(); } catch (e) { res = null; }
+  try { res = await enrolSerial(() => enrolRelayNet()); } catch (e) { res = null; }
   // RETRY UNLESS IT ACTUALLY WORKED (audit 2026-10-21, finding 7): unknown, a throw, an own box that proved
   // nothing, or a signed list that reached no box at all — each is tried again on the next pass.
   // (A console served by the SHARED relay proves it and has nothing to sign — that is "done", not a failure.)
@@ -6032,33 +6069,20 @@ window.Steward = {
   // Signs the boxes this console can prove into the church's own membership document. Additive: it never
   // drops an entry that is merely unreachable.
   //
-  // STILL NOT CALLED AUTOMATICALLY ANYWHERE — and the sentence that used to be here, calling that a
-  // "DEPLOYMENT BLOCKER … its members would find no relay they may publish to", IS FALSE. Audit item 17,
-  // 2026-09-14, checked against the gate rather than against this comment.
+  // CALLED AUTOMATICALLY since self-hosting P1 (2026-10-21): autoEnrolRelayNet, from the console's KeyDistributor
+  // effect, signs the box serving this console; signRelay signs one relay the steward consented to; unsignRelay
+  // takes one out. All three are queued through enrolSerial so two signings never overlap.
   //
-  // WHAT proveRelay ACTUALLY DOES (src/relay-net.src.js): after the one refusal for our own shipped
-  // addresses, it tries canonical pin → same origin → the church's relay-net document → and then admits
-  // anything that proved it holds a relay identity key at all, as `root: 'software'`. A self-hosting
-  // church's box reaches that last line and is admitted with NO document in existence. So nobody is cut off,
-  // and this function is a loose end, not a blocker.
-  //
-  // TWO THINGS THE NEXT PERSON TO WIRE IT UP NEEDS, because neither is visible from the call site:
-  //  · ROOT 3 IS INERT IN PRACTICE. No console authors a relay-net document today, so the `church` root
-  //    matches nothing and every self-hosted box is admitted one line lower on proof alone. Turning this on
-  //    does not "enable" self-hosting; it narrows nothing and adds a signed record.
-  //  · `9ec4310`'s GUARD IS UNEXERCISED. That commit fixed a doc-wipe — a read nobody answered was reported
-  //    as an empty church, the document was rebuilt from scratch with `created_at: now()`, and newest-wins
-  //    UN-ADMITTED every box the church had signed, on every member's phone. The `!complete → unknown:true`
-  //    return below is that fix, and with zero callers it has never run outside its test. It is the first
-  //    thing to exercise on a real slow link when this is wired in, not the last.
-  // Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own.
-  // (Wired 2026-10-21, self-hosting P1: autoEnrolRelayNet on boot/unlock signs this console's own box only;
-  // signRelay signs one relay the steward has consented to on the Add-a-relay card. B0/B1/B3/B4 closed.)
+  // WHAT THIS DOES NOT CHANGE YET: which relays receive a church's data. proveRelay still admits any box that
+  // proves it runs our software (`root: 'software'`, src/relay-net.src.js); narrowing that to the boxes this
+  // document names is self-hosting Phase 2 (reference/DESIGN-SELFHOSTING-2026-10-21.md).
   enrolRelayNet,
   autoEnrolRelayNet,
   // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
   // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.
-  signRelay(url) { const u = normRelay(url); return u ? enrolRelayNet({ extra: [u] }) : Promise.resolve(null); },
+  signRelay(url) { const u = normRelay(url); return u ? enrolSerial(() => enrolRelayNet({ extra: [u] })) : Promise.resolve(null); },
+  // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
+  unsignRelay(url) { return enrolSerial(() => unenrolRelayNet(url)); },
 
   // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
   // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
@@ -13297,6 +13321,19 @@ window.Steward = {
   // Auto-find + adopt up to n open relays (default 2 = primary + backup, different operators), then re-publish
   // the church's NIP-65 list so members discover them. Additive: only adds relays not already configured.
   // Returns the picked offers (or [] when nothing is open — e.g. the pilot, where it's a safe no-op).
+  // AUTO-FIND IN TWO STEPS (owner decision A, 2026-10-21): find the relays first, so the consent line can NAME
+  // them, then connect exactly those on "Yes, connect". findRelays adds nothing; connectFoundRelays adds the
+  // given picks and republishes the relay list (signing each is the card's job, through signRelay).
+  async findRelays(n) {
+    const offers = await discoverRelayOffers(null, null);
+    const have = new Set(relays());
+    return pickRelays(offers.filter(o => !have.has(o.url)), n || 2);
+  },
+  async connectFoundRelays(picks) {
+    for (const p of (picks || [])) { try { window.Steward.addRelay(p.url); } catch (e) {} }
+    if ((picks || []).length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
+    return picks || [];
+  },
   async autoPickRelays(n) {
     const offers = await discoverRelayOffers(null, null);
     const have = new Set(relays());
