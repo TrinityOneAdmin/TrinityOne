@@ -136,7 +136,10 @@ function _applyBlockedReset(cpHex, d) {
   const next = (remaining.find(c => c.npub) || remaining[0] || {}).id || null;
   d.setActiveChurch(next); d.lsSet('trinityone.activeChurch', next);
   if (!(remaining.find(c => c.id === next) || {}).npub) d.openFollow();   // same test as promptFollowChurch
-  d.toast('Your church has removed your access, so this phone no longer follows it.');
+  // { error: true } so this lingers long enough to READ (6s, not the 1.9s tick) and draws a shield, not a
+  // green check — losing access is not a success. The sentence carries no failure word, so toastKind() would
+  // otherwise class it 'ok'. Owner, 2026-10-14: the reset message flashed by before it could be read.
+  d.toast('Your church has removed your access, so this phone no longer follows it.', { error: true });
   try { F.ackAmBlocked(); } catch (e) {}
   return true;
 }
