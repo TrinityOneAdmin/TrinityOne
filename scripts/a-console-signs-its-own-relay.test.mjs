@@ -536,6 +536,8 @@ test('the outcome lines say only what is true (third audit, findings 2 and 8)', 
     ['unknown', { unknown: true, proven: [], entries: [] }, /Connect it again once your relays are answering/, /automatically/],
     ['the console switched church mid-signing', { unknown: true, changed: true, proven: [], entries: [] }, /switched church/, /Only your church’s own console|could not be read in full/],
     ['a shared relay', { proven: [{ url: T, pubkey: 'b'.repeat(64), shared: true }], entries: [] }, /shared relays/, /Try again/],
+    // Fifth audit, finding 3: the list found names the relay, but not every relay answered, so it may be a stale copy.
+    ['a list found on a partial read', { full: false, proven: [{ url: T, pubkey: 'c'.repeat(64) }], entries: [{ pubkey: 'c'.repeat(64) }] }, /can’t be confirmed in the list yet/, /✓ Added/],
   ]) {
     const r = recorder({ signRelay: async () => result });
     const card = addCard(r.steward);
@@ -587,10 +589,11 @@ async function removeSecond(view) {
 test('Remove says so whenever the relay could not be taken out of the church\'s list, and keeps the row (third and fourth audits, findings 3 and 2)', async () => {
   const WARN = /could not be updated right now|Couldn’t take|switched church|Only your church’s own console can take it out|is the box this console runs on/;
   // keep: the church's list may still name it, so the row stays on screen for the steward to try again.
-  for (const [why, unsign, want, keep] of [
-    ['the write failed', async () => ({ removed: false, entries: [] }), /could not be updated right now/, true],
+  for (const [why, unsign, want, keep, never] of [
+    ['the write failed', async () => ({ removed: false, entries: [] }), /could not be updated right now/, true, /gone for good/],
     ['it threw (no church key on this device)', async () => { throw new Error('No church key on this device'); }, /Couldn’t take .* out of your church’s relay list \(No church key on this device\)/, true],
-    ['unknown (a relay is not answering)', async () => ({ removed: false, unknown: true }), /could not be updated right now/, true],
+    // Fifth audit, finding 1: unknown now means ANOTHER relay is silent, so the steward is told the way out.
+    ['unknown (a relay is not answering)', async () => ({ removed: false, unknown: true }), /could not be updated right now.*If a relay you added is gone for good, remove it first/, true],
     ['not listed, and its key could not be proved', async () => ({ removed: false, notListed: true, proven: false }), /could not be updated right now/, true],
     ['the console switched church mid-removal', async () => ({ removed: false, unknown: true, changed: true }), /switched church while removing/, true],
     ['a delegated console', async () => ({ removed: false, skipped: 'x' }), /Only your church’s own console can take it out/, false],
@@ -598,6 +601,7 @@ test('Remove says so whenever the relay could not be taken out of the church\'s 
   ]) {
     const removed = [];
     const text = await removeSecond(relaysCard({ unsignRelay: unsign }, removed));
+    if (never) assert.doesNotMatch(text, never, why + ': the card said something that does not apply here: ' + text);
     assert.match(text, want, why + ': REMOVE WAS SILENT — the steward believes their consent withdrawn when the church\'s list still names it');
     assert.equal(removed.length, keep ? 0 : 1, why + (keep
       ? ': THE ROW WAS REMOVED ANYWAY — "remove it again" with nothing left to remove, and adding it back signs it in again'

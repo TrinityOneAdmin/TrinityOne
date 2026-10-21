@@ -4943,7 +4943,8 @@ function _oneComplete(filters, ms = 6000, privateDoc = false) {
       const complete = urls.length > 0 && eosed.size === urls.length && answered > 0;
       for (const s of subs) { try { s.close(); } catch {} }
       const answeredUrls = [...eosed].filter(u => !failed.has(u) && !(privateDoc && loginPending(u)));
-      resolve({ ev: best, complete, answered, asked: urls.length, answeredUrls });
+      // `askedUrls` (round 6): WHICH relays were asked, so a caller can state its rule by address (_readCovers).
+      resolve({ ev: best, complete, answered, asked: urls.length, askedUrls: urls.slice(), answeredUrls });
     };
     for (const u of urls) {
       try {
@@ -4962,6 +4963,19 @@ function _oneComplete(filters, ms = 6000, privateDoc = false) {
     }
     setTimeout(finish, ms);
   });
+}
+// WHICH RELAYS MUST ANSWER BEFORE THE CHURCH'S LIST MAY CHANGE (self-hosting P1, round 6). Every relay this console
+// asked, except `leaving`, the relay a Remove is taking out. A relay that cannot be reached cannot be told apart from
+// the church's own box holding the newest list, so its silence always counts. The one exception is the relay being
+// removed: it is leaving, and requiring it to answer made an offline relay impossible to remove (fifth audit,
+// finding 1). Fails closed: a read that does not say which relays it asked is never full.
+// Used by enrolRelayNet (first list, seed read, re-sign refusal, the `full` it reports) and unenrolRelayNet (the
+// only caller that passes `leaving`).
+function _readCovers(r, leaving) {
+  const k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
+  const said = new Set(((r && r.answeredUrls) || []).map(k));
+  const need = ((r && r.askedUrls) || []).map(k).filter(u => !leaving || u !== k(leaving));
+  return need.length > 0 && need.every(u => said.has(u));
 }
 // This church's own signed membership document, newest wins.
 function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAY_NET_D] }]); }
@@ -5021,7 +5035,8 @@ async function enrolRelayNet(opts) {
   if (!sk || !pub) throw new Error('No church key on this device');
   if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: 'not this church’s own console' };
   const sk0 = sk, pub0 = pub;
-  const { ev: existing, complete, answered, asked, answeredUrls } = await relayNetDoc();
+  const read = await relayNetDoc();
+  const { ev: existing } = read;
   const mine = (existing && existing.pubkey === pub) ? existing : null;
   // WHEN IS "NO LIST ANYWHERE" TRUE ENOUGH TO START ONE? (audit 2026-10-21, finding 2.) One empty answer is not
   // enough: a reinstalled box, or a relay that missed the last write, answers empty while the relays that DO
@@ -5052,7 +5067,8 @@ async function enrolRelayNet(opts) {
   const ownUrl = relayNetCandidates()[0] || '';
   const _k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
   const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some(u => _k(u) === _k(ownUrl));
-  const fullAnswer = (r) => !!r.complete && r.answered === r.asked;
+  // Every relay asked really answered — the one rule, stated by address (round 6, _readCovers).
+  const fullAnswer = (r) => _readCovers(r);
   // Decided once, before either read is judged: it gates the list read below AND the one-time seed read.
   let ownMayStart = false;
   if (!mine && o.auto === true && !(o.extra && o.extra.length) && _boxHostsUs === true && !seenBefore && !!ownUrl) {
@@ -5061,7 +5077,7 @@ async function enrolRelayNet(opts) {
     ownMayStart = /^[0-9a-f]{64}$/.test(ownKey) && !sharedRelayKeys().includes(ownKey);
   }
   const nothingAnywhere = (r) => fullAnswer(r) || (ownMayStart && ownSaidNothing(r.answeredUrls));
-  if (!mine && !nothingAnywhere({ complete, answered, asked, answeredUrls })) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+  if (!mine && !nothingAnywhere(read)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
   const entries = mine ? parseRelayNet(mine.content) : [];
   const before = JSON.stringify(entries);
   let seeded = 0;
@@ -5138,11 +5154,14 @@ async function enrolRelayNet(opts) {
   // "my network is empty", which is a statement, not a silence.
   if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
   // Unchanged: re-send the church's existing signed document, verbatim. Never re-signed.
-  if (!changed) return { published: false, entries, proven, unproven, seeded, delivered: await resend() };
+  // `full` (fifth audit, finding 3): whether the list found came from a read every relay answered. When it did not,
+  // the copy found may be stale, so a relay it names cannot be called "in the list" — the card says so. Still not
+  // `unknown`: nothing is written here, and the automatic pass must not retry on every focus through an outage.
+  if (!changed) return { published: false, full: !mine || fullAnswer(read), entries, proven, unproven, seeded, delivered: await resend() };
   // A LIST IS RE-SIGNED ONLY ON A FULL ANSWER (fourth audit, finding 6). The list found may be a stale copy — one
   // that missed a Remove — and re-signing it with a newer stamp would put the removed relay back. So when not every
   // relay asked answered, the list found is passed on as it is and nothing is signed; the next pass tries again.
-  if (mine && !fullAnswer({ complete, answered, asked })) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
+  if (mine && !fullAnswer(read)) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
   const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
   const ev = await publish(signed);
   const delivered = await deliver(signed);
@@ -5183,9 +5202,11 @@ async function unenrolRelayNet(url) {
   const u = normRelay(url);
   if (!u) return { removed: false };
   const sk0 = sk, pub0 = pub;
-  const { ev: existing, complete, answered, asked } = await relayNetDoc();
-  const full = !!complete && answered === asked;
-  if (!full) return { removed: false, unknown: true };
+  // FIFTH AUDIT, finding 1: every relay asked must answer EXCEPT the one being removed. It is leaving; requiring it
+  // to answer made an offline relay impossible to remove, and its row then blocked every other change for ever.
+  const read = await relayNetDoc();
+  const { ev: existing } = read;
+  if (!_readCovers(read, u)) return { removed: false, unknown: true };
   const mine = (existing && existing.pubkey === pub) ? existing : null;
   if (!mine) return { removed: false, notListed: true };
   const entries = parseRelayNet(mine.content);

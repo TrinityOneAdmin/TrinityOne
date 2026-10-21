@@ -18791,7 +18791,7 @@ zoo`.split("\n");
           }
         }
         const answeredUrls = [...eosed].filter((u) => !failed.has(u) && !(privateDoc && loginPending(u)));
-        resolve({ ev: best, complete, answered, asked: urls.length, answeredUrls });
+        resolve({ ev: best, complete, answered, asked: urls.length, askedUrls: urls.slice(), answeredUrls });
       };
       for (const u of urls) {
         try {
@@ -18821,6 +18821,18 @@ zoo`.split("\n");
       setTimeout(finish, ms);
     });
   }
+  function _readCovers(r, leaving) {
+    const k = (u) => {
+      try {
+        return normalizeURL2(u);
+      } catch (e) {
+        return String(u || "");
+      }
+    };
+    const said = new Set((r && r.answeredUrls || []).map(k));
+    const need = (r && r.askedUrls || []).map(k).filter((u) => !leaving || u !== k(leaving));
+    return need.length > 0 && need.every((u) => said.has(u));
+  }
   function relayNetDoc() {
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
   }
@@ -18837,7 +18849,8 @@ zoo`.split("\n");
     if (!sk || !pub) throw new Error("No church key on this device");
     if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: "not this church\u2019s own console" };
     const sk0 = sk, pub0 = pub;
-    const { ev: existing, complete, answered, asked, answeredUrls } = await relayNetDoc();
+    const read = await relayNetDoc();
+    const { ev: existing } = read;
     const mine = existing && existing.pubkey === pub ? existing : null;
     const seenKey = RELAYNET_SEEN + (pub || "");
     let seenBefore = false;
@@ -18861,7 +18874,7 @@ zoo`.split("\n");
       }
     };
     const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some((u) => _k(u) === _k(ownUrl));
-    const fullAnswer = (r) => !!r.complete && r.answered === r.asked;
+    const fullAnswer = (r) => _readCovers(r);
     let ownMayStart = false;
     if (!mine && o.auto === true && !(o.extra && o.extra.length) && _boxHostsUs === true && !seenBefore && !!ownUrl) {
       let ownKey = "";
@@ -18874,7 +18887,7 @@ zoo`.split("\n");
       ownMayStart = /^[0-9a-f]{64}$/.test(ownKey) && !sharedRelayKeys().includes(ownKey);
     }
     const nothingAnywhere = (r) => fullAnswer(r) || ownMayStart && ownSaidNothing(r.answeredUrls);
-    if (!mine && !nothingAnywhere({ complete, answered, asked, answeredUrls })) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    if (!mine && !nothingAnywhere(read)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     const entries = mine ? parseRelayNet(mine.content) : [];
     const before = JSON.stringify(entries);
     let seeded = 0;
@@ -18949,8 +18962,8 @@ zoo`.split("\n");
       return deliver(mine);
     };
     if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
-    if (!changed) return { published: false, entries, proven, unproven, seeded, delivered: await resend() };
-    if (mine && !fullAnswer({ complete, answered, asked })) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
+    if (!changed) return { published: false, full: !mine || fullAnswer(read), entries, proven, unproven, seeded, delivered: await resend() };
+    if (mine && !fullAnswer(read)) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
     const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
     const ev = await publish(signed);
     const delivered = await deliver(signed);
@@ -18976,9 +18989,9 @@ zoo`.split("\n");
     const u = normRelay(url);
     if (!u) return { removed: false };
     const sk0 = sk, pub0 = pub;
-    const { ev: existing, complete, answered, asked } = await relayNetDoc();
-    const full = !!complete && answered === asked;
-    if (!full) return { removed: false, unknown: true };
+    const read = await relayNetDoc();
+    const { ev: existing } = read;
+    if (!_readCovers(read, u)) return { removed: false, unknown: true };
     const mine = existing && existing.pubkey === pub ? existing : null;
     if (!mine) return { removed: false, notListed: true };
     const entries = parseRelayNet(mine.content);

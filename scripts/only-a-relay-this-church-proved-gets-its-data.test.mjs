@@ -166,6 +166,8 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'function relayNetCandidates', 'relayNetCandidates'),
     fnBody(src, 'function _oneComplete', '_oneComplete'),
     fnBody(src, 'function relayNetDoc', 'relayNetDoc'),
+    // Round 6: the read rule enrolRelayNet now consults.
+    fnBody(src, 'function _readCovers', '_readCovers'),
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
     stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
     stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),

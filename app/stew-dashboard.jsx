@@ -5396,7 +5396,9 @@ function dropOutcome(r, url) {
   if (r && r.skipped) return { drop: true, note: 'Removed from this console. Only your church’s own console can take it out of the church’s relay list.' };
   if (r && r.changed) return { drop: false, note: 'This console switched church while removing ' + url + ', so it is still in your church’s relay list. Remove it again.' };
   if (r && r.error) return { drop: false, note: 'Couldn’t take ' + url + ' out of your church’s relay list (' + r.error + '), so it is still connected.' };
-  return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' };
+  // `unknown` now means a relay OTHER than this one is silent (fifth audit, finding 1: the relay being removed need not
+  // answer). If that one is gone for good it would block every change for ever, so the steward is told the way out.
+  return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' + ((r && r.unknown) ? ' If a relay you added is gone for good, remove it first.' : '') };
 }
 const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
 // WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
@@ -5409,13 +5411,17 @@ function signOutcome(r, url) {
   // the automatic pass signs only the console's own box (B4) — so the unknown line says to connect again (finding 2).
   if (r.changed) return 'Added to this console, but it switched church while saving, so the relay isn’t in your church’s list yet. Connect it again.';
   if (r.skipped) return 'Added to this console. Only your church’s own console can put it in the church’s relay list.';
-  if (r.unknown) return 'Added, but your church’s relay list could not be read in full just now (a relay isn’t answering), so it isn’t in the list yet. Connect it again once your relays are answering.';
+  // One line for two cases (fifth audit, finding 3): nothing was signed (`unknown`), or the list found names the relay
+  // but came from a read not every relay answered, so it may be a stale copy (`full === false`). True for both.
+  const UNREAD = 'Added to this console, but your church’s relay list could not be read in full just now (a relay isn’t answering), so it can’t be confirmed in the list yet. Connect it again once your relays are answering.';
+  if (r.unknown) return UNREAD;
   // Compared the way Steward.signRelay normalises (normRelay: wss:// added, trailing slashes dropped), so a
   // resolved name or a pasted address with a trailing slash still finds its own proof.
   const n = (x) => { let v = String(x || '').trim(); if (v && !/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, ''); return v.replace(/\/+$/, '').toLowerCase(); };
   const p = (r.proven || []).find(x => n(x.url) === n(url)) || null;
   if (!p) return 'It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.';
   if (p.shared) return 'That is one of TrinityOne’s shared relays. Your church already uses it, so it doesn’t need adding to your church’s own list.';
+  if (r.full === false) return UNREAD;
   if (!(r.entries || []).some(e => e.pubkey === p.pubkey)) return 'Couldn’t put it in your church’s relay list. Try again.';
   return '';
 }

@@ -32,6 +32,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { WebSocketServer } from 'ws';
+import { SimplePool } from 'nostr-tools/pool';
 import { verifyEvent, finalizeEvent } from 'nostr-tools/pure';
 import { normalizeURL } from 'nostr-tools/utils';
 import { fnBody, stmt } from './test-slice.mjs';
@@ -109,6 +112,8 @@ function consoleWith(deps) {
     fnBody(src, 'function _ownOrigin', '_ownOrigin'),
     fnBody(src, 'function relayNetCandidates', 'relayNetCandidates'),
     fnBody(src, 'function relayNetDoc', 'relayNetDoc'),
+    // Round 6: the one rule both enrolment and removal now consult.
+    fnBody(src, 'function _readCovers', '_readCovers'),
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),
     fnBody(src, 'async function unenrolRelayNet', 'unenrolRelayNet'),
@@ -172,8 +177,54 @@ const oneFrom = (relay, church) => async (filters) => {
   let best = null;
   for (const e of evs) if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
   // `answered`/`asked` (2026-10-21, audit finding 2): one real relay, and it answered.
-  return { ev: best, complete: true, answered: 1, asked: 1, answeredUrls: [relay.wsUrl] };
+  // `askedUrls` (round 6): the console's rule is stated by address, so a full answer names who was asked.
+  return { ev: best, complete: true, answered: 1, asked: 1, askedUrls: [relay.wsUrl], answeredUrls: [relay.wsUrl] };
 };
+// ── REAL READS (round 6) ──────────────────────────────────────────────────────────────────────────────
+// The fifth audit's root finding: rows that hand the console a ready-made answer cannot see what the reader
+// really reports when a relay is down. `realRead(urls)` is the SHIPPED `_oneComplete`, lifted out of
+// vendor/steward.js and run over a real SimplePool against the given addresses — `urls` is what the console's
+// relaysRaw() would hold (the input), never the answer. relay-net is a public document, so no login is needed.
+const SHIPPED_STEWARD = read('vendor/steward.js');
+const _realPools = [];
+function realRead(urls) {
+  const pool = new SimplePool();
+  _realPools.push([pool, urls]);
+  const scope = { pool, relaysRaw: () => urls, normalizeURL, normalizeURL2: normalizeURL, _authAccepted: new Map(),
+    setTimeout, clearTimeout, Promise, Math, console };
+  return new Function('scope', 'with (scope) {' +
+    // ⚠ `6e3`: the bundle's spelling of the source's 6000 (see a-failed-read-is-not-an-empty-church).
+    fnBody(SHIPPED_STEWARD, 'function _oneComplete(filters, ms = 6e3, privateDoc = false) {', '_oneComplete') +
+    '\nreturn _oneComplete; }')(new Proxy(scope, {
+      has: (t, k) => (k in t) || !(String(k) in globalThis),
+      get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+        throw new ReferenceError('the shipped reader needs a stub for ' + String(k)); },
+    }));
+}
+// A relay that is switched off: a port that was bound by the OS a moment ago and is now closed. Port 0, so no
+// fixed port can collide with another file (test-ports.test.mjs).
+async function deadRelay() {
+  const srv = createServer();
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  await new Promise(r => srv.close(r));
+  return 'ws://127.0.0.1:' + port + '/';
+}
+// An ordinary Nostr relay that is not TrinityOne: it answers every REQ with an empty EOSE and has no /status, so
+// it answers the read and proves no key.
+const _junk = [];
+async function junkRelay() {
+  const w = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise(r => w.on('listening', r));
+  w.on('connection', (sock) => sock.on('message', (d) => { try { const m = JSON.parse(d); if (m[0] === 'REQ') sock.send(JSON.stringify(['EOSE', m[1]])); } catch {} }));
+  _junk.push(w);
+  return 'ws://127.0.0.1:' + w.address().port + '/';
+}
+after(() => {
+  for (const [p, u] of _realPools) { try { p.close(u); } catch {} }
+  for (const w of _junk) { try { w.close(); } catch {} }
+});
+
 // …and the same read on a link where ONE of the two documents never comes back: that filter answers nothing
 // and never reaches the end, the other answers normally.
 //
@@ -675,8 +726,8 @@ test('a list is never rebuilt from scratch unless EVERY relay asked said "nothin
     // under test can stop the from-scratch rebuild (a first version half-answered both, and the seed's own guard
     // hid a sabotage of this one).
     one: async (f) => ((f[0]['#d'] || [])[0] === RELAY_NET_D
-      ? { ev: null, complete: true, answered: 1, asked: 2 }
-      : { ev: null, complete: true, answered: 2, asked: 2 }),
+      ? { ev: null, complete: true, answered: 1, asked: 2, askedUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: ['wss://somewhere-else.example/relay'] }
+      : { ev: null, complete: true, answered: 2, asked: 2, askedUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'] }),
     publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub,
   });
   const res = await con.enrolRelayNet();
@@ -686,7 +737,7 @@ test('a list is never rebuilt from scratch unless EVERY relay asked said "nothin
   // …and when both answered, the first list is written.
   const con2 = consoleWith({
     location, pool: poolTo(BOX),
-    one: async () => ({ ev: null, complete: true, answered: 2, asked: 2 }),
+    one: async () => ({ ev: null, complete: true, answered: 2, asked: 2, askedUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'] }),
     publish: publishTo(BOX), sk: flock.sk, pub: flock.pub,
   });
   assert.equal((await con2.enrolRelayNet()).published, true, 'every relay answered and still nothing was signed');
@@ -699,7 +750,7 @@ test('with the shared relays unreachable, the church\'s OWN box saying "nothing 
   // reinstalled box answering empty while the relays holding the list are down is still refused.
   const { flock, BOX, location } = await selfHostedChurch('F2b');
   // Both reads (the list, and the one-time seed) get the same answer: only the own box replied, empty.
-  const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] });
+  const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: [BOX.wsUrl] });
   // The automatic pass, on a box this church's registration says holds it (third audit, finding 1).
   const fresh = consoleWith({ location, boxHostsUs: true, one: ownOnly, publish: publishTo(BOX), pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
   const res = await fresh.enrolRelayNet({ auto: true });
@@ -717,7 +768,7 @@ test('with the shared relays unreachable, the church\'s OWN box saying "nothing 
   // And a relay that is not the church's own box saying "nothing here" is never enough on its own.
   let published3 = 0;
   const other = consoleWith({ location, boxHostsUs: true,
-    one: async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: ['wss://somewhere-else.example/relay'] }),
+    one: async () => ({ ev: null, complete: false, answered: 1, asked: 3, askedUrls: [BOX.wsUrl, 'wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: ['wss://somewhere-else.example/relay'] }),
     publish: async () => { published3++; return true; }, pool: poolTo(), sk: flock.sk, pub: flock.pub });
   assert.equal((await other.enrolRelayNet({ auto: true })).unknown, true, 'another relay\'s "nothing here" started the list');
   assert.equal(published3, 0);
@@ -738,11 +789,11 @@ test('a console remembers having seen its church\'s list, so a later empty answe
 // church's own box. Each row stands up "only the serving box answered, empty" and must start NO list.
 test('only the automatic pass, on a box that holds this church and is not a shared relay, may start a list on its own answer (third audit, finding 1)', async () => {
   const { flock, BOX, TYPED, location } = await selfHostedChurch('F1');
-  const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] });
+  const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: [BOX.wsUrl] });
   // The one-time seed read finds an old sync list naming another box: a list started here WOULD have something
   // to sign even when the serving box itself is skipped, so the shared-key row cannot pass by accident.
   const oldSync = H.relaysDoc(flock, [TYPED]);
-  const ownOnlyWithSeed = async (f) => ((f[0]['#d'] || [])[0] === RELAY_NET_D ? ownOnly() : { ev: oldSync, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] });
+  const ownOnlyWithSeed = async (f) => ((f[0]['#d'] || [])[0] === RELAY_NET_D ? ownOnly() : { ev: oldSync, complete: false, answered: 1, asked: 3, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: [BOX.wsUrl] });
   for (const [why, deps, opts] of [
     ['a steward\'s Connect (the consent path)', { boxHostsUs: true }, { extra: [TYPED.wsUrl] }],
     ['the consent path, even if it claims to be automatic', { boxHostsUs: true }, { auto: true, extra: [TYPED.wsUrl] }],
@@ -779,7 +830,7 @@ test('a console that READS its church\'s list remembers it, so the own box\'s la
   // …and that memory is what refuses the same console later, when only its own box answers, empty.
   let published2 = 0;
   const later = consoleWith({ location, store, boxHostsUs: true, pool: poolTo(),
-    one: async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] }),
+    one: async () => ({ ev: null, complete: false, answered: 1, asked: 3, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: [BOX.wsUrl] }),
     publish: async () => { published2++; return true; }, sk: flock.sk, pub: flock.pub });
   assert.equal((await later.enrolRelayNet({ auto: true })).unknown, true, 'a console that had read the list started a new one');
   assert.equal(published2, 0);
@@ -790,7 +841,7 @@ test('a console that READS its church\'s list remembers it, so the own box\'s la
 // reader does: an empty answer from a relay still waiting on our login does not count.
 function seedWorld(BOX, seedAnswer) {
   return async (f, ms, privateDoc) => {
-    if ((f[0]['#d'] || [])[0] === RELAY_NET_D) return { ev: null, complete: true, answered: 1, asked: 1, answeredUrls: [BOX.wsUrl] };
+    if ((f[0]['#d'] || [])[0] === RELAY_NET_D) return { ev: null, complete: true, answered: 1, asked: 1, askedUrls: [BOX.wsUrl], answeredUrls: [BOX.wsUrl] };
     return seedAnswer(privateDoc);
   };
 }
@@ -800,8 +851,8 @@ test('the seed read is asked as PRIVATE, so an answer given while our login is p
   const con = consoleWith({ location, pool: poolTo(),
     // The old sync list exists but is withheld: the relay answered empty while our login was still pending.
     one: seedWorld(BOX, (privateDoc) => privateDoc
-      ? { ev: null, complete: true, answered: 0, asked: 1, answeredUrls: [] }
-      : { ev: null, complete: true, answered: 1, asked: 1, answeredUrls: [BOX.wsUrl] }),
+      ? { ev: null, complete: true, answered: 0, asked: 1, askedUrls: [BOX.wsUrl], answeredUrls: [] }
+      : { ev: null, complete: true, answered: 1, asked: 1, askedUrls: [BOX.wsUrl], answeredUrls: [BOX.wsUrl] }),
     publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
   const res = await con.enrolRelayNet();
   assert.equal(res.unknown, true, 'the seed read was not asked as private, so a withheld list read as "none"');
@@ -811,7 +862,7 @@ test('the seed read must be answered in full, or by the church\'s own box — no
   const { flock, BOX, location } = await selfHostedChurch('SEEDF');
   let published = 0;
   const con = consoleWith({ location, pool: poolTo(),
-    one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, answeredUrls: ['wss://somewhere-else.example/relay'] })),
+    one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, askedUrls: [BOX.wsUrl, 'wss://somewhere-else.example/relay'], answeredUrls: ['wss://somewhere-else.example/relay'] })),
     publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
   assert.equal((await con.enrolRelayNet()).unknown, true, 'one other relay\'s empty answer was taken as "no old sync list"');
   assert.equal(published, 0);
@@ -821,7 +872,7 @@ test('a refused login on a SHARED relay does not block the seed: the church\'s o
   // The own-box rule means that cannot keep a self-hosting church from signing its box.
   const { flock, BOX, location } = await selfHostedChurch('SEEDS');
   const con = consoleWith({ location, pool: poolTo(BOX), boxHostsUs: true,
-    one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, answeredUrls: [BOX.wsUrl] })),
+    one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay'], answeredUrls: [BOX.wsUrl] })),
     publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
   assert.equal((await con.enrolRelayNet({ auto: true })).published, true, 'a refused login on another relay kept the church\'s own box unsigned');
 });
@@ -853,7 +904,7 @@ test('a relay that is offline is removed by the address the list recorded for it
 test('removing writes nothing when the list could not be read in full, or from a console that is not this church\'s own', async () => {
   const { flock, BOX, location } = await selfHostedChurch('UNSIGN3');
   for (const [why, deps] of [
-    ['an unfinished read', { one: async () => ({ ev: null, complete: false, answered: 0, asked: 2, answeredUrls: [] }) }],
+    ['an unfinished read', { one: async () => ({ ev: null, complete: false, answered: 0, asked: 2, askedUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: [] }) }],
     ['a delegated console', { actingChurch: H.key().pub, one: oneFrom(BOX, flock), mustNotRead: true }],
     ['a network view', { viewingNetwork: true, one: oneFrom(BOX, flock), mustNotRead: true }],
   ]) {
@@ -873,8 +924,9 @@ test('removing changes nothing unless EVERY relay asked answered — a stale cop
   await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: TYPED.relayPub, alwaysOn: true, url: TYPED.wsUrl }])]);
   const before = await storedRelayNet(BOX, flock);
   let published = 0;
-  // The list came back — but from one of two relays. The other may hold a newer list.
-  const half = async (f) => ({ ...(await oneFrom(BOX, flock)(f)), answered: 1, asked: 2 });
+  // The list came back — but from one of two relays. The other may hold a newer list. A REAL read (round 6): the
+  // box answers, the other relay is switched off.
+  const half = realRead([BOX.wsUrl, await deadRelay()]);
   const con = consoleWith({ location, one: half, publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
   const res = await con.unenrolRelayNet(TYPED.wsUrl);
   assert.equal(res.removed, false, 'a relay was removed from a list only one of two relays answered with');
@@ -903,13 +955,18 @@ test('removing never takes out the box this console runs on, under any address (
     { pubkey: sharedPub, alwaysOn: true, url: 'wss://shared-seed.example/relay' },
     { pubkey: 'c'.repeat(64), alwaysOn: true, url: deadOwn },
   ])]);
+  // CHANGED round 6: a REAL read of two relays — the box, and one more that answers (TYPED holds no list), as a real
+  // console always asks its own box AND the shared relays. With only the box asked, removing the box's own address
+  // now leaves nothing else to have answered (the relay being removed need not answer), and that is refused as
+  // unknown — fail closed — before the own-box check is reached. The card offers no Remove on the own box's row.
+  const both = () => realRead([BOX.wsUrl, TYPED.wsUrl]);
   for (const [why, url, flag, at] of [
     ['the own box under another address (matched by the key it proves)', alias, 'ownBox', location],
     ['the own box\'s own address', BOX.wsUrl, 'ownBox', location],
     ['the own box\'s own address while that box is offline (matched by address)', deadOwn, 'ownBox', { protocol: 'http:', host: '127.0.0.1:1' }],
   ]) {
     let published = 0;
-    const con = consoleWith({ location: at, shared: [sharedPub], one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+    const con = consoleWith({ location: at, shared: [sharedPub], one: both(), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
     const res = await con.unenrolRelayNet(url);
     assert.equal(res[flag], true, why + ': not refused as ' + flag + ': ' + JSON.stringify(res));
     assert.equal(published, 0, why + ': THE LIST WAS RE-SIGNED WITHOUT IT');
@@ -949,7 +1006,8 @@ test('a list found on a partial read is passed on, never re-signed — a stale c
   await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }])]);
   const stored = (await storedRelayNet(BOX, flock))[0];
   const sent = [];
-  const half = async (f) => ({ ...(await oneFrom(BOX, flock)(f)), answered: 1, asked: 2 });
+  // A REAL read (round 6): the box and the typed relay answer, a third relay is switched off.
+  const half = realRead([BOX.wsUrl, await deadRelay(), TYPED.wsUrl]);
   const pool = poolTo(BOX, TYPED);
   const con = consoleWith({ location, one: half, pool, publish: async (ev) => { sent.push(ev); return ev; }, sk: flock.sk, pub: flock.pub });
   const res = await con.enrolRelayNet({ extra: [TYPED.wsUrl] });
@@ -1017,6 +1075,69 @@ test('a console that switches to a network view mid-enrolment signs nothing (aud
   assert.equal(published + pool.sent.length, 0,
     'THE CONSOLE SIGNED AFTER IT HAD SWITCHED AWAY — church A\'s list under another key');
   assert.deepEqual(await storedRelayNet(BOX, flock), [], 'something reached the box');
+});
+
+// ── the fifth audit round (2026-10-21), every row over REAL reads ──────────────────────────────────────────
+test('an offline relay the list names is removed, though it cannot answer (round 6, fifth audit finding 1)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('R6N1');
+  const DEAD = await deadRelay();
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: 'e'.repeat(64), alwaysOn: true, url: DEAD }])]);
+  await new Promise(r => setTimeout(r, 1100));   // a newer second, so newest-wins can see the change
+  // Re-anchor: the read really is partial — the relay being removed did not answer.
+  const probe = await realRead([BOX.wsUrl, DEAD])([{ kinds: [30078], authors: [flock.pub], '#d': [RELAY_NET_D] }]);
+  assert.ok(probe.ev, 're-anchor: the box did not return the church\'s list');
+  // (`complete` is true here — it means "everyone finished and someone answered" — so the count is the anchor.)
+  assert.equal(probe.answered, 1, 're-anchor: a switched-off relay was counted as answering');
+  assert.equal(probe.asked, 2, 're-anchor: the read did not ask both relays');
+  const con = consoleWith({ location, one: realRead([BOX.wsUrl, DEAD]), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
+  const res = await con.unenrolRelayNet(DEAD);
+  assert.equal(res.removed, true, 'AN OFFLINE RELAY COULD NOT BE REMOVED — it waits for an answer from the relay being taken out, which never comes: ' + JSON.stringify(res));
+  const d = (await storedRelayNet(BOX, flock)).sort((a, b) => b.created_at - a.created_at);
+  assert.deepEqual(cores[0][1].parseRelayNet(d[0].content).map(e => e.pubkey), [BOX.relayPub], 'the church\'s list still names the removed relay');
+});
+
+test('…but not while ANOTHER relay is silent (round 6)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('R6N2');
+  const DEAD = await deadRelay(), DEAD2 = await deadRelay();
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: 'e'.repeat(64), alwaysOn: true, url: DEAD }])]);
+  const before = await storedRelayNet(BOX, flock);
+  await new Promise(r => setTimeout(r, 1100));
+  let published = 0;
+  const con = consoleWith({ location, one: realRead([BOX.wsUrl, DEAD, DEAD2]), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.unenrolRelayNet(DEAD);
+  assert.equal(res.unknown, true, 'a removal went ahead while a relay that may hold a newer list was silent: ' + JSON.stringify(res));
+  assert.equal(published, 0, 'A POSSIBLY STALE LIST WAS RE-SIGNED — the exception for the relay being removed covered another silent relay too');
+  assert.equal((await storedRelayNet(BOX, flock))[0].id, before[0].id);
+});
+
+test('a relay that answers but proves no key, and the list doesn\'t name, comes back notListed (round 6, fifth audit finding 2)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('R6N3');
+  const JUNK = await junkRelay();
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }])]);
+  let published = 0;
+  const con = consoleWith({ location, one: realRead([BOX.wsUrl, JUNK]), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.unenrolRelayNet(JUNK);
+  assert.equal(res.notListed, true, 'a relay the church\'s list never named was not reported as such: ' + JSON.stringify(res));
+  assert.equal(res.proven, false, 'a relay with no /status was reported as having proved a key');
+  assert.equal(published, 0, 'something was signed for a relay the list never named');
+});
+
+test('re-Connect on a read with a silent relay signs nothing and says the read was partial (round 6, fifth audit finding 3)', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('R6N4');
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: TYPED.relayPub, alwaysOn: true, url: TYPED.wsUrl }])]);
+  const stored = (await storedRelayNet(BOX, flock))[0];
+  const sent = [];
+  const con = consoleWith({ location, one: realRead([BOX.wsUrl, await deadRelay(), TYPED.wsUrl]), pool: poolTo(BOX, TYPED),
+    publish: async (ev) => { sent.push(ev.id); return ev; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.ok((res.entries || []).some(e => e.pubkey === TYPED.relayPub), 're-anchor: the list found does not name the typed relay: ' + JSON.stringify(res));
+  assert.equal(res.published, false, 'a list was signed on a partial read');
+  assert.ok(sent.every(id => id === stored.id), 'a list read from a partial answer was re-signed');
+  assert.equal(res.full, false, 'THE CARD WAS NOT TOLD THE READ WAS PARTIAL — it says "✓ Added" from what may be a stale copy: ' + JSON.stringify(res));
+  // …and when every relay answers, the same call says the read was full, so the flag is not a blanket "false".
+  const con2 = consoleWith({ location, one: realRead([BOX.wsUrl, TYPED.wsUrl]), pool: poolTo(BOX, TYPED),
+    publish: async (ev) => ev, sk: flock.sk, pub: flock.pub });
+  assert.equal((await con2.enrolRelayNet({ extra: [TYPED.wsUrl] })).full, true, 'a read every relay answered was reported as partial');
 });
 
 // ── 10. teardown, asserted rather than trusted ──────────────────────────────────────────────────────────
