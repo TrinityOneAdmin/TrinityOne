@@ -18861,7 +18861,19 @@ zoo`.split("\n");
       }
     };
     const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some((u) => _k(u) === _k(ownUrl));
-    const nothingAnywhere = (r) => r.complete && r.answered === r.asked || !seenBefore && ownSaidNothing(r.answeredUrls);
+    const fullAnswer = (r) => !!r.complete && r.answered === r.asked;
+    let ownMayStart = false;
+    if (!mine && o.auto === true && !(o.extra && o.extra.length) && _boxHostsUs === true && !seenBefore && !!ownUrl) {
+      let ownKey = "";
+      try {
+        const pr = await verifyRelayIdentity(ownUrl);
+        ownKey = String(pr && pr.relayPub || "").toLowerCase();
+      } catch (e) {
+        ownKey = "";
+      }
+      ownMayStart = /^[0-9a-f]{64}$/.test(ownKey) && !sharedRelayKeys().includes(ownKey);
+    }
+    const nothingAnywhere = (r) => fullAnswer(r) || ownMayStart && ownSaidNothing(r.answeredUrls);
     if (!mine && !nothingAnywhere({ complete, answered, asked, answeredUrls })) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     const entries = mine ? parseRelayNet(mine.content) : [];
     const before = JSON.stringify(entries);
@@ -18905,7 +18917,7 @@ zoo`.split("\n");
         unproven.push(url);
         continue;
       }
-      proven.push({ url, pubkey: p });
+      proven.push(shared.includes(p) ? { url, pubkey: p, shared: true } : { url, pubkey: p });
       if (shared.includes(p)) continue;
       const isOwn = !!own && url === own;
       const hint = _isLoopbackRelay(url) ? isOwn ? selfPublicRelay() : "" : url;
@@ -18921,7 +18933,7 @@ zoo`.split("\n");
       }
     }
     const changed = JSON.stringify(entries) !== before;
-    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, skipped: "the console changed church while enrolling" };
+    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, changed: true };
     const deliver = async (ev2) => {
       const urls = proven.filter((x) => !shared.includes(x.pubkey)).map((x) => x.url);
       if (!ev2 || !urls.length) return [];
@@ -18955,17 +18967,12 @@ zoo`.split("\n");
     const u = normRelay(url);
     if (!u) return { removed: false };
     const sk0 = sk, pub0 = pub;
-    const { ev: existing, complete } = await relayNetDoc();
+    const { ev: existing, complete, answered, asked } = await relayNetDoc();
+    const full = !!complete && answered === asked;
+    if (!full) return { removed: false, unknown: true };
     const mine = existing && existing.pubkey === pub ? existing : null;
-    if (!mine) return { removed: false, unknown: !complete, notListed: !!complete };
+    if (!mine) return { removed: false, notListed: true };
     const entries = parseRelayNet(mine.content);
-    let pk = "";
-    try {
-      const proof = await verifyRelayIdentity(u);
-      pk = String(proof && proof.relayPub || "").toLowerCase();
-    } catch (e) {
-      pk = "";
-    }
     const _k = (x) => {
       try {
         return normalizeURL2(x);
@@ -18973,9 +18980,24 @@ zoo`.split("\n");
         return String(x || "");
       }
     };
-    const keep = entries.filter((e) => !(pk && e.pubkey === pk || e.url && _k(e.url) === _k(u)));
-    if (keep.length === entries.length) return { removed: false, notListed: true, proven: !!pk };
-    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true };
+    const keyAt = async (x) => {
+      try {
+        const proof = await verifyRelayIdentity(x);
+        return String(proof && proof.relayPub || "").toLowerCase();
+      } catch (e) {
+        return "";
+      }
+    };
+    const pk = await keyAt(u);
+    const drop = entries.filter((e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u));
+    if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
+    const own = relayNetCandidates()[0] || "";
+    const ownKey = !own ? "" : _k(own) === _k(u) ? pk : await keyAt(own);
+    const shared = sharedRelayKeys();
+    if (own && _k(own) === _k(u) || drop.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+    if (drop.some((e) => shared.includes(e.pubkey))) return { removed: false, shared: true };
+    const keep = entries.filter((e) => !drop.includes(e));
+    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
     const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
     return { removed: !!ev, entries: keep };
   }
@@ -18990,7 +19012,7 @@ zoo`.split("\n");
     _autoEnrolled.add(key);
     let res = null;
     try {
-      res = await enrolSerial(() => enrolRelayNet());
+      res = await enrolSerial(() => enrolRelayNet({ auto: true }));
     } catch (e) {
       res = null;
     }
@@ -19617,7 +19639,9 @@ zoo`.split("\n");
     // WHAT THIS DOES NOT CHANGE YET: which relays receive a church's data. proveRelay still admits any box that
     // proves it runs our software (`root: 'software'`, src/relay-net.src.js); narrowing that to the boxes this
     // document names is self-hosting Phase 2 (reference/DESIGN-SELFHOSTING-2026-10-21.md).
-    enrolRelayNet,
+    // Queued like signRelay, and never `auto` — that exception belongs to the automatic pass alone (third audit,
+    // finding 8). No screen calls it; scripts and the console's devtools do.
+    enrolRelayNet: (opts) => enrolSerial(() => enrolRelayNet({ extra: opts && opts.extra || void 0 })),
     autoEnrolRelayNet,
     // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
     // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.

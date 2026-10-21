@@ -338,14 +338,14 @@ const VENDOR = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 const OK = { proven: [{ url: 'ws://127.0.0.1:9/relay', pubkey: 'c'.repeat(64) }], published: true, entries: [{}], delivered: [] };
 function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null }) {
   const body = fnBody(VENDOR, 'async function autoEnrolRelayNet()', 'autoEnrolRelayNet');
-  let n = 0;
+  let n = 0; const args = [];
   const fn = new Function('sk', 'pub', 'actingChurch', '_viewingNetwork', 'relayNetCandidates', 'enrolRelayNet', '_autoEnrolled',
     '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial',
     body + '\nreturn autoEnrolRelayNet;')(
     'sk', 'a'.repeat(64), acting, () => network, () => cands.slice(),
-    async () => { const r = results[Math.min(n, results.length - 1)]; n++; if (r instanceof Error) throw r; return r; }, new Set(),
+    async (o) => { args.push(o); const r = results[Math.min(n, results.length - 1)]; n++; if (r instanceof Error) throw r; return r; }, new Set(),
     hosts, () => shared, queue || ((f) => f()));
-  return { fn, calls: () => n };
+  return { fn, calls: () => n, args };
 }
 
 test('B2: the automatic call enrols once per church and box, and retries only when the answer was unknown', async () => {
@@ -506,4 +506,133 @@ test('every signing path goes through the one queue (the automatic pass, Connect
   assert.deepEqual(seen, ['queued', 'queued'], 'Connect or Remove signs outside the queue — it can overlap an automatic pass');
   const auto = autoEnrol({ results: [OK], queue: (fn) => { seen.push('auto-queued'); return fn(); } });
   return auto.fn().then(() => assert.ok(seen.includes('auto-queued'), 'the automatic pass signs outside the queue'));
+});
+
+// ── 7. the third audit round (2026-10-21) ───────────────────────────────────────────────────────────────
+test('only the automatic pass asks for the own-box exception; Connect and the exported call never can (third audit, findings 1 and 8)', async () => {
+  const auto = autoEnrol({ results: [OK] });
+  await auto.fn();
+  assert.deepEqual(auto.args, [{ auto: true }],
+    'THE AUTOMATIC PASS DOES NOT ASK AS THE AUTOMATIC PASS — a Suite whose shared relays are unreachable never signs its own box');
+  const asked = [];
+  const sign = fnBody(VENDOR, '  signRelay(url) {', 'signRelay');
+  const norm = fnBody(VENDOR, 'function normRelay(input) {', 'normRelay');
+  const line = VENDOR.split('\n').find(l => /^\s*enrolRelayNet: \(opts\) => /.test(l));
+  assert.ok(line, 're-anchor: Steward.enrolRelayNet is no longer the queued arrow');
+  const queued = [];
+  const api = new Function('enrolSerial', 'enrolRelayNet', 'unenrolRelayNet', norm + '\nreturn ({ ' + sign + ', ' + line.trim().replace(/,$/, '') + ' });')(
+    (fn) => { queued.push(1); return fn(); }, async (o) => { asked.push(o); return {}; }, async () => ({}));
+  await api.signRelay('wss://typed.example/relay');
+  await api.enrolRelayNet({ auto: true, extra: ['wss://x.example/relay'] });
+  await api.enrolRelayNet();
+  assert.equal(queued.length, 3, 'Steward.enrolRelayNet signs outside the one queue');
+  assert.ok(asked.every(o => !o || o.auto !== true), 'a steward\'s Connect or the exported call reached the own-box exception: ' + JSON.stringify(asked));
+  assert.deepEqual(asked[0].extra, ['wss://typed.example/relay'], 'Connect no longer names the relay it signs');
+});
+
+test('the outcome lines say only what is true (third audit, findings 2 and 8)', async () => {
+  const T = 'wss://second.grace.example/relay';
+  for (const [why, result, want, never] of [
+    ['unknown', { unknown: true, proven: [], entries: [] }, /Connect it again once your relays are answering/, /automatically/],
+    ['the console switched church mid-signing', { unknown: true, changed: true, proven: [], entries: [] }, /switched church/, /Only your church’s own console|could not be read in full/],
+    ['a shared relay', { proven: [{ url: T, pubkey: 'b'.repeat(64), shared: true }], entries: [] }, /shared relays/, /Try again/],
+  ]) {
+    const r = recorder({ signRelay: async () => result });
+    const card = addCard(r.steward);
+    card.draw(); await settle();
+    find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add')[0].props.onChange({ target: { value: T } });
+    button(card.draw(), 'Add relay')[0].props.onClick();
+    await settle();
+    await consentYes(card.draw())[0].props.onClick();
+    await settle(); await settle();
+    const all = said(card.draw());
+    assert.match(all, want, why + ': the card did not say ' + want);
+    assert.doesNotMatch(all, never, why + ': the card said something untrue: ' + all);
+  }
+});
+
+function relaysCard(steward) {
+  const { React, draw } = miniReact();
+  const relays = [{ url: 'wss://relay.grace.example/relay', status: 'on' }, { url: 'wss://second.grace.example/relay', status: 'on' }];
+  const win = {
+    useStewardRelays: () => relays, useStewardChurch: () => ({ name: 'St Aidan’s' }),
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    Steward: { ownRelay: () => 'wss://relay.grace.example/relay', backupState: async () => ({ boxes: 2, online: 2, syncOn: true }),
+      removeRelay: () => true, canRemoveRelay: () => true, relayName: () => '', ...steward },
+  };
+  const globals = {
+    React, window: win, localStorage: win.localStorage,
+    location: { host: 'relay.grace.example', hostname: 'relay.grace.example' }, navigator: { userAgent: '' },
+    document: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout, setInterval, clearInterval, console,
+    fetch: async () => ({ ok: false, json: async () => ({}) }),
+    CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
+    Icon: function Icon() { return null; }, SkPill: function SkPill() { return null; }, SkBadge: function SkBadge() { return null; },
+    useStewDialog: () => ({ current: null }),
+  };
+  const names = Object.keys(globals);
+  const mod = new Function(...names, JS + '\nreturn { DashRelaysCard };')(...names.map(k => globals[k]));
+  return () => draw(mod.DashRelaysCard, {});
+}
+async function removeSecond(view) {
+  view(); await settle();
+  const trash = find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay');
+  assert.ok(trash.length >= 1, 're-anchor: no Remove relay button on the Relays card');
+  trash[trash.length - 1].props.onClick();
+  await settle();
+  await find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0].props.onClick();
+  await settle(); await settle();
+  return said(view());
+}
+
+test('Remove says so whenever the relay could not be taken out of the church\'s list (third audit, finding 3)', async () => {
+  const WARN = /could not be updated right now|Only your church’s own console can take it out|is the box this console runs on/;
+  for (const [why, unsign, want] of [
+    ['the write failed', async () => ({ removed: false, entries: [] }), /could not be updated right now/],
+    ['it threw (no church key on this device)', async () => { throw new Error('No church key on this device'); }, /could not be updated right now/],
+    ['unknown (a relay is not answering)', async () => ({ removed: false, unknown: true }), /could not be updated right now/],
+    ['not listed, and its key could not be proved', async () => ({ removed: false, notListed: true, proven: false }), /could not be updated right now/],
+    ['a delegated console', async () => ({ removed: false, skipped: 'x' }), /Only your church’s own console can take it out/],
+    ['the box this console runs on', async () => ({ removed: false, ownBox: true }), /is the box this console runs on/],
+  ]) {
+    const text = await removeSecond(relaysCard({ unsignRelay: unsign }));
+    assert.match(text, want, why + ': REMOVE WAS SILENT — the steward believes their consent withdrawn when the church\'s list still names it');
+  }
+  for (const [why, unsign] of [
+    ['removed', async () => ({ removed: true, entries: [] })],
+    ['never in the list (key proved)', async () => ({ removed: false, notListed: true, proven: true })],
+    ['a shared relay', async () => ({ removed: false, shared: true })],
+  ]) {
+    const text = await removeSecond(relaysCard({ unsignRelay: unsign }));
+    assert.doesNotMatch(text, WARN, why + ': a warning was shown over a removal that worked');
+  }
+});
+
+test('Auto-find reports each relay\'s own result, never "✓ Added" over one that was not signed (third audit, finding 4)', async () => {
+  const r = recorder({ signRelay: async (u) => (/open-b/.test(u)
+    ? { proven: [], unproven: [u], published: false }
+    : { proven: [{ url: u, pubkey: 'a'.repeat(64) }], entries: [{ pubkey: 'a'.repeat(64) }], published: true }) });
+  const card = addCard(r.steward);
+  card.draw(); await settle();
+  button(card.draw(), 'Auto-find relays for me')[0].props.onClick();
+  await settle(); await settle();
+  await consentYes(card.draw())[0].props.onClick();
+  await settle(); await settle(); await settle();
+  const all = said(card.draw());
+  assert.match(all, /✓ Added 1 relay for backup: open-a/, 'the relay that WAS signed is not reported as added');
+  assert.doesNotMatch(all, /Added 2 relays/, 'AUTO-FIND SAID BOTH WERE ADDED — one is not in the church\'s list');
+  assert.match(all, /open-b: It could not prove it runs TrinityOne yet/, 'the steward was not told which relay was not signed, or why');
+});
+
+test('Steward.connectFoundRelays adds every relay it is handed and republishes once — out of the shipped bundle (third audit, finding 4)', async () => {
+  const body = fnBody(VENDOR, '  async connectFoundRelays(picks) {', 'connectFoundRelays');
+  const log = [];
+  const window = { Steward: { addRelay: (u) => { log.push(['add', u]); return u; }, publishRelayList: async () => { log.push(['publish']); } } };
+  const api = new Function('window', 'return ({ ' + body + ' });')(window);
+  const picks = [{ url: 'wss://open-a.example/relay' }, { url: 'wss://open-b.example/relay' }];
+  assert.deepEqual(await api.connectFoundRelays(picks), picks);
+  assert.deepEqual(log, [['add', 'wss://open-a.example/relay'], ['add', 'wss://open-b.example/relay'], ['publish']],
+    'THE FOUND RELAYS WERE NOT ADDED — the steward agreed to relays the console never connected');
+  log.length = 0;
+  assert.deepEqual(await api.connectFoundRelays([]), []);
+  assert.deepEqual(log, [], 'nothing found, and the relay list was republished anyway');
 });

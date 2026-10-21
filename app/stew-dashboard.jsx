@@ -5165,7 +5165,7 @@ function DashRelaysCard() {
     setConfirmDrop(null); setDropNote('');
     try { window.Steward.removeRelay(url); } catch (e) {}
     let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = null; }
-    if (r && (r.unknown || (r.notListed && r.proven === false))) setDropNote('Removed from this console, but your church’s relay list could not be updated right now — it may still name ' + url + '. Remove it again once your relays are answering.');
+    setDropNote(dropOutcome(r, url));
   };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
@@ -5382,19 +5382,35 @@ function WizAddRelay() {
 // wizard's Add; nothing is added or signed until "Yes, connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
 // relay is the church vouching for it to every member's phone, not a connection test.
 const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
+// WHAT A REMOVE ANSWERED, in a steward's words — '' when the relay is out of the church's signed list, or was never
+// in it. Every other answer says so (third audit, finding 3: a failed write, a throw and a delegated console were
+// silent, so a steward believed their consent withdrawn when it was not).
+function dropOutcome(r, url) {
+  if (r && r.removed) return '';
+  if (r && r.notListed && r.proven !== false) return '';   // proved its key, and the church's list never named it
+  if (r && r.shared) return '';                             // a shared relay is never in the church's own list
+  if (r && r.ownBox) return 'Removed from this console. ' + url + ' is the box this console runs on, so it stays in your church’s relay list.';
+  if (r && r.skipped) return 'Removed from this console. Only your church’s own console can take it out of the church’s relay list.';
+  return 'Removed from this console, but your church’s relay list could not be updated right now — it may still name ' + url + '. Remove it again once your relays are answering.';
+}
 const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
 // WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
 // the Add-a-relay card and the wizard so neither can say "Added" over a relay that was not signed (second audit,
 // finding 8: a skipped or unknown result used to read as success).
 function signOutcome(r, url) {
   if (!r) return 'Couldn’t sign that relay into your church’s list. Try again.';
+  // `changed` first: a church switch mid-signing also reads as unknown, and is neither "a relay isn't answering"
+  // nor "not your church's own console" (third audit, finding 8). And nothing is ever added automatically later —
+  // the automatic pass signs only the console's own box (B4) — so the unknown line says to connect again (finding 2).
+  if (r.changed) return 'Added to this console, but it switched church while saving, so the relay isn’t in your church’s list yet. Connect it again.';
   if (r.skipped) return 'Added to this console. Only your church’s own console can put it in the church’s relay list.';
-  if (r.unknown) return 'Added, but your church’s relay list could not be read in full just now (a relay isn’t answering), so it isn’t in the list yet. It will be added automatically once they answer — or connect it again.';
+  if (r.unknown) return 'Added, but your church’s relay list could not be read in full just now (a relay isn’t answering), so it isn’t in the list yet. Connect it again once your relays are answering.';
   // Compared the way Steward.signRelay normalises (normRelay: wss:// added, trailing slashes dropped), so a
   // resolved name or a pasted address with a trailing slash still finds its own proof.
   const n = (x) => { let v = String(x || '').trim(); if (v && !/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, ''); return v.replace(/\/+$/, '').toLowerCase(); };
   const p = (r.proven || []).find(x => n(x.url) === n(url)) || null;
   if (!p) return 'It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.';
+  if (p.shared) return 'That is one of TrinityOne’s shared relays. Your church already uses it, so it is never added to your church’s own list.';
   if (!(r.entries || []).some(e => e.pubkey === p.pubkey)) return 'Couldn’t put it in your church’s relay list. Try again.';
   return '';
 }
@@ -5527,8 +5543,17 @@ function DashAddRelayCard() {
     setFinding(true); setFindMsg('');
     try {
       const picks = (window.Steward.connectFoundRelays && chosen.length) ? await window.Steward.connectFoundRelays(chosen) : [];
-      for (const p of (picks || [])) { try { if (window.Steward.signRelay) await window.Steward.signRelay(p.url); } catch (e) {} }
-      if (picks && picks.length) setFindMsg('✓ Added ' + picks.length + ' relay' + (picks.length > 1 ? 's' : '') + ' for backup: ' + picks.map(p => p.name || p.url).join(', '));
+      // EACH RELAY'S OWN ANSWER (third audit, finding 4): "✓ Added" only for a relay now in the church's signed list.
+      const added = [], missed = [];
+      for (const p of (picks || [])) {
+        let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(p.url) : null; } catch (e) { r = null; }
+        const why = window.Steward.signRelay ? signOutcome(r, p.url) : '';
+        if (why) missed.push((p.name || p.url) + ': ' + why); else added.push(p);
+      }
+      const lines = [];
+      if (added.length) lines.push('✓ Added ' + added.length + ' relay' + (added.length > 1 ? 's' : '') + ' for backup: ' + added.map(p => p.name || p.url).join(', '));
+      for (const m of missed) lines.push('✗ ' + m);
+      if (lines.length) setFindMsg(lines.join(' '));
       else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
     } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
     setFinding(false);

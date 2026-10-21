@@ -5033,13 +5033,31 @@ async function enrolRelayNet(opts) {
   // is for) — could otherwise never sign its own box at all. Measured in a real browser 2026-10-21: with the
   // shared hosts unreachable, "every relay" kept the Suite's own box unsigned for ever. The console remembers
   // having seen a list (RELAYNET_SEEN), so the reinstalled-box case stays refused wherever a list was seen.
+  //
+  // WHO MAY USE THE SECOND ANSWER (third audit 2026-10-21, finding 1). "The box that served this page" is not
+  // the church's own box just because it served the page: the hosted console is served by the SHARED relay, and
+  // in a new browser (no seen flag) its "nothing here" — with the church's real box unreachable — let a steward's
+  // Connect rebuild the list as [typed], dropping the church's own box. So the second answer counts only for
+  //  · the automatic pass (`auto`), never a steward's Connect (`extra`): that path waits for every relay; and
+  //  · a serving box this church's registration says holds it (_boxHostsUs === true); and
+  //  · a serving box that proves a key of its own, not a shared relay's key.
+  // What is left (owner accepted, 2026-10-21): the church's own box reinstalled empty, every other relay
+  // unreachable, and a browser that never saw the list — the list then restarts with the own box in it.
   const seenKey = RELAYNET_SEEN + (pub || '');
   let seenBefore = false; try { seenBefore = lsGet(seenKey) === '1'; } catch (e) { seenBefore = true; }
   if (mine) { try { lsSet(seenKey, '1'); } catch (e) {} }
   const ownUrl = relayNetCandidates()[0] || '';
   const _k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
   const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some(u => _k(u) === _k(ownUrl));
-  const nothingAnywhere = (r) => (r.complete && r.answered === r.asked) || (!seenBefore && ownSaidNothing(r.answeredUrls));
+  const fullAnswer = (r) => !!r.complete && r.answered === r.asked;
+  // Decided once, before either read is judged: it gates the list read below AND the one-time seed read.
+  let ownMayStart = false;
+  if (!mine && o.auto === true && !(o.extra && o.extra.length) && _boxHostsUs === true && !seenBefore && !!ownUrl) {
+    let ownKey = '';
+    try { const pr = await verifyRelayIdentity(ownUrl); ownKey = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { ownKey = ''; }
+    ownMayStart = /^[0-9a-f]{64}$/.test(ownKey) && !sharedRelayKeys().includes(ownKey);
+  }
+  const nothingAnywhere = (r) => fullAnswer(r) || (ownMayStart && ownSaidNothing(r.answeredUrls));
   if (!mine && !nothingAnywhere({ complete, answered, asked, answeredUrls })) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
   const entries = mine ? parseRelayNet(mine.content) : [];
   const before = JSON.stringify(entries);
@@ -5067,7 +5085,8 @@ async function enrolRelayNet(opts) {
     try { proof = await verifyRelayIdentity(url); } catch { proof = null; }
     const p = String((proof && proof.relayPub) || '').toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(p)) { unproven.push(url); continue; }
-    proven.push({ url, pubkey: p });
+    // `shared` tells the card a typed shared relay needs no signing (third audit, finding 8), instead of "try again".
+    proven.push(shared.includes(p) ? { url, pubkey: p, shared: true } : { url, pubkey: p });
     // THE SHARED POOL IS NEVER SIGNED IN. A console served from the shared relay would otherwise sign that
     // relay into a church that does not self-host, and a church that does not self-host must be left exactly
     // as it was (owner decision 6). The shared relays are admitted on their own pin.
@@ -5093,7 +5112,7 @@ async function enrolRelayNet(opts) {
   // THE IDENTITY MAY HAVE MOVED WHILE WE WAITED (audit 2026-10-21, finding 6). The guard at the top ran before up
   // to two six-second reads and a proof per box; a switch to a delegated church or a network view in that window
   // would otherwise sign church A's entries with whatever key is current now. Unknown, so the next run retries.
-  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, skipped: 'the console changed church while enrolling' };
+  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, changed: true };
   // B3, the delivery half: send the signed document straight to every box that just proved its key.
   const deliver = async (ev) => {
     const urls = proven.filter(x => !shared.includes(x.pubkey)).map(x => x.url);
@@ -5134,22 +5153,36 @@ function enrolSerial(fn) {
 // it proves at that address; if it cannot be reached, by the address the list recorded for it. Nothing is
 // written unless the church's own list was read in full and actually names the relay. Same guards as enrolment:
 // this church's own console only, and the identity re-checked just before signing.
+//
+// THIRD AUDIT 2026-10-21. Finding 6: "read in full" means every relay asked answered, not merely that the read
+// finished — a stale copy edited and re-signed with a newer stamp would replace the church's real list.
+// Finding 5: never the box this console runs on, and never a shared relay. The church's own box can be in the
+// panel a second time under another address (its public tunnel address, a directory name); removing that
+// address proves the own box's key, and taking that key out would drop the church's own box from its own list.
 async function unenrolRelayNet(url) {
   if (!sk || !pub) throw new Error('No church key on this device');
   if (actingChurch || _viewingNetwork()) return { removed: false, skipped: 'not this church’s own console' };
   const u = normRelay(url);
   if (!u) return { removed: false };
   const sk0 = sk, pub0 = pub;
-  const { ev: existing, complete } = await relayNetDoc();
+  const { ev: existing, complete, answered, asked } = await relayNetDoc();
+  const full = !!complete && answered === asked;
+  if (!full) return { removed: false, unknown: true };
   const mine = (existing && existing.pubkey === pub) ? existing : null;
-  if (!mine) return { removed: false, unknown: !complete, notListed: !!complete };
+  if (!mine) return { removed: false, notListed: true };
   const entries = parseRelayNet(mine.content);
-  let pk = '';
-  try { const proof = await verifyRelayIdentity(u); pk = String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { pk = ''; }
   const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
-  const keep = entries.filter(e => !((pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u))));
-  if (keep.length === entries.length) return { removed: false, notListed: true, proven: !!pk };
-  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true };
+  const keyAt = async (x) => { try { const proof = await verifyRelayIdentity(x); return String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { return ''; } };
+  const pk = await keyAt(u);
+  const drop = entries.filter(e => (pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u)));
+  if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
+  const own = relayNetCandidates()[0] || '';
+  const ownKey = !own ? '' : (_k(own) === _k(u)) ? pk : await keyAt(own);
+  const shared = sharedRelayKeys();
+  if ((own && _k(own) === _k(u)) || drop.some(e => (ownKey && e.pubkey === ownKey))) return { removed: false, ownBox: true };
+  if (drop.some(e => shared.includes(e.pubkey))) return { removed: false, shared: true };
+  const keep = entries.filter(e => !drop.includes(e));
+  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
   const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
   return { removed: !!ev, entries: keep };
 }
@@ -5168,7 +5201,8 @@ async function autoEnrolRelayNet() {
   if (_autoEnrolled.has(key)) return null;
   _autoEnrolled.add(key);
   let res = null;
-  try { res = await enrolSerial(() => enrolRelayNet()); } catch (e) { res = null; }
+  // `auto`: only this pass may start a first list on the own box's own answer (third audit, finding 1).
+  try { res = await enrolSerial(() => enrolRelayNet({ auto: true })); } catch (e) { res = null; }
   // RETRY UNLESS IT ACTUALLY WORKED (audit 2026-10-21, finding 7): unknown, a throw, an own box that proved
   // nothing, or a signed list that reached no box at all — each is tried again on the next pass.
   // (A console served by the SHARED relay proves it and has nothing to sign — that is "done", not a failure.)
@@ -6076,7 +6110,9 @@ window.Steward = {
   // WHAT THIS DOES NOT CHANGE YET: which relays receive a church's data. proveRelay still admits any box that
   // proves it runs our software (`root: 'software'`, src/relay-net.src.js); narrowing that to the boxes this
   // document names is self-hosting Phase 2 (reference/DESIGN-SELFHOSTING-2026-10-21.md).
-  enrolRelayNet,
+  // Queued like signRelay, and never `auto` — that exception belongs to the automatic pass alone (third audit,
+  // finding 8). No screen calls it; scripts and the console's devtools do.
+  enrolRelayNet: (opts) => enrolSerial(() => enrolRelayNet({ extra: (opts && opts.extra) || undefined })),
   autoEnrolRelayNet,
   // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
   // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.

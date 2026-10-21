@@ -124,8 +124,11 @@ function consoleWith(deps) {
   const f = new Function('verifyEvent', 'verifyEvent2', 'normalizeURL', 'normalizeURL2', 'fetch',
     'location', 'window', 'extraRelays', '_oneComplete', 'publish', 'sk', 'pub', 'now',
     'finalizeEvent', 'finalizeEvent2', 'relays', 'ownRelay', '_boxHostsUs', '_monotonic',
-    'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool', 'lsGet', 'lsSet',
+    'actingChurch', '_viewingNetwork', 'selfRelayName', 'selfPublicRelay', 'pool', 'lsGet', 'lsSet', '__shared',
     body + '\n' + more +
+    // Third audit (2026-10-21, finding 1): a row can make a test box's key count as a SHARED relay's, which is
+    // the only way to stand up "the box that served this page is the shared relay" against real relays.
+    '\nif (__shared && __shared.length) CANONICAL_RELAY_PUBS = Object.assign({}, CANONICAL_RELAY_PUBS, { "wss://test-shared.invalid/relay": __shared });' +
     '\nreturn { enrolRelayNet, unenrolRelayNet, relayNetCandidates, relayNetEntries, isNetworkRelay: isNetworkRelay2, _ownOrigin };');
   return f(verifyEvent, verifyEvent, normalizeURL, normalizeURL, globalThis.fetch,
     deps.location, undefined, deps.extraRelays || (() => []), deps.one, deps.publish, deps.sk, deps.pub,
@@ -143,7 +146,8 @@ function consoleWith(deps) {
     deps.pool || { publish: () => [] },
     // The console's own localStorage (finding 2's "has this console seen a list?"), fresh per console unless shared.
     (k) => { const m = deps.store || (deps.store = new Map()); return m.has(k) ? m.get(k) : null; },
-    (k, v) => { const m = deps.store || (deps.store = new Map()); m.set(k, String(v)); });
+    (k, v) => { const m = deps.store || (deps.store = new Map()); m.set(k, String(v)); },
+    deps.shared || []);
 }
 
 // ── reading the relay, not the client ───────────────────────────────────────────────────────────────────
@@ -692,25 +696,26 @@ test('with the shared relays unreachable, the church\'s OWN box saying "nothing 
   const { flock, BOX, location } = await selfHostedChurch('F2b');
   // Both reads (the list, and the one-time seed) get the same answer: only the own box replied, empty.
   const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] });
-  const fresh = consoleWith({ location, one: ownOnly, publish: publishTo(BOX), pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
-  const res = await fresh.enrolRelayNet();
+  // The automatic pass, on a box this church's registration says holds it (third audit, finding 1).
+  const fresh = consoleWith({ location, boxHostsUs: true, one: ownOnly, publish: publishTo(BOX), pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
+  const res = await fresh.enrolRelayNet({ auto: true });
   assert.equal(res.published, true,
     'A SELF-HOSTING CHURCH WHOSE SHARED RELAYS ARE UNREACHABLE COULD NOT SIGN ITS OWN BOX: ' + JSON.stringify(res));
 
   // A console that HAS seen a list for this church: the same answer is not enough.
   const store = new Map([['trinityone.steward.relaynet-seen.' + flock.pub, '1']]);
   let published = 0;
-  const seen = consoleWith({ location, store, one: ownOnly, publish: async () => { published++; return true; }, pool: poolTo(), sk: flock.sk, pub: flock.pub });
-  const res2 = await seen.enrolRelayNet();
+  const seen = consoleWith({ location, store, boxHostsUs: true, one: ownOnly, publish: async () => { published++; return true; }, pool: poolTo(), sk: flock.sk, pub: flock.pub });
+  const res2 = await seen.enrolRelayNet({ auto: true });
   assert.equal(res2.unknown, true, 'a console that has seen this church\'s list started a new one from one box\'s "nothing here"');
   assert.equal(published, 0, 'A LIST WAS STARTED OVER ONE THIS CONSOLE HAD ALREADY SEEN — the reinstalled-box wipe');
 
   // And a relay that is not the church's own box saying "nothing here" is never enough on its own.
   let published3 = 0;
-  const other = consoleWith({ location,
+  const other = consoleWith({ location, boxHostsUs: true,
     one: async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: ['wss://somewhere-else.example/relay'] }),
     publish: async () => { published3++; return true; }, pool: poolTo(), sk: flock.sk, pub: flock.pub });
-  assert.equal((await other.enrolRelayNet()).unknown, true, 'another relay\'s "nothing here" started the list');
+  assert.equal((await other.enrolRelayNet({ auto: true })).unknown, true, 'another relay\'s "nothing here" started the list');
   assert.equal(published3, 0);
 });
 
@@ -721,6 +726,58 @@ test('a console remembers having seen its church\'s list, so a later empty answe
   assert.equal((await con.enrolRelayNet()).published, true, 'precondition: the first list was signed');
   assert.equal(store.get('trinityone.steward.relaynet-seen.' + flock.pub), '1',
     'the console did not remember signing a list — after a reinstall its own box\'s empty answer would wipe it');
+});
+
+// ── the own-box exception belongs to the automatic pass on the church's own box (third audit, finding 1) ──
+// The wipe the audit verified: the hosted console in a new browser, the box that served it answering "nothing
+// here", the church's real box unreachable — and a steward's Connect rebuilt the list as [typed], dropping the
+// church's own box. Each row stands up "only the serving box answered, empty" and must start NO list.
+test('only the automatic pass, on a box that holds this church and is not a shared relay, may start a list on its own answer (third audit, finding 1)', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('F1');
+  const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] });
+  // The one-time seed read finds an old sync list naming another box: a list started here WOULD have something
+  // to sign even when the serving box itself is skipped, so the shared-key row cannot pass by accident.
+  const oldSync = H.relaysDoc(flock, [TYPED]);
+  const ownOnlyWithSeed = async (f) => ((f[0]['#d'] || [])[0] === RELAY_NET_D ? ownOnly() : { ev: oldSync, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] });
+  for (const [why, deps, opts] of [
+    ['a steward\'s Connect (the consent path)', { boxHostsUs: true }, { extra: [TYPED.wsUrl] }],
+    ['the consent path, even if it claims to be automatic', { boxHostsUs: true }, { auto: true, extra: [TYPED.wsUrl] }],
+    ['a bare call (neither automatic nor consented)', { boxHostsUs: true }, undefined],
+    ['the automatic pass on a box not yet known to hold this church', { boxHostsUs: null }, { auto: true }],
+    ['the automatic pass on a box that holds a different church', { boxHostsUs: false }, { auto: true }],
+    ['the automatic pass on a box serving the SHARED relay\'s key', { boxHostsUs: true, shared: [BOX.relayPub] }, { auto: true }],
+  ]) {
+    let published = 0;
+    const pool = poolTo(BOX, TYPED);
+    const con = consoleWith({ location, ...deps, pool, one: ownOnlyWithSeed, publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+    const res = await con.enrolRelayNet(opts);
+    assert.equal(res.unknown, true, why + ': one box\'s "nothing here" was taken as "this church has no list": ' + JSON.stringify(res));
+    assert.equal(published + pool.sent.length, 0, why + ': A LIST WAS STARTED FROM ONE BOX\'S EMPTY ANSWER — the real list, on a box that did not answer, is replaced');
+  }
+  assert.deepEqual(await storedRelayNet(BOX, flock), [], 'something reached the box');
+  assert.deepEqual(await storedRelayNet(TYPED, flock), [], 'something reached the typed relay');
+});
+
+test('a console that READS its church\'s list remembers it, so the own box\'s later empty answer starts nothing (third audit, finding 7)', async () => {
+  const { flock, BOX, location } = await selfHostedChurch('F7SEEN');
+  // The church's list already names its box exactly as this console would write it, so nothing is signed: the
+  // only thing that can remember the list is the read itself.
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }])]);
+  const store = new Map();
+  let published = 0;
+  const con = consoleWith({ location, store, boxHostsUs: true, one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
+  const res = await con.enrolRelayNet({ auto: true });
+  assert.equal(res.published, false, 'precondition: an unchanged list was re-signed');
+  assert.equal(published, 0);
+  assert.equal(store.get('trinityone.steward.relaynet-seen.' + flock.pub), '1',
+    'A CONSOLE THAT READ ITS CHURCH\'S LIST DID NOT REMEMBER IT — after a reinstall its own box\'s empty answer would restart the list');
+  // …and that memory is what refuses the same console later, when only its own box answers, empty.
+  let published2 = 0;
+  const later = consoleWith({ location, store, boxHostsUs: true, pool: poolTo(),
+    one: async () => ({ ev: null, complete: false, answered: 1, asked: 3, answeredUrls: [BOX.wsUrl] }),
+    publish: async () => { published2++; return true; }, sk: flock.sk, pub: flock.pub });
+  assert.equal((await later.enrolRelayNet({ auto: true })).unknown, true, 'a console that had read the list started a new one');
+  assert.equal(published2, 0);
 });
 
 // ── the one-time seed read, at the point of use (second audit, findings 4 and 5) ────────────────────────
@@ -758,10 +815,10 @@ test('a refused login on a SHARED relay does not block the seed: the church\'s o
   // A socket keeps its last login challenge; if the shared relay refused our login, its answers never count.
   // The own-box rule means that cannot keep a self-hosting church from signing its box.
   const { flock, BOX, location } = await selfHostedChurch('SEEDS');
-  const con = consoleWith({ location, pool: poolTo(BOX),
+  const con = consoleWith({ location, pool: poolTo(BOX), boxHostsUs: true,
     one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, answeredUrls: [BOX.wsUrl] })),
     publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
-  assert.equal((await con.enrolRelayNet()).published, true, 'a refused login on another relay kept the church\'s own box unsigned');
+  assert.equal((await con.enrolRelayNet({ auto: true })).published, true, 'a refused login on another relay kept the church\'s own box unsigned');
 });
 
 // ── Remove un-signs (owner decision B, 2026-10-21) ──────────────────────────────────────────────────────
@@ -804,6 +861,86 @@ test('removing writes nothing when the list could not be read in full, or from a
     // The guard at the top, not only the re-check before signing: the wrong identity must not even read the list.
     if (deps.mustNotRead) assert.equal(reads, 0, why + ': the church\'s relay list was read under the wrong identity');
   }
+});
+
+test('removing changes nothing unless EVERY relay asked answered — a stale copy is never re-signed (third audit, finding 6)', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('F6UN');
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: TYPED.relayPub, alwaysOn: true, url: TYPED.wsUrl }])]);
+  const before = await storedRelayNet(BOX, flock);
+  let published = 0;
+  // The list came back — but from one of two relays. The other may hold a newer list.
+  const half = async (f) => ({ ...(await oneFrom(BOX, flock)(f)), answered: 1, asked: 2 });
+  const con = consoleWith({ location, one: half, publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.unenrolRelayNet(TYPED.wsUrl);
+  assert.equal(res.removed, false, 'a relay was removed from a list only one of two relays answered with');
+  assert.equal(res.unknown, true, 'the card was not told the answer is unknown, so it cannot warn');
+  assert.equal(published, 0, 'A POSSIBLY STALE LIST WAS EDITED AND RE-SIGNED — it now replaces whatever the silent relay held');
+  assert.equal((await storedRelayNet(BOX, flock))[0].id, before[0].id);
+});
+
+test('removing never takes out the box this console runs on, under any address, nor a shared relay (third audit, finding 5)', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('F5');
+  const sharedPub = 'd'.repeat(64);
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [
+    { pubkey: BOX.relayPub, alwaysOn: true, url: '' },
+    { pubkey: TYPED.relayPub, alwaysOn: true, url: TYPED.wsUrl },
+    { pubkey: sharedPub, alwaysOn: true, url: 'wss://shared-seed.example/relay' },
+  ])]);
+  // The own box a second time, under another address: same box, same key, an address nothing in the list records.
+  const alias = BOX.wsUrl.replace('127.0.0.1', 'localhost');
+  assert.notEqual(alias, BOX.wsUrl, 're-anchor: the box\'s address has no 127.0.0.1 to alias');
+  // A console whose own box is OFFLINE, and whose list recorded that box's address: matched by the address alone.
+  const deadOwn = 'ws://127.0.0.1:1/relay';
+  await new Promise(r => setTimeout(r, 1100));
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [
+    { pubkey: BOX.relayPub, alwaysOn: true, url: '' },
+    { pubkey: TYPED.relayPub, alwaysOn: true, url: TYPED.wsUrl },
+    { pubkey: sharedPub, alwaysOn: true, url: 'wss://shared-seed.example/relay' },
+    { pubkey: 'c'.repeat(64), alwaysOn: true, url: deadOwn },
+  ])]);
+  for (const [why, url, flag, at] of [
+    ['the own box under another address (matched by the key it proves)', alias, 'ownBox', location],
+    ['the own box\'s own address', BOX.wsUrl, 'ownBox', location],
+    ['the own box\'s own address while that box is offline (matched by address)', deadOwn, 'ownBox', { protocol: 'http:', host: '127.0.0.1:1' }],
+    ['a shared relay the old sync list seeded in', 'wss://shared-seed.example/relay', 'shared', location],
+  ]) {
+    let published = 0;
+    const con = consoleWith({ location: at, shared: [sharedPub], one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+    const res = await con.unenrolRelayNet(url);
+    assert.equal(res[flag], true, why + ': not refused as ' + flag + ': ' + JSON.stringify(res));
+    assert.equal(published, 0, why + ': THE LIST WAS RE-SIGNED WITHOUT IT');
+  }
+  // …and an ordinary typed relay is still removed by the same console, so the refusal is not a blanket one.
+  await new Promise(r => setTimeout(r, 1100));
+  const con = consoleWith({ location, shared: [sharedPub], one: oneFrom(BOX, flock), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
+  assert.equal((await con.unenrolRelayNet(TYPED.wsUrl)).removed, true, 'the refusal blocked an ordinary relay too');
+});
+
+test('a typed SHARED relay is reported as shared, so the card can say it needs no signing (third audit, finding 8)', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('F8SH');
+  const con = consoleWith({ location, shared: [TYPED.relayPub], one: oneFrom(BOX, flock), publish: publishTo(BOX), pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
+  const res = await con.enrolRelayNet({ extra: [TYPED.wsUrl] });
+  const p = (res.proven || []).find(x => x.url === TYPED.wsUrl);
+  assert.ok(p, 'precondition: the typed relay proved its key: ' + JSON.stringify(res));
+  assert.equal(p.shared, true, 'A SHARED RELAY WAS NOT MARKED SHARED — the steward is told "try again" over a relay that can never be signed');
+  assert.ok(!(res.entries || []).some(e => e.pubkey === TYPED.relayPub), 'the shared relay was signed into the church\'s list');
+  assert.ok(!(res.proven || []).find(x => x.url === BOX.wsUrl).shared, 'the church\'s own box was marked shared');
+});
+
+test('a console that switches to a network view mid-removal signs nothing (third audit, finding 7)', async () => {
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('F7UN');
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: TYPED.relayPub, alwaysOn: true, url: TYPED.wsUrl }])]);
+  let calls = 0, published = 0;
+  const con = consoleWith({
+    location,
+    viewingNetwork: () => (calls++ > 0),            // our own church at the guard, a network view by the time we sign
+    one: oneFrom(BOX, flock), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub,
+  });
+  const res = await con.unenrolRelayNet(TYPED.wsUrl);
+  assert.ok(calls >= 2, 're-anchor: the identity was only checked once');
+  assert.equal(res.removed, false);
+  assert.equal(res.unknown, true, 'the card was not told the removal did not happen');
+  assert.equal(published, 0, 'THE CONSOLE RE-SIGNED THE LIST AFTER IT HAD SWITCHED AWAY — church A\'s list under another key');
 });
 
 test('a console that switches to a network view mid-enrolment signs nothing (audit finding 6)', async () => {
