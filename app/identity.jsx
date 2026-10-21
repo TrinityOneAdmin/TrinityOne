@@ -1592,9 +1592,9 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, letterSpacing: '-.5px' }}>
             {named ? identity.name : 'Anonymous'}</h1>
           {named && identity.nip05 ? <div style={{ marginTop: 5, display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--sage)', fontWeight: 700, fontSize: 14 }} title={identity.nip05}>@{String(identity.nip05).split('@')[0]} <Icon name="check" size={14} stroke={3} color="var(--sage)" /></div> : null}
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, background: 'var(--clay-soft)', color: 'var(--clay-ink)',
-            padding: '5px 13px', borderRadius: 999, fontSize: 12.5, fontWeight: 700 }}>
-            <Icon name="shield" size={13} /> {named ? 'TrinityOne member' : 'Anonymous member'}</div>
+          {/* The 'TrinityOne member' / 'Anonymous member' shield pill was removed from this settings hero
+              at the owner's request (2026-10-21) — it added nothing the rest of the screen did not already
+              say. The anonymous state is still surfaced by the 'Add your name' card below. */}
           {/* ADA CHOSE THIS BY ACCIDENT AND FOUND IT ONLY BY HUNTING. "Continue without a name" stays exactly
               as it is — anonymity is a real option and some people need it — but the state it leaves you in was
               a single word on this screen with nothing to press. This says what the church sees and fixes it in
