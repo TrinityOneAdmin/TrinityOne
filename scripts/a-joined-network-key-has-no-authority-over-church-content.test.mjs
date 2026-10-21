@@ -181,6 +181,58 @@ test('READ the sealed-names key envelope (namekey:): the network key is REFUSED;
   assert.equal(await served(church, e.id), true, 're-anchor: the church cannot read its envelope');
 });
 
+// ── POSTING INTO A CHURCH'S RESTRICTED GROUPS, AND EVENT / PIN / HIDE (N1 audit follow-up, 2026-10-21) ────────
+// The doc matrix and the open-group test above do not reach three kind-1 gates that each carried their own
+// `networkOf` clause (broadcast / invite-only / team posting), nor the owner tier for event / pin / hide. A broadcast
+// reaches the WHOLE congregation under the author's name, so that one is the sensitive door. For each: the
+// network key is REFUSED; the church and a content steward are ACCEPTED (and a member where the gate allows one).
+const groupDef = (gid, body) => doc(church, P + 'group:' + gid, body, CH);
+const chatTo = (k, gid, text = 'hello') => kindEvt(k, 1, [['t', gid], ['church', church.pub]], text);
+async function postingMatrix(gid, memberMayPost) {
+  const net = chatTo(networkKey, gid, 'net posts');
+  assert.equal(await writes(networkKey, net), false, `the network key POSTED into the church's ${gid} group`);
+  assert.equal(await writes(church, chatTo(church, gid, 'church posts')), true, `re-anchor: the church cannot post into its own ${gid} group`);
+  assert.equal(await writes(steward, chatTo(steward, gid, 'steward posts')), true, `re-anchor: a content steward cannot post into the ${gid} group`);
+  assert.equal(await writes(member, chatTo(member, gid, 'member posts')), memberMayPost, `re-anchor: member posting into ${gid} should be ${memberMayPost}`);
+}
+
+test('WRITE a BROADCAST group (the congregation-wide voice): the network key is REFUSED; church and content steward accepted; a member is not', async () => {
+  assert.equal(await writes(church, groupDef('bc1', { name: 'Announcements', kind: 'broadcast' })), true, 'church could not define the broadcast group');
+  await sleep(300);
+  await postingMatrix('bc1', false);
+});
+
+test('WRITE an INVITE-ONLY group: the network key is REFUSED; church, content steward and a listed member accepted', async () => {
+  assert.equal(await writes(church, groupDef('inv1', { name: 'Leaders', visibility: 'invite', members: [member.pub] })), true, 'church could not define the invite-only group');
+  await sleep(300);
+  await postingMatrix('inv1', true);
+});
+
+test('WRITE a TEAM group: the network key is REFUSED; church, content steward and a rostered member accepted', async () => {
+  assert.equal(await writes(church, groupDef('tm1', { name: 'Welcome team', kind: 'team' })), true, 'church could not define the team group');
+  // a team's allowlist is the ROSTER, not the group doc: the member is listed; the network key is not, so only the
+  // gate's own network clause could have let it in.
+  assert.equal(await writes(church, doc(church, P + 'roster:tm1', { pubs: [member.pub] }, CH)), true, 'church could not write the team roster');
+  await sleep(400);
+  await postingMatrix('tm1', true);
+});
+
+test('WRITE an EVENT, a PIN and a HIDE into a church group (owner tier): the network key is REFUSED; church and content steward accepted', async () => {
+  assert.equal(await writes(church, groupDef('ow1', { name: 'Open room', kind: 'group' })), true, 'church could not define the group');
+  await sleep(300);
+  const kinds = [
+    ['event', P + 'event:evn1', { title: 'Social' }],
+    ['pin', P + 'pin:ow1', { id: 'm1' }],
+    ['hide', P + 'hidden:msgx1', { id: 'msgx1' }],
+  ];
+  for (const [label, d, body] of kinds) {
+    const tags = [['t', 'ow1'], ['church', church.pub]];
+    assert.equal(await writes(networkKey, doc(networkKey, d, body, tags)), false, `the network key wrote a ${label} into the church's group`);
+    assert.equal(await writes(church, doc(church, d, body, tags)), true, `re-anchor: the church cannot write a ${label} into its own group`);
+    assert.equal(await writes(steward, doc(steward, d, body, tags)), true, `re-anchor: a content steward cannot write a ${label} into the group`);
+  }
+});
+
 // LAST ON PURPOSE: it makes the network key a MEMBER of the church, which would change every read above it.
 test('the narrowing did not close the human-admission doors: a declared network key can still join (member:) and request stewardship (stewardreq:) like any other key', async () => {
   // c5406d72 is NOT ported (it patches the N5a _pureNet guard, which this branch does not have). This is the proof that nothing
