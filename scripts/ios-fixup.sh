@@ -116,4 +116,18 @@ SWIFT
   echo "  AppDelegate.swift: SceneDelegate appended"
 fi
 
+# ── 4. App icon + splash: replace the default Capacitor icon ─────────────────
+# `cap add ios` ships the stock Capacitor icon (a blue chevron on white). Generate the
+# real MEMBER icon + splash from assets/ (icon-foreground over icon-background, + splash,
+# the @capacitor/assets layout) so the phone shows the TrinityOne mark. @capacitor/assets
+# and its sharp engine are pure-JS devDependencies; skip quietly if they are not installed
+# so an icon step never breaks the build. (The STEWARD console overwrites this afterwards
+# with scripts/ios-steward-appicon.mjs — see that file.)
+if [ -x "$ROOT/node_modules/.bin/capacitor-assets" ]; then
+  "$ROOT/node_modules/.bin/capacitor-assets" generate --ios >/dev/null \
+    && echo "  AppIcon + splash: generated from assets/ (member)"
+else
+  echo "  AppIcon: @capacitor/assets not installed — keeping the default icon (run 'npm i' to brand it)"
+fi
+
 echo "ios-fixup: done. Next: 'cd ios/App && pod install' (CI's pod install step does this)."
