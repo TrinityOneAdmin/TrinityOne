@@ -287,6 +287,8 @@ test('a signing that did not put the relay in the list is never reported as done
     ['skipped (not this church\'s own console)', { skipped: 'x', proven: [], entries: [] }, /Only your church’s own console/],
     ['unknown (a relay is not answering)', { unknown: true, proven: [], entries: [] }, /could not be read in full/],
     ['proven but not in the signed list', { proven: [{ url: 'wss://second.grace.example/relay', pubkey: 'b'.repeat(64) }], entries: [] }, /Couldn’t put it in your church’s relay list/],
+    // Sixth audit, finding 5: the list found names it, but on a partial read — the wizard must not say "✓ Added".
+    ['in a list found on a partial read', { full: false, proven: [{ url: 'wss://second.grace.example/relay', pubkey: 'b'.repeat(64) }], entries: [{ pubkey: 'b'.repeat(64) }] }, /can’t be confirmed in the list yet/],
   ]) {
     const r = recorder({ signRelay: async () => result });
     const card = addCard(r.steward);
@@ -537,7 +539,9 @@ test('the outcome lines say only what is true (third audit, findings 2 and 8)', 
     ['the console switched church mid-signing', { unknown: true, changed: true, proven: [], entries: [] }, /switched church/, /Only your church’s own console|could not be read in full/],
     ['a shared relay', { proven: [{ url: T, pubkey: 'b'.repeat(64), shared: true }], entries: [] }, /shared relays/, /Try again/],
     // Fifth audit, finding 3: the list found names the relay, but not every relay answered, so it may be a stale copy.
-    ['a list found on a partial read', { full: false, proven: [{ url: T, pubkey: 'c'.repeat(64) }], entries: [{ pubkey: 'c'.repeat(64) }] }, /can’t be confirmed in the list yet/, /✓ Added/],
+    // Its "never" is what THIS card would wrongly say. "✓ Added" is checked where it can appear — the setup wizard
+    // and Auto-find (sixth audit, finding 5: this card never shows "✓ Added", so checking for it here could not fail).
+    ['a list found on a partial read', { full: false, proven: [{ url: T, pubkey: 'c'.repeat(64) }], entries: [{ pubkey: 'c'.repeat(64) }] }, /can’t be confirmed in the list yet/, /Try again\.|could not prove/],
   ]) {
     const r = recorder({ signRelay: async () => result });
     const card = addCard(r.steward);
@@ -585,6 +589,8 @@ async function removeSecond(view) {
   await settle();
   await find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0].props.onClick();
   await settle(); await settle();
+  // One draw for the card to see the row has left its list (and end "Removing…"), one to show what it says then.
+  view(); await settle();
   return said(view());
 }
 
@@ -631,25 +637,78 @@ test('Remove ignores a second tap while removing, and says so in the neutral col
   const removed = [];
   const view = relaysCard({ unsignRelay: () => { calls++; return held; } }, removed);
   view(); await settle();
-  const tapRemove = async () => {
-    const trash = find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay');
-    assert.equal(trash.length, 1, 're-anchor: no Remove relay button on the second relay\'s row');
-    trash[0].props.onClick(); await settle();
-    find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0].props.onClick();   // not awaited: it is held
-    await settle();
-  };
+  find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay')[0].props.onClick(); await settle();
+  const confirm = find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0];
+  confirm.props.onClick(); await settle();   // not awaited: it is held
   const note = () => find(view(), n => n.type === 'div' && n.props.role === 'status')[0];
-  await tapRemove();
   assert.equal(calls, 1, 're-anchor: the first tap did not start a removal');
   assert.ok(note(), 'nothing on the card says a removal is under way');
   assert.match(texts(note()).join(''), /Removing wss:\/\/second\.grace\.example\/relay…/, 'the in-progress line is not shown');
   assert.equal(note().props.style.color, 'var(--ink-3)', '"Removing…" IS SHOWN IN THE WARNING COLOUR — it is progress, not a fault');
-  await tapRemove();
+  // Seventh audit, finding 4: the row being removed offers no Remove of its own while it is removed.
+  assert.equal(find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay').length, 0,
+    'THE ROW BEING REMOVED STILL OFFERS REMOVE — it can be tapped again mid-removal');
+  // A second tap reaching dropRelay anyway (the confirm button of a render drawn before the first tap took hold).
+  confirm.props.onClick(); await settle();
   assert.equal(calls, 1, 'A SECOND TAP WHILE REMOVING STARTED A SECOND REMOVAL — two signings of the church\'s list for one intent');
   release({ removed: false, unknown: true });
-  await settle(); await settle();
+  await settle(); await settle(); view(); await settle();
   assert.equal(note().props.style.color, 'var(--clay-ink)', 'the outcome of a failed removal is not shown as a warning');
   assert.doesNotMatch(texts(note()).join(''), /Removing/, 'the in-progress line stayed after the removal finished');
+});
+
+test('two relays removed at once are each guarded, and a row stays "Removing…" until it has really gone (seventh audit, findings 2 and 4)', async () => {
+  const { React, draw } = miniReact();
+  const A = 'wss://second.grace.example/relay', B = 'wss://third.grace.example/relay';
+  const relays = [{ url: 'wss://relay.grace.example/relay', status: 'on' }, { url: A, status: 'on' }, { url: B, status: 'on' }];
+  const calls = [], gate = {}, removedFromConsole = [];
+  const win = {
+    useStewardRelays: () => relays.slice(), useStewardChurch: () => ({ name: 'St Aidan’s' }),
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    Steward: { ownRelay: () => 'wss://relay.grace.example/relay', backupState: async () => ({ boxes: 3, online: 3, syncOn: true }),
+      // The REAL removeRelay drops the row only later (the panel re-reads its list): here it records the call and
+      // leaves the row exactly where it is until the test takes it out.
+      removeRelay: (u) => { removedFromConsole.push(u); return true; }, canRemoveRelay: () => true, relayName: () => '',
+      unsignRelay: (u) => { calls.push(u); return new Promise(r => { gate[u] = r; }); } },
+  };
+  const globals = {
+    React, window: win, localStorage: win.localStorage,
+    location: { host: 'relay.grace.example', hostname: 'relay.grace.example' }, navigator: { userAgent: '' },
+    document: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout, setInterval, clearInterval, console,
+    fetch: async () => ({ ok: false, json: async () => ({}) }),
+    CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
+    Icon: function Icon() { return null; }, SkPill: function SkPill() { return null; }, SkBadge: function SkBadge() { return null; },
+    useStewDialog: () => ({ current: null }),
+  };
+  const names = Object.keys(globals);
+  const mod = new Function(...names, JS + '\nreturn { DashRelaysCard };')(...names.map(k => globals[k]));
+  const view = () => draw(mod.DashRelaysCard, {});
+  const trashOf = (i) => find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay')[i];
+  view(); await settle();
+  // Remove A, keeping its confirm button; then Remove B while A is still in flight.
+  trashOf(0).props.onClick(); await settle();
+  const confirmA = find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0];
+  confirmA.props.onClick(); await settle();
+  trashOf(0).props.onClick(); await settle();      // A's bin is gone, so the only bin left is B's
+  find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0].props.onClick(); await settle();
+  assert.deepEqual(calls, [A, B], 're-anchor: the two removals did not both start');
+  // A second Remove of A (from the render drawn before), while B is the LAST one started.
+  confirmA.props.onClick(); await settle();
+  assert.deepEqual(calls, [A, B], 'A RELAY ALREADY BEING REMOVED WAS REMOVED AGAIN — the guard only remembered the last relay');
+  assert.match(said(view()), /Removing wss:\/\/second\.grace\.example\/relay, wss:\/\/third\.grace\.example\/relay…/, 'the in-progress line does not name both removals');
+  // A's removal finishes: taken off this console — but its row has not left the list yet.
+  gate[A]({ removed: true, entries: [] }); await settle(); await settle(); view(); await settle();
+  assert.deepEqual(removedFromConsole, [A], 're-anchor: A was not taken off this console');
+  assert.equal(find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay').length, 0,
+    'A ROW THAT IS LEAVING OFFERS REMOVE AGAIN before it has gone');
+  assert.match(said(view()), /Removing wss:\/\/second\.grace\.example\/relay/, '"Removing…" ended before the row had gone');
+  // The row leaves the list: only now does A stop being "Removing…".
+  relays.splice(relays.findIndex(x => x.url === A), 1);
+  view(); await settle(); view(); await settle();
+  assert.doesNotMatch(said(view()), /Removing wss:\/\/second/, '"Removing…" stayed after the row had gone');
+  assert.match(said(view()), /Removing wss:\/\/third\.grace\.example\/relay…/, 'B, still in flight, stopped saying so');
+  gate[B]({ removed: false, unknown: true }); await settle(); await settle(); view(); await settle();
+  assert.equal(find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay').length, 1, 'B, kept, has no Remove to try again');
 });
 
 test('Auto-find reports each relay\'s own result, never "✓ Added" over one that was not signed (third audit, finding 4)', async () => {
@@ -667,6 +726,21 @@ test('Auto-find reports each relay\'s own result, never "✓ Added" over one tha
   assert.doesNotMatch(all, /Added 2 relays/, 'AUTO-FIND SAID BOTH WERE ADDED — one is not in the church\'s list');
   assert.match(all, /open-b: It could not prove it runs TrinityOne yet/, 'the steward was not told which relay was not signed, or why');
   assert.match(all, /To try again, enter wss:\/\/open-b\.example\/relay under Add a relay/, 'the steward was not told how to retry (Auto-find will not offer it again)');
+
+  // Sixth audit, finding 5: a relay found on a PARTIAL read (fifth audit, finding 3) is not counted as added either.
+  const r2 = recorder({ signRelay: async (u) => (/open-b/.test(u)
+    ? { full: false, proven: [{ url: u, pubkey: 'b'.repeat(64) }], entries: [{ pubkey: 'b'.repeat(64) }], published: false }
+    : { proven: [{ url: u, pubkey: 'a'.repeat(64) }], entries: [{ pubkey: 'a'.repeat(64) }], published: true }) });
+  const card2 = addCard(r2.steward);
+  card2.draw(); await settle();
+  button(card2.draw(), 'Auto-find relays for me')[0].props.onClick();
+  await settle(); await settle();
+  await consentYes(card2.draw())[0].props.onClick();
+  await settle(); await settle(); await settle();
+  const all2 = said(card2.draw());
+  assert.match(all2, /✓ Added 1 relay for backup: open-a/, 're-anchor: the relay that WAS signed is not reported as added');
+  assert.doesNotMatch(all2, /✓ Added 2 relays/, 'AUTO-FIND SAID "✓ Added" OVER A RELAY ONLY A POSSIBLY STALE COPY OF THE LIST NAMES');
+  assert.match(all2, /open-b: Added to this console, but .*can’t be confirmed in the list yet/, 'the steward was not told the partial-read relay is unconfirmed');
 });
 
 test('Steward.connectFoundRelays adds every relay it is handed and republishes once — out of the shipped bundle (third audit, finding 4)', async () => {

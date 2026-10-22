@@ -5161,24 +5161,44 @@ function DashRelaysCard() {
   // REMOVE ALSO UN-SIGNS (owner decision B, 2026-10-21). Connecting a relay signs it into the church's relay list;
   // removing it must take it out again, or a steward's consent could never be withdrawn. Says so when it could not.
   const [dropNote, setDropNote] = React.useState('');
-  // THE REMOVAL IN FLIGHT (fifth audit, finding 7): the url being removed, or ''. It is the one source of the
-  // "Removing…" line, shown in the neutral colour (it is progress, not a warning). The ref is the guard: a second tap
-  // on the same relay while it is being removed does nothing (state alone would be stale inside the same frame).
-  const [dropping, setDropping] = React.useState('');
-  const droppingRef = React.useRef('');
+  // THE REMOVALS IN FLIGHT (fifth audit, finding 7; seventh audit, findings 2 and 4): EVERY url being removed, not
+  // only the last one. It is the one source of the "Removing…" line, shown in the neutral colour (it is progress,
+  // not a warning), and a row in it has no Remove button. The ref is the guard: a second Remove of a relay already
+  // being removed does nothing, even from a stale render. A url stays in it until its row has actually LEFT the
+  // list (the real removeRelay takes a moment to drop the row), so the row cannot be tapped again meanwhile.
+  const [dropping, setDropping] = React.useState([]);
+  // Lazily filled, React's idiom for an object initial value (and no new Set built on every draw).
+  const droppingRef = React.useRef(null);   // every url being removed
+  const leavingRef = React.useRef(null);    // …of which these were taken off the console, row not yet gone
+  if (!droppingRef.current) droppingRef.current = new Set();
+  if (!leavingRef.current) leavingRef.current = new Set();
+  const syncDropping = () => setDropping(Array.from(droppingRef.current));
+  const release = (u) => { leavingRef.current.delete(u); if (droppingRef.current.delete(u)) syncDropping(); };
+  const listedNow = status.map(r => (r && r.url) || '');
+  React.useEffect(() => {
+    for (const u of Array.from(leavingRef.current)) if (!listedNow.includes(u)) release(u);
+  }, [listedNow.join(' '), dropping.join(' ')]);
   // OUT OF THE CHURCH'S LIST FIRST, THEN OFF THIS SCREEN (fourth audit 2026-10-21, finding 2). Removing the row
   // first left a steward told "remove it again" with no row left to remove — and adding it back to retry signs it
   // straight back in. So the row stays, with the reason, until the church's list no longer names the relay.
   const dropRelay = async (url) => {
     setConfirmDrop(null);
-    if (droppingRef.current === url) return;
-    droppingRef.current = url; setDropping(url); setDropNote('');
+    if (droppingRef.current.has(url)) return;
+    droppingRef.current.add(url); syncDropping(); setDropNote('');
+    let leaving = false;
     try {
       let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = { error: String((e && e.message) || e || '') }; }
       const out = dropOutcome(r, url);
-      if (out.drop) { try { window.Steward.removeRelay(url); } catch (e) {} }
+      if (out.drop) { try { window.Steward.removeRelay(url); leaving = true; } catch (e) {} }
       setDropNote(out.note);
-    } finally { droppingRef.current = ''; setDropping(''); }
+    } finally {
+      if (leaving) {
+        // Held until the row leaves the list (the effect above). If it never does, let go after 10s, so a row that
+        // stays for some other reason is not stuck in "Removing…" for ever.
+        leavingRef.current.add(url);
+        setTimeout(() => release(url), 10000);
+      } else release(url);
+    }
   };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
@@ -5269,7 +5289,8 @@ function DashRelaysCard() {
                   {refused ? <SkPill tint="clay">Refused our last change</SkPill> : null}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Answering' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
-                  {!self && r.url !== own && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
+                  {dropping.includes(r.url) ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Removing…</span> : null}
+                  {!self && r.url !== own && !dropping.includes(r.url) && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
                 {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
                     the name goes too, and that — not the address on screen — is what would bring it back. */}
@@ -5290,7 +5311,7 @@ function DashRelaysCard() {
               </div>
             );
           })}
-          {(dropping || dropNote) ? <div role="status" style={{ fontSize: 12, color: dropping ? 'var(--ink-3)' : 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropping ? 'Removing ' + dropping + '…' : dropNote}</div> : null}
+          {(dropping.length || dropNote) ? <div role="status" style={{ fontSize: 12, color: dropping.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropping.length ? 'Removing ' + dropping.join(', ') + '…' : dropNote}</div> : null}
         </div>
         {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
             `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct

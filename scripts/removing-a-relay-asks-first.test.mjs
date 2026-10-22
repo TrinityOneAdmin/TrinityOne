@@ -101,8 +101,8 @@ const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8')
   .replace("Your church's messages, groups and members live on the relays above", 'Your church\u2019s messages, groups and members live on the relays above');
 
 function mini() {
-  const states = []; const memos = []; const effDeps = []; let queued = [];
-  let i = 0, mi = 0, ei = 0;
+  const states = []; const memos = []; const effDeps = []; const refs = []; let queued = [];
+  let i = 0, mi = 0, ei = 0, ri = 0;
   const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, n) => Object.is(v, b[n]));
   const React = {
     useState(init) { const k = i++; if (!(k in states)) states[k] = typeof init === 'function' ? init() : init;
@@ -110,12 +110,14 @@ function mini() {
     useMemo(f, deps) { const k = mi++; if (!memos[k] || !same(memos[k].deps, deps)) memos[k] = { deps, v: f() }; return memos[k].v; },
     useCallback(f, deps) { return React.useMemo(() => f, deps); },
     useEffect(fn, deps) { const k = ei++; if (!(k in effDeps) || !same(effDeps[k], deps)) { effDeps[k] = deps; queued.push(fn); } },
-    useRef: () => ({ current: null }),
+    // A ref as React keeps one: its initial value, and the SAME object on every draw. (It used to be a fresh
+    // { current: null } each call, which no real component can rely on — DashRelaysCard's removal guard does.)
+    useRef(init) { const k = ri++; if (!(k in refs)) refs[k] = { current: init === undefined ? null : init }; return refs[k]; },
     createElement: (type, props, ...kids) => ({ type, props: props || {}, kids }),
     Fragment: 'Fragment',
   };
   const flush = () => { const r = queued; queued = []; r.forEach(f => { try { f(); } catch (e) {} }); };
-  return { React, reset: () => { i = 0; mi = 0; ei = 0; }, flush };
+  return { React, reset: () => { i = 0; mi = 0; ei = 0; ri = 0; }, flush };
 }
 const texts = (n, out = []) => {
   if (n == null || n === false) return out;
@@ -146,7 +148,8 @@ const NAMES = { [ROW_A]: 'falgate-box', [ROW_B]: 'grace-city' };
 async function relayPanel({ names = NAMES } = {}) {
   const removed = [];
   const { React, reset, flush } = mini();
-  const src = fnBody(DASH, 'function DashRelaysCard()', 'DashRelaysCard');
+  // dropOutcome too: since owner decision B the card asks it what a Remove answered (whether the row may go).
+  const src = fnBody(DASH, 'function DashRelaysCard()', 'DashRelaysCard') + '\n' + fnBody(DASH, 'function dropOutcome(r, url) {', 'dropOutcome');
   const tmp = join(tmpdir(), 'relay19-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -158,6 +161,10 @@ async function relayPanel({ names = NAMES } = {}) {
     relaysDetailed: () => [{ url: ROW_A, status: 'on', ms: 20, member: true }, { url: ROW_B, status: 'on', ms: 30, member: true }],
     relays: () => [ROW_A, ROW_B], relaysRaw: () => [ROW_A, ROW_B],
     removeRelay: (u) => { removed.push(u); return true; },
+    // Since owner decision B (2026-10-21) Remove first takes the relay out of the church's signed list, and the row
+    // leaves this console only once that worked. This fake predates that step; it answers "removed" so this file
+    // still measures what it is about — the confirmation — and the row really is removed after it.
+    unsignRelay: async () => ({ removed: true, entries: [] }),
     relayNameFor: (u) => names[u] || '',
     ownRelayUrl: () => '', selfHostedUrl: () => '', addRelay: () => {}, publishRelayList: async () => {},
   };
@@ -219,7 +226,7 @@ test('…and the confirmation NAMES THE BINDING OF THE ROW SHE TAPPED, not just 
 test('…and confirming removes THAT row, not another one', async () => {
   const p = await relayPanel();
   trash(p.draw(), 1).props.onClick();
-  find(p.draw(), n => n.type === 'button' && /Remove this relay/i.test((n.props && n.props.title) || ''))[0].props.onClick();
+  await find(p.draw(), n => n.type === 'button' && /Remove this relay/i.test((n.props && n.props.title) || ''))[0].props.onClick();
   assert.deepEqual(p.removed, [ROW_B],
     'the confirmation asked about one relay and removed another: ' + JSON.stringify(p.removed));
 });
@@ -254,7 +261,7 @@ test('confirming removes it; "Keep it" does not', async () => {
   trash(q.draw()).props.onClick();
   const go = find(q.draw(), n => n.type === 'button' && /Remove this relay/i.test((n.props && n.props.title) || ''))[0];
   assert.ok(go, 're-anchor: the confirmation has no confirm button');
-  go.props.onClick();
+  await go.props.onClick();
   assert.deepEqual(q.removed, [ROW_A],
     'confirming did not actually remove the relay — the control is now decorative');
 });

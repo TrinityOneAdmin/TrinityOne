@@ -18829,8 +18829,16 @@ zoo`.split("\n");
         return String(u || "");
       }
     };
+    let skip = leaving ? k(leaving) : "";
+    if (skip) {
+      try {
+        if (isSharedAddress(leaving)) skip = "";
+      } catch (e) {
+        skip = "";
+      }
+    }
     const said = new Set((r && r.answeredUrls || []).map(k));
-    const need = (r && r.askedUrls || []).map(k).filter((u) => !leaving || u !== k(leaving));
+    const need = (r && r.askedUrls || []).map(k).filter((u) => !skip || u !== skip);
     return need.length > 0 && need.every((u) => said.has(u));
   }
   function relayNetDoc() {
@@ -27022,7 +27030,11 @@ zoo`.split("\n");
     //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
     canRemoveRelay(url) {
       if (!url) return false;
-      if (CANONICAL_RELAYS.includes(url)) return false;
+      const ak = (u) => {
+        let v = String(u || "").trim().toLowerCase().replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://").replace(/\/+$/, "");
+        return v.replace(/^(wss:\/\/[^/]+):443(?=\/|$)/, "$1").replace(/^(ws:\/\/[^/]+):80(?=\/|$)/, "$1");
+      };
+      if (CANONICAL_RELAYS.some((c) => ak(c) === ak(url))) return false;
       try {
         if (url === ownRelay()) return false;
       } catch (e) {

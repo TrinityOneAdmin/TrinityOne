@@ -164,7 +164,9 @@ const shippedCanRemove = () => {
 
 test('a relay that cannot be removed is not offered a bin', () => {
   const can = shippedCanRemove();
-  for (const url of ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay']) {
+  // …however it is spelled (sixth audit, finding 2): case, a default port and a trailing slash are the same relay.
+  for (const url of ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay',
+    'wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'wss://app.trinityone.church/relay/']) {
     assert.equal(can(url), false,
       url + ' is offered for removal. removeRelay only filters extraRelays(), and the canonical addresses ' +
       'are appended unconditionally — so the click removes nothing, returns true, and still forgets any ' +
@@ -214,6 +216,7 @@ const renderRelayCard = (rows) => {
 test('the console does not PUT a bin on a relay it cannot remove', () => {
   const bins = renderRelayCard([
     { url: CANON, status: 'on' },
+    { url: 'wss://App.TrinityOne.church:443/relay/', status: 'on' },   // the same shared relay, spelled differently
     { url: OWN, status: 'on' },
     { url: 'wss://friend.ts.net/relay', status: 'on' },
   ]);

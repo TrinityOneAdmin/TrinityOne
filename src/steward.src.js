@@ -24,7 +24,7 @@ import { verifyRelayIdentity } from './relay-identity.src.js';
 // …and then decide whether the key it proved is one this church's network contains, and write the document
 // that says so. Shared with the member app so both surfaces answer that question the same way.
 // …and C4's gate, which is what keeps this church's documents off a relay that cannot prove itself.
-import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, sharedRelayKeys, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
+import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, sharedRelayKeys, isSharedAddress, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -4971,10 +4971,20 @@ function _oneComplete(filters, ms = 6000, privateDoc = false) {
 // finding 1). Fails closed: a read that does not say which relays it asked is never full.
 // Used by enrolRelayNet (first list, seed read, re-sign refusal, the `full` it reports) and unenrolRelayNet (the
 // only caller that passes `leaving`).
+//
+// WHAT THE EXCEPTION COSTS (corrected after the sixth audit, finding 3). A Remove that does not wait for the relay
+// being removed can lose a list change that reached ONLY that relay. That happens when the writing console's other
+// relays were offline OR refused the write, or when two consoles ask different sets of relays (one console's write
+// lands only where it asked). It is a narrow loss of one change, never a list rebuilt from nothing.
+// NEVER A SHARED RELAY (sixth audit, finding 2). The shared relays are where every console finds the list, so a
+// Remove never skips waiting for one, however its address is spelled (case, :443, a trailing slash) — even when it
+// is the relay being removed.
 function _readCovers(r, leaving) {
   const k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
+  let skip = leaving ? k(leaving) : '';
+  if (skip) { try { if (isSharedAddress(leaving)) skip = ''; } catch (e) { skip = ''; } }
   const said = new Set(((r && r.answeredUrls) || []).map(k));
-  const need = ((r && r.askedUrls) || []).map(k).filter(u => !leaving || u !== k(leaving));
+  const need = ((r && r.askedUrls) || []).map(k).filter(u => !skip || u !== skip);
   return need.length > 0 && need.every(u => said.has(u));
 }
 // This church's own signed membership document, newest wins.
@@ -13362,7 +13372,12 @@ window.Steward = {
   //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
   canRemoveRelay(url) {
     if (!url) return false;
-    if (CANONICAL_RELAYS.includes(url)) return false;
+    // A SHARED RELAY HAS NO REMOVE, HOWEVER IT IS SPELLED (sixth audit, finding 2). Compared the way relayAddrKey
+    // keys an address: case, a default port (:443 / :80) and trailing slashes do not make a second relay. A Remove
+    // here would also let _readCovers skip waiting for the relay every console reads the church's list from.
+    const ak = (u) => { let v = String(u || '').trim().toLowerCase().replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/+$/, '');
+      return v.replace(/^(wss:\/\/[^/]+):443(?=\/|$)/, '$1').replace(/^(ws:\/\/[^/]+):80(?=\/|$)/, '$1'); };
+    if (CANONICAL_RELAYS.some(c => ak(c) === ak(url))) return false;
     try { if (url === ownRelay()) return false; } catch (e) {}
     return true;
   },

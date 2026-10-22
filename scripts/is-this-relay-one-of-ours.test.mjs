@@ -1139,6 +1139,26 @@ test('re-Connect on a read with a silent relay signs nothing and says the read w
   assert.equal((await con2.enrolRelayNet({ extra: [TYPED.wsUrl] })).full, true, 'a read every relay answered was reported as partial');
 });
 
+test('removing a SHARED relay\'s address never skips waiting for it, however it is spelled (round 7, sixth audit finding 2)', async () => {
+  // The shared relays are where every console finds the church's list. If a Remove could treat one as "the relay
+  // being removed", the console would sign its edit without hearing from the relay most likely to hold the newest
+  // list. `shared` makes test-shared.invalid a shared address; it does not resolve, so it never answers.
+  const { flock, BOX, location } = await selfHostedChurch('R7SH');
+  const SHARED = 'wss://test-shared.invalid/relay';
+  const ODD = 'wss://TEST-SHARED.invalid:443/relay/';   // the same address, spelled differently
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: 'e'.repeat(64), alwaysOn: true, url: ODD }])]);
+  const before = await storedRelayNet(BOX, flock);
+  await new Promise(r => setTimeout(r, 1100));
+  for (const leaving of [SHARED, ODD]) {
+    let published = 0;
+    const con = consoleWith({ location, shared: ['f'.repeat(64)], one: realRead([BOX.wsUrl, SHARED]), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+    const res = await con.unenrolRelayNet(leaving);
+    assert.equal(res.unknown, true, leaving + ': a Remove went ahead without an answer from a SHARED relay: ' + JSON.stringify(res));
+    assert.equal(published, 0, leaving + ': THE LIST WAS RE-SIGNED WITHOUT HEARING FROM THE SHARED RELAY');
+  }
+  assert.equal((await storedRelayNet(BOX, flock))[0].id, before[0].id);
+});
+
 // ── 10. teardown, asserted rather than trusted ──────────────────────────────────────────────────────────
 test('every relay and every temp directory this file created is gone', () => {
   H.stopAll();
