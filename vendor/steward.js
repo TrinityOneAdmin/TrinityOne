@@ -17759,6 +17759,12 @@ zoo`.split("\n");
       _gate.refresh(relaysRaw(), pub);
     } catch (e) {
     }
+    try {
+      const _p = adoptNetDocAddresses();
+      if (_p && _p.catch) _p.catch(() => {
+      });
+    } catch (e) {
+    }
     window.Steward.activePub = pub;
     window.Steward.hasKey = true;
   }
@@ -19092,6 +19098,90 @@ zoo`.split("\n");
     const worked = !!res && !res.unknown && proven.length > 0 && (res.published || (res.delivered || []).length > 0 || proven.every((x) => shared.includes(x.pubkey)));
     if (!worked) _autoEnrolled.delete(key);
     return res;
+  }
+  function _netDocDialUrl(raw) {
+    let s = String(raw || "").trim();
+    if (!s) return "";
+    s = s.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
+    if (!/^wss?:\/\//i.test(s)) return "";
+    s = s.replace(/\/+$/, "").replace(/\/relay$/i, "").replace(/\/+$/, "");
+    if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return "";
+    return s + "/relay";
+  }
+  function _alreadyACandidate(u) {
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const a = (x) => {
+      try {
+        return relayAddrKey(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const vn = n(u), va = a(u);
+    let list = [];
+    try {
+      list = relaysRaw();
+    } catch (e) {
+      list = [];
+    }
+    for (const r of list) {
+      if (!r) continue;
+      if (r === u) return true;
+      if (vn && n(r) === vn) return true;
+      if (va && a(r) === va) return true;
+    }
+    return false;
+  }
+  var NETDOC_ADOPT_MAX = 8;
+  async function adoptNetDocAddresses() {
+    if (!pub || pub !== churchPub) return [];
+    const pub0 = pub;
+    let entries = [];
+    try {
+      entries = await relayNetEntries(pub0);
+    } catch (e) {
+      return [];
+    }
+    if (pub !== pub0) return [];
+    const added = [];
+    for (const e of entries) {
+      let have = 0;
+      try {
+        have = extraRelays().length;
+      } catch (err2) {
+        have = NETDOC_ADOPT_MAX;
+      }
+      if (have >= NETDOC_ADOPT_MAX) break;
+      const u = _netDocDialUrl(e && e.url);
+      if (!u) continue;
+      if (isOwnRelaySpelling(u) || isSharedRelaySpelling(u)) continue;
+      if (_alreadyACandidate(u)) continue;
+      let proved = "";
+      try {
+        const pr = await verifyRelayIdentity(u);
+        proved = String(pr && pr.relayPub || "").toLowerCase();
+      } catch (err2) {
+        proved = "";
+      }
+      if (!proved || proved !== String(e && e.pubkey || "").toLowerCase()) continue;
+      if (!await admitRemoteRelay(u)) continue;
+      if (pub !== pub0) break;
+      if (_alreadyACandidate(u)) continue;
+      let ok = false;
+      try {
+        ok = !!window.Steward.addRelay(u);
+      } catch (err2) {
+        ok = false;
+      }
+      if (ok) added.push(u);
+    }
+    return added;
   }
   function isNetworkRelay2(cp, url) {
     return isNetworkRelay(cp, url, {
