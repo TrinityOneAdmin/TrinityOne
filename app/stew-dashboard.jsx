@@ -5170,8 +5170,10 @@ function DashRelaysCard() {
   // Lazily filled, React's idiom for an object initial value (and no new Set built on every draw).
   const droppingRef = React.useRef(null);   // every url being removed
   const leavingRef = React.useRef(null);    // …of which these were taken off the console, row not yet gone
+  const genRef = React.useRef(null);        // url -> which removal of it is current (eighth audit, finding 3)
   if (!droppingRef.current) droppingRef.current = new Set();
   if (!leavingRef.current) leavingRef.current = new Set();
+  if (!genRef.current) genRef.current = new Map();
   const syncDropping = () => setDropping(Array.from(droppingRef.current));
   const release = (u) => { leavingRef.current.delete(u); if (droppingRef.current.delete(u)) syncDropping(); };
   const listedNow = status.map(r => (r && r.url) || '');
@@ -5184,6 +5186,8 @@ function DashRelaysCard() {
   const dropRelay = async (url) => {
     setConfirmDrop(null);
     if (droppingRef.current.has(url)) return;
+    const gen = (genRef.current.get(url) || 0) + 1;
+    genRef.current.set(url, gen);
     droppingRef.current.add(url); syncDropping(); setDropNote('');
     let leaving = false;
     try {
@@ -5194,9 +5198,10 @@ function DashRelaysCard() {
     } finally {
       if (leaving) {
         // Held until the row leaves the list (the effect above). If it never does, let go after 10s, so a row that
-        // stays for some other reason is not stuck in "Removing…" for ever.
+        // stays for some other reason is not stuck in "Removing…" for ever. The timer frees only ITS OWN removal: if
+        // the relay was removed, added back and removed again meanwhile, a newer removal is current and is left alone.
         leavingRef.current.add(url);
-        setTimeout(() => release(url), 10000);
+        setTimeout(() => { if (genRef.current.get(url) === gen) release(url); }, 10000);
       } else release(url);
     }
   };

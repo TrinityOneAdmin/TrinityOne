@@ -1159,6 +1159,28 @@ test('removing a SHARED relay\'s address never skips waiting for it, however it 
   assert.equal((await storedRelayNet(BOX, flock))[0].id, before[0].id);
 });
 
+test('a dead relay at a CAPITALISED PATH of a shared address can be removed, and then the list is no longer frozen (round 8, eighth audit finding 1)', async () => {
+  // relayAddrKey keeps path case, so .../Relay is NOT the shared relay: it is a typo that never answers. While it is
+  // in the panel every change to the list waits for it; removing it must work, or the list is frozen for ever.
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('R8TYPO');
+  const TYPO = 'wss://test-shared.invalid/Relay';   // test-shared.invalid/relay is the shared address here
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: 'e'.repeat(64), alwaysOn: true, url: TYPO }])]);
+  await new Promise(r => setTimeout(r, 1100));
+  const deps = { location, shared: ['f'.repeat(64)], pool: poolTo(BOX, TYPED), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub };
+  // Re-anchor: with the typo in the panel, a Connect is held (the typo never answers).
+  const held = await consoleWith({ ...deps, one: realRead([BOX.wsUrl, TYPO]) }).enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.equal(held.unknown, true, 're-anchor: a relay that never answers did not hold the list: ' + JSON.stringify(held));
+  // Remove the typo: it is the relay being removed and is not shared, so it need not answer.
+  const res = await consoleWith({ ...deps, one: realRead([BOX.wsUrl, TYPO]) }).unenrolRelayNet(TYPO);
+  assert.equal(res.removed, true, 'A DEAD /Relay TYPO COULD NOT BE REMOVED — it was treated as the shared relay, and the list stays frozen: ' + JSON.stringify(res));
+  await new Promise(r => setTimeout(r, 1100));
+  // …and with it gone from the panel, the same Connect goes through.
+  const after = await consoleWith({ ...deps, one: realRead([BOX.wsUrl]) }).enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.equal(after.published, true, 'the list was still frozen after the typo was removed: ' + JSON.stringify(after));
+  const d = (await storedRelayNet(BOX, flock)).sort((a, b) => b.created_at - a.created_at);
+  assert.deepEqual(new Set(cores[0][1].parseRelayNet(d[0].content).map(e => e.pubkey)), new Set([BOX.relayPub, TYPED.relayPub]));
+});
+
 // ── 10. teardown, asserted rather than trusted ──────────────────────────────────────────────────────────
 test('every relay and every temp directory this file created is gone', () => {
   H.stopAll();

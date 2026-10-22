@@ -35,6 +35,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadScreen, miniReact, find } from './render-jsx-screen.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -157,20 +158,36 @@ const shippedCanRemove = () => {
     else if (c === '}') { d--; if (!d) { end = j + 1; break; } }
   }
   const CANONICAL_RELAYS = ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay'];
+  // Round 8: canRemoveRelay asks the SHIPPED isSharedAddress (the one test _readCovers also uses), so that is lifted
+  // too, with what it reads — out of the same bundle, never a second opinion written here.
+  const shared = [
+    stmt(STEWARD, 'var SHARED_RELAY_KEYS = ', 'SHARED_RELAY_KEYS'),
+    stmt(STEWARD, 'var SHARED_RELAY_HINTS = ', 'SHARED_RELAY_HINTS'),
+    stmt(STEWARD, 'var CANONICAL_RELAY_PUBS = ', 'CANONICAL_RELAY_PUBS'),
+    fnBody(STEWARD, 'function relayAddrKey', 'relayAddrKey'),
+    fnBody(STEWARD, 'function _relayKey', '_relayKey'),
+    fnBody(STEWARD, 'function isSharedAddress', 'isSharedAddress'),
+  ].join('\n');
   // eslint-disable-next-line no-new-func
-  return new Function('CANONICAL_RELAYS', 'ownRelay', 'return ({ ' + STEWARD.slice(i, end) + ' }).canRemoveRelay;')(
+  return new Function('CANONICAL_RELAYS', 'ownRelay', shared + '\nreturn ({ ' + STEWARD.slice(i, end) + ' }).canRemoveRelay;')(
     CANONICAL_RELAYS, () => 'wss://ourbox.ts.net/relay');
 };
 
 test('a relay that cannot be removed is not offered a bin', () => {
   const can = shippedCanRemove();
-  // …however it is spelled (sixth audit, finding 2): case, a default port and a trailing slash are the same relay.
-  for (const url of ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay',
-    'wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'wss://app.trinityone.church/relay/']) {
+  // The two shipped addresses: removeRelay only filters extraRelays() and these are appended unconditionally, so a
+  // bin would remove nothing, return true and still forget any name→url binding.
+  for (const url of ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay']) {
     assert.equal(can(url), false,
       url + ' is offered for removal. removeRelay only filters extraRelays(), and the canonical addresses ' +
       'are appended unconditionally — so the click removes nothing, returns true, and still forgets any ' +
       'name→url binding, while the row stays put and nothing explains why.');
+  }
+  // Other spellings relayAddrKey calls the SAME shared address (host case, a default port, a trailing slash). These
+  // ARE in extraRelays and removeRelay could take them out; the rule is the product's: no Remove on a shared relay,
+  // decided by the one test (isSharedAddress) that _readCovers also uses (sixth audit, finding 2).
+  for (const url of ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'wss://app.trinityone.church/relay/']) {
+    assert.equal(can(url), false, url + ' is the shared relay spelled differently, and is offered for removal');
   }
   assert.equal(can('wss://ourbox.ts.net/relay'), false,
     "the church's own relay is offered for removal");
@@ -179,6 +196,11 @@ test('a relay that cannot be removed is not offered a bin', () => {
 test('CONTROL: a relay the church added itself is still removable', () => {
   // The cheap way to pass the test above is to refuse everything, which would leave a church unable to stop
   // using a relay it chose — worse than the bug.
+  // Eighth audit, finding 1: a path that differs only in CASE is a different address (relayAddrKey keeps path case;
+  // the server answers 502). A dead typo like this must stay removable, or it freezes the church's list for ever.
+  assert.equal(shippedCanRemove()('wss://app.trinityone.church/Relay'), true,
+    'A MISTYPED SHARED-LOOKING ADDRESS (/Relay) GOT NO REMOVE — it is not the shared relay, never answers, and keeps ' +
+    'every change to the church\'s relay list waiting for ever');
   assert.equal(shippedCanRemove()('wss://a-friend-church.ts.net/relay'), true,
     'a relay the church added itself can no longer be removed — the control has been disabled rather than ' +
     'corrected, and a church cannot take its data off a box it no longer trusts.');
@@ -227,6 +249,9 @@ test('the console does not PUT a bin on a relay it cannot remove', () => {
 });
 
 test('CONTROL: the console still offers a bin on a relay the church added', () => {
+  // …and on a dead /Relay typo of a shared address (eighth audit, finding 1), on the rendered card.
+  assert.equal(renderRelayCard([{ url: CANON, status: 'on' }, { url: 'wss://app.trinityone.church/Relay', status: 'off' }]).length, 1,
+    'THE CARD OFFERS NO REMOVE ON A DEAD /Relay TYPO — the row, and the church\'s list with it, is stuck');
   const bins = renderRelayCard([{ url: 'wss://friend.ts.net/relay', status: 'on' }]);
   assert.equal(bins.length, 1,
     'the bin has gone from a relay the church chose and can remove — the control has been disabled rather ' +

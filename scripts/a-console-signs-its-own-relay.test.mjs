@@ -711,6 +711,59 @@ test('two relays removed at once are each guarded, and a row stays "Removing…"
   assert.equal(find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay').length, 1, 'B, kept, has no Remove to try again');
 });
 
+test('the 10-second fallback frees a row that never leaves, and only its OWN removal (eighth audit, finding 3)', async () => {
+  const { React, draw } = miniReact();
+  const A = 'wss://second.grace.example/relay';
+  const relays = [{ url: 'wss://relay.grace.example/relay', status: 'on' }, { url: A, status: 'on' }];
+  const timers = [];   // the card's 10 s fallbacks, fired by the test; any other timer runs for real
+  const fakeSetTimeout = (fn, ms, ...a) => (ms === 10000 ? (timers.push(fn), timers.length) : setTimeout(fn, ms, ...a));
+  let calls = 0;
+  const win = {
+    useStewardRelays: () => relays.slice(), useStewardChurch: () => ({ name: 'St Aidan’s' }),
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    Steward: { ownRelay: () => 'wss://relay.grace.example/relay', backupState: async () => ({ boxes: 2, online: 2, syncOn: true }),
+      // Taken off the console, but the row does not leave the list (the case the fallback exists for).
+      removeRelay: () => true, canRemoveRelay: () => true, relayName: () => '',
+      unsignRelay: async () => { calls++; return { removed: true, entries: [] }; } },
+  };
+  const globals = {
+    React, window: win, localStorage: win.localStorage,
+    location: { host: 'relay.grace.example', hostname: 'relay.grace.example' }, navigator: { userAgent: '' },
+    document: { addEventListener() {}, removeEventListener() {} }, setTimeout: fakeSetTimeout, clearTimeout, setInterval, clearInterval, console,
+    fetch: async () => ({ ok: false, json: async () => ({}) }),
+    CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
+    Icon: function Icon() { return null; }, SkPill: function SkPill() { return null; }, SkBadge: function SkBadge() { return null; },
+    useStewDialog: () => ({ current: null }),
+  };
+  const names = Object.keys(globals);
+  const mod = new Function(...names, JS + '\nreturn { DashRelaysCard };')(...names.map(k => globals[k]));
+  const view = () => draw(mod.DashRelaysCard, {});
+  const bins = () => find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay').length;
+  const removeA = async () => {
+    find(view(), n => n.type === 'button' && n.props['aria-label'] === 'Remove relay')[0].props.onClick(); await settle();
+    await find(view(), n => n.type === 'button' && n.props.title === 'Remove this relay')[0].props.onClick();
+    await settle(); view(); await settle();
+  };
+  view(); await settle();
+  // 1. A row that never leaves: "Removing…" until its fallback fires, then free again.
+  await removeA();
+  assert.equal(calls, 1);
+  assert.equal(timers.length, 1, 're-anchor: no 10-second fallback was set for a row that has not left');
+  assert.equal(bins(), 0, 're-anchor: the leaving row offers Remove before it has gone');
+  timers[0](); view(); await settle();
+  assert.equal(bins(), 1, 'THE FALLBACK DID NOT FREE THE ROW — a row that never leaves is stuck in "Removing…" for ever');
+  assert.doesNotMatch(said(view()), /Removing/, 'the in-progress line stayed after the fallback');
+  // 2. Removed again: the OLD timer must not free the NEW removal.
+  await removeA();
+  assert.equal(calls, 2, 're-anchor: the second removal did not start');
+  assert.equal(timers.length, 2);
+  timers[0](); view(); await settle();
+  assert.equal(bins(), 0, 'A STALE 10-SECOND TIMER FREED A NEWER REMOVAL — the row can be tapped mid-removal again');
+  assert.match(said(view()), /Removing wss:\/\/second\.grace\.example\/relay/, 'a stale timer ended the newer removal\'s "Removing…"');
+  timers[1](); view(); await settle();
+  assert.equal(bins(), 1, 'the newer removal\'s own fallback did not free it');
+});
+
 test('Auto-find reports each relay\'s own result, never "✓ Added" over one that was not signed (third audit, finding 4)', async () => {
   const r = recorder({ signRelay: async (u) => (/open-b/.test(u)
     ? { proven: [], unproven: [u], published: false }

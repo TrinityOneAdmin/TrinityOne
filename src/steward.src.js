@@ -4977,8 +4977,9 @@ function _oneComplete(filters, ms = 6000, privateDoc = false) {
 // relays were offline OR refused the write, or when two consoles ask different sets of relays (one console's write
 // lands only where it asked). It is a narrow loss of one change, never a list rebuilt from nothing.
 // NEVER A SHARED RELAY (sixth audit, finding 2). The shared relays are where every console finds the list, so a
-// Remove never skips waiting for one, however its address is spelled (case, :443, a trailing slash) — even when it
-// is the relay being removed.
+// Remove never skips waiting for an address isSharedAddress calls shared (relayAddrKey: host case, scheme, default
+// port, query and trailing slashes ignored; path case kept) — even when it is the relay being removed. The same
+// test decides which rows have no Remove (canRemoveRelay).
 function _readCovers(r, leaving) {
   const k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
   let skip = leaving ? k(leaving) : '';
@@ -13372,12 +13373,13 @@ window.Steward = {
   //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
   canRemoveRelay(url) {
     if (!url) return false;
-    // A SHARED RELAY HAS NO REMOVE, HOWEVER IT IS SPELLED (sixth audit, finding 2). Compared the way relayAddrKey
-    // keys an address: case, a default port (:443 / :80) and trailing slashes do not make a second relay. A Remove
-    // here would also let _readCovers skip waiting for the relay every console reads the church's list from.
-    const ak = (u) => { let v = String(u || '').trim().toLowerCase().replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/+$/, '');
-      return v.replace(/^(wss:\/\/[^/]+):443(?=\/|$)/, '$1').replace(/^(ws:\/\/[^/]+):80(?=\/|$)/, '$1'); };
-    if (CANONICAL_RELAYS.some(c => ak(c) === ak(url))) return false;
+    // NO REMOVE FOR AN ADDRESS relayAddrKey CALLS SHARED (sixth audit finding 2; eighth audit findings 1-2). The ONE
+    // test is isSharedAddress — the same one _readCovers uses — so the two cannot drift. relayAddrKey ignores host
+    // case, the scheme, a default port, a query and trailing slashes, and KEEPS PATH CASE: so a typo such as
+    // .../Relay is not shared and stays removable (a lower-cased whole-url compare once locked such a dead row in,
+    // and with it every change to the church's list). Any other row the console added stays removable; that is
+    // safe because _readCovers never skips waiting for an address isSharedAddress calls shared.
+    if (isSharedAddress(url)) return false;
     try { if (url === ownRelay()) return false; } catch (e) {}
     return true;
   },

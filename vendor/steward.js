@@ -27030,11 +27030,7 @@ zoo`.split("\n");
     //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
     canRemoveRelay(url) {
       if (!url) return false;
-      const ak = (u) => {
-        let v = String(u || "").trim().toLowerCase().replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://").replace(/\/+$/, "");
-        return v.replace(/^(wss:\/\/[^/]+):443(?=\/|$)/, "$1").replace(/^(ws:\/\/[^/]+):80(?=\/|$)/, "$1");
-      };
-      if (CANONICAL_RELAYS.some((c) => ak(c) === ak(url))) return false;
+      if (isSharedAddress(url)) return false;
       try {
         if (url === ownRelay()) return false;
       } catch (e) {
