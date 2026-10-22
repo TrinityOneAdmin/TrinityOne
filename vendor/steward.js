@@ -16202,6 +16202,7 @@ zoo`.split("\n");
         const newUrl = normRelay(j && j.url);
         if (!newUrl || newUrl === entry.url) continue;
         if (!await admitRemoteRelay(newUrl)) continue;
+        if (isSharedRelaySpelling(newUrl)) continue;
         extra = extra.filter((u) => u !== entry.url);
         extra.push(newUrl);
         entry.url = newUrl;
@@ -16224,6 +16225,23 @@ zoo`.split("\n");
     setInterval(refreshNamedRelays, 9e4);
     window.addEventListener("focus", refreshNamedRelays);
   } catch (e) {
+  }
+  function isSharedRelaySpelling(u) {
+    if (!u) return false;
+    try {
+      if (isSharedAddress(u)) return true;
+    } catch (e) {
+    }
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const v = n(u);
+    if (!v) return false;
+    return Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some((h) => n(h) === v);
   }
   function normRelay(input) {
     let v = String(input || "").trim();
@@ -18832,7 +18850,7 @@ zoo`.split("\n");
     let skip = leaving ? k(leaving) : "";
     if (skip) {
       try {
-        if (isSharedAddress(leaving)) skip = "";
+        if (Object.keys(CANONICAL_RELAY_PUBS).some((h) => k(h) === skip)) skip = "";
       } catch (e) {
         skip = "";
       }
@@ -27008,9 +27026,14 @@ zoo`.split("\n");
       const url = normRelay(input);
       return url && extraRelays().includes(url) ? url : "";
     },
+    // Asked by every Add path before the consent line, so the steward is told why (ninth audit).
+    isSharedRelaySpelling(input) {
+      return isSharedRelaySpelling(input) || isSharedRelaySpelling(normRelay(input));
+    },
     addRelay(input) {
       const url = normRelay(input);
       if (!url || url === ownRelay()) return false;
+      if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
       const cur = extraRelays();
       if (cur.includes(url)) return false;
       lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
@@ -27030,7 +27053,7 @@ zoo`.split("\n");
     //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
     canRemoveRelay(url) {
       if (!url) return false;
-      if (isSharedAddress(url)) return false;
+      if (CANONICAL_RELAYS.includes(url)) return false;
       try {
         if (url === ownRelay()) return false;
       } catch (e) {

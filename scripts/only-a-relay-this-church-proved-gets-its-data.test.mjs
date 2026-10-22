@@ -159,6 +159,8 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'function lsSet', 'lsSet'),
     stmt(src, 'var RELAYS_LS = ', 'RELAYS_LS'),
     fnBody(src, 'function normRelay', 'normRelay'),
+    // Round 9: addRelay (and refreshNamedRelays) refuse a spelling of a shared relay through this helper.
+    fnBody(src, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
     fnBody(src, 'function ownRelay', 'ownRelay'),
     fnBody(src, 'function extraRelays', 'extraRelays'),
     fnBody(src, 'function relaysRaw', 'relaysRaw'),

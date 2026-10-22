@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compileScreen, miniReact, find, texts, button } from './render-jsx-screen.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
@@ -762,6 +762,100 @@ test('the 10-second fallback frees a row that never leaves, and only its OWN rem
   assert.match(said(view()), /Removing wss:\/\/second\.grace\.example\/relay/, 'a stale timer ended the newer removal\'s "Removing…"');
   timers[1](); view(); await settle();
   assert.equal(bins(), 1, 'the newer removal\'s own fallback did not free it');
+});
+
+// ── round 9: one relay, one row ────────────────────────────────────────────────────────────────────────────
+// The SHIPPED Add guard, out of vendor/steward.js: Steward.isSharedRelaySpelling and Steward.addRelay, with the
+// helpers they call (the bundle's own normalizeURL copy among them) — never a second opinion written here.
+function shippedAdd() {
+  const stored = [];
+  const lib = [
+    fnBody(VENDOR, 'function normalizeURL2(url) {', 'normalizeURL2'),
+    stmt(VENDOR, 'var SHARED_RELAY_KEYS = ', 'SHARED_RELAY_KEYS'),
+    stmt(VENDOR, 'var SHARED_RELAY_HINTS = ', 'SHARED_RELAY_HINTS'),
+    stmt(VENDOR, 'var CANONICAL_RELAY_PUBS = ', 'CANONICAL_RELAY_PUBS'),
+    stmt(VENDOR, 'var CANONICAL_RELAYS = ', 'CANONICAL_RELAYS'),
+    fnBody(VENDOR, 'function relayAddrKey', 'relayAddrKey'),
+    fnBody(VENDOR, 'function _relayKey', '_relayKey'),
+    fnBody(VENDOR, 'function isSharedAddress', 'isSharedAddress'),
+    fnBody(VENDOR, 'function normRelay(input) {', 'normRelay'),
+    fnBody(VENDOR, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
+  ].join('\n');
+  const methods = fnBody(VENDOR, '  isSharedRelaySpelling(input) {', 'Steward.isSharedRelaySpelling') + ',\n' + fnBody(VENDOR, '  addRelay(input) {', 'Steward.addRelay');
+  const api = new Function('extraRelays', 'lsSet', 'RELAYS_LS', 'ownRelay', 'window', 'CustomEvent',
+    lib + '\nreturn ({ ' + methods + ' });')(
+    () => stored.slice(), (k, v) => { stored.length = 0; stored.push(...JSON.parse(v)); }, 'extra', () => 'wss://relay.grace.example/relay',
+    { dispatchEvent() { return true; } }, class { constructor(t) { this.type = t; } });
+  return { api, stored };
+}
+const SHARED_SPELLINGS = ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'ws://app.trinityone.church/relay',
+  'wss://app.trinityone.church//relay', 'wss://app.trinityone.church/relay/', 'wss://app.trinityone.church/relay',
+  'ws://trinityone-master-01.tailbeaac0.ts.net/relay'];
+
+test('Add refuses every spelling of a TrinityOne relay, on the card and in the wizard, and says why (ninth audit)', async () => {
+  const ALREADY = /That’s already one of TrinityOne’s relays\./;
+  for (const u of SHARED_SPELLINGS) {
+    // The engine, which every Add path writes through (Connect by name and Auto-find's connectFoundRelays included).
+    const eng = shippedAdd();
+    assert.equal(eng.api.addRelay(u), false, u + ': THE SHIPPED addRelay STORED A SECOND SPELLING OF A SHARED RELAY');
+    assert.deepEqual(eng.stored, [], u + ': something was written to the relay list');
+    // The card.
+    const s1 = shippedAdd(); const r1 = recorder({ isSharedRelaySpelling: s1.api.isSharedRelaySpelling, addRelay: (x) => s1.api.addRelay(x) });
+    const card = addCard(r1.steward);
+    card.draw(); await settle();
+    find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add')[0].props.onChange({ target: { value: u } });
+    button(card.draw(), 'Add relay')[0].props.onClick();
+    await settle(); await settle();
+    const t1 = said(card.draw());
+    assert.match(t1, ALREADY, u + ': the Add-a-relay card did not say it is already one of TrinityOne’s relays: ' + t1);
+    assert.equal(consentYes(card.draw()).length, 0, u + ': the consent line was offered for a shared relay');
+    assert.deepEqual(s1.stored, [], u + ': the card stored it');
+    assert.equal(r1.count('signRelay'), 0, u + ': the card signed it');
+    // The setup wizard.
+    const s2 = shippedAdd(); const r2 = recorder({ isSharedRelaySpelling: s2.api.isSharedRelaySpelling, addRelay: (x) => s2.api.addRelay(x) });
+    const box = wizBox(r2.steward);
+    box.draw(); await settle();
+    find(box.draw(), n => n.type === 'input' && n.props.placeholder === 'wss://relay.yourchurch.org')[0].props.onChange({ target: { value: u } });
+    button(box.draw(), 'Add')[0].props.onClick();
+    await settle(); await settle();
+    assert.match(said(box.draw()), ALREADY, u + ': the wizard did not say it is already one of TrinityOne’s relays');
+    assert.equal(consentYes(box.draw()).length, 0, u + ': the wizard offered the consent line for a shared relay');
+    assert.deepEqual(s2.stored, [], u + ': the wizard stored it');
+    assert.equal(r2.count('signRelay'), 0, u + ': the wizard signed it');
+  }
+  // CONTROL: an ordinary relay is still added (after consent) and signed, through the same shipped guard.
+  const s3 = shippedAdd(); const r3 = recorder({ isSharedRelaySpelling: s3.api.isSharedRelaySpelling, addRelay: (x) => s3.api.addRelay(x) });
+  const card = addCard(r3.steward);
+  card.draw(); await settle();
+  find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add')[0].props.onChange({ target: { value: 'wss://friend.example/relay' } });
+  button(card.draw(), 'Add relay')[0].props.onClick();
+  await settle();
+  await consentYes(card.draw())[0].props.onClick();
+  await settle(); await settle();
+  assert.deepEqual(s3.stored, ['wss://friend.example/relay'], 'AN ORDINARY RELAY COULD NOT BE ADDED — the guard refuses everything');
+  assert.equal(r3.count('signRelay'), 1, 'an ordinary relay was not signed after consent');
+  assert.doesNotMatch(said(card.draw()), ALREADY);
+});
+
+test('Connect by name and Auto-find add no spelling of a TrinityOne relay (ninth audit)', async () => {
+  const s = shippedAdd();
+  const r = recorder({ isSharedRelaySpelling: s.api.isSharedRelaySpelling, addRelay: (x) => s.api.addRelay(x),
+    resolveRelayName: async () => ({ url: 'wss://APP.trinityone.church:443/relay' }),
+    findRelays: async () => [{ url: 'wss://app.trinityone.church//relay', name: 'shared-again' }] });
+  const card = addCard(r.steward);
+  card.draw(); await settle();
+  const nameIn = find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay name to connect to');
+  assert.equal(nameIn.length, 1, 're-anchor: no relay-name field on the card');
+  nameIn[0].props.onChange({ target: { value: 'grace-city' } });
+  button(card.draw(), 'Connect').filter(b => b.props['aria-label'] === 'Connect to relay by name')[0].props.onClick();
+  await settle(); await settle(); await settle();
+  assert.match(said(card.draw()), /That’s already one of TrinityOne’s relays\./, 'Connect by name did not say the name leads to a TrinityOne relay');
+  assert.equal(consentYes(card.draw()).length, 0, 'Connect by name offered consent for a shared relay');
+  button(card.draw(), 'Auto-find relays for me')[0].props.onClick();
+  await settle(); await settle();
+  assert.equal(consentYes(card.draw()).length, 0, 'AUTO-FIND OFFERED A SPELLING OF A TRINITYONE RELAY');
+  assert.deepEqual(s.stored, [], 'a spelling of a shared relay was stored');
+  assert.equal(r.count('signRelay') + r.count('registerAtRelay'), 0, 'something was signed or registered');
 });
 
 test('Auto-find reports each relay\'s own result, never "✓ Added" over one that was not signed (third audit, finding 4)', async () => {

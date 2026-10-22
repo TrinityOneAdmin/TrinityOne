@@ -1181,6 +1181,39 @@ test('a dead relay at a CAPITALISED PATH of a shared address can be removed, and
   assert.deepEqual(new Set(cores[0][1].parseRelayNet(d[0].content).map(e => e.pubkey)), new Set([BOX.relayPub, TYPED.relayPub]));
 });
 
+test('a dead ws:// spelling of a shared address can be removed, and then the list is no longer frozen (round 9, ninth audit finding 1)', async () => {
+  // relayAddrKey ignores the scheme and calls ws://… shared, but the read dials it as its own address — a dead one
+  // (the real server answers 302). Waiting for it as "a shared relay" froze every change to the list.
+  const { flock, BOX, TYPED, location } = await selfHostedChurch('R9WS');
+  const WS = 'ws://test-shared.invalid/relay';   // wss://test-shared.invalid/relay is the shared address here
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: 'e'.repeat(64), alwaysOn: true, url: WS }])]);
+  await new Promise(r => setTimeout(r, 1100));
+  const deps = { location, shared: ['f'.repeat(64)], pool: poolTo(BOX, TYPED), publish: publishTo(BOX), sk: flock.sk, pub: flock.pub };
+  const held = await consoleWith({ ...deps, one: realRead([BOX.wsUrl, WS]) }).enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.equal(held.unknown, true, 're-anchor: a relay that never answers did not hold the list: ' + JSON.stringify(held));
+  const res = await consoleWith({ ...deps, one: realRead([BOX.wsUrl, WS]) }).unenrolRelayNet(WS);
+  assert.equal(res.removed, true, 'A DEAD ws:// SPELLING COULD NOT BE REMOVED — the read waited for it as if it were the shared relay: ' + JSON.stringify(res));
+  await new Promise(r => setTimeout(r, 1100));
+  const after = await consoleWith({ ...deps, one: realRead([BOX.wsUrl]) }).enrolRelayNet({ extra: [TYPED.wsUrl] });
+  assert.equal(after.published, true, 'the list was still frozen after the dead spelling was removed: ' + JSON.stringify(after));
+});
+
+test('removing a //relay spelling still waits for the REAL shared relay it normalises onto (round 9, ninth audit finding 2)', async () => {
+  // normalizeURL — what the read and the pool use — collapses …//relay onto …/relay, the shared relay itself. If the
+  // removal skipped "the relay being removed", it would skip the shared relay, and sign without hearing from it.
+  const { flock, BOX, location } = await selfHostedChurch('R9DS');
+  const DS = 'wss://test-shared.invalid//relay';
+  await H.publishAll(BOX, [H.churchDoc(flock, RELAY_NET_D, [{ pubkey: BOX.relayPub, alwaysOn: true, url: '' }, { pubkey: 'e'.repeat(64), alwaysOn: true, url: DS }])]);
+  const before = await storedRelayNet(BOX, flock);
+  await new Promise(r => setTimeout(r, 1100));
+  let published = 0;
+  const con = consoleWith({ location, shared: ['f'.repeat(64)], one: realRead([BOX.wsUrl, DS]), publish: async () => { published++; return true; }, sk: flock.sk, pub: flock.pub });
+  const res = await con.unenrolRelayNet(DS);
+  assert.equal(res.unknown, true, 'A REMOVE SKIPPED THE SHARED RELAY — the //relay spelling normalises onto it: ' + JSON.stringify(res));
+  assert.equal(published, 0, 'THE LIST WAS RE-SIGNED WITHOUT HEARING FROM THE SHARED RELAY');
+  assert.equal((await storedRelayNet(BOX, flock))[0].id, before[0].id);
+});
+
 // ── 10. teardown, asserted rather than trusted ──────────────────────────────────────────────────────────
 test('every relay and every temp directory this file created is gone', () => {
   H.stopAll();

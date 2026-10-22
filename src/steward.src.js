@@ -1642,6 +1642,7 @@ async function refreshNamedRelays() {
       // non-member address; this is the check at the point the list is actually written, so a future edit
       // that loosens the resolver cannot quietly un-gate the swap.
       if (!(await admitRemoteRelay(newUrl))) continue;
+      if (isSharedRelaySpelling(newUrl)) continue;   // never a second spelling of a shared relay (ninth audit)
       extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true;
     } catch (e) {}
   }
@@ -1656,6 +1657,18 @@ async function refreshNamedRelays() {
 }
 // keep named relays pointed at the live url: on load, then every 90s, and whenever the app regains focus
 try { setTimeout(refreshNamedRelays, 2500); setInterval(refreshNamedRelays, 90000); window.addEventListener('focus', refreshNamedRelays); } catch (e) {}
+// IS THIS A SPELLING OF ONE OF TRINITYONE'S OWN RELAYS, under EITHER normalisation the console uses (ninth audit)?
+// relayAddrKey (isSharedAddress: host case, scheme, default port, query, trailing slashes ignored) or normalizeURL
+// (the pool and every read: also collapses //). The three normalisations — normRelay at entry, relayAddrKey,
+// normalizeURL — disagree at the edges, so an address either one maps onto a shared relay is refused at Add.
+function isSharedRelaySpelling(u) {
+  if (!u) return false;
+  try { if (isSharedAddress(u)) return true; } catch (e) {}
+  const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
+  const v = n(u);
+  if (!v) return false;
+  return Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some(h => n(h) === v);
+}
 // normalise a user-typed relay address to a ws/wss URL
 function normRelay(input) {
   let v = String(input || '').trim();
@@ -4976,14 +4989,16 @@ function _oneComplete(filters, ms = 6000, privateDoc = false) {
 // being removed can lose a list change that reached ONLY that relay. That happens when the writing console's other
 // relays were offline OR refused the write, or when two consoles ask different sets of relays (one console's write
 // lands only where it asked). It is a narrow loss of one change, never a list rebuilt from nothing.
-// NEVER A SHARED RELAY (sixth audit, finding 2). The shared relays are where every console finds the list, so a
-// Remove never skips waiting for an address isSharedAddress calls shared (relayAddrKey: host case, scheme, default
-// port, query and trailing slashes ignored; path case kept) — even when it is the relay being removed. The same
-// test decides which rows have no Remove (canRemoveRelay).
+// NEVER A SHARED RELAY (sixth audit, finding 2; ninth audit, findings 1-2). The shared relays are where every
+// console finds the list. The skip is decided in the SAME normalisation the read and the pool use (normalizeURL):
+// if the address being removed normalises onto a shared relay's address, nothing is skipped, because skipping
+// it would drop the REAL shared relay from the read (…//relay normalises onto …/relay). An address that only
+// relayAddrKey calls shared (ws://…, a different scheme the read dials separately) is its own entry in the read and
+// may be skipped like any other leaving relay — waiting for it froze the list while the dead spelling sat there.
 function _readCovers(r, leaving) {
   const k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
   let skip = leaving ? k(leaving) : '';
-  if (skip) { try { if (isSharedAddress(leaving)) skip = ''; } catch (e) { skip = ''; } }
+  if (skip) { try { if (Object.keys(CANONICAL_RELAY_PUBS).some(h => k(h) === skip)) skip = ''; } catch (e) { skip = ''; } }
   const said = new Set(((r && r.answeredUrls) || []).map(k));
   const need = ((r && r.askedUrls) || []).map(k).filter(u => !skip || u !== skip);
   return need.length > 0 && need.every(u => said.has(u));
@@ -13352,9 +13367,13 @@ window.Steward = {
   // steward who connects a relay that is already listed (added before consent existed, or offline the first
   // time) still gets it signed rather than a "please enter an address" error (audit 2026-10-21, finding 1).
   knownRelay(input) { const url = normRelay(input); return (url && extraRelays().includes(url)) ? url : ''; },
+  // Asked by every Add path before the consent line, so the steward is told why (ninth audit).
+  isSharedRelaySpelling(input) { return isSharedRelaySpelling(input) || isSharedRelaySpelling(normRelay(input)); },
   addRelay(input) {
     const url = normRelay(input);
     if (!url || url === ownRelay()) return false;
+    // NOT A SECOND SPELLING OF A SHARED RELAY (ninth audit): refused here, the one writer every Add path goes through.
+    if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
     const cur = extraRelays(); if (cur.includes(url)) return false;
     lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
     window.dispatchEvent(new CustomEvent('steward-relays'));
@@ -13373,13 +13392,11 @@ window.Steward = {
   //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
   canRemoveRelay(url) {
     if (!url) return false;
-    // NO REMOVE FOR AN ADDRESS relayAddrKey CALLS SHARED (sixth audit finding 2; eighth audit findings 1-2). The ONE
-    // test is isSharedAddress — the same one _readCovers uses — so the two cannot drift. relayAddrKey ignores host
-    // case, the scheme, a default port, a query and trailing slashes, and KEEPS PATH CASE: so a typo such as
-    // .../Relay is not shared and stays removable (a lower-cased whole-url compare once locked such a dead row in,
-    // and with it every change to the church's list). Any other row the console added stays removable; that is
-    // safe because _readCovers never skips waiting for an address isSharedAddress calls shared.
-    if (isSharedAddress(url)) return false;
+    // ONLY THE SHIPPED ROWS (ninth audit). Every row the console added is removable, whatever it spells: hiding Remove
+    // on a "shared-looking" added row locked dead spellings in (ws://…, which the read waits for separately) and
+    // froze the church's list. Shared spellings are refused at Add instead (isSharedRelaySpelling), and one already
+    // in an older install's list can be removed without the read skipping the real shared relay (_readCovers).
+    if (CANONICAL_RELAYS.includes(url)) return false;
     try { if (url === ownRelay()) return false; } catch (e) {}
     return true;
   },

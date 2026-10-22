@@ -35,7 +35,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadScreen, miniReact, find } from './render-jsx-screen.mjs';
-import { fnBody, stmt } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -158,18 +157,8 @@ const shippedCanRemove = () => {
     else if (c === '}') { d--; if (!d) { end = j + 1; break; } }
   }
   const CANONICAL_RELAYS = ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay'];
-  // Round 8: canRemoveRelay asks the SHIPPED isSharedAddress (the one test _readCovers also uses), so that is lifted
-  // too, with what it reads — out of the same bundle, never a second opinion written here.
-  const shared = [
-    stmt(STEWARD, 'var SHARED_RELAY_KEYS = ', 'SHARED_RELAY_KEYS'),
-    stmt(STEWARD, 'var SHARED_RELAY_HINTS = ', 'SHARED_RELAY_HINTS'),
-    stmt(STEWARD, 'var CANONICAL_RELAY_PUBS = ', 'CANONICAL_RELAY_PUBS'),
-    fnBody(STEWARD, 'function relayAddrKey', 'relayAddrKey'),
-    fnBody(STEWARD, 'function _relayKey', '_relayKey'),
-    fnBody(STEWARD, 'function isSharedAddress', 'isSharedAddress'),
-  ].join('\n');
   // eslint-disable-next-line no-new-func
-  return new Function('CANONICAL_RELAYS', 'ownRelay', shared + '\nreturn ({ ' + STEWARD.slice(i, end) + ' }).canRemoveRelay;')(
+  return new Function('CANONICAL_RELAYS', 'ownRelay', 'return ({ ' + STEWARD.slice(i, end) + ' }).canRemoveRelay;')(
     CANONICAL_RELAYS, () => 'wss://ourbox.ts.net/relay');
 };
 
@@ -183,11 +172,12 @@ test('a relay that cannot be removed is not offered a bin', () => {
       'are appended unconditionally — so the click removes nothing, returns true, and still forgets any ' +
       'name→url binding, while the row stays put and nothing explains why.');
   }
-  // Other spellings relayAddrKey calls the SAME shared address (host case, a default port, a trailing slash). These
-  // ARE in extraRelays and removeRelay could take them out; the rule is the product's: no Remove on a shared relay,
-  // decided by the one test (isSharedAddress) that _readCovers also uses (sixth audit, finding 2).
-  for (const url of ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'wss://app.trinityone.church/relay/']) {
-    assert.equal(can(url), false, url + ' is the shared relay spelled differently, and is offered for removal');
+  // CHANGED round 9 (ninth audit): another SPELLING of a shared relay is a row the console ADDED (it is in
+  // extraRelays, and removeRelay does take it out). Such rows are now refused at Add; one an older install already
+  // holds must be removable, or a dead spelling (ws://…) freezes the church's list. So these get a bin.
+  for (const url of ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'wss://app.trinityone.church/relay/',
+    'ws://trinityone-master-01.tailbeaac0.ts.net/relay', 'wss://app.trinityone.church//relay']) {
+    assert.equal(can(url), true, url + ': A ROW THE CONSOLE ADDED HAS NO REMOVE — a dead spelling stays and holds the church\'s list');
   }
   assert.equal(can('wss://ourbox.ts.net/relay'), false,
     "the church's own relay is offered for removal");
@@ -242,8 +232,9 @@ test('the console does not PUT a bin on a relay it cannot remove', () => {
     { url: OWN, status: 'on' },
     { url: 'wss://friend.ts.net/relay', status: 'on' },
   ]);
-  assert.equal(bins.length, 1,
-    'expected exactly one bin — on the relay the church added itself. Got ' + bins.length + '. A bin against ' +
+  // Two: the relay the church added, and the added second spelling of the shared relay (round 9: every added row).
+  assert.equal(bins.length, 2,
+    'expected exactly two bins — on the two rows the church added itself. Got ' + bins.length + '. A bin against ' +
     'a canonical relay or the church\'s own box does nothing when clicked: removeRelay filters extraRelays() ' +
     'and those are appended unconditionally, so it returns true, the row stays, and nothing says why.');
 });

@@ -5386,6 +5386,9 @@ function WizAddRelay() {
   const [addrAsk, setAddrAsk] = React.useState(false);   // the consent line is showing (see RelayConsent)
   const addOwnRelay = (confirmed) => {
     const u = (relayAddr || '').trim(); if (!u) return;
+    // A spelling of a shared relay is refused before the consent line (ninth audit): it would be a second row for a
+    // relay the church already uses, and one Remove could not be trusted on.
+    if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(u)) { setAddrAsk(false); setAddrMsg('✗ ' + 'That’s already one of TrinityOne’s relays.'); return; }
     if (confirmed !== true) { setAddrAsk(true); return; }   // first tap shows what connecting means
     setAddrAsk(false);
     // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
@@ -5513,6 +5516,8 @@ function DashAddRelayCard() {
   };
   const addRelay = async (confirmed) => {
     if (!(draft || '').trim()) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+    // Ninth audit: a spelling of a shared relay is refused, and the steward is told why, before the consent line.
+    if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(draft)) { setAsk(''); setErr('That’s already one of TrinityOne’s relays.'); setAddedNote(''); return; }
     if (confirmed !== true) { setAsk('add'); return; }
     setAsk('');
     // ALREADY LISTED IS NOT AN ERROR (audit 2026-10-21, finding 1): a relay added before consent existed, or one
@@ -5544,6 +5549,8 @@ function DashAddRelayCard() {
       if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
       // THE CONSENT LINE, naming the address the name led to. Nothing is added, registered or signed until the
       // steward taps "Yes, connect" — see `ask` above.
+      // Ninth audit: a name that leads to a spelling of a shared relay adds nothing.
+      if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(j.url)) { setAsk(''); setNamed(null); setByNameMsg({ ok: false, text: '✗ ' + 'That’s already one of TrinityOne’s relays.' }); return; }
       if (confirmed !== true) { setNamed({ n, url: j.url }); setByNameMsg(null); setAsk('name'); return; }
       setAsk(''); setNamed(null);
       // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
@@ -5581,7 +5588,9 @@ function DashAddRelayCard() {
     if (confirmed !== true) {
       setFinding(true); setFindMsg(''); setFound(null);
       try {
-        const picks = window.Steward.findRelays ? await window.Steward.findRelays(2) : [];
+        // Ninth audit: never offer a spelling of a shared relay (the church already uses those).
+        const picks = (window.Steward.findRelays ? (await window.Steward.findRelays(2)) || [] : [])
+          .filter(p => !(window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(p && p.url)));
         if (picks && picks.length) { setFound(picks); setAsk('find'); }
         else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
       } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
