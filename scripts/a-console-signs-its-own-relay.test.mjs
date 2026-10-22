@@ -780,8 +780,9 @@ function shippedAdd() {
     fnBody(VENDOR, 'function isSharedAddress', 'isSharedAddress'),
     fnBody(VENDOR, 'function normRelay(input) {', 'normRelay'),
     fnBody(VENDOR, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
+    fnBody(VENDOR, 'function isOwnRelaySpelling(u) {', 'isOwnRelaySpelling'),
   ].join('\n');
-  const methods = fnBody(VENDOR, '  isSharedRelaySpelling(input) {', 'Steward.isSharedRelaySpelling') + ',\n' + fnBody(VENDOR, '  addRelay(input) {', 'Steward.addRelay');
+  const methods = fnBody(VENDOR, '  isSharedRelaySpelling(input) {', 'Steward.isSharedRelaySpelling') + ',\n' + fnBody(VENDOR, '  isOwnRelaySpelling(input) {', 'Steward.isOwnRelaySpelling') + ',\n' + fnBody(VENDOR, '  addRelay(input) {', 'Steward.addRelay');
   const api = new Function('extraRelays', 'lsSet', 'RELAYS_LS', 'ownRelay', 'window', 'CustomEvent',
     lib + '\nreturn ({ ' + methods + ' });')(
     () => stored.slice(), (k, v) => { stored.length = 0; stored.push(...JSON.parse(v)); }, 'extra', () => 'wss://relay.grace.example/relay',
@@ -835,6 +836,77 @@ test('Add refuses every spelling of a TrinityOne relay, on the card and in the w
   assert.deepEqual(s3.stored, ['wss://friend.example/relay'], 'AN ORDINARY RELAY COULD NOT BE ADDED — the guard refuses everything');
   assert.equal(r3.count('signRelay'), 1, 'an ordinary relay was not signed after consent');
   assert.doesNotMatch(said(card.draw()), ALREADY);
+});
+
+test('Add refuses this console\'s OWN relay, however it is spelled, before the consent line, and says why (phone test 2026-10-22)', async () => {
+  // shippedAdd's console runs on wss://relay.grace.example/relay. On the phone, typing the own box's address showed
+  // the consent line, then "Enter a relay address, e.g. wss://…" — which explains nothing.
+  const OWN_SAID = /That’s this console’s own relay — it’s already on your list\./;
+  const OWN_SPELLINGS = ['wss://relay.grace.example/relay', 'wss://Relay.Grace.Example/relay', 'wss://relay.grace.example:443/relay',
+    'wss://relay.grace.example/relay/', 'ws://relay.grace.example/relay', 'wss://relay.grace.example//relay', 'relay.grace.example/relay'];
+  for (const u of OWN_SPELLINGS) {
+    const eng = shippedAdd();
+    assert.equal(eng.api.addRelay(u), false, u + ': the shipped addRelay stored the console\'s own relay');
+    const s1 = shippedAdd(); const r1 = recorder({ isSharedRelaySpelling: s1.api.isSharedRelaySpelling, isOwnRelaySpelling: s1.api.isOwnRelaySpelling, addRelay: (x) => s1.api.addRelay(x) });
+    const card = addCard(r1.steward);
+    card.draw(); await settle();
+    find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add')[0].props.onChange({ target: { value: u } });
+    button(card.draw(), 'Add relay')[0].props.onClick();
+    await settle(); await settle();
+    const t = said(card.draw());
+    assert.match(t, OWN_SAID, u + ': THE CARD DID NOT SAY IT IS THIS CONSOLE\'S OWN RELAY: ' + t);
+    assert.doesNotMatch(t, /Enter a relay address/, u + ': the card answered a typed address with "Enter a relay address"');
+    assert.equal(consentYes(card.draw()).length, 0, u + ': THE CONSENT LINE WAS OFFERED FOR THE CONSOLE\'S OWN RELAY');
+    assert.deepEqual(s1.stored, [], u + ': stored'); assert.equal(r1.count('signRelay'), 0, u + ': signed');
+    const s2 = shippedAdd(); const r2 = recorder({ isSharedRelaySpelling: s2.api.isSharedRelaySpelling, isOwnRelaySpelling: s2.api.isOwnRelaySpelling, addRelay: (x) => s2.api.addRelay(x) });
+    const box = wizBox(r2.steward);
+    box.draw(); await settle();
+    find(box.draw(), n => n.type === 'input' && n.props.placeholder === 'wss://relay.yourchurch.org')[0].props.onChange({ target: { value: u } });
+    button(box.draw(), 'Add')[0].props.onClick();
+    await settle(); await settle();
+    assert.match(said(box.draw()), OWN_SAID, u + ': the wizard did not say it is this console\'s own relay');
+    assert.equal(consentYes(box.draw()).length, 0, u + ': the wizard offered consent for the console\'s own relay');
+  }
+  // Connect by name leading to the own relay, and an Auto-find pick of it: neither is offered.
+  const s3 = shippedAdd();
+  const r3 = recorder({ isSharedRelaySpelling: s3.api.isSharedRelaySpelling, isOwnRelaySpelling: s3.api.isOwnRelaySpelling, addRelay: (x) => s3.api.addRelay(x),
+    resolveRelayName: async () => ({ url: 'wss://RELAY.grace.example:443/relay/' }),
+    findRelays: async () => [{ url: 'wss://relay.grace.example//relay', name: 'ourselves' }] });
+  const card = addCard(r3.steward);
+  card.draw(); await settle();
+  find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay name to connect to')[0].props.onChange({ target: { value: 'grace-city' } });
+  button(card.draw(), 'Connect').filter(b => b.props['aria-label'] === 'Connect to relay by name')[0].props.onClick();
+  await settle(); await settle(); await settle();
+  assert.match(said(card.draw()), OWN_SAID, 'Connect by name did not say the name leads to this console\'s own relay');
+  assert.equal(consentYes(card.draw()).length, 0, 'Connect by name offered consent for the console\'s own relay');
+  button(card.draw(), 'Auto-find relays for me')[0].props.onClick();
+  await settle(); await settle();
+  assert.equal(consentYes(card.draw()).length, 0, 'AUTO-FIND OFFERED THIS CONSOLE\'S OWN RELAY');
+  // CONTROL: an ordinary relay still adds, after consent, and is signed.
+  const s4 = shippedAdd(); const r4 = recorder({ isSharedRelaySpelling: s4.api.isSharedRelaySpelling, isOwnRelaySpelling: s4.api.isOwnRelaySpelling, addRelay: (x) => s4.api.addRelay(x) });
+  const c4 = addCard(r4.steward);
+  c4.draw(); await settle();
+  find(c4.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add')[0].props.onChange({ target: { value: 'wss://friend.example/relay' } });
+  button(c4.draw(), 'Add relay')[0].props.onClick();
+  await settle();
+  await consentYes(c4.draw())[0].props.onClick();
+  await settle(); await settle();
+  assert.deepEqual(s4.stored, ['wss://friend.example/relay'], 'AN ORDINARY RELAY COULD NOT BE ADDED — the own-relay check refuses everything');
+  assert.equal(r4.count('signRelay'), 1);
+});
+
+test('a typed address that cannot be added is never answered "Enter a relay address" (phone test 2026-10-22)', async () => {
+  const r = recorder({ addRelay: () => false, knownRelay: () => '' });
+  const card = addCard(r.steward);
+  card.draw(); await settle();
+  find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay address to add')[0].props.onChange({ target: { value: 'wss://friend.example/relay' } });
+  button(card.draw(), 'Add relay')[0].props.onClick();
+  await settle();
+  await consentYes(card.draw())[0].props.onClick();
+  await settle(); await settle();
+  const t = said(card.draw());
+  assert.doesNotMatch(t, /Enter a relay address/, 'A NON-EMPTY ADDRESS THAT COULD NOT BE ADDED WAS ANSWERED "Enter a relay address": ' + t);
+  assert.match(t, /Couldn’t add wss:\/\/friend\.example\/relay/, 'the card did not say which address could not be added');
 });
 
 test('Connect by name and Auto-find add no spelling of a TrinityOne relay (ninth audit)', async () => {

@@ -20,7 +20,7 @@ import { normalizeURL } from 'nostr-tools/utils';
 import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
-import { verifyRelayIdentity } from './relay-identity.src.js';
+import { verifyRelayIdentity, relayAddrKey } from './relay-identity.src.js';
 // …and then decide whether the key it proved is one this church's network contains, and write the document
 // that says so. Shared with the member app so both surfaces answer that question the same way.
 // …and C4's gate, which is what keeps this church's documents off a relay that cannot prove itself.
@@ -1668,6 +1668,19 @@ function isSharedRelaySpelling(u) {
   const v = n(u);
   if (!v) return false;
   return Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some(h => n(h) === v);
+}
+// IS THIS A SPELLING OF THIS CONSOLE'S OWN RELAY (ownRelay()), under either normalisation (phone test 2026-10-22)?
+// Same family as isSharedRelaySpelling: relayAddrKey (host case, scheme, default port, query, trailing slashes)
+// or normalizeURL (also collapses //). addRelay always refused the own relay, but only by an exact match and
+// silently, after the consent line; this lets every Add path say why, before it.
+function isOwnRelaySpelling(u) {
+  if (!u) return false;
+  let own = ''; try { own = ownRelay(); } catch (e) { own = ''; }
+  if (!own) return false;
+  try { const a = relayAddrKey(u); if (a && a === relayAddrKey(own)) return true; } catch (e) {}
+  const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
+  const v = n(u);
+  return !!v && v === n(own);
 }
 // normalise a user-typed relay address to a ws/wss URL
 function normRelay(input) {
@@ -13369,9 +13382,10 @@ window.Steward = {
   knownRelay(input) { const url = normRelay(input); return (url && extraRelays().includes(url)) ? url : ''; },
   // Asked by every Add path before the consent line, so the steward is told why (ninth audit).
   isSharedRelaySpelling(input) { return isSharedRelaySpelling(input) || isSharedRelaySpelling(normRelay(input)); },
+  isOwnRelaySpelling(input) { return isOwnRelaySpelling(input) || isOwnRelaySpelling(normRelay(input)); },
   addRelay(input) {
     const url = normRelay(input);
-    if (!url || url === ownRelay()) return false;
+    if (!url || url === ownRelay() || isOwnRelaySpelling(input) || isOwnRelaySpelling(url)) return false;
     // NOT A SECOND SPELLING OF A SHARED RELAY (ninth audit): refused here, the one writer every Add path goes through.
     if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
     const cur = extraRelays(); if (cur.includes(url)) return false;

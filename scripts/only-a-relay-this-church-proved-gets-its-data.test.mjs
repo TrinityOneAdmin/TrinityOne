@@ -161,6 +161,7 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'function normRelay', 'normRelay'),
     // Round 9: addRelay (and refreshNamedRelays) refuse a spelling of a shared relay through this helper.
     fnBody(src, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
+    fnBody(src, 'function isOwnRelaySpelling(u) {', 'isOwnRelaySpelling'),
     fnBody(src, 'function ownRelay', 'ownRelay'),
     fnBody(src, 'function extraRelays', 'extraRelays'),
     fnBody(src, 'function relaysRaw', 'relaysRaw'),

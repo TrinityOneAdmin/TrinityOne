@@ -5389,6 +5389,8 @@ function WizAddRelay() {
     // A spelling of a shared relay is refused before the consent line (ninth audit): it would be a second row for a
     // relay the church already uses, and one Remove could not be trusted on.
     if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(u)) { setAddrAsk(false); setAddrMsg('✗ ' + 'That’s already one of TrinityOne’s relays.'); return; }
+    // …and this console's own relay, however it is spelled (phone test 2026-10-22: it used to show consent, then fail silently).
+    if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(u)) { setAddrAsk(false); setAddrMsg('✗ ' + 'That’s this console’s own relay — it’s already on your list.'); return; }
     if (confirmed !== true) { setAddrAsk(true); return; }   // first tap shows what connecting means
     setAddrAsk(false);
     // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
@@ -5518,12 +5520,15 @@ function DashAddRelayCard() {
     if (!(draft || '').trim()) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
     // Ninth audit: a spelling of a shared relay is refused, and the steward is told why, before the consent line.
     if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(draft)) { setAsk(''); setErr('That’s already one of TrinityOne’s relays.'); setAddedNote(''); return; }
+    // This console's own relay, however it is spelled, is refused before consent and says why (phone test 2026-10-22).
+    if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(draft)) { setAsk(''); setErr('That’s this console’s own relay — it’s already on your list.'); setAddedNote(''); return; }
     if (confirmed !== true) { setAsk('add'); return; }
     setAsk('');
     // ALREADY LISTED IS NOT AN ERROR (audit 2026-10-21, finding 1): a relay added before consent existed, or one
     // that was offline the first time, is signed now rather than refused as "please enter an address".
     const r = (window.Steward.addRelay && window.Steward.addRelay(draft)) || (window.Steward.knownRelay && window.Steward.knownRelay(draft));
-    if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+    // A non-empty address that still could not be added is never answered "Enter a relay address" (phone test 2026-10-22).
+    if (!r) { setErr('Couldn’t add ' + draft.trim() + '. Check it is a relay address (wss://…) and try again.'); setAddedNote(''); return; }
     setDraft(''); setErr('');
     setAddedNote(String(r));
     await signIt(String(r));
@@ -5551,6 +5556,7 @@ function DashAddRelayCard() {
       // steward taps "Yes, connect" — see `ask` above.
       // Ninth audit: a name that leads to a spelling of a shared relay adds nothing.
       if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(j.url)) { setAsk(''); setNamed(null); setByNameMsg({ ok: false, text: '✗ ' + 'That’s already one of TrinityOne’s relays.' }); return; }
+      if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(j.url)) { setAsk(''); setNamed(null); setByNameMsg({ ok: false, text: '✗ ' + 'That’s this console’s own relay — it’s already on your list.' }); return; }
       if (confirmed !== true) { setNamed({ n, url: j.url }); setByNameMsg(null); setAsk('name'); return; }
       setAsk(''); setNamed(null);
       // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
@@ -5590,7 +5596,8 @@ function DashAddRelayCard() {
       try {
         // Ninth audit: never offer a spelling of a shared relay (the church already uses those).
         const picks = (window.Steward.findRelays ? (await window.Steward.findRelays(2)) || [] : [])
-          .filter(p => !(window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(p && p.url)));
+          .filter(p => !(window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(p && p.url)))
+          .filter(p => !(window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(p && p.url)));
         if (picks && picks.length) { setFound(picks); setAsk('find'); }
         else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
       } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }

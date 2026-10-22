@@ -16243,6 +16243,30 @@ zoo`.split("\n");
     if (!v) return false;
     return Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some((h) => n(h) === v);
   }
+  function isOwnRelaySpelling(u) {
+    if (!u) return false;
+    let own = "";
+    try {
+      own = ownRelay();
+    } catch (e) {
+      own = "";
+    }
+    if (!own) return false;
+    try {
+      const a = relayAddrKey(u);
+      if (a && a === relayAddrKey(own)) return true;
+    } catch (e) {
+    }
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const v = n(u);
+    return !!v && v === n(own);
+  }
   function normRelay(input) {
     let v = String(input || "").trim();
     if (!v) return "";
@@ -27030,9 +27054,12 @@ zoo`.split("\n");
     isSharedRelaySpelling(input) {
       return isSharedRelaySpelling(input) || isSharedRelaySpelling(normRelay(input));
     },
+    isOwnRelaySpelling(input) {
+      return isOwnRelaySpelling(input) || isOwnRelaySpelling(normRelay(input));
+    },
     addRelay(input) {
       const url = normRelay(input);
-      if (!url || url === ownRelay()) return false;
+      if (!url || url === ownRelay() || isOwnRelaySpelling(input) || isOwnRelaySpelling(url)) return false;
       if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
       const cur = extraRelays();
       if (cur.includes(url)) return false;
