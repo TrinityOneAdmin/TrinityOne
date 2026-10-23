@@ -70,6 +70,28 @@
 // on the scheme case, which is what a box key really does conflate, and the reasoning in
 // src/steward.src.js:declineRelay was corrected rather than softened.
 //
+// FOURTH SABOTAGE ROUND, 2026-10-23, over the two fixes from the audit of b057bfd0 (`reached` plus the
+// strike counter, and the read-modify-write race) — eight changes, same scoping discipline: the enclosing
+// function was sliced, the anchor asserted to appear exactly once INSIDE it AND exactly once in the whole
+// file, then replaced there only. Caught, with the cases that went red out of 27:
+//   · the `reached` test disabled (an unreachable probe scores a strike) → 15
+//   · one answered failure retires again (DEAD_STRIKES_MAX - 1)          → 13, 15, 16, 17, 23
+//   · a proof no longer forgets the strike it had                        → 16
+//   · the write reverted to the pre-probe list, literally                → 24 (the lift guard in makeConsole)
+//   · the write's re-READ neutered, its text left in place              → 17, and 17 alone
+//   · the strike store's prune disabled                                 → 13, 15, 16, 17, 23
+// AND ONE HAD TO BE RE-AIMED, the same trap as the third round: hard-coding `if (n >= 1)` leaves
+// DEAD_STRIKES_MAX unreferenced, esbuild tree-shakes it, and the lift throws “is missing” — a true red that
+// reads like a broken test (24 red, none of them about the counter). `DEAD_STRIKES_MAX - 1` keeps the symbol
+// referenced and is the number quoted above.
+// NOT caught, and stated rather than hidden:
+//   · the TAG store's re-read (`tags = adoptedRelays()` reverted to `tags = tagged`) — ZERO red. It is
+//     defence-in-depth against a SECOND pass tagging a row inside this one's probe window, and this pass
+//     has no re-entry guard (finding 11 of the same audit, deliberately not fixed here), so the only test
+//     that could distinguish it would have to drive two concurrent passes — which would be a test that
+//     depends on that open defect being legal. The extraRelays() half of the same write IS caught, by the
+//     race test, which is the half the finding was about.
+//
 // FIRST ROUND — not caught, and both are stated rather than hidden:
 //   · keeping the gate call but ignoring its answer. On this base `proveRelay` admits on the possession
 //     proof alone, so there is no address that proves the key the church signed and that the gate would
@@ -87,6 +109,9 @@ import { finalizeEvent, verifyEvent } from 'nostr-tools/pure';
 import { normalizeURL } from 'nostr-tools/utils';
 import { fnBody, stmt } from './test-slice.mjs';
 import * as H from './relay-network-harness.mjs';
+import { createServer as createHttpServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 
 const RELAY_NET_D = 'trinityone/relay-net';
 const GROUP_D = 'trinityone/group:';
@@ -244,6 +269,10 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'function _isDeclined', '_isDeclined'),
     fnBody(src, 'function declineRelay', 'declineRelay'),
     fnBody(src, 'function undeclineRelay', 'undeclineRelay'),
+    stmt(src, 'var DEAD_STRIKES_LS = ', 'DEAD_STRIKES_LS'),
+    stmt(src, 'var DEAD_STRIKES_MAX = ', 'DEAD_STRIKES_MAX'),
+    fnBody(src, 'function deadStrikes', 'deadStrikes'),
+    fnBody(src, 'function setDeadStrikes', 'setDeadStrikes'),
     fnBody(src, 'function getNamedRelays', 'getNamedRelays'),
     fnBody(src, 'function setNamedRelays', 'setNamedRelays'),
     stmt(src, 'var NAMES_LS = ', 'NAMES_LS'),
@@ -276,6 +305,16 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     'them wedge every change to the church\'s relay list — the HIGH finding of the 2026-10-22 audit.');
   assert.match(adopt, /_staleBoxSpelling\(u\)/,
     'the merge no longer recognises a box it already lists at an address that cannot be dialled');
+  // THE TWO FIXES OF 2026-10-23, re-anchored in the bundle. Each is also driven to a red/green conclusion by
+  // a test below; these two lines are what stops a slice that no longer contains either one from leaving
+  // those tests passing over nothing (the same guard the four lines above exist for).
+  const retire = fnBody(src, 'async function retireDeadAdoptedRows', 'retireDeadAdoptedRows');
+  assert.match(retire, /await verifyRelayIdentityDetailed\(u\)/,
+    'THE RETIRE PASS IS BACK ON THE WRAPPER. verifyRelayIdentity discards `reached`, so one ~6s timeout ' +
+    'retires a row again and a church box switched off for an afternoon loses its address on every console.');
+  assert.doesNotMatch(retire, /_writeExtraRelays\(cur\.filter/,
+    'FIX 2 REGRESSED: the write is computed from the list read BEFORE the probes, so a relay the steward ' +
+    'added while the pass was out is silently deleted.');
 
   const win = fakeWindow();
   const scope = scopeOf({
@@ -330,6 +369,7 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
              declined: () => declinedRelays(),
              isDeclined: (u) => _isDeclined(u),
              staleSpelling: _staleBoxSpelling,
+             strikes: () => deadStrikes(),
              sharedSpelling: isSharedRelaySpelling,
              ownSpelling: isOwnRelaySpelling,
              setChurch: (p) => { pub = p; churchPub = p; },
@@ -380,6 +420,58 @@ async function pressRemove(con, url) {
   const out = dropOutcome(r, url);
   if (out.drop) con.removeRelay(url);
   return { r, out };
+}
+
+// ── A TUNNEL THAT HAS BEEN TORN DOWN, STAGED AS IT REALLY HAPPENS ───────────────────────────────────────
+//
+// ADDED 2026-10-23 with FIX 1, and it replaces `relay.stop()` in the two retire tests below. The difference
+// is the whole of that fix. `relay.stop()` closes the port, so the console's probe gets ECONNREFUSED and
+// `verifyRelayIdentityDetailed` reports `reached: false` -- which is INDISTINGUISHABLE from the church's box
+// being switched off for an afternoon, and the pass must not retire a row for that (RELAY-ADMISSION, and
+// src/steward.src.js:DEAD_STRIKES_LS).
+//
+// What actually wedges a real church is different and was measured: `enrolRelayNet` publishes
+// selfPublicRelay, a Cloudflare quick-tunnel hostname that changes on every restart of the tunnel, and a
+// hostname whose tunnel is gone does NOT stop resolving. It still points at Cloudflare, which answers HTTP
+// 530 at it. So the probe REACHES something that is not the church's box. That is the case this pass
+// retires, and the only honest way to stage it is to kill the real gateway and bind something that really
+// answers at the address it had.
+//
+// `hold()` parks the response instead of answering, so a test can stand inside the pass's probe and do
+// something to the store while it is out -- which is what the Add-mid-pass race below needs. Nothing about
+// the console is injected or stubbed: this is one more real HTTP server, like H.startFakeRelay.
+async function tunnelTornDown(relay) {
+  try { relay.proc.kill('SIGKILL'); } catch {}
+  await H.waitFor(async () => { try { await fetch(relay.base + '/status'); return false; } catch (e) { return true; } },
+                  { label: relay.name + ' stopped answering before the 530 took its place' });
+  let holding = false;
+  const parked = [];
+  const five30 = (res) => { try { res.writeHead(530, { 'Content-Type': 'text/plain' }); res.end('error code: 1033'); } catch (e) {} };
+  const srv = createHttpServer((req, res) => { if (holding) parked.push(res); else five30(res); });
+  await new Promise((ok, bad) => { srv.once('error', bad); srv.listen(relay.port, '127.0.0.1', ok); });
+  return {
+    url: relay.wsUrl, port: relay.port,
+    hold: () => { holding = true; },
+    waiting: () => parked.length,
+    release: () => { holding = false; while (parked.length) five30(parked.pop()); },
+    close: () => new Promise(r => { try { srv.closeAllConnections(); } catch (e) {} srv.close(() => r()); }),
+  };
+}
+// THE SAME BOX BACK AT THE SAME ADDRESS, which H.moveRelay deliberately does NOT do (that is the same box at
+// a NEW address, the tunnel-restart case). Re-spawned over its own data directory on its own port, so it
+// reads back the same relay-key.json and proves the same key at the same url -- a church box switched on
+// again after a night off. Needed because rule 4 will not take "downtime no longer un-candidates a box" on
+// anything less than a test that drives a real outage AND a real recovery.
+async function comeBack(relay) {
+  const proc = spawn(process.execPath, [join(H.ROOT, 'scripts/gateway.mjs'), String(relay.port)], {
+    cwd: H.ROOT, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: relay.dataDir, RELAY_SYNC: '0', RELAY_MAX_EVENTS: '5000' },
+  });
+  const st = await H.waitFor(async () => { try { const r = await fetch(relay.base + '/status'); return r.ok ? r.json() : false; } catch (e) { return false; } },
+                             { label: relay.name + ' came back at ' + relay.base });
+  assert.equal(st.relayPub, relay.relayPub,
+    'staging fault: the box came back with a DIFFERENT identity key, so it is not the same box returning');
+  return { stop: () => { try { proc.kill('SIGKILL'); } catch (e) {} } };
 }
 
 // How many copies of one document a box holds, read off THAT BOX'S OWN STORE as the church key.
@@ -713,6 +805,7 @@ test('two adopted rows whose boxes are gone no longer wedge the church\'s relay 
     H.startRelay({ name: 'tunnel-2', churches: [church.pub] }),
   ]);
   const con = makeConsole({ church, origin: ORIGIN, canonical: [SHARED.wsUrl], boxHostsUs: true });
+  let t1 = null, t2 = null;
   try {
     // The church signs its box at three addresses over the life of the tunnel. All three are real boxes.
     await H.publishAll(SHARED, [relayNetDocFor(church, [BOX, g1, g2].map(r =>
@@ -722,8 +815,11 @@ test('two adopted rows whose boxes are gone no longer wedge the church\'s relay 
     assert.equal(con.extraRelays().length, 3, 'staging fault: the three boxes were not all adopted — ' + JSON.stringify(con.extraRelays()));
     assert.equal(con.adopted().length, 3, 'the rows this path added are not recorded as its own, so none can retire');
 
-    // Two tunnels restart and never answer at those addresses again.
-    g1.stop(); g2.stop();
+    // Two tunnels are torn down. RESTAGED 2026-10-23 with FIX 1: this used to be `g1.stop(); g2.stop()`,
+    // which closes the port, and a closed port is `reached: false` -- the shape of a box switched off for an
+    // afternoon, which the pass must now keep. A torn-down quick tunnel is not that: the hostname still
+    // resolves to Cloudflare and Cloudflare answers 530 at it. See tunnelTornDown.
+    t1 = await tunnelTornDown(g1); t2 = await tunnelTornDown(g2);
     assert.equal(await con.readCovers(), false, 'staging fault: two dead rows did not make the read incomplete');
 
     // THE JAM, on the product's own path. The steward is trying to remove the box that IS answering.
@@ -731,11 +827,19 @@ test('two adopted rows whose boxes are gone no longer wedge the church\'s relay 
     assert.equal(jam.removed, false, 'staging fault: the removal was not blocked, so there is no jam to clear');
     assert.equal(jam.unknown, true, 'the removal failed for some other reason than the incomplete read: ' + JSON.stringify(jam));
 
-    // THE UNLOCK TICK CLEARS IT. Same call the console makes on boot with a key and on every unlock.
+    // THE UNLOCK TICKS CLEAR IT. Same call the console makes on boot with a key and on every unlock, and
+    // there are TWO of them because FIX 1 requires two consecutive answered failures: one unlock is a
+    // hiccup, and a church box must not lose its address for one.
     // DECIDES FIRST: adoptNetDocAddresses' own `pub !== churchPub` guard (satisfied — setKey assigns both),
     // then `if (!entries.length) return []`, which is the retire pass's precondition. The line that decides
-    // each ROW's fate is `if (!/^[0-9a-f]{64}$/.test(proved))` inside retireDeadAdoptedRows — a real
-    // /relay-identity round trip to a port nothing listens on. Nothing earlier can drop a row.
+    // each ROW's fate is the proof test inside retireDeadAdoptedRows, and then `if (!reached)` — a real
+    // /relay-identity round trip to an address that really answers, and really is not the box any more.
+    // Nothing earlier can drop a row.
+    con.setKey('x '.repeat(12).trim());
+    for (let i = 0; i < 240 && Object.keys(con.strikes()).length < 2; i++) await sleep(250);
+    assert.equal(Object.keys(con.strikes()).length, 2,
+      'the first unlock did not score both dead rows: ' + JSON.stringify(con.strikes()));
+    assert.equal(con.extraRelays().length, 3, 'a row retired on the FIRST answered failure, so one hiccup is still enough');
     con.setKey('x '.repeat(12).trim());
     for (let i = 0; i < 240 && con.extraRelays().length > 1; i++) await sleep(250);
     assert.deepEqual(con.extraRelays(), [BOX.wsUrl],
@@ -748,7 +852,7 @@ test('two adopted rows whose boxes are gone no longer wedge the church\'s relay 
     assert.equal(freed.removed, true,
       'the church\'s relay list STILL cannot be changed: ' + JSON.stringify(freed) + '. Retiring the dead ' +
       'rows was the whole point — a row nobody typed must be able to leave again by itself.');
-  } finally { con.close(); g1.stop(); g2.stop(); }
+  } finally { if (t1) await t1.close(); if (t2) await t2.close(); con.close(); g1.stop(); g2.stop(); }
 });
 
 test('a row that is still answering is never retired, and nothing is retired without a read', async () => {
@@ -779,6 +883,161 @@ test('a row that is still answering is never retired, and nothing is retired wit
       'a read that returned nothing still retired a row. On a phone with no signal that throws away every ' +
       'address the console has, on every unlock.');
   } finally { con2.close(); }
+});
+
+// ── 4b. WHAT "NO LONGER ANSWERS" MEANS (audit of b057bfd0, FIX 1 and FIX 2) ──────────────────
+//
+// Three tests, all driven against real gateways and real HTTP servers. Nothing injects `one`, `netEntries`,
+// `verify` or `relayNetEntries` -- every probe below is a real /relay-identity round trip to an address that
+// really does what the test says it does.
+
+test('a box that is merely off keeps its row; only an address that answers and is not the box retires', async () => {
+  // THE DEFECT FIX 1 ANSWERS. The pass called `verifyRelayIdentity`, the wrapper, which throws away
+  // `reached` -- so a single ~6s timeout retired the row, and a church box switched off for an evening lost
+  // its address on every console of that church, silently, on the next unlock.
+  //
+  // THE TWO ROWS ARE IN ONE CONSOLE AND ONE PASS, so the only difference between them is what their address
+  // does when it is dialled. A fix that kept everything, or dropped everything, fails one half or the other.
+  const [off, torn530] = await Promise.all([
+    H.startRelay({ name: 'switched-off', churches: [church.pub] }),
+    H.startRelay({ name: 'tunnel-gone', churches: [church.pub] }),
+  ]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  let torn = null;
+  try {
+    await H.publishAll(SHARED, [relayNetDocFor(church, [off, torn530].map(r =>
+      ({ pubkey: r.relayPub, alwaysOn: true, url: r.wsUrl })))]);
+    assert.deepEqual((await con.adopt()).slice().sort(), [off.wsUrl, torn530.wsUrl].slice().sort(),
+      'staging fault: both real boxes were not adopted');
+
+    // One box is SWITCHED OFF: its port closes, so nothing answers at all (`reached: false`).
+    off.proc.kill('SIGKILL');
+    await H.waitFor(async () => { try { await fetch(off.base + '/status'); return false; } catch (e) { return true; } },
+                    { label: 'the switched-off box to stop answering' });
+    // The other box's TUNNEL IS GONE: the address still answers, with a 530 (`reached: true`).
+    torn = await tunnelTornDown(torn530);
+
+    // DECIDES FIRST inside the pass: `if (!tagged.length) return []` — satisfied, both rows are tagged —
+    // then `cur = extraRelays()`, which lists both. The line that decides each ROW is the proof test and
+    // then `if (!reached)`. Nothing before that can tell these two rows apart: same console, same document,
+    // same pass, both adopted by the same call. That is what makes this test about `reached` and the strike
+    // counter and nothing else.
+    assert.deepEqual(await con.retire(), [],
+      'ONE ANSWERED FAILURE RETIRED A ROW. The strike counter is gone, so a single bad unlock is enough.');
+    assert.deepEqual(con.extraRelays().slice().sort(), [off.wsUrl, torn530.wsUrl].slice().sort(),
+      'a row left the store on the first pass: ' + JSON.stringify(con.extraRelays()));
+    assert.equal(Object.keys(con.strikes()).length, 1,
+      'the strike store holds ' + JSON.stringify(con.strikes()) + '. Exactly one row ANSWERED, so exactly ' +
+      'one strike may be scored — scoring the switched-off box means downtime still un-candidates it.');
+    assert.ok(Object.keys(con.strikes()).some(k => k.includes(String(torn530.port))),
+      'the strike was scored against the wrong address: ' + JSON.stringify(con.strikes()));
+
+    // THE SECOND CONSECUTIVE ANSWERED FAILURE. Same two rows, same one difference.
+    assert.deepEqual(await con.retire(), [torn530.wsUrl],
+      'THE ROW AT AN ADDRESS THAT ANSWERS AND IS NOT THE CHURCH BOX DID NOT RETIRE after two passes. That ' +
+      'is the row that makes `_readCovers` false, and two of them wedge every change to the church\'s relay ' +
+      'list for ever — the HIGH finding this pass exists to answer.');
+    assert.deepEqual(con.extraRelays(), [off.wsUrl],
+      'THE SWITCHED-OFF BOX LOST ITS ROW: ' + JSON.stringify(con.extraRelays()) + '. A relay off for an ' +
+      'afternoon must not be un-candidated (RELAY-ADMISSION).');
+    assert.deepEqual(con.adopted(), [off.wsUrl], 'the provenance store and the row list disagree');
+    assert.deepEqual(con.strikes(), {},
+      'the retired row left its strike behind: ' + JSON.stringify(con.strikes()) + '. The store is pruned ' +
+      'by being rewritten from the rows the pass considered, so this says the prune is gone.');
+
+    // AND IT SURVIVES BEING OFF FOR LONGER THAN ONE UNLOCK. Four more passes, nothing answering.
+    for (let i = 0; i < 4; i++) assert.deepEqual(await con.retire(), [],
+      'the switched-off box retired on pass ' + (i + 3) + ' — an unreachable probe is accumulating strikes');
+    assert.deepEqual(con.extraRelays(), [off.wsUrl], 'the switched-off box lost its row after six passes');
+    assert.deepEqual(con.strikes(), {}, 'an unreachable probe scored a strike: ' + JSON.stringify(con.strikes()));
+  } finally { if (torn) await torn.close(); con.close(); off.stop(); torn530.stop(); }
+});
+
+test('one answered failure is not enough, and the box answering in between forgets it', async () => {
+  // WHAT "TWO CONSECUTIVE" MEANS, and what clears the count. Rule 4 will not take "downtime no longer
+  // un-candidates a box" on anything less than a test that drives a real outage AND a real recovery, so the
+  // box here is genuinely killed and genuinely brought back at the SAME address over its own data directory.
+  const box = await H.startRelay({ name: 'overnight-box', churches: [church.pub] });
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: box.relayPub, alwaysOn: true, url: box.wsUrl }])]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  let torn = null, revived = null;
+  try {
+    assert.deepEqual(await con.adopt(), [box.wsUrl], 'staging fault: nothing was adopted');
+    torn = await tunnelTornDown(box);
+    // DECIDES FIRST: `!tagged.length` (one row is tagged), then the proof test, then `if (!reached)` — and
+    // this address really answers, so it is the strike branch that runs and not the unreachable one.
+    assert.deepEqual(await con.retire(), [], 'one answered failure retired the row');
+    assert.equal(Object.values(con.strikes())[0], 1,
+      'the first answered failure scored ' + JSON.stringify(con.strikes()) + ', not one');
+
+    // THE BOX COMES BACK AT THE SAME ADDRESS.
+    await torn.close(); torn = null;
+    revived = await comeBack(box);
+    assert.deepEqual(await con.retire(), [], 'a box that is answering again was retired anyway');
+    assert.deepEqual(con.strikes(), {},
+      'THE STRIKE SURVIVED THE RECOVERY: ' + JSON.stringify(con.strikes()) + '. "Two CONSECUTIVE failures" ' +
+      'then means "two failures ever", and a box with one bad afternoon behind it dies on its next hiccup.');
+    assert.deepEqual(con.extraRelays(), [box.wsUrl], 'the recovered row is gone');
+
+    // AND THE COUNT STARTS AGAIN FROM ONE, not from one-already-spent.
+    revived.stop(); revived = null;
+    torn = await tunnelTornDown(box);
+    assert.deepEqual(await con.retire(), [],
+      'the proof did not reset the count, so a single answered failure retired the row');
+    assert.equal(Object.values(con.strikes())[0], 1, 'the count did not restart at one: ' + JSON.stringify(con.strikes()));
+    assert.deepEqual(await con.retire(), [box.wsUrl], 'two consecutive answered failures did not retire the row');
+    assert.deepEqual(con.extraRelays(), [], 'the row is still listed after the pass reported it retired');
+    assert.deepEqual(con.strikes(), {}, 'the retired row left its count behind: ' + JSON.stringify(con.strikes()));
+  } finally { if (torn) await torn.close(); if (revived) revived.stop(); con.close(); box.stop(); }
+});
+
+test('a relay the steward adds while the retire pass is probing is still there when the pass writes', async () => {
+  // FIX 2, DRIVEN rather than reasoned about. `cur = extraRelays()` was read BEFORE N serial
+  // /relay-identity round trips of up to 6.5s each and written back afterwards, so anything that reached
+  // the store inside that window was deleted without a word. The window is real: two dead rows is ~13s, and
+  // the steward's own Add on the Relays card lands inside it — they unlock the console and press Add.
+  //
+  // The pass is genuinely STOOD STILL inside its first probe: the torn-down tunnel parks the HTTP response
+  // instead of answering it, so there is no sleep here and no timing assumption. Add is then pressed
+  // through the bundle's own Add route (lifted and run — see the first test in this file), and the pass is
+  // let go.
+  const [a, b] = await Promise.all([
+    H.startRelay({ name: 'race-1', churches: [church.pub] }),
+    H.startRelay({ name: 'race-2', churches: [church.pub] }),
+  ]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  const TYPED = 'wss://the-relay-the-steward-just-typed.example/relay';
+  let t1 = null, t2 = null;
+  try {
+    await H.publishAll(SHARED, [relayNetDocFor(church, [a, b].map(r =>
+      ({ pubkey: r.relayPub, alwaysOn: true, url: r.wsUrl })))]);
+    assert.equal((await con.adopt()).length, 2, 'staging fault: both real boxes were not adopted');
+    t1 = await tunnelTornDown(a); t2 = await tunnelTornDown(b);
+    // Both rows to one strike, so the pass that follows is the one that WRITES. A pass that writes nothing
+    // cannot lose the steward's row, so without this the test would pass over nothing.
+    assert.deepEqual(await con.retire(), [], 'staging fault: a row retired on its first answered failure');
+    assert.equal(Object.keys(con.strikes()).length, 2, 'staging fault: both rows did not reach one strike');
+
+    t1.hold(); t2.hold();
+    const pass = con.retire();
+    await H.waitFor(() => t1.waiting() + t2.waiting() >= 1,
+                    { label: 'the retire pass to be standing inside a probe it cannot finish' });
+    const added = con.addRelay(TYPED);
+    assert.ok(added, 'staging fault: the bundle\'s Add route refused the address, so nothing was added mid-pass');
+    assert.ok(con.extraRelays().includes(added), 'staging fault: Add did not write the store');
+    t1.release(); t2.release();
+    // DECIDES FIRST, for the typed row: nothing at all. It is not in `adoptedRelays()`, so it is never a
+    // retire candidate, no probe is ever made of it, and no branch in the pass mentions it. The ONLY way it
+    // can leave the store is the stale write — which is what makes this assertion about FIX 2 and nothing
+    // else. The two dead rows retiring in the same breath is what proves the pass really wrote.
+    assert.equal((await pass).length, 2, 'staging fault: the two dead rows did not retire, so nothing was written');
+    assert.deepEqual(con.extraRelays(), [added],
+      'THE RELAY THE STEWARD JUST ADDED IS GONE: ' + JSON.stringify(con.extraRelays()) + '. The retire pass ' +
+      'wrote back the list it read ~13s earlier. `signRelay` may already have put that address into the ' +
+      'church\'s SIGNED document, so this console now refuses to dial a relay its own document names, and ' +
+      'nothing on the screen says why.');
+    assert.deepEqual(con.adopted(), [], 'a provenance tag survived its row');
+  } finally { if (t1) await t1.close(); if (t2) await t2.close(); con.close(); a.stop(); b.stop(); }
 });
 
 // ── 4c. THE PATH DIFFERENCE (audit 2026-10-22 finding 2) ──────────────────────────────────
@@ -963,20 +1222,22 @@ test('a RETIRE never declines — a box offline for an afternoon is not shut out
   const addr = gone.wsUrl;
   await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: gone.relayPub, alwaysOn: true, url: addr }])]);
   const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  let torn = null;
   try {
     assert.deepEqual(await con.adopt(), [addr], 'staging fault: nothing was adopted');
     assert.deepEqual(con.declined(), [], 'staging fault: something was declined before the box even went away');
-    gone.stop();
+    torn = await tunnelTornDown(gone);
     // DECIDES FIRST inside the retire pass: `if (!tagged.length) return []` (one row is tagged), then the
-    // proof test, which is what drops this row — the box is really gone. What this test asserts is what the
-    // pass does NOT do on the way.
+    // proof test, then `if (!reached)` — this address answers, so the strike branch runs. The FIRST pass
+    // must not drop it (FIX 1); the second does. What this test asserts is what neither pass does on the way.
+    assert.deepEqual(await con.retire(), [], 'staging fault: the row retired on one answered failure, so the second pass tests nothing');
     assert.deepEqual(await con.retire(), [addr], 'staging fault: the dead row was not retired, so nothing was tested');
     assert.deepEqual(con.declined(), [],
       'A RETIRE WROTE A DECLINE. A church box switched off for an afternoon is now refused for ever, and ' +
       'the next unlock will never adopt it again — fail-closed in the wrong place, which is the mistake ' +
       'RELAY-ADMISSION exists to warn about.');
     assert.equal(con.isDeclined(addr), false, 'the retired address reads as declined, so it can never be adopted again');
-  } finally { con.close(); gone.stop(); }
+  } finally { if (torn) await torn.close(); con.close(); gone.stop(); }
 });
 
 test('the decline is one ADDRESS, never the box — the same box at another scheme is untouched', async () => {
@@ -1041,7 +1302,7 @@ test('the decline list is bounded', () => {
 // data, which is what ROUTING_KEYS is for.
 //
 // app/backup.jsx ships UNBUNDLED, so these two functions are sliced out and RUN (rule 3), never matched.
-test('neither new store leaves in a backup, and neither can be written by an imported file', () => {
+test('none of the three routing stores leaves in a backup, and none can be written by an imported file', () => {
   const BK = readFileSync(new URL('../app/backup.jsx', import.meta.url), 'utf8');
   const body = [
     stmt(BK, '  const ROUTING_KEYS = new Set(', 'ROUTING_KEYS'),
@@ -1055,6 +1316,7 @@ test('neither new store leaves in a backup, and neither can be written by an imp
     'trinityone.steward.relay-names': '[{"name":"grace","url":"wss://grace.example/relay"}]',
     'trinityone.steward.adopted-relays': '["wss://adopted.example/relay"]',
     'trinityone.steward.declined-relays': '["wss://declined.example/relay"]',
+    'trinityone.steward.dead-relay-strikes': '{"wss://adopted.example/relay":1}',
   });
   const m = new Function('localStorage', body + '\nreturn { snapshot, restoreLocal, STEWARD_PREFIXES, ROUTING_KEYS };')(store);
   assert.ok(m.STEWARD_PREFIXES.includes('trinityone.steward'),
@@ -1063,7 +1325,8 @@ test('neither new store leaves in a backup, and neither can be written by an imp
   // OUT: the export carries the church's name and neither routing store.
   const out = m.snapshot(m.STEWARD_PREFIXES);
   assert.ok('trinityone.steward.church-name' in out, 'the export stopped carrying ordinary steward state — staging fault');
-  for (const k of ['trinityone.steward.adopted-relays', 'trinityone.steward.declined-relays']) {
+  for (const k of ['trinityone.steward.adopted-relays', 'trinityone.steward.declined-relays',
+                   'trinityone.steward.dead-relay-strikes']) {
     assert.equal(k in out, false, k + ' travels in every steward backup. It is an instruction about which ' +
       'machines a church talks to, stale the moment the file is written.');
   }
@@ -1078,6 +1341,7 @@ test('neither new store leaves in a backup, and neither can be written by an imp
     'trinityone.steward.church-name': 'Attacker\u2019s Chapel',
     'trinityone.steward.adopted-relays': '["wss://typed-by-the-steward.example/relay"]',
     'trinityone.steward.declined-relays': '["wss://the-churchs-own-box.example/relay"]',
+    'trinityone.steward.dead-relay-strikes': '{"wss://the-churchs-own-box.example/relay":1}',
   }, m.STEWARD_PREFIXES);
   assert.equal(victim.getItem('trinityone.steward.church-name'), 'Attacker\u2019s Chapel',
     'the import wrote nothing at all, so the two refusals below prove nothing');
@@ -1086,7 +1350,11 @@ test('neither new store leaves in a backup, and neither can be written by an imp
     'church\'s choosing, and nothing on the screen says why.');
   assert.equal(victim.getItem('trinityone.steward.adopted-relays'), null,
     'an imported file forged an ADOPTED tag, so the retire pass may now drop a row the steward typed');
-  assert.equal(skipped, 2, 'restoreLocal reported ' + skipped + ' skipped keys, expected the two routing stores');
+  assert.equal(victim.getItem('trinityone.steward.dead-relay-strikes'), null,
+    'AN IMPORTED FILE FORGED A STRIKE. The retire pass now drops a row on the FIRST answered failure ' +
+    'instead of the second, which is exactly the guard that stops a church box being un-candidated for a ' +
+    'moment of downtime (src/steward.src.js:DEAD_STRIKES_LS).');
+  assert.equal(skipped, 3, 'restoreLocal reported ' + skipped + ' skipped keys, expected the three routing stores');
 });
 
 // ── 5. ONLY THIS CONSOLE'S OWN CHURCH ───────────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ import { normalizeURL } from 'nostr-tools/utils';
 import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
-import { verifyRelayIdentity, relayAddrKey } from './relay-identity.src.js';
+import { verifyRelayIdentity, verifyRelayIdentityDetailed, relayAddrKey } from './relay-identity.src.js';
 // …and then decide whether the key it proved is one this church's network contains, and write the document
 // that says so. Shared with the member app so both surfaces answer that question the same way.
 // …and C4's gate, which is what keeps this church's documents off a relay that cannot prove itself.
@@ -5609,7 +5609,60 @@ function _isDeclined(u) {
 }
 function declineRelay(u) { const v = String(u || '').trim(); if (v) setDeclinedRelays([v, ...declinedRelays().filter(r => _declineKey(r) !== _declineKey(v))]); }
 function undeclineRelay(u) { const k = _declineKey(u); if (k) setDeclinedRelays(declinedRelays().filter(r => r !== u && _declineKey(r) !== k)); }
-// Drop every row this path added that no longer answers at all, in one write.
+// HOW MANY ANSWERED FAILURES RETIRE A ROW, where the count lives and what clears it (audit of b057bfd0,
+// FIX 1).
+//
+// THE DEFECT. The first version of retireDeadAdoptedRows called `verifyRelayIdentity` -- the WRAPPER, which
+// returns the proof and throws away the one bit that matters here. src/relay-identity.src.js documents it:
+// `reached` is "true when the HTTP request got a response (even a non-200 or unparseable one), false when
+// the host timed out or the network was down", and it is what "lets adoptInviteRelays retry an unreachable
+// box instead of refusing it". That is exactly this pass's question, and it was discarded. So ONE ~6s
+// timeout retired the row, and the only thing between a church box switched off for an afternoon and losing
+// its address on every console was adoptNetDocAddresses' `entries.length` check -- which is a GLOBAL
+// connectivity signal (the shared pool answered) and says nothing whatever about whether the church's own
+// box is reachable from this phone. RELAY-ADMISSION's "a relay off for an afternoon must not be
+// un-admitted" was therefore reading, here, as "downtime un-CANDIDATES".
+//
+// THE RULE NOW, per row, per pass:
+//   * answered WITH a relay key        -> keep the row, and forget any strike it had.
+//   * nothing answered (reached false) -> keep the row, strike count UNCHANGED. A box switched off, a flat
+//     phone, a captive portal and a hostname that has stopped resolving are ONE observation here, and the
+//     conservative reading is the only safe one: this pass may not un-candidate a box for being off.
+//   * answered WITHOUT a relay key     -> one strike. The SECOND consecutive one retires the row.
+//
+// AND THE JAM STILL CLEARS, which is why the pass exists, and this is MEASURED rather than argued: the rows
+// that wedge it are Cloudflare quick-tunnel hostnames (enrolRelayNet publishes selfPublicRelay, which
+// changes on every restart of the tunnel), and a quick-tunnel hostname whose tunnel is gone does NOT stop
+// resolving -- it still points at Cloudflare, which answers HTTP 530 at it. So `reached` is TRUE for
+// precisely the rows that cause the jam: each unlock scores a strike and the second one retires them.
+//
+// WHAT THIS GIVES UP, stated rather than left to be discovered: a row whose address stops resolving
+// altogether -- a LAN address of a box that has gone, a tunnel name whose DNS record was deleted -- is now
+// never retired by this pass, because every probe of it reads `reached: false` and is indistinguishable
+// from the box being off. Such a row can still make `_readCovers` false, and the escape is the steward's
+// own Remove, which `removeRelay` now remembers (b057bfd0) so it stays removed. That is the trade
+// RELAY-ADMISSION asks for: a church that switches its box off overnight must not lose it.
+//
+// WHERE THE COUNT LIVES: one localStorage object, address -> small integer, keyed by `_declineKey` -- the
+// same normalizeURL-or-lowercase key the decline uses, so a cosmetic re-spelling cannot reset it.
+// WHAT CLEARS IT: (a) the address answering with its key, on any pass; (b) the row being retired; (c) the
+// row leaving extraRelays() or the adopted tag store; (d) there being no adopted rows at all. (b), (c) and
+// (d) are one mechanism: every pass REWRITES the object from the rows it actually considered, so nothing
+// else can be in it. It is therefore bounded by NETDOC_ADOPT_MAX without a cap of its own, unlike
+// DECLINED_MAX -- a decline outlives its row and this does not.
+// AND IT IS A ROUTING INSTRUCTION, NOT DATA, so it is named in app/backup.jsx:ROUTING_KEYS beside the other
+// two: a `trinityone.steward.*` key travels in every steward backup and is writable by an untrusted file,
+// and a forged strike of 1 would make the next answered failure retire a row on the FIRST observation
+// instead of the second -- which is the guard above, undone by a file.
+const DEAD_STRIKES_LS = 'trinityone.steward.dead-relay-strikes';
+const DEAD_STRIKES_MAX = 2;
+function deadStrikes() {
+  try { const o = JSON.parse(lsGet(DEAD_STRIKES_LS) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch { return {}; }
+}
+function setDeadStrikes(map) { try { lsSet(DEAD_STRIKES_LS, JSON.stringify(map || {})); } catch (e) {} }
+// Drop every row this path added that has TWICE answered at its own address without proving a relay key, in
+// one write. Both words are load-bearing and neither was true before: see DEAD_STRIKES_LS above for why one
+// timeout is not a death and why the jam this pass exists to clear is still cleared.
 //
 // ONLY CALLED AFTER A READ THAT ACTUALLY RETURNED THE CHURCH'S ENTRIES, which is this console's cheapest
 // proof that it has a network at all. Without that precondition a phone with no signal would retire every
@@ -5621,22 +5674,54 @@ function undeclineRelay(u) { const k = _declineKey(u); if (k) setDeclinedRelays(
 // job and not this one's; a box that answers nothing is the one that wedges the read.
 async function retireDeadAdoptedRows() {
   const tagged = adoptedRelays();
-  if (!tagged.length) return [];
+  // No adopted rows at all: nothing here can ever retire, so there is nothing for a strike to describe.
+  if (!tagged.length) { if (Object.keys(deadStrikes()).length) setDeadStrikes({}); return []; }
   let cur = []; try { cur = extraRelays(); } catch (e) { return []; }
   // Forget a tag whose row a steward has already removed, so the store cannot grow without bound.
   const listed = tagged.filter(u => cur.includes(u));
+  const was = deadStrikes();
+  const strikes = {};
   const retired = [];
   for (const u of listed) {
-    let proved = '';
-    try { const pr = await verifyRelayIdentity(u); proved = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { proved = ''; }
-    if (!/^[0-9a-f]{64}$/.test(proved)) retired.push(u);
+    const k = _declineKey(u) || u;
+    let proved = '', reached = false;
+    // THE DETAILED CALL, NOT THE WRAPPER (FIX 1). `verifyRelayIdentity` hands back the proof alone and
+    // discards `reached`, which is the only thing that separates "this address is not our box any more"
+    // from "nothing answered just now". src/fellowship.src.js:adoptInviteRelays reads it for the same
+    // reason, and the two are now the same shape of decision on the two surfaces.
+    try {
+      const d = await verifyRelayIdentityDetailed(u);
+      proved = String((d && d.proof && d.proof.relayPub) || '').toLowerCase();
+      reached = !!(d && d.reached);
+    } catch (e) { proved = ''; reached = false; }
+    if (/^[0-9a-f]{64}$/.test(proved)) continue;                      // still our box: any strike is forgotten
+    if (!reached) { const n = Number(was[k]) || 0; if (n > 0) strikes[k] = n; continue; }   // nothing answered
+    const n = (Number(was[k]) || 0) + 1;
+    if (n >= DEAD_STRIKES_MAX) retired.push(u); else strikes[k] = n;  // one answered failure is not enough
   }
+  // EVERY WRITE FROM A FRESH READ (audit of b057bfd0, FIX 2). `cur` and `tagged` were read BEFORE N serial
+  // /relay-identity round trips of up to 6.5s each. Inside that window the steward may have pressed Add on
+  // the Relays card, refreshNamedRelays' 90s swap may have landed, or another pass may have tagged a row.
+  // Writing the pre-probe list back DELETED whatever arrived -- and for Add that is a relay the steward had
+  // just added, which signRelay may already have put into the church's SIGNED document, so the console
+  // stops dialling a relay its own document names and nothing on the screen says why. The swap branch in
+  // adoptNetDocAddresses re-reads for exactly this reason ("the proofs above took two round trips"); this
+  // is the same hazard, in the branch that was missed. The TAG store is re-read too: `tagged` is just as
+  // stale, and writing it back would drop the provenance of a row another pass had adopted in the window,
+  // leaving a row nobody typed that can never retire itself.
   if (retired.length) {
-    _writeExtraRelays(cur.filter(u => !retired.includes(u)));
-    setAdoptedRelays(listed.filter(u => !retired.includes(u)));
-  } else if (listed.length !== tagged.length) {
-    setAdoptedRelays(listed);
+    let live = cur; try { live = extraRelays(); } catch (e) { live = cur; }
+    _writeExtraRelays(live.filter(u => !retired.includes(u)));
   }
+  let tags = tagged; try { tags = adoptedRelays(); } catch (e) { tags = tagged; }
+  let rows = cur; try { rows = extraRelays(); } catch (e) { rows = cur; }
+  const keep = tags.filter(u => !retired.includes(u) && rows.includes(u));
+  if (keep.length !== tags.length) setAdoptedRelays(keep);
+  // THE PRUNE, and it is this line rather than a cap: the object is rewritten from the rows this pass
+  // actually considered, so a strike for a row that has been retired, removed or untagged simply is not
+  // carried over. Written only when it changed, so an unlock with nothing to say costs no write.
+  const kn = Object.keys(strikes), kw = Object.keys(was);
+  if (kn.length !== kw.length || kn.some(k => Number(was[k]) !== Number(strikes[k]))) setDeadStrikes(strikes);
   return retired;
 }
 // THE MERGE. Fire-and-forget from setKey (see there); never awaited, so a slow or dead box cannot delay an
