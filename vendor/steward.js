@@ -19222,9 +19222,28 @@ zoo`.split("\n");
     const k = _declineKey(u);
     if (k) setDeclinedRelays(declinedRelays().filter((r) => r !== u && _declineKey(r) !== k));
   }
+  var DEAD_STRIKES_LS = "trinityone.steward.dead-relay-strikes";
+  var DEAD_STRIKES_MAX = 2;
+  function deadStrikes() {
+    try {
+      const o = JSON.parse(lsGet(DEAD_STRIKES_LS) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch {
+      return {};
+    }
+  }
+  function setDeadStrikes(map) {
+    try {
+      lsSet(DEAD_STRIKES_LS, JSON.stringify(map || {}));
+    } catch (e) {
+    }
+  }
   async function retireDeadAdoptedRows() {
     const tagged = adoptedRelays();
-    if (!tagged.length) return [];
+    if (!tagged.length) {
+      if (Object.keys(deadStrikes()).length) setDeadStrikes({});
+      return [];
+    }
     let cur = [];
     try {
       cur = extraRelays();
@@ -19232,23 +19251,55 @@ zoo`.split("\n");
       return [];
     }
     const listed = tagged.filter((u) => cur.includes(u));
+    const was = deadStrikes();
+    const strikes = {};
     const retired = [];
     for (const u of listed) {
-      let proved = "";
+      const k = _declineKey(u) || u;
+      let proved = "", reached = false;
       try {
-        const pr = await verifyRelayIdentity(u);
-        proved = String(pr && pr.relayPub || "").toLowerCase();
+        const d = await verifyRelayIdentityDetailed(u);
+        proved = String(d && d.proof && d.proof.relayPub || "").toLowerCase();
+        reached = !!(d && d.reached);
       } catch (e) {
         proved = "";
+        reached = false;
       }
-      if (!/^[0-9a-f]{64}$/.test(proved)) retired.push(u);
+      if (/^[0-9a-f]{64}$/.test(proved)) continue;
+      if (!reached) {
+        const n2 = Number(was[k]) || 0;
+        if (n2 > 0) strikes[k] = n2;
+        continue;
+      }
+      const n = (Number(was[k]) || 0) + 1;
+      if (n >= DEAD_STRIKES_MAX) retired.push(u);
+      else strikes[k] = n;
     }
     if (retired.length) {
-      _writeExtraRelays(cur.filter((u) => !retired.includes(u)));
-      setAdoptedRelays(listed.filter((u) => !retired.includes(u)));
-    } else if (listed.length !== tagged.length) {
-      setAdoptedRelays(listed);
+      let live = cur;
+      try {
+        live = extraRelays();
+      } catch (e) {
+        live = cur;
+      }
+      _writeExtraRelays(live.filter((u) => !retired.includes(u)));
     }
+    let tags = tagged;
+    try {
+      tags = adoptedRelays();
+    } catch (e) {
+      tags = tagged;
+    }
+    let rows = cur;
+    try {
+      rows = extraRelays();
+    } catch (e) {
+      rows = cur;
+    }
+    const keep = tags.filter((u) => !retired.includes(u) && rows.includes(u));
+    if (keep.length !== tags.length) setAdoptedRelays(keep);
+    const kn = Object.keys(strikes), kw = Object.keys(was);
+    if (kn.length !== kw.length || kn.some((k) => Number(was[k]) !== Number(strikes[k]))) setDeadStrikes(strikes);
     return retired;
   }
   async function adoptNetDocAddresses() {
