@@ -7722,6 +7722,68 @@
       _resolving.delete(cp);
     }
   }
+  var CHURCHLIST_REREAD_MS = 2e4;
+  var CHURCHLIST_SETTLE_MS = 3e3;
+  var _crWatch = null;
+  var _crLast = 0;
+  var _crOpening = false;
+  function _crMono() {
+    try {
+      return performance.now();
+    } catch (e) {
+      return Date.now();
+    }
+  }
+  function _stopChurchRelaysWatch() {
+    const w = _crWatch;
+    _crWatch = null;
+    if (w) {
+      try {
+        w.stop();
+      } catch (e) {
+      }
+    }
+  }
+  function _watchChurchRelays(cp) {
+    if (_crOpening) return _crWatch;
+    if (!cp) {
+      _stopChurchRelaysWatch();
+      return null;
+    }
+    const same = !!_crWatch && _crWatch.cp === cp;
+    if (same && _crWatch.over > 0) {
+      const age = _crMono() - _crLast;
+      if (age < CHURCHLIST_SETTLE_MS) return _crWatch;
+      if (age < CHURCHLIST_REREAD_MS && _crHealthy()) return _crWatch;
+    }
+    _crOpening = true;
+    try {
+      _stopChurchRelaysWatch();
+      let stop = null;
+      try {
+        stop = window.Fellowship.subscribeChurchRelays(cp);
+      } catch (e) {
+      }
+      let over = 0;
+      try {
+        over = churchRelays().length;
+      } catch (e) {
+      }
+      _crWatch = { cp, stop: typeof stop === "function" ? stop : () => {
+      }, over };
+      _crLast = _crMono();
+    } finally {
+      _crOpening = false;
+    }
+    return _crWatch;
+  }
+  function _crHealthy() {
+    try {
+      return window.Fellowship.relaysHealthy() === true;
+    } catch (e) {
+      return false;
+    }
+  }
   function relaysForChurch(cp) {
     const own = cp && _churchRelays.get(cp);
     const global = window.Fellowship.relays || [];
@@ -10505,6 +10567,10 @@
       window.Fellowship.churchPub = toPub(npubOrHex);
       try {
         _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub);
+      } catch (e) {
+      }
+      try {
+        _watchChurchRelays(window.Fellowship.churchPub);
       } catch (e) {
       }
       return window.Fellowship.churchPub;
