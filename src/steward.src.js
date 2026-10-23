@@ -5530,6 +5530,85 @@ function adoptedRelays() {
 }
 function setAdoptedRelays(list) { try { lsSet(ADOPTED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))])); } catch (e) {} }
 function _tagAdopted(u) { if (u) setAdoptedRelays([...adoptedRelays(), u]); }
+// WHAT THE STEWARD HAS ALREADY TAKEN OUT — so a Remove is not undone on the next unlock (audit of
+// a13a9934, finding 3).
+//
+// THE DEFECT. app/stew-dashboard.jsx:dropOutcome returns `drop: true` — take the row off this console — in
+// two branches where the entry STAYS in the church's signed document, so the merge found it there again and
+// put it straight back:
+//   · `ownBox` (unenrolRelayNet's own-box refusal): the removed address proved the OWN box's key at a
+//     DIFFERENT address, which is the church's own box listed a second time under its public tunnel address
+//     or a directory name. The steward removes that duplicate; it returned on the next unlock, for ever.
+//   · `skipped` (a delegated or network view): "Only your church's own console can take it out of the
+//     church's relay list." Off this console, still in the document, back on the next own-church unlock.
+// b759bfa4's message said the merge is "idempotent, so every later unlock is a no-op". That was true only
+// while nothing removed a row. Nothing anywhere remembered a removal, and no test covered one.
+//
+// THE PRECEDENT, followed deliberately: `removeRelay` already forgets the name→url binding so the
+// named-relay auto-follow cannot re-add what was just removed. This is the same contract for adoption, and
+// it is recorded in the same place — `removeRelay` is the ONE writer that takes a row out of extraRelays(),
+// and it has exactly one product caller: app/stew-dashboard.jsx's dropRelay, inside `if (out.drop)`. So
+// every removal the screen performs declines, and nothing else can.
+//
+// BY ADDRESS, NOT BY BOX — and the reasoning here was CORRECTED after sabotage refuted the first version of
+// it, so what follows is measured rather than argued.
+//
+// WHAT `_netDocBoxKey` ACTUALLY CONFLATES, measured: it is `relayAddrKey` of the address with a trailing
+// `/relay` taken off, and relayAddrKey KEEPS host and port. So it collapses only the SCHEME and the PATH of
+// one host:port — `ws://h:7777/relay`, `wss://h:7777/relay` and `ws://h:7777` are one key — and it does NOT
+// collapse two hostnames. The first draft of this comment claimed a box key would be dangerous because the
+// `ownBox` case is "the same box at a different address" and because a tunnelled box gets a new address on
+// every restart. Both are different HOSTNAMES, so a box key would not have caught either, and that argument
+// was simply wrong. Deleted rather than softened.
+//
+// SO WHY ADDRESS. What a box key would additionally decline is the same host:port under another scheme, and
+// that is a real and silent loss: a church that moves its box from plain `ws://` on the LAN to `wss://`
+// behind a TLS tunnel on the same host and port would find the better address refused because the old one
+// had been removed. The PATH case needs no help from a decline at all — FIX 2 (a13a9934) upgrades a
+// path-less row in place rather than leaving one for the steward to remove. And a box key buys nothing the
+// address rule misses, because the cases it would have to catch have different hostnames anyway.
+//
+// So: one address, compared under normalizeURL as well as literally, so a cosmetic re-spelling (a trailing
+// slash, a default port) cannot walk around the decline. A consequence, stated rather than discovered:
+// removing the path-less spelling of a box does NOT decline its dialling address — they are different
+// addresses and the dialling one is what the church's document actually names.
+//
+// HOW IT CLEARS: the steward adds that address again, by hand or by Connect. `addRelay` is the only route
+// in and it clears the decline on a successful add, so changing one's mind costs exactly the action that
+// expresses it. Nothing else clears it — in particular the church re-signing the same address does not,
+// because a removal on THIS console is this console's decision and the other console still has the row.
+//
+// A RETIRE MUST NEVER WRITE ONE, and the separation is structural rather than promised:
+// retireDeadAdoptedRows writes `extraRelays()` through `_writeExtraRelays` and never calls `removeRelay`,
+// which is the only function that declines. If a retire declined, a box switched off for an afternoon would
+// be shut out for good and the feature would die silently for that church.
+//
+// A CRAFTED BACKUP MUST NOT BE ABLE TO FORGE ONE. `app/backup.jsx:STEWARD_PREFIXES` is the bare prefix
+// `trinityone.steward`, and import is filtered by that same allowlist — so any new `trinityone.steward.*`
+// key travels in every steward backup and is writable by an untrusted file. A forged decline would silently
+// stop a church's console adopting its own box; a forged ADOPTED tag would let the retire pass drop a row
+// the steward typed. Both are now named in `app/backup.jsx:ROUTING_KEYS`, which is the existing mechanism
+// for exactly this ("a restore should recover a church, not a routing table") and excludes them from the
+// export AND the import. Nothing is lost: both stores are rebuilt from the church's own signed document.
+const DECLINED_LS = 'trinityone.steward.declined-relays';
+// Bounded like every other ring in this file (NAME_RING_MAX, GROUP_RING_MAX): newest first, so a steward who
+// keeps removing a rotating tunnel address cannot grow this without end. 32 is far past any real church's
+// number of removals and still small enough to compare linearly on every unlock.
+const DECLINED_MAX = 32;
+function declinedRelays() {
+  try { const a = JSON.parse(lsGet(DECLINED_LS) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; } catch { return []; }
+}
+function setDeclinedRelays(list) {
+  try { lsSet(DECLINED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))].slice(0, DECLINED_MAX))); } catch (e) {}
+}
+const _declineKey = (u) => { const v = String(u || '').trim(); if (!v) return ''; try { return normalizeURL(v) || v.toLowerCase(); } catch (e) { return v.toLowerCase(); } };
+function _isDeclined(u) {
+  const k = _declineKey(u);
+  if (!k) return false;
+  return declinedRelays().some(r => r === u || _declineKey(r) === k);
+}
+function declineRelay(u) { const v = String(u || '').trim(); if (v) setDeclinedRelays([v, ...declinedRelays().filter(r => _declineKey(r) !== _declineKey(v))]); }
+function undeclineRelay(u) { const k = _declineKey(u); if (k) setDeclinedRelays(declinedRelays().filter(r => r !== u && _declineKey(r) !== k)); }
 // Drop every row this path added that no longer answers at all, in one write.
 //
 // ONLY CALLED AFTER A READ THAT ACTUALLY RETURNED THE CHURCH'S ENTRIES, which is this console's cheapest
@@ -5587,6 +5666,9 @@ async function adoptNetDocAddresses() {
   for (const e of entries) {
     const u = _netDocDialUrl(e && e.url);
     if (!u) continue;
+    // THE STEWARD ALREADY TOOK THIS ADDRESS OUT. Asked before anything else, so a declined address costs no
+    // identity probe on every unlock for ever, and so the replace branch below cannot put it back either.
+    if (_isDeclined(u)) continue;
     // IS THIS BOX ALREADY LISTED AT AN ADDRESS THAT CANNOT BE DIALLED? Then this is a replacement, not an
     // addition: it does not grow the list, so the cap does not apply to it (finding 2).
     const stale = _staleBoxSpelling(u);
@@ -13732,6 +13814,10 @@ window.Steward = {
     if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
     const cur = extraRelays(); if (cur.includes(url)) return false;
     lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
+    // A STEWARD CHANGING THEIR MIND IS THE WAY A DECLINE CLEARS, and this is the only route in, so it is the
+    // only place it can clear. Without it an address removed once could never be adopted again, and a
+    // steward who re-added it by hand would be the only thing holding it in the list.
+    undeclineRelay(url);
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return url;
   },
@@ -13761,6 +13847,11 @@ window.Steward = {
     lsSet(RELAYS_LS, JSON.stringify(next));
     // also forget any name that pointed here, so auto-follow doesn't re-add it
     setNamedRelays(getNamedRelays().filter(e => e.url !== url));
+    // …and remember the removal, so the church's signed document does not put it back on the next unlock
+    // (see declineRelay). Here, and not in dropOutcome, because this is the one writer that takes a row out
+    // and dropOutcome's only job is to decide whether to call it.
+    declineRelay(url);
+    setAdoptedRelays(adoptedRelays().filter(r => r !== url));
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return true;
   },

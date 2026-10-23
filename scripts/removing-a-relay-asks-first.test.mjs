@@ -22,6 +22,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { normalizeURL } from 'nostr-tools/utils';
 import { fnBody, stmt } from './test-slice.mjs';
 
 const SHIP = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -53,12 +54,24 @@ test('removing a relay really does forget the name — so the screen must say so
     stmt(SHIP, 'var RELAYS_LS =', 'RELAYS_LS'),
     fnBody(SHIP, 'function getNamedRelays()', 'getNamedRelays'),
     fnBody(SHIP, 'function setNamedRelays(', 'setNamedRelays'),
+    // RELAY-ADDRESS-GOSSIP, 2026-10-23: removeRelay also records the removal, so the church's signed relay
+    // list cannot put the row back on the next unlock. The REAL functions, not stubs, for the same reason
+    // this test runs the shipped removeRelay rather than imitating it.
+    stmt(SHIP, 'var DECLINED_LS = ', 'DECLINED_LS'),
+    stmt(SHIP, 'var DECLINED_MAX = ', 'DECLINED_MAX'),
+    fnBody(SHIP, 'function declinedRelays', 'declinedRelays'),
+    fnBody(SHIP, 'function setDeclinedRelays', 'setDeclinedRelays'),
+    stmt(SHIP, 'var _declineKey = ', '_declineKey'),
+    fnBody(SHIP, 'function declineRelay', 'declineRelay'),
+    stmt(SHIP, 'var ADOPTED_LS = ', 'ADOPTED_LS'),
+    fnBody(SHIP, 'function adoptedRelays', 'adoptedRelays'),
+    fnBody(SHIP, 'function setAdoptedRelays', 'setAdoptedRelays'),
   ].join('\n');
-  const removeRelay = new Function('lsGet', 'lsSet', 'extraRelays', 'window',
+  const removeRelay = new Function('lsGet', 'lsSet', 'extraRelays', 'window', 'normalizeURL',
     src + '\nreturn ({ ' + fnBody(SHIP, 'removeRelay(url) {', 'removeRelay') + ' }).removeRelay;')(
       (k) => (k in store ? store[k] : null), (k, v) => { store[k] = v; },
       () => JSON.parse(store['trinityone.steward.extra-relays']),
-      { dispatchEvent: () => {}, CustomEvent: function () {} });
+      { dispatchEvent: () => {}, CustomEvent: function () {} }, normalizeURL);
   removeRelay('wss://box.example.ts.net/relay');
   assert.deepEqual(JSON.parse(store['trinityone.steward.relay-names']), [],
     'the name binding now SURVIVES removal — auto-follow would re-add a relay the steward just removed, and ' +

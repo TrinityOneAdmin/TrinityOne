@@ -50,6 +50,26 @@
 // the first version of the path-less-candidate test was found to be vacuous — it had staged a console that
 // could not read the church's document at all. See that test's own note.
 //
+// THIRD SABOTAGE ROUND, 2026-10-23, over the decline (finding 3) — eight changes, same scoping discipline.
+// ALL EIGHT caught, with the cases that went red out of 24:
+//   · the merge ignores the decline                                  → 18, 19
+//   · `removeRelay` records nothing                                  → 18, 19, 21, 22
+//   · `addRelay` does not clear it                                   → 18
+//   · the decline keyed on the BOX instead of the address            → 21
+//   · the decline keyed on the literal string only (no normalizeURL) → 21
+//   · the decline list unbounded                                     → 22
+//   · the RETIRE pass declines what it retires (trap 1)              → 20
+//   · the two stores left out of app/backup.jsx:ROUTING_KEYS         → 23
+// Three of these had to be re-aimed first: deleting a call outright makes esbuild tree-shake the symbol, so
+// the lift throws "is missing" instead of the test failing — a true red that reads like a broken test. The
+// numbers above are from the versions that keep the symbol referenced and only change what it does.
+//
+// AND SABOTAGE CAUGHT A WRONG CLAIM OF MINE, not only wrong code: the box-key version survived, which said
+// the "decline by address, never by box" test proved nothing. Measured, `_netDocBoxKey` keeps host and port,
+// so it never conflated the loopback-vs-tunnel-name case that test was staged around. The test is restaged
+// on the scheme case, which is what a box key really does conflate, and the reasoning in
+// src/steward.src.js:declineRelay was corrected rather than softened.
+//
 // FIRST ROUND — not caught, and both are stated rather than hidden:
 //   · keeping the gate call but ignoring its answer. On this base `proveRelay` admits on the possession
 //     proof alone, so there is no address that proves the key the church signed and that the gate would
@@ -216,6 +236,17 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'function adoptedRelays', 'adoptedRelays'),
     fnBody(src, 'function setAdoptedRelays', 'setAdoptedRelays'),
     fnBody(src, 'function _tagAdopted', '_tagAdopted'),
+    stmt(src, 'var DECLINED_LS = ', 'DECLINED_LS'),
+    stmt(src, 'var DECLINED_MAX = ', 'DECLINED_MAX'),
+    fnBody(src, 'function declinedRelays', 'declinedRelays'),
+    fnBody(src, 'function setDeclinedRelays', 'setDeclinedRelays'),
+    stmt(src, 'var _declineKey = ', '_declineKey'),
+    fnBody(src, 'function _isDeclined', '_isDeclined'),
+    fnBody(src, 'function declineRelay', 'declineRelay'),
+    fnBody(src, 'function undeclineRelay', 'undeclineRelay'),
+    fnBody(src, 'function getNamedRelays', 'getNamedRelays'),
+    fnBody(src, 'function setNamedRelays', 'setNamedRelays'),
+    stmt(src, 'var NAMES_LS = ', 'NAMES_LS'),
     fnBody(src, 'async function retireDeadAdoptedRows', 'retireDeadAdoptedRows'),
     fnBody(src, 'async function adoptNetDocAddresses', 'adoptNetDocAddresses'),
     // THE POINT OF USE
@@ -280,17 +311,11 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     ...CAPS,
   });
   store.setItem('trinityone.steward.extra-relays', JSON.stringify(extra));
+  const addRelay = fnBody(src, '    addRelay(input) {', 'window.Steward.addRelay');
+  const removeRelay = fnBody(src, '    removeRelay(url) {', 'window.Steward.removeRelay');
   const api = new Function('scope', `with (scope) { ${body}
-    window.Steward = {
-      addRelay(input) {
-        const url = normRelay(input);
-        if (!url || url === ownRelay() || isOwnRelaySpelling(input) || isOwnRelaySpelling(url)) return false;
-        if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
-        const cur = extraRelays(); if (cur.includes(url)) return false;
-        lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
-        return url;
-      },
-    };
+    const _api = { ${addRelay}, ${removeRelay} };
+    window.Steward = { addRelay: (u) => _api.addRelay(u), removeRelay: (u) => _api.removeRelay(u) };
     return { setKey, relays, relaysRaw, extraRelays, gate: _gate,
              adopt: () => adoptNetDocAddresses(),
              dial: _netDocDialUrl,
@@ -300,6 +325,10 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
              adopted: () => adoptedRelays(),
              retire: () => retireDeadAdoptedRows(),
              boxKey: _netDocBoxKey,
+             removeRelay: (u) => window.Steward.removeRelay(u),
+             addRelay: (u) => window.Steward.addRelay(u),
+             declined: () => declinedRelays(),
+             isDeclined: (u) => _isDeclined(u),
              staleSpelling: _staleBoxSpelling,
              sharedSpelling: isSharedRelaySpelling,
              ownSpelling: isOwnRelaySpelling,
@@ -314,16 +343,44 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
 }
 // `window.Steward.addRelay` above is NOT a mirror written here: it is the bundle's own method body, taken out
 // of vendor/steward.js and checked against it, so a change to the real Add route's refusals changes this too.
-test('the Add route this file installs is the shipped one, character for character', () => {
-  // DECIDES FIRST: nothing — a text comparison with no gate in front of it.
-  const real = fnBody(STEWARD, '    addRelay(input) {', 'window.Steward.addRelay');
-  for (const line of ['const url = normRelay(input);',
-                      'if (!url || url === ownRelay() || isOwnRelaySpelling(input) || isOwnRelaySpelling(url)) return false;',
-                      'if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;',
-                      'const cur = extraRelays();']) {
-    assert.ok(real.includes(line), 'vendor/steward.js: the Add route changed (' + line + ') — update the copy in this file');
-  }
+test('the Add and Remove routes this file drives are the bundle\'s own, lifted and run', () => {
+  // REPLACES a guard that compared a hand-written copy of addRelay against the bundle, line by line. The
+  // copy is gone: both methods are now sliced out of vendor/steward.js and RUN, so there is nothing left to
+  // drift. This asserts the slices are the real methods by driving each one's documented refusal.
+  // DECIDES FIRST: `fnBody`'s own "is missing" assertion if either method is renamed. Nothing else.
+  const con = makeConsole({ church: { sk: new Uint8Array(32).fill(1), pub: 'a'.repeat(64) },
+                            origin: { protocol: 'https:', host: 'console.example.church' },
+                            canonical: ['wss://shared.example/relay'] });
+  try {
+    assert.equal(con.addRelay('wss://console.example.church/relay'), false, 'the lifted Add route no longer refuses this console\'s own relay');
+    assert.equal(con.addRelay('wss://shared.example/relay'), false, 'the lifted Add route no longer refuses a shared relay');
+    assert.equal(con.addRelay('wss://second.example/relay'), 'wss://second.example/relay', 'the lifted Add route refuses everything, so nothing below adds anything');
+    assert.deepEqual(con.extraRelays(), ['wss://second.example/relay'], 'the lifted Add route did not write the store');
+    assert.equal(con.removeRelay('wss://second.example/relay'), true, 'the lifted Remove route did not report a removal');
+    assert.deepEqual(con.extraRelays(), [], 'the lifted Remove route did not take the row out');
+  } finally { con.close(); }
 });
+
+// ── THE SCREEN'S OWN DECISION, LIFTED AND RUN ──────────────────────────────────────
+//
+// `dropOutcome` in app/stew-dashboard.jsx is what turns an unenrolRelayNet answer into "take the row off this
+// console" plus a sentence for the steward. It is the function finding 3 is about, and app/*.jsx ships
+// UNBUNDLED — so `false && ` in front of anything leaves every word in place and a text assertion still
+// passes (CLAUDE.md rule 3). It is therefore sliced out and RUN, never matched.
+const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+const dropOutcome = (() => {
+  const body = fnBody(DASH, 'function dropOutcome(r, url) {', 'app/stew-dashboard.jsx:dropOutcome');
+  return new Function(body + '\nreturn dropOutcome;')();
+})();
+// The screen's own sequence, in the screen's own order (app/stew-dashboard.jsx:dropRelay): ask the engine,
+// let dropOutcome decide, and ONLY THEN take the row off the console. Nothing here second-guesses it.
+async function pressRemove(con, url) {
+  let r = null;
+  try { r = await con.unsignRelay(url); } catch (e) { r = { error: String((e && e.message) || e || '') }; }
+  const out = dropOutcome(r, url);
+  if (out.drop) con.removeRelay(url);
+  return { r, out };
+}
 
 // How many copies of one document a box holds, read off THAT BOX'S OWN STORE as the church key.
 async function held(relay, church, prefix) {
@@ -825,6 +882,211 @@ test('the box key does not collapse two different relays, and a dialling row is 
       'a working wss:// row was offered up for replacement by a ws:// spelling of the same box');
     assert.equal(con.staleSpelling('wss://box.example/relay'), '', 'the row already listed was offered up for replacement by itself');
   } finally { con.close(); }
+});
+
+// ── 4d. A REMOVE MUST NOT UNDO ITSELF (audit of a13a9934, finding 3) ─────────────────────
+//
+// THE POINT-OF-USE TEST for the fix, and the `ownBox` branch is staged for real: the church's document names
+// its own box at a SECOND address — `ws://localhost:<port>/relay`, which that gateway genuinely declares and
+// genuinely answers at — while the console is served by the same box at `127.0.0.1`. That is precisely the
+// case unenrolRelayNet's own comment describes ("the church's own box can be in the panel a second time
+// under another address"), and it is why the entry cannot be taken out of the document.
+test('a duplicate row of the church\'s own box, removed by the steward, does not come back on the next unlock', async () => {
+  const ORIGIN = { protocol: 'http:', host: '127.0.0.1:' + BOX.port };
+  const alias = 'ws://localhost:' + BOX.port + '/relay';
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: alias }])]);
+  const con = makeConsole({ church, origin: ORIGIN, canonical: [SHARED.wsUrl], boxHostsUs: true });
+  try {
+    con.setKey('x '.repeat(12).trim());
+    for (let i = 0; i < 240 && !con.extraRelays().length; i++) await sleep(250);
+    assert.deepEqual(con.extraRelays(), [alias],
+      'staging fault: the alias was not adopted, so there is no duplicate row to remove — ' + JSON.stringify(con.extraRelays()));
+
+    // THE STEWARD PRESSES REMOVE. The engine refuses to take it out of the church's list because the address
+    // proves the OWN box's key; the screen removes the row anyway and says so. Both measured, not assumed.
+    const { r, out } = await pressRemove(con, alias);
+    assert.equal(r.ownBox, true, 'staging fault: the engine did not take the own-box branch — ' + JSON.stringify(r));
+    assert.equal(out.drop, true, 'the screen did not remove the row, so there is nothing for the next unlock to undo');
+    assert.match(out.note, /is the box this console runs on/, 'the screen gave some other reason than the own-box one');
+    assert.deepEqual(con.extraRelays(), [], 'the row is still on the console');
+
+    // THE NEXT UNLOCK. The document still names that address — nothing removed it, and nothing could.
+    // DECIDES FIRST: `if (_isDeclined(u)) continue;` is the first line of the loop body after the
+    // conversion, before `_staleBoxSpelling`, the cap, both spelling refusals and every probe. The
+    // conversion is asserted non-empty below so a '' cannot be the reason this passes, and the adoption at
+    // the top of this same test — same document, same console — is the control that says the merge would
+    // otherwise put it straight back.
+    assert.equal(con.dial(alias), alias, 'the conversion dropped the address, so this test proves nothing');
+    assert.ok(con.isDeclined(alias), 'the removal was not remembered, so the merge has nothing to honour');
+    con.setKey('x '.repeat(12).trim());
+    await sleep(3000);
+    assert.deepEqual(con.extraRelays(), [],
+      'THE REMOVE UNDID ITSELF. The steward took the duplicate off and the next unlock put it back, for ever ' +
+      '— and each dead one of these is half of the jam that wedges the church\'s relay list.');
+
+    // AND THE STEWARD CAN CHANGE THEIR MIND. Adding it by hand is the one thing that clears the decline.
+    assert.equal(con.addRelay(alias), alias, 'the steward could not add back an address they had removed');
+    assert.equal(con.isDeclined(alias), false, 'adding it by hand did not clear the decline, so only the hand-add holds it');
+    con.setKey('x '.repeat(12).trim());
+    await sleep(3000);
+    assert.deepEqual(con.extraRelays(), [alias], 'the re-added row was dropped or duplicated by the next unlock');
+  } finally { con.close(); }
+});
+
+test('a Remove in a delegated or network view is remembered too — the `skipped` branch', async () => {
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  try {
+    assert.deepEqual(await con.adopt(), [BOX.wsUrl], 'staging fault: nothing was adopted');
+    // The console steps sideways into a network view and the steward presses Remove there.
+    con.setNetworkView(other.pub);
+    const { r, out } = await pressRemove(con, BOX.wsUrl);
+    assert.ok(r.skipped, 'staging fault: the engine did not take the skipped branch — ' + JSON.stringify(r));
+    assert.equal(out.drop, true, 'the screen did not remove the row');
+    assert.deepEqual(con.extraRelays(), [], 'the row is still on the console');
+    // Back in the church's own console, where the merge runs.
+    // DECIDES FIRST: the same `_isDeclined(u)` line. The own-church guard is satisfied here (setChurch), and
+    // the adoption at the top of this test over the same document is the control.
+    con.setChurch(church.pub);
+    assert.deepEqual(await con.adopt(), [],
+      'a Remove made in a network view was undone the moment the steward came back to their own church');
+  } finally { con.close(); }
+});
+
+test('a RETIRE never declines — a box offline for an afternoon is not shut out for good', async () => {
+  // TRAP 1, and it is the one that would turn this fix into a far worse bug: FIX 1 drops a row when its box
+  // stops answering. If that path recorded a decline, a box switched off overnight would be refused for
+  // ever and the feature would die silently for that church. The separation is structural —
+  // retireDeadAdoptedRows writes extraRelays() through _writeExtraRelays and never calls removeRelay, which
+  // is the only function that declines — and this is what says so out loud.
+  const gone = await H.startRelay({ name: 'overnight', churches: [church.pub] });
+  const addr = gone.wsUrl;
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: gone.relayPub, alwaysOn: true, url: addr }])]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  try {
+    assert.deepEqual(await con.adopt(), [addr], 'staging fault: nothing was adopted');
+    assert.deepEqual(con.declined(), [], 'staging fault: something was declined before the box even went away');
+    gone.stop();
+    // DECIDES FIRST inside the retire pass: `if (!tagged.length) return []` (one row is tagged), then the
+    // proof test, which is what drops this row — the box is really gone. What this test asserts is what the
+    // pass does NOT do on the way.
+    assert.deepEqual(await con.retire(), [addr], 'staging fault: the dead row was not retired, so nothing was tested');
+    assert.deepEqual(con.declined(), [],
+      'A RETIRE WROTE A DECLINE. A church box switched off for an afternoon is now refused for ever, and ' +
+      'the next unlock will never adopt it again — fail-closed in the wrong place, which is the mistake ' +
+      'RELAY-ADMISSION exists to warn about.');
+    assert.equal(con.isDeclined(addr), false, 'the retired address reads as declined, so it can never be adopted again');
+  } finally { con.close(); gone.stop(); }
+});
+
+test('the decline is one ADDRESS, never the box — the same box at another scheme is untouched', async () => {
+  // TRAP 3, AND THIS TEST WAS RESTAGED AFTER SABOTAGE SAID THE FIRST VERSION PROVED NOTHING. It compared a
+  // loopback alias (`ws://localhost:P`) with `ws://127.0.0.1:P` and asserted a box-key decline would have
+  // conflated them — measured, it would not: `_netDocBoxKey` is relayAddrKey with `/relay` stripped, and
+  // relayAddrKey KEEPS host and port. Blinding the address rule into a box-key rule left the suite green.
+  //
+  // What a box key really conflates is one host:port under another SCHEME or PATH. The scheme case is the
+  // one that matters and is staged here: a church that moves its box from plain ws:// on the LAN to wss://
+  // behind a TLS tunnel at the same host and port must not find the new address refused because the old one
+  // was removed.
+  const plain = BOX.wsUrl;                               // ws://127.0.0.1:<port>/relay
+  const tls = BOX.wsUrl.replace(/^ws:/, 'wss:');         // the same host:port, one scheme on
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl], extra: [plain] });
+  try {
+    // DECIDES FIRST: `_declineKey`'s own `if (!v) return ''`. These are direct calls, no gate in front.
+    assert.equal(con.boxKey(plain), con.boxKey(tls),
+      'staging fault: these two are not one box key, so a box-key decline could not conflate them and this test is vacuous');
+    assert.notEqual(con.boxKey(plain), con.boxKey('ws://localhost:' + BOX.port + '/relay'),
+      're-anchor: the box key now collapses two hostnames, which changes what this choice costs');
+    assert.equal(con.removeRelay(plain), true, 'the row was not removed');
+    assert.ok(con.isDeclined(plain), 'the removal was not remembered at all');
+    assert.equal(con.isDeclined(tls), false,
+      'removing the ws:// row declined the wss:// address of the SAME box. A church moving its relay behind ' +
+      'TLS at the same host and port would silently never be given the better address.');
+    // …and a re-spelling of the SAME address does not walk around it.
+    assert.ok(con.isDeclined(plain + '/'), 'a trailing slash defeated the decline, so the merge re-adds it on the next unlock');
+  } finally { con.close(); }
+
+  // AND THE BOX IS STILL ADOPTABLE at the address its church actually signed, with a stale decline present
+  // for a DIFFERENT address of the same box.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const con2 = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl],
+                             seed: { 'trinityone.steward.declined-relays': JSON.stringify([BOX.wsUrl.replace(/^ws:/, 'wss:')]) } });
+  try {
+    assert.deepEqual(await con2.adopt(), [BOX.wsUrl],
+      'a decline recorded for another spelling kept the box out at the address its church signed — the ' +
+      'decline is behaving like a box key after all');
+  } finally { con2.close(); }
+});
+
+test('the decline list is bounded', () => {
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  try {
+    // DECIDES FIRST: setDeclinedRelays' own `.slice(0, DECLINED_MAX)`; nothing stands in front of it.
+    for (let i = 0; i < 50; i++) con.removeRelay('wss://tunnel-' + i + '.example/relay');
+    assert.equal(con.declined().length, 32,
+      'the decline list is ' + con.declined().length + ' long. A steward removing a rotating tunnel address ' +
+      'would grow it without end, and it is compared on every unlock.');
+    assert.ok(con.isDeclined('wss://tunnel-49.example/relay'), 'the newest removal was dropped instead of the oldest');
+    assert.equal(con.isDeclined('wss://tunnel-0.example/relay'), false, 'the oldest removal was kept, so the bound is not newest-first');
+  } finally { con.close(); }
+});
+
+// ── 4e. THE BACKUP SURFACE ─────────────────────────────────────────────────────
+//
+// `STEWARD_PREFIXES` is the bare prefix `trinityone.steward` and the IMPORT is filtered by that same
+// allowlist, so every new `trinityone.steward.*` key travels in a steward backup AND is writable by an
+// untrusted file. A forged `declined-relays` would silently stop a church's console reaching its own box; a
+// forged `adopted-relays` would let the retire pass drop a row the steward typed. Both are instructions, not
+// data, which is what ROUTING_KEYS is for.
+//
+// app/backup.jsx ships UNBUNDLED, so these two functions are sliced out and RUN (rule 3), never matched.
+test('neither new store leaves in a backup, and neither can be written by an imported file', () => {
+  const BK = readFileSync(new URL('../app/backup.jsx', import.meta.url), 'utf8');
+  const body = [
+    stmt(BK, '  const ROUTING_KEYS = new Set(', 'ROUTING_KEYS'),
+    fnBody(BK, '  function snapshot(prefixes, exact) {', 'snapshot'),
+    fnBody(BK, '  function restoreLocal(map, allow, exact) {', 'restoreLocal'),
+    stmt(BK, '  const STEWARD_PREFIXES = ', 'STEWARD_PREFIXES'),
+  ].join('\n');
+  const store = memStore({
+    'trinityone.steward.church-name': 'St Aidan\u2019s',
+    'trinityone.steward.extra-relays': '["wss://typed.example/relay"]',
+    'trinityone.steward.relay-names': '[{"name":"grace","url":"wss://grace.example/relay"}]',
+    'trinityone.steward.adopted-relays': '["wss://adopted.example/relay"]',
+    'trinityone.steward.declined-relays': '["wss://declined.example/relay"]',
+  });
+  const m = new Function('localStorage', body + '\nreturn { snapshot, restoreLocal, STEWARD_PREFIXES, ROUTING_KEYS };')(store);
+  assert.ok(m.STEWARD_PREFIXES.includes('trinityone.steward'),
+    're-anchor: the steward backup no longer allows the bare prefix, so this test is about nothing');
+
+  // OUT: the export carries the church's name and neither routing store.
+  const out = m.snapshot(m.STEWARD_PREFIXES);
+  assert.ok('trinityone.steward.church-name' in out, 'the export stopped carrying ordinary steward state — staging fault');
+  for (const k of ['trinityone.steward.adopted-relays', 'trinityone.steward.declined-relays']) {
+    assert.equal(k in out, false, k + ' travels in every steward backup. It is an instruction about which ' +
+      'machines a church talks to, stale the moment the file is written.');
+  }
+
+  // IN: a crafted file cannot write either one. DECIDES FIRST inside restoreLocal's `ok`: the prefix
+  // allowance (`trinityone.steward` — satisfied, which is the whole problem), then `ROUTING_KEYS.has(k)`,
+  // which is the line under test. The church-name row below proves the allowance really does pass, so the
+  // two refusals are not a prefix mismatch wearing a disguise.
+  const victim = memStore({ 'trinityone.steward.declined-relays': '["wss://real.example/relay"]' });
+  const m2 = new Function('localStorage', body + '\nreturn { restoreLocal };')(victim);
+  const skipped = m2.restoreLocal({
+    'trinityone.steward.church-name': 'Attacker\u2019s Chapel',
+    'trinityone.steward.adopted-relays': '["wss://typed-by-the-steward.example/relay"]',
+    'trinityone.steward.declined-relays': '["wss://the-churchs-own-box.example/relay"]',
+  }, m.STEWARD_PREFIXES);
+  assert.equal(victim.getItem('trinityone.steward.church-name'), 'Attacker\u2019s Chapel',
+    'the import wrote nothing at all, so the two refusals below prove nothing');
+  assert.equal(victim.getItem('trinityone.steward.declined-relays'), '["wss://real.example/relay"]',
+    'AN IMPORTED FILE FORGED A DECLINE. The console now silently refuses to adopt an address of its own ' +
+    'church\'s choosing, and nothing on the screen says why.');
+  assert.equal(victim.getItem('trinityone.steward.adopted-relays'), null,
+    'an imported file forged an ADOPTED tag, so the retire pass may now drop a row the steward typed');
+  assert.equal(skipped, 2, 'restoreLocal reported ' + skipped + ' skipped keys, expected the two routing stores');
 });
 
 // ── 5. ONLY THIS CONSOLE'S OWN CHURCH ───────────────────────────────────────────────────────────────────

@@ -19184,6 +19184,44 @@ zoo`.split("\n");
   function _tagAdopted(u) {
     if (u) setAdoptedRelays([...adoptedRelays(), u]);
   }
+  var DECLINED_LS = "trinityone.steward.declined-relays";
+  var DECLINED_MAX = 32;
+  function declinedRelays() {
+    try {
+      const a = JSON.parse(lsGet(DECLINED_LS) || "[]");
+      return Array.isArray(a) ? a.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  function setDeclinedRelays(list) {
+    try {
+      lsSet(DECLINED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))].slice(0, DECLINED_MAX)));
+    } catch (e) {
+    }
+  }
+  var _declineKey = (u) => {
+    const v = String(u || "").trim();
+    if (!v) return "";
+    try {
+      return normalizeURL2(v) || v.toLowerCase();
+    } catch (e) {
+      return v.toLowerCase();
+    }
+  };
+  function _isDeclined(u) {
+    const k = _declineKey(u);
+    if (!k) return false;
+    return declinedRelays().some((r) => r === u || _declineKey(r) === k);
+  }
+  function declineRelay(u) {
+    const v = String(u || "").trim();
+    if (v) setDeclinedRelays([v, ...declinedRelays().filter((r) => _declineKey(r) !== _declineKey(v))]);
+  }
+  function undeclineRelay(u) {
+    const k = _declineKey(u);
+    if (k) setDeclinedRelays(declinedRelays().filter((r) => r !== u && _declineKey(r) !== k));
+  }
   async function retireDeadAdoptedRows() {
     const tagged = adoptedRelays();
     if (!tagged.length) return [];
@@ -19233,6 +19271,7 @@ zoo`.split("\n");
     for (const e of entries) {
       const u = _netDocDialUrl(e && e.url);
       if (!u) continue;
+      if (_isDeclined(u)) continue;
       const stale = _staleBoxSpelling(u);
       if (!stale) {
         let have = 0;
@@ -27253,6 +27292,7 @@ zoo`.split("\n");
       const cur = extraRelays();
       if (cur.includes(url)) return false;
       lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
+      undeclineRelay(url);
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return url;
     },
@@ -27280,6 +27320,8 @@ zoo`.split("\n");
       const next = extraRelays().filter((r) => r !== url);
       lsSet(RELAYS_LS, JSON.stringify(next));
       setNamedRelays(getNamedRelays().filter((e) => e.url !== url));
+      declineRelay(url);
+      setAdoptedRelays(adoptedRelays().filter((r) => r !== url));
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return true;
     },

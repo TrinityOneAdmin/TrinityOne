@@ -116,7 +116,14 @@
   //
   // Applied on BOTH sides on purpose: excluded from the export so the addresses never leave the device, and
   // from the import so an older file that already carries them cannot write them.
-  const ROUTING_KEYS = new Set(['trinityone.steward.extra-relays', 'trinityone.steward.relay-names']);
+  // The relay-address-gossip stores joined this list on 2026-10-23, for the reason the paragraph above gives
+  // and one more: they are not merely stale on the way in, they are INSTRUCTIONS. `declined-relays` says
+  // "never adopt this address", so a forged entry silently stops a church's console reaching its own box;
+  // `adopted-relays` says "this row is mine to retire", so a forged entry lets the retire pass drop a row the
+  // steward typed. Both are rebuilt from the church's own signed relay-net document, so nothing is lost by
+  // leaving them behind. See src/steward.src.js:declineRelay.
+  const ROUTING_KEYS = new Set(['trinityone.steward.extra-relays', 'trinityone.steward.relay-names',
+                                'trinityone.steward.adopted-relays', 'trinityone.steward.declined-relays']);
 
   function snapshot(prefixes, exact) {
     const out = {};

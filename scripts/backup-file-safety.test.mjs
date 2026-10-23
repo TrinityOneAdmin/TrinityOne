@@ -160,6 +160,14 @@ test('a backup file carries no routing table, and cannot write one', async () =>
   localStorage.setItem('trinityone.steward.church-name', 'St Brides');
   localStorage.setItem('trinityone.steward.extra-relays', '["wss://the-church-relay.example/relay"]');
   localStorage.setItem('trinityone.steward.relay-names', '[{"name":"stbrides","url":"wss://the-church-relay.example/relay"}]');
+  // THE RELAY-ADDRESS-GOSSIP STORES, added 2026-10-23. They were added to ROUTING_KEYS and not to this test,
+  // and an independent audit found the gap executably — which is the whole reason this case exists: a new
+  // `trinityone.steward.*` key is carried by STEWARD_PREFIXES' bare prefix unless something names it here.
+  // Both are INSTRUCTIONS, not settings: `adopted-relays` says "this row is mine to retire", so a forged
+  // entry makes the console silently delete a relay the steward typed; `declined-relays` says "never adopt
+  // this address", so a forged entry stops a church reaching its own box with nothing on screen to say why.
+  localStorage.setItem('trinityone.steward.adopted-relays', '["wss://the-church-relay.example/relay"]');
+  localStorage.setItem('trinityone.steward.declined-relays', '["wss://left-last-year.example/relay"]');
 
   const member = await api.collectMember();
   assert.equal(member.local['trinityone.mydata:data/notes'], '["mine"]', 'the member backup stopped carrying the member\u2019s own data');
@@ -172,6 +180,12 @@ test('a backup file carries no routing table, and cannot write one', async () =>
   assert.equal(steward.local['trinityone.steward.church-name'], 'St Brides', 'the church backup stopped carrying the church\u2019s own settings');
   assert.equal('trinityone.steward.extra-relays' in steward.local, false, 'the church backup still carries the console\u2019s relay list');
   assert.equal('trinityone.steward.relay-names' in steward.local, false, 'the church backup still carries the console\u2019s named-relay table');
+  assert.equal('trinityone.steward.adopted-relays' in steward.local, false,
+    'the church backup carries the rows the console adopted from its church\u2019s signed list — which is the ' +
+    'church\u2019s self-hosted relay addresses leaving the device in a file, the one thing ROUTING_KEYS exists to stop');
+  assert.equal('trinityone.steward.declined-relays' in steward.local, false,
+    'the church backup carries the addresses this console declined — stale on the way out, and a restore ' +
+    'would teach another device to refuse a relay it has never heard of');
 
   // …and the import side, which is the half that faces a crafted file rather than a stale one.
   const fresh = loadBackup();
@@ -187,6 +201,8 @@ test('a backup file carries no routing table, and cannot write one', async () =>
   fresh.api.applySteward({ v: 1, app: 'trinityone', kind: 'steward', local: {
     'trinityone.steward.extra-relays': '["wss://attacker.example/relay"]',
     'trinityone.steward.relay-names': '[{"name":"x","url":"wss://attacker.example/relay"}]',
+    'trinityone.steward.adopted-relays': '["wss://typed-by-the-steward.example/relay"]',
+    'trinityone.steward.declined-relays': '["wss://the-churchs-own-box.example/relay"]',
     'trinityone.steward.church-name': 'St Brides',
   } });
   assert.equal(fresh.localStorage.getItem('trinityone.steward.church-name'), 'St Brides', 'the legitimate church setting did not restore');
@@ -195,4 +211,11 @@ test('a backup file carries no routing table, and cannot write one', async () =>
     'wherever the file said');
   assert.equal(fresh.localStorage.getItem('trinityone.steward.relay-names'), null,
     'a church backup file wrote the named-relay table, which the 90-second refresh then follows for ever');
+  assert.equal(fresh.localStorage.getItem('trinityone.steward.adopted-relays'), null,
+    'a church backup file tagged a row as "adopted". The retire pass deletes an adopted row whose box does ' +
+    'not answer, so a crafted file silently removes a relay the steward typed by hand — and nothing puts it ' +
+    'back, because the church\u2019s document does not name it at that spelling');
+  assert.equal(fresh.localStorage.getItem('trinityone.steward.declined-relays'), null,
+    'a church backup file wrote a decline, so this console will refuse to adopt an address of its own ' +
+    'church\u2019s choosing and say nothing about it');
 });

@@ -173,6 +173,19 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'function _readCovers', '_readCovers'),
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
     stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
+    // RELAY-ADDRESS-GOSSIP, 2026-10-23: `removeRelay` now records the removal so the church's signed
+    // relay list cannot put the row back on the next unlock, and `addRelay` clears it. The REAL
+    // functions, not stubs — a stub here would let a change to either one go unnoticed in this file.
+    stmt(src, 'var DECLINED_LS = ', 'DECLINED_LS'),
+    stmt(src, 'var DECLINED_MAX = ', 'DECLINED_MAX'),
+    fnBody(src, 'function declinedRelays', 'declinedRelays'),
+    fnBody(src, 'function setDeclinedRelays', 'setDeclinedRelays'),
+    stmt(src, 'var _declineKey = ', '_declineKey'),
+    fnBody(src, 'function declineRelay', 'declineRelay'),
+    fnBody(src, 'function undeclineRelay', 'undeclineRelay'),
+    stmt(src, 'var ADOPTED_LS = ', 'ADOPTED_LS'),
+    fnBody(src, 'function adoptedRelays', 'adoptedRelays'),
+    fnBody(src, 'function setAdoptedRelays', 'setAdoptedRelays'),
     stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),
     stmt(src, 'var RELAYNET_SEEN = ', 'RELAYNET_SEEN'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),

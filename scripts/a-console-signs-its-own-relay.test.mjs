@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compileScreen, miniReact, find, texts, button } from './render-jsx-screen.mjs';
+import { normalizeURL } from 'nostr-tools/utils';
 import { fnBody, stmt } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -781,12 +782,26 @@ function shippedAdd() {
     fnBody(VENDOR, 'function normRelay(input) {', 'normRelay'),
     fnBody(VENDOR, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
     fnBody(VENDOR, 'function isOwnRelaySpelling(u) {', 'isOwnRelaySpelling'),
+    // RELAY-ADDRESS-GOSSIP, 2026-10-23: addRelay also clears a recorded removal, so a steward who adds back
+    // an address they removed is not fighting the church's signed list. The REAL functions, not stubs.
+    fnBody(VENDOR, 'function lsGet', 'lsGet'),
+    stmt(VENDOR, 'var DECLINED_LS = ', 'DECLINED_LS'),
+    stmt(VENDOR, 'var DECLINED_MAX = ', 'DECLINED_MAX'),
+    fnBody(VENDOR, 'function declinedRelays', 'declinedRelays'),
+    fnBody(VENDOR, 'function setDeclinedRelays', 'setDeclinedRelays'),
+    stmt(VENDOR, 'var _declineKey = ', '_declineKey'),
+    fnBody(VENDOR, 'function undeclineRelay', 'undeclineRelay'),
   ].join('\n');
   const methods = fnBody(VENDOR, '  isSharedRelaySpelling(input) {', 'Steward.isSharedRelaySpelling') + ',\n' + fnBody(VENDOR, '  isOwnRelaySpelling(input) {', 'Steward.isOwnRelaySpelling') + ',\n' + fnBody(VENDOR, '  addRelay(input) {', 'Steward.addRelay');
-  const api = new Function('extraRelays', 'lsSet', 'RELAYS_LS', 'ownRelay', 'window', 'CustomEvent',
+  const kv = { extra: JSON.stringify(stored) };
+  const api = new Function('extraRelays', 'lsSet', 'RELAYS_LS', 'ownRelay', 'window', 'CustomEvent', 'localStorage', 'normalizeURL',
     lib + '\nreturn ({ ' + methods + ' });')(
-    () => stored.slice(), (k, v) => { stored.length = 0; stored.push(...JSON.parse(v)); }, 'extra', () => 'wss://relay.grace.example/relay',
-    { dispatchEvent() { return true; } }, class { constructor(t) { this.type = t; } });
+    () => stored.slice(),
+    (k, v) => { kv[k] = v; if (k === 'extra') { stored.length = 0; stored.push(...JSON.parse(v)); } },
+    'extra', () => 'wss://relay.grace.example/relay',
+    { dispatchEvent() { return true; } }, class { constructor(t) { this.type = t; } },
+    { getItem: (k) => (k in kv ? kv[k] : null), setItem: (k, v) => { kv[k] = String(v); }, removeItem: (k) => { delete kv[k]; } },
+    normalizeURL);
   return { api, stored };
 }
 const SHARED_SPELLINGS = ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'ws://app.trinityone.church/relay',
