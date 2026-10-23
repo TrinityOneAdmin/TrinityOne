@@ -30,7 +30,27 @@
 //   · `_alreadyACandidate` blinded (reads an empty candidate list)    →  1
 //   · the origin-only shape check removed from the conversion         →  1
 //   · the gate call DELETED outright                                  →  2 (tests 4 and 5)
-// NOT caught, and both are stated rather than hidden:
+// SECOND SABOTAGE ROUND, 2026-10-23, over the two fixes from the audit of b759bfa4 — eleven changes, same
+// scoping discipline. Caught, out of 18 cases:
+//   · the retire pass drops nothing (its proof test blinded)         → 1  (the jam test)
+//   · the retire pass drops everything                                → 1  (its sibling)
+//   · the retire CALL removed from the merge                          → 1
+//   · the `!entries.length` precondition removed                      → 1
+//   · a row added without being tagged                                → 14
+//   · a row SWAPPED without being tagged                              → 1
+//   · the box key stops stripping the path                            → 2
+//   · the row-side `!_hasRelayPath(r)` removed (the downgrade guard)  → 2
+//   · `_staleBoxSpelling` blinded                                     → 1
+//   · the box-key branch of `_alreadyACandidate` blinded              → 1
+// NOT caught, and stated rather than hidden:
+//   · the `!_hasRelayPath(u)` half of _staleBoxSpelling's first line. It is a contract check on the
+//     argument: the one caller always passes an address _netDocDialUrl produced, which always ends in
+//     `/relay`. The row-side half is what decides, and that IS caught.
+// AND SABOTAGE EARNED ITS KEEP THIS ROUND: blinding the box-key branch left the suite green, which is how
+// the first version of the path-less-candidate test was found to be vacuous — it had staged a console that
+// could not read the church's document at all. See that test's own note.
+//
+// FIRST ROUND — not caught, and both are stated rather than hidden:
 //   · keeping the gate call but ignoring its answer. On this base `proveRelay` admits on the possession
 //     proof alone, so there is no address that proves the key the church signed and that the gate would
 //     still refuse — the answer is unfalsifiable here. Deleting the call IS caught (above), because the
@@ -85,7 +105,7 @@ test('the console bundle never writes _churchRelays — the remove/re-add loop c
 // "adoptNetDocAddresses is missing — re-anchor this test" — a true red, but one that reads like a broken
 // test rather than a missing feature. (CLAUDE.md warns about exactly this artefact, which is why the merge
 // is a named function called from setKey and not a one-caller helper hidden behind another.) Measured: with
-// the call deleted, 10 of the 11 tests in this file go red.
+// the call deleted, 10 of the 13 tests measured at the time went red (the file has grown since).
 //
 // A text assertion against vendor/*.js is allowed where one against app/*.jsx is not (CLAUDE.md rule 3): the
 // bundle is tree-shaken, so a `false &&` branch is REMOVED and the text would disappear with it.
@@ -188,6 +208,15 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'function _netDocDialUrl', '_netDocDialUrl'),
     fnBody(src, 'function _alreadyACandidate', '_alreadyACandidate'),
     stmt(src, 'var NETDOC_ADOPT_MAX = ', 'NETDOC_ADOPT_MAX'),
+    fnBody(src, 'function _netDocBoxKey', '_netDocBoxKey'),
+    stmt(src, 'var _hasRelayPath = ', '_hasRelayPath'),
+    fnBody(src, 'function _staleBoxSpelling', '_staleBoxSpelling'),
+    fnBody(src, 'function _writeExtraRelays', '_writeExtraRelays'),
+    stmt(src, 'var ADOPTED_LS = ', 'ADOPTED_LS'),
+    fnBody(src, 'function adoptedRelays', 'adoptedRelays'),
+    fnBody(src, 'function setAdoptedRelays', 'setAdoptedRelays'),
+    fnBody(src, 'function _tagAdopted', '_tagAdopted'),
+    fnBody(src, 'async function retireDeadAdoptedRows', 'retireDeadAdoptedRows'),
     fnBody(src, 'async function adoptNetDocAddresses', 'adoptNetDocAddresses'),
     // THE POINT OF USE
     fnBody(src, 'function setKey(mnemonic) {', 'setKey'),
@@ -195,6 +224,9 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'function _requireTrustedView', '_requireTrustedView'),
     fnBody(src, 'function _isRelayAuthed', '_isRelayAuthed'),
     fnBody(src, 'async function publish(', 'publish'),
+    fnBody(src, 'function _readCovers', '_readCovers'),
+    stmt(src, 'var _viewingNetwork = ', '_viewingNetwork'),
+    fnBody(src, 'async function unenrolRelayNet', 'unenrolRelayNet'),
     stmt(src, 'var NET = ', 'NET'),
     stmt(src, 'var GROUP_D = ', 'GROUP_D'),
     fnBody(src, 'function _monotonic', '_monotonic'),
@@ -208,6 +240,11 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
   const adopt = fnBody(src, 'async function adoptNetDocAddresses', 'adoptNetDocAddresses');
   assert.match(adopt, /await admitRemoteRelay\(u\)/, 'the merge no longer proves an address before adopting it');
   assert.match(adopt, /window\.Steward\.addRelay\(u\)/, 'the merge no longer writes through the console\'s own Add route');
+  assert.match(adopt, /await retireDeadAdoptedRows\(\)/,
+    'THE RETIRE PASS IS GONE. A row this path added that stops answering then stays for ever, and two of ' +
+    'them wedge every change to the church\'s relay list — the HIGH finding of the 2026-10-22 audit.');
+  assert.match(adopt, /_staleBoxSpelling\(u\)/,
+    'the merge no longer recognises a box it already lists at an address that cannot be dialled');
 
   const win = fakeWindow();
   const scope = scopeOf({
@@ -258,6 +295,14 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
              adopt: () => adoptNetDocAddresses(),
              dial: _netDocDialUrl,
              publish: (ev) => publish(ev),
+             unsignRelay: (u) => unenrolRelayNet(u),
+             readCovers: async () => _readCovers(await relayNetDoc()),
+             adopted: () => adoptedRelays(),
+             retire: () => retireDeadAdoptedRows(),
+             boxKey: _netDocBoxKey,
+             staleSpelling: _staleBoxSpelling,
+             sharedSpelling: isSharedRelaySpelling,
+             ownSpelling: isOwnRelaySpelling,
              setChurch: (p) => { pub = p; churchPub = p; },
              setDelegated: (p) => { pub = p; actingChurch = p; },
              setNetworkView: (p) => { pub = p; actingChurch = ''; },
@@ -441,10 +486,13 @@ test('an address that proves a key the church never signed is NOT adopted — ad
   await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: 'f'.repeat(64), alwaysOn: true, url: BOX.wsUrl }])]);
   const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
   try {
-    // DECIDES FIRST: `_netDocDialUrl` returns BOX.wsUrl unchanged (asserted below, so a '' cannot be the
-    // reason this passes), then isOwnRelaySpelling/isSharedRelaySpelling are both false for a loopback
-    // harness address that is neither the origin nor in CANONICAL_RELAYS, and `_alreadyACandidate` is false
-    // for an empty extraRelays(). So `await admitRemoteRelay(u)` is what refuses, which is the claim.
+    // DECIDES FIRST — CORRECTED after the 2026-10-22 audit, which pointed out that this note credited the
+    // wrong line. `_netDocDialUrl` returns BOX.wsUrl unchanged (asserted below, so a '' cannot be the reason
+    // this passes); isOwnRelaySpelling/isSharedRelaySpelling are both false for a loopback harness address
+    // that is neither the origin nor in CANONICAL_RELAYS; `_staleBoxSpelling` and `_alreadyACandidate` are
+    // false for an empty extraRelays(). So THE KEY CHECK is what refuses — the entry names ffff… and the box
+    // proves its own key. `admitRemoteRelay` never runs, and on this base it could not refuse this address
+    // anyway: by the time anything reaches it, root 3 holds by construction.
     assert.equal(con.dial(BOX.wsUrl), BOX.wsUrl, 'the conversion dropped the address, so this test proves nothing');
     const added = await con.adopt();
     assert.deepEqual(added, [],
@@ -462,9 +510,11 @@ test('an address nothing answers at is NOT adopted — a dead entry never joins 
   await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: deadPub, alwaysOn: true, url: deadUrl }])]);
   const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
   try {
-    // DECIDES FIRST: the conversion (asserted), then the two spelling refusals (false), then
-    // `_alreadyACandidate` (false). `await admitRemoteRelay(u)` is the refusal — its /relay-identity fetch
-    // to a port nothing listens on cannot succeed.
+    // DECIDES FIRST — CORRECTED after the 2026-10-22 audit, which pointed out that this note credited the
+    // wrong line. The conversion (asserted), then the two spelling refusals (false), then
+    // `_staleBoxSpelling`/`_alreadyACandidate` (false). THE KEY CHECK is the refusal: its /relay-identity
+    // fetch to a port nothing listens on returns nothing, so `proved` is '' and the row is skipped before
+    // `admitRemoteRelay` is ever reached.
     assert.equal(con.dial(deadUrl), deadUrl, 'the conversion dropped the address, so this test proves nothing');
     assert.deepEqual(await con.adopt(), [],
       'an address that answers nothing was added to the candidate list. Every console then dials it on ' +
@@ -578,6 +628,202 @@ test('a PINNED shared relay that is not in the compiled list is still refused', 
     // optimisation that saves an identity probe, not the thing standing between a shared relay and the
     // list. This test asserts the product behaviour (the row is refused), which is what matters; it cannot
     // distinguish which of the two lines refused it, and nothing here claims otherwise.
+  } finally { con.close(); }
+});
+
+// ── 4b. THE JAM, AND THAT IT IS ESCAPABLE (audit 2026-10-22 finding 1, HIGH) ────────────────────
+//
+// `unenrolRelayNet` — the engine behind Remove on the Relays card — refuses to change the church's signed
+// list unless every relay it asked answered, EXCEPT the one being removed. Two dead rows therefore wedge it
+// for ever: removing A waits on B and removing B waits on A, and the on-screen advice
+// ("Remove it again once your relays are answering. If a relay you added is gone for good, remove it first.")
+// is circular. Before this feature a steward had to type two addresses that then died; this feature makes
+// it arrive unaided, because a Suite box behind a quick tunnel publishes a hostname that changes on every
+// restart and its own console adopts each one.
+//
+// THIS IS THE POINT-OF-USE TEST FOR THE FIX (rule 1): the jam is driven on the PRODUCT's own removal path
+// against real relays, then the PRODUCT's own unlock tick (setKey) is run, then the same removal is driven
+// again. Nothing is injected; the two boxes are real gateways that are really killed.
+test('two adopted rows whose boxes are gone no longer wedge the church\'s relay list', async () => {
+  // THE CONSOLE IS SERVED BY THE SHARED RELAY — the hosted-console case, and it is required here for a
+  // reason worth writing down: `unenrolRelayNet` fails closed when it cannot learn its OWN box's key
+  // (`if (own && !ownKey && pk && drop.some(...)) return { unknown: true }`). On an origin that runs no
+  // relay at all that guard refuses every removal, so the jam could never be shown to clear. Served by a
+  // real relay, the guard is satisfied honestly and the only thing left that can refuse is _readCovers.
+  const ORIGIN = { protocol: 'http:', host: '127.0.0.1:' + SHARED.port };
+  const [g1, g2] = await Promise.all([
+    H.startRelay({ name: 'tunnel-1', churches: [church.pub] }),
+    H.startRelay({ name: 'tunnel-2', churches: [church.pub] }),
+  ]);
+  const con = makeConsole({ church, origin: ORIGIN, canonical: [SHARED.wsUrl], boxHostsUs: true });
+  try {
+    // The church signs its box at three addresses over the life of the tunnel. All three are real boxes.
+    await H.publishAll(SHARED, [relayNetDocFor(church, [BOX, g1, g2].map(r =>
+      ({ pubkey: r.relayPub, alwaysOn: true, url: r.wsUrl })))]);
+    con.setKey('x '.repeat(12).trim());
+    for (let i = 0; i < 240 && con.extraRelays().length < 3; i++) await sleep(250);
+    assert.equal(con.extraRelays().length, 3, 'staging fault: the three boxes were not all adopted — ' + JSON.stringify(con.extraRelays()));
+    assert.equal(con.adopted().length, 3, 'the rows this path added are not recorded as its own, so none can retire');
+
+    // Two tunnels restart and never answer at those addresses again.
+    g1.stop(); g2.stop();
+    assert.equal(await con.readCovers(), false, 'staging fault: two dead rows did not make the read incomplete');
+
+    // THE JAM, on the product's own path. The steward is trying to remove the box that IS answering.
+    const jam = await con.unsignRelay(BOX.wsUrl);
+    assert.equal(jam.removed, false, 'staging fault: the removal was not blocked, so there is no jam to clear');
+    assert.equal(jam.unknown, true, 'the removal failed for some other reason than the incomplete read: ' + JSON.stringify(jam));
+
+    // THE UNLOCK TICK CLEARS IT. Same call the console makes on boot with a key and on every unlock.
+    // DECIDES FIRST: adoptNetDocAddresses' own `pub !== churchPub` guard (satisfied — setKey assigns both),
+    // then `if (!entries.length) return []`, which is the retire pass's precondition. The line that decides
+    // each ROW's fate is `if (!/^[0-9a-f]{64}$/.test(proved))` inside retireDeadAdoptedRows — a real
+    // /relay-identity round trip to a port nothing listens on. Nothing earlier can drop a row.
+    con.setKey('x '.repeat(12).trim());
+    for (let i = 0; i < 240 && con.extraRelays().length > 1; i++) await sleep(250);
+    assert.deepEqual(con.extraRelays(), [BOX.wsUrl],
+      'THE DEAD ROWS DID NOT RETIRE: ' + JSON.stringify(con.extraRelays()) + '. Every change to this ' +
+      'church\'s relay list is now impossible, for ever, and the advice the card gives is circular.');
+    assert.deepEqual(con.adopted(), [BOX.wsUrl], 'the provenance store still names rows that are gone');
+    assert.equal(await con.readCovers(), true, 'the read is still incomplete, so the removal path is still wedged');
+
+    const freed = await con.unsignRelay(BOX.wsUrl);
+    assert.equal(freed.removed, true,
+      'the church\'s relay list STILL cannot be changed: ' + JSON.stringify(freed) + '. Retiring the dead ' +
+      'rows was the whole point — a row nobody typed must be able to leave again by itself.');
+  } finally { con.close(); g1.stop(); g2.stop(); }
+});
+
+test('a row that is still answering is never retired, and nothing is retired without a read', async () => {
+  // The other half: a retire pass that dropped everything would pass the test above and be useless.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl] });
+  try {
+    assert.deepEqual(await con.adopt(), [BOX.wsUrl], 'staging fault: nothing was adopted');
+    // DECIDES FIRST: `if (!tagged.length) return []`, which is satisfied — one row is tagged. The deciding
+    // line is the proof test, and BOX is a real relay that really answers.
+    assert.deepEqual(await con.retire(), [], 'a live box was retired. Its row would then be re-adopted and ' +
+      're-dropped on every unlock, and the Relays card would flicker for ever.');
+    assert.deepEqual(con.extraRelays(), [BOX.wsUrl], 'the live row was dropped anyway');
+  } finally { con.close(); }
+
+  // AND NOTHING IS RETIRED WHEN THE CHURCH'S DOCUMENT COULD NOT BE READ. A phone with no signal must not
+  // throw away every address it has. Staged by publishing an EMPTY list for the church, which is the shape
+  // of "the read told us nothing": one dead row is listed and tagged, and it stays.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [])]);
+  const dead = 'ws://127.0.0.1:1/relay';
+  const con2 = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl],
+                             extra: [dead], seed: { 'trinityone.steward.adopted-relays': JSON.stringify([dead]) } });
+  try {
+    // DECIDES FIRST: `if (!entries.length) return []` in adoptNetDocAddresses, which is BEFORE the retire
+    // call. Asserted as a refusal here and driven as a retirement in the test above, over the same code.
+    assert.deepEqual(await con2.adopt(), [], 'something was adopted from an empty list');
+    assert.deepEqual(con2.extraRelays(), [dead],
+      'a read that returned nothing still retired a row. On a phone with no signal that throws away every ' +
+      'address the console has, on every unlock.');
+  } finally { con2.close(); }
+});
+
+// ── 4c. THE PATH DIFFERENCE (audit 2026-10-22 finding 2) ──────────────────────────────────
+test('a box already listed at an address that cannot be dialled is upgraded in place, not duplicated', async () => {
+  // `signRelay` stores a steward-typed address through normRelay, which adds no path — so a steward who
+  // typed the bare host has `ws://host:port` in this console's list. Measured with the real normalizeURL:
+  // that spelling and `ws://host:port/relay` DIFFER under every normalisation the console uses, because all
+  // of them keep the path. Without the box key the merge added a second row for the same relay, and the
+  // path-less one can never upgrade — which is the first dead row of the jam above.
+  const typed = BOX.wsUrl.replace(/\/relay$/, '');
+  assert.match(typed, /^ws:\/\/127\.0\.0\.1:\d+$/, 're-anchor: the harness address no longer has the shape this test strips');
+
+  // FIRST: that spelling really is undialable, so the upgrade is load-bearing rather than cosmetic.
+  const typedOk = await new Promise((res) => {
+    const w = new WebSocket(typed);
+    const done = (v) => { try { w.close(); } catch {} res(v); };
+    w.on('open', () => done(true)); w.on('error', () => done(false)); w.on('close', () => done(false));
+    setTimeout(() => done(false), 5000);
+  });
+  assert.equal(typedOk, false, 'the path-less address accepts a websocket after all — re-derive this whole file');
+
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl], extra: [typed] });
+  try {
+    assert.equal(con.boxKey(typed), con.boxKey(BOX.wsUrl), 'the two spellings are not recognised as one box');
+    assert.equal(con.staleSpelling(BOX.wsUrl), typed, 'the path-less row was not identified as the one to replace');
+    // DECIDES FIRST: `_staleBoxSpelling(u)` is the first line of the loop body after the conversion, and it
+    // is what sends this row down the replace branch instead of the add branch — so the cap is skipped and
+    // `_alreadyACandidate` (which WOULD refuse, now that it knows the box) is not consulted. The row is
+    // still only written after the key proof, which test 7 drives as a refusal.
+    assert.deepEqual(await con.adopt(), [BOX.wsUrl], 'the dialling address was not taken on');
+    assert.deepEqual(con.extraRelays(), [BOX.wsUrl],
+      'the console now lists ' + JSON.stringify(con.extraRelays()) + '. Two rows for one box, one of which ' +
+      'can never connect — and two of those wedge every change to the church\'s relay list.');
+    assert.deepEqual(con.adopted(), [BOX.wsUrl], 'the replacement was not recorded as this path\'s own row, so it can never retire');
+    // and it is a real address, not a tidier string
+    const before = await held(BOX, church, GROUP_D);
+    const doc = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', GROUP_D + 'upgraded'], ['t', 'trinityone']], content: '{}' }, church.sk);
+    assert.ok(await con.publish(doc), 'the write failed outright');
+    const landed = await H.waitFor(async () => (await held(BOX, church, GROUP_D)) > before,
+      { timeout: 20000, label: 'the document reaching the upgraded address' }).then(() => true, () => false);
+    assert.ok(landed, 'the upgraded row does not reach the box either');
+  } finally { con.close(); }
+});
+
+test('a box listed path-lessly OUTSIDE extraRelays() is not duplicated either', async () => {
+  // WHY THIS EXISTS: sabotage proved the box-key branch of `_alreadyACandidate` was not reached by any other
+  // test. `_staleBoxSpelling` handles the path-less row when it is in extraRelays() (it replaces it), so the
+  // only way to reach that branch is a path-less spelling of the same box elsewhere in relaysRaw() — the
+  // compiled pool or ownRelay(). Both are /relay-pathed in every build that ships, so this is a defensive
+  // case staged on purpose, and it is labelled as one rather than dressed up as a field report. It pins the
+  // branch's job: a path difference anywhere in the candidate list must not produce a duplicate row.
+  //
+  // THE FIRST VERSION OF THIS TEST WAS VACUOUS, and sabotage is what said so. It listed the path-less
+  // spelling as the ONLY compiled relay, so the console could not read the church's document at all — the
+  // dialling spelling was nowhere in relaysRaw() — and the merge returned early at `if (!entries.length)`.
+  // "Nothing was adopted" was true for a reason that had nothing to do with the line under test. So the
+  // shared relay is kept readable here and the path-less spelling is of a different box.
+  const bare = BOX.wsUrl.replace(/\/relay$/, '');
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl, bare] });
+  try {
+    // DECIDES FIRST, and every earlier line is MEASURED here rather than reasoned about — the vacuous first
+    // draft is why. The conversion returns BOX.wsUrl; both spelling refusals answer false (asserted, not
+    // assumed: isSharedRelaySpelling is the obvious candidate and it does NOT refuse, because every
+    // normalisation it uses keeps the path); `_staleBoxSpelling` returns '' because the path-less row is in
+    // CANONICAL_RELAYS, not extraRelays(). So the box-key branch of `_alreadyACandidate` is the only line
+    // left that can refuse it — and the read reaches the document through the shared relay, so the merge
+    // genuinely gets as far as this row.
+    assert.equal(con.dial(BOX.wsUrl), BOX.wsUrl, 'the conversion altered the address, so this test proves nothing');
+    assert.ok(con.relaysRaw().includes(bare), 'staging fault: the path-less spelling is not in the candidate list');
+    assert.equal(con.relaysRaw().includes(BOX.wsUrl), false, 'staging fault: the dialling spelling is already a candidate');
+    assert.ok(con.relaysRaw().includes(SHARED.wsUrl), 'staging fault: no readable relay, so the merge returns early and proves nothing');
+    assert.equal(con.ownSpelling(BOX.wsUrl), false, 'the own-relay refusal would decide this, not the box key');
+    assert.equal(con.sharedSpelling(BOX.wsUrl), false, 'the shared-relay refusal would decide this, not the box key');
+    assert.equal(con.staleSpelling(BOX.wsUrl), '', 'the replace branch claimed a row that is not in extraRelays()');
+    assert.deepEqual(await con.adopt(), [],
+      'a second row was added for a box the candidate list already covers, differing only by path. Two rows ' +
+      'for one relay is two sockets, and the path-less one can never connect — the first dead row of the jam.');
+    assert.deepEqual(con.extraRelays(), [], 'the candidate store grew');
+  } finally { con.close(); }
+});
+
+test('the box key does not collapse two different relays, and a dialling row is never swapped for another spelling', () => {
+  const con = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl],
+                            extra: ['wss://box.example/relay'] });
+  try {
+    // DECIDES FIRST for each row below: `_netDocBoxKey`'s own `if (!bare) return ''`, and nothing else —
+    // these are direct calls, with no gate in front of them.
+    assert.notEqual(con.boxKey('wss://box.example/foo'), con.boxKey('wss://box.example/relay'),
+      'a relay mounted at another path was collapsed onto this one — the merge would then refuse to adopt it, ' +
+      'or worse, overwrite it');
+    assert.equal(con.boxKey('wss://box.example'), con.boxKey('ws://box.example/relay/'),
+      'the box key is not scheme-blind and path-blind, which is the whole reason it exists');
+    assert.equal(con.boxKey(''), '', 'an empty address produced a key, so every empty entry would match every box');
+    // A ROW THAT IS ALREADY A DIALLING ADDRESS IS NEVER REPLACED. The first version of this fix swapped a
+    // listed `wss://.../relay` for a document's `ws://.../relay` — a cleartext downgrade of a working row,
+    // on every unlock, because relayAddrKey treats the two as one address. A test caught it.
+    assert.equal(con.staleSpelling('ws://box.example/relay'), '',
+      'a working wss:// row was offered up for replacement by a ws:// spelling of the same box');
+    assert.equal(con.staleSpelling('wss://box.example/relay'), '', 'the row already listed was offered up for replacement by itself');
   } finally { con.close(); }
 });
 

@@ -19108,6 +19108,16 @@ zoo`.split("\n");
     if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return "";
     return s + "/relay";
   }
+  function _netDocBoxKey(u) {
+    const bare = String(u || "").trim().replace(/\/+$/, "").replace(/\/relay$/i, "").replace(/\/+$/, "");
+    if (!bare) return "";
+    try {
+      const k = relayAddrKey(bare);
+      if (k) return k;
+    } catch (e) {
+    }
+    return bare.toLowerCase();
+  }
   function _alreadyACandidate(u) {
     const n = (x) => {
       try {
@@ -19123,7 +19133,7 @@ zoo`.split("\n");
         return "";
       }
     };
-    const vn = n(u), va = a(u);
+    const vn = n(u), va = a(u), vb = _netDocBoxKey(u);
     let list = [];
     try {
       list = relaysRaw();
@@ -19135,10 +19145,74 @@ zoo`.split("\n");
       if (r === u) return true;
       if (vn && n(r) === vn) return true;
       if (va && a(r) === va) return true;
+      if (vb && _netDocBoxKey(r) === vb) return true;
     }
     return false;
   }
+  var _hasRelayPath = (x) => /\/relay\/*$/i.test(String(x || "").trim());
+  function _staleBoxSpelling(u) {
+    const want = _netDocBoxKey(u);
+    if (!want || !_hasRelayPath(u)) return "";
+    let list = [];
+    try {
+      list = extraRelays();
+    } catch (e) {
+      return "";
+    }
+    if (list.includes(u)) return "";
+    for (const r of list) {
+      if (r && !_hasRelayPath(r) && _netDocBoxKey(r) === want) return r;
+    }
+    return "";
+  }
   var NETDOC_ADOPT_MAX = 8;
+  var ADOPTED_LS = "trinityone.steward.adopted-relays";
+  function adoptedRelays() {
+    try {
+      const a = JSON.parse(lsGet(ADOPTED_LS) || "[]");
+      return Array.isArray(a) ? a.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  function setAdoptedRelays(list) {
+    try {
+      lsSet(ADOPTED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))]));
+    } catch (e) {
+    }
+  }
+  function _tagAdopted(u) {
+    if (u) setAdoptedRelays([...adoptedRelays(), u]);
+  }
+  async function retireDeadAdoptedRows() {
+    const tagged = adoptedRelays();
+    if (!tagged.length) return [];
+    let cur = [];
+    try {
+      cur = extraRelays();
+    } catch (e) {
+      return [];
+    }
+    const listed = tagged.filter((u) => cur.includes(u));
+    const retired = [];
+    for (const u of listed) {
+      let proved = "";
+      try {
+        const pr = await verifyRelayIdentity(u);
+        proved = String(pr && pr.relayPub || "").toLowerCase();
+      } catch (e) {
+        proved = "";
+      }
+      if (!/^[0-9a-f]{64}$/.test(proved)) retired.push(u);
+    }
+    if (retired.length) {
+      _writeExtraRelays(cur.filter((u) => !retired.includes(u)));
+      setAdoptedRelays(listed.filter((u) => !retired.includes(u)));
+    } else if (listed.length !== tagged.length) {
+      setAdoptedRelays(listed);
+    }
+    return retired;
+  }
   async function adoptNetDocAddresses() {
     if (!pub || pub !== churchPub) return [];
     const pub0 = pub;
@@ -19149,19 +19223,28 @@ zoo`.split("\n");
       return [];
     }
     if (pub !== pub0) return [];
+    if (!entries.length) return [];
+    try {
+      await retireDeadAdoptedRows();
+    } catch (e) {
+    }
+    if (pub !== pub0) return [];
     const added = [];
     for (const e of entries) {
-      let have = 0;
-      try {
-        have = extraRelays().length;
-      } catch (err2) {
-        have = NETDOC_ADOPT_MAX;
-      }
-      if (have >= NETDOC_ADOPT_MAX) break;
       const u = _netDocDialUrl(e && e.url);
       if (!u) continue;
+      const stale = _staleBoxSpelling(u);
+      if (!stale) {
+        let have = 0;
+        try {
+          have = extraRelays().length;
+        } catch (err2) {
+          have = NETDOC_ADOPT_MAX;
+        }
+        if (have >= NETDOC_ADOPT_MAX) break;
+      }
       if (isOwnRelaySpelling(u) || isSharedRelaySpelling(u)) continue;
-      if (_alreadyACandidate(u)) continue;
+      if (!stale && _alreadyACandidate(u)) continue;
       let proved = "";
       try {
         const pr = await verifyRelayIdentity(u);
@@ -19172,6 +19255,19 @@ zoo`.split("\n");
       if (!proved || proved !== String(e && e.pubkey || "").toLowerCase()) continue;
       if (!await admitRemoteRelay(u)) continue;
       if (pub !== pub0) break;
+      if (stale) {
+        let now2 = [];
+        try {
+          now2 = extraRelays();
+        } catch (err2) {
+          now2 = [];
+        }
+        if (!now2.includes(stale) || now2.includes(u)) continue;
+        _writeExtraRelays(now2.map((r) => r === stale ? u : r));
+        setAdoptedRelays([...adoptedRelays().filter((r) => r !== stale), u]);
+        added.push(u);
+        continue;
+      }
       if (_alreadyACandidate(u)) continue;
       let ok = false;
       try {
@@ -19179,7 +19275,10 @@ zoo`.split("\n");
       } catch (err2) {
         ok = false;
       }
-      if (ok) added.push(u);
+      if (ok) {
+        _tagAdopted(u);
+        added.push(u);
+      }
     }
     return added;
   }

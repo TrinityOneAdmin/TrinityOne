@@ -5337,7 +5337,16 @@ async function autoEnrolRelayNet() {
 //    ADDS candidates to the list those two already see.
 //  · IT DOES NOT MATCH ON THE URL. Admission is still the key the box proves at the address dialled
 //    (RELAY-ADMISSION trap 2). The document's url is only a HINT about where to look; what decides is the
-//    key — the entry's pubkey against what the box proves, and then the gate — and neither looks at the url.
+//    KEY — the entry's pubkey against the key the box proves — and that check never looks at the url.
+//
+//    AND IT WIDENS CANDIDATES ONLY, NOT ADMISSION — provable, not hoped for (audit 2026-10-22). By the time
+//    an address reaches the gate here it has passed isSharedRelaySpelling (so it is not a shared address and
+//    the one refusal cannot bite) and it has proved a key the church's own document names (so root 3 holds
+//    by construction). The gate therefore CANNOT refuse anything on this path on this base. It is kept
+//    because it is the only thing that may answer "may this church publish here" — Phase 2 tightens
+//    `proveRelay` and this path must obey whatever it decides — and because it caches the proof, so the
+//    steward's first write after an unlock is not waiting on one. Deleting the call is caught by the tests;
+//    ignoring its ANSWER is not, and cannot be, because today there is no answer to ignore.
 //  · IT DOES NOT SIGN ANYTHING, and it never removes or re-signs an entry. Adopting an address is not
 //    consent to send the church's data somewhere new: the box is already in the church's own signed list,
 //    which is where the consent was given.
@@ -5400,18 +5409,74 @@ function _netDocDialUrl(raw) {
 // checked here as well — relayAddrKey (scheme-blind; host/port/path) and normalizeURL (the pool's and every
 // read's; also collapses //). Without this an address that differs from one already listed by a trailing
 // slash, a default port or a scheme would be adopted as a second row for the same box on every unlock.
+// WHICH BOX IS THIS ADDRESS, with the dialling path taken off (audit 2026-10-22, finding 2).
+//
+// The three normalisations this console uses all keep the PATH, and the path is the one difference this
+// merge creates. Measured against the real normalizeURL: `wss://host/relay` normalises to
+// `wss://host/relay` while `wss://host` normalises to `wss://host/` — they DIFFER, under relayAddrKey too.
+// So a steward who typed `wss://host` on this very device (signRelay only runs a typed address through
+// normRelay, which adds no path) had a row that this merge did not recognise as the same box: it added
+// `wss://host/relay` beside it and the console then held two rows for one relay, one of which can never
+// connect at all. Which is the first half of the jam finding 1 is about.
+//
+// Scheme-blind, like relayAddrKey and for its reason (one box is legitimately dialled wss:// through a
+// tunnel and ws:// on the loopback behind it). Only a trailing `/relay` is taken off, so a relay genuinely
+// mounted at another path — `wss://host/foo` — is still its own box and is not collapsed onto this one.
+function _netDocBoxKey(u) {
+  const bare = String(u || '').trim().replace(/\/+$/, '').replace(/\/relay$/i, '').replace(/\/+$/, '');
+  if (!bare) return '';
+  try { const k = relayAddrKey(bare); if (k) return k; } catch (e) {}
+  return bare.toLowerCase();
+}
 function _alreadyACandidate(u) {
   const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
   const a = (x) => { try { return relayAddrKey(x); } catch (e) { return ''; } };
-  const vn = n(u), va = a(u);
+  const vn = n(u), va = a(u), vb = _netDocBoxKey(u);
   let list = []; try { list = relaysRaw(); } catch (e) { list = []; }
   for (const r of list) {
     if (!r) continue;
     if (r === u) return true;
     if (vn && n(r) === vn) return true;
     if (va && a(r) === va) return true;
+    // …and the same BOX under a different path, which is what the three above miss.
+    if (vb && _netDocBoxKey(r) === vb) return true;
   }
   return false;
+}
+// THE ROW TO REPLACE, if this console already lists this box at an address that cannot be dialled.
+//
+// Returns a row of extraRelays() only — never ownRelay() and never a canonical address, because those are
+// not in that store and are not this merge's to rewrite (the two spelling refusals run before this anyway).
+// '' when the box is not listed, or is listed at the dialling address already.
+//
+// Replacing rather than deduping is the choice here, and it is the better one for the church: the row being
+// replaced is the SAME box at an address the relay refuses to upgrade (gateway.mjs destroys any upgrade
+// whose path is not exactly /relay), so deduping would leave the console holding one dead row and no live
+// one — exactly the position it was in before this feature existed. The church's own signed document is the
+// authority on where its box answers, and refreshNamedRelays already does this same swap, for the same
+// reason, when a tunnel address moves. The new address is proved first; nothing is rewritten on the strength
+// of the document alone.
+//
+// ONLY A ROW THAT IS NOT ITSELF A DIALLING ADDRESS, and this was narrowed after a test refuted the wider
+// version. The first draft replaced any row of the same box that spelled it differently, which swapped a
+// listed `wss://host/relay` for a document's `ws://host/relay` — a cleartext DOWNGRADE of a working row, on
+// every unlock, because relayAddrKey treats the two as one address. So the ROW must be one the relay cannot
+// upgrade at all: a path that is not `/relay`. That row-side test is the one that decides, and sabotaging it
+// turns two tests red. A scheme difference between two dialling forms is left to `_alreadyACandidate`, which
+// already refuses it.
+//
+// The `!_hasRelayPath(u)` half below is a CONTRACT check on the argument, not a second guard: this function's
+// one caller always passes an address `_netDocDialUrl` produced, and that always ends in `/relay`, so
+// sabotaging that half alone changes nothing and no test can catch it. It is kept so a future second caller
+// cannot quietly ask this function to replace a working row with a path-less one.
+const _hasRelayPath = (x) => /\/relay\/*$/i.test(String(x || '').trim());
+function _staleBoxSpelling(u) {
+  const want = _netDocBoxKey(u);
+  if (!want || !_hasRelayPath(u)) return '';
+  let list = []; try { list = extraRelays(); } catch (e) { return ''; }
+  if (list.includes(u)) return '';
+  for (const r of list) { if (r && !_hasRelayPath(r) && _netDocBoxKey(r) === want) return r; }
+  return '';
 }
 // HOW FAR THIS PATH MAY GROW THE CANDIDATE STORE. Chosen here, 2026-10-22, and the number is not arrived at
 // from anywhere else: the plan cited a member-side `CHURCH_BOXES_MAX = 8` and there is no such constant in
@@ -5424,6 +5489,77 @@ function _alreadyACandidate(u) {
 // side, and their own eight are addresses a person chose. Following the box's NAME instead of its address is
 // the real answer to churn and is step 3 of the plan, not built here.
 const NETDOC_ADOPT_MAX = 8;
+// WHICH ROWS THIS PATH PUT THERE — and why a row nobody typed has to be able to leave again by itself
+// (audit 2026-10-22, finding 1, HIGH).
+//
+// THE JAM, measured in the code by the auditor and confirmed here. `unenrolRelayNet` refuses to change the
+// church's signed list unless every relay it asked answered — `if (!_readCovers(read, u)) return { removed:
+// false, unknown: true }` — and app/stew-dashboard.jsx:dropOutcome turns that into "… is still connected.
+// Remove it again once your relays are answering. If a relay you added is gone for good, remove it first."
+// With TWO dead rows that advice is circular: removing A waits on B and removing B waits on A, so neither
+// can go and no change to the church's relay list is possible again, ever.
+//
+// Before this feature that needed a steward to type two addresses that then died. This feature makes it
+// arrive on its own: `enrolRelayNet` publishes the box's CURRENT public address (selfPublicRelay, a
+// Cloudflare quick-tunnel hostname that changes on every restart), and the box's own loopback-served console
+// adopts it, because isOwnRelaySpelling compares against the LOOPBACK spelling and a tunnel hostname does
+// not match it. Restart one: one row. Restart two: one dead, one live. Restart three: two dead, wedged — and
+// at NETDOC_ADOPT_MAX rows the console stops following its own box as well.
+//
+// THE REMEDY CHOSEN, and why it is not the other two the audit offered. A row this path added is DERIVED
+// STATE: the church's document still names that box, so dropping the row locally loses nothing and the next
+// unlock adopts it again the moment it answers. So the row retires itself when it stops answering, and that
+// drop touches `extraRelays()` ONLY — nothing is unsigned, nothing is published, and `_readCovers` is never
+// consulted, so the retire can never be blocked by the jam it exists to clear.
+//   · NOT "make adopted rows non-blocking for `_readCovers`": that guard is what stops a stale copy of the
+//     church's list being re-signed over the real one, and an adopted box is the church's OWN box — the one
+//     most likely to be holding the newest list. Excusing it from the read is the fail-open mistake in the
+//     one place this file cannot afford it.
+//   · NOT "skip every unreachable row in `unenrolRelayNet`": that is the same fail-open, in the removal
+//     path, and it changes shared machinery that hand-typed rows depend on. It would also fix the
+//     PRE-EXISTING jam for typed rows, which is worth doing — on its own branch, with its own test and its
+//     own caller list. It is not this change's to make.
+//
+// THE TAG CANNOT BE FORGED BY THE DOCUMENT. It is a list of addresses in this console's own localStorage,
+// written only by adoptNetDocAddresses after the address proved the key the church signed. A document can
+// influence WHICH of its own proved boxes get tagged, and tagging is only ever permission to drop a local
+// row that the document itself will restore — so there is nothing to gain by it.
+const ADOPTED_LS = 'trinityone.steward.adopted-relays';
+function adoptedRelays() {
+  try { const a = JSON.parse(lsGet(ADOPTED_LS) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; } catch { return []; }
+}
+function setAdoptedRelays(list) { try { lsSet(ADOPTED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))])); } catch (e) {} }
+function _tagAdopted(u) { if (u) setAdoptedRelays([...adoptedRelays(), u]); }
+// Drop every row this path added that no longer answers at all, in one write.
+//
+// ONLY CALLED AFTER A READ THAT ACTUALLY RETURNED THE CHURCH'S ENTRIES, which is this console's cheapest
+// proof that it has a network at all. Without that precondition a phone with no signal would retire every
+// adopted row on every unlock — harmless, because the document restores them, but it would churn the Relays
+// card and spend a write for nothing.
+//
+// "No longer answers" is the identity proof returning nothing, not the gate refusing it. A box that answers
+// with a key the church has since un-signed keeps its row and loses only its admission, which is the gate's
+// job and not this one's; a box that answers nothing is the one that wedges the read.
+async function retireDeadAdoptedRows() {
+  const tagged = adoptedRelays();
+  if (!tagged.length) return [];
+  let cur = []; try { cur = extraRelays(); } catch (e) { return []; }
+  // Forget a tag whose row a steward has already removed, so the store cannot grow without bound.
+  const listed = tagged.filter(u => cur.includes(u));
+  const retired = [];
+  for (const u of listed) {
+    let proved = '';
+    try { const pr = await verifyRelayIdentity(u); proved = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { proved = ''; }
+    if (!/^[0-9a-f]{64}$/.test(proved)) retired.push(u);
+  }
+  if (retired.length) {
+    _writeExtraRelays(cur.filter(u => !retired.includes(u)));
+    setAdoptedRelays(listed.filter(u => !retired.includes(u)));
+  } else if (listed.length !== tagged.length) {
+    setAdoptedRelays(listed);
+  }
+  return retired;
+}
 // THE MERGE. Fire-and-forget from setKey (see there); never awaited, so a slow or dead box cannot delay an
 // unlock, and it is safe to run twice because every step is idempotent.
 //
@@ -5442,18 +5578,28 @@ async function adoptNetDocAddresses() {
   // difference does not matter here: this path only ever adds, so it simply does nothing and the next
   // unlock asks again. Nothing is removed or re-signed on a failed read.
   if (pub !== pub0) return [];
+  // THE ROWS THIS PATH LEFT BEHIND LAST TIME, before adding any more (finding 1). A non-empty read is the
+  // precondition — see retireDeadAdoptedRows — and this is the only place that calls it.
+  if (!entries.length) return [];
+  try { await retireDeadAdoptedRows(); } catch (e) {}
+  if (pub !== pub0) return [];
   const added = [];
   for (const e of entries) {
-    let have = 0; try { have = extraRelays().length; } catch (err) { have = NETDOC_ADOPT_MAX; }
-    if (have >= NETDOC_ADOPT_MAX) break;
     const u = _netDocDialUrl(e && e.url);
     if (!u) continue;
+    // IS THIS BOX ALREADY LISTED AT AN ADDRESS THAT CANNOT BE DIALLED? Then this is a replacement, not an
+    // addition: it does not grow the list, so the cap does not apply to it (finding 2).
+    const stale = _staleBoxSpelling(u);
+    if (!stale) {
+      let have = 0; try { have = extraRelays().length; } catch (err) { have = NETDOC_ADOPT_MAX; }
+      if (have >= NETDOC_ADOPT_MAX) break;
+    }
     // THE SAME REFUSALS EVERY OTHER ADD ROUTE MAKES, and asked here as well as inside addRelay so the
     // proof below is not spent on an address that would be refused anyway. isOwnRelaySpelling: this
     // console's own box is already relaysRaw()[0]. isSharedRelaySpelling: the shared pool is appended
     // unconditionally and is admitted on its own pin, so a second spelling of it is only a second dial.
     if (isOwnRelaySpelling(u) || isSharedRelaySpelling(u)) continue;
-    if (_alreadyACandidate(u)) continue;
+    if (!stale && _alreadyACandidate(u)) continue;
     // THE BOX AT THAT ADDRESS MUST BE THE BOX THE ENTRY NAMES, and this check was added after a test
     // refuted the version without it. On this base `proveRelay` admits on the possession proof alone — the
     // three roots are diagnostics (RELAY-ADMISSION, "the invariant") — so a church document naming key X at
@@ -5476,9 +5622,19 @@ async function adoptNetDocAddresses() {
     // is the "gossiping junk" risk the plan names.
     if (!(await admitRemoteRelay(u))) continue;
     if (pub !== pub0) break;                 // the console changed church while the proofs were out
+    if (stale) {
+      // THE SWAP, through the one writer refreshNamedRelays uses for the same job. Re-read the store rather
+      // than reusing the list the check was made against: the proofs above took two round trips.
+      let now = []; try { now = extraRelays(); } catch (err) { now = []; }
+      if (!now.includes(stale) || now.includes(u)) continue;
+      _writeExtraRelays(now.map(r => (r === stale ? u : r)));
+      setAdoptedRelays([...adoptedRelays().filter(r => r !== stale), u]);
+      added.push(u);
+      continue;
+    }
     if (_alreadyACandidate(u)) continue;     // something else added it while we waited
     let ok = false; try { ok = !!window.Steward.addRelay(u); } catch (err) { ok = false; }
-    if (ok) added.push(u);
+    if (ok) { _tagAdopted(u); added.push(u); }
   }
   return added;
 }
