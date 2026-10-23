@@ -7480,6 +7480,95 @@
       pins: CANONICAL_RELAY_PUBS
     });
   }
+  function _netDocDialUrl(raw) {
+    let s = String(raw || "").trim();
+    if (!s) return "";
+    s = s.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
+    if (!/^wss?:\/\//i.test(s)) return "";
+    s = s.replace(/\/+$/, "").replace(/\/relay$/i, "").replace(/\/+$/, "");
+    if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return "";
+    return s + "/relay";
+  }
+  function _alreadyAMemberCandidate(u) {
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const d = (x) => {
+      try {
+        return _netDocDialUrl(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const vn = n(u), vd = d(u);
+    let list = [];
+    try {
+      list = churchRelaysRaw();
+    } catch (e) {
+      list = [];
+    }
+    for (const r of list) {
+      if (!r) continue;
+      if (r === u) return true;
+      if (vn && n(r) === vn) return true;
+      if (vd && d(r) === vd) return true;
+    }
+    return false;
+  }
+  var MEMBER_NETDOC_ADOPT_MAX = 8;
+  var _adoptingNetDoc = false;
+  async function adoptChurchNetDocAddresses(cp) {
+    if (!cp) return [];
+    if (_adoptingNetDoc) return [];
+    _adoptingNetDoc = true;
+    try {
+      let entries;
+      try {
+        entries = await churchRelayNet(cp);
+      } catch (e) {
+        return [];
+      }
+      if (window.Fellowship.churchPub !== cp) return [];
+      const added = [];
+      for (const e of entries || []) {
+        if ((window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+        const u = _netDocDialUrl(e && e.url);
+        if (!u) continue;
+        if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
+        if (_alreadyAMemberCandidate(u)) continue;
+        let detail;
+        try {
+          detail = await verifyRelayIdentityDetailed(u);
+        } catch (err) {
+          detail = { proof: null, reached: false };
+        }
+        const proof = detail && detail.proof;
+        if (!proof) continue;
+        if (String(proof.relayPub || "").toLowerCase() !== String(e && e.pubkey || "").toLowerCase()) continue;
+        const ok = await isNetworkRelay(cp, u, {
+          verify: async () => proof,
+          netEntries: churchRelayNet,
+          origin: _adoptionOrigin(),
+          pins: CANONICAL_RELAY_PUBS
+        });
+        if (!ok) continue;
+        if (window.Fellowship.churchPub !== cp) break;
+        if (_alreadyAMemberCandidate(u)) continue;
+        try {
+          window.Fellowship.addRelay(u);
+          added.push(u);
+        } catch (err) {
+        }
+      }
+      return added;
+    } finally {
+      _adoptingNetDoc = false;
+    }
+  }
   var _gate = createRelayGate({
     store: typeof localStorage !== "undefined" ? localStorage : null,
     verify: verifyRelayIdentity,
@@ -10571,6 +10660,12 @@
       }
       try {
         _watchChurchRelays(window.Fellowship.churchPub);
+      } catch (e) {
+      }
+      try {
+        const _p = adoptChurchNetDocAddresses(window.Fellowship.churchPub);
+        if (_p && _p.catch) _p.catch(() => {
+        });
       } catch (e) {
       }
       return window.Fellowship.churchPub;
