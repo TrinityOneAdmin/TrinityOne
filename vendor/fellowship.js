@@ -7672,7 +7672,16 @@
         } catch (err) {
           claimOnly = false;
         }
-        if (!claimOnly && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+        const wantKey = String(e && e.pubkey || "").toLowerCase();
+        let moved = [];
+        try {
+          const r1 = readRec();
+          const rows = r1[cp] && r1[cp].rows || {};
+          moved = Object.keys(rows).filter((x) => x !== u && String(rows[x] || "").toLowerCase() === wantKey);
+        } catch (err) {
+          moved = [];
+        }
+        if (!claimOnly && !moved.length && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
         if (!claimOnly && _alreadyAMemberCandidate(u)) continue;
         let detail;
         try {
@@ -7704,8 +7713,15 @@
           const mine = rec[cp] && typeof rec[cp] === "object" ? rec[cp] : { hw: docAt, rows: {} };
           if (!mine.rows || typeof mine.rows !== "object") mine.rows = {};
           mine.rows[u] = String(proof.relayPub || "").toLowerCase();
+          for (const x of moved) delete mine.rows[x];
           rec[cp] = mine;
           writeRec(rec);
+          if (moved.length) for (const x of _dropRevokedNetDocRows(cp, moved, rec)) {
+            try {
+              _gate.forget(x);
+            } catch (err) {
+            }
+          }
         } catch (err) {
         }
       }
