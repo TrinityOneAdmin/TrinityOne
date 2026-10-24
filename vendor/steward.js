@@ -6655,7 +6655,15 @@
       if (!_isHex64(pub2)) continue;
       const until = Number(v.until) || 0, at = Number(v.at) || 0;
       const cp = _isHex64(v.cp) ? String(v.cp).toLowerCase() : "";
-      out.set(_relayKey(k), { pub: pub2, cp, at, until });
+      const cps = {};
+      if (v.cps && typeof v.cps === "object" && !Array.isArray(v.cps)) {
+        for (const [s, w] of Object.entries(v.cps)) {
+          if (!w || typeof w !== "object" || s && !_isHex64(s)) continue;
+          cps[s.toLowerCase()] = { at: Number(w.at) || 0, until: Number(w.until) || 0 };
+        }
+      }
+      if (!Object.keys(cps).length) cps[cp] = { at, until };
+      out.set(_relayKey(k), { pub: pub2, cp, at, until, cps });
     }
     return out;
   }
@@ -6663,7 +6671,7 @@
     try {
       if (!store || !store.setItem) return;
       const obj = {};
-      for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until };
+      for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until, cps: _scopesOf(v) };
       store.setItem(VERIFIED_KEY, JSON.stringify(obj));
     } catch {
     }
@@ -6671,13 +6679,33 @@
   function admitCached(map, url, cp, nowSec) {
     const e = map.get(_relayKey(url));
     if (!e || !(e.until > nowSec)) return false;
-    if (!e.cp) return true;
-    return !cp || e.cp === String(cp).toLowerCase();
+    return !!_admittingScope(e, cp, nowSec);
+  }
+  function _scopesOf(e) {
+    if (e && e.cps && typeof e.cps === "object") return e.cps;
+    return { [e && e.cp || ""]: { at: e && e.at || 0, until: e && e.until || 0 } };
+  }
+  function _admittingScope(e, cp, nowSec) {
+    const s = _scopesOf(e);
+    const live = (k) => Object.prototype.hasOwnProperty.call(s, k) && s[k] && s[k].until > nowSec ? s[k] : null;
+    if (live("")) return live("");
+    if (!cp) {
+      for (const k of Object.keys(s)) if (live(k)) return live(k);
+      return null;
+    }
+    return live(String(cp).toLowerCase());
   }
   function rememberVerified(map, url, pub2, cp, nowSec) {
     const k = _relayKey(url);
     if (!k || !_isHex64(pub2)) return;
-    map.set(k, { pub: String(pub2).toLowerCase(), cp: _isHex64(cp) ? String(cp).toLowerCase() : "", at: nowSec, until: nowSec + VERIFIED_TTL_SEC });
+    const p = String(pub2).toLowerCase(), scope = _isHex64(cp) ? String(cp).toLowerCase() : "";
+    const had = map.get(k), cps = {};
+    if (had && had.pub === p) {
+      for (const [s, w] of Object.entries(_scopesOf(had))) if (w && w.until > nowSec) cps[s] = w;
+    }
+    cps[scope] = { at: nowSec, until: nowSec + VERIFIED_TTL_SEC };
+    const until = Math.max(...Object.values(cps).map((w) => w.until));
+    map.set(k, { pub: p, cp: scope, at: nowSec, until, cps });
   }
   function createRelayGate(deps) {
     const d = deps || {};
@@ -6712,9 +6740,10 @@
           attempted.set(k, nowSec());
           return false;
         }
+        const before = had && had.pub === res.pub ? _scopesOf(had)[scope] : null;
         rememberVerified(map, url, res.pub, scope, nowSec());
         writeVerified(d.store, map);
-        if (!had || had.pub !== res.pub || had.cp !== scope) changed();
+        if (!before || !(before.until > nowSec())) changed();
         return true;
       }
       attempted.set(k, nowSec());
@@ -6753,7 +6782,8 @@
           const e = map.get(_relayKey(u));
           if (admitCached(map, u, cp, t)) {
             out.push(u);
-            if (!e.at || t - e.at > VERIFIED_REFRESH_SEC) schedule(u, cp);
+            const w = _admittingScope(e, cp, t) || e;
+            if (!w.at || t - w.at > VERIFIED_REFRESH_SEC) schedule(u, cp);
           } else schedule(u, cp);
         }
         return out;

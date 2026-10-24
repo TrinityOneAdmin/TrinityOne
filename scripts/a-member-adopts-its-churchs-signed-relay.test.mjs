@@ -159,6 +159,8 @@ function gateSource(src) {
     fnBody(src, 'function readVerified', 'readVerified'),
     fnBody(src, 'function writeVerified', 'writeVerified'),
     fnBody(src, 'function admitCached', 'admitCached'),
+    fnBody(src, 'function _scopesOf', '_scopesOf'),
+    fnBody(src, 'function _admittingScope', '_admittingScope'),
     fnBody(src, 'function rememberVerified', 'rememberVerified'),
     fnBody(src, 'function createRelayGate', 'createRelayGate'),
   ].join('\n');
@@ -745,11 +747,10 @@ test('one phone in two churches: church A\'s own box carries none of church B\'s
     assert.ok(app.relaysForChurch(B.pub).includes(MUTUAL.wsUrl),
       'a box BOTH churches sign is not used for church B — the fix broke churches hosting each other');
     assert.equal(app.relaysForChurch(B.pub).includes(BOXA.wsUrl), false, 'claiming the mutual box let A\'s own box in too');
-    // Church A keeps the mutual box as a CANDIDATE. Re-proved for A first because of a PRE-EXISTING limit of the
-    // admission gate this test surfaced (src/relay-net.src.js createRelayGate.prove): a `church`-root admission
-    // is cached with ONE church's scope per address, so proving the mutual box for B un-admits it for A until
-    // it is proved for A again. That is the gate's, not this change's, and is reported separately.
-    await app.gate.refresh(app.churchRelaysRaw(), A.pub);
+    // …and church A KEEPS it, with no re-proof. The gate used to remember one church per address, so proving
+    // the mutual box for B un-admitted it for A (this test found that; scripts/a-box-two-churches-sign-stays-
+    // proved-for-both.test.mjs pins the gate rule).
+    assert.ok(app.gate.admits(MUTUAL.wsUrl, A.pub), 'proving the mutual box for church B un-admitted it for church A');
     assert.ok(app.relaysForChurch(A.pub).includes(MUTUAL.wsUrl), 'church B\'s claim took the mutual box away from church A');
   } finally { app.close(); }
 });

@@ -1300,10 +1300,16 @@ export const CASES = [
   {
     name: 'relay-gate: one church\'s signature admits a relay for every church on the device',
     file: 'src/relay-net.src.js',
-    find: `  if (!e.cp) return true;                 // canonical / same-origin: church-independent
-  return !cp || e.cp === String(cp).toLowerCase();`,
+    find: `  return !!_admittingScope(e, cp, nowSec);`,
     replace: `  return true;`,
     test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: proving a box for one church erases another church\'s proof of it',
+    file: 'src/relay-net.src.js',
+    find: `  if (had && had.pub === p) for (const [s, w] of Object.entries(_scopesOf(had))) if (w && w.until > nowSec) cps[s] = w;`,
+    replace: ``,
+    test: 'scripts/a-box-two-churches-sign-stays-proved-for-both.test.mjs',
   },
   {
     name: 'relay-gate: the verified set is never persisted',

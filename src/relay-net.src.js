@@ -343,6 +343,14 @@ export async function isNetworkRelay(cp, url, deps) {
 // congregation. `admit(list, cp)` accepts an entry when it is church-independent or when it names THIS
 // church. Passing no church at all (a DM, a profile read — traffic that belongs to the member and not to a
 // congregation) accepts any church this device has proved a relay for; it never accepts an unverified one.
+//
+// ONE BOX, SEVERAL CHURCHES. Churches host each other, so one box can be signed by two churches this device
+// follows. An entry therefore keeps EVERY scope proved for the machine at that address, each with its own
+// time, in `cps` ({ [scope]: { at, until } }, '' being church-independent). It used to keep one, so proving
+// a mutual box for church B un-admitted it for church A until A re-proved (found by
+// a-member-adopts-its-churchs-signed-relay test 11, 2026-10-24). `cp` stays the scope of the NEWEST proof, so
+// a store written now still reads sensibly to an older build. A different key at the address is a different
+// machine: its entry starts again and carries no church's proof over.
 export const VERIFIED_KEY = 'trinityone.relays.verified';
 // HOW LONG A PROOF IS GOOD FOR WITHOUT THE NETWORK. Not a security window — the background pass re-proves
 // every few hours whenever the device is online, so this only decides what a phone that has been OFF or out
@@ -370,7 +378,15 @@ export function readVerified(store) {
     if (!_isHex64(pub)) continue;
     const until = Number(v.until) || 0, at = Number(v.at) || 0;
     const cp = _isHex64(v.cp) ? String(v.cp).toLowerCase() : '';
-    out.set(_relayKey(k), { pub, cp, at, until });
+    const cps = {};
+    if (v.cps && typeof v.cps === 'object' && !Array.isArray(v.cps)) {
+      for (const [s, w] of Object.entries(v.cps)) {
+        if (!w || typeof w !== 'object' || (s && !_isHex64(s))) continue;
+        cps[s.toLowerCase()] = { at: Number(w.at) || 0, until: Number(w.until) || 0 };
+      }
+    }
+    if (!Object.keys(cps).length) cps[cp] = { at, until };   // written before `cps`: its one scope
+    out.set(_relayKey(k), { pub, cp, at, until, cps });
   }
   return out;
 }
@@ -378,7 +394,7 @@ export function writeVerified(store, map) {
   try {
     if (!store || !store.setItem) return;
     const obj = {};
-    for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until };
+    for (const [k, v] of map) obj[k] = { pub: v.pub, cp: v.cp, at: v.at, until: v.until, cps: _scopesOf(v) };
     store.setItem(VERIFIED_KEY, JSON.stringify(obj));
   } catch {}
 }
@@ -388,14 +404,34 @@ export function writeVerified(store, map) {
 export function admitCached(map, url, cp, nowSec) {
   const e = map.get(_relayKey(url));
   if (!e || !(e.until > nowSec)) return false;
-  if (!e.cp) return true;                 // canonical / same-origin: church-independent
-  return !cp || e.cp === String(cp).toLowerCase();
+  return !!_admittingScope(e, cp, nowSec);
+}
+// The scopes of an entry, for one built before `cps` existed too (a hand-made map in a test).
+function _scopesOf(e) {
+  if (e && e.cps && typeof e.cps === 'object') return e.cps;
+  return { [(e && e.cp) || '']: { at: (e && e.at) || 0, until: (e && e.until) || 0 } };
+}
+// WHICH proof admits this entry for `cp` now, or null. Church-independent first (canonical / same-origin /
+// software); then this church's own; with no church given, any church's.
+function _admittingScope(e, cp, nowSec) {
+  const s = _scopesOf(e);
+  const live = (k) => (Object.prototype.hasOwnProperty.call(s, k) && s[k] && s[k].until > nowSec) ? s[k] : null;
+  if (live('')) return live('');
+  if (!cp) { for (const k of Object.keys(s)) if (live(k)) return live(k); return null; }
+  return live(String(cp).toLowerCase());
 }
 
 export function rememberVerified(map, url, pub, cp, nowSec) {
   const k = _relayKey(url);
   if (!k || !_isHex64(pub)) return;
-  map.set(k, { pub: String(pub).toLowerCase(), cp: _isHex64(cp) ? String(cp).toLowerCase() : '', at: nowSec, until: nowSec + VERIFIED_TTL_SEC });
+  const p = String(pub).toLowerCase(), scope = _isHex64(cp) ? String(cp).toLowerCase() : '';
+  const had = map.get(k), cps = {};
+  // SAME MACHINE: every other church's proof that has not run out is kept. A different key is a different
+  // machine, and nothing proved about the old one carries over.
+  if (had && had.pub === p) for (const [s, w] of Object.entries(_scopesOf(had))) if (w && w.until > nowSec) cps[s] = w;
+  cps[scope] = { at: nowSec, until: nowSec + VERIFIED_TTL_SEC };
+  const until = Math.max(...Object.values(cps).map(w => w.until));
+  map.set(k, { pub: p, cp: scope, at: nowSec, until, cps });
 }
 
 // THE GATE ITSELF. One per surface (one in the member app, one in the console), created once at module load.
@@ -435,9 +471,10 @@ export function createRelayGate(deps) {
       // (netEntries answers [] when there is no church to ask about) and it is refused here anyway, because
       // this is the exact shape of cross-tenant defect this codebase has shipped twice.
       if (res.root === 'church' && !_isHex64(scope)) { attempted.set(k, nowSec()); return false; }
+      const before = had && had.pub === res.pub ? _scopesOf(had)[scope] : null;
       rememberVerified(map, url, res.pub, scope, nowSec());
       writeVerified(d.store, map);
-      if (!had || had.pub !== res.pub || had.cp !== scope) changed();
+      if (!before || !(before.until > nowSec())) changed();
       return true;
     }
     attempted.set(k, nowSec());
@@ -478,7 +515,8 @@ export function createRelayGate(deps) {
         const e = map.get(_relayKey(u));
         if (admitCached(map, u, cp, t)) {
           out.push(u);
-          if (!e.at || (t - e.at) > VERIFIED_REFRESH_SEC) schedule(u, cp);   // still good; re-prove in the background
+          const w = _admittingScope(e, cp, t) || e;   // the age of the proof that admitted it, not of the newest one
+          if (!w.at || (t - w.at) > VERIFIED_REFRESH_SEC) schedule(u, cp);   // still good; re-prove in the background
         } else schedule(u, cp);
       }
       return out;
