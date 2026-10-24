@@ -300,7 +300,7 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
   const adopt = fnBody(src, 'async function adoptNetDocAddresses', 'adoptNetDocAddresses');
   assert.match(adopt, /await admitRemoteRelay\(u\)/, 'the merge no longer proves an address before adopting it');
   assert.match(adopt, /window\.Steward\.addRelay\(u\)/, 'the merge no longer writes through the console\'s own Add route');
-  assert.match(adopt, /await retireDeadAdoptedRows\(\)/,
+  assert.match(adopt, /await retireDeadAdoptedRows\(signedKeys\)/,
     'THE RETIRE PASS IS GONE. A row this path added that stops answering then stays for ever, and two of ' +
     'them wedge every change to the church\'s relay list — the HIGH finding of the 2026-10-22 audit.');
   assert.match(adopt, /_staleBoxSpelling\(u\)/,
@@ -868,16 +868,20 @@ test('a row that is still answering is never retired, and nothing is retired wit
     assert.deepEqual(con.extraRelays(), [BOX.wsUrl], 'the live row was dropped anyway');
   } finally { con.close(); }
 
-  // AND NOTHING IS RETIRED WHEN THE CHURCH'S DOCUMENT COULD NOT BE READ. A phone with no signal must not
-  // throw away every address it has. Staged by publishing an EMPTY list for the church, which is the shape
-  // of "the read told us nothing": one dead row is listed and tagged, and it stays.
+  // AND A ROW NOTHING ANSWERS AT IS NOT RETIRED BY AN EMPTY LIST ON AN UNFINISHED READ. A phone with no signal
+  // must not throw away every address it has. Staged by publishing an EMPTY list for the church: the dead row
+  // itself never answers, so the read is never complete (_readCovers) and the row's key is never proved — so
+  // neither the unsigned-key rule (PR #7 audit, H-2: tests 28-29 below) nor the dead-strike rule can retire it.
+  // (Corrected 2026-10-24: this comment called an empty list "the read told us nothing". Since H-2, an empty
+  // signed list on a COMPLETE read is the church removing its last box, and does retire an answering row.)
   await H.publishAll(SHARED, [relayNetDocFor(church, [])]);
   const dead = 'ws://127.0.0.1:1/relay';
   const con2 = makeConsole({ church, origin: SECOND_CONSOLE_ORIGIN, canonical: [SHARED.wsUrl],
                              extra: [dead], seed: { 'trinityone.steward.adopted-relays': JSON.stringify([dead]) } });
   try {
-    // DECIDES FIRST: `if (!entries.length) return []` in adoptNetDocAddresses, which is BEFORE the retire
-    // call. Asserted as a refusal here and driven as a retirement in the test above, over the same code.
+    // DECIDES FIRST: `if (entries.length || full)` in adoptNetDocAddresses — the list is empty and the read is
+    // not complete, so the retire pass does not run at all. Driven as a retirement in the test above, and as
+    // an unsigned-key retirement on a complete read in tests 28-29.
     assert.deepEqual(await con2.adopt(), [], 'something was adopted from an empty list');
     assert.deepEqual(con2.extraRelays(), [dead],
       'a read that returned nothing still retired a row. On a phone with no signal that throws away every ' +
@@ -1383,4 +1387,78 @@ test('a delegated steward and a network view adopt nothing — extraRelays() is 
     assert.deepEqual(await con.adopt(), [BOX.wsUrl],
       'the own church adopts nothing either, so the two refusals above prove nothing about the guard');
   } finally { con.close(); }
+});
+
+// ── 6. A BOX THE CHURCH TAKES OUT IS TAKEN OFF EVERY OTHER CONSOLE (PR #7 audit, H-2 and M-3) ──────────
+//
+// THE DEFECT. The owner removes box X on one console. That console re-signs the church's relay-net document
+// without X. Every OTHER console had adopted X from the document, and kept it: adoptNetDocAddresses returned
+// before the retire pass on an empty list, and retireDeadAdoptedRows kept any row that proved ANY key. So X
+// stayed listed, admitted and in the publish set — the steward was told it was gone, and it went on receiving
+// this console's writes. The same rule kept a recycled address now proving a DIFFERENT church's key.
+//
+// SERVED BY THE SHARED RELAY, so this console's own origin is a relay that answers and a read can be COMPLETE
+// (_readCovers) — the precondition for retiring a row for being unsigned. Same staging as the jam test above.
+//
+// THE STAGING is all real: the document is a real church-signed event on the shared relay, the box is a real
+// gateway that keeps answering with its key throughout (so "it stopped answering" is never what retires it),
+// and adoption and the later pass are the shipped adoptNetDocAddresses over the shipped _oneComplete read.
+const servedBy = (r) => ({ protocol: 'http:', host: '127.0.0.1:' + r.port });
+test('a box the church took out of its signed list leaves this console too — even while it still answers', async () => {
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const con = makeConsole({ church, origin: servedBy(SHARED), canonical: [SHARED.wsUrl] });
+  try {
+    assert.deepEqual(await con.adopt(), [BOX.wsUrl], 'staging fault: the box was not adopted in the first place');
+    assert.ok(con.adopted().includes(BOX.wsUrl), 'staging fault: the adopted row was not tagged');
+
+    // THE CHURCH REMOVES IT: a newer signed list with no boxes in it, which is what Remove on another console
+    // signs when X was the only one.
+    await H.publishAll(SHARED, [relayNetDocFor(church, [])]);
+    assert.ok(await con.readCovers(), 'staging fault: the read did not cover every relay, so nothing may retire');
+    await con.adopt();
+    assert.equal(con.extraRelays().includes(BOX.wsUrl), false,
+      'THE CHURCH TOOK THIS BOX OUT OF ITS SIGNED LIST and this console still lists it: ' +
+      JSON.stringify(con.extraRelays()) + '. The steward who pressed Remove was told it was gone.');
+    assert.equal(con.relays().includes(BOX.wsUrl), false, 'the removed box is still in this console\'s publish set');
+    assert.equal(con.adopted().includes(BOX.wsUrl), false, 'the tag outlived the row');
+    // THE SHARED POOL IS NEVER DROPPED.
+    assert.ok(con.relaysRaw().includes(SHARED.wsUrl), 'the shared relay fell out of the list');
+  } finally { con.close(); }
+});
+
+test('the same address now proving a key the church does not sign is retired; a typed row and an unfinished read keep theirs', async () => {
+  // M-3: the church's list names a DIFFERENT key at this address — a recycled tunnel hostname, a replaced
+  // machine. The tagged row proves BOX's key, which the church no longer signs, so it goes.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const con = makeConsole({ church, origin: servedBy(SHARED), canonical: [SHARED.wsUrl] });
+  try {
+    assert.deepEqual(await con.adopt(), [BOX.wsUrl], 'staging fault: the box was not adopted');
+    await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: 'f'.repeat(64), alwaysOn: true, url: BOX.wsUrl }])]);
+    await con.adopt();
+    assert.equal(con.extraRelays().includes(BOX.wsUrl), false,
+      'an adopted address now proving a key the church does not sign was kept and stays in the publish set');
+  } finally { con.close(); }
+
+  // CONTROL 1 — A ROW THE STEWARD TYPED IS NEVER TOUCHED, whatever the document says: only rows this path
+  // added are tagged, and only tagged rows retire.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [])]);
+  const typed = makeConsole({ church, origin: servedBy(SHARED), canonical: [SHARED.wsUrl], extra: [BOX.wsUrl] });
+  try {
+    await typed.adopt();
+    assert.deepEqual(typed.extraRelays(), [BOX.wsUrl], 'a relay the steward TYPED was removed by the church\'s list');
+  } finally { typed.close(); }
+
+  // CONTROL 2 — AN UNFINISHED READ RETIRES NOTHING FOR BEING UNSIGNED. One relay this console asks never
+  // answers, so the read is not complete (_readCovers) and the church's list cannot be trusted to be the
+  // newest: the adopted, still-answering box keeps its row.
+  const dead = 'ws://127.0.0.1:1/relay';
+  const half = makeConsole({ church, origin: servedBy(SHARED), canonical: [SHARED.wsUrl], extra: [BOX.wsUrl, dead],
+                             seed: { 'trinityone.steward.adopted-relays': JSON.stringify([BOX.wsUrl]) } });
+  try {
+    assert.equal(await half.readCovers(), false, 'staging fault: the read covered every relay, so this control proves nothing');
+    await half.adopt();
+    assert.ok(half.extraRelays().includes(BOX.wsUrl),
+      'a read that did not hear from every relay retired a box for being unsigned — on a thin link that ' +
+      'would drop the church\'s own box whenever one relay is slow');
+  } finally { half.close(); }
 });

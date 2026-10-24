@@ -1058,7 +1058,7 @@ function _adoptionOrigin() {
 // network still know what it knew yesterday — belongs to the gate that would otherwise re-decide under time
 // pressure (plan C4). Nothing here decides anything yet, so persisting a membership answer now would ship a
 // cache with no reader and a stale-data question nobody has to answer.
-const _relayNetCache = new Map();   // cp -> { at, entries }
+const _relayNetCache = new Map();   // cp -> { at, entries, docAt } (docAt: the signed document's created_at, 0 if none came back)
 const RELAY_NET_TTL_MS = 60000;
 async function churchRelayNet(cp, opts) {
   if (!cp) return [];
@@ -1079,7 +1079,10 @@ async function churchRelayNet(cp, opts) {
       if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
     }
     entries = best ? parseRelayNet(best.content) : [];
-    _relayNetCache.set(cp, { at: Date.now(), entries });
+    // `docAt`: the signed document's own created_at, 0 when no relay returned one. It is what separates
+    // "the church signed an EMPTY list" from "nobody answered" — the first may revoke a box, the second
+    // never does (adoptChurchNetDocAddresses).
+    _relayNetCache.set(cp, { at: Date.now(), entries, docAt: best ? (best.created_at || 0) : 0 });
   } catch {
     // Unreachable is NOT "the church has no relays". Return the last answer if we have one and leave the
     // cache alone so the next call retries, rather than caching an empty list over a real membership.
@@ -1174,14 +1177,71 @@ const MEMBER_NETDOC_ADOPT_MAX = 8;
 let _adoptingNetDoc = false;
 // THE MERGE. Fire-and-forget from setChurch (see there); never awaited, so a slow or dead box cannot delay a
 // church switch, and it is safe to run twice because every step is idempotent.
+// TAKE A REVOKED ADDRESS OFF THIS PHONE (adoptChurchNetDocAddresses, PR #7 audit H-2) — but never one that
+// something else still needs: the shared pool, another church's doc-adopted box, any church's invite or
+// kind-10002 boxes. The same refusals as _maybeDropRelay, plus the doc records of the other churches. Kept out
+// of adoptChurchNetDocAddresses so that function still never so much as names _churchRelays or churchboxes
+// (its tests assert it does not write them; this only reads them).
+function _dropRevokedNetDocRows(cp, gone, rec) {
+  let boxes = {}; try { boxes = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || '{}') || {}; } catch (e) { boxes = {}; }
+  const stillNeeded = (u) => {
+    if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) return true;
+    for (const c of Object.keys(rec || {})) { if (c !== cp && rec[c] && rec[c].rows && rec[c].rows[u]) return true; }
+    for (const c of Object.keys(boxes)) { if (Array.isArray(boxes[c]) && boxes[c].includes(u)) return true; }
+    for (const [, m] of _churchRelays) { if (m && m.has && m.has(u)) return true; }
+    return false;
+  };
+  const drop = (gone || []).filter(u => !stillNeeded(u));
+  if (!drop.length) return [];
+  const now = window.Fellowship.relays || [];
+  if (now.some(u => drop.includes(u))) window.Fellowship.setRelays(now.filter(u => !drop.includes(u)));
+  try { pool.close(drop); } catch (e) {}
+  return drop;
+}
 async function adoptChurchNetDocAddresses(cp) {
   if (!cp) return [];
   if (_adoptingNetDoc) return [];
   _adoptingNetDoc = true;
+  // WHAT THIS PATH ADDED, AND FOR WHICH CHURCH AND KEY — so a box the church later TAKES OUT of its signed
+  // document can be taken off this phone again (PR #7 audit, finding H-2). Without it the address stayed in
+  // window.Fellowship.relays for ever: re-admitted under the `software` root, still sent this member's writes,
+  // AUTH and IP long after the steward pressed Remove and was told it was gone.
+  //
+  // `trinityone.relays.netdoc` = { [churchPub]: { hw: <newest document created_at seen>, rows: { [url]: <key> } } }.
+  // ONLY ADDRESSES THIS FUNCTION ADDED are recorded, so revocation can never take away a relay the member
+  // typed, an invite relay, or the shared pool. NOT IN ANY BACKUP: app/backup.jsx exports members by an
+  // allowlist (MEMBER_PREFIXES), and `trinityone.relays` is deliberately absent from it — the same reason the
+  // candidate list and the gate's verified set stay out (closed-network plan C5): routing is rebuilt from the
+  // church's own signed document, never from a file.
+  const NETDOC_KEY = 'trinityone.relays.netdoc';
+  const readRec = () => { try { const o = JSON.parse(localStorage.getItem(NETDOC_KEY) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch (e) { return {}; } };
+  const writeRec = (o) => { try { localStorage.setItem(NETDOC_KEY, JSON.stringify(o)); } catch (e) {} };
   try {
     let entries;
     try { entries = await churchRelayNet(cp); } catch (e) { return []; }
     if (window.Fellowship.churchPub !== cp) return [];   // the church switched while we read
+    // THE REVOCATION, before anything is added. Only on a document that was REALLY READ (docAt > 0 — a relay
+    // returned the church's signed event): "nobody answered" is never "the church removed its box". And only
+    // on a document at least as new as the newest this phone has acted on (`hw`), so a relay serving an
+    // older copy cannot put back a box the church has since removed — the rollback the audit's hardening
+    // note names.
+    const cached = _relayNetCache.get(cp);
+    const docAt = (cached && cached.docAt) || 0;
+    if (docAt > 0) {
+      const rec = readRec();
+      const mine = (rec[cp] && typeof rec[cp] === 'object') ? rec[cp] : { hw: 0, rows: {} };
+      if (!mine.rows || typeof mine.rows !== 'object') mine.rows = {};
+      if (docAt < (Number(mine.hw) || 0)) return [];      // an older copy than one already acted on: ignore it whole
+      mine.hw = docAt;
+      // MATCHED ON THE KEY (RELAY-ADMISSION trap 2): a row goes when the KEY it was adopted for is no longer
+      // signed. A box that merely moved address keeps its key and is not revoked here.
+      const signedKeys = new Set((entries || []).map(e => String((e && e.pubkey) || '').toLowerCase()).filter(Boolean));
+      const gone = Object.keys(mine.rows).filter(u => !signedKeys.has(String(mine.rows[u] || '').toLowerCase()));
+      for (const u of gone) delete mine.rows[u];
+      rec[cp] = mine;
+      writeRec(rec);
+      if (gone.length) _dropRevokedNetDocRows(cp, gone, rec);
+    }
     const added = [];
     for (const e of (entries || [])) {
       if ((window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
@@ -1210,6 +1270,16 @@ async function adoptChurchNetDocAddresses(cp) {
       if (window.Fellowship.churchPub !== cp) break;       // switched while proving
       if (_alreadyAMemberCandidate(u)) continue;           // added while we waited
       try { window.Fellowship.addRelay(u); added.push(u); } catch (err) {}
+      // RECORD IT, for the revocation above: this church, the key it proved. Re-read, because the proofs above
+      // took round trips and another pass may have written.
+      try {
+        const rec = readRec();
+        const mine = (rec[cp] && typeof rec[cp] === 'object') ? rec[cp] : { hw: docAt, rows: {} };
+        if (!mine.rows || typeof mine.rows !== 'object') mine.rows = {};
+        mine.rows[u] = String(proof.relayPub || '').toLowerCase();
+        rec[cp] = mine;
+        writeRec(rec);
+      } catch (err) {}
     }
     return added;
   } finally { _adoptingNetDoc = false; }

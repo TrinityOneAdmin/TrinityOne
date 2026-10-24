@@ -184,6 +184,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     fnBody(src, 'function _alreadyAMemberCandidate', '_alreadyAMemberCandidate'),
     stmt(src, 'var MEMBER_NETDOC_ADOPT_MAX = ', 'MEMBER_NETDOC_ADOPT_MAX'),
     stmt(src, 'var _adoptingNetDoc = ', '_adoptingNetDoc'),
+    fnBody(src, 'function _dropRevokedNetDocRows', '_dropRevokedNetDocRows'),
     fnBody(src, 'async function adoptChurchNetDocAddresses', 'adoptChurchNetDocAddresses'),
     // the gate and the read/publish sets it feeds
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
@@ -583,5 +584,91 @@ test('an invite-path member\'s church writes reach the box the church signed —
     assert.ok(await joinOn(BOX, app.me),
       'the member\'s join was published over the publish set but is not in the church\'s own box');
     assert.ok(await joinOn(SHARED, app.me), 'the member\'s join did not reach the shared relay either');
+  } finally { app.close(); }
+});
+
+// ── 9. A BOX THE CHURCH TAKES OUT IS TAKEN OFF THE MEMBER'S PHONE (PR #7 audit, finding H-2) ───────────
+// THE DEFECT. adoptChurchNetDocAddresses only ever ADDED to window.Fellowship.relays. When the church
+// re-signed its relay-net document without the box, the member kept the address for ever: it was re-admitted
+// under the `software` root and went on receiving the member's writes, AUTH and IP long after the steward
+// pressed Remove. Measured 2026-10-24: doc re-signed [] on the relay, relaunch, the box still in the candidate
+// list and its sqlite still receiving the member's next join.
+//
+// THE STAGING. A "relaunch" is a fresh memberOn over the SAME store and the relay list the last session left —
+// the shipped adopt, the shipped churchRelayNet, the shipped gate; the documents are real church-signed events.
+test('a box the church took out of its signed list leaves the member\'s phone; an older copy cannot put it back', async () => {
+  const store = memStore();
+  const opts = (relays) => ({
+    church, relays, canonical: [secure(SHARED.wsUrl)],
+    pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] }, store,
+  });
+  const signedOld = relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }]);
+  await H.publishAll(SHARED, [signedOld]);
+  let app = memberOn(opts([secure(SHARED.wsUrl)]));
+  let left;
+  try {
+    app.setChurch(church.npub);
+    await until(() => app.relays().includes(BOX.wsUrl), 'the church\'s box to be adopted in the first place');
+    left = [...app.relays()];
+  } finally { app.close(); }
+
+  // THE CHURCH REMOVES IT — a newer signed list without the box. The member simply opens the app again.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [])]);
+  app = memberOn(opts(left));
+  try {
+    assert.ok(app.relays().includes(BOX.wsUrl), 'precondition: the relaunched phone starts with the adopted box');
+    await app.adopt(church.pub);
+    assert.equal(app.relays().includes(BOX.wsUrl), false,
+      'THE CHURCH TOOK THIS BOX OUT OF ITS SIGNED LIST and the member\'s phone still dials it: ' +
+      JSON.stringify(app.relays()));
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    assert.equal(app.publishSetFor(church.pub).includes(BOX.wsUrl), false, 'the removed box is still in the publish set');
+    assert.equal(app.relaysForChurch(church.pub).includes(BOX.wsUrl), false, 'the removed box is still in the read set');
+    // THE SHARED POOL IS NEVER DROPPED (owner decision 2026-10-23).
+    assert.ok(app.relays().includes(secure(SHARED.wsUrl)), 'revocation took the shared relay with it');
+    left = [...app.relays()];
+  } finally { app.close(); }
+
+  // ROLLBACK — a relay serving the OLDER copy (which still names the box) must not put it back. Staged on a
+  // fresh relay that holds only the old document, with the shared relay out of the picture.
+  const STALE = await H.startRelay({ name: 'STALE', churches: [church.pub] });
+  await H.publishAll(STALE, [signedOld]);
+  app = memberOn({ ...opts([secure(STALE.wsUrl)]), canonical: [secure(STALE.wsUrl)], pins: { [secure(STALE.wsUrl)]: [STALE.relayPub] } });
+  try {
+    await app.adopt(church.pub);
+    assert.equal(app.relays().includes(BOX.wsUrl), false,
+      'an OLDER copy of the church\'s list put a removed box back on the phone — one stale relay undoes a Remove');
+  } finally { app.close(); }
+});
+
+test('revocation never takes away what it did not add, and nothing answered is not "the church removed it"', async () => {
+  // CONTROL 1 — A RELAY THE MEMBER ALREADY HAD (typed, or from an invite) is never touched by the church's
+  // list: only addresses this path added are recorded, and only recorded ones are revoked.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [])]);
+  const typed = memberOn({ church, relays: [secure(SHARED.wsUrl), BOX.wsUrl], canonical: [secure(SHARED.wsUrl)],
+                           pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] } });
+  try {
+    await typed.adopt(church.pub);
+    assert.ok(typed.relays().includes(BOX.wsUrl), 'a relay the member had BEFORE adoption was revoked by the church\'s list');
+  } finally { typed.close(); }
+
+  // CONTROL 2 — NO DOCUMENT CAME BACK. The adopted box is recorded, then the phone can reach only relays that
+  // hold no copy of the list: that is "nobody answered", never "the church removed it", and the box stays.
+  const store = memStore();
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  let app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)],
+                       pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] }, store });
+  try {
+    app.setChurch(church.npub);
+    await until(() => app.relays().includes(BOX.wsUrl), 'the box to be adopted');
+  } finally { app.close(); }
+  const EMPTY = await H.startRelay({ name: 'EMPTY', churches: [church.pub] });
+  app = memberOn({ church, relays: [secure(EMPTY.wsUrl), BOX.wsUrl], canonical: [secure(EMPTY.wsUrl)],
+                   pins: { [secure(EMPTY.wsUrl)]: [EMPTY.relayPub] }, store });
+  try {
+    await app.adopt(church.pub);
+    assert.ok(app.relays().includes(BOX.wsUrl),
+      'a read that returned NO document revoked the church\'s box — on a phone with no signal that would ' +
+      'throw away every box the church has signed');
   } finally { app.close(); }
 });

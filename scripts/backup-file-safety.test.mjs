@@ -157,6 +157,10 @@ test('a backup file carries no routing table, and cannot write one', async () =>
   localStorage.setItem('trinityone.mydata:data/notes', '["mine"]');
   localStorage.setItem('trinityone.relays', '["wss://the-church-relay.example/relay"]');
   localStorage.setItem('trinityone.relays.verified', '{"wss://the-church-relay.example/relay":{"pub":"aa"}}');
+  // The member's record of which addresses it adopted from each church's signed relay-net document, and for
+  // which key (adoptChurchNetDocAddresses, PR #7 audit H-2). It decides what the phone may take away again,
+  // so it is an instruction, not a preference — and it is rebuilt from the church's own signed document.
+  localStorage.setItem('trinityone.relays.netdoc', '{"aa":{"hw":1,"rows":{"wss://the-church-relay.example/relay":"aa"}}}');
   localStorage.setItem('trinityone.steward.church-name', 'St Brides');
   localStorage.setItem('trinityone.steward.extra-relays', '["wss://the-church-relay.example/relay"]');
   localStorage.setItem('trinityone.steward.relay-names', '[{"name":"stbrides","url":"wss://the-church-relay.example/relay"}]');
@@ -172,6 +176,8 @@ test('a backup file carries no routing table, and cannot write one', async () =>
   const member = await api.collectMember();
   assert.equal(member.local['trinityone.mydata:data/notes'], '["mine"]', 'the member backup stopped carrying the member\u2019s own data');
   assert.equal('trinityone.relays' in member.local, false, 'the member backup still carries the relay list');
+  assert.equal('trinityone.relays.netdoc' in member.local, false,
+    'the member backup carries the doc-adoption record, so a restore would tell a phone which boxes it may revoke');
   assert.equal('trinityone.relays.verified' in member.local, false,
     'the member backup carries the verified-relay cache — a restore would hand a phone both a routing table and ' +
     'the proofs that make it look already-checked');
@@ -192,11 +198,14 @@ test('a backup file carries no routing table, and cannot write one', async () =>
   await fresh.api.applyMember({ v: 1, app: 'trinityone', kind: 'member', local: {
     'trinityone.relays': '["wss://attacker.example/relay"]',
     'trinityone.relays.verified': '{"wss://attacker.example/relay":{"pub":"bb"}}',
+    'trinityone.relays.netdoc': '{"bb":{"hw":9999999999,"rows":{}}}',
     'trinityone.mydata:data/notes': '["restored"]',
   } });
   assert.equal(fresh.localStorage.getItem('trinityone.mydata:data/notes'), '["restored"]', 'the legitimate data did not restore');
   assert.equal(fresh.localStorage.getItem('trinityone.relays'), null, 'a member file wrote a relay list');
   assert.equal(fresh.localStorage.getItem('trinityone.relays.verified'), null, 'a member file wrote the verified-relay cache');
+  assert.equal(fresh.localStorage.getItem('trinityone.relays.netdoc'), null,
+    'a member file wrote the doc-adoption record — a forged high-water mark would make the phone ignore its church\'s real list');
 
   fresh.api.applySteward({ v: 1, app: 'trinityone', kind: 'steward', local: {
     'trinityone.steward.extra-relays': '["wss://attacker.example/relay"]',

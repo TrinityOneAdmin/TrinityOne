@@ -19247,7 +19247,7 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  async function retireDeadAdoptedRows() {
+  async function retireDeadAdoptedRows(signed) {
     const tagged = adoptedRelays();
     if (!tagged.length) {
       if (Object.keys(deadStrikes()).length) setDeadStrikes({});
@@ -19274,7 +19274,10 @@ zoo`.split("\n");
         proved = "";
         reached = false;
       }
-      if (/^[0-9a-f]{64}$/.test(proved)) continue;
+      if (/^[0-9a-f]{64}$/.test(proved)) {
+        if (signed && !signed.has(proved)) retired.push(u);
+        continue;
+      }
       if (!reached) {
         const n2 = Number(was[k]) || 0;
         if (n2 > 0) strikes[k] = n2;
@@ -19315,17 +19318,26 @@ zoo`.split("\n");
     if (!pub || pub !== churchPub) return [];
     const pub0 = pub;
     let entries = [];
+    let full = false, haveDoc = false;
     try {
-      entries = await relayNetEntries(pub0);
+      const r = await relayNetDoc();
+      const ev = r && r.ev;
+      haveDoc = !!(ev && ev.pubkey === pub0);
+      entries = haveDoc ? parseRelayNet(ev.content) : [];
+      full = haveDoc && _readCovers(r);
     } catch (e) {
       return [];
     }
     if (pub !== pub0) return [];
-    if (!entries.length) return [];
-    try {
-      await retireDeadAdoptedRows();
-    } catch (e) {
+    if (!haveDoc) return [];
+    const signedKeys = full ? new Set(entries.map((e) => String(e && e.pubkey || "").toLowerCase()).filter(Boolean)) : null;
+    if (entries.length || full) {
+      try {
+        await retireDeadAdoptedRows(signedKeys);
+      } catch (e) {
+      }
     }
+    if (!entries.length) return [];
     if (pub !== pub0) return [];
     const added = [];
     for (const e of entries) {
