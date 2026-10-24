@@ -5212,11 +5212,48 @@ async function enrolRelayNet(opts) {
   // that missed a Remove — and re-signing it with a newer stamp would put the removed relay back. So when not every
   // relay asked answered, the list found is passed on as it is and nothing is signed; the next pass tries again.
   if (mine && !fullAnswer(read)) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
-  const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
-  const ev = await publish(signed);
-  const delivered = await deliver(signed);
-  if (ev || delivered.length) { try { lsSet(seenKey, '1'); } catch (e) {} }
-  return { published: !!ev || delivered.length > 0, entries, proven, unproven, seeded, delivered };
+  // WHAT THIS CALL MEANT TO CHANGE (audit M-5): every entry that is new or different from the list we started from
+  // (including seeded ones). The read-back below asks whether THESE are in the newest document, not whether the
+  // publish was accepted — a relay accepts a replaceable write that a concurrent console's newer one then replaces.
+  const startedWith = new Map(parseRelayNet(before).map(e => [e.pubkey, JSON.stringify(e)]));
+  const wanted = entries.filter(e => startedWith.get(e.pubkey) !== JSON.stringify(e)).map(e => ({ pubkey: e.pubkey, url: e.url || '', name: e.name || '' }));
+  const landed = (list, t) => { const e = list.find(x => x.pubkey === t.pubkey); return !!e && (!t.url || e.url === t.url) && (!t.name || e.name === t.name); };
+  // The same edit as above, applied to a NEWER list: add what is missing, refresh url/name, never blank a real hint.
+  const reapply = (list) => {
+    for (const t of wanted) {
+      const cur = list.find(x => x.pubkey === t.pubkey);
+      if (cur) { if (t.url && cur.url !== t.url) cur.url = t.url; if (t.name && cur.name !== t.name) cur.name = t.name; }
+      else { const e = { pubkey: t.pubkey, alwaysOn: true, url: t.url }; if (t.name) e.name = t.name; list.push(e); }
+    }
+    return list;
+  };
+  // SIGN, THEN READ BACK, AT MOST TWO REPAIRS (audit M-5). Two consoles that start from the same list and sign at
+  // the same moment each publish successfully and the newer signature silently replaces the other's change. After
+  // publishing we re-read; if this call's entries are missing from a COMPLETE read we merge them onto the newer list
+  // and sign again. An INCOMPLETE read-back is "unknown" — it is never read as "missing", which would re-sign over a
+  // list we could not see (the same rule as the re-sign refusal above). `published` is true only when the read-back
+  // shows the change.
+  let list = entries, floorAt = 0, repairs = 0;
+  for (;;) {
+    const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', RELAY_NET_D]], content: JSON.stringify(list) }), sk);
+    const ev = await publish(signed);
+    const delivered = await deliver(signed);
+    if (ev || delivered.length) { try { lsSet(seenKey, '1'); } catch (e) {} }
+    if (!ev && !delivered.length) return { published: false, entries: list, proven, unproven, seeded, delivered };
+    const back = await relayNetDoc();
+    const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
+    const found = newest ? parseRelayNet(newest.content) : [];
+    // SEEING the change needs no complete read (a document that holds it is evidence enough, and a first list started
+    // on the own box's answer while the shared relays are down could otherwise never be confirmed). NOT seeing it
+    // is only a finding on a complete read; an incomplete one is unknown and signs nothing.
+    if (wanted.every(t => landed(found, t))) return { published: true, entries: found, proven, unproven, seeded, delivered, repaired: repairs };
+    if (!_readCovers(back)) return { published: false, unknown: true, unverified: true, entries: list, proven, unproven, seeded, delivered };
+    if (repairs >= 2) return { published: false, unknown: true, lost: true, entries: found, proven, unproven, seeded, delivered };
+    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, changed: true };
+    repairs++;
+    list = reapply(found);
+    floorAt = newest ? (newest.created_at || 0) + 1 : 0;
+  }
 }
 
 // THE AUTOMATIC CALL (B2): this console's own box only, once per (church, box) per page load. The console
@@ -5275,8 +5312,28 @@ async function unenrolRelayNet(url) {
   // shared relays are admitted on their own pin, so the church's list naming them changes nothing.
   const keep = entries.filter(e => !drop.includes(e));
   if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-  const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
-  return { removed: !!ev, entries: keep };
+  // READ BACK, AND REPAIR A LOST REMOVE (audit M-5): a console that signed an addition from the old list at the same
+  // moment can replace this Remove with a newer document that still names the relay. `removed` is true only when a
+  // COMPLETE read-back no longer names it; an incomplete one is unknown and re-signs nothing. At most two repairs.
+  const isDropped = (e) => (pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u));
+  let list = keep, floorAt = 0, repairs = 0;
+  for (;;) {
+    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', RELAY_NET_D]], content: JSON.stringify(list) }), sk));
+    if (!ev) return { removed: false, entries: list };
+    const back = await relayNetDoc();
+    if (!_readCovers(back, u)) return { removed: false, unknown: true, unverified: true, entries: list };
+    const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
+    const found = newest ? parseRelayNet(newest.content) : [];
+    const still = found.filter(isDropped);
+    if (!still.length) return { removed: true, entries: found, repaired: repairs };
+    if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
+    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+    // the own-box refusal still applies to whatever the newer list names under that address
+    if (still.some(e => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+    repairs++;
+    list = found.filter(e => !isDropped(e));
+    floorAt = newest ? (newest.created_at || 0) + 1 : 0;
+  }
 }
 
 const _autoEnrolled = new Set();

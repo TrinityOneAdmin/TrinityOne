@@ -105,6 +105,17 @@ const cores = BUNDLES.map(f => [f, coreApi(f)]);
 // `relays`, `ownRelay` and `_boxHostsUs` are supplied even though the shipped census touches none of them.
 // That is the point: the deadlock test needs a console whose FILTERED view of the world disagrees with its
 // origin, and the sabotage that makes the census read that view has to have something to read.
+// M-5 (audit): enrolRelayNet now reads the church's document back after signing, so a stubbed read that never
+// shows what was just written can no longer be "published". `echoing` wraps a stubbed read + a real publish so the
+// read answers (with the same completeness it always had) and ALSO carries the newest document this console wrote —
+// what a real relay would hold.
+function echoing(oneFn, publishFn) {
+  let last = null;
+  return {
+    publish: async (ev, o) => { const r = await publishFn(ev, o); if (r && ev && ev.kind === 30078) last = ev; return r; },
+    one: async (f) => { const r = await oneFn(f); return (last && (f[0]['#d'] || [])[0] === RELAY_NET_D) ? { ...r, ev: last } : r; },
+  };
+}
 function consoleWith(deps) {
   const { body } = liftCore('vendor/steward.js');
   const src = read('vendor/steward.js');
@@ -735,10 +746,11 @@ test('a list is never rebuilt from scratch unless EVERY relay asked said "nothin
   assert.equal(published + pool.sent.length, 0,
     'A LIST WAS BUILT FROM SCRATCH WHILE A RELAY THAT MAY HOLD THE REAL ONE WAS DOWN — every box it named is dropped');
   // …and when both answered, the first list is written.
+  const e2 = echoing(async () => ({ ev: null, complete: true, answered: 2, asked: 2, askedUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'] }), publishTo(BOX));
   const con2 = consoleWith({
     location, pool: poolTo(BOX),
-    one: async () => ({ ev: null, complete: true, answered: 2, asked: 2, askedUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: ['wss://somewhere-else.example/relay', 'wss://holds-the-list.example/relay'] }),
-    publish: publishTo(BOX), sk: flock.sk, pub: flock.pub,
+    one: e2.one,
+    publish: e2.publish, sk: flock.sk, pub: flock.pub,
   });
   assert.equal((await con2.enrolRelayNet()).published, true, 'every relay answered and still nothing was signed');
 });
@@ -752,7 +764,8 @@ test('with the shared relays unreachable, the church\'s OWN box saying "nothing 
   // Both reads (the list, and the one-time seed) get the same answer: only the own box replied, empty.
   const ownOnly = async () => ({ ev: null, complete: false, answered: 1, asked: 3, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay', 'wss://holds-the-list.example/relay'], answeredUrls: [BOX.wsUrl] });
   // The automatic pass, on a box this church's registration says holds it (third audit, finding 1).
-  const fresh = consoleWith({ location, boxHostsUs: true, one: ownOnly, publish: publishTo(BOX), pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
+  const eo = echoing(ownOnly, publishTo(BOX));
+  const fresh = consoleWith({ location, boxHostsUs: true, one: eo.one, publish: eo.publish, pool: poolTo(BOX), sk: flock.sk, pub: flock.pub });
   const res = await fresh.enrolRelayNet({ auto: true });
   assert.equal(res.published, true,
     'A SELF-HOSTING CHURCH WHOSE SHARED RELAYS ARE UNREACHABLE COULD NOT SIGN ITS OWN BOX: ' + JSON.stringify(res));
@@ -871,9 +884,10 @@ test('a refused login on a SHARED relay does not block the seed: the church\'s o
   // A socket keeps its last login challenge; if the shared relay refused our login, its answers never count.
   // The own-box rule means that cannot keep a self-hosting church from signing its box.
   const { flock, BOX, location } = await selfHostedChurch('SEEDS');
+  const es = echoing(seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay'], answeredUrls: [BOX.wsUrl] })), publishTo(BOX));
   const con = consoleWith({ location, pool: poolTo(BOX), boxHostsUs: true,
-    one: seedWorld(BOX, () => ({ ev: null, complete: true, answered: 1, asked: 2, askedUrls: [BOX.wsUrl, 'wss://shared.example/relay'], answeredUrls: [BOX.wsUrl] })),
-    publish: publishTo(BOX), sk: flock.sk, pub: flock.pub });
+    one: es.one,
+    publish: es.publish, sk: flock.sk, pub: flock.pub });
   assert.equal((await con.enrolRelayNet({ auto: true })).published, true, 'a refused login on another relay kept the church\'s own box unsigned');
 });
 
