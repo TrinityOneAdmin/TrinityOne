@@ -7451,7 +7451,32 @@
     return [.../* @__PURE__ */ new Set([...window.Fellowship.relays || [], ...CANONICAL_RELAYS])];
   }
   function churchRelays() {
-    return _netRelays(churchRelaysRaw());
+    const foreign = _otherChurchesNetDocRows(window.Fellowship.churchPub);
+    return _netRelays(churchRelaysRaw().filter((u) => !foreign.has(u)));
+  }
+  function _otherChurchesNetDocRows(cp) {
+    const out = /* @__PURE__ */ new Set();
+    if (!cp) return out;
+    try {
+      const rec = JSON.parse(localStorage.getItem("trinityone.relays.netdoc") || "{}") || {};
+      const mine = rec[cp] && rec[cp].rows || {};
+      let boxes = [];
+      try {
+        boxes = _loadChurchBoxes(cp) || [];
+      } catch (e) {
+        boxes = [];
+      }
+      const live = _churchRelays.get(cp);
+      for (const c of Object.keys(rec)) {
+        if (c === cp || !rec[c] || !rec[c].rows || typeof rec[c].rows !== "object") continue;
+        for (const u of Object.keys(rec[c].rows)) {
+          if (mine[u] || boxes.includes(u) || live && live.has && live.has(u) || CANONICAL_RELAYS.includes(u)) continue;
+          out.add(u);
+        }
+      }
+    } catch (e) {
+    }
+    return out;
   }
   function churchOwnProvedRelays() {
     return _netRelays([...new Set(window.Fellowship.relays || [])]);
@@ -7604,11 +7629,20 @@
       }
       const added = [];
       for (const e of entries || []) {
-        if ((window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
         const u = _netDocDialUrl(e && e.url);
         if (!u) continue;
         if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
-        if (_alreadyAMemberCandidate(u)) continue;
+        let claimOnly = false;
+        try {
+          const r0 = readRec();
+          const elsewhere = Object.keys(r0).some((c) => c !== cp && r0[c] && r0[c].rows && r0[c].rows[u]);
+          const mineAlready = !!(r0[cp] && r0[cp].rows && r0[cp].rows[u]);
+          claimOnly = elsewhere && !mineAlready && _alreadyAMemberCandidate(u);
+        } catch (err) {
+          claimOnly = false;
+        }
+        if (!claimOnly && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+        if (!claimOnly && _alreadyAMemberCandidate(u)) continue;
         let detail;
         try {
           detail = await verifyRelayIdentityDetailed(u);
@@ -7626,11 +7660,13 @@
         });
         if (!ok) continue;
         if (window.Fellowship.churchPub !== cp) break;
-        if (_alreadyAMemberCandidate(u)) continue;
-        try {
-          window.Fellowship.addRelay(u);
-          added.push(u);
-        } catch (err) {
+        if (!claimOnly) {
+          if (_alreadyAMemberCandidate(u)) continue;
+          try {
+            window.Fellowship.addRelay(u);
+            added.push(u);
+          } catch (err) {
+          }
         }
         try {
           const rec = readRec();
@@ -7953,7 +7989,8 @@
   }
   function relaysForChurch(cp) {
     const own = cp && _churchRelays.get(cp);
-    const global = window.Fellowship.relays || [];
+    const foreign = _otherChurchesNetDocRows(cp);
+    const global = (window.Fellowship.relays || []).filter((u) => !foreign.has(u));
     const ownUrls = own ? [...own.keys()] : [];
     const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
     if (boxes >= 2) return _netRelays([.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])], cp);
