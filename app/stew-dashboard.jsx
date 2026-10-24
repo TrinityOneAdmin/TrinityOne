@@ -963,12 +963,15 @@ function KeyDistributor() {
   //    Tried again when a relay comes back and when the console window regains focus, so a console left open
   //    for days recovers from a box that was briefly offline (audit 2026-10-21, finding 7); a pass that already
   //    worked is a no-op. Events, not a timer: the same churn signals the rest of the console follows.
+  //    And when the tunnel address or relay name changes ('steward-relays'), so the list follows a restart.
   React.useEffect(() => {
     const run = () => {
       try { const p = window.Steward && window.Steward.autoEnrolRelayNet && window.Steward.autoEnrolRelayNet(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
     };
     const t = setTimeout(run, 4000);
-    const EVENTS = ['steward-relay-returned', 'focus'];
+    // 'steward-relays': the tunnel address or relay name changed (setSelfPublicRelay / setSelfRelayName), so
+    // what the church's list should say has changed too (PR #7 audit, M-2).
+    const EVENTS = ['steward-relay-returned', 'focus', 'steward-relays'];
     for (const ev of EVENTS) window.addEventListener(ev, run);
     return () => { clearTimeout(t); for (const ev of EVENTS) window.removeEventListener(ev, run); };
   }, [unlockTick]);

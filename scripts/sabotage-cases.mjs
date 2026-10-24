@@ -1319,6 +1319,27 @@ export const CASES = [
     test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
   },
   {
+    name: 'console own-relay: the automatic pass remembers the box alone, not the tunnel address it is signed under',
+    file: 'src/steward.src.js',
+    find: `  const key = pub + '|' + own + '|' + selfPublicRelay() + '|' + selfRelayName();`,
+    replace: `  const key = pub + '|' + own;`,
+    test: 'scripts/a-console-signs-its-own-relay.test.mjs',
+  },
+  {
+    name: 'console own-relay: the dashboard does not re-run the pass when the tunnel address changes',
+    file: 'app/stew-dashboard.jsx',
+    find: `    const EVENTS = ['steward-relay-returned', 'focus', 'steward-relays'];`,
+    replace: `    const EVENTS = ['steward-relay-returned', 'focus'];`,
+    test: 'scripts/a-console-signs-its-own-relay.test.mjs',
+  },
+  {
+    name: 'console own-relay: a new relay name is not announced',
+    file: 'src/steward.src.js',
+    find: `if (v !== selfRelayName()) { lsSet(SELF_NAME_LS, v); window.dispatchEvent(new CustomEvent('steward-relays')); }`,
+    replace: `if (v !== selfRelayName()) { lsSet(SELF_NAME_LS, v); }`,
+    test: 'scripts/a-console-signs-its-own-relay.test.mjs',
+  },
+  {
     name: 'relay-gate: the verified set is never persisted',
     file: 'src/relay-net.src.js',
     find: `  const map = readVerified(d.store);`,
