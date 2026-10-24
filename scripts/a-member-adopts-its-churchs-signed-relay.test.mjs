@@ -42,6 +42,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join as join_ } from 'node:path';
+import { networkInterfaces } from 'node:os';
 import { SimplePool } from 'nostr-tools/pool';
 import { verifyEvent, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
@@ -64,7 +65,9 @@ assert.ok(CAP > 0 && CAP < 1000, 'MEMBER_NETDOC_ADOPT_MAX read as a nonsense val
 // ── the TLS shim, and nothing but ───────────────────────────────────────────────────────────────────────
 const secure = (u) => String(u || '').replace(/^ws:\/\//i, 'wss://').replace(/^http:\/\//i, 'https://');
 const wire = (u) => String(u || '').replace(/^wss:\/\/(127\.0\.0\.1[:/])/i, 'ws://$1').replace(/^https:\/\/(127\.0\.0\.1[:/])/i, 'http://$1');
-const netFetch = (u, o) => globalThis.fetch(wire(typeof u === 'string' ? u : String(u)), o);
+// Every address the shipped code fetches, as it asked for it — so a test can say a box was never even dialled.
+const FETCHED = [];
+const netFetch = (u, o) => { FETCHED.push(String(u)); return globalThis.fetch(wire(typeof u === 'string' ? u : String(u)), o); };
 
 // A real SimplePool with that rewrite on the way to the socket, plus the counters the no-churn questions need.
 // Every list the shipped code assembles still arrives exactly as it assembled it.
@@ -753,4 +756,45 @@ test('one phone in two churches: church A\'s own box carries none of church B\'s
     assert.ok(app.gate.admits(MUTUAL.wsUrl, A.pub), 'proving the mutual box for church B un-admitted it for church A');
     assert.ok(app.relaysForChurch(A.pub).includes(MUTUAL.wsUrl), 'church B\'s claim took the mutual box away from church A');
   } finally { app.close(); }
+});
+
+// ── 12. A ws:// ADDRESS OFF THIS DEVICE IS NEVER ADOPTED, NOR DIALLED ───────────────────────────────────
+test('a box the church signed at a cleartext ws:// or http:// address on the network is not adopted and never dialled', async () => {
+  // PR #7 audit, M-4. A console served over plain http signs a ws:// origin. The SAME box is named three
+  // ways: by this machine's network address over ws:// and over http:// (both cleartext across the wifi, so
+  // refused), and over loopback ws:// (never leaves the device — the control, and the spelling every other
+  // test in this file adopts by). DECIDES: the NO CLEARTEXT `continue` in adoptChurchNetDocAddresses.
+  const lan = Object.values(networkInterfaces()).flat().find(i => i && i.family === 'IPv4' && !i.internal);
+  const host = lan ? lan.address : '192.0.2.1';
+  const port = new URL(BOX.wsUrl).port;
+  const lanWs = 'ws://' + host + ':' + port + '/relay';
+  const lanHttp = 'http://' + host + ':' + port;
+  const app = memberOn({
+    church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)],
+    pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] },
+  });
+  try {
+    await H.publishAll(SHARED, [joinDoc(app.me, church.pub)]);
+    await H.publishAll(SHARED, [relayNetDocFor(church, [
+      { pubkey: BOX.relayPub, url: lanWs }, { pubkey: BOX.relayPub, url: lanHttp },
+    ])]);
+    FETCHED.length = 0;
+    const added = await app.adopt(church.pub);
+    assert.deepEqual(added, [], 'a cleartext address on the network was adopted');
+    assert.equal(app.relays().some(u => u.includes(host + ':' + port)), false, 'the cleartext address reached the relay list');
+    assert.equal(FETCHED.some(u => u.includes('//' + host + ':' + port)), false,
+      'the cleartext address was DIALLED — the proof itself crosses the wifi unencrypted: ' + JSON.stringify(FETCHED));
+
+  } finally { app.close(); }
+  // CONTROL, on a fresh phone (the first one has the document cached): the same box, same key, at loopback
+  // IS adopted — so the refusal above is about the address, not the box or its proof.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, url: BOX.wsUrl }])]);
+  const ctl = memberOn({
+    church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)],
+    pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] },
+  });
+  try {
+    await H.publishAll(SHARED, [joinDoc(ctl.me, church.pub)]);
+    assert.deepEqual(await ctl.adopt(church.pub), [BOX.wsUrl], 'staging: the loopback spelling of the same box was not adopted');
+  } finally { ctl.close(); }
 });

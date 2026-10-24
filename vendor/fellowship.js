@@ -7661,6 +7661,7 @@
       for (const e of entries || []) {
         const u = _netDocDialUrl(e && e.url);
         if (!u) continue;
+        if (/^ws:/i.test(u) && !/^ws:\/\/(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|localhost|\[::1\])(:\d+)?\/relay$/i.test(u)) continue;
         if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
         let claimOnly = false;
         try {

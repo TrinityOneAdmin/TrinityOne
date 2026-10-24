@@ -1312,6 +1312,13 @@ export const CASES = [
     test: 'scripts/a-box-two-churches-sign-stays-proved-for-both.test.mjs',
   },
   {
+    name: 'member adoption: a cleartext ws:// address off this device is adopted from the relay-net doc',
+    file: 'src/fellowship.src.js',
+    find: `      if (/^ws:/i.test(u) && !/^ws:\\/\\/(127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|localhost|\\[::1\\])(:\\d+)?\\/relay$/i.test(u)) continue;`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
     name: 'relay-gate: the verified set is never persisted',
     file: 'src/relay-net.src.js',
     find: `  const map = readVerified(d.store);`,

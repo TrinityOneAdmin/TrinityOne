@@ -1285,6 +1285,11 @@ async function adoptChurchNetDocAddresses(cp) {
     for (const e of (entries || [])) {
       const u = _netDocDialUrl(e && e.url);
       if (!u) continue;
+      // NO CLEARTEXT. Every other route a phone learns a box by refuses anything but wss:// (adoptInviteRelays,
+      // resolveRelayName, kind-10002 `r` tags); a console served over plain http signs a ws:// origin, and dialling
+      // it would send AUTH and church traffic unencrypted across the parish wifi (PR #7 audit, M-4). Loopback is
+      // the one exception: it never leaves the device.
+      if (/^ws:/i.test(u) && !/^ws:\/\/(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|localhost|\[::1\])(:\d+)?\/relay$/i.test(u)) continue;
       // The shared pool is added unconditionally by churchRelaysRaw; a second spelling of it only buys a dial.
       if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
       // A BOX TWO CHURCHES BOTH SIGN (mutual hosting — DOMAIN: churches host each other). It is already on this
