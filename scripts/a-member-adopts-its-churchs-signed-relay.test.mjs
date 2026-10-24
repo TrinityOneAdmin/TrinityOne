@@ -512,3 +512,76 @@ test('a box at a shipped/pinned address that proves the wrong key for that addre
     assert.equal(app.relays().includes(BOX.wsUrl), false, 'the candidate list grew anyway');
   } finally { app.close(); }
 });
+
+// ── 8. THE INVITE-PATH MEMBER: the church's writes reach the box it signed ─────────────────────────────
+// PR #7 audit, finding H-1 (2026-10-24). A member who followed with `?relay=S` has trinityone.churchboxes[cp]
+// = [S] (adoptInviteRelays writes it). The shipped publishSetFor then took its PERSISTED branch — church boxes
+// plus the shared pool — and never looked at window.Fellowship.relays, which is the only place the relay-net
+// adoption above writes. So the box was proved, connected and in the read set, and received none of the
+// member's writes: on the device test the church's own box held 0 of the member's events. Test 1 above cannot
+// see this, because its member never went through the invite path, so it takes the other branch.
+//
+// THE STAGING. The phone's store is seeded the way adoptInviteRelays leaves it (churchboxes[cp] = [SHARED]).
+// The box reaches the candidate list through the shipped adopt, out of the church's signed document, exactly as
+// in test 1. The write is published over the SHIPPED publishSetFor's answer and read back out of the BOX
+// relay's own store, so the assertion is about where the data landed, not about a list.
+test('an invite-path member\'s church writes reach the box the church signed — matched on its key, never on the URL', async () => {
+  const seededStore = () => {
+    const s = memStore();
+    s.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [secure(SHARED.wsUrl)] }));
+    return s;
+  };
+  const opts = (store) => ({
+    church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)],
+    pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] }, store,
+  });
+  const joinOn = async (relay, who) => (await H.readAs(relay, who,
+    { kinds: [30078], authors: [who.pub], '#d': ['trinityone/member:' + church.pub] })).length > 0;
+
+  // CONTROL — a box that is admitted but whose key the church's document does NOT name is not pulled into the
+  // church's writes. This is the key-scoping half: without it the fix would route a church's traffic to any
+  // admitted box in the global candidate list (the two-church leak, PR #7 audit H-3).
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: 'c'.repeat(64), alwaysOn: true, url: 'wss://elsewhere.invalid/relay' }])]);
+  const ctl = memberOn(opts(seededStore()));
+  try {
+    ctl.win.Fellowship.relays.push(BOX.wsUrl);              // admitted below, but never signed by this church
+    ctl.win.Fellowship.churchPub = church.pub;
+    await ctl.adopt(church.pub);                            // fills the relay-net cache with the unrelated doc
+    await ctl.gate.refresh(ctl.churchRelaysRaw(), church.pub);
+    assert.ok(ctl.gate.admits(BOX.wsUrl, church.pub), 'staging fault: the box must be admitted for the control to mean anything');
+    assert.ok(ctl.publishSetFor(church.pub).includes(secure(SHARED.wsUrl)), 'staging fault: the invite branch lost its own box');
+    assert.equal(ctl.publishSetFor(church.pub).includes(BOX.wsUrl), false,
+      'an admitted box the church never signed was added to the church\'s publish set — the fix matched on ' +
+      'admission alone, not on a key the church signed: ' + JSON.stringify(ctl.publishSetFor(church.pub)));
+  } finally { ctl.close(); }
+
+  // THE CASE — the church signs the box; the invite-path member opens the app.
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const app = memberOn(opts(seededStore()));
+  try {
+    assert.deepEqual(JSON.parse(app.store.getItem('trinityone.churchboxes'))[church.pub], [secure(SHARED.wsUrl)],
+      'precondition: this phone must be on the invite branch (church boxes = the invite relay)');
+    app.setChurch(church.npub);
+    await until(() => app.relays().includes(BOX.wsUrl), 'the church\'s box to reach the member\'s relay list');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    await until(() => app.relaysForChurch(church.pub).includes(BOX.wsUrl), 'the box to join the read set');
+
+    const set = app.publishSetFor(church.pub);
+    assert.ok(set.includes(BOX.wsUrl),
+      'the church signed this box and the member admitted it, but the PUBLISH set still leaves it out, so ' +
+      'nothing the member writes reaches the church\'s own box: ' + JSON.stringify(set));
+    assert.ok(set.includes(secure(SHARED.wsUrl)), 'the invite relay fell out of the publish set');
+    // THE SHARED POOL IS NEVER DROPPED (owner decision 2026-10-23).
+    assert.ok(set.includes(secure(SHARED.wsUrl)), 'the shared pool was dropped from the publish set');
+    // NOTHING WRITTEN: the fix routes, it does not persist. churchboxes is exactly as the invite left it.
+    assert.deepEqual(JSON.parse(app.store.getItem('trinityone.churchboxes'))[church.pub], [secure(SHARED.wsUrl)],
+      'publishSetFor wrote to trinityone.churchboxes');
+
+    // WHERE THE DATA LANDS. The member's join, published over the shipped publish set, is in the BOX's store.
+    const join = joinDoc(app.me, church.pub);
+    await Promise.allSettled(app.pool.publish(set, join));
+    assert.ok(await joinOn(BOX, app.me),
+      'the member\'s join was published over the publish set but is not in the church\'s own box');
+    assert.ok(await joinOn(SHARED, app.me), 'the member\'s join did not reach the shared relay either');
+  } finally { app.close(); }
+});
