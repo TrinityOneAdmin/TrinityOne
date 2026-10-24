@@ -8911,8 +8911,10 @@ window.Fellowship = {
   // proved — never wider than the old ungated read (CLAUDE.md rule 10). PROVED WITHOUT RECORDING: a relay the
   // gate already admits for this church (_gate.admits, read-only), or one that passes isNetworkRelay now — the
   // same proof the gate and adoptInviteRelays use, which writes nothing. It used _gate.refresh(list, cp), and the
-  // gate keeps ONE church label per address, so checking church X re-labelled a shared relay away from a church
-  // the member already follows, dropping it there until the next re-proof (audit of 9862cdd, finding 4).
+  // gate then kept ONE church label per address, so checking church X re-labelled a shared relay away from a church
+  // the member already follows, dropping it there until the next re-proof (audit of 9862cdd, finding 4). The gate
+  // keeps one label per church now (2026-10-24), and this stays read-only anyway: checking a church the member
+  // may never join should leave nothing behind.
   //
   // THE ANSWER: 'church' if any proved relay returns that document; 'not-found' only if EVERY proved relay
   // really answered (a genuine end-of-results, not the library's timer) and the invite's own relay is not
