@@ -183,7 +183,7 @@ export function canonicalPinsFor(url, pins) {
   return [];
 }
 
-// `[{ pubkey, alwaysOn, url? }]` out of the document's content, dropping anything malformed rather than
+// `[{ pubkey, alwaysOn, url?, name? }]` out of the document's content, dropping anything malformed rather than
 // throwing. One bad entry must not cost a church its whole relay list.
 //
 // `alwaysOn` DEFAULTS TRUE and is the owner's "this machine is not on 24/7" flag — a parish-office box
@@ -202,7 +202,12 @@ export function parseRelayNet(content) {
     const pubkey = String(e.pubkey || '').toLowerCase();
     if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
     seen.add(pubkey);
-    out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: (typeof e.url === 'string') ? e.url : '' });
+    const entry = { pubkey, alwaysOn: e.alwaysOn !== false, url: (typeof e.url === 'string') ? e.url : '' };
+    // THE BOX'S STABLE DIRECTORY NAME (self-hosting P1, 2026-10-21). A hint, like `url`: it lets a phone find
+    // the box after its tunnel address moves, by resolving the name and then proving the pubkey. Kept only
+    // when it is a well-formed handle, and only present when set, so a nameless entry keeps its old shape.
+    if (typeof e.name === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/.test(e.name)) entry.name = e.name;
+    out.push(entry);
   }
   return out;
 }

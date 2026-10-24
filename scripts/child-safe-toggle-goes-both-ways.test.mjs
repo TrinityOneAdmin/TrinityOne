@@ -101,24 +101,32 @@ async function groupsTab() {
     NewGroupModal: Stub('NewGroupModal'), CategoriesModal: Stub('CategoriesModal'),
     GroupChatModal: Stub('GroupChatModal'), GroupLeadersModal: Stub('GroupLeadersModal'),
     EditGroupMembersModal: Stub('EditGroupMembersModal'), KeyDistributor: Stub('KeyDistributor'),
-    useRealMemberCount: () => 5, useStewDialog: () => ({}),
+    GroupIconPicker: Stub('GroupIconPicker'),   // the settings panel renders it
+    useRealMemberCount: () => 5, useStewDialog: () => ({}), useStewNarrow: () => false,   // DashGroups reads a responsive flag (phase 1 settings panel)
   });
   draw(Comp, {});
   assert.ok(captured && typeof captured.renderRight === 'function',
     'the Groups tab no longer renders its rows through ListPanel’s renderRight — re-anchor this test');
-  // The child-safe control on one room's row, found by its accessible name. The `encrypted` toggle beside it
-  // is written identically, so anything less specific than this would be pressing the wrong button.
+  // PHASE 1 (2026-10-19): the child-safe control moved OFF the row and into the group-settings panel, which
+  // now opens on desktop too. So drive it at its new point of use — press the row's settings gear to open the
+  // panel, then take the child-safe checkbox by its accessible name (the `encrypted` toggle in the same panel
+  // is named identically, so anything less specific would press the wrong control).
   const control = (group) => {
-    const hits = find(captured.renderRight(group), n => n.type === 'button'
+    const gear = find(captured.renderRight(group), n => n.type === 'button'
+      && /^Settings for /.test(String((n.props || {})['aria-label'] || '')));
+    assert.equal(gear.length, 1, 'the row no longer carries a settings gear to open the panel — re-anchor this test');
+    gear[0].props.onClick();                 // setSettingsFor(group)
+    const tree = draw(Comp, {});             // re-render: the settings panel is now in the tree
+    const hits = find(tree, n => n.type === 'input' && (n.props || {}).type === 'checkbox'
       && /child-safe is (on|off)\./.test(String((n.props || {})['aria-label'] || '')));
     assert.equal(hits.length, 1,
-      `a room's row no longer carries exactly one child-safe control (found ${hits.length}) — re-anchor this test`);
+      `the settings panel no longer carries exactly one child-safe control (found ${hits.length}) — re-anchor this test`);
     return hits[0];
   };
   return { control, published };
 }
 
-test('CONTROL: a room’s row carries a child-safe toggle that says which way it is set', async () => {
+test('CONTROL: the group-settings panel carries a child-safe toggle that says which way it is set', async () => {
   const g = await groupsTab();
   assert.match(g.control({ id: 'g1', name: 'Youth group', kind: 'group', childsafe: true }).props['aria-label'],
     /^Youth group — child-safe is on\./);
@@ -128,7 +136,7 @@ test('CONTROL: a room’s row carries a child-safe toggle that says which way it
 
 test('PRESSING IT ON AN ALREADY-CHILD-SAFE ROOM TURNS CHILD-SAFE OFF', async () => {
   const g = await groupsTab();
-  g.control({ id: 'g1', name: 'Youth group', kind: 'group', childsafe: true }).props.onClick();
+  g.control({ id: 'g1', name: 'Youth group', kind: 'group', childsafe: true }).props.onChange();
   assert.equal(g.published.length, 1, 'the control published nothing at all — the setting cannot be changed');
   assert.ok(!g.published[0].childsafe,
     'a room that is already child-safe stayed child-safe when the steward pressed the control to restrict it ' +
@@ -140,7 +148,7 @@ test('PRESSING IT ON AN ALREADY-CHILD-SAFE ROOM TURNS CHILD-SAFE OFF', async () 
 
 test('…and pressing it on an adults-only room turns child-safe ON, which is the other half of a toggle', async () => {
   const g = await groupsTab();
-  g.control({ id: 'g2', name: 'Youth group', kind: 'group' }).props.onClick();
+  g.control({ id: 'g2', name: 'Youth group', kind: 'group' }).props.onChange();
   assert.equal(g.published.length, 1, 'the control published nothing at all');
   assert.equal(g.published[0].childsafe, true,
     'a church can no longer open a room to the young people it is for — and per reference/DOMAIN.md the room ' +

@@ -135,7 +135,7 @@ test('connecting by name registers the church under its real name, and its write
       'precondition: a box holding no churches refuses this church\'s writes, which is what registering has to change');
 
     const card = liftConnectByName({ churchName: 'St Aidan’s, Ferrymead', relayUrl: relay.wsUrl, registerAtRelay: liftRegisterAtRelay(church) });
-    await card.run();
+    await card.run(true);   // true = the steward tapped Connect on the consent line (B4, 2026-10-21)
 
     // THE MIRROR, and it is the half that matters. A 200 from /config means the request was well formed; that
     // the church can now WRITE is the thing the steward came here for.
@@ -171,7 +171,7 @@ test('a church with no name is told to name it, not sent to find the relay opera
   const church = H.key();
   try {
     const card = liftConnectByName({ churchName: '', relayUrl: relay.wsUrl, registerAtRelay: liftRegisterAtRelay(church) });
-    await card.run();
+    await card.run(true);   // true = the steward tapped Connect on the consent line (B4, 2026-10-21)
 
     assert.equal((await churches(relay)).length, 0,
       'precondition: the relay refused the nameless registration, so the message below is about a real refusal');

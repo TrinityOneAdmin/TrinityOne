@@ -1097,6 +1097,124 @@ function isNetworkRelay(cp, url) {
   });
 }
 
+// ── STEP 1 (MEMBER SIDE): KEEP THE ADDRESSES THE CHURCH HAS ALREADY SIGNED ───────────────────────────────
+//
+// PLAN-relay-address-gossip-2026-10-22 §4, the member half of step 1 — the mirror of the console's
+// adoptNetDocAddresses (src/steward.src.js, commit b759bfa4). Measured 2026-10-22 on two phones: a steward
+// typed the church's own relay into one console; a member who had ALREADY followed that church never learned
+// it. `churchRelayNet` already reads the church's signed relay-net document (d = trinityone/relay-net) and
+// carries each box's pubkey + url — but it was read for the admission gate's `netEntries` dep alone: the KEY
+// was used to admit and the ADDRESS was thrown away. This keeps the address, so an existing member's phone
+// can dial a box the church added after the member joined, without anyone re-following or re-typing anything.
+//
+// FIVE THINGS THIS DELIBERATELY DOES NOT DO (each is a known failure mode — see the console commit):
+//
+//  · IT DOES NOT WRITE `_churchRelays`. That map drives relaysForChurch's self-sufficiency count (boxes>=2),
+//    and `_applyChurchList` revokes anything in it that is not in the newest kind-10002 list — which a
+//    doc-discovered address never is — so putting one there produces a remove/re-add loop with a pool.close
+//    on every churn (the Phase 3 audit's finding). This writes ONLY window.Fellowship.relays, via addRelay.
+//  · IT DOES NOT WRITE `_saveChurchBoxes` / trinityone.churchboxes either — it stays a candidate-only mirror
+//    of the console, which writes only its own extra-relays store. The invite path (adoptInviteRelays) does
+//    write churchboxes; this one does not, on purpose.
+//  · IT DOES NOT GATE THE BOOTSTRAP READ. churchRelayNet still reads over churchRelaysRaw() (unfiltered) —
+//    RELAY-ADMISSION trap 3: the proof a box is ours is a document read from a box not yet proved, so gating
+//    that read deadlocks the bootstrap. This only ever ADDS candidates to the list that read already sees.
+//  · IT DOES NOT DROP THE SHARED POOL. CANONICAL_RELAYS/DEFAULT_RELAYS are skipped here and appended
+//    unconditionally elsewhere (churchRelaysRaw), so a church is never isolated from the shared relays
+//    (owner decision 2026-10-23). Nothing here touches relaysForChurch / publishSetFor / churchRelaysRaw.
+//  · IT DOES NOT MATCH ON THE URL. Admission is the KEY the box proves at the address dialled
+//    (RELAY-ADMISSION trap 2). The entry's url is only a hint about where to look; the entry's pubkey is
+//    checked against what the box proves, and then the member admission predicate decides.
+//
+// THE DIALLING FORM — copied verbatim from the console's _netDocDialUrl (b759bfa4), because the document's
+// `url` arrives in the same four shapes here. scripts/gateway.mjs destroys any upgrade whose path is not
+// exactly /relay, so an origin with no path connects to nothing; every entry is reduced to its origin and
+// given the one path the relay answers at, the scheme carried through (http→ws, https→wss), and anything
+// with a leftover path, query, fragment or userinfo dropped rather than guessed at.
+function _netDocDialUrl(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  s = s.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+  if (!/^wss?:\/\//i.test(s)) return '';
+  s = s.replace(/\/+$/, '').replace(/\/relay$/i, '').replace(/\/+$/, '');
+  if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return '';
+  return s + '/relay';
+}
+// IS THIS ADDRESS ALREADY A CANDIDATE, UNDER ANY SPELLING THIS PHONE USES? addRelay refuses only an exact
+// string repeat of something already in window.Fellowship.relays, so the normalisations that disagree at the
+// edges are checked here too. The console uses relayAddrKey (scheme-blind) AND normalizeURL; grepped at this
+// commit, `relayAddrKey` is NOT imported in src/fellowship.src.js (it lives in relay-net.src.js and is not
+// re-exported here) while `normalizeURL` IS (from nostr-tools/utils). So this uses the fallback the brief
+// names: exact-string compare, normalizeURL compare, and a compare of the _netDocDialUrl-canonical form —
+// which collapses a trailing slash, a bare slash and a /relay suffix, and is scheme-sensitive. Compared
+// against churchRelaysRaw() (window.Fellowship.relays ∪ CANONICAL_RELAYS) so neither a shared-pool spelling
+// nor a typed address gets a second row.
+function _alreadyAMemberCandidate(u) {
+  const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
+  const d = (x) => { try { return _netDocDialUrl(x); } catch (e) { return ''; } };
+  const vn = n(u), vd = d(u);
+  let list = []; try { list = churchRelaysRaw(); } catch (e) { list = []; }
+  for (const r of list) {
+    if (!r) continue;
+    if (r === u) return true;
+    if (vn && n(r) === vn) return true;
+    if (vd && d(r) === vd) return true;
+  }
+  return false;
+}
+// HOW FAR THIS PATH MAY GROW THE MEMBER CANDIDATE STORE. Chosen here, 2026-10-22 — NOT copied from a
+// pre-existing constant: the plan cited a `CHURCH_BOXES_MAX = 8` and there is no such bound in this tree
+// (_saveChurchBoxes is uncapped). The console chose 8 for the same reason; this matches it so the two sides
+// churn the same way. It bounds window.Fellowship.relays AS A WHOLE, so a box behind a free tunnel — a new
+// provable address on every restart — cannot grow the list for ever at one dial per dead address per read.
+const MEMBER_NETDOC_ADOPT_MAX = 8;
+// Module-level re-entrancy guard. setChurch is on the launch/foreground/unlock/online/resume/90s-beat effect
+// (app.jsx, keyed [activeChurch, churches, connTick]), so this fires-and-is-never-awaited repeatedly; the
+// guard + churchRelayNet's 60s cache + the _alreadyAMemberCandidate short-circuit keep repeated ticks cheap.
+let _adoptingNetDoc = false;
+// THE MERGE. Fire-and-forget from setChurch (see there); never awaited, so a slow or dead box cannot delay a
+// church switch, and it is safe to run twice because every step is idempotent.
+async function adoptChurchNetDocAddresses(cp) {
+  if (!cp) return [];
+  if (_adoptingNetDoc) return [];
+  _adoptingNetDoc = true;
+  try {
+    let entries;
+    try { entries = await churchRelayNet(cp); } catch (e) { return []; }
+    if (window.Fellowship.churchPub !== cp) return [];   // the church switched while we read
+    const added = [];
+    for (const e of (entries || [])) {
+      if ((window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+      const u = _netDocDialUrl(e && e.url);
+      if (!u) continue;
+      // The shared pool is added unconditionally by churchRelaysRaw; a second spelling of it only buys a dial.
+      if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
+      if (_alreadyAMemberCandidate(u)) continue;
+      // THE BOX AT THAT ADDRESS MUST PROVE THE KEY THE ENTRY NAMES (RELAY-ADMISSION trap 2). Without this a
+      // recycled tunnel hostname answering with a DIFFERENT key would be adopted. verifyRelayIdentityDetailed
+      // tells "unreachable" apart from "answered, not ours"; the proof is reused one line down so the address
+      // is proved and admitted in ONE round trip (the invite-path idiom, adoptInviteRelays).
+      let detail;
+      try { detail = await verifyRelayIdentityDetailed(u); } catch (err) { detail = { proof: null, reached: false }; }
+      const proof = detail && detail.proof;
+      if (!proof) continue;
+      if (String(proof.relayPub || '').toLowerCase() !== String((e && e.pubkey) || '').toLowerCase()) continue;
+      // ADMIT via the member predicate, reusing the proof. Same roots as every other add route.
+      const ok = await _isNetworkRelay(cp, u, {
+        verify: async () => proof,
+        netEntries: churchRelayNet,
+        origin: _adoptionOrigin(),
+        pins: CANONICAL_RELAY_PUBS,
+      });
+      if (!ok) continue;
+      if (window.Fellowship.churchPub !== cp) break;       // switched while proving
+      if (_alreadyAMemberCandidate(u)) continue;           // added while we waited
+      try { window.Fellowship.addRelay(u); added.push(u); } catch (err) {}
+    }
+    return added;
+  } finally { _adoptingNetDoc = false; }
+}
+
 // ── C4: THE GATE, one per surface ───────────────────────────────────────────────────────────────────────
 //
 // The persisted verified set and the synchronous filter over it. Created once, here, because a second gate
@@ -1286,6 +1404,98 @@ async function _reResolveRelayName(cp) {
     }
   } finally { _resolving.delete(cp); }
 }
+// ── THE CHURCH'S SIGNED RELAY LIST IS READ ON EVERY LAUNCH, NOT ONLY WHEN SOMEBODY FOLLOWS ──────────────
+//
+// MEASURED 2026-10-22, two phones against live relays: a relay typed into one steward console never reached
+// a second console of the SAME church — five reads over 3.5 minutes, including a reload and a PIN unlock.
+// Church DATA propagated fine over the shared relay in the same window; it is specifically ADDRESSES that
+// did not move. The member half of that is here. `subscribeChurchRelays` reads the church's signed kind-10002
+// list and adopts the relays it declares, and it had exactly ONE caller — app/app.jsx's followChurch, the
+// moment somebody follows a church. So on an ordinary launch the read never ran at all: `_churchRelays`
+// stayed empty, `_reResolveRelayName` was never driven, and every existing member of an established church
+// never learned about a box added after they joined. (PLAN-relay-address-gossip-2026-10-22 §4 step 2.)
+//
+// WHAT DRIVES IT NOW — and it is deliberately NOT a new signal. `setChurch` below, which the member app
+// already calls from one effect keyed on [activeChurch, churches, connTick]. connTick is the app's single
+// reconnect scheduler, and foregrounding, `online`, the native resume, a PIN unlock's `trinity-reconnect`,
+// the advisory `trinity-relay-returned` and the 90-second beat ALL bump it. So church-active, focus/resume
+// and relay-returned arrive here through the debounce and jitter the app already has. A second set of
+// listeners and a second 90-second timer in this file would be a second schedule that can run out of step
+// with that one, and app.jsx's own note explains why the two reconnect signals are deliberately not merged.
+//
+// WHY A COOLDOWN IS NOT OPTIONAL. Each call to `subscribeChurchRelays` opens a pool subscription AND installs
+// a `trinity-relays` listener, and returns the one function that undoes both. That effect's `churches` dep is
+// memoised on the STORED church list, which is rewritten whenever a church's kind-0 profile merges in, so
+// setChurch legitimately fires several times during one launch. Calling the read per signal without the
+// teardown leaks one subscription and one listener each time — strictly worse than the bug being fixed.
+//
+// SO: at most ONE live read, for the church that is active, and the previous one is CLOSED before the next is
+// opened. A re-open for the SAME church is rate-limited; a church SWITCH is not, because the member is
+// looking at a different congregation whose list this device may never have read.
+//
+// THIS WRITES NOTHING ITSELF. Everything it can change to a relay list, it changes through the existing
+// `subscribeChurchRelays` -> `_applyChurchList`, unaltered: the same church-signature check, the same
+// newest-wins high-water, the same NIP-11 capability gate, the same revocation. What is new is only HOW OFTEN
+// that runs. Re-reading does not make it revoke more: an equal-timestamp re-application yields the identical
+// `want` set, so nothing is dropped and `_maybeDropRelay`/`pool.close` are not reached (see the re-read test
+// in scripts/a-member-learns-a-relay-added-after-they-followed.test.mjs, which counts both).
+// TWO FLOORS, because "is this read still working?" cannot be answered in the first seconds of one.
+//   · REREAD: a HEALTHY read is not re-opened inside this window. Foregrounding, `online`, a PIN unlock and
+//     a relay returning all arrive through app.jsx's one scheduler, so this is the real rate limit on them.
+//   · SETTLE: NO re-open inside this window, healthy or not. A read whose socket has not finished opening
+//     reads as unhealthy, and the launch tick arrives while exactly that is true — without this floor the
+//     first second of every launch would open and close a read per tick. Long enough for a loopback or a
+//     tunnel to connect; short enough that a PIN unlock's own tick, which lands a few seconds in, is not
+//     swallowed and left holding the sockets reconnectAll() has just closed.
+const CHURCHLIST_REREAD_MS = 20000;
+const CHURCHLIST_SETTLE_MS = 3000;
+let _crWatch = null;      // { cp, stop, over } — the one live read, or null
+let _crLast = 0;          // monotonic ms at which it was opened
+let _crOpening = false;   // re-entrancy guard: adoption fires `trinity-relays`, and the gate's onChange fires `trinity-relay-returned`
+// A MONOTONIC CLOCK, for the reason app.jsx's auth retry uses one: the faults this code sits next to include a
+// wrong wall clock, and a clock corrected BACKWARDS makes a Date.now() difference negative, which would
+// suppress the re-read for exactly as long as the original skew — the one window it is needed.
+function _crMono() { try { return performance.now(); } catch (e) { return Date.now(); } }
+function _stopChurchRelaysWatch() {
+  const w = _crWatch; _crWatch = null;
+  if (w) { try { w.stop(); } catch (e) {} }
+}
+function _watchChurchRelays(cp) {
+  if (_crOpening) return _crWatch;                       // a signal raised by our own adoption: the open in flight covers it
+  if (!cp) { _stopChurchRelaysWatch(); return null; }    // no active church (the app passes null when it clears the scope)
+  const same = !!_crWatch && _crWatch.cp === cp;
+  if (same && _crWatch.over > 0) {
+    const age = _crMono() - _crLast;
+    if (age < CHURCHLIST_SETTLE_MS) return _crWatch;                   // too young to judge
+    if (age < CHURCHLIST_REREAD_MS && _crHealthy()) return _crWatch;   // working, and recent
+  }
+  _crOpening = true;
+  try {
+    _stopChurchRelaysWatch();
+    let stop = null;
+    try { stop = window.Fellowship.subscribeChurchRelays(cp); } catch (e) {}
+    // WHAT THIS READ WENT OVER, because an empty answer and an unasked question are not the same thing.
+    let over = 0; try { over = churchRelays().length; } catch (e) {}
+    _crWatch = { cp, stop: (typeof stop === 'function') ? stop : () => {}, over };
+    _crLast = _crMono();
+  } finally { _crOpening = false; }
+  return _crWatch;
+}
+// TWO CASES THE RE-READ COOLDOWN MUST NOT SWALLOW, and they are the two that matter on a real phone.
+//
+//   • A READ THAT WENT OVER NOTHING (`over === 0`). On a cold boot the gate has proved nothing yet, so
+//     churchRelays() is empty and the subscription reaches no relay at all. The next signal — which is what
+//     the gate's own onChange fires the moment it admits one — must be allowed to open a read that can
+//     answer. This cannot feed itself: a read over an empty set contacts nothing, so it raises no signal.
+//   • A READ WHOSE SOCKETS ARE GONE. A PIN unlock runs reconnectAll(), which closes every socket and with it
+//     every subscription this read owns, and the unlock's own tick arrives within a second or two of launch.
+//     A flat cooldown would swallow precisely that signal and leave the member on a dead read until the
+//     90-second beat. `relaysHealthy()` is the same question that beat already asks — one live socket among
+//     the publish set — so asking it here cannot drift away from the app's own definition of a dead link.
+//
+// Unreachable or throwing is treated as NOT healthy, so the fallback is to re-read. The whole cost of being
+// wrong that way is one REQ for one kind on one author.
+function _crHealthy() { try { return window.Fellowship.relaysHealthy() === true; } catch (e) { return false; } }
 // relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
 // self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
 // no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
@@ -4224,6 +4434,19 @@ window.Fellowship = {
   setChurch(npubOrHex) {
     window.Fellowship.churchPub = toPub(npubOrHex);
     try { _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub); } catch (e) {}
+    // THE CHURCH IS ACTIVE, SO READ THE LIST IT SIGNED. Until this line the kind-10002 read had one caller —
+    // the moment somebody follows a church — so an existing member never learned about a box the church added
+    // afterwards. See _watchChurchRelays above for what drives this, why there is at most one live read, and
+    // why the re-open is rate-limited. Nothing waits on it and nothing here can throw into the caller: a
+    // church whose box cannot be reached keeps exactly the relays this device already had.
+    try { _watchChurchRelays(window.Fellowship.churchPub); } catch (e) {}
+    // AND KEEP THE ADDRESSES OUT OF THE CHURCH'S SIGNED relay-net DOCUMENT, not just the keys (relay address
+    // gossip, step 1; see adoptChurchNetDocAddresses above). The mirror of the console's own tick. Without it
+    // a member who followed before the church added a box never learns that box — measured on two phones,
+    // 2026-10-22. Fire-and-forget, like the _watchChurchRelays read above and the gate refresh: setChurch is
+    // synchronous and on the unlock path, so a slow or gone box must cost the member nothing, and the guard +
+    // 60s cache make every later tick a no-op. Rides the existing [activeChurch, churches, connTick] effect.
+    try { const _p = adoptChurchNetDocAddresses(window.Fellowship.churchPub); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
     return window.Fellowship.churchPub;
   },
   // C4, for the Relays sheet: is this address carrying this church's traffic? A relay the gate has not
@@ -6043,8 +6266,9 @@ window.Fellowship = {
         if (d !== 'trinityone/verse-prompt') return;
         if (!_trust(e)) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
-        if (current && current.ts >= e.created_at) return;
-        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at }; cb(current); } catch {}
+        // Never let an OLDER copy overwrite a newer one; on an exact same-second tie the RELAY keeps the lowest event id, so do the same.
+        if (current && (current.ts > e.created_at || (current.ts === e.created_at && String(current.id || '') <= String(e.id || '')))) return;
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at, id: e.id }; cb(current); } catch {}
       },
       oneose() { cb(current); },
     });

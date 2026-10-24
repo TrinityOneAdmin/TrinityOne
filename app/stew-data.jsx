@@ -28,17 +28,59 @@ const SK = {
     { id: 'youth', name: 'Youth', sub: '31 members · 2 stewards', kind: 'group' },
     { id: 'prayer', name: 'Prayer Wall', sub: 'open · 140 requests', kind: 'group' },
   ],
-  // reading plans the steward can share with the congregation (public-domain, chapter-a-day structure)
+  // reading plans the steward can share with the congregation: ALL 11 of the member app's built-in plans, ported VERBATIM
+  // from app/data.jsx PLANS (same ids, titles, days) so a pushed plan renders identically on a member's phone. The members'
+  // Discover no longer lists them (owner 2026-10-19) - this is now the only way they reach a member. Wrapped in a function so the
+  // helper consts below stay private: app/*.jsx are classic scripts sharing one global scope.
   planLibrary: (function () {
-    const chapters = (book, n) => Array.from({ length: n }, (_, i) => ({ d: i + 1, ref: book + ' ' + (i + 1), label: 'Chapter ' + (i + 1) }));
-    const psalms = (list) => list.map((p, i) => ({ d: i + 1, ref: 'Psalm ' + p, label: 'Psalm ' + p }));
-    return [
-      { id: 'john21', title: 'The Gospel of John', sub: '21 days · a chapter a morning', tag: 'Gospels', accent: 'var(--clay)', blurb: 'Walk slowly through John, one chapter a day.', days: chapters('John', 21) },
-      { id: 'mark', title: 'The Gospel of Mark', sub: '16 days', tag: 'Gospels', accent: '#5360D6', blurb: 'The fast-paced gospel, a chapter a day.', days: chapters('Mark', 16) },
-      { id: 'proverbs', title: 'A Proverb a Day', sub: '31 days', tag: 'Wisdom', accent: 'var(--gold)', blurb: 'Daily wisdom — one chapter of Proverbs each day.', days: chapters('Proverbs', 31) },
-      { id: 'romans', title: 'Romans', sub: '16 days', tag: 'Epistles', accent: 'var(--sage)', blurb: "Paul's gospel laid out, a chapter a day.", days: chapters('Romans', 16) },
-      { id: 'psalms-comfort', title: 'Psalms of Comfort', sub: '7 days', tag: 'Devotional', accent: 'var(--sage)', blurb: 'A week in the Psalms for anxious seasons.', days: psalms([23, 27, 34, 42, 91, 121, 139]) },
+    const _johnLabels = ['The Word made flesh', 'Water into wine', 'Born again', 'The woman at the well', 'The healing pool',
+      'Bread of life', 'Rivers of living water', 'The light of the world', 'The man born blind', 'The good shepherd',
+      'The raising of Lazarus', 'The hour has come', 'The foot-washing', 'The way, the truth, the life', 'The true vine',
+      'The Counselor promised', 'The high-priestly prayer', 'Betrayal and arrest', 'The crucifixion', 'The empty tomb', 'Breakfast by the sea'];
+    const _psalms = [[23, 'The LORD my shepherd'], [27, 'The LORD my light'], [34, 'Taste and see'], [42, 'As the deer'],
+      [46, 'A very present help'], [91, 'Under his wings'], [121, 'My help comes from the LORD']];
+    const _ntChapters = [['Matthew', 28], ['Mark', 16], ['Luke', 24], ['John', 21], ['Acts', 28], ['Romans', 16],
+      ['1 Corinthians', 16], ['2 Corinthians', 13], ['Galatians', 6], ['Ephesians', 6], ['Philippians', 4], ['Colossians', 4],
+      ['1 Thessalonians', 5], ['2 Thessalonians', 3], ['1 Timothy', 6], ['2 Timothy', 4], ['Titus', 3], ['Philemon', 1],
+      ['Hebrews', 13], ['James', 5], ['1 Peter', 5], ['2 Peter', 3], ['1 John', 5], ['2 John', 1], ['3 John', 1], ['Jude', 1], ['Revelation', 22]];
+    function _ntDays() { const out = []; let d = 0; for (const [bk, n] of _ntChapters) for (let c = 1; c <= n; c++) out.push({ d: ++d, ref: `${bk} ${c}`, label: `${bk} ${c}` }); return out; }
+
+    const PLANS = [
+      { id: 'john21', title: 'The Gospel of John', sub: '21 days · a chapter a morning', tag: 'Gospels', accent: 'var(--clay)',
+        blurb: 'Walk slowly through John, one chapter a day.',
+        days: _johnLabels.map((label, i) => ({ d: i + 1, ref: `John ${i + 1}`, label })) },
+      { id: 'psalms', title: 'Psalms of Comfort', sub: '7 days', tag: 'Devotional', accent: 'var(--sage)',
+        blurb: 'A week in the Psalms for anxious seasons.',
+        days: _psalms.map(([n, label], i) => ({ d: i + 1, ref: `Psalms ${n}`, label })) },
+      { id: 'proverbs', title: 'A Proverb a Day', sub: '31 days', tag: 'Wisdom', accent: 'var(--gold)',
+        blurb: 'Daily wisdom, one chapter of Proverbs at a time.',
+        days: Array.from({ length: 31 }, (_, i) => ({ d: i + 1, ref: `Proverbs ${i + 1}`, label: `Chapter ${i + 1}` })) },
+      { id: 'nt-year', title: 'The New Testament', sub: '260 days · a chapter a day', tag: 'Whole NT', accent: 'var(--clay)',
+        blurb: 'The steady, achievable path through the New Testament.',
+        days: _ntDays() },
+      { id: 'mark', title: 'The Gospel of Mark', sub: '16 days · a chapter a day', tag: 'Gospels', accent: 'var(--clay)',
+        blurb: 'The fast-moving, action-packed account of Jesus’ life.',
+        days: Array.from({ length: 16 }, (_, i) => ({ d: i + 1, ref: `Mark ${i + 1}`, label: `Chapter ${i + 1}` })) },
+      { id: 'romans', title: 'Romans', sub: '16 days', tag: 'Epistles', accent: 'var(--sage)',
+        blurb: 'Paul’s great letter on grace, faith and the gospel.',
+        days: Array.from({ length: 16 }, (_, i) => ({ d: i + 1, ref: `Romans ${i + 1}`, label: `Chapter ${i + 1}` })) },
+      { id: 'sermon-mount', title: 'The Sermon on the Mount', sub: '3 days', tag: 'Teaching', accent: 'var(--gold)',
+        blurb: 'Jesus’ most famous teaching, in three sittings.',
+        days: [{ d: 1, ref: 'Matthew 5', label: 'The Beatitudes' }, { d: 2, ref: 'Matthew 6', label: 'Prayer & treasure' }, { d: 3, ref: 'Matthew 7', label: 'The narrow way' }] },
+      { id: 'philippians', title: 'Philippians', sub: '4 days · joy', tag: 'Epistles', accent: 'var(--clay)',
+        blurb: 'Paul’s letter of joy, written from prison.',
+        days: Array.from({ length: 4 }, (_, i) => ({ d: i + 1, ref: `Philippians ${i + 1}`, label: `Chapter ${i + 1}` })) },
+      { id: 'james', title: 'James', sub: '5 days · faith that works', tag: 'Wisdom', accent: 'var(--sage)',
+        blurb: 'Practical wisdom for everyday faith.',
+        days: Array.from({ length: 5 }, (_, i) => ({ d: i + 1, ref: `James ${i + 1}`, label: `Chapter ${i + 1}` })) },
+      { id: 'christmas', title: 'The Christmas Story', sub: '4 days · Advent', tag: 'Advent', accent: 'var(--gold)',
+        blurb: 'The birth of Jesus across Luke and Matthew.',
+        days: [{ d: 1, ref: 'Luke 1', label: 'The announcement' }, { d: 2, ref: 'Luke 2', label: 'The birth' }, { d: 3, ref: 'Matthew 1', label: 'Joseph’s dream' }, { d: 4, ref: 'Matthew 2', label: 'The wise men' }] },
+      { id: 'easter', title: 'The Story of Easter', sub: '5 days · Holy Week', tag: 'Easter', accent: 'var(--clay)',
+        blurb: 'Walk through the cross and resurrection in John.',
+        days: [{ d: 1, ref: 'John 18', label: 'Betrayed & arrested' }, { d: 2, ref: 'John 19', label: 'The crucifixion' }, { d: 3, ref: 'John 20', label: 'The empty tomb' }, { d: 4, ref: 'John 21', label: 'Restored' }, { d: 5, ref: '1 Corinthians 15', label: 'Why it matters' }] },
     ];
+    return PLANS;
   })(),
   // Mock-up data only — nothing reads SK.relays (grepped 2026-09-01). The two entries removed here named a
   // host on a domain we do not run and a generic public Nostr relay; a church's relays are its own

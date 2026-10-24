@@ -3820,7 +3820,9 @@
       const pubkey = String(e.pubkey || "").toLowerCase();
       if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
       seen.add(pubkey);
-      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+      const entry = { pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" };
+      if (typeof e.name === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(e.name)) entry.name = e.name;
+      out.push(entry);
     }
     return out;
   }
@@ -7478,6 +7480,95 @@
       pins: CANONICAL_RELAY_PUBS
     });
   }
+  function _netDocDialUrl(raw) {
+    let s = String(raw || "").trim();
+    if (!s) return "";
+    s = s.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
+    if (!/^wss?:\/\//i.test(s)) return "";
+    s = s.replace(/\/+$/, "").replace(/\/relay$/i, "").replace(/\/+$/, "");
+    if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return "";
+    return s + "/relay";
+  }
+  function _alreadyAMemberCandidate(u) {
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const d = (x) => {
+      try {
+        return _netDocDialUrl(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const vn = n(u), vd = d(u);
+    let list = [];
+    try {
+      list = churchRelaysRaw();
+    } catch (e) {
+      list = [];
+    }
+    for (const r of list) {
+      if (!r) continue;
+      if (r === u) return true;
+      if (vn && n(r) === vn) return true;
+      if (vd && d(r) === vd) return true;
+    }
+    return false;
+  }
+  var MEMBER_NETDOC_ADOPT_MAX = 8;
+  var _adoptingNetDoc = false;
+  async function adoptChurchNetDocAddresses(cp) {
+    if (!cp) return [];
+    if (_adoptingNetDoc) return [];
+    _adoptingNetDoc = true;
+    try {
+      let entries;
+      try {
+        entries = await churchRelayNet(cp);
+      } catch (e) {
+        return [];
+      }
+      if (window.Fellowship.churchPub !== cp) return [];
+      const added = [];
+      for (const e of entries || []) {
+        if ((window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+        const u = _netDocDialUrl(e && e.url);
+        if (!u) continue;
+        if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
+        if (_alreadyAMemberCandidate(u)) continue;
+        let detail;
+        try {
+          detail = await verifyRelayIdentityDetailed(u);
+        } catch (err) {
+          detail = { proof: null, reached: false };
+        }
+        const proof = detail && detail.proof;
+        if (!proof) continue;
+        if (String(proof.relayPub || "").toLowerCase() !== String(e && e.pubkey || "").toLowerCase()) continue;
+        const ok = await isNetworkRelay(cp, u, {
+          verify: async () => proof,
+          netEntries: churchRelayNet,
+          origin: _adoptionOrigin(),
+          pins: CANONICAL_RELAY_PUBS
+        });
+        if (!ok) continue;
+        if (window.Fellowship.churchPub !== cp) break;
+        if (_alreadyAMemberCandidate(u)) continue;
+        try {
+          window.Fellowship.addRelay(u);
+          added.push(u);
+        } catch (err) {
+        }
+      }
+      return added;
+    } finally {
+      _adoptingNetDoc = false;
+    }
+  }
   var _gate = createRelayGate({
     store: typeof localStorage !== "undefined" ? localStorage : null,
     verify: verifyRelayIdentity,
@@ -7718,6 +7809,68 @@
       }
     } finally {
       _resolving.delete(cp);
+    }
+  }
+  var CHURCHLIST_REREAD_MS = 2e4;
+  var CHURCHLIST_SETTLE_MS = 3e3;
+  var _crWatch = null;
+  var _crLast = 0;
+  var _crOpening = false;
+  function _crMono() {
+    try {
+      return performance.now();
+    } catch (e) {
+      return Date.now();
+    }
+  }
+  function _stopChurchRelaysWatch() {
+    const w = _crWatch;
+    _crWatch = null;
+    if (w) {
+      try {
+        w.stop();
+      } catch (e) {
+      }
+    }
+  }
+  function _watchChurchRelays(cp) {
+    if (_crOpening) return _crWatch;
+    if (!cp) {
+      _stopChurchRelaysWatch();
+      return null;
+    }
+    const same = !!_crWatch && _crWatch.cp === cp;
+    if (same && _crWatch.over > 0) {
+      const age = _crMono() - _crLast;
+      if (age < CHURCHLIST_SETTLE_MS) return _crWatch;
+      if (age < CHURCHLIST_REREAD_MS && _crHealthy()) return _crWatch;
+    }
+    _crOpening = true;
+    try {
+      _stopChurchRelaysWatch();
+      let stop = null;
+      try {
+        stop = window.Fellowship.subscribeChurchRelays(cp);
+      } catch (e) {
+      }
+      let over = 0;
+      try {
+        over = churchRelays().length;
+      } catch (e) {
+      }
+      _crWatch = { cp, stop: typeof stop === "function" ? stop : () => {
+      }, over };
+      _crLast = _crMono();
+    } finally {
+      _crOpening = false;
+    }
+    return _crWatch;
+  }
+  function _crHealthy() {
+    try {
+      return window.Fellowship.relaysHealthy() === true;
+    } catch (e) {
+      return false;
     }
   }
   function relaysForChurch(cp) {
@@ -10505,6 +10658,16 @@
         _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub);
       } catch (e) {
       }
+      try {
+        _watchChurchRelays(window.Fellowship.churchPub);
+      } catch (e) {
+      }
+      try {
+        const _p = adoptChurchNetDocAddresses(window.Fellowship.churchPub);
+        if (_p && _p.catch) _p.catch(() => {
+        });
+      } catch (e) {
+      }
       return window.Fellowship.churchPub;
     },
     // C4, for the Relays sheet: is this address carrying this church's traffic? A relay the gate has not
@@ -12378,10 +12541,10 @@
             }
             return;
           }
-          if (current && current.ts >= e.created_at) return;
+          if (current && (current.ts > e.created_at || current.ts === e.created_at && String(current.id || "") <= String(e.id || ""))) return;
           try {
             const j = JSON.parse(e.content);
-            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at };
+            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at, id: e.id };
             cb(current);
           } catch {
           }

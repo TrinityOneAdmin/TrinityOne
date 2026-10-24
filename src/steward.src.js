@@ -20,11 +20,11 @@ import { normalizeURL } from 'nostr-tools/utils';
 import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
-import { verifyRelayIdentity } from './relay-identity.src.js';
+import { verifyRelayIdentity, verifyRelayIdentityDetailed, relayAddrKey } from './relay-identity.src.js';
 // …and then decide whether the key it proved is one this church's network contains, and write the document
 // that says so. Shared with the member app so both surfaces answer that question the same way.
 // …and C4's gate, which is what keeps this church's documents off a relay that cannot prove itself.
-import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
+import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, sharedRelayKeys, isSharedAddress, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -1642,6 +1642,7 @@ async function refreshNamedRelays() {
       // non-member address; this is the check at the point the list is actually written, so a future edit
       // that loosens the resolver cannot quietly un-gate the swap.
       if (!(await admitRemoteRelay(newUrl))) continue;
+      if (isSharedRelaySpelling(newUrl)) continue;   // never a second spelling of a shared relay (ninth audit)
       extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true;
     } catch (e) {}
   }
@@ -1656,6 +1657,31 @@ async function refreshNamedRelays() {
 }
 // keep named relays pointed at the live url: on load, then every 90s, and whenever the app regains focus
 try { setTimeout(refreshNamedRelays, 2500); setInterval(refreshNamedRelays, 90000); window.addEventListener('focus', refreshNamedRelays); } catch (e) {}
+// IS THIS A SPELLING OF ONE OF TRINITYONE'S OWN RELAYS, under EITHER normalisation the console uses (ninth audit)?
+// relayAddrKey (isSharedAddress: host case, scheme, default port, query, trailing slashes ignored) or normalizeURL
+// (the pool and every read: also collapses //). The three normalisations — normRelay at entry, relayAddrKey,
+// normalizeURL — disagree at the edges, so an address either one maps onto a shared relay is refused at Add.
+function isSharedRelaySpelling(u) {
+  if (!u) return false;
+  try { if (isSharedAddress(u)) return true; } catch (e) {}
+  const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
+  const v = n(u);
+  if (!v) return false;
+  return Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some(h => n(h) === v);
+}
+// IS THIS A SPELLING OF THIS CONSOLE'S OWN RELAY (ownRelay()), under either normalisation (phone test 2026-10-22)?
+// Same family as isSharedRelaySpelling: relayAddrKey (host case, scheme, default port, query, trailing slashes)
+// or normalizeURL (also collapses //). addRelay always refused the own relay, but only by an exact match and
+// silently, after the consent line; this lets every Add path say why, before it.
+function isOwnRelaySpelling(u) {
+  if (!u) return false;
+  let own = ''; try { own = ownRelay(); } catch (e) { own = ''; }
+  if (!own) return false;
+  try { const a = relayAddrKey(u); if (a && a === relayAddrKey(own)) return true; } catch (e) {}
+  const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
+  const v = n(u);
+  return !!v && v === n(own);
+}
 // normalise a user-typed relay address to a ws/wss URL
 function normRelay(input) {
   let v = String(input || '').trim();
@@ -3401,6 +3427,15 @@ function setKey(mnemonic) {
   // incident that produced it), and it wants the same answer rather than a second ad-hoc await.
   // Fire-and-forget, and the cold-start race above is the known cost of that. See _waitForRegistration.
   try { _gate.refresh(relaysRaw(), pub); } catch (e) {}
+  // ── AND TAKE THE ADDRESSES OUT OF THE CHURCH'S OWN SIGNED LIST, not just the keys (relay address gossip,
+  //    step 1; see adoptNetDocAddresses). THE SAME TICK AS THE GATE REFRESH ABOVE, on purpose: this is the
+  //    moment the console learns which church is asking, and the church's signed relay-net document is the
+  //    only place an address a steward typed on ANOTHER device can be found. Without it a church's second
+  //    console never learns its own box — measured on two phones, 2026-10-22.
+  //    Fire-and-forget, like the refresh above: setKey is synchronous and on the unlock path, and a box that
+  //    is slow or gone must cost the steward nothing. Idempotent, so every unlock re-running it is a no-op
+  //    once the addresses are in the list.
+  try { const _p = adoptNetDocAddresses(); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
   // NO RELAY-LIST PUBLISH ON UNLOCK. This used to fire publishRelayList() here, deferred and
@@ -4852,7 +4887,7 @@ function _one(filters, ms = 4000) {
 // therefore excluded for ever. A self-hosting church would be permanently orphaned from its own machine —
 // the finding that made an earlier version of this plan a no-go.
 //
-// So the census is location, the relay panel's own configured entries, and anything explicitly handed in.
+// So the census is location and anything explicitly handed in (a relay the steward has consented to — B4, 2026-10-21).
 // The filtered list is for PUBLISHING. Using it as the enrolment census is the deadlock.
 
 // The console's own serving origin, or '' when the page was not served by anything that could be a relay.
@@ -4877,13 +4912,19 @@ function _ownOrigin() {
 // of the bundle, the lift that reads it fails to find it, and several unrelated tests then go red with a
 // "could not anchor" error instead of the one test going red with the real message. That has already cost
 // this repo a misread sabotage run, and it is cheaper to keep the line here than to explain the artefact.
+//
+// B4 (owner, 2026-10-21): ONLY THE BOX THAT SERVED THIS CONSOLE, plus whatever the caller names. This used to
+// enumerate extraRelays() too — every address the relay panel had ever been given — so an automatic enrolment
+// would have signed a URL a steward pasted "to see if it works" into the church's document, and every member
+// phone would have trusted it. A typed relay is now signed only through signRelay(), which the console calls
+// after the steward has read "Connecting this relay lets your whole church's data go to it" and tapped
+// Connect. That tap is the consent; nothing reaches this list without it.
 function relayNetCandidates(extra) {
   const out = [];
   const add = (u) => { const s = String(u || '').trim(); if (s && !out.includes(s)) out.push(s); };
   const o = _ownOrigin();              // the box that served this console — location, NOT ownRelay()
   if (o) add(o.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/relay');
-  for (const u of extraRelays()) add(u);   // the relay panel's own configured entries, as typed
-  for (const u of (extra || [])) add(u);   // a pasted candidate the caller is asking about
+  for (const u of (extra || [])) add(u);   // a relay the steward has just consented to (signRelay)
   return out;
 }
 
@@ -4898,36 +4939,91 @@ function relayNetCandidates(extra) {
 //
 // (It reads over relays(), the raw list today. C4 must keep the READER off a filtered list for the same
 // reason enrolment stays off one — see the deadlock rule above.)
-function _oneComplete(filters, ms = 6000) {
+//
+// AUDIT 2026-10-21 (finding 3), corrected on measurement: for a PRIVATE document the relay does not simply answer
+// an anonymous socket "nothing" — when it withholds the document it sends a login challenge and holds its EOSE
+// for EOSE_AUTH_GRACE_MS (gateway.mjs, 2.5 s) while we log in, then replays it. The lie left is a login that is
+// refused or slower than that hold: the held EOSE then goes out empty. So with `privateDoc`, a relay's "nothing
+// here" counts as an answer only if that relay never asked us to log in, or our login on THAT live socket was
+// accepted (_authAccepted, the relay's OK). A brand-new church with no such document is not challenged at all,
+// so its first read still completes. (Asking only already-logged-in sockets was tried first and blocked a new
+// church's first enrolment for ever — nothing had logged in yet.)
+// `asked` is reported so a caller can demand that EVERY relay answered (finding 2).
+function _oneComplete(filters, ms = 6000, privateDoc = false) {
+  // B0 STEPS 2-3 (self-hosting P1, 2026-10-21): "complete" now means AT LEAST ONE RELAY GENUINELY ANSWERED and
+  // every relay asked has finished one way or the other. A dead port used to count as finished — nostr-tools
+  // routes a connection failure through the same oneose a real EOSE uses (handleClose calls handleEose) — so
+  // a church whose relays were all down read as a COMPLETED read of an EMPTY church, and enrolment would
+  // rebuild its signed list from scratch and un-admit every box in it. One subscription per relay, so a
+  // failure can be told apart from an answer: the library fires that relay's onclose straight after its fake
+  // oneose, in the same turn, and a real EOSE fires no onclose at all. `answered` counts the relays that said
+  // "that is everything I hold" and did not fail.
   return new Promise((resolve) => {
-    let best = null, complete = false, done = false;
-    const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve({ ev: best, complete }); };
     // RAW, NOT THE PUBLISH SET — the read side of the deadlock rule. This is the reader that fetches the
     // church's membership document, so routing it through the gate that document feeds would mean a box the
     // church has signed for can never be asked for the signature that admits it.
-    const sub = pool.subscribeMany(relaysRaw(), filters, {
-      onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
-      oneose() { complete = true; finish(); },
-      // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — B0 of reference/PLAN-ENROLMENT-GAP-2026-09-02.md,
-      // and the same fix `_newestByD` has carried since AUDIT-8 measured it there.
-      // nostr-tools arms its OWN EOSE timer (default `baseEoseTimeout` 4400ms) and calls `oneose` when it
-      // expires, whether or not any relay ever sent the frame. This function's own bound is 6000ms, so the
-      // library's fake EOSE fired FIRST and set `complete = true` — a failed read reporting a COMPLETED read
-      // of an EMPTY church. That is the input to the doc-wipe chain: `relayNetDoc()` returns
-      // {ev:null, complete:true} while the church's relays are merely down (the a8 update blip is exactly
-      // this), the `!complete` guard does not fire, entries are rebuilt FROM SCRATCH with created_at: now(),
-      // and newest-wins un-admits every box the church had signed, on every member's phone.
-      // Pushing the library's timer well past our own bound means an EOSE arriving inside `ms` is a real one.
-      //
-      // ⚠ THIS ALONE DOES NOT CLOSE B0, and the plan says so in as many words. An UNREACHABLE relay still
-      // reports finished — measured in scripts/a-failed-read-is-not-an-empty-church.test.mjs, which drives a
-      // real socket that never sends EOSE and a genuinely dead port. `complete` means "every relay I could
-      // reach finished", which is not the question enrolment asks. Steps 2-3 of B0 — counting how many relays
-      // GENUINELY answered, and refusing the from-scratch path unless at least one did — are still open.
-      maxWait: ms + 5000,
-    });
+    const urls = relaysRaw();
+    let best = null, done = false;
+    // A relay that challenged us and has not accepted our login: its empty answer may be a withheld document.
+    const loginPending = (u) => {
+      let k = u; try { k = normalizeURL(u); } catch (e) {}
+      const r = pool.relays.get(k);
+      return !!r && !!r.challenge && _authAccepted.get(k) !== r;
+    };
+    const eosed = new Set(), failed = new Set(), subs = [];
+    const finish = () => {
+      if (done) return; done = true;
+      let answered = 0;
+      for (const u of eosed) if (!failed.has(u) && !(privateDoc && loginPending(u))) answered++;
+      const complete = urls.length > 0 && eosed.size === urls.length && answered > 0;
+      for (const s of subs) { try { s.close(); } catch {} }
+      const answeredUrls = [...eosed].filter(u => !failed.has(u) && !(privateDoc && loginPending(u)));
+      // `askedUrls` (round 6): WHICH relays were asked, so a caller can state its rule by address (_readCovers).
+      resolve({ ev: best, complete, answered, asked: urls.length, askedUrls: urls.slice(), answeredUrls });
+    };
+    for (const u of urls) {
+      try {
+        subs.push(pool.subscribeMany([u], filters, {
+          onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
+          // Deferred one turn so a failing relay's onclose — fired synchronously after its fake oneose — is
+          // recorded before anything is counted.
+          oneose() { eosed.add(u); if (eosed.size === urls.length) setTimeout(finish, 0); },
+          onclose() { failed.add(u); },
+          // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — nostr-tools arms its own EOSE timer and calls
+          // oneose when it expires whether or not any relay sent the frame. Pushing it well past our own bound
+          // means an EOSE arriving inside `ms` is a real one (B0 step 1, measured at ~4421ms before this).
+          maxWait: ms + 5000,
+        }));
+      } catch (e) { failed.add(u); eosed.add(u); }
+    }
     setTimeout(finish, ms);
   });
+}
+// WHICH RELAYS MUST ANSWER BEFORE THE CHURCH'S LIST MAY CHANGE (self-hosting P1, round 6). Every relay this console
+// asked, except `leaving`, the relay a Remove is taking out. A relay that cannot be reached cannot be told apart from
+// the church's own box holding the newest list, so its silence always counts. The one exception is the relay being
+// removed: it is leaving, and requiring it to answer made an offline relay impossible to remove (fifth audit,
+// finding 1). Fails closed: a read that does not say which relays it asked is never full.
+// Used by enrolRelayNet (first list, seed read, re-sign refusal, the `full` it reports) and unenrolRelayNet (the
+// only caller that passes `leaving`).
+//
+// WHAT THE EXCEPTION COSTS (corrected after the sixth audit, finding 3). A Remove that does not wait for the relay
+// being removed can lose a list change that reached ONLY that relay. That happens when the writing console's other
+// relays were offline OR refused the write, or when two consoles ask different sets of relays (one console's write
+// lands only where it asked). It is a narrow loss of one change, never a list rebuilt from nothing.
+// NEVER A SHARED RELAY (sixth audit, finding 2; ninth audit, findings 1-2). The shared relays are where every
+// console finds the list. The skip is decided in the SAME normalisation the read and the pool use (normalizeURL):
+// if the address being removed normalises onto a shared relay's address, nothing is skipped, because skipping
+// it would drop the REAL shared relay from the read (…//relay normalises onto …/relay). An address that only
+// relayAddrKey calls shared (ws://…, a different scheme the read dials separately) is its own entry in the read and
+// may be skipped like any other leaving relay — waiting for it froze the list while the dead spelling sat there.
+function _readCovers(r, leaving) {
+  const k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
+  let skip = leaving ? k(leaving) : '';
+  if (skip) { try { if (Object.keys(CANONICAL_RELAY_PUBS).some(h => k(h) === skip)) skip = ''; } catch (e) { skip = ''; } }
+  const said = new Set(((r && r.answeredUrls) || []).map(k));
+  const need = ((r && r.askedUrls) || []).map(k).filter(u => !skip || u !== skip);
+  return need.length > 0 && need.every(u => said.has(u));
 }
 // This church's own signed membership document, newest wins.
 function relayNetDoc() { return _oneComplete([{ kinds: [30078], authors: [pub], '#d': [RELAY_NET_D] }]); }
@@ -4963,18 +5059,81 @@ async function relayNetEntries(cp) {
 // build a document from scratch, publish it with a newer timestamp, and un-admit every box the church had
 // already signed for. The same rule covers the one-time seed, which is one-time and so gets exactly one
 // chance to read the old document correctly.
+// B1: ONLY THIS CHURCH'S OWN CONSOLE SIGNS. In delegated mode `sk` is the helper's own key while `pub` is the
+// church they help, so this would read one church's list and sign it with another's key — replacing the
+// helper's own church's document. In a network view `pub` is the network's key, which has no relay list.
+// Mirrors publishRelayList.
+//
+// B3: THE DOCUMENT REACHES THE BOX IT ADMITS. publish() writes over relays(), the gated set; a box that has
+// just proved its key is admissible by definition, so the signed document is also sent straight to every
+// proven address — and re-sent, byte for byte, when nothing changed, so a box that missed the first write
+// still ends up holding the document that admits it. Self-signed and content-addressed: re-sending is
+// idempotent and can never clobber a newer copy.
+//
+// THE NAME AND THE ADDRESS IN EACH ENTRY. The box serving this console records its stable directory name
+// (selfRelayName) and its PUBLIC address (selfPublicRelay). Both are hints a phone uses to find the box when
+// its tunnel moves; the pubkey stays the membership. Neither is ever blanked once written: selfRelayName is
+// cleared locally whenever the tunnel is down, and an empty value then must not erase the church's record.
+// A loopback address is never written — it names the steward's own computer, not anything a phone can reach.
+const RELAYNET_SEEN = 'trinityone.steward.relaynet-seen.';   // + church pub: '1' once this console has seen or written its list
+const _isLoopbackRelay = (u) => /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/|$)/i.test(String(u || ''));
+const _RELAY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 async function enrolRelayNet(opts) {
   const o = opts || {};
   if (!sk || !pub) throw new Error('No church key on this device');
-  const { ev: existing, complete } = await relayNetDoc();
+  if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: 'not this church’s own console' };
+  const sk0 = sk, pub0 = pub;
+  const read = await relayNetDoc();
+  const { ev: existing } = read;
   const mine = (existing && existing.pubkey === pub) ? existing : null;
-  if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+  // WHEN IS "NO LIST ANYWHERE" TRUE ENOUGH TO START ONE? (audit 2026-10-21, finding 2.) One empty answer is not
+  // enough: a reinstalled box, or a relay that missed the last write, answers empty while the relays that DO
+  // hold the church's list are down — and a list started from that drops every box it named. Two answers are:
+  //  · every relay asked said "nothing here"; or
+  //  · THIS CHURCH'S OWN BOX said "nothing here", and this console has never seen a list for this church.
+  // The second exists because "every relay" includes the shared community relays, and a self-hosting church
+  // whose shared relays are unreachable — blocked, seized, or simply offline (the threat model this feature
+  // is for) — could otherwise never sign its own box at all. Measured in a real browser 2026-10-21: with the
+  // shared hosts unreachable, "every relay" kept the Suite's own box unsigned for ever. The console remembers
+  // having seen a list (RELAYNET_SEEN), so the reinstalled-box case stays refused wherever a list was seen.
+  //
+  // WHO MAY USE THE SECOND ANSWER (third audit 2026-10-21, finding 1). "The box that served this page" is not
+  // the church's own box just because it served the page: the hosted console is served by the SHARED relay, and
+  // in a new browser (no seen flag) its "nothing here" — with the church's real box unreachable — let a steward's
+  // Connect rebuild the list as [typed], dropping the church's own box. So the second answer counts only for
+  //  · the automatic pass (`auto`), never a steward's Connect (`extra`): that path waits for every relay; and
+  //  · a serving box this church's registration says holds it (_boxHostsUs === true); and
+  //  · a serving box that proves a key of its own, not a shared relay's key.
+  // What is left (owner accepted, 2026-10-21; widened by the fourth audit and accepted again the same day): any
+  // box this church is registered on answering "nothing here" — reinstalled empty, or a second Suite machine set
+  // up while the office box is off — with every other relay unreachable, in a browser that never saw the list.
+  // The seen flag is kept per web address, so a quick tunnel's new address counts as never having seen it. The
+  // list then restarts with that box in it; a box it dropped is added back by its own console's next pass.
+  const seenKey = RELAYNET_SEEN + (pub || '');
+  let seenBefore = false; try { seenBefore = lsGet(seenKey) === '1'; } catch (e) { seenBefore = true; }
+  if (mine) { try { lsSet(seenKey, '1'); } catch (e) {} }
+  const ownUrl = relayNetCandidates()[0] || '';
+  const _k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
+  const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some(u => _k(u) === _k(ownUrl));
+  // Every relay asked really answered — the one rule, stated by address (round 6, _readCovers).
+  const fullAnswer = (r) => _readCovers(r);
+  // Decided once, before either read is judged: it gates the list read below AND the one-time seed read.
+  let ownMayStart = false;
+  if (!mine && o.auto === true && !(o.extra && o.extra.length) && _boxHostsUs === true && !seenBefore && !!ownUrl) {
+    let ownKey = '';
+    try { const pr = await verifyRelayIdentity(ownUrl); ownKey = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { ownKey = ''; }
+    ownMayStart = /^[0-9a-f]{64}$/.test(ownKey) && !sharedRelayKeys().includes(ownKey);
+  }
+  const nothingAnywhere = (r) => fullAnswer(r) || (ownMayStart && ownSaidNothing(r.answeredUrls));
+  if (!mine && !nothingAnywhere(read)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
   const entries = mine ? parseRelayNet(mine.content) : [];
   const before = JSON.stringify(entries);
   let seeded = 0;
   if (!mine) {
     let old = null, oldComplete = false;
-    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }]); old = r.ev; oldComplete = r.complete; } catch {}
+    // trinityone/relays is PRIVATE: an empty answer from a relay still waiting on our login is not an answer, and
+    // the seed is trusted only if every relay asked really answered (see _oneComplete's `privateDoc`).
+    try { const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true); old = r.ev; oldComplete = !!r.ev || nothingAnywhere(r); } catch {}
     if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     let arr = [];
     if (old && old.pubkey === pub) { try { arr = JSON.parse(old.content || '[]'); } catch { arr = []; } }
@@ -4986,25 +5145,665 @@ async function enrolRelayNet(opts) {
     }
   }
   const proven = [], unproven = [];
+  const shared = sharedRelayKeys();
+  const own = relayNetCandidates()[0] || '';      // the serving box's own address, if this console has one
   for (const url of relayNetCandidates(o.extra)) {
     let proof = null;
     try { proof = await verifyRelayIdentity(url); } catch { proof = null; }
     const p = String((proof && proof.relayPub) || '').toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(p)) { unproven.push(url); continue; }
-    proven.push({ url, pubkey: p });
+    // `shared` tells the card a typed shared relay needs no signing (third audit, finding 8), instead of "try again".
+    proven.push(shared.includes(p) ? { url, pubkey: p, shared: true } : { url, pubkey: p });
+    // THE SHARED POOL IS NEVER SIGNED IN. A console served from the shared relay would otherwise sign that
+    // relay into a church that does not self-host, and a church that does not self-host must be left exactly
+    // as it was (owner decision 6). The shared relays are admitted on their own pin.
+    if (shared.includes(p)) continue;
+    const isOwn = !!own && url === own;
+    const hint = _isLoopbackRelay(url) ? (isOwn ? selfPublicRelay() : '') : url;
+    const nm = isOwn ? String(selfRelayName() || '').toLowerCase() : '';
     const cur = entries.find(x => x.pubkey === p);
     // THE URL IS A HINT AND IS REFRESHED; THE PUBKEY IS THE MEMBERSHIP AND IS NEVER MATCHED ON. A box behind
     // a free tunnel arrives here on a new address every restart, and it is the SAME member — so its entry's
-    // `url` is updated in place rather than a second entry being created for the same key.
-    if (cur) { if (url && cur.url !== url) cur.url = url; }
-    else entries.push({ pubkey: p, alwaysOn: true, url });
+    // `url` is updated in place rather than a second entry being created for the same key. An empty hint
+    // never overwrites a real one.
+    if (cur) {
+      if (hint && cur.url !== hint) cur.url = hint;
+      if (_RELAY_NAME_RE.test(nm) && cur.name !== nm) cur.name = nm;
+    } else {
+      const e = { pubkey: p, alwaysOn: true, url: hint };
+      if (_RELAY_NAME_RE.test(nm)) e.name = nm;
+      entries.push(e);
+    }
   }
   const changed = JSON.stringify(entries) !== before;
+  // THE IDENTITY MAY HAVE MOVED WHILE WE WAITED (audit 2026-10-21, finding 6). The guard at the top ran before up
+  // to two six-second reads and a proof per box; a switch to a delegated church or a network view in that window
+  // would otherwise sign church A's entries with whatever key is current now. Unknown, so the next run retries.
+  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, changed: true };
+  // B3, the delivery half: send the signed document straight to every box that just proved its key.
+  const deliver = async (ev) => {
+    const urls = proven.filter(x => !shared.includes(x.pubkey)).map(x => x.url);
+    if (!ev || !urls.length) return [];
+    const res = await Promise.allSettled(pool.publish(urls, ev).map(pr => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))])));
+    return urls.filter((u, i) => res[i] && res[i].status === 'fulfilled' && !(typeof res[i].value === 'string' && res[i].value.startsWith('connection failure')));
+  };
+  // THE CHURCH'S EXISTING SIGNED LIST, RE-SENT VERBATIM (fourth audit 2026-10-21, finding 1): to the proven boxes,
+  // AND over the ordinary publish set, which includes the shared relays. A list first signed while the shared
+  // relays were unreachable otherwise never reached them, and a new browser — which asks only the relays it knows,
+  // never a church box it has not heard of — found "nothing here" on every one and rebuilt the list from scratch.
+  // Verbatim, so it can never replace anything newer: a relay keeps the newest copy and refuses an older one.
+  // `background` marks it as a write the console started; on an owner's console publishErrorMessage treats it like
+  // any other, so a refusal by every relay still shows. (Fifth audit, finding 5: this line used to claim a refusal
+  // would not show the steward an error. Nothing tested that, and on an owner's console it is not so.)
+  const resend = async () => {
+    if (!mine) return [];
+    try { await publish(mine, { background: true }); } catch (e) {}
+    return deliver(mine);
+  };
   // Nothing proved and nothing already signed in: publish NOTHING. An empty document is the church signing
   // "my network is empty", which is a statement, not a silence.
-  if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
-  const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk));
-  return { published: !!ev, entries, proven, unproven, seeded };
+  if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
+  // Unchanged: re-send the church's existing signed document, verbatim. Never re-signed.
+  // `full` (fifth audit, finding 3): whether the list found came from a read every relay answered. When it did not,
+  // the copy found may be stale, so a relay it names cannot be called "in the list" — the card says so. Still not
+  // `unknown`: nothing is written here, and the automatic pass must not retry on every focus through an outage.
+  if (!changed) return { published: false, full: !mine || fullAnswer(read), entries, proven, unproven, seeded, delivered: await resend() };
+  // A LIST IS RE-SIGNED ONLY ON A FULL ANSWER (fourth audit, finding 6). The list found may be a stale copy — one
+  // that missed a Remove — and re-signing it with a newer stamp would put the removed relay back. So when not every
+  // relay asked answered, the list found is passed on as it is and nothing is signed; the next pass tries again.
+  if (mine && !fullAnswer(read)) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
+  const signed = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
+  const ev = await publish(signed);
+  const delivered = await deliver(signed);
+  if (ev || delivered.length) { try { lsSet(seenKey, '1'); } catch (e) {} }
+  return { published: !!ev || delivered.length > 0, entries, proven, unproven, seeded, delivered };
+}
+
+// THE AUTOMATIC CALL (B2): this console's own box only, once per (church, box) per page load. The console
+// calls it when the key is present — on boot with a key, and again on every unlock (KeyDistributor in
+// app/stew-dashboard.jsx). "I don't know yet" (an unfinished read) is not remembered, so the next unlock
+// tries again; a finished run is, so a steward locking and unlocking all afternoon costs one enrolment.
+// ONE SIGNING AT A TIME (second audit 2026-10-21, finding 1). Every change to the church's relay list reads the
+// current list, edits it and signs a new one; newest wins. Two that overlap both read the same old list, and the
+// later signature silently undoes the earlier — an automatic pass finishing after a steward's "Yes, connect"
+// would un-sign the relay they had just been told was connected. So the automatic pass, signRelay and
+// unenrolRelayNet all queue here; each starts only after the one before it has finished (and published).
+let _enrolQueue = Promise.resolve();
+function enrolSerial(fn) {
+  const run = _enrolQueue.then(() => fn(), () => fn());
+  _enrolQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+// TAKE A RELAY OUT OF THE CHURCH'S SIGNED LIST (owner decision B, 2026-10-21): "Remove" on the Relays card
+// must undo what "Yes, connect" did, or the consent could never be withdrawn. The box is identified by the key
+// it proves at that address; if it cannot be reached, by the address the list recorded for it. Nothing is
+// written unless the church's own list was read in full and actually names the relay. Same guards as enrolment:
+// this church's own console only, and the identity re-checked just before signing.
+//
+// THIRD AUDIT 2026-10-21. Finding 6: "read in full" means every relay asked answered, not merely that the read
+// finished — a stale copy edited and re-signed with a newer stamp would replace the church's real list.
+// Finding 5: never the box this console runs on. The church's own box can be in the
+// panel a second time under another address (its public tunnel address, a directory name); removing that
+// address proves the own box's key, and taking that key out would drop the church's own box from its own list.
+async function unenrolRelayNet(url) {
+  if (!sk || !pub) throw new Error('No church key on this device');
+  if (actingChurch || _viewingNetwork()) return { removed: false, skipped: 'not this church’s own console' };
+  const u = normRelay(url);
+  if (!u) return { removed: false };
+  const sk0 = sk, pub0 = pub;
+  // FIFTH AUDIT, finding 1: every relay asked must answer EXCEPT the one being removed. It is leaving; requiring it
+  // to answer made an offline relay impossible to remove, and its row then blocked every other change for ever.
+  const read = await relayNetDoc();
+  const { ev: existing } = read;
+  if (!_readCovers(read, u)) return { removed: false, unknown: true };
+  const mine = (existing && existing.pubkey === pub) ? existing : null;
+  if (!mine) return { removed: false, notListed: true };
+  const entries = parseRelayNet(mine.content);
+  const _k = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  const keyAt = async (x) => { try { const proof = await verifyRelayIdentity(x); return String((proof && proof.relayPub) || '').toLowerCase(); } catch (e) { return ''; } };
+  const pk = await keyAt(u);
+  const drop = entries.filter(e => (pk && e.pubkey === pk) || (e.url && _k(e.url) === _k(u)));
+  if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
+  const own = relayNetCandidates()[0] || '';
+  const ownKey = !own ? '' : (_k(own) === _k(u)) ? pk : await keyAt(own);
+  if ((own && _k(own) === _k(u)) || drop.some(e => (ownKey && e.pubkey === ownKey))) return { removed: false, ownBox: true };
+  // FAIL CLOSED (fourth audit, finding 3): matched by the key it proved, while the console's own box could not
+  // say which key is its own — the removed address may be the own box's alias. Unknown; try again.
+  if (own && !ownKey && pk && drop.some(e => e.pubkey === pk)) return { removed: false, unknown: true };
+  // A shared relay that the one-time seed carried in is taken out like any other (fourth audit, finding 4): the
+  // shared relays are admitted on their own pin, so the church's list naming them changes nothing.
+  const keep = entries.filter(e => !drop.includes(e));
+  if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+  const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
+  return { removed: !!ev, entries: keep };
+}
+
+const _autoEnrolled = new Set();
+async function autoEnrolRelayNet() {
+  if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
+  const own = relayNetCandidates()[0] || '';
+  if (!own) return null;                          // an APK or a static host: there is no own box to sign
+  // ONLY A BOX THAT HOLDS THIS CHURCH (audit 2026-10-21, finding 9). A delegated steward opening the console on
+  // the box of the church they help would otherwise sign THAT box into their own church's list in the moment
+  // before the console switches to the church they help. `_boxHostsUs` is this church's own answer to "does the
+  // serving box hold us" (registration accepted / read back); not yet known → not now, and not remembered.
+  if (_boxHostsUs !== true) return null;
+  const key = pub + '|' + own;
+  if (_autoEnrolled.has(key)) return null;
+  _autoEnrolled.add(key);
+  let res = null;
+  // `auto`: only this pass may start a first list on the own box's own answer (third audit, finding 1).
+  try { res = await enrolSerial(() => enrolRelayNet({ auto: true })); } catch (e) { res = null; }
+  // RETRY UNLESS IT ACTUALLY WORKED (audit 2026-10-21, finding 7): unknown, a throw, an own box that proved
+  // nothing, or a signed list that reached no box at all — each is tried again on the next pass.
+  // (A console served by the SHARED relay proves it and has nothing to sign — that is "done", not a failure.)
+  const shared = sharedRelayKeys();
+  const proven = (res && res.proven) || [];
+  const worked = !!res && !res.unknown && proven.length > 0
+    && (res.published || (res.delivered || []).length > 0 || proven.every(x => shared.includes(x.pubkey)));
+  if (!worked) _autoEnrolled.delete(key);
+  return res;
+}
+
+// ── STEP 1: USE THE ADDRESSES THE CHURCH HAS ALREADY SIGNED ──────────────────────────────────────────────
+//
+// PLAN-relay-address-gossip-2026-10-22 §4 step 1. Measured 2026-10-22 on two phones: a relay typed into the
+// Pixel console was absent from the Oppo console of the SAME church over five reads and 3.5 minutes,
+// including a reload and a PIN unlock. Church DATA propagated fine in the same window over the shared relay.
+// It is specifically ADDRESSES that did not move, because a console's candidate list is only ever
+// ownRelay() + CANONICAL_RELAYS + what THAT DEVICE typed (relaysRaw()), and nothing else ever wrote to it.
+//
+// The church's own signed relay-net document already carries each box's url; before this it was read for the
+// gate's `netEntries` dep alone — the KEY was used to admit and the ADDRESS was thrown away, so a second
+// console could admit a box it had no way to dial. This takes the address too.
+//
+// WHY THIS DOCUMENT AND NOT `trinityone/relays` (owner decision, 2026-10-22). `trinityone/relays` is not an
+// address list, it is a replication instruction: the relay ingests it into TRUSTED_RELAYS/PEER_URLS and starts
+// pulling the church's whole corpus between peers. There is no addresses-only mode, so reading it here would
+// turn "we read from this box" into "this box holds every safeguarding record we have". relay-net is written
+// automatically, proves each box before recording it, and triggers no replication.
+//
+// FOUR THINGS THIS DELIBERATELY DOES NOT DO:
+//
+//  · IT DOES NOT WRITE `_churchRelays` — that map is the MEMBER side (src/fellowship.src.js) and nothing
+//    here goes near it. Stated because the Phase 3 audit established what happens if a doc-discovered
+//    address is put in it: `_applyChurchList` revokes anything in that map which is not in the newest
+//    kind-10002 list, and a doc-discovered address never is, so every churn produced a remove/re-add loop
+//    with a `pool.close` in it.
+//  · IT DOES NOT GATE THE BOOTSTRAP READ. `relaysRaw()` and `_oneComplete` are untouched and still
+//    unfiltered (RELAY-ADMISSION trap 3): the proof that a box is ours is a document you must read from a
+//    box you have not proved yet, so filtering that read means no phone can ever bootstrap. This only ever
+//    ADDS candidates to the list those two already see.
+//  · IT DOES NOT MATCH ON THE URL. Admission is still the key the box proves at the address dialled
+//    (RELAY-ADMISSION trap 2). The document's url is only a HINT about where to look; what decides is the
+//    KEY — the entry's pubkey against the key the box proves — and that check never looks at the url.
+//
+//    AND IT WIDENS CANDIDATES ONLY, NOT ADMISSION — provable, not hoped for (audit 2026-10-22). By the time
+//    an address reaches the gate here it has passed isSharedRelaySpelling (so it is not a shared address and
+//    the one refusal cannot bite) and it has proved a key the church's own document names (so root 3 holds
+//    by construction). The gate therefore CANNOT refuse anything on this path on this base. It is kept
+//    because it is the only thing that may answer "may this church publish here" — Phase 2 tightens
+//    `proveRelay` and this path must obey whatever it decides — and because it caches the proof, so the
+//    steward's first write after an unlock is not waiting on one. Deleting the call is caught by the tests;
+//    ignoring its ANSWER is not, and cannot be, because today there is no answer to ignore.
+//  · IT DOES NOT SIGN ANYTHING, and it never removes or re-signs an entry. Adopting an address is not
+//    consent to send the church's data somewhere new: the box is already in the church's own signed list,
+//    which is where the consent was given.
+//
+// WHAT IT COSTS, stated rather than discovered later. An adopted address joins relaysRaw(), so `_oneComplete`
+// REQs it on every read — and `_readCovers` ("every relay asked answered") is what lets enrolRelayNet
+// re-sign the church's list at all. So a box that is adopted and LATER goes offline makes those list writes
+// report `unknown` and retry until it answers or a steward removes the row. That is exactly what a typed
+// address has always done; this makes it reachable without anyone typing. Prove-before-adopt keeps a box
+// that is offline NOW out of the list entirely, and the Relays card can remove a row that has gone dead.
+//
+// THE DIALLING FORM, and this is the trap. The document's `url` arrives in four shapes, every one of them
+// measured in this tree rather than assumed:
+//   · `wss://host/relay`  — enrolRelayNet's own-origin candidate (relayNetCandidates appends '/relay'), and
+//     selfPublicRelay(), which comes from gateway.mjs cfPublicWss() = the tunnel URL with '/relay' appended.
+//     Already dialable.
+//   · `ws://host:port/relay` — the same, for a box served over plain http (a parish-office machine on a LAN).
+//     RELAY-ADMISSION trap 2 records a hardware-verified document holding exactly `ws://127.0.0.1:8000/relay`.
+//   · `wss://host`        — a steward-typed address: signRelay passes it through normRelay, which only forces
+//     a ws/wss scheme and strips trailing slashes. NO PATH.
+//   · `https://host`      — enrolRelayNet's one-time seed copies `url` verbatim out of `trinityone/relays`,
+//     and syncEnable writes `r.base` there: the relay's HTTP ORIGIN, with '/relay' already stripped off.
+//
+// Only the first two can be dialled as written. scripts/gateway.mjs destroys any websocket upgrade whose path
+// is not exactly `/relay` — `server.on('upgrade')`: `if ((req.url || '').split('?')[0] !== '/relay') {
+// socket.destroy(); return; }` — so an origin with no path connects to nothing at all. Every entry is
+// therefore reduced to its origin and given the one path the relay answers at.
+//
+// THE SCHEME IS CARRIED THROUGH, NOT FORCED. http→ws and https→wss, because those name the same box, but a
+// `ws://` entry stays `ws://`. The counter-argument, stated so nobody has to reconstruct it: resolveRelayName
+// above refuses anything but wss://, and the member side has refused it since the 2026-07-06 audit (L5). Those
+// refusals are about a DIRECTORY record — an answer from a machine nobody vouched for, which can be re-pointed
+// between two reads. This document is signed by the church's own key and says how the church dials its own
+// box; a `ws://` entry in it is the parish-office box on the LAN, and the device that wrote the entry is
+// already publishing to that same cleartext socket. Refusing it here would not close that exposure, it would
+// only make this feature inert for exactly the churches self-hosting is for. relayAddrKey excludes the scheme
+// from comparison for the same reason ("the same box is legitimately dialled wss:// through a tunnel that
+// terminates TLS and ws:// on the loopback behind it").
+//
+// AND NO LOOPBACK CHECK. It was written and then removed deliberately. A loopback entry (which only the
+// one-time seed can produce — enrolRelayNet refuses to write one) is useless on another device, but it is
+// the PROOF below that refuses it, not a string test: nothing answers, or what answers proves a key this
+// church never signed, and either way the address is never adopted. A string test in front of that would
+// add no safety and would make a loopback address un-adoptable even on the one machine where it is right.
+function _netDocDialUrl(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  s = s.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+  if (!/^wss?:\/\//i.test(s)) return '';
+  s = s.replace(/\/+$/, '').replace(/\/relay$/i, '').replace(/\/+$/, '');
+  // ORIGIN ONLY: host, optional port, nothing else. An entry with a path still on it (a reverse-proxy mount,
+  // a typo), a query, a fragment or userinfo cannot be dialled per the upgrade rule above, so it is dropped
+  // rather than guessed at — which is the whole point of doing this conversion carefully: an address that can
+  // never connect, once in the candidate list, costs every console one dial on every read for ever.
+  if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return '';
+  return s + '/relay';
+}
+// IS THIS ADDRESS ALREADY A CANDIDATE, UNDER ANY SPELLING THIS CONSOLE USES? `addRelay` refuses only an exact
+// repeat of a string already in extraRelays(), so the three normalisations that disagree at the edges are
+// checked here as well — relayAddrKey (scheme-blind; host/port/path) and normalizeURL (the pool's and every
+// read's; also collapses //). Without this an address that differs from one already listed by a trailing
+// slash, a default port or a scheme would be adopted as a second row for the same box on every unlock.
+// WHICH BOX IS THIS ADDRESS, with the dialling path taken off (audit 2026-10-22, finding 2).
+//
+// The three normalisations this console uses all keep the PATH, and the path is the one difference this
+// merge creates. Measured against the real normalizeURL: `wss://host/relay` normalises to
+// `wss://host/relay` while `wss://host` normalises to `wss://host/` — they DIFFER, under relayAddrKey too.
+// So a steward who typed `wss://host` on this very device (signRelay only runs a typed address through
+// normRelay, which adds no path) had a row that this merge did not recognise as the same box: it added
+// `wss://host/relay` beside it and the console then held two rows for one relay, one of which can never
+// connect at all. Which is the first half of the jam finding 1 is about.
+//
+// Scheme-blind, like relayAddrKey and for its reason (one box is legitimately dialled wss:// through a
+// tunnel and ws:// on the loopback behind it). Only a trailing `/relay` is taken off, so a relay genuinely
+// mounted at another path — `wss://host/foo` — is still its own box and is not collapsed onto this one.
+function _netDocBoxKey(u) {
+  const bare = String(u || '').trim().replace(/\/+$/, '').replace(/\/relay$/i, '').replace(/\/+$/, '');
+  if (!bare) return '';
+  try { const k = relayAddrKey(bare); if (k) return k; } catch (e) {}
+  return bare.toLowerCase();
+}
+function _alreadyACandidate(u) {
+  const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
+  const a = (x) => { try { return relayAddrKey(x); } catch (e) { return ''; } };
+  const vn = n(u), va = a(u), vb = _netDocBoxKey(u);
+  let list = []; try { list = relaysRaw(); } catch (e) { list = []; }
+  for (const r of list) {
+    if (!r) continue;
+    if (r === u) return true;
+    if (vn && n(r) === vn) return true;
+    if (va && a(r) === va) return true;
+    // …and the same BOX under a different path, which is what the three above miss.
+    if (vb && _netDocBoxKey(r) === vb) return true;
+  }
+  return false;
+}
+// THE ROW TO REPLACE, if this console already lists this box at an address that cannot be dialled.
+//
+// Returns a row of extraRelays() only — never ownRelay() and never a canonical address, because those are
+// not in that store and are not this merge's to rewrite (the two spelling refusals run before this anyway).
+// '' when the box is not listed, or is listed at the dialling address already.
+//
+// Replacing rather than deduping is the choice here, and it is the better one for the church: the row being
+// replaced is the SAME box at an address the relay refuses to upgrade (gateway.mjs destroys any upgrade
+// whose path is not exactly /relay), so deduping would leave the console holding one dead row and no live
+// one — exactly the position it was in before this feature existed. The church's own signed document is the
+// authority on where its box answers, and refreshNamedRelays already does this same swap, for the same
+// reason, when a tunnel address moves. The new address is proved first; nothing is rewritten on the strength
+// of the document alone.
+//
+// ONLY A ROW THAT IS NOT ITSELF A DIALLING ADDRESS, and this was narrowed after a test refuted the wider
+// version. The first draft replaced any row of the same box that spelled it differently, which swapped a
+// listed `wss://host/relay` for a document's `ws://host/relay` — a cleartext DOWNGRADE of a working row, on
+// every unlock, because relayAddrKey treats the two as one address. So the ROW must be one the relay cannot
+// upgrade at all: a path that is not `/relay`. That row-side test is the one that decides, and sabotaging it
+// turns two tests red. A scheme difference between two dialling forms is left to `_alreadyACandidate`, which
+// already refuses it.
+//
+// The `!_hasRelayPath(u)` half below is a CONTRACT check on the argument, not a second guard: this function's
+// one caller always passes an address `_netDocDialUrl` produced, and that always ends in `/relay`, so
+// sabotaging that half alone changes nothing and no test can catch it. It is kept so a future second caller
+// cannot quietly ask this function to replace a working row with a path-less one.
+const _hasRelayPath = (x) => /\/relay\/*$/i.test(String(x || '').trim());
+function _staleBoxSpelling(u) {
+  const want = _netDocBoxKey(u);
+  if (!want || !_hasRelayPath(u)) return '';
+  let list = []; try { list = extraRelays(); } catch (e) { return ''; }
+  if (list.includes(u)) return '';
+  for (const r of list) { if (r && !_hasRelayPath(r) && _netDocBoxKey(r) === want) return r; }
+  return '';
+}
+// HOW FAR THIS PATH MAY GROW THE CANDIDATE STORE. Chosen here, 2026-10-22, and the number is not arrived at
+// from anywhere else: the plan cited a member-side `CHURCH_BOXES_MAX = 8` and there is no such constant in
+// this tree (`_saveChurchBoxes` in src/fellowship.src.js is uncapped), so this is a new bound, not a
+// matching one. Eight extra addresses is far more than any real church runs and it is a hard ceiling on the
+// cost of the thing that WILL churn: a box behind a free tunnel gets a new address every restart, each one
+// is a genuine, provable address of a genuine box, and without a bound every console would accumulate them
+// for ever and spend one dial per dead address per read. Bounding extraRelays() as a whole rather than only
+// the adopted rows means a steward who has typed eight addresses gets nothing adopted — the conservative
+// side, and their own eight are addresses a person chose. Following the box's NAME instead of its address is
+// the real answer to churn and is step 3 of the plan, not built here.
+const NETDOC_ADOPT_MAX = 8;
+// WHICH ROWS THIS PATH PUT THERE — and why a row nobody typed has to be able to leave again by itself
+// (audit 2026-10-22, finding 1, HIGH).
+//
+// THE JAM, measured in the code by the auditor and confirmed here. `unenrolRelayNet` refuses to change the
+// church's signed list unless every relay it asked answered — `if (!_readCovers(read, u)) return { removed:
+// false, unknown: true }` — and app/stew-dashboard.jsx:dropOutcome turns that into "… is still connected.
+// Remove it again once your relays are answering. If a relay you added is gone for good, remove it first."
+// With TWO dead rows that advice is circular: removing A waits on B and removing B waits on A, so neither
+// can go and no change to the church's relay list is possible again, ever.
+//
+// Before this feature that needed a steward to type two addresses that then died. This feature makes it
+// arrive on its own: `enrolRelayNet` publishes the box's CURRENT public address (selfPublicRelay, a
+// Cloudflare quick-tunnel hostname that changes on every restart), and the box's own loopback-served console
+// adopts it, because isOwnRelaySpelling compares against the LOOPBACK spelling and a tunnel hostname does
+// not match it. Restart one: one row. Restart two: one dead, one live. Restart three: two dead, wedged — and
+// at NETDOC_ADOPT_MAX rows the console stops following its own box as well.
+//
+// THE REMEDY CHOSEN, and why it is not the other two the audit offered. A row this path added is DERIVED
+// STATE: the church's document still names that box, so dropping the row locally loses nothing and the next
+// unlock adopts it again the moment it answers. So the row retires itself when it stops answering, and that
+// drop touches `extraRelays()` ONLY — nothing is unsigned, nothing is published, and `_readCovers` is never
+// consulted, so the retire can never be blocked by the jam it exists to clear.
+//   · NOT "make adopted rows non-blocking for `_readCovers`": that guard is what stops a stale copy of the
+//     church's list being re-signed over the real one, and an adopted box is the church's OWN box — the one
+//     most likely to be holding the newest list. Excusing it from the read is the fail-open mistake in the
+//     one place this file cannot afford it.
+//   · NOT "skip every unreachable row in `unenrolRelayNet`": that is the same fail-open, in the removal
+//     path, and it changes shared machinery that hand-typed rows depend on. It would also fix the
+//     PRE-EXISTING jam for typed rows, which is worth doing — on its own branch, with its own test and its
+//     own caller list. It is not this change's to make.
+//
+// THE TAG CANNOT BE FORGED BY THE DOCUMENT. It is a list of addresses in this console's own localStorage,
+// written only by adoptNetDocAddresses after the address proved the key the church signed. A document can
+// influence WHICH of its own proved boxes get tagged, and tagging is only ever permission to drop a local
+// row that the document itself will restore — so there is nothing to gain by it.
+const ADOPTED_LS = 'trinityone.steward.adopted-relays';
+function adoptedRelays() {
+  try { const a = JSON.parse(lsGet(ADOPTED_LS) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; } catch { return []; }
+}
+function setAdoptedRelays(list) { try { lsSet(ADOPTED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))])); } catch (e) {} }
+function _tagAdopted(u) { if (u) setAdoptedRelays([...adoptedRelays(), u]); }
+// WHAT THE STEWARD HAS ALREADY TAKEN OUT — so a Remove is not undone on the next unlock (audit of
+// a13a9934, finding 3).
+//
+// THE DEFECT. app/stew-dashboard.jsx:dropOutcome returns `drop: true` — take the row off this console — in
+// two branches where the entry STAYS in the church's signed document, so the merge found it there again and
+// put it straight back:
+//   · `ownBox` (unenrolRelayNet's own-box refusal): the removed address proved the OWN box's key at a
+//     DIFFERENT address, which is the church's own box listed a second time under its public tunnel address
+//     or a directory name. The steward removes that duplicate; it returned on the next unlock, for ever.
+//   · `skipped` (a delegated or network view): "Only your church's own console can take it out of the
+//     church's relay list." Off this console, still in the document, back on the next own-church unlock.
+// b759bfa4's message said the merge is "idempotent, so every later unlock is a no-op". That was true only
+// while nothing removed a row. Nothing anywhere remembered a removal, and no test covered one.
+//
+// THE PRECEDENT, followed deliberately: `removeRelay` already forgets the name→url binding so the
+// named-relay auto-follow cannot re-add what was just removed. This is the same contract for adoption, and
+// it is recorded in the same place — `removeRelay` is the ONE writer that takes a row out of extraRelays(),
+// and it has exactly one product caller: app/stew-dashboard.jsx's dropRelay, inside `if (out.drop)`. So
+// every removal the screen performs declines, and nothing else can.
+//
+// BY ADDRESS, NOT BY BOX — and the reasoning here was CORRECTED after sabotage refuted the first version of
+// it, so what follows is measured rather than argued.
+//
+// WHAT `_netDocBoxKey` ACTUALLY CONFLATES, measured: it is `relayAddrKey` of the address with a trailing
+// `/relay` taken off, and relayAddrKey KEEPS host and port. So it collapses only the SCHEME and the PATH of
+// one host:port — `ws://h:7777/relay`, `wss://h:7777/relay` and `ws://h:7777` are one key — and it does NOT
+// collapse two hostnames. The first draft of this comment claimed a box key would be dangerous because the
+// `ownBox` case is "the same box at a different address" and because a tunnelled box gets a new address on
+// every restart. Both are different HOSTNAMES, so a box key would not have caught either, and that argument
+// was simply wrong. Deleted rather than softened.
+//
+// SO WHY ADDRESS. What a box key would additionally decline is the same host:port under another scheme, and
+// that is a real and silent loss: a church that moves its box from plain `ws://` on the LAN to `wss://`
+// behind a TLS tunnel on the same host and port would find the better address refused because the old one
+// had been removed. The PATH case needs no help from a decline at all — FIX 2 (a13a9934) upgrades a
+// path-less row in place rather than leaving one for the steward to remove. And a box key buys nothing the
+// address rule misses, because the cases it would have to catch have different hostnames anyway.
+//
+// So: one address, compared under normalizeURL as well as literally, so a cosmetic re-spelling (a trailing
+// slash, a default port) cannot walk around the decline. A consequence, stated rather than discovered:
+// removing the path-less spelling of a box does NOT decline its dialling address — they are different
+// addresses and the dialling one is what the church's document actually names.
+//
+// HOW IT CLEARS: the steward adds that address again, by hand or by Connect. `addRelay` is the only route
+// in and it clears the decline on a successful add, so changing one's mind costs exactly the action that
+// expresses it. Nothing else clears it — in particular the church re-signing the same address does not,
+// because a removal on THIS console is this console's decision and the other console still has the row.
+//
+// A RETIRE MUST NEVER WRITE ONE, and the separation is structural rather than promised:
+// retireDeadAdoptedRows writes `extraRelays()` through `_writeExtraRelays` and never calls `removeRelay`,
+// which is the only function that declines. If a retire declined, a box switched off for an afternoon would
+// be shut out for good and the feature would die silently for that church.
+//
+// A CRAFTED BACKUP MUST NOT BE ABLE TO FORGE ONE. `app/backup.jsx:STEWARD_PREFIXES` is the bare prefix
+// `trinityone.steward`, and import is filtered by that same allowlist — so any new `trinityone.steward.*`
+// key travels in every steward backup and is writable by an untrusted file. A forged decline would silently
+// stop a church's console adopting its own box; a forged ADOPTED tag would let the retire pass drop a row
+// the steward typed. Both are now named in `app/backup.jsx:ROUTING_KEYS`, which is the existing mechanism
+// for exactly this ("a restore should recover a church, not a routing table") and excludes them from the
+// export AND the import. Nothing is lost: both stores are rebuilt from the church's own signed document.
+const DECLINED_LS = 'trinityone.steward.declined-relays';
+// Bounded like every other ring in this file (NAME_RING_MAX, GROUP_RING_MAX): newest first, so a steward who
+// keeps removing a rotating tunnel address cannot grow this without end. 32 is far past any real church's
+// number of removals and still small enough to compare linearly on every unlock.
+const DECLINED_MAX = 32;
+function declinedRelays() {
+  try { const a = JSON.parse(lsGet(DECLINED_LS) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; } catch { return []; }
+}
+function setDeclinedRelays(list) {
+  try { lsSet(DECLINED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))].slice(0, DECLINED_MAX))); } catch (e) {}
+}
+const _declineKey = (u) => { const v = String(u || '').trim(); if (!v) return ''; try { return normalizeURL(v) || v.toLowerCase(); } catch (e) { return v.toLowerCase(); } };
+function _isDeclined(u) {
+  const k = _declineKey(u);
+  if (!k) return false;
+  return declinedRelays().some(r => r === u || _declineKey(r) === k);
+}
+function declineRelay(u) { const v = String(u || '').trim(); if (v) setDeclinedRelays([v, ...declinedRelays().filter(r => _declineKey(r) !== _declineKey(v))]); }
+function undeclineRelay(u) { const k = _declineKey(u); if (k) setDeclinedRelays(declinedRelays().filter(r => r !== u && _declineKey(r) !== k)); }
+// HOW MANY ANSWERED FAILURES RETIRE A ROW, where the count lives and what clears it (audit of b057bfd0,
+// FIX 1).
+//
+// THE DEFECT. The first version of retireDeadAdoptedRows called `verifyRelayIdentity` -- the WRAPPER, which
+// returns the proof and throws away the one bit that matters here. src/relay-identity.src.js documents it:
+// `reached` is "true when the HTTP request got a response (even a non-200 or unparseable one), false when
+// the host timed out or the network was down", and it is what "lets adoptInviteRelays retry an unreachable
+// box instead of refusing it". That is exactly this pass's question, and it was discarded. So ONE ~6s
+// timeout retired the row, and the only thing between a church box switched off for an afternoon and losing
+// its address on every console was adoptNetDocAddresses' `entries.length` check -- which is a GLOBAL
+// connectivity signal (the shared pool answered) and says nothing whatever about whether the church's own
+// box is reachable from this phone. RELAY-ADMISSION's "a relay off for an afternoon must not be
+// un-admitted" was therefore reading, here, as "downtime un-CANDIDATES".
+//
+// THE RULE NOW, per row, per pass:
+//   * answered WITH a relay key        -> keep the row, and forget any strike it had.
+//   * nothing answered (reached false) -> keep the row, strike count UNCHANGED. A box switched off, a flat
+//     phone, a captive portal and a hostname that has stopped resolving are ONE observation here, and the
+//     conservative reading is the only safe one: this pass may not un-candidate a box for being off.
+//   * answered WITHOUT a relay key     -> one strike. The SECOND consecutive one retires the row.
+//
+// AND THE JAM STILL CLEARS, which is why the pass exists, and this is MEASURED rather than argued: the rows
+// that wedge it are Cloudflare quick-tunnel hostnames (enrolRelayNet publishes selfPublicRelay, which
+// changes on every restart of the tunnel), and a quick-tunnel hostname whose tunnel is gone does NOT stop
+// resolving -- it still points at Cloudflare, which answers HTTP 530 at it. So `reached` is TRUE for
+// precisely the rows that cause the jam: each unlock scores a strike and the second one retires them.
+//
+// WHAT THIS GIVES UP, stated rather than left to be discovered: a row whose address stops resolving
+// altogether -- a LAN address of a box that has gone, a tunnel name whose DNS record was deleted -- is now
+// never retired by this pass, because every probe of it reads `reached: false` and is indistinguishable
+// from the box being off. Such a row can still make `_readCovers` false, and the escape is the steward's
+// own Remove, which `removeRelay` now remembers (b057bfd0) so it stays removed. That is the trade
+// RELAY-ADMISSION asks for: a church that switches its box off overnight must not lose it.
+//
+// WHERE THE COUNT LIVES: one localStorage object, address -> small integer, keyed by `_declineKey` -- the
+// same normalizeURL-or-lowercase key the decline uses, so a cosmetic re-spelling cannot reset it.
+// WHAT CLEARS IT: (a) the address answering with its key, on any pass; (b) the row being retired; (c) the
+// row leaving extraRelays() or the adopted tag store; (d) there being no adopted rows at all. (b), (c) and
+// (d) are one mechanism: every pass REWRITES the object from the rows it actually considered, so nothing
+// else can be in it. It is therefore bounded by NETDOC_ADOPT_MAX without a cap of its own, unlike
+// DECLINED_MAX -- a decline outlives its row and this does not.
+// AND IT IS A ROUTING INSTRUCTION, NOT DATA, so it is named in app/backup.jsx:ROUTING_KEYS beside the other
+// two: a `trinityone.steward.*` key travels in every steward backup and is writable by an untrusted file,
+// and a forged strike of 1 would make the next answered failure retire a row on the FIRST observation
+// instead of the second -- which is the guard above, undone by a file.
+const DEAD_STRIKES_LS = 'trinityone.steward.dead-relay-strikes';
+const DEAD_STRIKES_MAX = 2;
+function deadStrikes() {
+  try { const o = JSON.parse(lsGet(DEAD_STRIKES_LS) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch { return {}; }
+}
+function setDeadStrikes(map) { try { lsSet(DEAD_STRIKES_LS, JSON.stringify(map || {})); } catch (e) {} }
+// Drop every row this path added that has TWICE answered at its own address without proving a relay key, in
+// one write. Both words are load-bearing and neither was true before: see DEAD_STRIKES_LS above for why one
+// timeout is not a death and why the jam this pass exists to clear is still cleared.
+//
+// ONLY CALLED AFTER A READ THAT ACTUALLY RETURNED THE CHURCH'S ENTRIES, which is this console's cheapest
+// proof that it has a network at all. Without that precondition a phone with no signal would retire every
+// adopted row on every unlock — harmless, because the document restores them, but it would churn the Relays
+// card and spend a write for nothing.
+//
+// "No longer answers" is the identity proof returning nothing, not the gate refusing it. A box that answers
+// with a key the church has since un-signed keeps its row and loses only its admission, which is the gate's
+// job and not this one's; a box that answers nothing is the one that wedges the read.
+async function retireDeadAdoptedRows() {
+  const tagged = adoptedRelays();
+  // No adopted rows at all: nothing here can ever retire, so there is nothing for a strike to describe.
+  if (!tagged.length) { if (Object.keys(deadStrikes()).length) setDeadStrikes({}); return []; }
+  let cur = []; try { cur = extraRelays(); } catch (e) { return []; }
+  // Forget a tag whose row a steward has already removed, so the store cannot grow without bound.
+  const listed = tagged.filter(u => cur.includes(u));
+  const was = deadStrikes();
+  const strikes = {};
+  const retired = [];
+  for (const u of listed) {
+    const k = _declineKey(u) || u;
+    let proved = '', reached = false;
+    // THE DETAILED CALL, NOT THE WRAPPER (FIX 1). `verifyRelayIdentity` hands back the proof alone and
+    // discards `reached`, which is the only thing that separates "this address is not our box any more"
+    // from "nothing answered just now". src/fellowship.src.js:adoptInviteRelays reads it for the same
+    // reason, and the two are now the same shape of decision on the two surfaces.
+    try {
+      const d = await verifyRelayIdentityDetailed(u);
+      proved = String((d && d.proof && d.proof.relayPub) || '').toLowerCase();
+      reached = !!(d && d.reached);
+    } catch (e) { proved = ''; reached = false; }
+    if (/^[0-9a-f]{64}$/.test(proved)) continue;                      // still our box: any strike is forgotten
+    if (!reached) { const n = Number(was[k]) || 0; if (n > 0) strikes[k] = n; continue; }   // nothing answered
+    const n = (Number(was[k]) || 0) + 1;
+    if (n >= DEAD_STRIKES_MAX) retired.push(u); else strikes[k] = n;  // one answered failure is not enough
+  }
+  // EVERY WRITE FROM A FRESH READ (audit of b057bfd0, FIX 2). `cur` and `tagged` were read BEFORE N serial
+  // /relay-identity round trips of up to 6.5s each. Inside that window the steward may have pressed Add on
+  // the Relays card, refreshNamedRelays' 90s swap may have landed, or another pass may have tagged a row.
+  // Writing the pre-probe list back DELETED whatever arrived -- and for Add that is a relay the steward had
+  // just added, which signRelay may already have put into the church's SIGNED document, so the console
+  // stops dialling a relay its own document names and nothing on the screen says why. The swap branch in
+  // adoptNetDocAddresses re-reads for exactly this reason ("the proofs above took two round trips"); this
+  // is the same hazard, in the branch that was missed. The TAG store is re-read too: `tagged` is just as
+  // stale, and writing it back would drop the provenance of a row another pass had adopted in the window,
+  // leaving a row nobody typed that can never retire itself.
+  if (retired.length) {
+    let live = cur; try { live = extraRelays(); } catch (e) { live = cur; }
+    _writeExtraRelays(live.filter(u => !retired.includes(u)));
+  }
+  let tags = tagged; try { tags = adoptedRelays(); } catch (e) { tags = tagged; }
+  let rows = cur; try { rows = extraRelays(); } catch (e) { rows = cur; }
+  const keep = tags.filter(u => !retired.includes(u) && rows.includes(u));
+  if (keep.length !== tags.length) setAdoptedRelays(keep);
+  // THE PRUNE, and it is this line rather than a cap: the object is rewritten from the rows this pass
+  // actually considered, so a strike for a row that has been retired, removed or untagged simply is not
+  // carried over. Written only when it changed, so an unlock with nothing to say costs no write.
+  const kn = Object.keys(strikes), kw = Object.keys(was);
+  if (kn.length !== kw.length || kn.some(k => Number(was[k]) !== Number(strikes[k]))) setDeadStrikes(strikes);
+  return retired;
+}
+// THE MERGE. Fire-and-forget from setKey (see there); never awaited, so a slow or dead box cannot delay an
+// unlock, and it is safe to run twice because every step is idempotent.
+//
+// ONLY THIS CONSOLE'S OWN CHURCH. `pub === churchPub` is the whole test and it decides before anything else
+// runs: in delegated mode `pub` is the church being helped while `churchPub` is this console's own, and in a
+// network view `pub` is the network's key (`_viewingNetwork()` is exactly `pub !== churchPub && !actingChurch`).
+// extraRelays() is ONE store for the whole device, not per church, so adopting another church's box here
+// would put an address on this church's dial list too. Narrower than it could be — a delegated steward gets
+// no benefit from this — and that is deliberate: the measured failure is one church's own key on two devices.
+async function adoptNetDocAddresses() {
+  if (!pub || pub !== churchPub) return [];
+  const pub0 = pub;
+  let entries = [];
+  try { entries = await relayNetEntries(pub0); } catch (e) { return []; }
+  // An empty read is "I do not know yet" as often as it is "the church has signed nothing", and the
+  // difference does not matter here: this path only ever adds, so it simply does nothing and the next
+  // unlock asks again. Nothing is removed or re-signed on a failed read.
+  if (pub !== pub0) return [];
+  // THE ROWS THIS PATH LEFT BEHIND LAST TIME, before adding any more (finding 1). A non-empty read is the
+  // precondition — see retireDeadAdoptedRows — and this is the only place that calls it.
+  if (!entries.length) return [];
+  try { await retireDeadAdoptedRows(); } catch (e) {}
+  if (pub !== pub0) return [];
+  const added = [];
+  for (const e of entries) {
+    const u = _netDocDialUrl(e && e.url);
+    if (!u) continue;
+    // THE STEWARD ALREADY TOOK THIS ADDRESS OUT. Asked before anything else, so a declined address costs no
+    // identity probe on every unlock for ever, and so the replace branch below cannot put it back either.
+    if (_isDeclined(u)) continue;
+    // IS THIS BOX ALREADY LISTED AT AN ADDRESS THAT CANNOT BE DIALLED? Then this is a replacement, not an
+    // addition: it does not grow the list, so the cap does not apply to it (finding 2).
+    const stale = _staleBoxSpelling(u);
+    if (!stale) {
+      let have = 0; try { have = extraRelays().length; } catch (err) { have = NETDOC_ADOPT_MAX; }
+      if (have >= NETDOC_ADOPT_MAX) break;
+    }
+    // THE SAME REFUSALS EVERY OTHER ADD ROUTE MAKES, and asked here as well as inside addRelay so the
+    // proof below is not spent on an address that would be refused anyway. isOwnRelaySpelling: this
+    // console's own box is already relaysRaw()[0]. isSharedRelaySpelling: the shared pool is appended
+    // unconditionally and is admitted on its own pin, so a second spelling of it is only a second dial.
+    if (isOwnRelaySpelling(u) || isSharedRelaySpelling(u)) continue;
+    if (!stale && _alreadyACandidate(u)) continue;
+    // THE BOX AT THAT ADDRESS MUST BE THE BOX THE ENTRY NAMES, and this check was added after a test
+    // refuted the version without it. On this base `proveRelay` admits on the possession proof alone — the
+    // three roots are diagnostics (RELAY-ADMISSION, "the invariant") — so a church document naming key X at
+    // address U, with somebody ELSE'S TrinityOne relay now answering at U, would have been adopted and then
+    // admitted: a recycled tunnel hostname, a replaced machine, a DNS move. The church signed a KEY, so the
+    // key is what is checked (RELAY-ADMISSION trap 2: never the URL). The entry's url decides nothing; it
+    // only says where to look.
+    //
+    // It also makes this path indifferent to which admission rule the gate is running: Phase 2 tightens
+    // `proveRelay` so a church-route address needs root 3 anyway, and this check neither needs nor
+    // contradicts that.
+    let proved = '';
+    try { const pr = await verifyRelayIdentity(u); proved = String((pr && pr.relayPub) || '').toLowerCase(); } catch (err) { proved = ''; }
+    if (!proved || proved !== String((e && e.pubkey) || '').toLowerCase()) continue;
+    // AND THEN THROUGH THE GATE, like every other address that arrived from somewhere remote
+    // (admitRemoteRelay, C5). Not a second opinion on the line above — a DIFFERENT question, and the gate is
+    // the only thing that may answer it: "may this church publish here". It also caches the proof, so the
+    // steward's first write after an unlock is not waiting on one. An address the gate will not admit must
+    // not join a list that `_oneComplete` REQs on every read: that is one dead dial per read for ever, which
+    // is the "gossiping junk" risk the plan names.
+    if (!(await admitRemoteRelay(u))) continue;
+    if (pub !== pub0) break;                 // the console changed church while the proofs were out
+    if (stale) {
+      // THE SWAP, through the one writer refreshNamedRelays uses for the same job. Re-read the store rather
+      // than reusing the list the check was made against: the proofs above took two round trips.
+      let now = []; try { now = extraRelays(); } catch (err) { now = []; }
+      if (!now.includes(stale) || now.includes(u)) continue;
+      _writeExtraRelays(now.map(r => (r === stale ? u : r)));
+      setAdoptedRelays([...adoptedRelays().filter(r => r !== stale), u]);
+      added.push(u);
+      continue;
+    }
+    if (_alreadyACandidate(u)) continue;     // something else added it while we waited
+    let ok = false; try { ok = !!window.Steward.addRelay(u); } catch (err) { ok = false; }
+    if (ok) { _tagAdopted(u); added.push(u); }
+  }
+  return added;
 }
 
 // The predicate. See src/relay-net.src.js for the three roots and why none of them is us.
@@ -5888,35 +6687,30 @@ window.Steward = {
   // and still reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md).
   // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
   isNetworkRelay,
-  // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
-  // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
-  // deadlock rule above enrolRelayNet.
+  // What the church has actually signed — [{pubkey, alwaysOn, url, name?}] — and who this console can PROVE.
+  // relayNetCandidates() is the RAW census (location, plus a relay the steward has just consented to), never
+  // relays(): see the deadlock rule above enrolRelayNet.
   relayNet: relayNetEntries,
   relayNetCandidates,
   // Signs the boxes this console can prove into the church's own membership document. Additive: it never
   // drops an entry that is merely unreachable.
   //
-  // STILL NOT CALLED AUTOMATICALLY ANYWHERE — and the sentence that used to be here, calling that a
-  // "DEPLOYMENT BLOCKER … its members would find no relay they may publish to", IS FALSE. Audit item 17,
-  // 2026-09-14, checked against the gate rather than against this comment.
+  // CALLED AUTOMATICALLY since self-hosting P1 (2026-10-21): autoEnrolRelayNet, from the console's KeyDistributor
+  // effect, signs the box serving this console; signRelay signs one relay the steward consented to; unsignRelay
+  // takes one out. All three are queued through enrolSerial so two signings never overlap.
   //
-  // WHAT proveRelay ACTUALLY DOES (src/relay-net.src.js): after the one refusal for our own shipped
-  // addresses, it tries canonical pin → same origin → the church's relay-net document → and then admits
-  // anything that proved it holds a relay identity key at all, as `root: 'software'`. A self-hosting
-  // church's box reaches that last line and is admitted with NO document in existence. So nobody is cut off,
-  // and this function is a loose end, not a blocker.
-  //
-  // TWO THINGS THE NEXT PERSON TO WIRE IT UP NEEDS, because neither is visible from the call site:
-  //  · ROOT 3 IS INERT IN PRACTICE. No console authors a relay-net document today, so the `church` root
-  //    matches nothing and every self-hosted box is admitted one line lower on proof alone. Turning this on
-  //    does not "enable" self-hosting; it narrows nothing and adds a signed record.
-  //  · `9ec4310`'s GUARD IS UNEXERCISED. That commit fixed a doc-wipe — a read nobody answered was reported
-  //    as an empty church, the document was rebuilt from scratch with `created_at: now()`, and newest-wins
-  //    UN-ADMITTED every box the church had signed, on every member's phone. The `!complete → unknown:true`
-  //    return below is that fix, and with zero callers it has never run outside its test. It is the first
-  //    thing to exercise on a real slow link when this is wired in, not the last.
-  // Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own.
-  enrolRelayNet,
+  // WHAT THIS DOES NOT CHANGE YET: which relays receive a church's data. proveRelay still admits any box that
+  // proves it runs our software (`root: 'software'`, src/relay-net.src.js); narrowing that to the boxes this
+  // document names is self-hosting Phase 2 (reference/DESIGN-SELFHOSTING-2026-10-21.md).
+  // Queued like signRelay, and never `auto` — that exception belongs to the automatic pass alone (third audit,
+  // finding 8). No screen calls it; scripts and the console's devtools do.
+  enrolRelayNet: (opts) => enrolSerial(() => enrolRelayNet({ extra: (opts && opts.extra) || undefined })),
+  autoEnrolRelayNet,
+  // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
+  // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.
+  signRelay(url) { const u = normRelay(url); return u ? enrolSerial(() => enrolRelayNet({ extra: [u] })) : Promise.resolve(null); },
+  // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
+  unsignRelay(url) { return enrolSerial(() => unenrolRelayNet(url)); },
 
   // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
   // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
@@ -13091,11 +13885,24 @@ window.Steward = {
     } catch (e) { return { ok: false, error: (e && e.message) || 'network' }; }
   },
   // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
+  // IS THIS ADDRESS ALREADY IN THE RELAY PANEL? → its normalised form, or ''. The Add-a-relay card asks, so a
+  // steward who connects a relay that is already listed (added before consent existed, or offline the first
+  // time) still gets it signed rather than a "please enter an address" error (audit 2026-10-21, finding 1).
+  knownRelay(input) { const url = normRelay(input); return (url && extraRelays().includes(url)) ? url : ''; },
+  // Asked by every Add path before the consent line, so the steward is told why (ninth audit).
+  isSharedRelaySpelling(input) { return isSharedRelaySpelling(input) || isSharedRelaySpelling(normRelay(input)); },
+  isOwnRelaySpelling(input) { return isOwnRelaySpelling(input) || isOwnRelaySpelling(normRelay(input)); },
   addRelay(input) {
     const url = normRelay(input);
-    if (!url || url === ownRelay()) return false;
+    if (!url || url === ownRelay() || isOwnRelaySpelling(input) || isOwnRelaySpelling(url)) return false;
+    // NOT A SECOND SPELLING OF A SHARED RELAY (ninth audit): refused here, the one writer every Add path goes through.
+    if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
     const cur = extraRelays(); if (cur.includes(url)) return false;
     lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
+    // A STEWARD CHANGING THEIR MIND IS THE WAY A DECLINE CLEARS, and this is the only route in, so it is the
+    // only place it can clear. Without it an address removed once could never be adopted again, and a
+    // steward who re-added it by hand would be the only thing holding it in the list.
+    undeclineRelay(url);
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return url;
   },
@@ -13112,6 +13919,10 @@ window.Steward = {
   //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
   canRemoveRelay(url) {
     if (!url) return false;
+    // ONLY THE SHIPPED ROWS (ninth audit). Every row the console added is removable, whatever it spells: hiding Remove
+    // on a "shared-looking" added row locked dead spellings in (ws://…, which the read waits for separately) and
+    // froze the church's list. Shared spellings are refused at Add instead (isSharedRelaySpelling), and one already
+    // in an older install's list can be removed without the read skipping the real shared relay (_readCovers).
     if (CANONICAL_RELAYS.includes(url)) return false;
     try { if (url === ownRelay()) return false; } catch (e) {}
     return true;
@@ -13121,6 +13932,11 @@ window.Steward = {
     lsSet(RELAYS_LS, JSON.stringify(next));
     // also forget any name that pointed here, so auto-follow doesn't re-add it
     setNamedRelays(getNamedRelays().filter(e => e.url !== url));
+    // …and remember the removal, so the church's signed document does not put it back on the next unlock
+    // (see declineRelay). Here, and not in dropOutcome, because this is the one writer that takes a row out
+    // and dropOutcome's only job is to decide whether to call it.
+    declineRelay(url);
+    setAdoptedRelays(adoptedRelays().filter(r => r !== url));
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return true;
   },
@@ -13151,6 +13967,19 @@ window.Steward = {
   // Auto-find + adopt up to n open relays (default 2 = primary + backup, different operators), then re-publish
   // the church's NIP-65 list so members discover them. Additive: only adds relays not already configured.
   // Returns the picked offers (or [] when nothing is open — e.g. the pilot, where it's a safe no-op).
+  // AUTO-FIND IN TWO STEPS (owner decision A, 2026-10-21): find the relays first, so the consent line can NAME
+  // them, then connect exactly those on "Yes, connect". findRelays adds nothing; connectFoundRelays adds the
+  // given picks and republishes the relay list (signing each is the card's job, through signRelay).
+  async findRelays(n) {
+    const offers = await discoverRelayOffers(null, null);
+    const have = new Set(relays());
+    return pickRelays(offers.filter(o => !have.has(o.url)), n || 2);
+  },
+  async connectFoundRelays(picks) {
+    for (const p of (picks || [])) { try { window.Steward.addRelay(p.url); } catch (e) {} }
+    if ((picks || []).length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
+    return picks || [];
+  },
   async autoPickRelays(n) {
     const offers = await discoverRelayOffers(null, null);
     const have = new Set(relays());

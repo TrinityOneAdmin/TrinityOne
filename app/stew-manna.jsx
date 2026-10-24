@@ -390,7 +390,7 @@ function MannaOpenForm({ funds, M, onClose }) {
     <MnPanel pad={20} style={{ marginBottom: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
         <MnLabel>Open a need</MnLabel>
-        <button onClick={onClose} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name="x" size={20} /></button>
+        <button onClick={onClose} title="Close" style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name="x" size={20} /></button>
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         {['mercy', 'covenant'].map(t => (

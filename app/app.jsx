@@ -136,7 +136,10 @@ function _applyBlockedReset(cpHex, d) {
   const next = (remaining.find(c => c.npub) || remaining[0] || {}).id || null;
   d.setActiveChurch(next); d.lsSet('trinityone.activeChurch', next);
   if (!(remaining.find(c => c.id === next) || {}).npub) d.openFollow();   // same test as promptFollowChurch
-  d.toast('Your church has removed your access, so this phone no longer follows it.');
+  // { error: true } so this lingers long enough to READ (6s, not the 1.9s tick) and draws a shield, not a
+  // green check — losing access is not a success. The sentence carries no failure word, so toastKind() would
+  // otherwise class it 'ok'. Owner, 2026-10-14: the reset message flashed by before it could be read.
+  d.toast('Your church has removed your access, so this phone no longer follows it.', { error: true });
   try { F.ackAmBlocked(); } catch (e) {}
   return true;
 }
@@ -482,6 +485,7 @@ function App() {
   const notes = Object.fromEntries(MD.list('notes').map(n => [n.ref, n.text]));               // {ref: text}
   const bookmarks = MD.list('bookmarks').map(b => b.ref);                                      // [ref]
   const planProgress = MD.settings.get('plans', {});                                           // planId -> [done days]
+  const planLast = MD.settings.get('plansLast', {});                                           // planId -> ms timestamp of the last day marked done
   const devoProgress = MD.settings.get('devos', {});                                            // devoId -> [done days]
   const plansFollowed = MD.settings.get('plansFollowed', []);                                   // discover-plan ids the member added to My Plans
   const plansHidden = MD.settings.get('plansHidden', []);                                       // church-plan ids the member removed from My Plans
@@ -2276,6 +2280,7 @@ function App() {
     notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
+    planLast,
     planRead,
     planChurch: activeChurch,
     devoProgress,
@@ -2583,7 +2588,10 @@ function App() {
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});
       const set = new Set(prev[pid] || []); set.has(day) ? set.delete(day) : set.add(day);
+      const adding = set.has(day);
       MD.settings.set('plans', { ...prev, [pid]: [...set].sort((a, b) => a - b) });
+      // remember WHEN a day was last marked done (not on undo) so Today's "Keep it going" shows the plan read most recently
+      if (adding) MD.settings.set('plansLast', { ...MD.settings.get('plansLast', {}), [pid]: Date.now() });
     },
     toggleDevoDay: (did, day) => {
       const prev = MD.settings.get('devos', {});

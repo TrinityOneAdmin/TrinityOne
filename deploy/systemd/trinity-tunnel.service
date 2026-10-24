@@ -1,5 +1,5 @@
 [Unit]
-Description=TrinityOne public tunnel (Cloudflare quick tunnel to the gateway)
+Description=TrinityOne public tunnel (Cloudflare named tunnel if configured, else quick tunnel) to the gateway
 After=network.target trinity-gateway.service
 [Service]
 WorkingDirectory=/mnt/storage/projects/TrinityOne

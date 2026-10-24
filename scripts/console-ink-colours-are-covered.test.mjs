@@ -133,7 +133,7 @@ test('CONTROL: the real relay panels render, and the relay rows reach the screen
   const tree = await paint(relaysCard({ relays: ONE_UP_ONE_DOWN, backup: { boxes: 2, online: 2, syncOn: true } }));
   const all = said(tree);
   assert.match(all, /Where your church publishes/, 'DashRelaysCard no longer renders its blurb — re-anchor this test');
-  assert.match(all, /Three ways to add a relay your church runs/,
+  assert.match(all, /Three ways to add a relay\./,
     'DashAddRelayCard is not in the tree — the add, auto-find and connect-by-name colours below measure nothing');
   assert.match(all, /Copies your church/, 'DashRelayHistoryCard is not in the tree — the clone and sync colours below measure nothing');
   assert.match(all, /wss:\/\/nos\.lol/, 'the relay list is not rendering a row per relay, so nothing below is being measured');
@@ -212,6 +212,14 @@ test('the connect-by-name result is legible whether it worked or failed', async 
     const go = button(card.draw(), 'Connect').filter(b => b.props['aria-label'] === 'Connect to relay by name');
     assert.equal(go.length, 1, 'the Connect button is gone — re-anchor this test');
     go[0].props.onClick();
+    // B4 (2026-10-21): the first tap looks the name up and shows the consent line; "Yes, connect" acts. A name
+    // that does not resolve is reported straight away, with no consent line to answer.
+    await settle();
+    const yes = button(card.draw(), 'Yes, connect');
+    if (ok) {
+      assert.equal(yes.length, 1, 'the consent line\'s "Yes, connect" is missing — the steward cannot go on');
+      yes[0].props.onClick();
+    } else assert.equal(yes.length, 0, 'a name that resolved to nothing still asked for consent');
     await settle();
     const msg = smallest(card.draw(), re);
     assert.ok(msg, `the connect-by-name ${ok ? 'success' : 'failure'} message did not render`);

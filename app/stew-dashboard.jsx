@@ -126,6 +126,20 @@ function StewCapBlocked({ cap, note }) {
   );
 }
 
+const NAV_TIPS = {
+  overview: 'See what needs your attention and how the church is doing at a glance',
+  groups: 'Create and manage groups, teams and rooms, and their members',
+  rota: 'Plan who is serving when, and manage your serving teams',
+  calendar: 'Add and edit church events and see what is coming up',
+  rooms: 'Add the rooms in your building and book them for events',
+  resources: 'Manage reading plans, devotionals, sermons and the verse prompt',
+  members: 'See who is in your church, approve new people and manage stewards',
+  finance: 'Record giving and expenses, import a bank statement, share a summary',
+  checkin: 'Run the children\'s check-in register',
+  manna: 'Manage Manna',
+  meals: 'Organise meals, practical help and care for people in need',
+  settings: 'Church name, relays, backup and other console settings',
+};
 const NAV = [
   { key: 'overview', label: 'Overview', ic: 'today' },
   { key: 'groups', label: 'Groups', ic: 'chat' },
@@ -941,6 +955,24 @@ function KeyDistributor() {
     window.addEventListener('steward-key', onKey);
     return () => window.removeEventListener('steward-key', onKey);
   }, []);
+  // ── SIGN THIS CONSOLE'S OWN RELAY INTO THE CHURCH'S LIST (self-hosting P1, B2). On mount with a key and on
+  //    every unlock. Only the box that served this console is ever signed here (B4) — a typed relay needs the
+  //    steward's Connect on the Add-a-relay card. Deferred so it never competes with the first paint; once per
+  //    (church, box) per page load, decided inside autoEnrolRelayNet. scripts/a-console-signs-its-own-relay
+  //    .test.mjs slices and RUNS this effect, from the line below to the end marker.
+  //    Tried again when a relay comes back and when the console window regains focus, so a console left open
+  //    for days recovers from a box that was briefly offline (audit 2026-10-21, finding 7); a pass that already
+  //    worked is a no-op. Events, not a timer: the same churn signals the rest of the console follows.
+  React.useEffect(() => {
+    const run = () => {
+      try { const p = window.Steward && window.Steward.autoEnrolRelayNet && window.Steward.autoEnrolRelayNet(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    };
+    const t = setTimeout(run, 4000);
+    const EVENTS = ['steward-relay-returned', 'focus'];
+    for (const ev of EVENTS) window.addEventListener(ev, run);
+    return () => { clearTimeout(t); for (const ev of EVENTS) window.removeEventListener(ev, run); };
+  }, [unlockTick]);
+  // ── end of the own-relay enrolment effect
   // THE THREE KEY SUBSCRIPTIONS FOLLOW THE CHURCH AND THE CONNECTION — [idv, conn, church], like makeSub in
   // steward-root.jsx. They were mounted with `[]`, so after a church switch they went on reading the PREVIOUS
   // church's envelopes and never read the new one's: switching A→B→A left the name key empty (every member
@@ -1327,21 +1359,10 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   const [relayToken, setRelayToken] = React.useState('');
   const [relayMsg, setRelayMsg] = React.useState('');
   const [relayBusy, setRelayBusy] = React.useState(false);
-  const [relayAddr, setRelayAddr] = React.useState('');
-  const [addrMsg, setAddrMsg] = React.useState('');
   // The desktop "church-in-a-box" build serves the console from its OWN relay, so there is nothing to add.
   // Was: "did they come through the full-suite door?" — a question about the LAUNCHER. Now: "does this
   // computer actually hold this church?" — a question about the church. See whereChurchLives.
   const isRelayApp = !!(window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted());
-  const addOwnRelay = () => {
-    const u = (relayAddr || '').trim(); if (!u) return;
-    // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
-    // The version of this that shipped before treated every outcome as success, so a leader who typoed their
-    // address saw a green tick and walked away believing their church was reachable there.
-    const ok = window.Steward.addRelay ? window.Steward.addRelay(u) : false;
-    if (ok) { setAddrMsg('✓ Added — your church now uses this relay too.'); setRelayAddr(''); }
-    else setAddrMsg('✗ Couldn’t add that. Check it starts with wss:// and isn’t one you’ve already added.');
-  };
   const phrase = (() => { try { return window.Steward.exportMnemonic() || ''; } catch { return ''; } })();
   const npub = church.npub || window.Steward.npub || '';
   // backup check: after they tick "written down", make them re-type 3 of the 12 words before continuing
@@ -1713,14 +1734,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
                 <b>This app is your relay.</b> Your church already publishes here — there’s nothing to connect.
               </div>
             ) : (
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Have your relay’s <b>address</b>? Add it so your church publishes and reads there as well as on the shared relays.</div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input value={relayAddr} onChange={e => setRelayAddr(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
-                  <button onClick={addOwnRelay} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
-                </div>
-                {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{addrMsg}</div> : null}
-              </div>
+              <WizAddRelay />
             )}
           </div>
         )}
@@ -1949,7 +1963,7 @@ function StewSectionsMenu({ nav, tab, onPick, onHelp, onClose }) {
           {nav.map(n => {
             const on = n.key === tab;
             return (
-              <button key={n.key} onClick={() => onPick(n.key)} aria-current={on ? 'page' : undefined} style={{ ...row, background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600 }}>
+              <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => onPick(n.key)} aria-current={on ? 'page' : undefined} style={{ ...row, background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600 }}>
                 <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                 {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
               </button>
@@ -2326,7 +2340,7 @@ function StewDashboard({ initial = 'overview' }) {
             {nav.map(n => {
               const on = n.key === tab;
               return (
-                <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
+                <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => setTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
                   <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                   {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
                 </button>
@@ -3348,6 +3362,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   const [groupsOpen, setGroupsOpen] = React.useState(true);   // the Groups & rooms card's body, folded by its header chevron
   const [activityOpen, setActivityOpen] = React.useState(true);   // likewise the Recent activity card
+  const [signupsOpen, setSignupsOpen] = React.useState(true);   // the "People have signed up to help" card's name lines; its chevron folds them away (one flag, all three layouts)
   const [joinOpen, setJoinOpen] = React.useState(true);   // the Joining code card's body; the chevron in its header folds it away
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3416,9 +3431,13 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>People have signed up to help</div>
-        {careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>)}
+        {signupsOpen ? careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>) : null}
       </div>
-      <Icon name="chevR" size={15} color="var(--ink-3)" />
+      {/* a span, not a button: the whole card is already a button, and a button inside a button is invalid. stopPropagation so folding does not also open Care. */}
+      <span role="button" tabIndex={0} aria-expanded={signupsOpen} aria-label={signupsOpen ? 'Collapse sign-ups' : 'Expand sign-ups'} title={signupsOpen ? 'Collapse' : 'Expand'}
+        onClick={(e) => { e.stopPropagation(); setSignupsOpen(o => !o); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setSignupsOpen(o => !o); } }}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 40, height: 40, margin: '-10px -10px -10px 0', borderRadius: 999, cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name={signupsOpen ? 'chevD' : 'chevU'} size={18} color="currentColor" /></span>
     </button>
   ) : null;
   const careReqBanner = (openCareReqs || careNewMsgs) ? (
@@ -3476,6 +3495,13 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // buttons crammed into it — the owner's screenshot after the church went public. Stacked, each card has the
   // pane, the joining card puts its QR above its text (`center`), and the page scrolls like the phone's.
   const stacked = narrow || snug;
+  // The two sign-up/verse banners share a row on a wide window (same `stacked` = narrow || snug gate as the lower
+  // cards); stacked, or with only one of them present, a single full-width column — never a lonely half-width card.
+  const bannerPair = (careSignupBanner || verseBanner) ? (
+    <div style={{ display: 'grid', gridTemplateColumns: (!stacked && careSignupBanner && verseBanner) ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 1fr)', columnGap: 12 }}>
+      {careSignupBanner}{verseBanner}
+    </div>
+  ) : null;
   const fillStyle = stacked ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
   const listStyle = stacked ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
 
@@ -3547,7 +3573,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3556,7 +3582,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {pendingBanner}{careReqBanner}{careSignupBanner}{stewardReqBanner}{verseBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3565,9 +3591,8 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
       {pendingBanner}
       {careReqBanner}
-      {careSignupBanner}
       {stewardReqBanner}
-      {verseBanner}
+      {bannerPair}
       {stat}
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{groupsPanel}</div>
@@ -3613,7 +3638,7 @@ function DashGiving() {
   );
 }
 
-function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInline, compact, onAdd, empty, reorderable, onReorder, headerExtra, filters }) {
+function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInline, compact, onAdd, empty, reorderable, onReorder, headerExtra, filters, addTip }) {
   const [order, setOrder] = React.useState(null);   // working copy while dragging
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
@@ -3641,7 +3666,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
   const move = (idx, dir) => { const arr = items.slice(); const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; if (onReorder) onReorder(arr); };
   const fld = { width: '100%', boxSizing: 'border-box', height: 40, padding: '0 14px 0 38px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   return (
-    <Panel title={title} action={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerExtra || null}<button onClick={onAdd} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> {addLabel}</button></div>} style={{ height: '100%' }} scroll>
+    <Panel title={title} action={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerExtra || null}<button onClick={onAdd} title={addTip} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> {addLabel}</button></div>} style={{ height: '100%' }} scroll>
       {searchable ? (
         <div style={{ position: 'relative', marginBottom: 12, flexShrink: 0 }}>
           <Icon name="search" size={16} color="var(--ink-3)" style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
@@ -3694,9 +3719,9 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
               {compact
                 ? <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, overflow: 'hidden' }}><span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{it.name}</span>{renderInline ? <span style={{ flexShrink: 0, display: 'flex' }}>{renderInline(it)}</span> : null}{it.sub ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>· {it.sub}</span> : null}</div>
                 : <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>}
+              {renderRight && !compact ? <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>{renderRight(it)}</div> : null}
               {renderAside ? <div style={{ flexShrink: 0 }}>{renderAside(it)}</div> : null}
             </div>
-            {renderRight && !compact ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: canDrag ? 82 : 51 }}>{renderRight(it)}</div> : null}
           </div>
           );
         })}
@@ -3714,6 +3739,7 @@ function NewGroupModal({ open, onClose }) {
   const [encrypted, setEncrypted] = React.useState(false);
   const [childsafe, setChildsafe] = React.useState(false);
   const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter for the pick list — does NOT touch `sel`
   const [category, setCategory] = React.useState('');   // chosen category id ('' = uncategorised)
   const [busy, setBusy] = React.useState(false);   // an encrypted room is being made: key first, then the room (createEncryptedGroup)
   const [note, setNote] = React.useState('');      // what the dialog says while that happens, or why it could not
@@ -3742,7 +3768,7 @@ function NewGroupModal({ open, onClose }) {
   const allGroupsForDefault = window.useStewardGroups ? window.useStewardGroups() : [];
   const encByDefault = (!church.features || church.features.encryptComms !== false)
     && !(allGroupsForDefault || []).some(g => g && g.kind === 'group' && !g.encrypted);
-  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setBusy(false); setNote(''); } }, [open]);
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setQ(''); setBusy(false); setNote(''); } }, [open]);
   // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
   // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
   // always mounted with `open` toggling, so opening it changed the hook count and React threw #310 and
@@ -3757,7 +3783,11 @@ function NewGroupModal({ open, onClose }) {
     if (!name.trim() || busy) return;
     const g = { name: name.trim(), kind, sub: sub.trim() };
     if (category) g.category = category;
-    if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
+    // INVITE-ONLY WORKS FOR BROADCAST TOO (phase 2): a broadcast stays steward-post-only; invite-only just
+    // restricts who can READ it. The relay keys its read gate on visibility==='invite' regardless of kind
+    // (GROUP_VIS/GROUP_MEMBERS in scripts/gateway.mjs) — the broadcast write gate is separate — so no relay
+    // change is needed. Encryption below stays group-only on purpose (owner-locked).
+    if (inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
     if (childsafe) g.childsafe = true;
     const sealed = kind === 'group' && encrypted;
     // A ROOM THE STEWARD CHOSE TO ENCRYPT IS NEVER CREATED WITHOUT ITS KEY (new church, 2026-10-02). This used to
@@ -3807,6 +3837,10 @@ function NewGroupModal({ open, onClose }) {
   };
   const fld = { width: '100%', boxSizing: 'border-box', height: 46, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrow the shown rows by name or @handle; `sel` is untouched, so a
+  // ticked member scrolled out of view by a search still saves. nameHandle(m) is the shared @handle helper.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? pickList.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : pickList;
   return (
     <div style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 50, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 30,
       background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -3836,34 +3870,41 @@ function NewGroupModal({ open, onClose }) {
             <input type="checkbox" checked={childsafe} onChange={e => setChildsafe(e.target.checked)} style={{ marginTop: 2 }} />
             <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>👶 Child-safe</b> — members marked as a child can see and join this group. Groups that aren’t child-safe are hidden from children.</span>
           </label>
+          {/* INVITE-ONLY applies to BROADCAST as well as group (phase 2): it restricts who can READ. The
+              ENCRYPTED checkbox stays inside the kind==='group' wrapper below — encryption is group-only. */}
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
+            <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
+            <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list; only the people you choose can see it (the relay enforces it).</span>
+          </label>
           {kind === 'group' ? (
             <React.Fragment>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '18px 0 0', cursor: 'pointer' }}>
-                <input type="checkbox" checked={inviteOnly} onChange={e => setInviteOnly(e.target.checked)} style={{ marginTop: 2 }} />
-                <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>Invite-only</b> — hidden from the group list, and only the members you choose can post (the relay enforces it).</span>
-              </label>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '12px 0 0', cursor: 'pointer' }}>
                 <input type="checkbox" checked={encrypted} onChange={e => setEncrypted(e.target.checked)} style={{ marginTop: 2 }} />
                 <span style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.45 }}><b>🔒 Encrypted</b> — messages are sealed end-to-end; not even the relay can read them. {inviteOnly ? 'Keyed to the chosen members.' : 'Keyed to everyone in the church.'} New members can read past messages.</span>
               </label>
-              {inviteOnly ? (
+            </React.Fragment>
+          ) : null}
+          {inviteOnly ? (
                 <div style={{ marginTop: 14 }}>
                   <div style={lbl}>WHO’S IN · {sel.size}</div>
                   {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members have joined yet — create the group, then add people here once they’re in.</div> : (
-                    <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {pickList.map(m => { const on = sel.has(m.pubkey); return (
+                    <React.Fragment>
+                      <input type="search" aria-label="Search members for this group" placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ ...fld, height: 40, fontSize: 14, marginBottom: 8 }} />
+                      {ql && visible.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members match “{q}”.</div> : (
+                      <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {visible.map(m => { const on = sel.has(m.pubkey); return (
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to add this person to the group, untick to leave them out" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
                           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
                           <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: nameHandle(m) ? 700 : 400, fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
                         </button>
                       ); })}
-                    </div>
+                      </div>
+                      )}
+                    </React.Fragment>
                   )}
                 </div>
               ) : null}
-            </React.Fragment>
-          ) : null}
         </div>
         {note ? <div role="status" style={{ padding: '14px 26px 0', fontSize: 13, color: busy ? 'var(--ink-2)' : 'var(--clay-ink)', lineHeight: 1.45, fontWeight: busy ? 500 : 600 }}>{note}</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
@@ -3879,7 +3920,7 @@ function NewGroupModal({ open, onClose }) {
 // group with the new member set — the relay then enforces posting + the read-gate against it.
 // `getCurrent` (optional) returns the group document AS IT IS NOW (null if it was deleted); save() publishes on top of that, so another steward's
 // change made while this dialog was open (childsafe, encryption, category, leaders) is not reverted by a stale snapshot.
-function EditGroupMembersModal({ group, getCurrent, onClose }) {
+function EditGroupMembersModal({ group, getCurrent, onClose, seed }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   // WHAT IS OFFERED: not people still waiting to join, not the blocked (sim A2 #7) — but whoever is ALREADY in
   // the group stays listed so they can be un-ticked. `members` stays the full list for `known`/`orphans` and the
@@ -3890,12 +3931,23 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
   // is how a church ends up with a care team the relay treats as empty.
   const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
   const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';
-  const [sel, setSel] = React.useState(() => new Set(Array.isArray(group.members) ? group.members : []));
+  // `seed` (phase 2, optional) only pre-ticks the picker when an OPEN group is being turned invite-only from
+  // the settings panel — it does NOT change the save() delta, which still reads `group.members` as the true
+  // baseline (empty for an open group, so everyone left ticked is ADDED). From-the-row opens pass no seed, so
+  // an invite-only group keeps starting from its own allowlist exactly as before.
+  const [sel, setSel] = React.useState(() => new Set(
+    (Array.isArray(group.members) && group.members.length) ? group.members
+      : (Array.isArray(seed) ? seed : (Array.isArray(group.members) ? group.members : []))));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter; save()/orphans/known read `sel`, not this
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const known = new Set(members.map(m => m.pubkey));
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrows the displayed rows only. save()/orphans/known read `sel`, so a
+  // ticked member filtered out of view is still saved. nameHandle(m) is the shared @handle helper.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? pickList.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : pickList;
   const save = () => {
     setBusy(true); setErr('');
     // THE DIALOG'S DELTA, applied to the group AS IT IS NOW (not the list seeded at open): someone another steward
@@ -3983,6 +4035,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
       .catch((e) => { clearTimeout(guard); clearTimeout(outer); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
+  const fld = { width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
   const dlgRef = useStewDialog(() => { if (!busy) onClose(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={() => !busy && onClose()} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 96, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 28, background: 'color-mix(in oklab, var(--ink) 32%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -3995,13 +4048,18 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={lbl}>MEMBERS · {sel.size}</div>
-          {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : pickList.map(m => { const on = sel.has(m.pubkey); return (
+          {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : (
+            <React.Fragment>
+              <input type="search" aria-label={'Search members in “' + group.name + '”'} placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ ...fld, marginBottom: 8 }} />
+              {ql && visible.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members match “{q}”.</div> : visible.map(m => { const on = sel.has(m.pubkey); return (
             <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to keep this person in the group, untick to remove them" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
               <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
               <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
             </button>
           ); })}
+            </React.Fragment>
+          )}
           {orphans.length ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>{orphans.length} other member{orphans.length === 1 ? '' : 's'} in this group aren’t on the current roster (left/quiet) — they stay unless you’ve unticked them above.</div> : null}
         </div>
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, padding: '8px 24px 0', lineHeight: 1.45 }}>{err}</div> : null}
@@ -4470,8 +4528,9 @@ function DashGroups() {
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
+  const [editMembersSeed, setEditMembersSeed] = React.useState(null); // phase 2: pre-tick set when turning an OPEN group invite-only (null = from-the-row, start from its own allowlist)
+  const [unrestricting, setUnrestricting] = React.useState(null);     // phase 2: { g } → confirm before opening an invite-only group to the whole church (exposes its history)
   const [settingsFor, setSettingsFor] = React.useState(null);       // APK: group whose settings sheet is open
-  const [iconFor, setIconFor] = React.useState(null);               // WEB: group whose icon picker is open (the APK uses the settings sheet)
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -4521,8 +4580,28 @@ function DashGroups() {
     clearTimeout(undoTimer.current); setUndo(null);
   };
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const stewNarrow = useStewNarrow();   // phone/narrow → the settings panel is a bottom sheet; wide/desktop → a centered dialog
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
   const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
+  // CLOSING THE SETTINGS PANEL MUST SAVE A TYPED-BUT-UNBLURRED NAME/DESCRIPTION. useStewDialog closes by
+  // UNMOUNTING, and React fires no onBlur on a removed element — so Escape and Android Back dropped an edit the
+  // field's own onBlur would have saved. (A backdrop or × click is safe because mousedown blurs the input
+  // first, but these route through here too for one consistent path.) Flush both changed fields in ONE publish
+  // against the LIVE document (rawById at save time), never two racing writes, then close.
+  const flushSettingsAndClose = () => {
+    const g = settingsFor;
+    if (!g) { setSettingsFor(null); return; }
+    const rawDoc = rawByIdRef.current.get(g.id);
+    if (!rawDoc) { setSettingsFor(null); return; }   // deleted meanwhile → just close, publish nothing
+    const patch = {};
+    const name = (g.name || '').trim().slice(0, 60);
+    if (name && name !== (rawDoc.name || '')) patch.name = name;   // never publish a blank name
+    const sub = (g.sub || '').trim();
+    if (sub !== (rawDoc.sub || '')) patch.sub = sub;
+    if (Object.keys(patch).length) pubOr(window.Steward.publishGroup({ ...rawDoc, ...patch }), 'Couldn’t save the changes to “' + (rawDoc.name || 'this group') + '” — the relay didn’t accept them, so they are unchanged.');
+    setSettingsFor(null);
+  };
+  const settingsDlgRef = useStewDialog(flushSettingsAndClose, !!settingsFor);  // a11y: group-settings panel (Escape + focus trap + modal count), now on desktop too — and flushes a pending edit on close
   return (
     <div style={{ position: 'relative', height: '100%' }}>
       {pendingDelete ? (
@@ -4557,43 +4636,38 @@ function DashGroups() {
           <button onClick={() => setRowErr('')} aria-label="Dismiss" className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>Dismiss</button>
         </div>
       ) : null}
-      <ListPanel title="Groups, teams & rooms" addLabel="New group" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
+      <ListPanel title="Groups, teams & rooms" addLabel="New group" addTip="Create a new group, team or room" onAdd={() => setAdding(true)} items={items} filters={groupFilters}
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
         compact={isNative}
-        renderInline={isNative ? (it) => (
+        /* The settings gear shows on EVERY row. ListPanel only renders renderInline in its compact (native)
+           branch — on the APK the gear sits inline by the name — so the web/desktop row gets its own gear in
+           renderRight below (ListPanel's web branch does not consume renderInline). */
+        renderInline={(it) => (
           <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sliders" size={16} /></button>
-        ) : undefined}
+        )}
+        /* Desktop row, decluttered (PHASE 1): the category select, icon button, the clickable child-safe and
+           encrypt TOGGLES and the standalone leader-count pill now live ONLY in the settings panel. The row
+           keeps the read-only Broadcast / Team tags, a read-only child-safe + sealed STATUS indicator (so a
+           steward sees a room's protection state at a glance — the toggles are in the panel), the People
+           button (invite-only), Leaders (count folded in), Chat, and the settings gear — Delete is in
+           renderAside. The status indicators are NOT buttons and carry no onClick: they only report. */
         renderRight={(it) => isNative ? null : (
           <React.Fragment>
-            {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), 'Couldn\'t move "' + (it.name || 'that group') + '" into that category — the relay didn\'t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-                <option value="">No category</option>
-                {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            ) : null}
-            <button onClick={(e) => { e.stopPropagation(); setIconFor(raw(it)); }} title="Change icon" aria-label={'Change icon for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center' }}><Icon name={groupIcon(it)} size={15} color="currentColor" /></button>
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
-            {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn\'t change child-safe on "' + (it.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
-            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can\'t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
-            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(raw(it))} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
-            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
+            {/* READ-ONLY child-safe status — both states shown and named; "which rooms are adults-only" is itself safety-relevant. No onClick; the toggle is in the panel. */}
+            <span role="img" aria-label={(it.name || 'This group') + (it.childsafe ? ' — child-safe: members marked as a child can join' : ' — adults only: hidden from children')} title={it.childsafe ? 'Child-safe — members marked as a child can join' : 'Adults only — hidden from children'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 30%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface-2)', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={13} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Adults only'}</span>
+            {/* READ-ONLY sealed status — shown only when encrypted. No onClick; sealing is toggled in the panel. */}
+            {it.encrypted ? <span role="img" aria-label={(it.name || 'This group') + ' — sealed end-to-end'} title="Sealed end-to-end" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name="lock" size={13} color="currentColor" /> Sealed</span> : null}
+            {it.visibility === 'invite' ? <button onClick={() => { setEditMembersSeed(null); setEditMembersFor(raw(it)); }} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> People · {(it.members || []).length}</button> : null}
+            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders{(it.leaders || []).length ? ' · ' + it.leaders.length : ''}</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
+            <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="sliders" size={15} color="currentColor" /> Settings</button>
           </React.Fragment>
         )}
-        renderAside={(it) => {
-          // THE CARE TEAM IS NOT OFFERED FOR DELETION (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE
-          // DELETED"), here as on the Rota page: disabled, with the reason in the tooltip and in the label a
-          // screen reader reads, rather than a confirm dialog that cannot complete. `careTeamId` comes from the
-          // shared removal flow (useTeamRemoval), and TeamRemoval.ask and Steward.removeTeam refuse it as well.
-          const noCare = it.kind === 'team' && !!trs.careTeamId && it.id === trs.careTeamId;
-          return (
-          <button onClick={() => (it.kind === 'team' && window.TeamRemoval ? window.TeamRemoval.ask(it) : setPendingDelete(it))} disabled={noCare} title={noCare ? (trs.careWhy || '') : (it.kind === 'team' ? 'Remove team' : 'Remove group')} aria-label={(it.kind === 'team' ? 'Remove team ' : 'Remove group ') + (it.name || '') + (noCare ? ' — ' + (trs.careWhy || '') : '')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: noCare ? 'default' : 'pointer', opacity: noCare ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-          );
-        }} />
+        />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {catsOpen ? <CategoriesModal cats={cats} groups={all} onClose={() => setCatsOpen(false)} /> : null}
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}
@@ -4618,40 +4692,46 @@ function DashGroups() {
         </div>
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
-      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
-      {iconFor ? (() => {
-        // WEB console: the same GroupIconPicker + the same publish the APK sheet uses (raw document, only `icon` changed).
-        const g = iconFor;
-        return (
-          <div onClick={() => setIconFor(null)} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
-            <div role="dialog" aria-modal="true" aria-label={'Icon for ' + g.name} onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '18px 22px 22px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{g.name}</div>
-                <button onClick={() => setIconFor(null)} title="Close" aria-label="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
-              </div>
-              <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setIconFor({ ...g, icon: ic }); }} />
-            </div>
-          </div>
-        );
-      })() : null}
+      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} seed={editMembersSeed} onClose={() => { setEditMembersFor(null); setEditMembersSeed(null); }} /> : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
         const sLabel = { display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 };
         const sName = { fontWeight: 700, fontSize: 14 };
         const sSub = { fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.4 };
+        const sFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
+        const sLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' };
         return (
-          <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-            <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
+          <div onClick={flushSettingsAndClose} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: stewNarrow ? 'flex-end' : 'safe center', justifyContent: 'center', ...(stewNarrow ? null : { overflowY: 'auto', padding: 24 }) }}>
+            <div ref={settingsDlgRef} role="dialog" aria-modal="true" aria-label={(g.name || 'Group') + ' settings'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: stewNarrow ? '22px 22px 0 0' : 22, border: stewNarrow ? 'none' : '1px solid var(--line)', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={groupIcon(g)} size={20} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{g.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{g.kind === 'team' ? 'Team' : g.kind === 'broadcast' ? 'Broadcast' : 'Group'} settings</div></div>
-                <button onClick={() => setSettingsFor(null)} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+                <button onClick={flushSettingsAndClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={16} /></button>
+              </div>
+
+              {/* Name + description. Save on blur, publishing against raw(g) — NOT the display row, whose `sub`
+                  groupLiveSub overwrites (see "PUBLISH THE DOCUMENT, NOT THE ROW"). A blank name is never
+                  published (the field snaps back to the current name); names cap at 60 to match the relay's
+                  GROUP_NAMES truncation. onBlur reads e.target.value so a save needs no intervening re-render. */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={sLbl}>NAME</div>
+                <input aria-label="Group name" value={g.name || ''} maxLength={60}
+                  onChange={(e) => setSettingsFor({ ...g, name: e.target.value })}
+                  onBlur={(e) => { const next = (e.target.value || '').trim().slice(0, 60); if (!next) { setSettingsFor({ ...g, name: raw(g).name }); return; } if (next === (raw(g).name || '')) return; pubOr(window.Steward.publishGroup({ ...raw(g), name: next }), 'Couldn’t rename “' + (raw(g).name || 'this group') + '” — the relay didn’t accept it, so it is unchanged.'); setSettingsFor({ ...g, name: next }); }}
+                  style={sFld} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={sLbl}>DESCRIPTION</div>
+                <input aria-label="Group description" value={g.sub || ''} placeholder="Optional — e.g. Whole church"
+                  onChange={(e) => setSettingsFor({ ...g, sub: e.target.value })}
+                  onBlur={(e) => { const next = (e.target.value || '').trim(); if (next === (raw(g).sub || '')) return; pubOr(window.Steward.publishGroup({ ...raw(g), sub: next }), 'Couldn’t update the description — the relay didn’t accept it, so it is unchanged.'); setSettingsFor({ ...g, sub: next }); }}
+                  style={{ ...sFld, fontWeight: 400 }} />
               </div>
 
               <div style={sToggle}>
                 <div style={sLabel}><Icon name={g.childsafe ? 'check' : 'pray'} size={18} color={g.childsafe ? 'var(--sage)' : 'var(--ink-3)'} /><div><div style={sName}>Child-safe</div><div style={sSub}>{g.childsafe ? 'Members marked as a child can join' : 'Hidden from children'}</div></div></div>
-                <input type="checkbox" className="sw" checked={!!g.childsafe} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe — the relay didn\'t accept it.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
+                <input type="checkbox" className="sw" title="Child-safe: on lets members marked as a child join this group; off keeps it adults only" checked={!!g.childsafe} aria-label={(g.name || 'This group') + ' — child-safe is ' + (g.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn\'t change child-safe on "' + (g.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
               </div>
 
               <GroupIconPicker group={g} onPick={(ic) => { pubOr(window.Steward.publishGroup({ ...raw(g), icon: ic }), 'Couldn\'t change the icon — the relay didn\'t accept it.'); setSettingsFor({ ...g, icon: ic }); }} />
@@ -4659,7 +4739,7 @@ function DashGroups() {
               {g.kind !== 'team' ? (
                 <div style={sToggle}>
                   <div style={sLabel}><Icon name="lock" size={18} color={g.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>End-to-end encrypted</div><div style={sSub}>{g.encrypted ? 'Sealed — not even the relay can read it' : 'Messages are readable by the relay'}</div></div></div>
-                  <input type="checkbox" className="sw" checked={!!g.encrypted} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
+                  <input type="checkbox" className="sw" title="Encrypted: on seals this group's messages so only its members can read them" checked={!!g.encrypted} aria-label={(g.name || 'This group') + ' — encryption is ' + (g.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
                 </div>
               ) : null}
 
@@ -4673,8 +4753,23 @@ function DashGroups() {
                 </div>
               ) : null}
 
+              {/* INVITE-ONLY ON/OFF (phase 2). Not for a team — a team's membership comes from its roster, and
+                  invite-only is not a concept there. OFF→ON opens the member picker seeded from everyone
+                  currently eligible (EditGroupMembersModal.save() publishes visibility:'invite'); ON→OFF goes
+                  through a confirm because it exposes the whole history to the church. Works for a broadcast
+                  too: the relay keys its read gate on visibility==='invite' regardless of kind. */}
+              {g.kind !== 'team' ? (
+                <div style={sToggle}>
+                  <div style={sLabel}><Icon name="lock" size={18} color={g.visibility === 'invite' ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>Invite-only</div><div style={sSub}>{g.visibility === 'invite' ? 'Only the people you choose can see it' : 'Anyone in the church can see and join it'}</div></div></div>
+                  <input type="checkbox" className="sw" title="Invite-only: on hides the group from the church list so people need an invitation" checked={g.visibility === 'invite'} aria-label={(g.name || 'This group') + ' — invite-only is ' + (g.visibility === 'invite' ? 'on. Press to open it to the whole church' : 'off. Press to restrict who can see it')} onChange={() => {
+                    if (g.visibility === 'invite') { setUnrestricting({ g: raw(g) }); setSettingsFor(null); }
+                    else { setEditMembersSeed(recipsFor(g) || []); setEditMembersFor(raw(g)); setSettingsFor(null); }
+                  }} />
+                </div>
+              ) : null}
+
               {g.visibility === 'invite' ? (
-                <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setEditMembersFor(raw(g)); setSettingsFor(null); }}>
+                <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setEditMembersSeed(null); setEditMembersFor(raw(g)); setSettingsFor(null); }}>
                   <div style={sLabel}><Icon name="lock" size={18} color="var(--clay-ink)" /><div><div style={sName}>Invite-only members</div><div style={sSub}>{(g.members || []).length} member{(g.members || []).length === 1 ? '' : 's'}</div></div></div>
                   <Icon name="chevR" size={16} color="var(--ink-3)" />
                 </div>
@@ -4690,14 +4785,35 @@ function DashGroups() {
                 <Icon name="chevR" size={16} color="var(--ink-3)" />
               </div>
 
-              <div style={{ ...sToggle, borderBottom: 'none', cursor: 'pointer' }} onClick={() => { setPendingDelete(raw(g)); setSettingsFor(null); }}>
-                <div style={sLabel}><Icon name="trash" size={18} color="var(--clay-ink)" /><div><div style={{ ...sName, color: 'var(--clay-ink)' }}>Delete {g.kind === 'team' ? 'team' : 'group'}</div></div></div>
-              </div>
+              {(() => {
+                // Delete lives ONLY here now (the row bin was removed). The care team is never offered for
+                // deletion (reference/DOMAIN.md "CARE TEAM CANNOT BE DELETED"); a team routes through the
+                // shared TeamRemoval flow, everything else through the group-delete confirm.
+                const noCareG = g.kind === 'team' && !!trs.careTeamId && g.id === trs.careTeamId;
+                return (
+                <div style={{ ...sToggle, borderBottom: 'none', cursor: noCareG ? 'default' : 'pointer', opacity: noCareG ? 0.55 : 1 }}
+                  role="button" tabIndex={noCareG ? -1 : 0} aria-disabled={noCareG || undefined}
+                  aria-label={(g.kind === 'team' ? 'Delete team ' : 'Delete group ') + (g.name || '') + (noCareG ? ' \u2014 ' + (trs.careWhy || 'the care team cannot be deleted') : '')}
+                  onClick={noCareG ? undefined : () => { if (g.kind === 'team' && window.TeamRemoval) { window.TeamRemoval.ask(raw(g)); } else { setPendingDelete(raw(g)); } setSettingsFor(null); }}>
+                  <div style={sLabel}><Icon name="trash" size={18} color={noCareG ? 'var(--ink-3)' : 'var(--clay-ink)'} /><div><div style={{ ...sName, color: noCareG ? 'var(--ink-3)' : 'var(--clay-ink)' }}>Delete {g.kind === 'team' ? 'team' : 'group'}</div>{noCareG ? <div style={sSub}>{trs.careWhy || 'The care team cannot be deleted.'}</div> : null}</div></div>
+                </div>
+                );
+              })()}
             </div>
           </div>
         );
       })() : null}
       {sealing ? <SkConfirm icon="lock" title={(sealing.on ? 'Seal "' : 'Unseal "') + sealing.g.name + '"?'} confirmLabel={sealing.busy ? 'Sealing…' : (sealing.on ? 'Seal it' : 'Unseal')} busy={!!sealing.busy} err={sealing.err || ''} body={sealing.on ? 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages already posted stay as they are.' : 'New messages become readable by the relay again. Messages already sealed stay sealed.'} onConfirm={doSeal} onCancel={() => { if (!sealing.busy) setSealing(null); }} /> : null}
+      {/* ON→OFF: opening an invite-only room to the whole church EXPOSES its history. publishGroup with
+          visibility/members cleared lands it in the relay's open branch. The confirm body names the exposure
+          plainly; for an also-encrypted room it adds that new members can't read the old sealed messages —
+          a warning, not a block (owner decision). No relay change: the relay already reads an absent
+          visibility as open. */}
+      {unrestricting ? <SkConfirm icon="globe" title={'Open "' + (unrestricting.g.name || 'this group') + '" to the whole church?'} confirmLabel="Open it up"
+        body={'It is invite-only now. If you open it up, every message posted in it so far becomes readable by anyone in your church, and anyone can join.'
+          + (unrestricting.g.encrypted ? '\n\nThis group is also encrypted: new members will not be able to read the old encrypted messages, only new ones.' : '')}
+        onConfirm={() => { const g = unrestricting.g; pubOr(window.Steward.publishGroup({ ...raw(g), visibility: undefined, members: undefined }), 'Couldn’t open “' + (g.name || 'this group') + '” to the church — the relay didn’t accept it, so it stays invite-only.'); setUnrestricting(null); }}
+        onCancel={() => setUnrestricting(null)} /> : null}
     </div>
   );
 }
@@ -4715,6 +4831,7 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
   const [saving, setSaving] = React.useState(false);
   const [notTold, setNotTold] = React.useState([]);   // new leaders the "you're now a leader" DM never reached
   const [saveErr, setSaveErr] = React.useState('');   // the leadership change itself did not reach any relay
+  const [q, setQ] = React.useState('');   // view-only name/@handle filter; `sel` (the leaders that save) is independent
   // WHAT THE RELAY ACTUALLY HOLDS, and WHO HAS ACTUALLY BEEN TOLD — both of which move when Save succeeds,
   // and neither of which the `group` PROP ever hears about. `before` was read from that prop, and this modal
   // deliberately stays open after a partial success, so a second Save re-computed "newly added" from the
@@ -4728,6 +4845,10 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
   // Save that would publish an empty leader list (console audit 2026-09-19 §C). The precondition is named where
   // the list would be, and Save waits until there is someone to tick or a different option is chosen.
   const nobodyToTick = members.length === 0;
+  // VIEW-ONLY FILTER (owner 2026-10-19): narrows the displayed rows only; `sel` (the leaders that save) and
+  // `nobodyToTick`/`saveBlocked` read the full `members`, so a ticked leader filtered out of view still saves.
+  const ql = q.trim().toLowerCase();
+  const visible = ql ? members.filter(m => (m.name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(ql)) || (nameHandle(m) || '').toLowerCase().replace(/^@/, '').startsWith(ql)) : members;
   const saveBlocked = pol === 'leaders' && nobodyToTick;
   const save = async () => {
     if (saveBlocked) return;
@@ -4826,9 +4947,11 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
             <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>This group is marked <strong>child-safe</strong>, so children can read it. Whoever you allow above, only adults on your <strong>cleared list</strong> can actually add an event here — and no child can, ever. That is enforced for you.</div>
           </div>
         ) : null}
+        {!nobodyToTick ? <input type="search" aria-label="Search members for group leaders" placeholder="Search by name or @handle" value={q} onChange={e => setQ(e.target.value)} style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 10 }} /> : null}
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7 }}>
           {nobodyToTick ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>Nobody has joined your church on the app yet, so there is no one to tick.</div>
-            : members.map(m => {
+            : (ql && visible.length === 0) ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No members match “{q}”.</div>
+            : visible.map(m => {
               const on = sel.has(m.pubkey);
               const nm = m.name || ('Anon · ' + (m.npub || m.pubkey).slice(-6));
               return (
@@ -5035,6 +5158,53 @@ function DashRelaysCard() {
   // has no relay, no name, and an address on screen that may already be stale — and the member app's own
   // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
   const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
+  // REMOVE ALSO UN-SIGNS (owner decision B, 2026-10-21). Connecting a relay signs it into the church's relay list;
+  // removing it must take it out again, or a steward's consent could never be withdrawn. Says so when it could not.
+  const [dropNote, setDropNote] = React.useState('');
+  // THE REMOVALS IN FLIGHT (fifth audit, finding 7; seventh audit, findings 2 and 4): EVERY url being removed, not
+  // only the last one. It is the one source of the "Removing…" line, shown in the neutral colour (it is progress,
+  // not a warning), and a row in it has no Remove button. The ref is the guard: a second Remove of a relay already
+  // being removed does nothing, even from a stale render. A url stays in it until its row has actually LEFT the
+  // list (the real removeRelay takes a moment to drop the row), so the row cannot be tapped again meanwhile.
+  const [dropping, setDropping] = React.useState([]);
+  // Lazily filled, React's idiom for an object initial value (and no new Set built on every draw).
+  const droppingRef = React.useRef(null);   // every url being removed
+  const leavingRef = React.useRef(null);    // …of which these were taken off the console, row not yet gone
+  const genRef = React.useRef(null);        // url -> which removal of it is current (eighth audit, finding 3)
+  if (!droppingRef.current) droppingRef.current = new Set();
+  if (!leavingRef.current) leavingRef.current = new Set();
+  if (!genRef.current) genRef.current = new Map();
+  const syncDropping = () => setDropping(Array.from(droppingRef.current));
+  const release = (u) => { leavingRef.current.delete(u); if (droppingRef.current.delete(u)) syncDropping(); };
+  const listedNow = status.map(r => (r && r.url) || '');
+  React.useEffect(() => {
+    for (const u of Array.from(leavingRef.current)) if (!listedNow.includes(u)) release(u);
+  }, [listedNow.join(' '), dropping.join(' ')]);
+  // OUT OF THE CHURCH'S LIST FIRST, THEN OFF THIS SCREEN (fourth audit 2026-10-21, finding 2). Removing the row
+  // first left a steward told "remove it again" with no row left to remove — and adding it back to retry signs it
+  // straight back in. So the row stays, with the reason, until the church's list no longer names the relay.
+  const dropRelay = async (url) => {
+    setConfirmDrop(null);
+    if (droppingRef.current.has(url)) return;
+    const gen = (genRef.current.get(url) || 0) + 1;
+    genRef.current.set(url, gen);
+    droppingRef.current.add(url); syncDropping(); setDropNote('');
+    let leaving = false;
+    try {
+      let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = { error: String((e && e.message) || e || '') }; }
+      const out = dropOutcome(r, url);
+      if (out.drop) { try { window.Steward.removeRelay(url); leaving = true; } catch (e) {} }
+      setDropNote(out.note);
+    } finally {
+      if (leaving) {
+        // Held until the row leaves the list (the effect above). If it never does, let go after 10s, so a row that
+        // stays for some other reason is not stuck in "Removing…" for ever. The timer frees only ITS OWN removal: if
+        // the relay was removed, added back and removed again meanwhile, a newer removal is current and is left alone.
+        leavingRef.current.add(url);
+        setTimeout(() => { if (genRef.current.get(url) === gen) release(url); }, 10000);
+      } else release(url);
+    }
+  };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
   // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
@@ -5124,7 +5294,8 @@ function DashRelaysCard() {
                   {refused ? <SkPill tint="clay">Refused our last change</SkPill> : null}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Answering' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
-                  {!self && r.url !== own && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
+                  {dropping.includes(r.url) ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Removing…</span> : null}
+                  {!self && r.url !== own && !dropping.includes(r.url) && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
                 {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
                     the name goes too, and that — not the address on screen — is what would bring it back. */}
@@ -5138,13 +5309,14 @@ function DashRelaysCard() {
                           was written. The whole file already uses ’; this is why. */}
                       Stop sending this church’s data to this relay?{relayName(r.url) ? ' It was added by the name “' + relayName(r.url) + '” — that name is forgotten too, so write it down if you may want it back.' : ' You would need this exact address to add it again.'}
                     </span>
-                    <button onClick={() => { window.Steward.removeRelay(r.url); setConfirmDrop(null); }} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
+                    <button onClick={() => dropRelay(r.url)} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
                     <button onClick={() => setConfirmDrop(null)} title="Keep this relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Keep it</button>
                   </div>
                 ) : null}
               </div>
             );
           })}
+          {(dropping.length || dropNote) ? <div role="status" style={{ fontSize: 12, color: dropping.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropping.length ? 'Removing ' + dropping.join(', ') + '…' : dropNote}</div> : null}
         </div>
         {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
             `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct
@@ -5203,6 +5375,116 @@ function DashRelaysCard() {
   );
 }
 
+// THE SETUP WIZARD'S "HAVE YOUR RELAY'S ADDRESS?" BOX, as its own component (audit 2026-10-21, finding 4) so the
+// consent line it shows can be rendered and pressed in a test — scripts/a-console-signs-its-own-relay.test.mjs —
+// rather than only the handler being lifted, which left the consent box itself unguarded.
+function WizAddRelay() {
+  // The wizard's own field style, carried with the box when it moved out (StewSetupWizard keeps its copy).
+  const fld = { width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
+  const [relayAddr, setRelayAddr] = React.useState('');
+  const [addrMsg, setAddrMsg] = React.useState('');
+  const [addrAsk, setAddrAsk] = React.useState(false);   // the consent line is showing (see RelayConsent)
+  const addOwnRelay = (confirmed) => {
+    const u = (relayAddr || '').trim(); if (!u) return;
+    // A spelling of a shared relay is refused before the consent line (ninth audit): it would be a second row for a
+    // relay the church already uses, and one Remove could not be trusted on.
+    if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(u)) { setAddrAsk(false); setAddrMsg('✗ ' + 'That’s already one of TrinityOne’s relays.'); return; }
+    // …and this console's own relay, however it is spelled (phone test 2026-10-22: it used to show consent, then fail silently).
+    if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(u)) { setAddrAsk(false); setAddrMsg('✗ ' + 'That’s this console’s own relay — it’s already on your list.'); return; }
+    if (confirmed !== true) { setAddrAsk(true); return; }   // first tap shows what connecting means
+    setAddrAsk(false);
+    // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
+    // The version of this that shipped before treated every outcome as success, so a leader who typoed their
+    // address saw a green tick and walked away believing their church was reachable there.
+    const ok = (window.Steward.addRelay ? window.Steward.addRelay(u) : false) || (window.Steward.knownRelay ? window.Steward.knownRelay(u) : '');
+    if (ok) {
+      setAddrMsg('Connecting…'); setRelayAddr('');
+      // Signed into the church's relay list on the steward's consent — the same as the Add-a-relay card — and
+      // only called added once that is true (audit 2026-10-21, finding 4: it used to say "✓ Added" regardless).
+      const p = window.Steward.signRelay ? Promise.resolve().then(() => window.Steward.signRelay(ok)) : Promise.resolve(null);
+      return p.then((r) => {
+        const why = window.Steward.signRelay ? signOutcome(r, ok) : '';
+        setAddrMsg(why ? '✗ ' + why : '✓ Added — your church now uses this relay too.');
+      }, () => setAddrMsg('✗ ' + signOutcome(null, ok)));
+    }
+    else setAddrMsg('✗ Couldn’t add that. Check it starts with wss:// and isn’t one you’ve already added.');
+  };
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Have your relay’s <b>address</b>? Add it so your church publishes and reads there as well as on the shared relays.</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input value={relayAddr} onChange={e => { setRelayAddr(e.target.value); setAddrAsk(false); }} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
+        <button onClick={() => addOwnRelay()} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
+      </div>
+      {addrAsk ? <RelayConsent onYes={() => addOwnRelay(true)} onNo={() => setAddrAsk(false)} /> : null}
+      {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{addrMsg}</div> : null}
+    </div>
+  );
+}
+
+// THE CONSENT LINE (owner, 2026-10-21). Shown on the first tap of Add relay / Connect / Auto-find / the setup
+// wizard's Add; nothing is added or signed until "Yes, connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
+// relay is the church vouching for it to every member's phone, not a connection test.
+const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
+// WHAT A REMOVE ANSWERED: whether the row may leave this screen (`drop`), and what to tell the steward (`note`, ''
+// when there is nothing to say). Every answer that is not a success says so (third audit, finding 3), and the row
+// leaves the screen only once the church's list no longer names the relay, or never did (fourth audit, finding 2).
+function dropOutcome(r, url) {
+  if (r && r.removed) return { drop: true, note: '' };
+  // Not in the church's list: `notListed` is only answered after the list was read from every relay asked (bar this
+  // one), and it names this relay neither by address nor by the key it proved. A relay that proved no key (a typo, a
+  // relay that is not TrinityOne) leaves too, and the steward is told the plain fact (fifth audit, finding 2: it used
+  // to stay for ever behind a "try again" that could never come true).
+  if (r && r.notListed) return { drop: true, note: r.proven === false ? 'Removed from this console. Your church’s relay list doesn’t name ' + url + '.' : '' };
+  if (r && r.ownBox) return { drop: true, note: 'Removed from this console. ' + url + ' is the box this console runs on, so it stays in your church’s relay list.' };
+  if (r && r.skipped) return { drop: true, note: 'Removed from this console. Only your church’s own console can take it out of the church’s relay list.' };
+  if (r && r.changed) return { drop: false, note: 'This console switched church while removing ' + url + ', so it is still in your church’s relay list. Remove it again.' };
+  if (r && r.error) return { drop: false, note: 'Couldn’t take ' + url + ' out of your church’s relay list (' + r.error + '), so it is still connected.' };
+  // `unknown` now means a relay OTHER than this one is silent (fifth audit, finding 1: the relay being removed need not
+  // answer). If that one is gone for good it would block every change for ever, so the steward is told the way out.
+  return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' + ((r && r.unknown) ? ' If a relay you added is gone for good, remove it first.' : '') };
+}
+const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
+// WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
+// the Add-a-relay card and the wizard so neither can say "Added" over a relay that was not signed (second audit,
+// finding 8: a skipped or unknown result used to read as success).
+function signOutcome(r, url) {
+  if (!r) return 'Couldn’t sign that relay into your church’s list. Try again.';
+  // `changed` first: a church switch mid-signing also reads as unknown, and is neither "a relay isn't answering"
+  // nor "not your church's own console" (third audit, finding 8). And nothing is ever added automatically later —
+  // the automatic pass signs only the console's own box (B4) — so the unknown line says to connect again (finding 2).
+  if (r.changed) return 'Added to this console, but it switched church while saving, so the relay isn’t in your church’s list yet. Connect it again.';
+  if (r.skipped) return 'Added to this console. Only your church’s own console can put it in the church’s relay list.';
+  // One line for two cases (fifth audit, finding 3): nothing was signed (`unknown`), or the list found names the relay
+  // but came from a read not every relay answered, so it may be a stale copy (`full === false`). True for both.
+  const UNREAD = 'Added to this console, but your church’s relay list could not be read in full just now (a relay isn’t answering), so it can’t be confirmed in the list yet. Connect it again once your relays are answering.';
+  if (r.unknown) return UNREAD;
+  // Compared the way Steward.signRelay normalises (normRelay: wss:// added, trailing slashes dropped), so a
+  // resolved name or a pasted address with a trailing slash still finds its own proof.
+  const n = (x) => { let v = String(x || '').trim(); if (v && !/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, ''); return v.replace(/\/+$/, '').toLowerCase(); };
+  const p = (r.proven || []).find(x => n(x.url) === n(url)) || null;
+  if (!p) return 'It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.';
+  if (p.shared) return 'That is one of TrinityOne’s shared relays. Your church already uses it, so it doesn’t need adding to your church’s own list.';
+  if (r.full === false) return UNREAD;
+  if (!(r.entries || []).some(e => e.pubkey === p.pubkey)) return 'Couldn’t put it in your church’s relay list. Try again.';
+  return '';
+}
+// `detail` names what is about to be connected (the address a name resolved to, or the relays Auto-find chose),
+// so the steward agrees to a box and not merely to a word (audit 2026-10-21, finding 8). The button says
+// "Yes, connect" so it cannot be confused with the Connect beside the name field (finding 10).
+function RelayConsent({ onYes, onNo, detail, text, note }) {
+  return (
+    <div role="alertdialog" aria-label="Confirm connecting this relay" style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+      <b style={{ color: 'var(--ink)' }}>{text || RELAY_CONSENT_TEXT}</b> {note || 'Only connect a relay your church runs or trusts.'}
+      {detail ? <div style={{ marginTop: 5, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', wordBreak: 'break-all', whiteSpace: 'pre-line' }}>{detail}</div> : null}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button onClick={onYes} className="sk-btn sk-btn--clay" style={{ padding: '6px 12px', fontSize: 12 }}>Yes, connect</button>
+        <button onClick={onNo} className="sk-btn sk-btn--ghost" style={{ padding: '6px 12px', fontSize: 12 }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 // ── ADD A RELAY: one page, three ways in — a typed address, auto-find, or the relay's claimed name.
 //    Split off the Relays card 2026-09-09. All three are rare, all three sat expanded on the everyday page,
 //    and between them they were most of its measured 1000px.
@@ -5222,27 +5504,61 @@ function DashAddRelayCard() {
   // Round 9's vicar did exactly that and stopped: "I typed our second office computer's address into the Add
   // relay box and pressed Add relay... Because of that I never got to the bit about keeping the two in step."
   const [addedNote, setAddedNote] = React.useState('');
-  const addRelay = () => {
-    const r = window.Steward.addRelay && window.Steward.addRelay(draft);
-    if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+  // INFORMED CONSENT BEFORE A RELAY IS SIGNED (owner, 2026-10-21, B4). Connecting a relay signs it into the
+  // church's own relay list, and every member's phone then sends the church's data to it. So the first tap
+  // only shows what that means; the steward's second tap — `confirmed` — is the consent, and only then is the
+  // relay added and signed. `ask` holds which action is waiting: 'add' or 'name'.
+  const [ask, setAsk] = React.useState('');
+  const [signNote, setSignNote] = React.useState('');
+  const signIt = async (url) => {
+    setSignNote('');
+    let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(url) : null; } catch (e) { r = null; }
+    setSignNote(window.Steward.signRelay ? signOutcome(r, url) : '');
+    return r;
+  };
+  const addRelay = async (confirmed) => {
+    if (!(draft || '').trim()) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+    // Ninth audit: a spelling of a shared relay is refused, and the steward is told why, before the consent line.
+    if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(draft)) { setAsk(''); setErr('That’s already one of TrinityOne’s relays.'); setAddedNote(''); return; }
+    // This console's own relay, however it is spelled, is refused before consent and says why (phone test 2026-10-22).
+    if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(draft)) { setAsk(''); setErr('That’s this console’s own relay — it’s already on your list.'); setAddedNote(''); return; }
+    if (confirmed !== true) { setAsk('add'); return; }
+    setAsk('');
+    // ALREADY LISTED IS NOT AN ERROR (audit 2026-10-21, finding 1): a relay added before consent existed, or one
+    // that was offline the first time, is signed now rather than refused as "please enter an address".
+    const r = (window.Steward.addRelay && window.Steward.addRelay(draft)) || (window.Steward.knownRelay && window.Steward.knownRelay(draft));
+    // A non-empty address that still could not be added is never answered "Enter a relay address" (phone test 2026-10-22).
+    if (!r) { setErr('Couldn’t add ' + draft.trim() + '. Check it is a relay address (wss://…) and try again.'); setAddedNote(''); return; }
     setDraft(''); setErr('');
     setAddedNote(String(r));
+    await signIt(String(r));
   };
   // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
   // relay. (Registering write-access still uses the token/pairing below.)
   const [byName, setByName] = React.useState('');
   const [byNameMsg, setByNameMsg] = React.useState(null);
   const RELAY_DIRECTORY = 'https://app.trinityone.church';
-  const connectByName = async () => {
+  // The address a name resolved to, held while the consent line asks about it — so the steward agrees to the
+  // box itself, and the box agreed to is the one connected (finding 8: no second lookup after consent).
+  const [named, setNamed] = React.useState(null);
+  const connectByName = async (confirmed) => {
     const n = (byName || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); if (!n) return;   // "Quiet Dove 45" → "quiet-dove-45"
-    setByNameMsg({ text: 'Looking up “' + n + '”…' });
+    const held = (confirmed === true && named && named.n === n) ? named : null;
+    if (!held) setByNameMsg({ text: 'Looking up “' + n + '”…' });
     try {
-      const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
+      const j = held || await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
       // C5: the resolver now refuses two things it used to pass on — a cleartext (ws://) answer, and an
       // address this church has not signed into its own relay-net document. "No relay is registered under
       // that name" would be a plain untruth for the second, and this project has shipped six controls that
       // told a steward a comforting story about something that did not happen. Say both possibilities.
       if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
+      // THE CONSENT LINE, naming the address the name led to. Nothing is added, registered or signed until the
+      // steward taps "Yes, connect" — see `ask` above.
+      // Ninth audit: a name that leads to a spelling of a shared relay adds nothing.
+      if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(j.url)) { setAsk(''); setNamed(null); setByNameMsg({ ok: false, text: '✗ ' + 'That’s already one of TrinityOne’s relays.' }); return; }
+      if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(j.url)) { setAsk(''); setNamed(null); setByNameMsg({ ok: false, text: '✗ ' + 'That’s this console’s own relay — it’s already on your list.' }); return; }
+      if (confirmed !== true) { setNamed({ n, url: j.url }); setByNameMsg(null); setAsk('name'); return; }
+      setAsk(''); setNamed(null);
       // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
       // the address is already in the list, or when it IS this console's own relay — and in both cases the
       // message below said "Added", which is at best confusing and at worst tells a steward they have a
@@ -5260,6 +5576,7 @@ function DashAddRelayCard() {
         ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
         : { ok: true, text: reg.ok ? ((added ? '✓ Connected to “' : '✓ “') + n + (added ? '” — your church is registered and can post.' : '” was already on your list — your church is registered there and can post.')) : '✓ ' + (added ? 'Added “' : 'Already had “') + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
+      await signIt(j.url);
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };
   // ── end of the connect-by-name flow. scripts/connect-by-name-names-the-church.test.mjs slices this
@@ -5268,18 +5585,49 @@ function DashAddRelayCard() {
   // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
   const [finding, setFinding] = React.useState(false);
   const [findMsg, setFindMsg] = React.useState('');
-  const autoFind = async () => {
+  // AUTO-FIND ASKS FIRST TOO, AND NAMES WHAT IT FOUND (owner decisions, 2026-10-21): it connects relays somebody
+  // ELSE runs, which is exactly when the steward most needs to know where the church's data will go. So it finds
+  // first (adding nothing), shows the relays it found on the consent line, and connects and signs exactly those
+  // on "Yes, connect".
+  const [found, setFound] = React.useState(null);
+  const autoFind = async (confirmed) => {
+    if (confirmed !== true) {
+      setFinding(true); setFindMsg(''); setFound(null);
+      try {
+        // Ninth audit: never offer a spelling of a shared relay (the church already uses those).
+        const picks = (window.Steward.findRelays ? (await window.Steward.findRelays(2)) || [] : [])
+          .filter(p => !(window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(p && p.url)))
+          .filter(p => !(window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(p && p.url)));
+        if (picks && picks.length) { setFound(picks); setAsk('find'); }
+        else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
+      } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
+      setFinding(false);
+      return;
+    }
+    const chosen = found || [];
+    setAsk(''); setFound(null);
     setFinding(true); setFindMsg('');
     try {
-      const picks = window.Steward.autoPickRelays ? await window.Steward.autoPickRelays(2) : [];
-      if (picks && picks.length) setFindMsg('✓ Added ' + picks.length + ' relay' + (picks.length > 1 ? 's' : '') + ' for backup: ' + picks.map(p => p.name || p.url).join(', '));
+      const picks = (window.Steward.connectFoundRelays && chosen.length) ? await window.Steward.connectFoundRelays(chosen) : [];
+      // EACH RELAY'S OWN ANSWER (third audit, finding 4): "✓ Added" only for a relay now in the church's signed list.
+      const added = [], missed = [];
+      for (const p of (picks || [])) {
+        let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(p.url) : null; } catch (e) { r = null; }
+        const why = window.Steward.signRelay ? signOutcome(r, p.url) : '';
+        // Auto-find will not offer a relay this console already has, so the way to retry is Add a relay (fourth audit, finding 7).
+        if (why) missed.push((p.name || p.url) + ': ' + why + ' To try again, enter ' + p.url + ' under Add a relay.'); else added.push(p);
+      }
+      const lines = [];
+      if (added.length) lines.push('✓ Added ' + added.length + ' relay' + (added.length > 1 ? 's' : '') + ' for backup: ' + added.map(p => p.name || p.url).join(', '));
+      for (const m of missed) lines.push('✗ ' + m);
+      if (lines.length) setFindMsg(lines.join(' '));
       else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
     } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
     setFinding(false);
   };
   return (
       <Panel title="Add a relay">
-        <div className="set-note" style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Three ways to add a relay your church runs. Any of them lets your church read from it straight away; it only starts carrying your church once it is registered there.</div>
+        <div className="set-note" style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Three ways to add a relay. Connecting one sends your church’s data to it; it only stores it once your church is registered there.</div>
         {/* ADD ANOTHER RELAY THIS CHURCH RUNS (redundancy) — never somebody else's.
             The placeholder below used to name two generic public Nostr relays and the error under it named
             a third. A steward who typed one of those in was following the product's own instructions, and
@@ -5289,41 +5637,46 @@ function DashAddRelayCard() {
             the second box it runs itself; what is gone is the suggestion of anybody else's. */}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 9 }}>
-            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
+            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); if (ask === 'add') setAsk(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
               aria-label="Relay address to add"
               placeholder="wss://relay.yourchurch.org" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-            <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
+            <button onClick={() => addRelay()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+          {ask === 'add' ? <RelayConsent onYes={() => addRelay(true)} onNo={() => setAsk('')} detail={(draft || '').trim()} /> : null}
+          {signNote ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7, lineHeight: 1.45 }}>{signNote}</div> : null}
           {/* The step nobody was told about. Says what was added, what it does NOT yet do, and the one thing
               left to do about it — in a steward's words, not the relay's. */}
           {addedNote ? (
             <div style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-              <b style={{ color: 'var(--ink)' }}>Added {addedNote}</b> — your church will now read from it.
+              <b style={{ color: 'var(--ink)' }}>Connected {addedNote}</b> — your church’s data now goes to it.
               <div style={{ marginTop: 4 }}>
-                It is not yet holding your church, though. A relay only carries a church once that church is
-                <b> registered</b> on it — until then it stays a spare you read from, and it will not count
-                towards keeping two copies. If it is your own relay, open its setup page and add this church;
-                if someone else runs it, ask them to.
+                It only keeps it once your church is <b>registered</b> there — until then it refuses your
+                posts and will not count towards keeping two copies. If it is your own relay, open its setup
+                page and add this church; if someone else runs it, ask them to.
               </div>
               <button onClick={() => setAddedNote('')} className="sk-btn sk-btn--ghost" style={{ marginTop: 8, padding: '6px 10px', fontSize: 12 }}>Got it</button>
             </div>
           ) : null}
-          <button onClick={autoFind} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
+          <button onClick={() => autoFind()} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies.</div>
+          {ask === 'find' && found ? <RelayConsent onYes={() => autoFind(true)} onNo={() => { setAsk(''); setFound(null); }}
+            text={RELAY_CONSENT_FOUND} note="They are run by other people who offer to host churches."
+            detail={found.map(p => (p.name ? p.name + ' — ' : '') + p.url).join('\n')} /> : null}
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
           {/* connect to a relay by its memorable name (resolved via the directory) */}
           <div style={{ marginTop: 13 }}>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 4 }}>OR CONNECT BY NAME</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 7, lineHeight: 1.45 }}>The name its operator claimed. It follows the relay’s current address, even when the tunnel URL changes.</div>
             <div style={{ display: 'flex', gap: 9 }}>
-              <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
+              <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); if (ask === 'name') { setAsk(''); setNamed(null); } }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
                 placeholder="your relay’s name, e.g. grace-city" spellCheck={false} autoCapitalize="none"
                 aria-label="Relay name to connect to" title="Type the name the relay’s operator claimed (e.g. grace-city). It resolves to the relay’s current address, so it keeps working even after the tunnel URL changes."
                 style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-              <button onClick={connectByName} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
+              <button onClick={() => connectByName()} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
             </div>
+            {ask === 'name' && named ? <RelayConsent onYes={() => connectByName(true)} onNo={() => { setAsk(''); setNamed(null); }} detail={'“' + named.n + '” is ' + named.url} /> : null}
             {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay-ink)' : byNameMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
           </div>
         </div>
@@ -5446,7 +5799,9 @@ function ago(ts) {
   return new Date(ts * 1000).toLocaleDateString();
 }
 
-function NewPlanModal({ onClose }) {
+// Create a reading plan, or EDIT one: passing `editing` (a plan from the shared list) pre-fills the form and re-publishes
+// under the SAME id with `created` carried through, so it replaces the plan in place and keeps its place in the list.
+function NewPlanModal({ onClose, editing }) {
   const [mode, setMode] = React.useState('manual');   // manual | upload | pick
   const [picked, setPicked] = React.useState([]);   // readings added with the Book/Chapter picker
   const [rpBook, setRpBook] = React.useState('');
@@ -5477,13 +5832,16 @@ function NewPlanModal({ onClose }) {
   };
   const rpRemove = (idx) => setPicked(prev => prev.filter((_, i) => i !== idx));
   const rpSel = { height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
-  const [name, setName] = React.useState('');
-  const [tag, setTag] = React.useState('');
-  const [blurb, setBlurb] = React.useState('');
-  const [text, setText] = React.useState('');
+  const [name, setName] = React.useState(editing ? editing.title || '' : '');
+  const [tag, setTag] = React.useState(editing ? editing.tag || '' : '');
+  const [blurb, setBlurb] = React.useState(editing ? editing.blurb || '' : '');
+  const editDays = editing && Array.isArray(editing.days) ? editing.days : [];
+  const [text, setText] = React.useState(editing ? editDays.map(d => d.ref).join('\n') : '');
+  const [saveErr, setSaveErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
   const [parsedDays, setParsedDays] = React.useState(null);   // [{ d, ref, label }] from file upload
   const [fileName, setFileName] = React.useState('');
-  const [schedAt, setSchedAt] = React.useState(0);
+  const [schedAt, setSchedAt] = React.useState(editing && editing.publishAt && editing.publishAt * 1000 > Date.now() ? editing.publishAt : 0);
   const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
@@ -5532,10 +5890,28 @@ function NewPlanModal({ onClose }) {
   const manualLines = text.split('\n').map(s => s.trim()).filter(Boolean);
   const activeDays = mode === 'upload' && parsedDays ? parsedDays
     : mode === 'pick' ? picked.map((ref, i) => ({ d: i + 1, ref, label: ref }))
-    : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
-  const canPublish = name.trim() && activeDays.length > 0;
+    : manualLines.map((ref, i) => ({ d: i + 1, ref, label: editLabel(ref, i) }));
+  const canPublish = name.trim() && activeDays.length > 0 && !busy;
+  // Editing keeps each day's own label ("Day 3 - Faith") whenever its reading is unchanged (or merely moved); a new or retyped
+  // reading is labelled by the reading itself, as a typed plan always was. Never flattens an untouched day.
+  const isLive = !!editing && !editing.draft;
+  const daysChanged = !!editing && JSON.stringify(activeDays.map(d => d.ref)) !== JSON.stringify(editDays.map(d => d.ref));
+  const warnDays = isLive && daysChanged;   // owner: warn, then allow
+  function editLabel(ref, i) {
+    if (!editing) return ref;
+    const same = editDays[i] && editDays[i].ref === ref ? editDays[i] : editDays.find(d => d.ref === ref);
+    return same && same.label ? same.label : ref;
+  }
   const create = (asDraft) => {
     if (!canPublish) return;
+    if (editing) {
+      setBusy(true); setSaveErr('');
+      const sub = (editing.sub && !daysChanged) ? editing.sub : activeDays.length + ' day' + (activeDays.length === 1 ? '' : 's');
+      Promise.resolve(window.Steward.publishPlan({ ...editing, id: editing.id, created: Number(editing.created) || Number(editing.ts) || undefined, title: name.trim(), sub, tag: tag.trim() || 'Custom', blurb: blurb.trim(), days: activeDays, publishAt: isLive ? 0 : (isFuture ? schedAt : 0), draft: !!asDraft }))
+        .then(res => { if (!res || !res.ts) { setBusy(false); setSaveErr('Not saved - try again. Your changes are still here.'); return; } onClose(); },
+              () => { setBusy(false); setSaveErr('Not saved - try again. Your changes are still here.'); });
+      return;
+    }
     window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: activeDays.length + ' day' + (activeDays.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: blurb.trim(), days: activeDays, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
     onClose();
   };
@@ -5545,15 +5921,15 @@ function NewPlanModal({ onClose }) {
   const dlgRef = useStewDialog(onClose);
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit reading plan' : 'Create a reading plan'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
         <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>Pick verses, type them, or upload a file.</p>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit reading plan' : 'Create a reading plan'}</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>{editing ? 'Change the name, details or readings (one per line).' : 'Pick verses, type them, or upload a file.'}</p>
+        {editing ? null : <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           {modeBtn('manual', 'Type it', 'pen')}
           {modeBtn('pick', 'Pick verses', 'read')}
           {modeBtn('upload', 'Upload file', 'share')}
-        </div>
+        </div>}
         {mode === 'upload' ? (
           <React.Fragment>
             <div onClick={() => inputRef.current && inputRef.current.click()} style={{ border: '2px dashed var(--line)', borderRadius: 14, background: 'var(--surface-2)', padding: '18px 16px', textAlign: 'center', cursor: 'pointer', marginBottom: 14 }}>
@@ -5632,7 +6008,8 @@ function NewPlanModal({ onClose }) {
             </div>
           </React.Fragment>
         ) : null}
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 6px' }}>Release</div>
+        {warnDays ? <div data-testid="plan-days-warning" role="alert" style={{ margin: '12px 0 0', padding: '10px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold, #c9a227) 14%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink)' }}>This plan is live. You are changing its days. Members who have already started keep their ticks by day number, so a tick may now sit against a different reading. Saving applies it straight away.</div> : null}
+        {editing && isLive ? null : <React.Fragment><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 6px' }}>Release</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: !schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (!schedAt ? 'var(--clay)' : 'var(--line)'), color: !schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Now</button>
           <button type="button" onClick={() => setSchedAt(schedAt || Math.floor(Date.now() / 1000) + 7 * 86400)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (schedAt ? 'var(--clay)' : 'var(--line)'), color: schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Schedule...</button>
@@ -5642,12 +6019,17 @@ function NewPlanModal({ onClose }) {
             <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', margin: '8px 0 6px' }} />
             <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)' }}>{isFuture ? 'Hidden from members until ' + new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.' : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
-        ) : null}
+        ) : null}</React.Fragment>}
         </div>
+        {saveErr ? <div role="alert" style={{ padding: '8px 28px 0', fontSize: 12.5, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{saveErr}</div> : null}
         <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
-          <button onClick={() => create(true)} disabled={!canPublish} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }} title="Hold it — members won't see it until you publish">Save as draft</button>
-          <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
+          {editing && isLive
+            ? <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> Save changes</button>
+            : <React.Fragment>
+              <button onClick={() => create(true)} disabled={!canPublish} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }} title="Hold it — members won't see it until you publish">Save as draft</button>
+              <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
+            </React.Fragment>}
         </div>
       </div>
     </div>
@@ -5770,6 +6152,19 @@ function DashVersePrompt() {
     var combined = remaining.map(function(s) { return s.ref; }).filter(Boolean).join('; ');
     window.Steward.publishVersePrompt(combined, '', remaining).then(function() {
       setMsg('Removed'); setTimeout(function() { setMsg(''); }, 3000);
+    }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
+  };
+  // Take ONE unscheduled ("now") passage down. The prompt is one replaceable document, so this republishes it
+  // without that passage (members follow the replacement); the last one going is the same as Clear.
+  var removeNowEntry = function(idx) {
+    if (!vp || !vp.ref) return;
+    var parts = vp.ref.split('; ').filter(Boolean);
+    var remaining = parts.filter(function(_, i) { return i !== idx; });
+    if (remaining.length === 0) { clear(); return; }
+    setBusy(true);
+    window.Steward.publishVersePrompt(remaining.join('; '), '', undefined).then(function(sent) {
+      if (sent && typeof sent.ts === 'number') setVp(function(prev) { return prev && typeof prev.ts === 'number' && prev.ts > sent.ts ? prev : sent; });
+      setMsg('Taken down'); setTimeout(function() { setMsg(''); }, 3000);
     }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
   };
   var pvIdxState = _s(0), pvIdx = pvIdxState[0], setPvIdx = pvIdxState[1];
@@ -5897,6 +6292,13 @@ function DashVersePrompt() {
     // unless the prompt already carries a schedule (members read only the schedule then, so it is kept as a past entry)
     var nowMs = Date.now();
     var anyFuture = refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > nowMs; });
+    // An existing unscheduled passage is visible to members only because the prompt has NO schedule; the moment a
+    // schedule exists members read the schedule alone. So when this push adds a scheduled passage, carry the live
+    // one(s) into the schedule as already-due entries, or they silently vanish from members.
+    if (anyFuture && existingSchedule.length === 0 && vp && vp.ref) {
+      var dueAt = Math.min(Number(vp.ts) || 0, Math.floor(nowMs / 1000) - 1) || Math.floor(nowMs / 1000) - 1;
+      existingSchedule = vp.ref.split('; ').filter(Boolean).map(function(r) { return { at: dueAt, ref: r, note: '' }; });
+    }
     var keepPast = anyFuture || existingSchedule.length > 0;
     var isSched = function(r) { return r.date && r.time && (keepPast || new Date(r.date + 'T' + r.time).getTime() > nowMs); };
     var newSchedule = refs.filter(isSched).map(function(r) {
@@ -5973,7 +6375,15 @@ function DashVersePrompt() {
               </div>;
             })}
             <button type="button" onClick={function() { setEditSch(vpSch.map(function(s) { return { ref: s.ref, at: s.at, note: s.note || '' }; })); }} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', cursor: 'pointer', padding: '4px 0', color: statusColor, fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>Edit schedule</button>
-          </div>) : <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--ink)' }}>{vp.ref}</div>}
+          </div>) : <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {vpVerses.map(function(v, i) {
+              return <div key={i + v} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 10, background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', border: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.3px', padding: '2px 7px', borderRadius: 99, background: 'var(--sage-soft)', color: 'var(--sage-ink)' }}>LIVE</span>
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{v}</span>
+                <button type="button" onClick={function() { removeNowEntry(i); }} disabled={busy} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', flexShrink: 0 }} title="Take down" aria-label={'Take down ' + v}><Icon name="x" size={14} color="currentColor" /></button>
+              </div>;
+            })}
+          </div>}
         </div>;
       })() : null}
 
@@ -5982,7 +6392,7 @@ function DashVersePrompt() {
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Pick a verse or range. Add multiple passages, then push them all to the church at once.</div>
         {bibleVersions.length > 1 ? <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TRANSLATION</div>
-          <select value={bibleVersion} onChange={function(e) { setBibleVersion(e.target.value); }} style={Object.assign({}, selStyle, { width: 'auto', minWidth: 140 })} aria-label="Translation">
+          <select value={bibleVersion} onChange={function(e) { setBibleVersion(e.target.value); }} style={Object.assign({}, selStyle, { width: 'auto', minWidth: 140 })} title="Which Bible translation to show" aria-label="Translation">
             {bibleVersions.map(function(v) { return <option key={v} value={v}>{v}</option>; })}
           </select>
         </div> : null}
@@ -5990,28 +6400,28 @@ function DashVersePrompt() {
         <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'end' }}>
           <div style={{ flex: '1 1 180px', maxWidth: 240 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>BOOK</div>
-            <select value={book} onChange={function(e) { setBook(e.target.value); setChap(''); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="Book">
+            <select value={book} onChange={function(e) { setBook(e.target.value); setChap(''); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} title="Choose the book of the Bible" aria-label="Book">
               <option value="">Choose a book</option>
               {VP_BOOKS.map(function(b) { return <option key={b[0]} value={b[0]}>{b[0]}</option>; })}
             </select>
           </div>
           {book ? <div style={{ flex: '0 0 80px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>CHAPTER</div>
-            <select value={chap} onChange={function(e) { setChap(e.target.value); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="Chapter">
+            <select value={chap} onChange={function(e) { setChap(e.target.value); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} title="Choose the chapter" aria-label="Chapter">
               <option value="">Ch.</option>
               {chapList.map(function(c) { return <option key={c} value={String(c)}>{c}</option>; })}
             </select>
           </div> : null}
           {chap ? <div style={{ flex: '0 0 118px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>FROM</div>
-            <select value={fromV} onChange={function(e) { setFrom(e.target.value); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="From verse">
+            <select value={fromV} onChange={function(e) { setFrom(e.target.value); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} title="First verse to include" aria-label="From verse">
               <option value="">Whole chapter</option>
               {verseList.map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
             </select>
           </div> : null}
           {fromV ? <div style={{ flex: '0 0 80px' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TO</div>
-            <select value={toV} onChange={function(e) { setTo(e.target.value); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="To verse (optional)">
+            <select value={toV} onChange={function(e) { setTo(e.target.value); }} style={Object.assign({}, selStyle, { width: '100%' })} title="Last verse to include. Leave blank for a single verse." aria-label="To verse (optional)">
               <option value="">{'\u2014'}</option>
               {verseList.filter(function(v) { return v >= Number(fromV); }).map(function(v) { return <option key={v} value={String(v)}>{v}</option>; })}
             </select>
@@ -6076,11 +6486,11 @@ function DashVersePrompt() {
               <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px', marginTop: 4 }}>{pvRef}{bibleVersion ? ' · ' + bibleVersion : ''}</div>
             </div>
             {pvRefs.length > 1 ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14, position: 'relative', zIndex: 2 }}>
-              <button type="button" onClick={function() { setPvIdx(function(i) { return i > 0 ? i - 1 : pvRefs.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevL" size={14} color="#fff" /></button>
+              <button type="button" title="Show the previous verse in the preview" onClick={function() { setPvIdx(function(i) { return i > 0 ? i - 1 : pvRefs.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevL" size={14} color="#fff" /></button>
               <div style={{ display: 'flex', gap: 6 }}>
                 {pvRefs.map(function(_, i) { return <div key={i} onClick={function() { setPvIdx(i); }} style={{ width: i === pvSafeIdx ? 18 : 7, height: 7, borderRadius: 99, background: i === pvSafeIdx ? '#fff' : 'rgba(255,255,255,.4)', cursor: 'pointer', transition: 'all .2s ease' }} />; })}
               </div>
-              <button type="button" onClick={function() { setPvIdx(function(i) { return i < pvRefs.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevR" size={14} color="#fff" /></button>
+              <button type="button" title="Show the next verse in the preview" onClick={function() { setPvIdx(function(i) { return i < pvRefs.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevR" size={14} color="#fff" /></button>
             </div> : null}
           </div>
         </div> : null}
@@ -6096,6 +6506,7 @@ window.DashVersePrompt = DashVersePrompt;
 function DashPlans() {
   const shared = window.useStewardPlans();          // plans currently shared with the church
   const [creating, setCreating] = React.useState(false);
+  const [editingPlan, setEditingPlan] = React.useState(null);   // the shared plan open in the edit form
   const [planErr, setPlanErr] = React.useState({});   // plan id -> short "didn't save" note beside its Website switch
   // Flip "Show on website". The switch reads p.public from the plans subscription, so it only moves once the
   // new copy has really landed; a refused publish (publishPlan resolves with no ts) leaves it where it was.
@@ -6103,6 +6514,12 @@ function DashPlans() {
     const note = (m) => setPlanErr(prev => { const n = Object.assign({}, prev); if (m) n[p.id] = m; else delete n[p.id]; return n; });
     note('');
     Promise.resolve(window.Steward.publishPlan({ ...p, public: p.public === false })).then(r => { if (!r || !r.ts) note('Not saved'); }, () => note('Not saved'));
+  };
+  // Unshare moves a live plan BACK TO DRAFTS (same id, days and created kept) - it is not deleted. Only Delete on a draft row removes it.
+  const unshare = (p) => {
+    const note = (m) => setPlanErr(prev => { const n = Object.assign({}, prev); if (m) n[p.id] = m; else delete n[p.id]; return n; });
+    note('');
+    Promise.resolve(window.Steward.publishPlan({ ...p, draft: true })).then(r => { if (!r || !r.ts) note('Not saved'); }, () => note('Not saved'));
   };
   const sharedIds = new Set(shared.map(p => p.id));
   const library = (window.SK && window.SK.planLibrary) || [];
@@ -6121,19 +6538,24 @@ function DashPlans() {
       </div>
       {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
       {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
+      {isShared ? <button onClick={() => setEditingPlan(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Edit this plan" aria-label={'Edit ' + p.title}><Icon name="pen" size={13} color="currentColor" /> Edit</button> : null}
       {isShared
-        ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
-        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
+        ? (p.draft
+          ? <button onClick={() => { if (confirm('Delete "' + p.title + '" for good? This cannot be undone.')) window.Steward.removePlan(p.id); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Delete this draft plan for good">Delete</button>
+          : <button onClick={() => unshare(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Stop sharing: members and your website stop seeing it, and it moves to drafts">Unshare</button>)
+        : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Publish this plan so members (and your website) can see and follow it"><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
     </div>
   );
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%' }}>
       {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
+      {editingPlan ? <NewPlanModal editing={editingPlan} onClose={() => setEditingPlan(null)} /> : null}
       {/* single scroll container so a long drafts list can't push the library off the bottom */}
       <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 }}>
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
+          <button onClick={() => window.TrinityTemplates.openReadPlanTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The format + house style for a reading plan you can upload"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
           <button onClick={() => setCreating(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New plan</button>
         </div>}>
         {shared.length === 0
@@ -6550,8 +6972,9 @@ function DashResources() {
   const [view, setView] = React.useState('plans');   // plans | devotionals
   const [bulk, setBulk] = React.useState(false);
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
+  const TAB_TIPS = { plans: 'Reading plans members can follow day by day', devotionals: 'Short devotionals you schedule for members to read', media: 'Sermon recordings and notes for members', verse: 'Set the verse members are prompted with' };
   const btn = (k, label) => (
-    <button onClick={() => setView(k)} style={{ padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay-ink)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
+    <button onClick={() => setView(k)} title={TAB_TIPS[k]} style={{ padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', background: view === k ? 'var(--surface)' : 'transparent', color: view === k ? 'var(--clay-ink)' : 'var(--ink-2)', boxShadow: view === k ? 'var(--shadow-sm)' : 'none' }}>{label}</button>
   );
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -6559,7 +6982,8 @@ function DashResources() {
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
         <div style={{ ...seg, maxWidth: '100%', overflowX: 'auto' }}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}{btn('media', 'Sermons')}{btn('verse', 'Verse prompt')}</div>
         <div style={{ flex: 1 }} />
-        {(view === 'plans' || view === 'devotionals') ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
+        {/* Bulk upload is devotionals-only. Reading plans go through New plan → Upload file + the Template (one file = one plan). */}
+        {view === 'devotionals' ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : view === 'devotionals' ? <DashDevotionals /> : view === 'verse' ? <DashVersePrompt /> : <DashSermons />}</div>
     </div>

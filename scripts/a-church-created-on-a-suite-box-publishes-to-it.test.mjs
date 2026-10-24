@@ -179,6 +179,23 @@ test('a church created in the console lands on the box that made it, in the same
       'church\'s relay — a self-hosting church whose own box got nothing.');
     assert.ok(held.some(h => h.dtag.startsWith('trinityone/joinpolicy:')),
       'the join policy did not reach the box either. It holds: ' + JSON.stringify(kinds));
+
+    // SELF-HOSTING P1 (2026-10-21): THE CONSOLE SIGNS ITS OWN BOX INTO THE CHURCH'S RELAY LIST, UNPROMPTED.
+    // The point of use, in a real browser, with the shared relays black-holed above — the case self-hosting is
+    // for. Caught a defect here that every unit test missed: "every relay must answer" before a first list may
+    // be started can never be met with the shared hosts unreachable, so the box stayed unsigned for ever.
+    const netDocs = () => {
+      const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true });
+      try { return db.prepare("SELECT raw FROM events WHERE pubkey = ? AND dtag = 'trinityone/relay-net'").all(churchPub).map(r => JSON.parse(r.raw)); }
+      finally { db.close(); }
+    };
+    await settles(async () => netDocs().length, n => n > 0, 60000);
+    const nd = netDocs();
+    assert.equal(nd.length, 1,
+      'THE SUITE\'S OWN BOX WAS NEVER SIGNED INTO THE CHURCH\'S RELAY LIST — the box holds ' + nd.length + ' relay-net documents');
+    const entries = JSON.parse(nd[0].content);
+    assert.deepEqual(entries.map(e => e.pubkey), [relay.relayPub], 'the signed list does not name exactly this box: ' + nd[0].content);
+    assert.doesNotMatch(nd[0].content, /127\.0\.0\.1|localhost/, 'a loopback address went into the church\'s signed list');
   } finally {
     try { ws && ws.close(); } catch {}
     try { chr.kill('SIGKILL'); } catch {}

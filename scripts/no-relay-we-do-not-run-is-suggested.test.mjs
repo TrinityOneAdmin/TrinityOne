@@ -167,7 +167,7 @@ test('CONTROL: the console relay pages render, keep the typed-address box, and s
   const tree = await paint(relaysCard({ relays: stored, backup: { boxes: 2, online: 2, syncOn: true } }));
   const all = said(tree);
   assert.match(all, /Where your church publishes/, 'DashRelaysCard no longer renders its blurb — re-anchor this test');
-  assert.match(all, /Three ways to add a relay your church runs/,
+  assert.match(all, /Three ways to add a relay\./,
     'the Add-a-relay page is not in the tree, so the placeholder and error sweeps below measure nothing');
   assert.match(all, /wss:\/\/nos\.lol/,
     'a relay already saved in a church\'s list stopped rendering. C1 removes SUGGESTIONS, never stored values');

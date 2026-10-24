@@ -6587,7 +6587,9 @@
       const pubkey = String(e.pubkey || "").toLowerCase();
       if (!_isHex64(pubkey) || seen.has(pubkey)) continue;
       seen.add(pubkey);
-      out.push({ pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" });
+      const entry = { pubkey, alwaysOn: e.alwaysOn !== false, url: typeof e.url === "string" ? e.url : "" };
+      if (typeof e.name === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(e.name)) entry.name = e.name;
+      out.push(entry);
     }
     return out;
   }
@@ -16200,6 +16202,7 @@ zoo`.split("\n");
         const newUrl = normRelay(j && j.url);
         if (!newUrl || newUrl === entry.url) continue;
         if (!await admitRemoteRelay(newUrl)) continue;
+        if (isSharedRelaySpelling(newUrl)) continue;
         extra = extra.filter((u) => u !== entry.url);
         extra.push(newUrl);
         entry.url = newUrl;
@@ -16222,6 +16225,47 @@ zoo`.split("\n");
     setInterval(refreshNamedRelays, 9e4);
     window.addEventListener("focus", refreshNamedRelays);
   } catch (e) {
+  }
+  function isSharedRelaySpelling(u) {
+    if (!u) return false;
+    try {
+      if (isSharedAddress(u)) return true;
+    } catch (e) {
+    }
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const v = n(u);
+    if (!v) return false;
+    return Object.keys(CANONICAL_RELAY_PUBS).concat(CANONICAL_RELAYS).some((h) => n(h) === v);
+  }
+  function isOwnRelaySpelling(u) {
+    if (!u) return false;
+    let own = "";
+    try {
+      own = ownRelay();
+    } catch (e) {
+      own = "";
+    }
+    if (!own) return false;
+    try {
+      const a = relayAddrKey(u);
+      if (a && a === relayAddrKey(own)) return true;
+    } catch (e) {
+    }
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const v = n(u);
+    return !!v && v === n(own);
   }
   function normRelay(input) {
     let v = String(input || "").trim();
@@ -17715,6 +17759,12 @@ zoo`.split("\n");
       _gate.refresh(relaysRaw(), pub);
     } catch (e) {
     }
+    try {
+      const _p = adoptNetDocAddresses();
+      if (_p && _p.catch) _p.catch(() => {
+      });
+    } catch (e) {
+    }
     window.Steward.activePub = pub;
     window.Steward.hasKey = true;
   }
@@ -18759,50 +18809,85 @@ zoo`.split("\n");
     };
     const o = _ownOrigin();
     if (o) add2(o.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") + "/relay");
-    for (const u of extraRelays()) add2(u);
     for (const u of extra || []) add2(u);
     return out;
   }
-  function _oneComplete(filters, ms = 6e3) {
+  function _oneComplete(filters, ms = 6e3, privateDoc = false) {
     return new Promise((resolve) => {
-      let best = null, complete = false, done = false;
+      const urls = relaysRaw();
+      let best = null, done = false;
+      const loginPending = (u) => {
+        let k = u;
+        try {
+          k = normalizeURL2(u);
+        } catch (e) {
+        }
+        const r = pool.relays.get(k);
+        return !!r && !!r.challenge && _authAccepted.get(k) !== r;
+      };
+      const eosed = /* @__PURE__ */ new Set(), failed = /* @__PURE__ */ new Set(), subs = [];
       const finish = () => {
         if (done) return;
         done = true;
-        try {
-          sub.close();
-        } catch {
+        let answered = 0;
+        for (const u of eosed) if (!failed.has(u) && !(privateDoc && loginPending(u))) answered++;
+        const complete = urls.length > 0 && eosed.size === urls.length && answered > 0;
+        for (const s of subs) {
+          try {
+            s.close();
+          } catch {
+          }
         }
-        resolve({ ev: best, complete });
+        const answeredUrls = [...eosed].filter((u) => !failed.has(u) && !(privateDoc && loginPending(u)));
+        resolve({ ev: best, complete, answered, asked: urls.length, askedUrls: urls.slice(), answeredUrls });
       };
-      const sub = pool.subscribeMany(relaysRaw(), filters, {
-        onevent(e) {
-          if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
-        },
-        oneose() {
-          complete = true;
-          finish();
-        },
-        // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — B0 of reference/PLAN-ENROLMENT-GAP-2026-09-02.md,
-        // and the same fix `_newestByD` has carried since AUDIT-8 measured it there.
-        // nostr-tools arms its OWN EOSE timer (default `baseEoseTimeout` 4400ms) and calls `oneose` when it
-        // expires, whether or not any relay ever sent the frame. This function's own bound is 6000ms, so the
-        // library's fake EOSE fired FIRST and set `complete = true` — a failed read reporting a COMPLETED read
-        // of an EMPTY church. That is the input to the doc-wipe chain: `relayNetDoc()` returns
-        // {ev:null, complete:true} while the church's relays are merely down (the a8 update blip is exactly
-        // this), the `!complete` guard does not fire, entries are rebuilt FROM SCRATCH with created_at: now(),
-        // and newest-wins un-admits every box the church had signed, on every member's phone.
-        // Pushing the library's timer well past our own bound means an EOSE arriving inside `ms` is a real one.
-        //
-        // ⚠ THIS ALONE DOES NOT CLOSE B0, and the plan says so in as many words. An UNREACHABLE relay still
-        // reports finished — measured in scripts/a-failed-read-is-not-an-empty-church.test.mjs, which drives a
-        // real socket that never sends EOSE and a genuinely dead port. `complete` means "every relay I could
-        // reach finished", which is not the question enrolment asks. Steps 2-3 of B0 — counting how many relays
-        // GENUINELY answered, and refusing the from-scratch path unless at least one did — are still open.
-        maxWait: ms + 5e3
-      });
+      for (const u of urls) {
+        try {
+          subs.push(pool.subscribeMany([u], filters, {
+            onevent(e) {
+              if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+            },
+            // Deferred one turn so a failing relay's onclose — fired synchronously after its fake oneose — is
+            // recorded before anything is counted.
+            oneose() {
+              eosed.add(u);
+              if (eosed.size === urls.length) setTimeout(finish, 0);
+            },
+            onclose() {
+              failed.add(u);
+            },
+            // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — nostr-tools arms its own EOSE timer and calls
+            // oneose when it expires whether or not any relay sent the frame. Pushing it well past our own bound
+            // means an EOSE arriving inside `ms` is a real one (B0 step 1, measured at ~4421ms before this).
+            maxWait: ms + 5e3
+          }));
+        } catch (e) {
+          failed.add(u);
+          eosed.add(u);
+        }
+      }
       setTimeout(finish, ms);
     });
+  }
+  function _readCovers(r, leaving) {
+    const k = (u) => {
+      try {
+        return normalizeURL2(u);
+      } catch (e) {
+        return String(u || "");
+      }
+    };
+    let skip = leaving ? k(leaving) : "";
+    if (skip) {
+      try {
+        if (Object.keys(CANONICAL_RELAY_PUBS).some((h) => k(h) === skip)) skip = "";
+      } catch (e) {
+        skip = "";
+      }
+    }
+    const said = new Set((r && r.answeredUrls || []).map(k));
+    const need = (r && r.askedUrls || []).map(k).filter((u) => !skip || u !== skip);
+    return need.length > 0 && need.every((u) => said.has(u));
   }
   function relayNetDoc() {
     return _oneComplete([{ kinds: [30078], authors: [pub], "#d": [RELAY_NET_D] }]);
@@ -18812,21 +18897,62 @@ zoo`.split("\n");
     const { ev } = await relayNetDoc();
     return ev && ev.pubkey === pub ? parseRelayNet(ev.content) : [];
   }
+  var RELAYNET_SEEN = "trinityone.steward.relaynet-seen.";
+  var _isLoopbackRelay = (u) => /^wss?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(:|\/|$)/i.test(String(u || ""));
+  var _RELAY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
   async function enrolRelayNet(opts) {
     const o = opts || {};
     if (!sk || !pub) throw new Error("No church key on this device");
-    const { ev: existing, complete } = await relayNetDoc();
+    if (actingChurch || _viewingNetwork()) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, skipped: "not this church\u2019s own console" };
+    const sk0 = sk, pub0 = pub;
+    const read = await relayNetDoc();
+    const { ev: existing } = read;
     const mine = existing && existing.pubkey === pub ? existing : null;
-    if (!mine && !complete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
+    const seenKey = RELAYNET_SEEN + (pub || "");
+    let seenBefore = false;
+    try {
+      seenBefore = lsGet(seenKey) === "1";
+    } catch (e) {
+      seenBefore = true;
+    }
+    if (mine) {
+      try {
+        lsSet(seenKey, "1");
+      } catch (e) {
+      }
+    }
+    const ownUrl = relayNetCandidates()[0] || "";
+    const _k = (u) => {
+      try {
+        return normalizeURL2(u);
+      } catch (e) {
+        return String(u || "");
+      }
+    };
+    const ownSaidNothing = (urls) => !!ownUrl && (urls || []).some((u) => _k(u) === _k(ownUrl));
+    const fullAnswer = (r) => _readCovers(r);
+    let ownMayStart = false;
+    if (!mine && o.auto === true && !(o.extra && o.extra.length) && _boxHostsUs === true && !seenBefore && !!ownUrl) {
+      let ownKey = "";
+      try {
+        const pr = await verifyRelayIdentity(ownUrl);
+        ownKey = String(pr && pr.relayPub || "").toLowerCase();
+      } catch (e) {
+        ownKey = "";
+      }
+      ownMayStart = /^[0-9a-f]{64}$/.test(ownKey) && !sharedRelayKeys().includes(ownKey);
+    }
+    const nothingAnywhere = (r) => fullAnswer(r) || ownMayStart && ownSaidNothing(r.answeredUrls);
+    if (!mine && !nothingAnywhere(read)) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
     const entries = mine ? parseRelayNet(mine.content) : [];
     const before = JSON.stringify(entries);
     let seeded = 0;
     if (!mine) {
       let old = null, oldComplete = false;
       try {
-        const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }]);
+        const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
         old = r.ev;
-        oldComplete = r.complete;
+        oldComplete = !!r.ev || nothingAnywhere(r);
       } catch {
       }
       if (!oldComplete) return { published: false, entries: [], proven: [], unproven: [], seeded: 0, unknown: true };
@@ -18846,6 +18972,8 @@ zoo`.split("\n");
       }
     }
     const proven = [], unproven = [];
+    const shared = sharedRelayKeys();
+    const own = relayNetCandidates()[0] || "";
     for (const url of relayNetCandidates(o.extra)) {
       let proof = null;
       try {
@@ -18858,16 +18986,391 @@ zoo`.split("\n");
         unproven.push(url);
         continue;
       }
-      proven.push({ url, pubkey: p });
+      proven.push(shared.includes(p) ? { url, pubkey: p, shared: true } : { url, pubkey: p });
+      if (shared.includes(p)) continue;
+      const isOwn = !!own && url === own;
+      const hint = _isLoopbackRelay(url) ? isOwn ? selfPublicRelay() : "" : url;
+      const nm = isOwn ? String(selfRelayName() || "").toLowerCase() : "";
       const cur = entries.find((x) => x.pubkey === p);
       if (cur) {
-        if (url && cur.url !== url) cur.url = url;
-      } else entries.push({ pubkey: p, alwaysOn: true, url });
+        if (hint && cur.url !== hint) cur.url = hint;
+        if (_RELAY_NAME_RE.test(nm) && cur.name !== nm) cur.name = nm;
+      } else {
+        const e = { pubkey: p, alwaysOn: true, url: hint };
+        if (_RELAY_NAME_RE.test(nm)) e.name = nm;
+        entries.push(e);
+      }
     }
     const changed = JSON.stringify(entries) !== before;
-    if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
-    const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk));
-    return { published: !!ev, entries, proven, unproven, seeded };
+    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, changed: true };
+    const deliver = async (ev2) => {
+      const urls = proven.filter((x) => !shared.includes(x.pubkey)).map((x) => x.url);
+      if (!ev2 || !urls.length) return [];
+      const res = await Promise.allSettled(pool.publish(urls, ev2).map((pr) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8e3))])));
+      return urls.filter((u, i3) => res[i3] && res[i3].status === "fulfilled" && !(typeof res[i3].value === "string" && res[i3].value.startsWith("connection failure")));
+    };
+    const resend = async () => {
+      if (!mine) return [];
+      try {
+        await publish(mine, { background: true });
+      } catch (e) {
+      }
+      return deliver(mine);
+    };
+    if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
+    if (!changed) return { published: false, full: !mine || fullAnswer(read), entries, proven, unproven, seeded, delivered: await resend() };
+    if (mine && !fullAnswer(read)) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
+    const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
+    const ev = await publish(signed);
+    const delivered = await deliver(signed);
+    if (ev || delivered.length) {
+      try {
+        lsSet(seenKey, "1");
+      } catch (e) {
+      }
+    }
+    return { published: !!ev || delivered.length > 0, entries, proven, unproven, seeded, delivered };
+  }
+  var _enrolQueue = Promise.resolve();
+  function enrolSerial(fn) {
+    const run = _enrolQueue.then(() => fn(), () => fn());
+    _enrolQueue = run.then(() => {
+    }, () => {
+    });
+    return run;
+  }
+  async function unenrolRelayNet(url) {
+    if (!sk || !pub) throw new Error("No church key on this device");
+    if (actingChurch || _viewingNetwork()) return { removed: false, skipped: "not this church\u2019s own console" };
+    const u = normRelay(url);
+    if (!u) return { removed: false };
+    const sk0 = sk, pub0 = pub;
+    const read = await relayNetDoc();
+    const { ev: existing } = read;
+    if (!_readCovers(read, u)) return { removed: false, unknown: true };
+    const mine = existing && existing.pubkey === pub ? existing : null;
+    if (!mine) return { removed: false, notListed: true };
+    const entries = parseRelayNet(mine.content);
+    const _k = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    const keyAt = async (x) => {
+      try {
+        const proof = await verifyRelayIdentity(x);
+        return String(proof && proof.relayPub || "").toLowerCase();
+      } catch (e) {
+        return "";
+      }
+    };
+    const pk = await keyAt(u);
+    const drop = entries.filter((e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u));
+    if (!drop.length) return { removed: false, notListed: true, proven: !!pk };
+    const own = relayNetCandidates()[0] || "";
+    const ownKey = !own ? "" : _k(own) === _k(u) ? pk : await keyAt(own);
+    if (own && _k(own) === _k(u) || drop.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+    if (own && !ownKey && pk && drop.some((e) => e.pubkey === pk)) return { removed: false, unknown: true };
+    const keep = entries.filter((e) => !drop.includes(e));
+    if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+    const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
+    return { removed: !!ev, entries: keep };
+  }
+  var _autoEnrolled = /* @__PURE__ */ new Set();
+  async function autoEnrolRelayNet() {
+    if (!sk || !pub || actingChurch || _viewingNetwork()) return null;
+    const own = relayNetCandidates()[0] || "";
+    if (!own) return null;
+    if (_boxHostsUs !== true) return null;
+    const key = pub + "|" + own;
+    if (_autoEnrolled.has(key)) return null;
+    _autoEnrolled.add(key);
+    let res = null;
+    try {
+      res = await enrolSerial(() => enrolRelayNet({ auto: true }));
+    } catch (e) {
+      res = null;
+    }
+    const shared = sharedRelayKeys();
+    const proven = res && res.proven || [];
+    const worked = !!res && !res.unknown && proven.length > 0 && (res.published || (res.delivered || []).length > 0 || proven.every((x) => shared.includes(x.pubkey)));
+    if (!worked) _autoEnrolled.delete(key);
+    return res;
+  }
+  function _netDocDialUrl(raw) {
+    let s = String(raw || "").trim();
+    if (!s) return "";
+    s = s.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
+    if (!/^wss?:\/\//i.test(s)) return "";
+    s = s.replace(/\/+$/, "").replace(/\/relay$/i, "").replace(/\/+$/, "");
+    if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return "";
+    return s + "/relay";
+  }
+  function _netDocBoxKey(u) {
+    const bare = String(u || "").trim().replace(/\/+$/, "").replace(/\/relay$/i, "").replace(/\/+$/, "");
+    if (!bare) return "";
+    try {
+      const k = relayAddrKey(bare);
+      if (k) return k;
+    } catch (e) {
+    }
+    return bare.toLowerCase();
+  }
+  function _alreadyACandidate(u) {
+    const n = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const a = (x) => {
+      try {
+        return relayAddrKey(x);
+      } catch (e) {
+        return "";
+      }
+    };
+    const vn = n(u), va = a(u), vb = _netDocBoxKey(u);
+    let list = [];
+    try {
+      list = relaysRaw();
+    } catch (e) {
+      list = [];
+    }
+    for (const r of list) {
+      if (!r) continue;
+      if (r === u) return true;
+      if (vn && n(r) === vn) return true;
+      if (va && a(r) === va) return true;
+      if (vb && _netDocBoxKey(r) === vb) return true;
+    }
+    return false;
+  }
+  var _hasRelayPath = (x) => /\/relay\/*$/i.test(String(x || "").trim());
+  function _staleBoxSpelling(u) {
+    const want = _netDocBoxKey(u);
+    if (!want || !_hasRelayPath(u)) return "";
+    let list = [];
+    try {
+      list = extraRelays();
+    } catch (e) {
+      return "";
+    }
+    if (list.includes(u)) return "";
+    for (const r of list) {
+      if (r && !_hasRelayPath(r) && _netDocBoxKey(r) === want) return r;
+    }
+    return "";
+  }
+  var NETDOC_ADOPT_MAX = 8;
+  var ADOPTED_LS = "trinityone.steward.adopted-relays";
+  function adoptedRelays() {
+    try {
+      const a = JSON.parse(lsGet(ADOPTED_LS) || "[]");
+      return Array.isArray(a) ? a.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  function setAdoptedRelays(list) {
+    try {
+      lsSet(ADOPTED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))]));
+    } catch (e) {
+    }
+  }
+  function _tagAdopted(u) {
+    if (u) setAdoptedRelays([...adoptedRelays(), u]);
+  }
+  var DECLINED_LS = "trinityone.steward.declined-relays";
+  var DECLINED_MAX = 32;
+  function declinedRelays() {
+    try {
+      const a = JSON.parse(lsGet(DECLINED_LS) || "[]");
+      return Array.isArray(a) ? a.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  function setDeclinedRelays(list) {
+    try {
+      lsSet(DECLINED_LS, JSON.stringify([...new Set((list || []).filter(Boolean))].slice(0, DECLINED_MAX)));
+    } catch (e) {
+    }
+  }
+  var _declineKey = (u) => {
+    const v = String(u || "").trim();
+    if (!v) return "";
+    try {
+      return normalizeURL2(v) || v.toLowerCase();
+    } catch (e) {
+      return v.toLowerCase();
+    }
+  };
+  function _isDeclined(u) {
+    const k = _declineKey(u);
+    if (!k) return false;
+    return declinedRelays().some((r) => r === u || _declineKey(r) === k);
+  }
+  function declineRelay(u) {
+    const v = String(u || "").trim();
+    if (v) setDeclinedRelays([v, ...declinedRelays().filter((r) => _declineKey(r) !== _declineKey(v))]);
+  }
+  function undeclineRelay(u) {
+    const k = _declineKey(u);
+    if (k) setDeclinedRelays(declinedRelays().filter((r) => r !== u && _declineKey(r) !== k));
+  }
+  var DEAD_STRIKES_LS = "trinityone.steward.dead-relay-strikes";
+  var DEAD_STRIKES_MAX = 2;
+  function deadStrikes() {
+    try {
+      const o = JSON.parse(lsGet(DEAD_STRIKES_LS) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch {
+      return {};
+    }
+  }
+  function setDeadStrikes(map) {
+    try {
+      lsSet(DEAD_STRIKES_LS, JSON.stringify(map || {}));
+    } catch (e) {
+    }
+  }
+  async function retireDeadAdoptedRows() {
+    const tagged = adoptedRelays();
+    if (!tagged.length) {
+      if (Object.keys(deadStrikes()).length) setDeadStrikes({});
+      return [];
+    }
+    let cur = [];
+    try {
+      cur = extraRelays();
+    } catch (e) {
+      return [];
+    }
+    const listed = tagged.filter((u) => cur.includes(u));
+    const was = deadStrikes();
+    const strikes = {};
+    const retired = [];
+    for (const u of listed) {
+      const k = _declineKey(u) || u;
+      let proved = "", reached = false;
+      try {
+        const d = await verifyRelayIdentityDetailed(u);
+        proved = String(d && d.proof && d.proof.relayPub || "").toLowerCase();
+        reached = !!(d && d.reached);
+      } catch (e) {
+        proved = "";
+        reached = false;
+      }
+      if (/^[0-9a-f]{64}$/.test(proved)) continue;
+      if (!reached) {
+        const n2 = Number(was[k]) || 0;
+        if (n2 > 0) strikes[k] = n2;
+        continue;
+      }
+      const n = (Number(was[k]) || 0) + 1;
+      if (n >= DEAD_STRIKES_MAX) retired.push(u);
+      else strikes[k] = n;
+    }
+    if (retired.length) {
+      let live = cur;
+      try {
+        live = extraRelays();
+      } catch (e) {
+        live = cur;
+      }
+      _writeExtraRelays(live.filter((u) => !retired.includes(u)));
+    }
+    let tags = tagged;
+    try {
+      tags = adoptedRelays();
+    } catch (e) {
+      tags = tagged;
+    }
+    let rows = cur;
+    try {
+      rows = extraRelays();
+    } catch (e) {
+      rows = cur;
+    }
+    const keep = tags.filter((u) => !retired.includes(u) && rows.includes(u));
+    if (keep.length !== tags.length) setAdoptedRelays(keep);
+    const kn = Object.keys(strikes), kw = Object.keys(was);
+    if (kn.length !== kw.length || kn.some((k) => Number(was[k]) !== Number(strikes[k]))) setDeadStrikes(strikes);
+    return retired;
+  }
+  async function adoptNetDocAddresses() {
+    if (!pub || pub !== churchPub) return [];
+    const pub0 = pub;
+    let entries = [];
+    try {
+      entries = await relayNetEntries(pub0);
+    } catch (e) {
+      return [];
+    }
+    if (pub !== pub0) return [];
+    if (!entries.length) return [];
+    try {
+      await retireDeadAdoptedRows();
+    } catch (e) {
+    }
+    if (pub !== pub0) return [];
+    const added = [];
+    for (const e of entries) {
+      const u = _netDocDialUrl(e && e.url);
+      if (!u) continue;
+      if (_isDeclined(u)) continue;
+      const stale = _staleBoxSpelling(u);
+      if (!stale) {
+        let have = 0;
+        try {
+          have = extraRelays().length;
+        } catch (err2) {
+          have = NETDOC_ADOPT_MAX;
+        }
+        if (have >= NETDOC_ADOPT_MAX) break;
+      }
+      if (isOwnRelaySpelling(u) || isSharedRelaySpelling(u)) continue;
+      if (!stale && _alreadyACandidate(u)) continue;
+      let proved = "";
+      try {
+        const pr = await verifyRelayIdentity(u);
+        proved = String(pr && pr.relayPub || "").toLowerCase();
+      } catch (err2) {
+        proved = "";
+      }
+      if (!proved || proved !== String(e && e.pubkey || "").toLowerCase()) continue;
+      if (!await admitRemoteRelay(u)) continue;
+      if (pub !== pub0) break;
+      if (stale) {
+        let now2 = [];
+        try {
+          now2 = extraRelays();
+        } catch (err2) {
+          now2 = [];
+        }
+        if (!now2.includes(stale) || now2.includes(u)) continue;
+        _writeExtraRelays(now2.map((r) => r === stale ? u : r));
+        setAdoptedRelays([...adoptedRelays().filter((r) => r !== stale), u]);
+        added.push(u);
+        continue;
+      }
+      if (_alreadyACandidate(u)) continue;
+      let ok = false;
+      try {
+        ok = !!window.Steward.addRelay(u);
+      } catch (err2) {
+        ok = false;
+      }
+      if (ok) {
+        _tagAdopted(u);
+        added.push(u);
+      }
+    }
+    return added;
   }
   function isNetworkRelay2(cp, url) {
     return isNetworkRelay(cp, url, {
@@ -19471,35 +19974,35 @@ zoo`.split("\n");
     // and still reported as `root`, but they are diagnostics now, not a second gate (RELAY-ADMISSION.md).
     // C4 consumes it: the answer, cached, IS relays() — the set publish() writes over.
     isNetworkRelay: isNetworkRelay2,
-    // What the church has actually signed — [{pubkey, alwaysOn, url}] — and who this console can PROVE.
-    // relayNetCandidates() is the RAW census (location + the relay panel's entries), never relays(): see the
-    // deadlock rule above enrolRelayNet.
+    // What the church has actually signed — [{pubkey, alwaysOn, url, name?}] — and who this console can PROVE.
+    // relayNetCandidates() is the RAW census (location, plus a relay the steward has just consented to), never
+    // relays(): see the deadlock rule above enrolRelayNet.
     relayNet: relayNetEntries,
     relayNetCandidates,
     // Signs the boxes this console can prove into the church's own membership document. Additive: it never
     // drops an entry that is merely unreachable.
     //
-    // STILL NOT CALLED AUTOMATICALLY ANYWHERE — and the sentence that used to be here, calling that a
-    // "DEPLOYMENT BLOCKER … its members would find no relay they may publish to", IS FALSE. Audit item 17,
-    // 2026-09-14, checked against the gate rather than against this comment.
+    // CALLED AUTOMATICALLY since self-hosting P1 (2026-10-21): autoEnrolRelayNet, from the console's KeyDistributor
+    // effect, signs the box serving this console; signRelay signs one relay the steward consented to; unsignRelay
+    // takes one out. All three are queued through enrolSerial so two signings never overlap.
     //
-    // WHAT proveRelay ACTUALLY DOES (src/relay-net.src.js): after the one refusal for our own shipped
-    // addresses, it tries canonical pin → same origin → the church's relay-net document → and then admits
-    // anything that proved it holds a relay identity key at all, as `root: 'software'`. A self-hosting
-    // church's box reaches that last line and is admitted with NO document in existence. So nobody is cut off,
-    // and this function is a loose end, not a blocker.
-    //
-    // TWO THINGS THE NEXT PERSON TO WIRE IT UP NEEDS, because neither is visible from the call site:
-    //  · ROOT 3 IS INERT IN PRACTICE. No console authors a relay-net document today, so the `church` root
-    //    matches nothing and every self-hosted box is admitted one line lower on proof alone. Turning this on
-    //    does not "enable" self-hosting; it narrows nothing and adds a signed record.
-    //  · `9ec4310`'s GUARD IS UNEXERCISED. That commit fixed a doc-wipe — a read nobody answered was reported
-    //    as an empty church, the document was rebuilt from scratch with `created_at: now()`, and newest-wins
-    //    UN-ADMITTED every box the church had signed, on every member's phone. The `!complete → unknown:true`
-    //    return below is that fix, and with zero callers it has never run outside its test. It is the first
-    //    thing to exercise on a real slow link when this is wired in, not the last.
-    // Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own.
-    enrolRelayNet,
+    // WHAT THIS DOES NOT CHANGE YET: which relays receive a church's data. proveRelay still admits any box that
+    // proves it runs our software (`root: 'software'`, src/relay-net.src.js); narrowing that to the boxes this
+    // document names is self-hosting Phase 2 (reference/DESIGN-SELFHOSTING-2026-10-21.md).
+    // Queued like signRelay, and never `auto` — that exception belongs to the automatic pass alone (third audit,
+    // finding 8). No screen calls it; scripts and the console's devtools do.
+    enrolRelayNet: (opts) => enrolSerial(() => enrolRelayNet({ extra: opts && opts.extra || void 0 })),
+    autoEnrolRelayNet,
+    // ONE RELAY, AFTER CONSENT. Called by the Add-a-relay card only once the steward has seen "Connecting this
+    // relay lets your whole church's data go to it" and tapped Connect. Never call it for a relay nobody chose.
+    signRelay(url) {
+      const u = normRelay(url);
+      return u ? enrolSerial(() => enrolRelayNet({ extra: [u] })) : Promise.resolve(null);
+    },
+    // The reverse, for the Relays card's Remove (owner decision B). Queued with every other signing.
+    unsignRelay(url) {
+      return enrolSerial(() => unenrolRelayNet(url));
+    },
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
     publishSigned: _publishSigned,
@@ -26819,12 +27322,28 @@ zoo`.split("\n");
       }
     },
     // add a public relay the church ALSO publishes to (redundancy if the self-hosted relay is offline)
+    // IS THIS ADDRESS ALREADY IN THE RELAY PANEL? → its normalised form, or ''. The Add-a-relay card asks, so a
+    // steward who connects a relay that is already listed (added before consent existed, or offline the first
+    // time) still gets it signed rather than a "please enter an address" error (audit 2026-10-21, finding 1).
+    knownRelay(input) {
+      const url = normRelay(input);
+      return url && extraRelays().includes(url) ? url : "";
+    },
+    // Asked by every Add path before the consent line, so the steward is told why (ninth audit).
+    isSharedRelaySpelling(input) {
+      return isSharedRelaySpelling(input) || isSharedRelaySpelling(normRelay(input));
+    },
+    isOwnRelaySpelling(input) {
+      return isOwnRelaySpelling(input) || isOwnRelaySpelling(normRelay(input));
+    },
     addRelay(input) {
       const url = normRelay(input);
-      if (!url || url === ownRelay()) return false;
+      if (!url || url === ownRelay() || isOwnRelaySpelling(input) || isOwnRelaySpelling(url)) return false;
+      if (isSharedRelaySpelling(input) || isSharedRelaySpelling(url)) return false;
       const cur = extraRelays();
       if (cur.includes(url)) return false;
       lsSet(RELAYS_LS, JSON.stringify([...cur, url]));
+      undeclineRelay(url);
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return url;
     },
@@ -26852,6 +27371,8 @@ zoo`.split("\n");
       const next = extraRelays().filter((r) => r !== url);
       lsSet(RELAYS_LS, JSON.stringify(next));
       setNamedRelays(getNamedRelays().filter((e) => e.url !== url));
+      declineRelay(url);
+      setAdoptedRelays(adoptedRelays().filter((r) => r !== url));
       window.dispatchEvent(new CustomEvent("steward-relays"));
       return true;
     },
@@ -26891,6 +27412,29 @@ zoo`.split("\n");
     // Auto-find + adopt up to n open relays (default 2 = primary + backup, different operators), then re-publish
     // the church's NIP-65 list so members discover them. Additive: only adds relays not already configured.
     // Returns the picked offers (or [] when nothing is open — e.g. the pilot, where it's a safe no-op).
+    // AUTO-FIND IN TWO STEPS (owner decision A, 2026-10-21): find the relays first, so the consent line can NAME
+    // them, then connect exactly those on "Yes, connect". findRelays adds nothing; connectFoundRelays adds the
+    // given picks and republishes the relay list (signing each is the card's job, through signRelay).
+    async findRelays(n) {
+      const offers = await discoverRelayOffers(null, null);
+      const have = new Set(relays());
+      return pickRelays(offers.filter((o) => !have.has(o.url)), n || 2);
+    },
+    async connectFoundRelays(picks) {
+      for (const p of picks || []) {
+        try {
+          window.Steward.addRelay(p.url);
+        } catch (e) {
+        }
+      }
+      if ((picks || []).length) {
+        try {
+          await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null);
+        } catch (e) {
+        }
+      }
+      return picks || [];
+    },
     async autoPickRelays(n) {
       const offers = await discoverRelayOffers(null, null);
       const have = new Set(relays());

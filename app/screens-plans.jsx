@@ -6,24 +6,36 @@ function doneDays(ctx, id) { return ctx.planProgress[id] || []; }
 // The bar under a passage that was opened FROM a plan day: "Mark day done" and "Next: Day N+1 · ref".
 // Shown only while the reader is still on that day's passage (so paging elsewhere hides it); null otherwise.
 // Marking done is ctx.togglePlanDay, the same call as the tick in the plan's day list.
-function PlanReadBar({ ctx, loc }) {
+function planReadBarShown(ctx, loc) {
   const pr = ctx.planRead;
-  if (!pr || !pr.plan || !pr.day || !loc) return null;
+  if (!pr || !pr.plan || !pr.day || !loc) return false;
   // the plan context is only for the exact location the plan day opened, in the church it was opened in, while the plan still exists
-  if (pr.loc !== loc || pr.church !== ctx.planChurch) return null;
+  if (pr.loc !== loc || pr.church !== ctx.planChurch) return false;
   const _D = window.TrinityData;
   const still = (ctx.churchPlans || []).concat((_D && _D.PLANS) || []).some(p => p.id === pr.plan.id);
-  if (!still) return null;
+  if (!still) return false;
   const B = window.Bible;
   const at = B && B.parseRef ? B.parseRef(pr.day.ref) : null;
-  if (!at || at.book !== loc.book || at.chap !== loc.chap) return null;
+  if (!at || at.book !== loc.book || at.chap !== loc.chap) return false;
+  return true;
+}
+// FLOATS above the bottom tab bar (owner 2026-10-19), rendered by the reader OUTSIDE its scroller. Tab bar: bottom max(12,safe), 66 tall;
+// 74 = 66 + 8px gap. While audio plays the mini-player sits in that gap, so ride above it (--trinity-player-h, set by MiniPlayer).
+function PlanReadBar({ ctx, loc }) {
+  if (!planReadBarShown(ctx, loc)) return null;
+  const pr = ctx.planRead;
   const days = pr.plan.days || [];
   const idx = days.findIndex(x => x.d === pr.day.d);
   const next = idx >= 0 ? days[idx + 1] : null;
   const isDone = doneDays(ctx, pr.plan.id).indexOf(pr.day.d) >= 0;
   const btn = { flex: '1 1 0', minWidth: 0, padding: '11px 12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   return (
-    <div data-testid="plan-read-bar" style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+    <div data-testid="plan-read-bar" style={{
+      position: 'absolute', left: 12, right: 12, zIndex: 24, display: 'flex', gap: 10, padding: 8, borderRadius: 20,
+      bottom: ctx.desktop ? 16 : 'max(calc(max(12px, env(safe-area-inset-bottom)) + 74px), var(--trinity-player-h, 0px))',
+      background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px) saturate(160%)', WebkitBackdropFilter: 'blur(16px) saturate(160%)',
+      border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)',
+    }}>
       <button onClick={() => ctx.togglePlanDay(pr.plan.id, pr.day.d)} title={isDone ? 'Day ' + pr.day.d + ' is done — tap to undo' : 'Mark day ' + pr.day.d + ' done'}
         style={{ ...btn, background: isDone ? 'var(--clay-soft)' : 'var(--surface)', border: '1.5px solid var(--clay)', color: 'var(--clay)' }}>
         {isDone ? 'Day done' : 'Mark day done'}
@@ -197,7 +209,10 @@ function PlansScreen({ ctx }) {
   const [discoverOpen, setDiscoverOpen] = useP(false);   // collapse the Discover-plans grid in Browse
   const churchPlans = ctx.churchPlans || [];           // plans the church's steward shared
   const churchName = (ctx.church && ctx.church.name) || 'your church';
-  const allPlans = [...churchPlans, ...D.PLANS];
+  // owner 2026-10-19: the built-in plans (D.PLANS) are steward-pushed only; a member is offered just what the church shared.
+  // (A built-in the member already has progress on still resolves via PlanDetail/Today, which read D.PLANS directly.)
+  // A built-in the member ALREADY follows stays in My Plans (nothing they had is taken away); none is offered fresh.
+  const allPlans = [...churchPlans, ...((D.PLANS || []).filter(p => (ctx.plansFollowed || []).includes(p.id)))];
   const isChurch = (p) => churchPlans.some(c => c.id === p.id);
   const followed = ctx.plansFollowed || [], hidden = ctx.plansHidden || [];
   // My Plans = church plans (unless the member removed one) + discover plans the member added
@@ -276,7 +291,7 @@ function PlansScreen({ ctx }) {
           {!featured ? (
             <div style={{ textAlign: 'center', padding: '20px 16px 28px', color: 'var(--ink-2)' }}>
               <Icon name="read" size={40} stroke={1.4} color="var(--ink-3)" />
-              <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '8px auto 14px' }}>No plans yet. Browse and add one to start reading a little every day.</p>
+              <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '8px auto 14px' }}>No plans yet. When your church shares a reading plan, you can add it here.</p>
               <button onClick={() => setTab('browse')} style={{ padding: '11px 18px', borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Browse plans</button>
             </div>
           ) : null}
@@ -315,14 +330,11 @@ function PlansScreen({ ctx }) {
               </div>
             </CollapsibleSection>
           ) : null}
-          <SectionLabel>Discover plans</SectionLabel>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, animation: 'trinityFade .5s ease .1s both' }}>
-            {(discoverOpen ? D.PLANS : D.PLANS.slice(0, 4)).map(p => <PlanCard key={p.id} p={p} ctx={ctx} onClick={() => ctx.openPlan(p)} corner={cornerBtn(p, inMine(p))} />)}
-          </div>
-          {D.PLANS.length > 4 ? (
-            <button onClick={() => setDiscoverOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%', marginTop: 12, padding: '12px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-              {discoverOpen ? 'Show fewer' : `Show all ${D.PLANS.length} plans`} <Icon name={discoverOpen ? 'chevU' : 'chevD'} size={17} color="var(--clay)" />
-            </button>
+          {!churchPlans.length ? (
+            <div data-plans-empty="" style={{ textAlign: 'center', padding: '30px 16px 28px', color: 'var(--ink-2)', animation: 'trinityFade .5s ease both' }}>
+              <Icon name="read" size={40} stroke={1.4} color="var(--ink-3)" />
+              <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 270, margin: '10px auto 0' }}>{churchName === 'your church' ? 'Your church' : churchName} hasn’t shared a reading plan yet. When they do, it’ll show up here.</p>
+            </div>
           ) : null}
         </React.Fragment>
       )}
@@ -455,39 +467,107 @@ function parseDevoDays(src) {
   return { weeks: weeks.filter(w => w.days.length), days, count: days.length, multiWeek: weeks.filter(w => w.days.length).length > 1 };
 }
 
-// open a devotional's "read:" passage in the Bible reader, landing on the verse. Closes the devotional
-// overlays first so the reader is in front. Returns false if the ref can't be resolved.
-function openDevoPassage(ctx, rawRef) {
-  const ref = String(rawRef || '').replace(/^\s*read\s*:?\s*/i, '').trim();
-  if (!ref) return false;
-  const loc = window.Bible.parseRef(ref);
-  if (!loc) { ctx.toast('Couldn’t open ' + ref); return false; }
-  if (!window.Bible.books().includes(loc.book)) { ctx.toast(ref + ' isn’t in this translation'); return false; }
-  if (ctx.openChurchDevo) ctx.openChurchDevo(null);   // close the devotional reader/index
-  ctx.gotoRef(loc.book, loc.chap, loc.verse || 1);
-  return true;
+// A scripture reference opens as a CARD over the plan/devotional and NEVER navigates away (owner 2026-10-18:
+// card-only, "never leave the plan"). screens-plans is a classic script and cannot import screens-read's
+// XrefPreviewSheet, so its resolve-and-preview is re-created here, locally. Resolution uses the active
+// translation: a whole-chapter reading (no verse) shows the whole chapter (scrollable), a range joins its
+// verses, a single verse shows just that verse. It never fabricates text — an unreadable reference says so and
+// an empty result offers a graceful line. Dismiss is the BottomSheet's own tested swipe-down/backdrop plus the
+// explicit X. Rendered via BottomSheet (app/ui.jsx).
+function DevoVerseSheet({ refStr, open, onClose }) {
+  const ref = String(refStr || '').replace(/^\s*read\s*:?\s*/i, '').trim();
+  const loc = ref ? window.Bible.parseRef(ref) : null;
+  let verses = [];
+  if (loc) {
+    try {
+      const rows = window.Bible.getVerses(loc.book, loc.chap, window.Bible.activeVersion) || [];
+      const from = loc.verse || 1;
+      const to = loc.verseEnd || (loc.verse ? loc.verse : Infinity);   // no verse = the whole chapter
+      verses = rows.filter(r => r.v >= from && r.v <= to);
+    } catch (e) { verses = []; }
+  }
+  const multi = verses.length > 1;
+  return (
+    // Isolate the card's touches: it renders INSIDE DevoDayReader's day-swipe scroll div, and a horizontal
+    // swipe on the card/backdrop would otherwise bubble up and turn the day (audit 2026-10-19). Stop touch
+    // events here so a swipe on the open card never marks-read/advances. The sheet's own swipe-down dismiss
+    // is unaffected (it is handled inside BottomSheet, deeper than this wrapper).
+    <div onTouchStart={e => e.stopPropagation()} onTouchMove={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()}>
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Scripture</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ref || ''}</div>
+        </div>
+        <IconBtn name="x" onClick={onClose} />
+      </div>
+      {!loc ? (
+        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16, padding: '6px 0 14px' }}>Couldn't read that reference.</p>
+      ) : verses.length ? (
+        <p style={{ fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.6, color: 'var(--ink)', margin: '4px 0 16px', textWrap: 'pretty' }}>
+          {verses.map((r, i) => (
+            <React.Fragment key={r.v}>
+              {multi ? <sup style={{ color: 'var(--clay)', fontWeight: 700, fontSize: 11, marginRight: 3 }}>{r.v}</sup> : null}{r.text}{i < verses.length - 1 ? ' ' : ''}
+            </React.Fragment>
+          ))}
+        </p>
+      ) : (
+        <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 15, padding: '4px 0 14px' }}>That passage isn't in this translation yet.</p>
+      )}
+    </BottomSheet>
+    </div>
+  );
 }
-// a tappable scripture chip: opens the passage in the reader
+// a tappable scripture chip: opens the passage as a CARD over the current view (never navigates to the reader).
+// The card open-state is the chip's own, so every DevoRefChip call site (DevoDayReader, the plain ChurchDevoView)
+// gets the card with no extra wiring. `ctx` is retained for call-site compatibility.
 function DevoRefChip({ refText, ctx, style }) {
+  const [cardOpen, setCardOpen] = React.useState(false);
   if (!refText) return null;
   return (
-    <button onClick={() => openDevoPassage(ctx, refText)} title={'Open ' + refText + ' in the Bible'} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999, cursor: 'pointer',
-      border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))',
-      color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, ...(style || {}) }}>
-      <Icon name="read" size={14} color="var(--clay)" /> {refText} <Icon name="chevR" size={14} color="var(--clay)" />
-    </button>
+    <React.Fragment>
+      <button onClick={() => setCardOpen(true)} title={'Read ' + refText} style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999, cursor: 'pointer',
+        border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))',
+        color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, ...(style || {}) }}>
+        <Icon name="read" size={14} color="var(--clay)" /> {refText} <Icon name="chevR" size={14} color="var(--clay)" />
+      </button>
+      <DevoVerseSheet refStr={refText} open={cardOpen} onClose={() => setCardOpen(false)} />
+    </React.Fragment>
   );
 }
 
 // ── one day of a multi-day devotional (prose + ref + mark-read), opened over the index ──
 function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
+  // SWIPE TO TURN THE DAY (owner 2026-10-18): swipe LEFT = mark read (NEVER un-mark) + go to next; swipe RIGHT
+  // = go to previous (navigation only, never changes read status). LEFT = forwards now MATCHES the reader's
+  // chapter-turn (screens-read: left = forwards). Thresholds mirror the reader:
+  // 60px of mostly-horizontal travel, so a diagonal scroll and a text-selection drag are left alone. These
+  // consts are declared INSIDE the component and the ref is a plain useRef: app/*.jsx are classic scripts
+  // sharing one global scope, and a duplicate top-level name blanks the whole APK, so nothing here is a new
+  // top-level global. The ref is ABOVE the early return so hook order stays stable (no-hook-after-early-return).
+  const DEVO_SWIPE_MIN = 60, DEVO_SWIPE_DOMINANCE = 1.7;
+  const devoSwipe = React.useRef(null);
   if (!day) return null;
   const doneSet = new Set((ctx.devoProgress && ctx.devoProgress[devo.id]) || []);
   const isDone = doneSet.has(day.d);
   const idx = parsed.days.findIndex(x => x.d === day.d);
   const prev = idx > 0 ? parsed.days[idx - 1] : null;
   const next = idx < parsed.days.length - 1 ? parsed.days[idx + 1] : null;
+  const onDaySwipeStart = (e) => {
+    if (!e.touches || e.touches.length !== 1) { devoSwipe.current = null; return; }
+    devoSwipe.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+  const onDaySwipeMove = (e) => { if (e.touches && e.touches.length > 1) devoSwipe.current = null; };
+  const onDaySwipeEnd = (e) => {
+    const s = devoSwipe.current; devoSwipe.current = null;
+    if (!s || (e.touches && e.touches.length) || !e.changedTouches || !e.changedTouches.length) return;
+    const dx = e.changedTouches[0].clientX - s.x, dy = e.changedTouches[0].clientY - s.y;
+    if (Math.abs(dx) < DEVO_SWIPE_MIN || Math.abs(dx) < Math.abs(dy) * DEVO_SWIPE_DOMINANCE) return;
+    try { const t = window.getSelection && window.getSelection(); if (t && String(t).trim()) return; } catch (err) {}
+    if (dx < 0) { if (!isDone) ctx.toggleDevoDay(devo.id, day.d); if (next) ctx.openChurchDevoDay(next); }   // left: mark read + next (owner 2026-10-19: flipped)
+    else if (prev) ctx.openChurchDevoDay(prev);                                                             // right: previous, no mark
+  };
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
@@ -499,7 +579,7 @@ function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
           </div>
         </div>
       </div>
-      <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
+      <div className="no-scrollbar" onTouchStart={onDaySwipeStart} onTouchMove={onDaySwipeMove} onTouchEnd={onDaySwipeEnd} style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '22px 22px 40px' }}>
           {day.ref ? <div style={{ marginBottom: 16 }}><DevoRefChip refText={day.ref} ctx={ctx} /></div> : null}
           {renderMarkdown(day.body)}
@@ -641,4 +721,4 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { PlansScreen, PlanDetail, PlanReadBar, ChurchDevoView, parseDevoDays });
+Object.assign(window, { PlansScreen, PlanDetail, PlanReadBar, planReadBarShown, ChurchDevoView, parseDevoDays });

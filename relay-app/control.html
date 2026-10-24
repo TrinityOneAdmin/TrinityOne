@@ -340,12 +340,12 @@
       <h1 id="title">Connecting to your relay…</h1>
       <div class="sub" id="sub">The box that carries your church's messages.</div>
     </div>
-    <button class="btn-ghost" id="openConsole">&larr; Back</button>
+    <button class="btn-ghost" id="openConsole" title="Go back to the page you came from">&larr; Back</button>
     <!-- THE CONSOLE IS ONE CLICK FROM HERE. The church is created in the console, not on this panel, and until
          2026-09-22 nothing on this page said so or led there — the owner's first run of the real app ended on
          this panel with no church and no idea why. Same href as the launcher's "Run your church" door: the
          console served by this same relay. (`openConsole` above is the Back button's historical id.) -->
-    <a class="btn btn-clay" id="goConsole" href="/steward.html" style="text-decoration:none">Open the console</a>
+    <a class="btn btn-clay" id="goConsole" title="Open the church console in this browser" href="/steward.html" style="text-decoration:none">Open the console</a>
   </div>
 
   <!-- Two groups: what the relay IS DOING (dashboard) vs what you CONFIGURE (settings). All eight cards
@@ -355,20 +355,20 @@
        on servesCard / updateCard / backupCard / subsCard for auth-gating and availability, so a tab that
        wrote card display would fight the lock and re-reveal cards the operator isn't entitled to see. -->
   <div class="tabs" role="tablist" aria-label="Relay console sections">
-    <button class="tab" id="tab-dash" role="tab" aria-selected="true" aria-controls="panel-dash" tabindex="0">Dashboard</button>
-    <button class="tab" id="tab-set" role="tab" aria-selected="false" aria-controls="panel-set" tabindex="-1">Settings</button>
+    <button class="tab" id="tab-dash" title="See how your relay is doing right now" role="tab" aria-selected="true" aria-controls="panel-dash" tabindex="0">Dashboard</button>
+    <button class="tab" id="tab-set" title="Change what this relay does, updates and backups" role="tab" aria-selected="false" aria-controls="panel-set" tabindex="-1">Settings</button>
   </div>
 
   <div class="panel" id="panel-dash" role="tabpanel" aria-labelledby="tab-dash">
 
   <div class="grid">
-    <div class="stat"><div class="n" id="s-churches">—</div><div class="l">Churches</div></div>
-    <div class="stat"><div class="n" id="s-members">—</div><div class="l">Members</div></div>
-    <div class="stat"><div class="n" id="s-events">—</div><div class="l">Events stored</div></div>
-    <div class="stat"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
-    <div class="stat"><div class="n" id="s-today">—</div><div class="l">Sent today</div></div>
-    <div class="stat"><div class="n" id="s-media">—</div><div class="l">Media stored</div></div>
-    <div class="stat"><div class="n" id="s-traffic">—</div><div class="l">Traffic (session)</div></div>
+    <div class="stat" title="Churches using this relay"><div class="n" id="s-churches">—</div><div class="l">Churches</div></div>
+    <div class="stat" title="People across all those churches"><div class="n" id="s-members">—</div><div class="l">Members</div></div>
+    <div class="stat" title="Messages and records saved on this relay"><div class="n" id="s-events">—</div><div class="l">Events stored</div></div>
+    <div class="stat" title="Phones and computers connected right now"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
+    <div class="stat" title="Messages passed along since midnight"><div class="n" id="s-today">—</div><div class="l">Sent today</div></div>
+    <div class="stat" title="Photos and files saved on this relay"><div class="n" id="s-media">—</div><div class="l">Media stored</div></div>
+    <div class="stat" title="Data moved since you opened this page"><div class="n" id="s-traffic">—</div><div class="l">Traffic (session)</div></div>
   </div>
 
   <!-- card deck: auto-fill grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
@@ -383,7 +383,7 @@
   <div class="card card--wide" id="nextStep" style="display:none" aria-label="Next step">
     <h2>Your relay is running</h2>
     <div class="muted" style="margin-bottom:12px">Now set up your church — it is created in the console, not here.</div>
-    <a class="btn btn-clay" id="nextStepConsole" href="/steward.html" style="text-decoration:none">Open the console</a>
+    <a class="btn btn-clay" id="nextStepConsole" title="Open the church console in this browser" href="/steward.html" style="text-decoration:none">Open the console</a>
   </div>
 
   <!-- The activity figures come from /stats, which is admin-only (it breaks activity down BY CHURCH).
@@ -392,7 +392,7 @@
   <div class="card card--wide" id="dashLocked" style="display:none">
     <h2>Activity is locked</h2>
     <div class="muted" style="margin-bottom:12px">The figures below need this relay's <b>admin token</b>. On the relay's own computer it fills in automatically; from another device, enter it once in Settings.</div>
-    <button class="btn-clay" id="goUnlock">Enter the admin token</button>
+    <button class="btn-clay" id="goUnlock" title="Type your admin token to unlock the controls">Enter the admin token</button>
   </div>
 
   <div class="card" id="actCard">
@@ -452,8 +452,8 @@
       <div class="gate-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2.5"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg></div>
       <div class="gate-title">This relay is locked</div>
       <div class="gate-desc">Enter the admin token to view and change settings. On the relay's own computer this fills in automatically; otherwise find it in the TrinityOne Suite window or the install output.</div>
-      <div class="field"><div class="field-l">Admin token</div><input id="tok" class="mono" type="password" autocomplete="off" aria-label="Admin token" /></div>
-      <button class="btn btn-clay" id="tokGo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2.5"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>Unlock settings</button>
+      <div class="field"><div class="field-l">Admin token</div><input id="tok" title="The secret admin token for this relay. It stays in this browser." class="mono" type="password" autocomplete="off" aria-label="Admin token" /></div>
+      <button class="btn btn-clay" id="tokGo" title="Unlock the controls with this token"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2.5"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>Unlock settings</button>
       <div class="muted" id="gateMsg" style="margin-top:10px" role="status" aria-live="polite"></div>
       <div class="gate-foot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg> The token stays on this device</div>
     </div>
@@ -500,13 +500,13 @@
         <span class="apply-tag"><span class="d"></span>Changes apply immediately</span>
       </div>
       <div class="ch-toggles">
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">You add each church. Off = a church can add itself from its Steward console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" aria-label="Invite-only"></div>
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Churches without a server can find this relay via "Auto-find relays" and ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" aria-label="Offer to host other churches"></div>
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Show church names</div><div class="toggle-s">Off by default — churches are labelled with a generated name from their key. On shows the real name from each church's profile.</div></div><input type="checkbox" class="sw" id="t-shownames" aria-label="Show church names"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">You add each church. Off = a church can add itself from its Steward console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" title="On: only churches you add can use this relay. Off: a church can add itself." aria-label="Invite-only"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Churches without a server can find this relay via "Auto-find relays" and ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" title="On: other churches without a server can choose to use this relay" aria-label="Offer to host other churches"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Show church names</div><div class="toggle-s">Off by default — churches are labelled with a generated name from their key. On shows the real name from each church's profile.</div></div><input type="checkbox" class="sw" id="t-shownames" title="On: show church names instead of generated ones" aria-label="Show church names"></div>
       </div>
       <div class="ch-add">
-        <input class="mono" id="addNpub" placeholder="Paste an npub to add a church…" autocomplete="off" spellcheck="false" aria-label="Add a church by npub" />
-        <button class="btn btn-clay" id="addCh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>Add</button>
+        <input class="mono" id="addNpub" title="The church key (starts with npub) from that church's steward console" placeholder="Paste an npub to add a church…" autocomplete="off" spellcheck="false" aria-label="Add a church by npub" />
+        <button class="btn btn-clay" id="addCh" title="Allow this church to use your relay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>Add</button>
         <button class="btn btn-ghost" id="refreshCh" title="Pull the latest list — includes any church that self-registered">↻</button>
       </div>
       <div class="muted" id="cfgMsg" role="status" aria-live="polite" style="margin-bottom:8px"></div>
@@ -523,20 +523,20 @@
         </div>
         <div class="save-note" id="servesDirtyNote" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg> You have unsaved changes</div>
         <div class="ch-toggles" style="border-bottom:none; padding-bottom:0">
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">The web app</div><div class="toggle-s">Serve TrinityOne from this box at your own web address.</div></div><input type="checkbox" class="sw" id="t-app" aria-label="Serve the web app"></div>
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Bible &amp; dictionary downloads</div><div class="toggle-s">Members download study modules from this box.</div></div><input type="checkbox" class="sw" id="t-modules" aria-label="Serve Bible downloads"></div>
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Audio Bibles &amp; media</div><div class="toggle-s">The audio-Bible / podcast proxy. Uses the most bandwidth.</div></div><input type="checkbox" class="sw" id="t-audio" aria-label="Serve audio and media"></div>
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Let phones on this wifi connect directly</div><div class="toggle-s">Off is safer. On, anyone on the same network — including a guest or church-hall wifi — can reach this relay. Takes effect next time you open the app.</div></div><input type="checkbox" class="sw" id="t-lan" aria-label="Allow devices on this network to connect directly"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">The web app</div><div class="toggle-s">Serve TrinityOne from this box at your own web address.</div></div><input type="checkbox" class="sw" id="t-app" title="On: this computer serves the TrinityOne web app at your web address" aria-label="Serve the web app"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Bible &amp; dictionary downloads</div><div class="toggle-s">Members download study modules from this box.</div></div><input type="checkbox" class="sw" id="t-modules" title="On: members can download Bibles and dictionaries from this computer" aria-label="Serve Bible downloads"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Audio Bibles &amp; media</div><div class="toggle-s">The audio-Bible / podcast proxy. Uses the most bandwidth.</div></div><input type="checkbox" class="sw" id="t-audio" title="On: this computer relays audio Bibles and podcasts. Uses the most internet." aria-label="Serve audio and media"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Let phones on this wifi connect directly</div><div class="toggle-s">Off is safer. On, anyone on the same network — including a guest or church-hall wifi — can reach this relay. Takes effect next time you open the app.</div></div><input type="checkbox" class="sw" id="t-lan" title="On: phones on the same wifi can connect directly. Off is safer." aria-label="Allow devices on this network to connect directly"></div>
         </div>
         <div class="field" style="margin-top:16px">
           <div class="field-l">Church web address (optional)</div>
-          <input id="t-appurl" placeholder="yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
+          <input id="t-appurl" title="Your church's web address, for example yourchurch.org" placeholder="yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
           <div class="hint">Your own domain. The app, joining codes and handles read as yours.</div>
           <div id="dnsWizard" style="display:none; margin-top:12px; padding:14px; border-radius:var(--r-sm); background:var(--surface-2); border:1px solid var(--line)">
             <div style="font-weight:700; font-size:13px; margin-bottom:8px">DNS setup</div>
             <div id="dnsSteps" style="font-size:12.5px; color:var(--ink-2); line-height:1.6"></div>
             <div style="display:flex; gap:8px; margin-top:10px; align-items:center">
-              <button class="btn btn-ghost" id="dnsCheck" style="white-space:nowrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M20 6 9 17l-5-5"></path></svg> Verify DNS</button>
+              <button class="btn btn-ghost" id="dnsCheck" title="Check that your web address points at this computer" style="white-space:nowrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M20 6 9 17l-5-5"></path></svg> Verify DNS</button>
               <span id="dnsResult" style="font-size:12.5px; font-weight:600"></span>
             </div>
           </div>
@@ -544,15 +544,15 @@
         <div class="field">
           <div class="field-l">Storage limits <span id="mediaUsed" style="text-transform:none; letter-spacing:0"></span></div>
           <div class="storage-grid">
-            <input id="t-mediacap" type="number" min="0" step="1" placeholder="Total GB (0 = unlimited)" aria-label="Total media storage limit in GB" />
-            <input id="t-churchcap" type="number" min="0" step="1" placeholder="Per church GB (0 = unlimited)" aria-label="Per-church storage limit in GB" />
+            <input id="t-mediacap" title="Most space photos and files may use in total. 0 means no limit." type="number" min="0" step="1" placeholder="Total GB (0 = unlimited)" aria-label="Total media storage limit in GB" />
+            <input id="t-churchcap" title="Most space each church may use. 0 means no limit." type="number" min="0" step="1" placeholder="Per church GB (0 = unlimited)" aria-label="Per-church storage limit in GB" />
           </div>
           <div class="hint">Cap total media (and optionally per church). Over-limit uploads are refused; messages unaffected.</div>
         </div>
         <div class="save-footer" id="servesFooter" style="display:none">
           <span class="sf-text" id="servesCount">Changes waiting</span>
-          <button class="btn btn-ghost" id="discardServes">Discard</button>
-          <button class="btn btn-clay" id="saveServes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Save changes</button>
+          <button class="btn btn-ghost" id="discardServes" title="Throw away your unsaved changes">Discard</button>
+          <button class="btn btn-clay" id="saveServes" title="Save these choices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Save changes</button>
         </div>
       </section>
 
@@ -566,7 +566,7 @@
         </div>
         <div class="sub-row">
           <div class="sub-count"><span class="sub-n" id="subsCount">—</span><span class="sub-l" id="subsLabel">subscribers</span></div>
-          <button class="btn btn-ghost" id="dlSubs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
+          <button class="btn btn-ghost" id="dlSubs" title="Download the list of phones that receive notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
         </div>
       </section>
 
@@ -585,14 +585,14 @@
              a packaged Suite arrives with one, and the two buttons that need it are disabled with the reason
              until it exists (control.js loadUpdate / loadApkStatus). -->
         <div class="ch-add" style="margin-bottom:4px">
-          <input class="mono" id="originIn" type="url" placeholder="https://…" autocomplete="off" spellcheck="false" aria-label="Update source — where this box fetches the installers it hands out from" />
-          <button class="btn btn-ghost" id="originSave">Save source</button>
+          <input class="mono" id="originIn" title="The web address this computer downloads updates from" type="url" placeholder="https://…" autocomplete="off" spellcheck="false" aria-label="Update source — where this box fetches the installers it hands out from" />
+          <button class="btn btn-ghost" id="originSave" title="Save the update address">Save source</button>
         </div>
         <div class="hint" id="originMsg" role="status" aria-live="polite" style="min-height:1.2em">Update source: where this box fetches the app installers it hands out from. The software card below says where its own code comes from.</div>
         <div id="u-body" class="muted" style="margin-top:10px">Checking for updates…</div>
         <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-2)">
           <div class="wz-actions">
-            <button class="btn btn-ghost" id="syncNow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg>Check sync now</button>
+            <button class="btn btn-ghost" id="syncNow" title="Check for a newer version now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg>Check sync now</button>
           </div>
           <div class="hint" id="syncNowMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
           <div class="hint">Updating the relay's software does <b>not</b> update the app installer it hands out — those are separate, and the installer has its own card below.</div>
@@ -602,7 +602,7 @@
             <div class="toggle-t">Update automatically</div>
             <div class="toggle-s">Checks hourly and applies new builds with no downtime beyond the restart. Off by default — the relay restarts briefly each time.</div>
           </div>
-          <input type="checkbox" class="sw" id="keepRelayCurrent" aria-label="Update relay software automatically">
+          <input type="checkbox" class="sw" id="keepRelayCurrent" title="On: install new relay versions automatically" aria-label="Update relay software automatically">
         </div>
       </section>
 
@@ -622,8 +622,8 @@
         </div>
         <div id="apkHeld" class="muted">Checking what this box hands out…</div>
         <div class="wz-actions" style="margin-top:13px">
-          <button class="btn btn-ghost" id="fetchApk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Update the installer now</button>
-          <a class="btn btn-ghost" id="openInstall" href="/install" target="_blank" rel="noopener" style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>Open the page members see</a>
+          <button class="btn btn-ghost" id="fetchApk" title="Download the latest phone app so this computer can hand it out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Update the installer now</button>
+          <a class="btn btn-ghost" id="openInstall" title="Open the page members use to install the phone app" href="/install" target="_blank" rel="noopener" style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>Open the page members see</a>
         </div>
         <div class="hint" id="apkMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
         <div class="toggle-row" style="margin-top:6px">
@@ -631,7 +631,7 @@
             <div class="toggle-t">Keep the installer up to date automatically</div>
             <div class="toggle-s">Off by default: it downloads about 80&nbsp;MB whenever a new build appears. On a metered or slow connection, leave this off and press the button above when it suits you.</div>
           </div>
-          <input type="checkbox" class="sw" id="keepApkCurrent" aria-label="Keep the installer up to date automatically">
+          <input type="checkbox" class="sw" id="keepApkCurrent" title="On: keep the phone app download up to date automatically" aria-label="Keep the installer up to date automatically">
         </div>
         <div class="share-box">
           <img id="installQr" class="share-qr" src="/apks/qr.svg" width="150" height="150" alt="QR code linking to this box's install page">
@@ -654,14 +654,14 @@
             <div class="card-desc">A snapshot is everything on this relay in one file — every church's messages, records and media, plus this relay's identity. <span id="backupMsg"></span></div>
           </div>
         </div>
-        <a class="btn btn-ghost" id="dlBackup" href="#" download style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download a backup</a>
+        <a class="btn btn-ghost" id="dlBackup" title="Download a backup of everything this relay stores" href="#" download style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download a backup</a>
         <div class="hint">⚠ It contains keys — keep it as safe as your recovery phrase.</div>
         <div class="danger-zone">
           <div class="dz-head"><span class="dz-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg></span><span class="dz-title">Restore from a backup</span></div>
           <div class="dz-body"><b>This replaces everything</b> — every church's messages, files and lists are overwritten by the snapshot, and you must restart the app to apply. It cannot be undone.</div>
           <div class="dz-actions">
-            <input type="file" id="restoreFile" accept=".tgz,.tar.gz,application/gzip" style="font-size:12.5px; width:auto; flex:1; min-width:180px" />
-            <button class="btn btn-danger" id="doRestore">Restore…</button>
+            <input type="file" id="restoreFile" title="Choose a backup file you downloaded earlier" accept=".tgz,.tar.gz,application/gzip" style="font-size:12.5px; width:auto; flex:1; min-width:180px" />
+            <button class="btn btn-danger" id="doRestore" title="Replace this relay's records with the chosen backup">Restore…</button>
           </div>
           <div class="hint" id="restoreMsg"></div>
         </div>

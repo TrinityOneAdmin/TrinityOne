@@ -2432,12 +2432,15 @@ function TodayScreen({ ctx }) {
   })();
 
   // active reading plan — from real persisted progress
-  const started = D.PLANS.filter(p => (ctx.planProgress[p.id] || []).length > 0);
-  const plan = started.sort((a, b) => (ctx.planProgress[b.id] || []).length - (ctx.planProgress[a.id] || []).length)[0] || D.PLANS[0];
-  const pDone = (ctx.planProgress[plan.id] || []).length;
-  const pDoneSet = new Set(ctx.planProgress[plan.id] || []);
+  // the plan read MOST RECENTLY (built-in or church-uploaded); ties / no stamp (older data) fall back to most days done; John only when nothing is started
+  const _last = ctx.planLast || {};
+  const _prog = (p) => (ctx.planProgress[p.id] || []).length;
+  const started = (D.PLANS || []).concat(ctx.churchPlans || []).filter(p => p && p.days && _prog(p) > 0);
+  const plan = started.sort((a, b) => ((_last[b.id] || 0) - (_last[a.id] || 0)) || (_prog(b) - _prog(a)))[0] || null;   // owner 2026-10-19: no built-in fallback - a member who has started no plan sees no plan card
+  const pDone = plan ? (ctx.planProgress[plan.id] || []).length : 0;
+  const pDoneSet = new Set(plan ? (ctx.planProgress[plan.id] || []) : []);
   // how far along the plan line the marker sits: days done / days in the plan, as a percentage kept inside 0..100
-  const planPct = plan.len ? Math.round(Math.min(1, Math.max(0, pDone / plan.len)) * 10000) / 100 : 0;
+  const planPct = plan && plan.len ? Math.round(Math.min(1, Math.max(0, pDone / plan.len)) * 10000) / 100 : 0;
 
   // am I being cared for right now? (a live care need names me as the recipient) → gentle banner near the top
   const _care = ctx.care || {};
@@ -2452,7 +2455,7 @@ function TodayScreen({ ctx }) {
     try { const d = JSON.parse(localStorage.getItem('trinityone.care.bannerDismiss') || 'null'); return !!(d && d.id === myCareNeed.id && d.ts === myCareNeed.ts); } catch { return false; }
   }, [myCareNeed && myCareNeed.id, myCareNeed && myCareNeed.ts, careDismissTick]);
   const dismissCareBanner = (e) => { if (e) e.stopPropagation(); try { if (myCareNeed) localStorage.setItem('trinityone.care.bannerDismiss', JSON.stringify({ id: myCareNeed.id, ts: myCareNeed.ts })); } catch {} if (ctx.toast) ctx.toast('Okay — this comes back if anything about your care changes.'); setCareDismissTick(t => t + 1); };
-  const pNext = plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1];
+  const pNext = plan ? (plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1]) : null;
 
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
@@ -2815,9 +2818,9 @@ function TodayScreen({ ctx }) {
       ) : null}
 
       {/* Plan + (real) devotional cards */}
-      <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
-        <div onClick={() => ctx.openPlan(plan)} style={{
+      {plan || churchDevo ? <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel> : null}
+      {plan || churchDevo ? <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
+        {plan ? <div onClick={() => ctx.openPlan(plan)} style={{
           flex: 1, padding: 16, borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)',
           boxShadow: 'var(--shadow)', cursor: 'pointer',
         }}>
@@ -2833,7 +2836,7 @@ function TodayScreen({ ctx }) {
             </div>
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>Day {pNext.d} of {plan.len}</div>
-        </div>
+        </div> : null}
         {churchDevo ? (
           <div onClick={() => ctx.openChurchDevo(churchDevo)} style={{
             flex: 1, padding: 16, borderRadius: 20, background: 'var(--sage)', cursor: 'pointer',
@@ -2847,7 +2850,7 @@ function TodayScreen({ ctx }) {
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, lineHeight: 1.15, marginTop: 2, position: 'relative' }}>{churchDevo.title}</div>
           </div>
         ) : null}
-      </div>
+      </div> : null}
 
       {/* Quick row */}
       <div style={{ display: 'flex', gap: 10, animation: 'trinityFade .5s ease .2s both' }}>

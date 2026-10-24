@@ -173,3 +173,33 @@ test('MANUAL RETRY AT THE POINT OF USE: a deliberate followChurch of a blocked c
   ctxOf(open.draw()).followChurch(OTHERNPUB);
   assert.equal(ctxOf(open.draw()).churches.length, n0 + 1, 'control: with the guard open the church should be followed');
 });
+
+// THE RESET NOTICE MUST LINGER LONG ENOUGH TO READ (owner, 2026-10-14: it "flashed by before I could read it").
+// Point of use (rule 3: lift and RUN the real function, never match app/*.jsx text). _applyBlockedReset is the one
+// place that announces the reset; it is dependency-injected (app.jsx) precisely so a test can drive it. The fix is
+// to mark the toast { error: true } — the app's toast() keeps an error up 6s (and draws a shield, not a success
+// tick) while a plain string gets 1.9s. The sentence carries no failure word, so without the flag toastKind()
+// classes it 'ok' and it flashes past. This fails if the flag is dropped.
+test('APP at the point of use: the blocked-reset notice is marked to LINGER, not shown as a 1.9s success tick', () => {
+  const r = fakeReact();
+  const env = appBrowser(); const window = env.window;
+  // the module defines functions at load; give it the same minimal globals boot() does so it evaluates clean
+  window.Bible = { loaded: true, activeVersion: 'KJV', subscribe: () => () => {}, books: () => ['John'], maxChapter: () => 21, defaultLoc: () => ({ book: 'John', chap: 1 }) };
+  window.MyData = { seedIfEmpty() {}, on: () => () => {}, list: () => [], settings: { get: () => ({}) }, count: () => 0, set: () => {} };
+  window.TrinityData = {};
+  const applyBlockedReset = loadApp({ React: r.React, window, expr: '_applyBlockedReset' });
+  assert.equal(typeof applyBlockedReset, 'function', 'could not lift _applyBlockedReset — re-anchor this test');
+  const toasts = [];
+  const d = {
+    F: { toPub: (x) => x, forgetChurch() {}, ackAmBlocked() {} },
+    churches: [{ id: CP, npub: CP }],
+    setChurches() {}, setActiveChurch() {}, lsSet() {}, openFollow() {},
+    toast: (msg, opts) => toasts.push({ msg, opts }),
+  };
+  const ok = applyBlockedReset(CP, d);
+  assert.equal(ok, true, 'the reset did not run on a valid church');
+  assert.equal(toasts.length, 1, 'the reset said nothing to the member — they lose access with no explanation');
+  assert.match(String(toasts[0].msg), /removed your access/, 'the reset notice wording changed unexpectedly');
+  assert.equal(toasts[0].opts && toasts[0].opts.error, true,
+    'the reset notice is NOT marked { error: true } — it will flash past in 1.9s with a success tick, which is the bug the owner reported');
+});
