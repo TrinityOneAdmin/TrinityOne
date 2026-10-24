@@ -1883,4 +1883,34 @@ export const CASES = [
     replace: ``,
     test: 'scripts/a-key-held-back-by-a-relay-says-which.test.mjs',
   },
+  {
+    name: `relay-net M-5: enrolment reports published from the publish result, not the read-back`,
+    file: 'src/steward.src.js',
+    find: `    if (wanted.every(t => landed(found, t))) return { published: true,`,
+    replace: `    if (wanted.length >= 0) return { published: true,`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
+  {
+    name: `relay-net M-5: an incomplete read-back is treated as a missing change (re-signs over a list it could not see)`,
+    file: 'src/steward.src.js',
+    find: `    if (!_readCovers(back)) return { published: false, unknown: true, unverified: true, entries: list,`,
+    replace: `    if (false && !_readCovers(back)) return { published: false, unknown: true, unverified: true, entries: list,`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
+  {
+    name: `relay-net M-5: the repair is signed no newer than the list it merged onto`,
+    file: 'src/steward.src.js',
+    find: `    list = reapply(found);
+    floorAt = newest ? (newest.created_at || 0) + 1 : 0;`,
+    replace: `    list = reapply(found);
+    floorAt = 0;`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
+  {
+    name: `relay-net M-5: Remove reports removed from the publish result, not the read-back`,
+    file: 'src/steward.src.js',
+    find: `    if (!still.length) return { removed: true, entries: found, repaired: repairs };`,
+    replace: `    if (still.length >= 0) return { removed: true, entries: found, repaired: repairs };`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
 ];

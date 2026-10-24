@@ -19045,10 +19045,10 @@ zoo`.split("\n");
     }
     const changed = JSON.stringify(entries) !== before;
     if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, changed: true };
-    const deliver = async (ev2) => {
+    const deliver = async (ev) => {
       const urls = proven.filter((x) => !shared.includes(x.pubkey)).map((x) => x.url);
-      if (!ev2 || !urls.length) return [];
-      const res = await Promise.allSettled(pool.publish(urls, ev2).map((pr) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8e3))])));
+      if (!ev || !urls.length) return [];
+      const res = await Promise.allSettled(pool.publish(urls, ev).map((pr) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8e3))])));
       return urls.filter((u, i3) => res[i3] && res[i3].status === "fulfilled" && !(typeof res[i3].value === "string" && res[i3].value.startsWith("connection failure")));
     };
     const resend = async () => {
@@ -19062,16 +19062,49 @@ zoo`.split("\n");
     if (!entries.length) return { published: false, entries, proven, unproven, seeded, delivered: [] };
     if (!changed) return { published: false, full: !mine || fullAnswer(read), entries, proven, unproven, seeded, delivered: await resend() };
     if (mine && !fullAnswer(read)) return { published: false, entries: [], proven, unproven, seeded, unknown: true, delivered: await resend() };
-    const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk);
-    const ev = await publish(signed);
-    const delivered = await deliver(signed);
-    if (ev || delivered.length) {
-      try {
-        lsSet(seenKey, "1");
-      } catch (e) {
+    const startedWith = new Map(parseRelayNet(before).map((e) => [e.pubkey, JSON.stringify(e)]));
+    const wanted = entries.filter((e) => startedWith.get(e.pubkey) !== JSON.stringify(e)).map((e) => ({ pubkey: e.pubkey, url: e.url || "", name: e.name || "" }));
+    const landed = (list2, t) => {
+      const e = list2.find((x) => x.pubkey === t.pubkey);
+      return !!e && (!t.url || e.url === t.url) && (!t.name || e.name === t.name);
+    };
+    const reapply = (list2) => {
+      for (const t of wanted) {
+        const cur = list2.find((x) => x.pubkey === t.pubkey);
+        if (cur) {
+          if (t.url && cur.url !== t.url) cur.url = t.url;
+          if (t.name && cur.name !== t.name) cur.name = t.name;
+        } else {
+          const e = { pubkey: t.pubkey, alwaysOn: true, url: t.url };
+          if (t.name) e.name = t.name;
+          list2.push(e);
+        }
       }
+      return list2;
+    };
+    let list = entries, floorAt = 0, repairs = 0;
+    for (; ; ) {
+      const signed = finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", RELAY_NET_D]], content: JSON.stringify(list) }), sk);
+      const ev = await publish(signed);
+      const delivered = await deliver(signed);
+      if (ev || delivered.length) {
+        try {
+          lsSet(seenKey, "1");
+        } catch (e) {
+        }
+      }
+      if (!ev && !delivered.length) return { published: false, entries: list, proven, unproven, seeded, delivered };
+      const back = await relayNetDoc();
+      const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
+      const found = newest ? parseRelayNet(newest.content) : [];
+      if (wanted.every((t) => landed(found, t))) return { published: true, entries: found, proven, unproven, seeded, delivered, repaired: repairs };
+      if (!_readCovers(back)) return { published: false, unknown: true, unverified: true, entries: list, proven, unproven, seeded, delivered };
+      if (repairs >= 2) return { published: false, unknown: true, lost: true, entries: found, proven, unproven, seeded, delivered };
+      if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { published: false, entries: [], proven, unproven, seeded, unknown: true, changed: true };
+      repairs++;
+      list = reapply(found);
+      floorAt = newest ? (newest.created_at || 0) + 1 : 0;
     }
-    return { published: !!ev || delivered.length > 0, entries, proven, unproven, seeded, delivered };
   }
   var _enrolQueue = Promise.resolve();
   function enrolSerial(fn) {
@@ -19117,8 +19150,24 @@ zoo`.split("\n");
     if (own && !ownKey && pk && drop.some((e) => e.pubkey === pk)) return { removed: false, unknown: true };
     const keep = entries.filter((e) => !drop.includes(e));
     if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
-    const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(keep) }), sk));
-    return { removed: !!ev, entries: keep };
+    const isDropped = (e) => pk && e.pubkey === pk || e.url && _k(e.url) === _k(u);
+    let list = keep, floorAt = 0, repairs = 0;
+    for (; ; ) {
+      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", RELAY_NET_D]], content: JSON.stringify(list) }), sk));
+      if (!ev) return { removed: false, entries: list };
+      const back = await relayNetDoc();
+      if (!_readCovers(back, u)) return { removed: false, unknown: true, unverified: true, entries: list };
+      const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
+      const found = newest ? parseRelayNet(newest.content) : [];
+      const still = found.filter(isDropped);
+      if (!still.length) return { removed: true, entries: found, repaired: repairs };
+      if (repairs >= 2) return { removed: false, unknown: true, lost: true, entries: found };
+      if (sk !== sk0 || pub !== pub0 || actingChurch || _viewingNetwork()) return { removed: false, unknown: true, changed: true };
+      if (still.some((e) => ownKey && e.pubkey === ownKey)) return { removed: false, ownBox: true };
+      repairs++;
+      list = found.filter((e) => !isDropped(e));
+      floorAt = newest ? (newest.created_at || 0) + 1 : 0;
+    }
   }
   var _autoEnrolled = /* @__PURE__ */ new Set();
   async function autoEnrolRelayNet() {
