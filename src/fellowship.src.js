@@ -1303,7 +1303,20 @@ async function adoptChurchNetDocAddresses(cp) {
         const mineAlready = !!(r0[cp] && r0[cp].rows && r0[cp].rows[u]);
         claimOnly = elsewhere && !mineAlready && _alreadyAMemberCandidate(u);
       } catch (err) { claimOnly = false; }
-      if (!claimOnly && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+      // THE SAME BOX AT A NEW ADDRESS (PR #7 audit, M-1). A box behind a free tunnel comes back on a new address
+      // every restart, and the church re-signs the SAME key there. Each old address this path recorded for this
+      // church under that key is REPLACED, not kept beside it: kept, they filled the cap after about five
+      // restarts (so the box's live address was never adopted again) and were dialled on every publish and read.
+      // So a replacement is not held back by the cap — it does not grow the list — and the old rows go once the
+      // new address has proved the key (below). Matched on the KEY, never the URL (RELAY-ADMISSION trap 2).
+      const wantKey = String((e && e.pubkey) || '').toLowerCase();
+      let moved = [];
+      try {
+        const r1 = readRec();
+        const rows = (r1[cp] && r1[cp].rows) || {};
+        moved = Object.keys(rows).filter(x => x !== u && String(rows[x] || '').toLowerCase() === wantKey);
+      } catch (err) { moved = []; }
+      if (!claimOnly && !moved.length && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
       if (!claimOnly && _alreadyAMemberCandidate(u)) continue;
       // THE BOX AT THAT ADDRESS MUST PROVE THE KEY THE ENTRY NAMES (RELAY-ADMISSION trap 2). Without this a
       // recycled tunnel hostname answering with a DIFFERENT key would be adopted. verifyRelayIdentityDetailed
@@ -1334,8 +1347,13 @@ async function adoptChurchNetDocAddresses(cp) {
         const mine = (rec[cp] && typeof rec[cp] === 'object') ? rec[cp] : { hw: docAt, rows: {} };
         if (!mine.rows || typeof mine.rows !== 'object') mine.rows = {};
         mine.rows[u] = String(proof.relayPub || '').toLowerCase();
+        for (const x of moved) delete mine.rows[x];
         rec[cp] = mine;
         writeRec(rec);
+        // …and off the phone, unless something else still needs the old address (_dropRevokedNetDocRows refuses
+        // the shared pool, another church's row, and any church's invite or kind-10002 box). The gate forgets
+        // what was dropped, so a dead address is not kept as "proved" for the rest of its 30 days.
+        if (moved.length) for (const x of _dropRevokedNetDocRows(cp, moved, rec)) { try { _gate.forget(x); } catch (err) {} }
       } catch (err) {}
     }
     return added;
