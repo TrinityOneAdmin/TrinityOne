@@ -7475,7 +7475,7 @@
         if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
       }
       entries = best ? parseRelayNet(best.content) : [];
-      _relayNetCache.set(cp, { at: Date.now(), entries });
+      _relayNetCache.set(cp, { at: Date.now(), entries, docAt: best ? best.created_at || 0 : 0 });
     } catch {
       return c ? c.entries : [];
     }
@@ -7530,10 +7530,55 @@
   }
   var MEMBER_NETDOC_ADOPT_MAX = 8;
   var _adoptingNetDoc = false;
+  function _dropRevokedNetDocRows(cp, gone, rec) {
+    let boxes = {};
+    try {
+      boxes = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || "{}") || {};
+    } catch (e) {
+      boxes = {};
+    }
+    const stillNeeded = (u) => {
+      if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) return true;
+      for (const c of Object.keys(rec || {})) {
+        if (c !== cp && rec[c] && rec[c].rows && rec[c].rows[u]) return true;
+      }
+      for (const c of Object.keys(boxes)) {
+        if (Array.isArray(boxes[c]) && boxes[c].includes(u)) return true;
+      }
+      for (const [, m] of _churchRelays) {
+        if (m && m.has && m.has(u)) return true;
+      }
+      return false;
+    };
+    const drop = (gone || []).filter((u) => !stillNeeded(u));
+    if (!drop.length) return [];
+    const now = window.Fellowship.relays || [];
+    if (now.some((u) => drop.includes(u))) window.Fellowship.setRelays(now.filter((u) => !drop.includes(u)));
+    try {
+      pool.close(drop);
+    } catch (e) {
+    }
+    return drop;
+  }
   async function adoptChurchNetDocAddresses(cp) {
     if (!cp) return [];
     if (_adoptingNetDoc) return [];
     _adoptingNetDoc = true;
+    const NETDOC_KEY = "trinityone.relays.netdoc";
+    const readRec = () => {
+      try {
+        const o = JSON.parse(localStorage.getItem(NETDOC_KEY) || "{}");
+        return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+      } catch (e) {
+        return {};
+      }
+    };
+    const writeRec = (o) => {
+      try {
+        localStorage.setItem(NETDOC_KEY, JSON.stringify(o));
+      } catch (e) {
+      }
+    };
     try {
       let entries;
       try {
@@ -7542,6 +7587,21 @@
         return [];
       }
       if (window.Fellowship.churchPub !== cp) return [];
+      const cached = _relayNetCache.get(cp);
+      const docAt = cached && cached.docAt || 0;
+      if (docAt > 0) {
+        const rec = readRec();
+        const mine = rec[cp] && typeof rec[cp] === "object" ? rec[cp] : { hw: 0, rows: {} };
+        if (!mine.rows || typeof mine.rows !== "object") mine.rows = {};
+        if (docAt < (Number(mine.hw) || 0)) return [];
+        mine.hw = docAt;
+        const signedKeys = new Set((entries || []).map((e) => String(e && e.pubkey || "").toLowerCase()).filter(Boolean));
+        const gone = Object.keys(mine.rows).filter((u) => !signedKeys.has(String(mine.rows[u] || "").toLowerCase()));
+        for (const u of gone) delete mine.rows[u];
+        rec[cp] = mine;
+        writeRec(rec);
+        if (gone.length) _dropRevokedNetDocRows(cp, gone, rec);
+      }
       const added = [];
       for (const e of entries || []) {
         if ((window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
@@ -7570,6 +7630,15 @@
         try {
           window.Fellowship.addRelay(u);
           added.push(u);
+        } catch (err) {
+        }
+        try {
+          const rec = readRec();
+          const mine = rec[cp] && typeof rec[cp] === "object" ? rec[cp] : { hw: docAt, rows: {} };
+          if (!mine.rows || typeof mine.rows !== "object") mine.rows = {};
+          mine.rows[u] = String(proof.relayPub || "").toLowerCase();
+          rec[cp] = mine;
+          writeRec(rec);
         } catch (err) {
         }
       }

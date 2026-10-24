@@ -5672,7 +5672,12 @@ function setDeadStrikes(map) { try { lsSet(DEAD_STRIKES_LS, JSON.stringify(map |
 // "No longer answers" is the identity proof returning nothing, not the gate refusing it. A box that answers
 // with a key the church has since un-signed keeps its row and loses only its admission, which is the gate's
 // job and not this one's; a box that answers nothing is the one that wedges the read.
-async function retireDeadAdoptedRows() {
+// `signed` (PR #7 audit, findings H-2 and M-3): the set of keys the church's signed document names, passed ONLY
+// when that document came from a COMPLETE read (_readCovers). With it, a row whose box proves a key the church
+// no longer signs is retired at once — the church took that box out (Remove on another console), or a
+// different TrinityOne box now answers at a recycled address. Without it (no complete read) the old rule
+// stands: a box that proves any key keeps its row. Rows the steward typed are never tagged, so never touched.
+async function retireDeadAdoptedRows(signed) {
   const tagged = adoptedRelays();
   // No adopted rows at all: nothing here can ever retire, so there is nothing for a strike to describe.
   if (!tagged.length) { if (Object.keys(deadStrikes()).length) setDeadStrikes({}); return []; }
@@ -5694,7 +5699,10 @@ async function retireDeadAdoptedRows() {
       proved = String((d && d.proof && d.proof.relayPub) || '').toLowerCase();
       reached = !!(d && d.reached);
     } catch (e) { proved = ''; reached = false; }
-    if (/^[0-9a-f]{64}$/.test(proved)) continue;                      // still our box: any strike is forgotten
+    if (/^[0-9a-f]{64}$/.test(proved)) {
+      if (signed && !signed.has(proved)) retired.push(u);            // proves a key the church no longer signs
+      continue;                                                      // still our box: any strike is forgotten
+    }
     if (!reached) { const n = Number(was[k]) || 0; if (n > 0) strikes[k] = n; continue; }   // nothing answered
     const n = (Number(was[k]) || 0) + 1;
     if (n >= DEAD_STRIKES_MAX) retired.push(u); else strikes[k] = n;  // one answered failure is not enough
@@ -5737,15 +5745,27 @@ async function adoptNetDocAddresses() {
   if (!pub || pub !== churchPub) return [];
   const pub0 = pub;
   let entries = [];
-  try { entries = await relayNetEntries(pub0); } catch (e) { return []; }
-  // An empty read is "I do not know yet" as often as it is "the church has signed nothing", and the
-  // difference does not matter here: this path only ever adds, so it simply does nothing and the next
-  // unlock asks again. Nothing is removed or re-signed on a failed read.
+  // READ THE DOCUMENT ITSELF, not only its entries, because the retire pass needs to know whether the read
+  // was COMPLETE (every relay asked answered — _readCovers) and whether a signed document was there at all.
+  // The same read relayNetEntries makes, with the same author re-check.
+  let full = false, haveDoc = false;
+  try {
+    const r = await relayNetDoc();
+    const ev = r && r.ev;
+    haveDoc = !!(ev && ev.pubkey === pub0);
+    entries = haveDoc ? parseRelayNet(ev.content) : [];
+    full = haveDoc && _readCovers(r);
+  } catch (e) { return []; }
   if (pub !== pub0) return [];
-  // THE ROWS THIS PATH LEFT BEHIND LAST TIME, before adding any more (finding 1). A non-empty read is the
-  // precondition — see retireDeadAdoptedRows — and this is the only place that calls it.
+  // No document came back: "I do not know yet". Nothing is removed or re-signed on a failed read.
+  if (!haveDoc) return [];
+  // THE ROWS THIS PATH LEFT BEHIND LAST TIME, before adding any more (finding 1). A COMPLETE read also passes
+  // the keys the church signs, so a box it took OUT of its document — even one still answering — is retired
+  // here (PR #7 audit, H-2), and so is a recycled address now proving a different key (M-3). This now runs
+  // on an EMPTY signed list as well: a church that removed its last box has signed exactly that.
+  const signedKeys = full ? new Set(entries.map(e => String((e && e.pubkey) || '').toLowerCase()).filter(Boolean)) : null;
+  if (entries.length || full) { try { await retireDeadAdoptedRows(signedKeys); } catch (e) {} }
   if (!entries.length) return [];
-  try { await retireDeadAdoptedRows(); } catch (e) {}
   if (pub !== pub0) return [];
   const added = [];
   for (const e of entries) {
