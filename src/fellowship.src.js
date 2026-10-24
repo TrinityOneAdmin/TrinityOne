@@ -1515,6 +1515,28 @@ function relaysForChurch(cp) {
   if (boxes >= 2) return _netRelays([...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])], cp);
   return _netRelays([...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
 }
+// THE PUBLISH SET FOR ONE CHURCH.
+//
+// THE BOXES THE CHURCH HAS SIGNED ARE ALWAYS IN IT. A member who followed with an invite link has
+// `trinityone.churchboxes[cp]` = the link's relay (adoptInviteRelays), and the branch below used to send every
+// church write — membership, posts, reactions, RSVPs, care — to that list plus the shared pool, and nowhere
+// else. A box the church added LATER reaches this phone only through the church's signed relay-net document
+// (adoptChurchNetDocAddresses), which writes window.Fellowship.relays and deliberately never churchboxes or
+// _churchRelays. So that box was proved, connected, in the read set — and sent nothing. Measured 2026-10-24
+// with two real relays: publishSetFor = [S, shared], relaysForChurch = [shared, S, T]; the member's join
+// landed on S and never on T, and T then refused the member's DMs as "not a member". On the device test of
+// PR #7 the church's own box held 0 of the member's events, which is this.
+//
+// MATCHED ON THE KEY, NEVER THE URL (RELAY-ADMISSION trap 2). A candidate is added only when the gate has an
+// admitted proof for it AND that proved key is one this church's own signed document names. The document is
+// read from the cache churchRelayNet keeps (synchronous here, never a new read); with no cached document
+// nothing is added, which is exactly the old behaviour. Nothing is written: not _churchRelays, not
+// churchboxes, not the candidate list — and the shared pool is still appended below, because adding a box can
+// only ever widen this set. The boxes>=2 count still reads _churchRelays alone, so this cannot drop
+// CANONICAL_RELAYS (owner decision 2026-10-23: a church is never isolated).
+//
+// Scoped to THIS church's document, so another church's box sitting in the global candidate list is not
+// pulled into this church's writes by this line.
 function publishSetFor(cp) {
   const live = cp && _churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : [];
   const persisted = live.length ? live : _loadChurchBoxes(cp);
@@ -1522,7 +1544,19 @@ function publishSetFor(cp) {
   const own = cp && _churchRelays.get(cp);
   const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
   const canonical = distinctBoxes >= 2 ? [] : CANONICAL_RELAYS;
-  return _netRelays([...new Set([...persisted, ...canonical])], cp);
+  const signed = [];
+  try {
+    const doc = cp && _relayNetCache.get(cp);
+    const keys = new Set(((doc && doc.entries) || []).map(e => String((e && e.pubkey) || '').toLowerCase()).filter(Boolean));
+    if (keys.size) {
+      for (const u of (window.Fellowship.relays || [])) {
+        if (!u || persisted.includes(u)) continue;
+        const k = _gate.provedKey(u, cp);
+        if (k && keys.has(k)) signed.push(u);
+      }
+    }
+  } catch (e) {}
+  return _netRelays([...new Set([...persisted, ...signed, ...canonical])], cp);
 }
 const RELAYS_KEY = 'trinityone.relays';
 // THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.

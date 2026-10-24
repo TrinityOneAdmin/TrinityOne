@@ -3996,6 +3996,15 @@
       admits(url, cp) {
         return admitCached(map, url, cp, nowSec());
       },
+      // THE KEY THIS ADDRESS PROVED, if it is admitted for `cp` right now; '' otherwise. Cache only, nothing
+      // opened. For a caller that must match an admitted address against the keys a church has SIGNED
+      // (RELAY-ADMISSION trap 2: the key, never the URL) — the member's publishSetFor, which routes a church's
+      // writes to the boxes its own relay-net document names.
+      provedKey(url, cp) {
+        if (!admitCached(map, url, cp, nowSec())) return "";
+        const e = map.get(_relayKey(url));
+        return e && _isHex64(e.pub) ? String(e.pub).toLowerCase() : "";
+      },
       // Prove a whole list NOW, awaited. For the moments where waiting is right: the list just changed, or the
       // app has just booted and would rather spend a second than start with an empty publish set.
       async refresh(list, cp) {
@@ -7888,7 +7897,20 @@
     const own = cp && _churchRelays.get(cp);
     const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
     const canonical = distinctBoxes >= 2 ? [] : CANONICAL_RELAYS;
-    return _netRelays([.../* @__PURE__ */ new Set([...persisted, ...canonical])], cp);
+    const signed = [];
+    try {
+      const doc = cp && _relayNetCache.get(cp);
+      const keys = new Set((doc && doc.entries || []).map((e) => String(e && e.pubkey || "").toLowerCase()).filter(Boolean));
+      if (keys.size) {
+        for (const u of window.Fellowship.relays || []) {
+          if (!u || persisted.includes(u)) continue;
+          const k = _gate.provedKey(u, cp);
+          if (k && keys.has(k)) signed.push(u);
+        }
+      }
+    } catch (e) {
+    }
+    return _netRelays([.../* @__PURE__ */ new Set([...persisted, ...signed, ...canonical])], cp);
   }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
