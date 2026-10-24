@@ -41,6 +41,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { join as join_ } from 'node:path';
 import { SimplePool } from 'nostr-tools/pool';
 import { verifyEvent, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode, decode as nip19decode } from 'nostr-tools/nip19';
@@ -190,6 +191,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function _netRelays', '_netRelays'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
+    fnBody(src, 'function _otherChurchesNetDocRows', '_otherChurchesNetDocRows'),
     stmt(src, 'var _churchRelays = ', '_churchRelays'),
     stmt(src, 'var CHURCH_BOXES_KEY = ', 'CHURCH_BOXES_KEY'),
     fnBody(src, 'function _loadChurchBoxes', '_loadChurchBoxes'),
@@ -670,5 +672,84 @@ test('revocation never takes away what it did not add, and nothing answered is n
     assert.ok(app.relays().includes(BOX.wsUrl),
       'a read that returned NO document revoked the church\'s box — on a phone with no signal that would ' +
       'throw away every box the church has signed');
+  } finally { app.close(); }
+});
+
+// ── 11. ONE PHONE, TWO CHURCHES: church A's box is never used for church B (PR #7 audit, finding H-3) ──
+// THE DEFECT. The candidate list is ONE list for every church the member follows. Church A's signed relay-net
+// document put A's own box on it, and from then on church B's reads and writes went there too: A's box refused
+// B's writes and wrote every refusal into its permanent rejected.log as "this member's key wrote
+// trinityone/member:<B>". Seize A's box and that log lists which other churches A's members belong to.
+// Measured 2026-10-24: B's publish set [shared, A-box]; the rejected.log line captured from a real gateway.
+//
+// THE STAGING. Two real churches, one shared relay both are registered on, A's own box (registered for A
+// only), and a MUTUAL box both churches sign — the DOMAIN case "churches host each other", which this fix must
+// not break. Adoption is the shipped adoptChurchNetDocAddresses; the sets are the shipped relaysForChurch,
+// publishSetFor and churchRelays; B's join is published over the shipped publish set and A's box's own
+// rejected.log is read afterwards.
+test('one phone in two churches: church A\'s own box carries none of church B\'s traffic; a box both sign serves both', async () => {
+  const A = church;
+  const B = H.key(); B.npub = npubEncode(B.pub);
+  const S2 = await H.startRelay({ name: 'S2', churches: [A.pub, B.pub] });
+  const BOXA = await H.startRelay({ name: 'BOXA', churches: [A.pub] });
+  const MUTUAL = await H.startRelay({ name: 'MUTUAL', churches: [A.pub, B.pub] });
+  const shared = secure(S2.wsUrl);
+  await H.publishAll(S2, [
+    relayNetDocFor(A, [{ pubkey: BOXA.relayPub, alwaysOn: true, url: BOXA.wsUrl },
+                       { pubkey: MUTUAL.relayPub, alwaysOn: true, url: MUTUAL.wsUrl }]),
+    relayNetDocFor(B, [{ pubkey: MUTUAL.relayPub, alwaysOn: true, url: MUTUAL.wsUrl }]),
+  ]);
+  const app = memberOn({ church: A, relays: [shared], canonical: [shared], pins: { [shared]: [S2.relayPub] } });
+  try {
+    // The member opens church A: both of A's boxes are adopted and recorded under A.
+    assert.deepEqual((await app.adopt(A.pub)).sort(), [BOXA.wsUrl, MUTUAL.wsUrl].sort(), 'staging fault: A\'s boxes were not adopted');
+    await app.gate.refresh(app.churchRelaysRaw(), A.pub);
+    await app.gate.refresh(app.churchRelaysRaw(), B.pub);
+    // CONTROL — church A still uses its own boxes. A fix that dropped them everywhere would pass the rest.
+    assert.ok(app.relaysForChurch(A.pub).includes(BOXA.wsUrl), 'church A lost its own box from its read set');
+    assert.ok(app.publishSetFor(A.pub).includes(BOXA.wsUrl), 'church A lost its own box from its publish set');
+
+    // CHURCH B, BEFORE IT HAS CLAIMED ANYTHING: neither of A's boxes is in B's sets.
+    assert.equal(app.relaysForChurch(B.pub).includes(BOXA.wsUrl), false,
+      'church B\'s READ set includes church A\'s own box: ' + JSON.stringify(app.relaysForChurch(B.pub)));
+    assert.equal(app.publishSetFor(B.pub).includes(BOXA.wsUrl), false,
+      'church B\'s PUBLISH set includes church A\'s own box: ' + JSON.stringify(app.publishSetFor(B.pub)));
+    app.win.Fellowship.churchPub = B.pub;
+    assert.equal(app.churchRelays().includes(BOXA.wsUrl), false,
+      'with church B active, churchRelays() — the set B\'s care, safety and member reads use — includes A\'s box');
+    // THE SHARED POOL IS NEVER DROPPED, for either church.
+    assert.ok(app.relaysForChurch(B.pub).includes(shared) && app.publishSetFor(B.pub).includes(shared),
+      'church B lost the shared relay');
+
+    // WHERE THE DATA LANDS: B's join, over B's shipped publish set, leaves no trace on A's box. (The gateway's
+    // rejectLog keeps the first 60 characters of the d-tag, so the trace is the start of B's key.)
+    const bTrace = 'trinityone/member:' + B.pub.slice(0, 40);
+    const join = joinDoc(app.me, B.pub);
+    await Promise.allSettled(app.pool.publish(app.publishSetFor(B.pub), join));
+    await sleep(600);
+    let log = ''; try { log = readFileSync(join_(BOXA.dataDir, 'rejected.log'), 'utf8'); } catch (e) { log = ''; }
+    assert.equal(log.includes(bTrace), false,
+      'church A\'s box logged this member\'s join to church B — a seizure of A\'s box reveals the second church');
+    // CONTROL FOR THE CHECK ABOVE: the same join sent STRAIGHT to A's box IS refused and logged — so an empty log
+    // above means nothing was sent there, not that the log could not be read.
+    const w = await H.connect(BOXA);
+    try { const [ok] = await H.publish(w, join); assert.equal(ok, false, 'staging fault: A\'s box accepted a join to church B'); }
+    finally { try { w.close(); } catch (e) {} }
+    await sleep(300);
+    const after = readFileSync(join_(BOXA.dataDir, 'rejected.log'), 'utf8');
+    assert.ok(after.includes(bTrace), 'staging fault: A\'s box does not log the refusal this test looks for');
+
+    // MUTUAL HOSTING: church B signs the MUTUAL box too. Once B's document is read, B claims it and uses it;
+    // A's private box stays out.
+    await app.adopt(B.pub);
+    assert.ok(app.relaysForChurch(B.pub).includes(MUTUAL.wsUrl),
+      'a box BOTH churches sign is not used for church B — the fix broke churches hosting each other');
+    assert.equal(app.relaysForChurch(B.pub).includes(BOXA.wsUrl), false, 'claiming the mutual box let A\'s own box in too');
+    // Church A keeps the mutual box as a CANDIDATE. Re-proved for A first because of a PRE-EXISTING limit of the
+    // admission gate this test surfaced (src/relay-net.src.js createRelayGate.prove): a `church`-root admission
+    // is cached with ONE church's scope per address, so proving the mutual box for B un-admits it for A until
+    // it is proved for A again. That is the gate's, not this change's, and is reported separately.
+    await app.gate.refresh(app.churchRelaysRaw(), A.pub);
+    assert.ok(app.relaysForChurch(A.pub).includes(MUTUAL.wsUrl), 'church B\'s claim took the mutual box away from church A');
   } finally { app.close(); }
 });

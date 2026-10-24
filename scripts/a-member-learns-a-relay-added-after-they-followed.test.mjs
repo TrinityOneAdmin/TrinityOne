@@ -232,6 +232,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function _netRelays', '_netRelays'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
+    fnBody(src, 'function _otherChurchesNetDocRows', '_otherChurchesNetDocRows'),
     // the adoption bookkeeping — unaltered by this branch, and lifted so nothing about it is mocked
     stmt(src, 'var _churchRelays = ', '_churchRelays'),
     stmt(src, 'var _churchList = ', '_churchList'),

@@ -685,6 +685,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var NO_NETWORK_RELAY = ', 'NO_NETWORK_RELAY'),
     stmt(src, 'var isNoNetworkRelay = ', 'isNoNetworkRelay'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
+    fnBody(src, 'function _otherChurchesNetDocRows', '_otherChurchesNetDocRows'),
     fnBody(src, 'function relaysForChurch', 'relaysForChurch'),
     fnBody(src, 'function publishSetFor', 'publishSetFor'),
     stmt(src, 'var _PUB_FAILED = ', '_PUB_FAILED'),

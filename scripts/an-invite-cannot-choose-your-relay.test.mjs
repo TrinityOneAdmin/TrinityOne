@@ -150,6 +150,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function _netRelays', '_netRelays'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
+    fnBody(src, 'function _otherChurchesNetDocRows', '_otherChurchesNetDocRows'),
   ].join('\n');
   const win = fakeWindow();
   win.Fellowship = { relays: [...relays], churchPub: church.pub, ready: Promise.resolve() };

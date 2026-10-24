@@ -1031,7 +1031,46 @@ function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays ||
 // empty, and when it is, every caller takes the failure it already had: a chat message, DM or join queues in
 // the outbox; a care request comes back not-sent. See src/relay-net.src.js for why the order is this way
 // round and why nothing here builds a queue.
-function churchRelays() { return _netRelays(churchRelaysRaw()); }
+function churchRelays() {
+  // NOT ANOTHER CHURCH'S BOX (PR #7 audit, H-3): the active church's reads and writes skip a box another
+  // church's signed document put on this phone. See _otherChurchesNetDocRows.
+  const foreign = _otherChurchesNetDocRows(window.Fellowship.churchPub);
+  return _netRelays(churchRelaysRaw().filter(u => !foreign.has(u)));
+}
+// THE BOXES ON THIS PHONE THAT BELONG TO A DIFFERENT CHURCH (PR #7 audit, finding H-3).
+//
+// The candidate list (window.Fellowship.relays) is ONE list for every church a member follows. When church A's
+// signed relay-net document added A's own box, that box was then used for church B too: B's reads went to it,
+// and B's writes — which A's box refuses, and records for ever in its rejected.log as "this member's key wrote
+// trinityone/member:<B>". A seizure of A's box then told whoever held it which OTHER churches A's members
+// belong to.
+//
+// This answers "which candidates must church `cp` not use": every address adoptChurchNetDocAddresses recorded
+// for ANOTHER church (trinityone.relays.netdoc, written there — the same key string), unless this church also
+// claims it — its own record (a box both churches sign: mutual hosting), its invite/kind-10002 boxes
+// (churchboxes / _churchRelays, READ only, never written), or the shared pool. Addresses the member typed are
+// never recorded, so they are never excluded. With no record at all, or no church, the answer is empty and
+// every list is exactly what it was before.
+//
+// This deliberately leaves churchRelaysRaw() — the UNGATED bootstrap read (RELAY-ADMISSION trap 3) — alone.
+function _otherChurchesNetDocRows(cp) {
+  const out = new Set();
+  if (!cp) return out;
+  try {
+    const rec = JSON.parse(localStorage.getItem('trinityone.relays.netdoc') || '{}') || {};
+    const mine = (rec[cp] && rec[cp].rows) || {};
+    let boxes = []; try { boxes = _loadChurchBoxes(cp) || []; } catch (e) { boxes = []; }
+    const live = _churchRelays.get(cp);
+    for (const c of Object.keys(rec)) {
+      if (c === cp || !rec[c] || !rec[c].rows || typeof rec[c].rows !== 'object') continue;
+      for (const u of Object.keys(rec[c].rows)) {
+        if (mine[u] || boxes.includes(u) || (live && live.has && live.has(u)) || CANONICAL_RELAYS.includes(u)) continue;
+        out.add(u);
+      }
+    }
+  } catch (e) {}
+  return out;
+}
 // THE CHURCH'S OWN LIST, GATED - narrower than churchRelays() on purpose, for traffic that must go only to
 // the relays THIS church is on. churchRelays() unions CANONICAL_RELAYS in, which is right for church content;
 // it is wrong for a member's personal unread marks (owner, DOMAIN.md 2026-10-13: "Marks should only go to the
@@ -1244,12 +1283,23 @@ async function adoptChurchNetDocAddresses(cp) {
     }
     const added = [];
     for (const e of (entries || [])) {
-      if ((window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
       const u = _netDocDialUrl(e && e.url);
       if (!u) continue;
       // The shared pool is added unconditionally by churchRelaysRaw; a second spelling of it only buys a dial.
       if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
-      if (_alreadyAMemberCandidate(u)) continue;
+      // A BOX TWO CHURCHES BOTH SIGN (mutual hosting — DOMAIN: churches host each other). It is already on this
+      // phone because ANOTHER church's document put it there, and is recorded under that church only — so
+      // _otherChurchesNetDocRows would keep it out of THIS church's read and publish sets. Claim it for this
+      // church too: prove the key this church signed, record it, add nothing to the list (it is already there).
+      let claimOnly = false;
+      try {
+        const r0 = readRec();
+        const elsewhere = Object.keys(r0).some(c => c !== cp && r0[c] && r0[c].rows && r0[c].rows[u]);
+        const mineAlready = !!(r0[cp] && r0[cp].rows && r0[cp].rows[u]);
+        claimOnly = elsewhere && !mineAlready && _alreadyAMemberCandidate(u);
+      } catch (err) { claimOnly = false; }
+      if (!claimOnly && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+      if (!claimOnly && _alreadyAMemberCandidate(u)) continue;
       // THE BOX AT THAT ADDRESS MUST PROVE THE KEY THE ENTRY NAMES (RELAY-ADMISSION trap 2). Without this a
       // recycled tunnel hostname answering with a DIFFERENT key would be adopted. verifyRelayIdentityDetailed
       // tells "unreachable" apart from "answered, not ours"; the proof is reused one line down so the address
@@ -1268,8 +1318,10 @@ async function adoptChurchNetDocAddresses(cp) {
       });
       if (!ok) continue;
       if (window.Fellowship.churchPub !== cp) break;       // switched while proving
-      if (_alreadyAMemberCandidate(u)) continue;           // added while we waited
-      try { window.Fellowship.addRelay(u); added.push(u); } catch (err) {}
+      if (!claimOnly) {
+        if (_alreadyAMemberCandidate(u)) continue;         // added while we waited
+        try { window.Fellowship.addRelay(u); added.push(u); } catch (err) {}
+      }
       // RECORD IT, for the revocation above: this church, the key it proved. Re-read, because the proofs above
       // took round trips and another pass may have written.
       try {
@@ -1572,7 +1624,9 @@ function _crHealthy() { try { return window.Fellowship.relaysHealthy() === true;
 // + reversible: dropping a8 for a self-hosted church never affects a church still using it, and a8 stays in code.
 function relaysForChurch(cp) {
   const own = cp && _churchRelays.get(cp);   // Map(url -> relayPub|null)
-  const global = window.Fellowship.relays || [];
+  // NOT ANOTHER CHURCH'S BOX (PR #7 audit, H-3): see _otherChurchesNetDocRows.
+  const foreign = _otherChurchesNetDocRows(cp);
+  const global = (window.Fellowship.relays || []).filter(u => !foreign.has(u));
   const ownUrls = own ? [...own.keys()] : [];
   // R3: "self-sufficient" (safe to drop the shared canonical fallback) requires >=2 DISTINCT relay BOXES of the
   // church's own — counted by identity key (relayPub), NOT by URL. Two routes to one relay (Cloudflare + Tailscale,
