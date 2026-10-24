@@ -1722,7 +1722,7 @@ function setSelfPublicRelay(wss) { try { const v = normRelay(wss || ''); if (v !
 // the member resolves the name at follow time. Only meaningful on the loopback-served desktop Suite.
 const SELF_NAME_LS = 'trinityone.steward.self-relay-name';
 function selfRelayName() { try { return String(lsGet(SELF_NAME_LS) || '').trim(); } catch { return ''; } }
-function setSelfRelayName(n) { try { const v = String(n || '').trim().toLowerCase(); if (v !== selfRelayName()) lsSet(SELF_NAME_LS, v); } catch (e) {} }
+function setSelfRelayName(n) { try { const v = String(n || '').trim().toLowerCase(); if (v !== selfRelayName()) { lsSet(SELF_NAME_LS, v); window.dispatchEvent(new CustomEvent('steward-relays')); } } catch (e) {} }
 let _localToken = null;
 // IS THIS ORIGIN LOOPBACK? Read straight off location, never through ownRelay().
 //
@@ -5289,7 +5289,11 @@ async function autoEnrolRelayNet() {
   // before the console switches to the church they help. `_boxHostsUs` is this church's own answer to "does the
   // serving box hold us" (registration accepted / read back); not yet known → not now, and not remembered.
   if (_boxHostsUs !== true) return null;
-  const key = pub + '|' + own;
+  // THE KEY IS WHAT WOULD BE SIGNED, not only which box. On a Suite box `own` is loopback and never changes, while
+  // the public address it is signed under (selfPublicRelay — a quick tunnel, new on every restart) and its name
+  // do. Keyed on the box alone, a pass that worked once never ran again on this page, and the church's list kept
+  // the dead tunnel address until the console was reloaded (PR #7 audit, M-2).
+  const key = pub + '|' + own + '|' + selfPublicRelay() + '|' + selfRelayName();
   if (_autoEnrolled.has(key)) return null;
   _autoEnrolled.add(key);
   let res = null;

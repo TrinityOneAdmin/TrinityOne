@@ -339,15 +339,15 @@ test('connecting a relay that is ALREADY listed signs it, instead of refusing it
 // tries again; nothing at all without an own box, or for a console that is not this church's own.
 const VENDOR = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 const OK = { proven: [{ url: 'ws://127.0.0.1:9/relay', pubkey: 'c'.repeat(64) }], published: true, entries: [{}], delivered: [] };
-function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null }) {
+function autoEnrol({ cands = ['ws://127.0.0.1:9/relay'], acting = '', network = false, hosts = true, shared = [], results, queue = null, self = { url: '', name: '' } }) {
   const body = fnBody(VENDOR, 'async function autoEnrolRelayNet()', 'autoEnrolRelayNet');
   let n = 0; const args = [];
   const fn = new Function('sk', 'pub', 'actingChurch', '_viewingNetwork', 'relayNetCandidates', 'enrolRelayNet', '_autoEnrolled',
-    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial',
+    '_boxHostsUs', 'sharedRelayKeys', 'enrolSerial', 'selfPublicRelay', 'selfRelayName',
     body + '\nreturn autoEnrolRelayNet;')(
     'sk', 'a'.repeat(64), acting, () => network, () => cands.slice(),
     async (o) => { args.push(o); const r = results[Math.min(n, results.length - 1)]; n++; if (r instanceof Error) throw r; return r; }, new Set(),
-    hosts, () => shared, queue || ((f) => f()));
+    hosts, () => shared, queue || ((f) => f()), () => self.url, () => self.name);
   return { fn, calls: () => n, args };
 }
 
@@ -375,6 +375,51 @@ test('B2: the automatic call enrols once per church and box, and retries only wh
   const sharedBox = autoEnrol({ shared: ['c'.repeat(64)], results: [{ ...OK, published: false, delivered: [], entries: [] }] });
   await sharedBox.fn(); await sharedBox.fn();
   assert.equal(sharedBox.calls(), 1, 'a console on the shared relay re-ran enrolment with nothing to do');
+});
+
+test('B2: a tunnel restart or a new relay name runs the pass again on the same page (PR #7 audit, M-2)', async () => {
+  // On a Suite box the own address is loopback and never changes; the public address it is signed under does,
+  // on every quick-tunnel restart. Remembered by box alone, a pass that worked once never ran again, so the
+  // church's list kept the dead tunnel address until the page was reloaded.
+  const self = { url: 'wss://alpha.trycloudflare.com/relay', name: 'grace' };
+  const a = autoEnrol({ results: [OK], self });
+  await a.fn(); await a.fn();
+  assert.equal(a.calls(), 1, 'staging: a pass that worked re-ran with nothing changed');
+  self.url = 'wss://beta.trycloudflare.com/relay';
+  await a.fn(); await a.fn();
+  assert.equal(a.calls(), 2, 'THE TUNNEL MOVED AND NOTHING RE-SIGNED — the church\'s list keeps the dead address until reload');
+  self.name = 'grace-city';
+  await a.fn();
+  assert.equal(a.calls(), 3, 'the relay name changed and nothing re-signed');
+});
+
+test('B2: the dashboard runs the pass when the tunnel address or relay name changes (\'steward-relays\')', async () => {
+  let calls = 0;
+  const e = runOwnRelayEffect({ autoEnrolRelayNet: async () => { calls++; return null; } });
+  e.fire('steward-relays');
+  await new Promise(r => setImmediate(r));
+  assert.equal(calls, 1, 'the console does not react to its own tunnel address changing — the list follows only a reload');
+  e.cleanup();
+  e.fire('steward-relays');
+  await new Promise(r => setImmediate(r));
+  assert.equal(calls, 1, 'the steward-relays listener outlives the effect');
+});
+
+test('both setters that change what is signed tell the console (\'steward-relays\')', () => {
+  // Lifted and RUN, not text-matched: each setter, given a new value, must dispatch the event the dashboard
+  // listens for. setSelfPublicRelay already did; setSelfRelayName did not.
+  const src = fnBody(VENDOR, 'function setSelfRelayName', 'setSelfRelayName') + '\n'
+    + fnBody(VENDOR, 'function selfRelayName', 'selfRelayName') + '\n'
+    + fnBody(VENDOR, 'function setSelfPublicRelay', 'setSelfPublicRelay') + '\n';
+  const ls = new Map(); const seen = [];
+  const f = new Function('lsGet', 'lsSet', 'SELF_NAME_LS', 'SELF_PUB_LS', 'normRelay', 'window', 'CustomEvent',
+    src + '\nreturn { setSelfRelayName, setSelfPublicRelay };')(
+    (k) => (ls.has(k) ? ls.get(k) : null), (k, v) => ls.set(k, v), 'n', 'p', (u) => String(u || ''),
+    { dispatchEvent: (e) => seen.push(e.type) }, class { constructor(t) { this.type = t; } });
+  f.setSelfRelayName('grace'); f.setSelfRelayName('grace');
+  assert.deepEqual(seen, ['steward-relays'], 'a new relay name was not announced, or an unchanged one was');
+  f.setSelfPublicRelay('wss://beta.trycloudflare.com/relay');
+  assert.deepEqual(seen, ['steward-relays', 'steward-relays'], 'a new tunnel address was not announced');
 });
 
 test('B2: nothing runs without an own box, or for a console that is not this church\'s own', async () => {

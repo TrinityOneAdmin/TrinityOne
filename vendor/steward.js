@@ -16356,7 +16356,10 @@ zoo`.split("\n");
   function setSelfRelayName(n) {
     try {
       const v = String(n || "").trim().toLowerCase();
-      if (v !== selfRelayName()) lsSet(SELF_NAME_LS, v);
+      if (v !== selfRelayName()) {
+        lsSet(SELF_NAME_LS, v);
+        window.dispatchEvent(new CustomEvent("steward-relays"));
+      }
     } catch (e) {
     }
   }
@@ -19123,7 +19126,7 @@ zoo`.split("\n");
     const own = relayNetCandidates()[0] || "";
     if (!own) return null;
     if (_boxHostsUs !== true) return null;
-    const key = pub + "|" + own;
+    const key = pub + "|" + own + "|" + selfPublicRelay() + "|" + selfRelayName();
     if (_autoEnrolled.has(key)) return null;
     _autoEnrolled.add(key);
     let res = null;
