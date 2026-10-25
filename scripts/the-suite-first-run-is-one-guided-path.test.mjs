@@ -309,6 +309,15 @@ test('a first launch shows ONE card with three choices — not the two doors —
     assert.equal(L.card, true, 'the first-run card is not on screen: ' + JSON.stringify(L));
     assert.deepEqual(L.doors, [false, false], 'a door is on screen beside the card: ' + JSON.stringify(L));
     assert.deepEqual([L.all.on, L.relay.on, L.console.on], [true, true, true], 'a choice is not on screen: ' + JSON.stringify(L));
+    // THE LOGO IS ~2.5x ITS OLD SIZE, MEASURED (owner 2026-10-25). The wordmark's rendered text was 195.7 x 25 px
+    // at 22px type; >= 2.2x is 430 x 55. Read from layout in Chromium, not matched in the source. It must also
+    // still fit the Suite's own window (900x780 here) with the first-run card's three choices fully on screen.
+    const logo = JSON.parse(await c.evalIn(`(() => { const e = document.querySelector('.brand'); const r = document.createRange(); r.selectNodeContents(e);
+      const t = r.getBoundingClientRect(); const last = document.getElementById('setupConsole').getBoundingClientRect();
+      return JSON.stringify({ w: t.width, h: t.height, lastBottom: last.bottom, vh: innerHeight, vw: innerWidth, sw: document.documentElement.scrollWidth }); })()`));
+    assert.ok(logo.w >= 195.7 * 2.2 && logo.h >= 25 * 2.2, 'the Suite logo is not ~2.5x its old 195.7x25 size: ' + JSON.stringify(logo));
+    assert.ok(logo.w <= logo.vw && logo.sw <= logo.vw, 'the enlarged logo overflows the window: ' + JSON.stringify(logo));
+    assert.ok(logo.lastBottom <= logo.vh, 'the enlarged logo pushes the first-run choices off the bottom of the window: ' + JSON.stringify(logo));
     assert.equal(L.all.href, '/relay-app/control.html?setup=everything', '"Set up everything" does not open the relay wizard on the everything path');
     assert.equal(L.relay.href, '/relay-app/control.html?setup=relay', '"Just a relay" does not open the relay wizard on the relay path');
     assert.equal(L.console.href, '/steward.html', '"Just the console" does not open the console');
