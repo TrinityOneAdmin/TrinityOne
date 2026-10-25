@@ -87,3 +87,24 @@
 
   window.RelayCopy = { copyText, flashCopied, showCopyFallback, copyWithFeedback };
 })();
+
+// ── INSIDE THE CONSOLE'S RELAY PANEL ──────────────────────────────────────────────────────────────────────
+// On the Suite the console opens these pages in a full-window panel (an <iframe>) so the console page — and the
+// church key unlocked in its memory — stays alive underneath (app/stew-dashboard.jsx, RelayPanel). The console
+// publishes `window.__trinityRelayPanel = { close }` while the panel is open. Here, in the frame, every link to
+// /steward.html must CLOSE the panel instead of loading a second (locked) console inside it, and `history.back()`
+// must never run (inside a frame it can navigate the TOP window away and unload the console). Same origin, so the
+// parent is read directly. Outside a panel `RelayPanelClose` is absent and nothing below does anything.
+(function () {
+  let close = null;
+  try { if (window.top !== window && window.parent && window.parent.__trinityRelayPanel && typeof window.parent.__trinityRelayPanel.close === 'function') close = () => window.parent.__trinityRelayPanel.close(); } catch (e) {}
+  if (!close) return;
+  window.RelayPanelClose = close;
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button) return;
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    let u; try { u = new URL(a.getAttribute('href'), location.href); } catch (err) { return; }
+    if (u.origin === location.origin && u.pathname === '/steward.html') { e.preventDefault(); close(); }
+  }, true);
+})();

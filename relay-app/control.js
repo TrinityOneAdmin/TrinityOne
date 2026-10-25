@@ -26,7 +26,7 @@
   }
   // Return to the Steward console IN THIS WINDOW — window.open('_blank') doesn't work in the desktop app's
   // webview. Prefer going back (preserves the console's state); fall back to navigating there fresh.
-  document.getElementById('openConsole').onclick = () => { if (history.length > 1) { history.back(); } else { location.href = '/relay-app/home.html'; } };   // fall back to the launcher (neutral) — not the full-suite console, which contradicts a "Relay only" choice
+  document.getElementById('openConsole').onclick = () => { if (window.RelayPanelClose) { window.RelayPanelClose(); return; } if (history.length > 1) { history.back(); } else { location.href = '/relay-app/home.html'; } };   // fall back to the launcher (neutral) — not the full-suite console, which contradicts a "Relay only" choice
   document.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
     await copyWithFeedback(copyMap[b.dataset.copy], b, b.dataset.copy === 'wss' ? 'Relay address' : 'Console link');
   });
