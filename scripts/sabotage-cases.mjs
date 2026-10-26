@@ -1988,6 +1988,21 @@ export const CASES = [
     test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
   },
   {
+    name: `relay-net first session: the invite-retry path admits a relay that was down at follow but does not re-run adoption`,
+    file: 'src/fellowship.src.js',
+    find: `        try { const _p = adoptChurchNetDocAddresses(p.cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
+`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: a follow-up queued for a different church than the finishing pass is never run`,
+    file: 'src/fellowship.src.js',
+    find: `    const _queued = [..._netDocAgain]; _netDocAgain.clear();`,
+    replace: `    const _queued = _netDocAgain.delete(cp) ? [cp] : []; _netDocAgain.clear();`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
     name: `relay-net D-2: publishSetFor drops the shared pool again (the old >=2-boxes rule, in its simplest form)`,
     file: 'src/fellowship.src.js',
     find: `  const canonical = CANONICAL_RELAYS;`,

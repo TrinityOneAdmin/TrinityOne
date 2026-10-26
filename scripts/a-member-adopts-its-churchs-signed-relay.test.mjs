@@ -67,7 +67,8 @@ const secure = (u) => String(u || '').replace(/^ws:\/\//i, 'wss://').replace(/^h
 const wire = (u) => String(u || '').replace(/^wss:\/\/(127\.0\.0\.1[:/])/i, 'ws://$1').replace(/^https:\/\/(127\.0\.0\.1[:/])/i, 'http://$1');
 // Every address the shipped code fetches, as it asked for it — so a test can say a box was never even dialled.
 const FETCHED = [];
-const netFetch = (u, o) => { FETCHED.push(String(u)); return globalThis.fetch(wire(typeof u === 'string' ? u : String(u)), o); };
+const DOWN = new Set();   // ports a test has taken off the air at the TRANSPORT (a relay unreachable, not refusing)
+const netFetch = (u, o) => { FETCHED.push(String(u)); if ([...DOWN].some(d => String(u).includes(':' + d + '/'))) return Promise.reject(new TypeError('fetch failed')); return globalThis.fetch(wire(typeof u === 'string' ? u : String(u)), o); };
 
 // A real SimplePool with that rewrite on the way to the socket, plus the counters the no-churn questions need.
 // Every list the shipped code assembles still arrives exactly as it assembled it.
@@ -191,6 +192,11 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var MEMBER_NETDOC_ADOPT_MAX = ', 'MEMBER_NETDOC_ADOPT_MAX'),
     stmt(src, 'var _adoptingNetDoc = ', '_adoptingNetDoc'),
     stmt(src, 'var _netDocAgain = ', '_netDocAgain'),
+    stmt(src, 'var _INVITE_PENDING_EXPIRY = ', '_INVITE_PENDING_EXPIRY'),
+    stmt(src, 'var _INVITE_PENDING_MIN_GAP = ', '_INVITE_PENDING_MIN_GAP'),
+    stmt(src, 'var _retryPendingRunning = ', '_retryPendingRunning'),
+    fnBody(src, 'function isNetworkRelay2', 'isNetworkRelay2'),
+    fnBody(src, 'async function _retryInvitePending', '_retryInvitePending'),
     // the shipped invite path: adoptInviteRelays proves the slip's relay and admits it (test 15)
     fnBody(src, 'function _saveChurchBoxes', '_saveChurchBoxes'),
     stmt(src, 'var _INVITE_PENDING_KEY = ', '_INVITE_PENDING_KEY'),
@@ -297,6 +303,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     window.Fellowship.addRelay = (u) => _api.setRelays([...window.Fellowship.relays, u]);
     return { setChurch: (n) => _api.setChurch(n),
              adopt: (cp) => { window.Fellowship.churchPub = cp; return adoptChurchNetDocAddresses(cp); },
+             retryPending: () => _retryInvitePending(),
              adoptInvite: (n, raw) => _api.adoptInviteRelays(n, raw),
              dial: _netDocDialUrl,
              churchRelays, churchRelaysRaw, relaysForChurch, publishSetFor,
@@ -1138,4 +1145,75 @@ test('a member who follows from an invite link gets the church\'s own box in the
 });
 test('the same, when the first adoption pass is still in flight as the invite relay is admitted: a follow-up pass is queued, not skipped', async () => {
   await firstSession({ holdFirstRead: true });
+});
+
+// ── 16. THE FLAKY LINK (audit of b6507b25, finding 1) ───────────────────────────────────────────────────
+// The invite relay was UNREACHABLE when the member followed, so adoptInviteRelays only parked it as pending;
+// _retryInvitePending admits it later (focus / online) and used to stop there. DECIDES: the
+// adoptChurchNetDocAddresses(p.cp, { again: true }) call inside _retryInvitePending's admit branch. DOWN is the
+// transport shim (the port refuses fetches), nothing else; the pending record's lastTry is back-dated by hand
+// because the 60 s retry gap is a clock, not the thing under test.
+test('an invite relay that was down at follow and is admitted later by the retry path brings the church\'s own box in the same session', async () => {
+  const church = H.key(); church.npub = npubEncode(church.pub);
+  const SHARED = await H.startRelay({ name: 'SHARED16', churches: [church.pub] });
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  const INV = await H.startRelay({ name: 'INVITE16', churches: [church.pub] });
+  const T = await H.startRelay({ name: 'T16', churches: [church.pub] });
+  await H.publishAll(INV, [relayNetDocFor(church, [{ pubkey: T.relayPub, alwaysOn: true, url: T.wsUrl }])]);
+  const app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins });
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    const sent = await app.announce(church.pub);
+    assert.ok(sent && sent.id, 'staging: the join did not land on the shared relay');
+    app.setChurch(church.npub);
+    DOWN.add(String(INV.port));
+    const out = await app.adoptInvite(church.npub, '?relay=' + encodeURIComponent(secure(INV.wsUrl)));
+    assert.deepEqual(out.pending, [secure(INV.wsUrl)], 'staging: the unreachable invite relay was not parked as pending: ' + JSON.stringify(out));
+    await sleep(2000);
+    assert.equal(app.relays().includes(T.wsUrl), false, 'control: T was adopted while the invite relay was down');
+    DOWN.delete(String(INV.port));
+    const pend = JSON.parse(app.store.getItem('trinityone.invitepending')); pend.forEach(x => { x.lastTry = 0; });
+    app.store.setItem('trinityone.invitepending', JSON.stringify(pend));
+    await app.retryPending();
+    assert.ok(app.relays().includes(secure(INV.wsUrl)), 'staging: the retry path did not admit the invite relay');
+    await until(() => app.relays().includes(T.wsUrl), 'the church\'s own box to be adopted after the retry admitted the invite relay');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    await until(() => app.publishSetFor(church.pub).includes(T.wsUrl), 'T to join the publish set');
+    let landed = 0;
+    for (let i = 0; i < 100 && !landed; i++) { landed = (await H.readAs(T, app.me, { kinds: [30078], authors: [app.me.pub], '#d': ['trinityone/member:' + church.pub] })).length; if (!landed) await sleep(200); }
+    assert.ok(landed, 'T was adopted but the member\'s join never reached its store');
+  } finally { DOWN.clear(); app.close(); }
+});
+
+// ── 17. A QUEUED FOLLOW-UP FOR A DIFFERENT CHURCH IS NOT LEFT BEHIND (audit finding 2) ──────────────────
+// A pass for church X is in flight (its read held); the invite relay for church Y is admitted meanwhile, so Y's
+// follow-up is queued. When X's pass ends it must run Y's too. Observed as: a relay-net read for Y's author
+// after the admit returned and X's pass was released. DECIDES: the drain of the whole _netDocAgain set in the
+// finally of adoptChurchNetDocAddresses (it used to delete only the finishing church's own entry).
+test('a follow-up queued for a different church while another church\'s pass is in flight still runs', async () => {
+  const X = H.key(); X.npub = npubEncode(X.pub);
+  const Y = H.key(); Y.npub = npubEncode(Y.pub);
+  const SHARED = await H.startRelay({ name: 'SHARED17', churches: [X.pub, Y.pub] });
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  const INV = await H.startRelay({ name: 'INVITE17', churches: [X.pub, Y.pub] });
+  const app = memberOn({ church: X, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins });
+  try {
+    app.win.Fellowship.churchPub = X.pub;
+    const real = app.pool.querySync; let first = true, release;
+    const gateOpen = new Promise(r => { release = r; });
+    const readsForY = [];
+    app.pool.querySync = async (urls, filters, o) => {
+      if (filters && filters[0] && (filters[0].authors || []).includes(Y.pub)) readsForY.push(Date.now());
+      if (first) { first = false; await gateOpen; }
+      return real(urls, filters, o);
+    };
+    app.setChurch(X.npub);                                    // X's pass starts and is held
+    await sleep(300);
+    const out = await app.adoptInvite(Y.npub, '?relay=' + encodeURIComponent(secure(INV.wsUrl)));
+    assert.deepEqual(out.added, [secure(INV.wsUrl)], 'staging: the invite relay for Y was not admitted: ' + JSON.stringify(out));
+    const before = readsForY.length;
+    release();
+    await until(() => readsForY.length > before, 'church Y\'s queued follow-up pass to read its relay-net document');
+  } finally { app.close(); }
 });

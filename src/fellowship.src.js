@@ -1414,7 +1414,9 @@ async function adoptChurchNetDocAddresses(cp, opts) {
     return added;
   } finally {
     _adoptingNetDoc = false;
-    if (_netDocAgain.delete(cp)) { try { const _q = adoptChurchNetDocAddresses(cp, { again: true }); if (_q && _q.catch) _q.catch(() => {}); } catch (e) {} }
+    // every church queued while this pass ran, once each (a different church's follow-up must not linger)
+    const _queued = [..._netDocAgain]; _netDocAgain.clear();
+    for (const q of _queued) { try { const _q = adoptChurchNetDocAddresses(q, { again: true }); if (_q && _q.catch) _q.catch(() => {}); } catch (e) {} }
   }
 }
 
@@ -4264,6 +4266,8 @@ async function _retryInvitePending() {
       try { ok = await isNetworkRelay(p.cp, p.url); } catch { ok = false; }
       if (ok) {
         if (!(window.Fellowship.relays || []).includes(p.url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), p.url]);
+        // The candidate set just grew (a follower on a flaky link): read the church's relay-net document again, fresh.
+        try { const _p = adoptChurchNetDocAddresses(p.cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
         try { window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url: p.url } })); } catch {}
       } else { p.lastTry = now; kept.push(p); }
     }

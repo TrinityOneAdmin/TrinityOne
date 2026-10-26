@@ -7767,9 +7767,11 @@
       return added;
     } finally {
       _adoptingNetDoc = false;
-      if (_netDocAgain.delete(cp)) {
+      const _queued = [..._netDocAgain];
+      _netDocAgain.clear();
+      for (const q of _queued) {
         try {
-          const _q = adoptChurchNetDocAddresses(cp, { again: true });
+          const _q = adoptChurchNetDocAddresses(q, { again: true });
           if (_q && _q.catch) _q.catch(() => {
           });
         } catch (e) {
@@ -10348,6 +10350,12 @@
         }
         if (ok) {
           if (!(window.Fellowship.relays || []).includes(p.url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], p.url]);
+          try {
+            const _p = adoptChurchNetDocAddresses(p.cp, { again: true });
+            if (_p && _p.catch) _p.catch(() => {
+            });
+          } catch (e) {
+          }
           try {
             window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url: p.url } }));
           } catch {
