@@ -8068,17 +8068,13 @@
     const foreign = _otherChurchesNetDocRows(cp);
     const global = (window.Fellowship.relays || []).filter((u) => !foreign.has(u));
     const ownUrls = own ? [...own.keys()] : [];
-    const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-    if (boxes >= 2) return _netRelays([.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])], cp);
     return _netRelays([.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
   }
   function publishSetFor(cp) {
     const live = cp && _churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : [];
     const persisted = live.length ? live : _loadChurchBoxes(cp);
     if (!persisted.length) return relaysForChurch(cp);
-    const own = cp && _churchRelays.get(cp);
-    const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-    const canonical = distinctBoxes >= 2 ? [] : CANONICAL_RELAYS;
+    const canonical = CANONICAL_RELAYS;
     const signed = [];
     try {
       const doc = cp && _relayNetCache.get(cp);
@@ -9160,7 +9156,7 @@
     const filters = [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }];
     if (since) for (const f of filters) f.since = since;
     const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
-      // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
+      // Phase 4: this church's relays (the shared pool is always included)
       onevent(e) {
         const d = _dtag(e);
         const key = e.pubkey + "|" + d;
@@ -9423,7 +9419,7 @@
     const k1since = _hubSinceKind1(hub);
     if (k1since) filters[0].since = k1since;
     const sub = pool.subscribeMany(relaysForChurch(cp), filters, {
-      // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
+      // Phase 4: this church's relays (the shared pool is always included)
       onevent(e) {
         _hubCursor(hub, e);
         if (e.pubkey === cp) {

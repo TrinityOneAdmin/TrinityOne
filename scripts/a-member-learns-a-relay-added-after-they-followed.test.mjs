@@ -726,26 +726,15 @@ test('re-reading the same newest list revokes nothing and closes no socket, howe
   } finally { app.close(); }
 });
 
-// ── 6. TWO BOXES, AND THE PART THIS BRANCH DOES NOT FIX — PINNED, NOT ARGUED ────────────────────────────
-test('adopting two boxes drops the shared pool for that church — measured here because this change makes it reachable far more often', async () => {
-  // DECIDES FIRST: `const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0` and the
-  // `if (boxes >= 2)` branch in relaysForChurch. Nothing earlier decides: `own` is populated by the adoption
-  // this test performs and is empty without it.
-  //
-  // THIS IS A FINDING, RECORDED AS AN EXECUTABLE FACT RATHER THAN PROSE, AND IT IS NOT FIXED HERE.
-  // relaysForChurch drops CANONICAL_RELAYS for a church with >=2 of its own boxes by distinct relay key.
-  // Before this branch `_churchRelays` was empty on an ordinary launch, so that threshold was reached only
-  // by a member in the middle of following a church. Driving the read on every launch makes it ordinary.
-  // Two consequences for the owner to decide on, neither of them changed by this commit:
-  //   · `_applyChurchList` admits into `_churchRelays` on the relay's own NIP-11 `enforces` flag and records
-  //     its self-reported `relayPub`. RELAY-ADMISSION is explicit that `relayPub` from NIP-11 is an
-  //     unauthenticated string and never proof — yet two such strings are what drop the shared pool.
-  //   · if both boxes then stop answering, the member's read set is those two addresses and nothing else.
-  //     The gate caches what it proved, so they stay admitted; the member reads over two dead boxes with no
-  //     fallback. That is the blank-screen class arriving through a safety threshold.
-  // Changing it is an owner decision — a self-hosting church that deliberately left the shared relay must
-  // not be put back on it by a fallback nobody asked for (CLAUDE.md rule 10) — so this test states what the
-  // code does today. If somebody changes it, this goes red and they should read this note.
+// ── 6. TWO BOXES: THE SHARED POOL STAYS — CHANGED IN MEANING 2026-10-26, NOT REMOVED (rule 8) ───────────
+// This test used to PIN the opposite: that a church with >=2 distinct own boxes lost the shared pool from its
+// read set. Owner decision 2026-10-26 (audit D-2, consistent with 2026-10-23 "never isolate a church"): the
+// shared servers are ALWAYS in a church's read and publish sets. If both boxes stop answering, the member still
+// has somewhere to read - the blank-screen class the old note warned about.
+test('adopting two boxes keeps the shared pool in the church\'s read set AND publish set', async () => {
+  // DECIDES FIRST: the final return of relaysForChurch (CANONICAL_RELAYS appended unconditionally) and
+  // `const canonical = CANONICAL_RELAYS` in publishSetFor. `own` is populated by the adoption this test
+  // performs and is empty without it, so the two-box state is real.
   const app = memberOn({
     church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)],
     pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] },
@@ -762,12 +751,56 @@ test('adopting two boxes drops the shared pool for that church — measured here
     await app.gate.refresh(app.churchRelaysRaw(), church.pub);
     await until(() => app.relaysForChurch(church.pub).includes(secure(BOX2.wsUrl)), 'the second box to be admitted');
 
+    const distinct = new Set([...app.churchBoxes.get(church.pub).values()].filter(Boolean)).size;
+    assert.ok(distinct >= 2, 'staging: the church must have two distinct boxes of its own or this proves nothing');
     const set = app.relaysForChurch(church.pub);
-    assert.equal(set.includes(secure(SHARED.wsUrl)), false,
-      'the shared pool survived two adopted boxes. If that is now intended, relaysForChurch has changed and ' +
-      'the note above this test needs rewriting.');
+    assert.ok(set.includes(secure(SHARED.wsUrl)),
+      'the shared pool was dropped from the READ set once the church had two boxes of its own: ' + JSON.stringify(set));
     assert.ok(set.includes(secure(BOX.wsUrl)) && set.includes(secure(BOX2.wsUrl)),
-      'the church\'s own boxes are not the read set after the shared pool was dropped, which would leave ' +
-      'this member reading over nothing at all');
+      'the church\'s own boxes are missing from the read set: ' + JSON.stringify(set));
+    const pubSet = app.publishSetFor(church.pub);
+    assert.ok(pubSet.includes(secure(SHARED.wsUrl)),
+      'the shared pool was dropped from the PUBLISH set once the church had two boxes of its own: ' + JSON.stringify(pubSet));
   } finally { app.close(); }
+});
+
+// ── 7. THE SHARED SERVERS ARE ALWAYS IN, AND A WRITE LANDS ON THEM (owner 2026-10-26, audit D-2) ────────
+// Two shared relays, two proved own boxes. EVERY canonical relay must be in the read set and the publish set, and
+// a member write published over the publish set must be in a shared relay's own store. Test 6 above covers one
+// shared relay; this is the "every" and the "lands" half. DECIDES: the canonical append in relaysForChurch and
+// `const canonical = CANONICAL_RELAYS` in publishSetFor.
+test('a church with two proved boxes of its own still has every shared relay in its read and publish sets, and a member write lands on a shared relay', async () => {
+  const SHARED2 = await H.startRelay({ name: 'SHARED2', churches: [church.pub] });
+  try {
+    const canonical = [secure(SHARED.wsUrl), secure(SHARED2.wsUrl)];
+    const app = memberOn({
+      church, relays: [secure(SHARED.wsUrl)], canonical,
+      pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub], [secure(SHARED2.wsUrl)]: [SHARED2.relayPub] },
+    });
+    try {
+      await H.publishAll(SHARED, [joinDoc(app.me, church.pub)]);
+      await H.publishAll(SHARED, [relayList(church, [SHARED.wsUrl, BOX.wsUrl, BOX2.wsUrl], now() + 30)]);
+      tickOn(app, church.npub);
+      app.setChurch(church.npub);
+      await until(() => {
+        const m = app.churchBoxes.get(church.pub);
+        return m && new Set([...m.values()].filter(Boolean)).size >= 2;
+      }, 'both of the church\'s boxes to be adopted with distinct identity keys');
+      await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+      await until(() => app.relaysForChurch(church.pub).includes(secure(BOX2.wsUrl)), 'the second box to be admitted');
+
+      const read = app.relaysForChurch(church.pub), pubSet = app.publishSetFor(church.pub);
+      for (const u of canonical) {
+        assert.ok(read.includes(u), 'shared relay ' + u + ' is not in the READ set of a two-box church: ' + JSON.stringify(read));
+        assert.ok(pubSet.includes(u), 'shared relay ' + u + ' is not in the PUBLISH set of a two-box church: ' + JSON.stringify(pubSet));
+      }
+      assert.ok(pubSet.includes(secure(BOX.wsUrl)) && pubSet.includes(secure(BOX2.wsUrl)), 'the church\'s own boxes left the publish set: ' + JSON.stringify(pubSet));
+
+      const w = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/member:' + church.pub], ['t', 'trinityone'], ['church', church.pub]], content: '{"hb":1}' }, app.me.sk);
+      await Promise.allSettled(app.pool.publish(pubSet, w));
+      const on = async (r) => (await H.readAs(r, app.me, { kinds: [30078], authors: [app.me.pub], '#d': ['trinityone/member:' + church.pub] })).some(e => e.id === w.id);
+      assert.ok(await on(SHARED2), 'the member\'s write is not in the second shared relay\'s store');
+      assert.ok(await on(SHARED), 'the member\'s write is not in the first shared relay\'s store');
+    } finally { app.close(); }
+  } finally { try { SHARED2.stop(); } catch (e) {} }
 });

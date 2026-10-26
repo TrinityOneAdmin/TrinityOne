@@ -1950,4 +1950,18 @@ export const CASES = [
     replace: `    const p = null;`,
     test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
   },
+  {
+    name: `relay-net D-2: publishSetFor drops the shared pool again (the old >=2-boxes rule, in its simplest form)`,
+    file: 'src/fellowship.src.js',
+    find: `  const canonical = CANONICAL_RELAYS;`,
+    replace: `  const canonical = [];`,
+    test: 'scripts/a-member-learns-a-relay-added-after-they-followed.test.mjs',
+  },
+  {
+    name: `relay-net D-2: relaysForChurch's final return no longer appends the shared pool`,
+    file: 'src/fellowship.src.js',
+    find: `  return _netRelays([...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);`,
+    replace: `  return _netRelays([...new Set([...global, ...ownUrls])], cp);`,
+    test: 'scripts/a-member-learns-a-relay-added-after-they-followed.test.mjs',
+  },
 ];

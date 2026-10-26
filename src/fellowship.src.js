@@ -1151,7 +1151,7 @@ function isNetworkRelay(cp, url) {
 //
 // FIVE THINGS THIS DELIBERATELY DOES NOT DO (each is a known failure mode — see the console commit):
 //
-//  · IT DOES NOT WRITE `_churchRelays`. That map drives relaysForChurch's self-sufficiency count (boxes>=2),
+//  · IT DOES NOT WRITE `_churchRelays`. That map is relaysForChurch's list of the church's adopted OWN relays,
 //    and `_applyChurchList` revokes anything in it that is not in the newest kind-10002 list — which a
 //    doc-discovered address never is — so putting one there produces a remove/re-add loop with a pool.close
 //    on every churn (the Phase 3 audit's finding). This writes ONLY window.Fellowship.relays, via addRelay.
@@ -1493,7 +1493,7 @@ function _restoreFold() {
 }
 // FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
 // (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
-const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. keys = read union; distinct non-null values = distinct relay BOXES (R3 self-sufficiency, dedup by identity not URL).
+const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. keys = read union; distinct non-null values = distinct relay BOXES (dedup by identity not URL).
 const _churchList   = new Map();   // cp -> { at, want:Set(url) }: the newest ACCEPTED church-signed relay-list, held in memory; drives (re)adoption + revocation.
 const _applying     = new Set();   // cp currently inside _applyChurchList — coalesces re-entrant churn (addRelay itself fires 'trinity-relays').
 const LISTHW_KEY = 'trinityone.relaylist.hw';   // persisted {cp: created_at} high-water — blocks a replayed OLDER list from downgrading or resurrecting a burned relay (R2 anti-replay).
@@ -1681,25 +1681,20 @@ function _watchChurchRelays(cp) {
 // Unreachable or throwing is treated as NOT healthy, so the fallback is to re-read. The whole cost of being
 // wrong that way is one REQ for one kind on one author.
 function _crHealthy() { try { return window.Fellowship.relaysHealthy() === true; } catch (e) { return false; } }
-// relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
-// self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
-// no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
-// + reversible: dropping a8 for a self-hosted church never affects a church still using it, and a8 stays in code.
+// relaysForChurch(cp): the read set for ONE church: the phone's relay list (minus other churches' boxes), the
+// church's own adopted boxes, and ALWAYS the shared pool (CANONICAL_RELAYS). Owner decision 2026-10-26 (audit
+// D-2, consistent with 2026-10-23 "never isolate a church"): this used to DROP the shared pool once a church had
+// >=2 distinct boxes of its own, so a church whose two boxes both went quiet read over nothing. Adding a box can
+// only ever widen this set now.
 function relaysForChurch(cp) {
   const own = cp && _churchRelays.get(cp);   // Map(url -> relayPub|null)
   // NOT ANOTHER CHURCH'S BOX (PR #7 audit, H-3): see _otherChurchesNetDocRows.
   const foreign = _otherChurchesNetDocRows(cp);
   const global = (window.Fellowship.relays || []).filter(u => !foreign.has(u));
   const ownUrls = own ? [...own.keys()] : [];
-  // R3: "self-sufficient" (safe to drop the shared canonical fallback) requires >=2 DISTINCT relay BOXES of the
-  // church's own — counted by identity key (relayPub), NOT by URL. Two routes to one relay (Cloudflare + Tailscale,
-  // the a8 pattern) share a relayPub and count ONCE, so a church that only LOOKS redundant keeps its safety net.
-  // Relays too old to advertise an identity (null) aren't counted, so this stays conservative (fallback retained).
-  const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-  // C4: the gate runs LAST, on the assembled list, so the self-sufficiency rule above still decides which
-  // candidates there are and the gate only decides which of them proved themselves. `cp` is passed through,
-  // because a relay admitted by ANOTHER church's signature is not admitted for this one.
-  if (boxes >= 2) return _netRelays([...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])], cp);
+  // C4: the gate runs LAST, on the assembled list: it decides which candidates proved themselves, and nothing
+  // here removes a candidate first. `cp` is passed through, because a relay admitted by ANOTHER church's
+  // signature is not admitted for this one. CANONICAL_RELAYS is unconditional (owner 2026-10-26).
   return _netRelays([...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
 }
 // THE PUBLISH SET FOR ONE CHURCH.
@@ -1719,7 +1714,7 @@ function relaysForChurch(cp) {
 // read from the cache churchRelayNet keeps (synchronous here, never a new read); with no cached document
 // nothing is added, which is exactly the old behaviour. Nothing is written: not _churchRelays, not
 // churchboxes, not the candidate list — and the shared pool is still appended below, because adding a box can
-// only ever widen this set. The boxes>=2 count still reads _churchRelays alone, so this cannot drop
+// only ever widen this set. The shared pool is appended whatever the number of boxes, so this cannot drop
 // CANONICAL_RELAYS (owner decision 2026-10-23: a church is never isolated).
 //
 // Scoped to THIS church's document, so another church's box sitting in the global candidate list is not
@@ -1728,9 +1723,9 @@ function publishSetFor(cp) {
   const live = cp && _churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : [];
   const persisted = live.length ? live : _loadChurchBoxes(cp);
   if (!persisted.length) return relaysForChurch(cp);
-  const own = cp && _churchRelays.get(cp);
-  const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-  const canonical = distinctBoxes >= 2 ? [] : CANONICAL_RELAYS;
+  // THE SHARED POOL IS ALWAYS IN THE SET (owner 2026-10-26, audit D-2). It used to be dropped at >=2 distinct
+  // boxes of the church's own; a church whose boxes both went quiet then published to nothing it could reach.
+  const canonical = CANONICAL_RELAYS;
   const signed = [];
   try {
     const doc = cp && _relayNetCache.get(cp);
@@ -3058,7 +3053,7 @@ function _docsHubOpen(hub) {
   const since = _hubSince(hub);
   const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
   if (since) for (const f of filters) f.since = since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
+  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
     onevent(e) {
       const d = _dtag(e);
       const key = e.pubkey + '|' + d;
@@ -3249,7 +3244,7 @@ function _memHubOpen(hub) {
   if (since) filters[1].since = since;
   const k1since = _hubSinceKind1(hub);
   if (k1since) filters[0].since = k1since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
+  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
     onevent(e) {
       _hubCursor(hub, e);
       if (e.pubkey === cp) { _memHubSaveSoon(hub); return; }
