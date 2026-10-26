@@ -915,7 +915,7 @@ function BookPicker({ open, onClose, onPick, version }) {
   const verseCount = (book && chap) ? ((window.Bible.getVerses(book.num, chap, version) || []).length || 1) : 0;
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 52 }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px 12px' }}>
           <IconBtn name={book || chap ? 'chevL' : 'x'} onClick={back} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700 }}>{title}</h1>
