@@ -1745,6 +1745,21 @@ function publishSetFor(cp) {
   } catch (e) {}
   return _netRelays([...new Set([...persisted, ...signed, ...canonical])], cp);
 }
+// THE READ SET FOR A CHURCH'S GROUP TRAFFIC (owner 2026-10-26: a church's box gets only that church's traffic).
+//
+// A group id belongs to the church whose group list it came from, and every group read here already drops
+// events not p-tagged to the church it was opened for (the `cp` check in each onevent) - so the church that
+// OWNS the groups of a subscription is the church the subscription is scoped to: window.Fellowship.churchPub
+// for the member screens, the explicit churchNpub for subscribeGroupEvents. These used to read over the whole
+// candidate list (window.Fellowship.relays), which holds every box ANY followed church signed, so church B's
+// group REQs (group ids, the member's pubkey) reached church A's box.
+//
+// Church unknown (no active church, or one that does not decode): the SHARED POOL ONLY. Never the whole list,
+// which is the leak, and never empty, because CANONICAL_RELAYS is always in it.
+function groupReadRelays(cp) {
+  if (!cp) return _netRelays([...CANONICAL_RELAYS]);
+  return relaysForChurch(cp);
+}
 const RELAYS_KEY = 'trinityone.relays';
 // THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.
 //
@@ -5839,7 +5854,7 @@ window.Fellowship = {
   // happen to share a group id (e.g. "prayer") don't cross-contaminate each other's chat.
   subscribeGroups(groupIds, onEvent) {
     const set = new Set(groupIds);
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1], '#t': groupIds, limit: 500 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1], '#t': groupIds, limit: 500 }], {
       onevent(e) {
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
@@ -5865,7 +5880,7 @@ window.Fellowship = {
 
   // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
   subscribeReactions(groupId, onReaction) {
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [7], '#t': [groupId], limit: 400 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [7], '#t': [groupId], limit: 400 }], {
       onevent(e) {
         const targetId = (e.tags.find(t => t[0] === 'e') || [])[1];
         if (targetId) { try { onReaction({ targetId, pubkey: e.pubkey, content: e.content, ts: e.created_at }); } catch (err) { console.error(err); } }
@@ -5877,7 +5892,7 @@ window.Fellowship = {
 
   // live subscription to a group's messages; returns an unsubscribe fn
   subscribeGroup(groupId, onEvent) {
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }], {
       onevent(e) {
         // belt-and-suspenders: only deliver events actually tagged for this group
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
@@ -5911,7 +5926,7 @@ window.Fellowship = {
   subscribeGroupPin(groupId, cb) {
     if (!groupId) { cb(null); return () => {}; }
     const PIN_D = 'trinityone/pin:'; let latest = 0;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#d': [PIN_D + groupId] }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [30078], '#d': [PIN_D + groupId] }], {
       onevent(e) {
         const cp = window.Fellowship.churchPub;
         // SECURITY-AUDIT-2026-07-06 M1: a pinned message is authoritative church UI, so only the church, a
@@ -5942,7 +5957,7 @@ window.Fellowship = {
     // whichever ARRIVED last made "un-hide" depend on which relay answered first.
     const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> { at, hidden }
     const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': [groupId] }], {
+    const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], '#t': [groupId] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(HIDE_D)) return;
@@ -8502,7 +8517,7 @@ window.Fellowship = {
     // de6e05a was written to fix, alive here. It also strands events absorbed before the roster arrived.
     const onTrust = () => { _reduceAll(versions, byId, _evTrust); emit(); };
     window.addEventListener('trinity-church-trust', onTrust);
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': groups }], {
+    const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], '#t': groups }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith('trinityone/event:')) return;

@@ -8091,6 +8091,10 @@
     }
     return _netRelays([.../* @__PURE__ */ new Set([...persisted, ...signed, ...canonical])], cp);
   }
+  function groupReadRelays(cp) {
+    if (!cp) return _netRelays([...CANONICAL_RELAYS]);
+    return relaysForChurch(cp);
+  }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {
@@ -12036,7 +12040,7 @@
     // happen to share a group id (e.g. "prayer") don't cross-contaminate each other's chat.
     subscribeGroups(groupIds, onEvent) {
       const set = new Set(groupIds);
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1], "#t": groupIds, limit: 500 }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1], "#t": groupIds, limit: 500 }], {
         onevent(e) {
           const cp = window.Fellowship.churchPub;
           if (cp && !e.tags.some((t) => t[0] === "p" && t[1] === cp)) return;
@@ -12080,7 +12084,7 @@
     },
     // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
     subscribeReactions(groupId, onReaction) {
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [7], "#t": [groupId], limit: 400 }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [7], "#t": [groupId], limit: 400 }], {
         onevent(e) {
           const targetId = (e.tags.find((t) => t[0] === "e") || [])[1];
           if (targetId) {
@@ -12103,7 +12107,7 @@
     },
     // live subscription to a group's messages; returns an unsubscribe fn
     subscribeGroup(groupId, onEvent) {
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1, 5], "#t": [groupId], limit: 200 }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1, 5], "#t": [groupId], limit: 200 }], {
         onevent(e) {
           if (!e.tags.some((t) => t[0] === "t" && t[1] === groupId)) return;
           const cp = window.Fellowship.churchPub;
@@ -12162,7 +12166,7 @@
       }
       const PIN_D = "trinityone/pin:";
       let latest = 0;
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#d": [PIN_D + groupId] }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [30078], "#d": [PIN_D + groupId] }], {
         onevent(e) {
           const cp = window.Fellowship.churchPub;
           if (cp && !_groupEventTrusted(cp, groupId, e.pubkey)) return;
@@ -12206,7 +12210,7 @@
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
       const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#t": [groupId] }], {
+      const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
@@ -14899,7 +14903,7 @@
         emit();
       };
       window.addEventListener("trinity-church-trust", onTrust);
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#t": groups }], {
+      const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], "#t": groups }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith("trinityone/event:")) return;
