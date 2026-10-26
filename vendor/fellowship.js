@@ -7625,6 +7625,7 @@
       } catch (e) {
       }
       if (window.Fellowship.churchPub !== cp) return;
+      if (!_joinSentFor(cp)) return;
       const after = publishSetFor(cp);
       if (!after.length) return;
       const gained = after.filter((u) => !before.includes(u) && !_memberResent.has(cp + "|" + u));

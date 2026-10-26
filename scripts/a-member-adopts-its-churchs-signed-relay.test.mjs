@@ -213,6 +213,13 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     fnBody(src, 'function _joinSentSave', '_joinSentSave'),
     fnBody(src, 'function _markJoinSent', '_markJoinSent'),
     fnBody(src, 'function _joinSentFor', '_joinSentFor'),
+    // the SHIPPED leaveMembership and what it calls to forget a join (finding A: a Leave during the re-send's wait)
+    fnBody(src, 'function _clearJoinSent', '_clearJoinSent'),
+    stmt(src, 'var JOININTENT_KEY = ', 'JOININTENT_KEY'),
+    stmt(src, 'var _joinIntents = ', '_joinIntents'),
+    fnBody(src, 'function _joinIntentSave', '_joinIntentSave'),
+    fnBody(src, 'function _dropJoinIntent', '_dropJoinIntent'),
+    fnBody(src, 'function _pubReason', '_pubReason'),
     stmt(src, 'var _lastStampF = ', '_lastStampF'),
     fnBody(src, 'function _monotonicF', '_monotonicF'),
     stmt(src, 'var NO_NETWORK_RELAY = ', 'NO_NETWORK_RELAY'),
@@ -246,6 +253,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
   const win = fakeWindow();
   win.Fellowship = { relays: [...relays], churchPub: null, ready: Promise.resolve() };
   const announceMembership = fnBody(src, 'async announceMembership(npubOrHex) {', 'announceMembership');
+  const leaveMembership = fnBody(src, 'async leaveMembership(npubOrHex) {', 'leaveMembership');
   const setChurch = fnBody(src, 'setChurch(npubOrHex) {', 'setChurch');
   const setRelays = fnBody(src, 'setRelays(urls) {', 'setRelays');
   // THE ONE LINE THIS CHANGE ADDS, asserted present in the slice that is about to run — otherwise every
@@ -271,20 +279,23 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     // nothing to do with WHERE it publishes: the wedge detector, the blocked check, the outbox's disk write.
     sk: me.sk, pub: me.pub, _outbox: [], _outboxSave: () => {}, _docsHubs: new Map(),
     normalizeURL2: normalizeURL, _noteSendResult: () => {}, _checkIfBlocked: () => {},
+    _forgetChurch: () => {},   // local-state cleanup after a leave; nothing here reads it
   });
   const api = new Function('scope', `with (scope) { ${body}
-    const _api = { ${setChurch}, ${setRelays}, ${announceMembership} };
+    const _api = { ${setChurch}, ${setRelays}, ${announceMembership}, ${leaveMembership} };
     window.Fellowship.setRelays = (u) => _api.setRelays(u);
     window.Fellowship.announceMembership = (n) => { ANNOUNCED.push(n); return _api.announceMembership(n); };
+    window.Fellowship.leaveMembership = (n) => _api.leaveMembership(n);
     window.Fellowship.addRelay = (u) => _api.setRelays([...window.Fellowship.relays, u]);
     return { setChurch: (n) => _api.setChurch(n),
              adopt: (cp) => { window.Fellowship.churchPub = cp; return adoptChurchNetDocAddresses(cp); },
              dial: _netDocDialUrl,
              churchRelays, churchRelaysRaw, relaysForChurch, publishSetFor,
-             gate: _gate }; }`)(scope);
+             gate: _gate, resend: _resendMembershipToNewBoxes }; }`)(scope);
   api.pool = pool;
   api.announced = ANNOUNCED;
   api.announce = (cp) => win.Fellowship.announceMembership(cp);
+  api.leave = (cp) => win.Fellowship.leaveMembership(cp);
   api.me = me;
   api.win = win;
   api.store = store;
@@ -973,5 +984,88 @@ test('a join sent before the church\'s box was adopted is sent again to it once 
     assert.deepEqual(JSON.parse(app.store.getItem('trinityone.churchboxes'))[church.pub], [secure(SHARED.wsUrl)],
       'the re-send wrote to trinityone.churchboxes');
     assert.ok(app.publishSetFor(church.pub).includes(secure(SHARED.wsUrl)), 'the shared pool left the publish set');
+  } finally { app.close(); }
+});
+
+// ── 12. A LEAVER MUST NOT BE RE-JOINED BY THE RE-SEND (independent audit, finding A) ────────────────────
+// THE DEFECT. _resendMembershipToNewBoxes checked _joinSentFor(cp) BEFORE `await _gate.refresh`. A Leave tapped
+// while that refresh was in flight published the tombstone and cleared _joinSent, but left churchPub alone, so
+// the function went on to announceMembership and published a join NEWER than the tombstone.
+//
+// THE STAGING, FOR REAL: the shipped gate's refresh is held open on a promise this test releases; the shipped
+// leaveMembership runs while it is held; then it is released and the shipped re-send finishes. Nothing about the
+// re-send is stubbed; only the moment `_gate.refresh` returns is controlled. DECIDES: the recheck after the await.
+// Also pins finding B in the same staging (test 13 below).
+function holdGate(app) {
+  const real = app.gate.refresh.bind(app.gate);
+  let release; const open = new Promise(r => { release = r; });
+  const state = { held: 0 };
+  // setRelays also calls _gate.refresh (un-awaited) when adoption adds a box; only the RE-SEND's own call is
+  // counted, found by the caller's name in the synchronous stack. Every call is held, so nothing races ahead.
+  app.gate.refresh = async (...a) => {
+    if (/_resendMembershipToNewBoxes/.test(new Error().stack)) state.held++;
+    await open; return real(...a);
+  };
+  return { state, release: () => release(), restore: () => { app.gate.refresh = real; } };
+}
+const memberDocsOn = async (relay, who) => await H.readAs(relay, who,
+  { kinds: [30078], authors: [who.pub], '#d': ['trinityone/member:' + church.pub] });
+
+test('a member who taps Leave while the re-send waits on the gate is not joined again', async () => {
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const s = memStore();
+  s.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [secure(SHARED.wsUrl)] }));
+  const app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins, store: s });
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    const sent = await app.announce(church.pub);                         // the join, before the box is adopted
+    assert.ok(sent && sent.id, 'staging: the join did not land');
+    assert.equal(app.announced.length, 1);
+    const hold = holdGate(app);
+    app.setChurch(church.npub);                                          // adoption runs, then the re-send parks on the gate
+    await until(() => hold.state.held >= 1, 'the re-send to be waiting on the gate refresh');
+    assert.equal(app.announced.length, 1, 'staging: the re-send already announced before the gate answered');
+    const left = await app.leave(church.pub);                            // LEAVE, while it waits
+    assert.equal(left.ok, true, 'staging: the leave did not land: ' + JSON.stringify(left));
+    hold.release();
+    await sleep(3000);                                                   // let the re-send finish; it must do nothing
+    assert.equal(app.announced.length, 1,
+      'the re-send called announceMembership for a member who had left while it waited');
+    for (const [name, relay] of [['shared', SHARED], ['church box', BOX]]) {
+      const docs = await memberDocsOn(relay, app.me);
+      for (const d of docs) {
+        assert.ok(d.tags.some(t => t[0] === 'deleted'),
+          'a member doc newer than the tombstone is on the ' + name + ' relay: the leaver was re-joined');
+        assert.ok(d.created_at <= left.evt.created_at, 'a doc newer than the tombstone is on the ' + name + ' relay');
+      }
+    }
+  } finally { app.close(); }
+});
+
+// ── 13. THE ONCE-PER-BOX GUARD (_memberResent) HAS A TEST (audit finding B) ─────────────────────────────
+// The first test only ever has the box in `before`'s complement once, so deleting the guard left it green.
+// Here the SAME stale `before` (box absent) is handed to the shipped function twice: the second call sees the
+// box as gained again and only _memberResent stops it announcing a second time.
+test('the re-send names a box once per launch even when called again with the same stale "before"', async () => {
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const s = memStore();
+  s.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [secure(SHARED.wsUrl)] }));
+  const app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins, store: s });
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    const stale = app.publishSetFor(church.pub);                         // the box is NOT in it
+    assert.equal(stale.includes(BOX.wsUrl), false, 'staging: the box is already in the publish set');
+    assert.ok((await app.announce(church.pub)).id, 'staging: the join did not land');
+    app.setChurch(church.npub);
+    await until(() => app.announced.length >= 2, 'the first re-send');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    assert.ok(app.publishSetFor(church.pub).includes(BOX.wsUrl), 'staging: the box is not in the publish set');
+    await app.resend(church.pub, stale);                                 // same stale `before`: the box looks new again
+    await app.resend(church.pub, stale);
+    assert.equal(app.announced.length, 2, 'the membership was re-sent again for a box already re-sent this launch');
   } finally { app.close(); }
 });

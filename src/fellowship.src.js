@@ -1265,6 +1265,11 @@ async function _resendMembershipToNewBoxes(cp, before) {
     // fire-and-forget, so nothing the member does waits on it); admission is unchanged, this only asks sooner.
     try { await _gate.refresh(window.Fellowship.relays || [], cp); } catch (e) {}
     if (window.Fellowship.churchPub !== cp) return;
+    // …AND ASK AGAIN AFTER THE WAIT. The first _joinSentFor above was read BEFORE the await. leaveMembership
+    // publishes its tombstone and clears _joinSent without touching churchPub, so a Leave tapped while the gate
+    // refresh was in flight passed the churchPub check and announceMembership then published a fresh join NEWER
+    // than the tombstone: a leaver re-joined. Nothing awaits between this line and announceMembership's signing.
+    if (!_joinSentFor(cp)) return;
     const after = publishSetFor(cp);
     if (!after.length) return;
     const gained = after.filter(u => !before.includes(u) && !_memberResent.has(cp + '|' + u));

@@ -1951,6 +1951,21 @@ export const CASES = [
     test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
   },
   {
+    name: `relay-net H-1 timing audit A: the re-send does not ask again after the gate wait whether the member has since left`,
+    file: 'src/fellowship.src.js',
+    find: `    if (!_joinSentFor(cp)) return;
+    const after = publishSetFor(cp);`,
+    replace: `    const after = publishSetFor(cp);`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net H-1 timing audit B: the once-per-box-per-launch guard (_memberResent) is not consulted`,
+    file: 'src/fellowship.src.js',
+    find: ` && !_memberResent.has(cp + '|' + u));`,
+    replace: `);`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
     name: `relay-net D-2: publishSetFor drops the shared pool again (the old >=2-boxes rule, in its simplest form)`,
     file: 'src/fellowship.src.js',
     find: `  const canonical = CANONICAL_RELAYS;`,
