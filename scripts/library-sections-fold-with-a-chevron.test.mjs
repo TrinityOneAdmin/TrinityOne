@@ -70,3 +70,17 @@ test('Listen and Recent journal fold too, and + New stays reachable while the jo
   assert.ok(!texts(t).join(' | ').includes('My reflection'));
   assert.equal(find(t, n => n.type === 'button' && texts(n).join('') === '+ New').length, 1, '+ New vanished with the fold');
 });
+
+test('the Library sections are on screen in order: Listen, Recent journal, Modules (owner 2026-10-26)', () => {
+  // The mini-React keeps state between draws, so reopen whatever an earlier test left folded.
+  for (const s of ['Listen', 'Recent journal', 'Modules']) { const b = toggle(view(), 'Expand ' + s); if (b) b.props.onClick(); }
+  const t = view();
+  const labels = ['Listen', 'Recent journal', 'Modules'];
+  // SectionLabel renders a text node per heading; read them in document order from the rendered tree.
+  const seen = texts(t).filter(x => labels.includes(x));
+  assert.deepEqual(seen, labels, 'THE DEFECT: Modules is not below Listen and Recent journal');
+  // And the content follows its own heading: Audio Bibles, then the journal entry, then the module tiles.
+  const flat = texts(t);
+  const at = (s) => flat.findIndex(x => x.includes(s));
+  assert.ok(at('Audio Bibles') < at('My reflection') && at('My reflection') < at('Dictionaries'), flat.join(' | '));
+});
