@@ -255,6 +255,7 @@ async function runPanel(reply) {
     document: dom.document,
     esc: (s) => String(s || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])),
     authHeaders: () => ({ Authorization: 'Bearer t' }),
+    adminFetch: (url, opts = {}) => globals.fetch(url, { ...opts, headers: { Authorization: 'Bearer t' } }),
     fetch: async (url, opts) => { calls.push({ url, opts }); return reply(url); },
   };
   const key = '__panel_' + Math.random().toString(36).slice(2);

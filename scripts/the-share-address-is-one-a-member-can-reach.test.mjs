@@ -240,6 +240,7 @@ async function runPanel(shareUrl) {
     document: dom.document,
     esc: (s) => String(s || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])),
     authHeaders: () => ({ Authorization: 'Bearer t' }),
+    adminFetch: (url, opts = {}) => globals.fetch(url, { ...opts, headers: { Authorization: 'Bearer t' } }),
     fetch: async () => ({ ok: true, status: 200, json: async () => ({ behind: false, holding: 2, keepCurrent: false, shareUrl, files: [] }) }),
   };
   const key = '__share_' + Math.random().toString(36).slice(2);
