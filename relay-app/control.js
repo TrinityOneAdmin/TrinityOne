@@ -46,6 +46,12 @@
   }
 
   const initials = (n) => (n||'?').split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  // The headline "Churches" figure = churches REGISTERED on this relay (`/status` counts.churches, authed), not
+  // churches with >=1 stored event (`/stats` churches, capped at 8 by qByChurch LIMIT 8). Falls back to the old
+  // active count when the relay (older, or unauthed) sends no counts.
+  function registeredChurches(s, st) {
+    return (s && s.counts && typeof s.counts.churches === 'number') ? s.counts.churches : ((st && st.churches) || []).length;
+  }
   async function poll() {
     // REACHABILITY IS DECIDED BY THE FETCH, NOTHING ELSE. This try used to wrap the fetch AND every DOM
     // update after it, so any rendering error landed in the catch below and told a volunteer their relay
@@ -61,7 +67,10 @@
     // One defect, two findings (round 4, #2 and #3).
     let s;
     try {
-      const r = await fetch('/status', { cache: 'no-store' });
+      // the admin token makes /status add `counts` (REGISTERED churches); without it the field is simply absent.
+      // adminFetch (not a bare fetch) so a stale token self-heals here too — otherwise /status would keep
+      // coming back without `counts` and the headline would silently fall back to the active count for ever.
+      const r = await adminFetch('/status');
       s = await r.json();
     } catch (e) {
       document.getElementById('dot').className = 'dot off';
@@ -81,13 +90,13 @@
       // of that handler holds itself to (the clock was justified there as "says nothing about the
       // church"). So they are not being restored to /status; the panel already holds an admin token and
       // already calls /stats for the activity chart. `—` stays put when a number is genuinely unknown.
-      const st = await fetch('/stats?days=1', { headers: authHeaders(), cache: 'no-store' })
-        .then(r2 => (r2.ok ? r2.json() : null)).catch(() => null);
+      const st = await adminFetch('/stats?days=1')
+        .then(r2 => { noteStatsStatus(r2.status); return r2.ok ? r2.json() : null; }).catch(() => null);
       if (st) {
         const kinds = st.kinds || [];
         const total = kinds.reduce((a, k) => a + (k.n || 0), 0);
         const profiles = (kinds.find(k => k.kind === 0) || {}).n;
-        document.getElementById('s-churches').textContent = (st.churches || []).length;
+        document.getElementById('s-churches').textContent = registeredChurches(s, st);
         if (profiles != null) document.getElementById('s-members').textContent = profiles;
         document.getElementById('s-events').textContent = total.toLocaleString();
         if (st.connections != null) document.getElementById('s-conns').textContent = st.connections;
@@ -116,11 +125,13 @@
       try { console.error('[relay panel] render failed after a successful /status', e); } catch (e2) {}
     }
   }
-  poll(); setInterval(poll, 5000);
 
   // ── setup wizard: read/write the relay's write policy (church.json) via /config ──
   const TOKEN_KEY = 'to_relay_admin_token';
-  let adminToken = sessionStorage.getItem(TOKEN_KEY) || '';
+  // Blocked/throwing storage (private mode, hardened webview) must not stop the script: poll() is started
+  // below this line, so an unguarded throw here would leave the hero card frozen and never polling.
+  let adminToken = '';
+  try { adminToken = sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
   // THE OLD COPY ON DISK. Until 3e3c8f7 the token was kept in localStorage; that commit moved the writes to
   // sessionStorage and never removed what was already there, so a box that had opened this panel before kept
   // its admin bearer token on disk for ever. Remove it on every load. Nothing reads this key from localStorage
@@ -129,6 +140,48 @@
   let cfgChurches = [];
   const esc = (s) => String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const authHeaders = () => adminToken ? { 'Authorization': 'Bearer ' + adminToken } : {};
+  // ADMIN-FETCH-BEGIN (lifted and run by scripts/relay-app-admin-token.test.mjs — keep the markers)
+  // Self-healing admin token. A cached token can go stale (admin.json lost, or a remote view with no token).
+  // reauth(): ONE in-flight attempt shared by every caller, at most one /local-token try per 30s after a try,
+  // and adminToken/sessionStorage are only touched when /local-token actually returns a token — a 403 (remote
+  // view) must never wipe a valid token.
+  let _reauthP = null, _lastReauth = 0;
+  function reauth() {
+    if (_reauthP) return _reauthP;
+    if (Date.now() - _lastReauth < 30000) return Promise.resolve(!!adminToken);
+    _lastReauth = Date.now();
+    _reauthP = (async () => {
+      try {
+        const r = await fetch('/local-token', { cache: 'no-store' });
+        if (r.ok) { const j = await r.json(); if (j && j.token) { adminToken = j.token; try { sessionStorage.setItem(TOKEN_KEY, adminToken); } catch (e) {} } }
+      } catch (e) {}
+      finally { _reauthP = null; }
+      return !!adminToken;
+    })();
+    return _reauthP;
+  }
+  // adminFetch(): for admin GET reads only. Sends the token, hands the caller the real Response (so r.status is
+  // visible), and after a 401 re-acquires the token once and retries once. Never use it for a mutation.
+  async function adminFetch(url, opts = {}) {
+    const go = () => fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...authHeaders() }, cache: 'no-store' });
+    let r = await go();
+    if (r.status === 401) { await reauth(); r = await go(); }
+    return r;
+  }
+  // ADMIN-FETCH-END
+  // ONE lock flag for the Dashboard's admin-gated numbers, read by poll() (5s) and loadStats() (60s) so the two
+  // timers never flicker the cards against each other.
+  let statsLocked = false;
+  function noteStatsStatus(status) {
+    const want = status === 401;
+    if (want === statsLocked) return;
+    statsLocked = want;
+    syncSettingsLock(want);
+  }
+  // Started HERE, not where poll() is declared: poll() now calls adminFetch() (which uses authHeaders) before
+  // its first await, and adminFetch/reauth/noteStatsStatus/authHeaders are all declared above this line, so
+  // starting earlier would hit the temporal dead zone.
+  poll(); setInterval(poll, 5000);
 
   // RELAY-UX-2026-07-20: the church list is a LIVE view of the server, not a form.
   // It used to be an editable array with a Save button, and that shape caused the incident this rewrite
@@ -256,7 +309,7 @@
   async function loadConfig() {
     const st = document.getElementById('cfgStatus');
     try {
-      const r = await fetch('/config?stats=1', { headers: authHeaders(), cache: 'no-store' });   // stats so each row shows what it holds
+      const r = await adminFetch('/config?stats=1');   // stats so each row shows what it holds
       if (r.status === 401) { setLocked(true); document.getElementById('cfgList').innerHTML = ''; return; }
       const s = await r.json();
       setLocked(false);
@@ -273,7 +326,7 @@
   async function loadSubs() {
     const card = document.getElementById('subsCard');
     try {
-      const r = await fetch('/subscribe', { headers: authHeaders(), cache: 'no-store' });
+      const r = await adminFetch('/subscribe');
       if (r.status === 401) { card.style.display = 'none'; return; }
       const s = await r.json();
       subsCache = s.subscribers || [];
@@ -289,7 +342,7 @@
   async function loadServes() {
     const card = document.getElementById('servesCard');
     try {
-      const r = await fetch('/settings', { headers: authHeaders(), cache: 'no-store' });
+      const r = await adminFetch('/settings');
       if (r.status === 401) { card.style.display = 'none'; return; }   // shown only when unlocked with the admin token
       const j = await r.json(); const s = j.settings || {};
       card.style.display = 'block';
@@ -384,7 +437,7 @@
       '<tr><td style="padding:5px 8px; font-weight:700; color:var(--ink-3)">Points to</td><td style="padding:5px 8px" id="dnsTarget"><span style="color:var(--ink-3)">loading…</span></td></tr>' +
       '</table>' +
       '<div style="font-size:11.5px; color:var(--ink-3); margin-top:8px">If using a CNAME, point it at your Tailscale hostname. If using an A record, point it at this relay’s IP address. Changes can take a few minutes to propagate.</div>';
-    fetch('/dns-check?domain=' + encodeURIComponent(domain), { headers: authHeaders(), cache: 'no-store' })
+    adminFetch('/dns-check?domain=' + encodeURIComponent(domain))
       .then(r => r.json()).then(j => {
         const tgt = document.getElementById('dnsTarget');
         if (!tgt) return;
@@ -402,7 +455,7 @@
     if (!domain) { res.textContent = ''; return; }
     res.style.color = 'var(--ink-3)'; res.textContent = 'Checking…';
     try {
-      const r = await fetch('/dns-check?domain=' + encodeURIComponent(domain), { headers: authHeaders(), cache: 'no-store' });
+      const r = await adminFetch('/dns-check?domain=' + encodeURIComponent(domain));
       const j = await r.json();
       if (!j.ok) { res.style.color = 'var(--clay-ink)'; res.textContent = '✗ ' + (j.error || 'lookup failed'); return; }
       if (j.pointsHere) { res.style.color = 'var(--sage-ink)'; res.textContent = '✓ ' + domain + ' points to this relay'; }
@@ -488,7 +541,7 @@
   async function loadRelayName() {
     const body = document.getElementById('relayNameBody'); if (!body) return;
     try {
-      const r = await fetch('/relay-names/mine', { headers: authHeaders(), cache: 'no-store' });
+      const r = await adminFetch('/relay-names/mine');
       if (r.status === 401) { body.innerHTML = '<div class="muted">Enter the admin token (Churches card below) to manage your relay’s name.</div>'; return; }
       const m = await r.json();
       const pet = petName(m.pub);
@@ -570,7 +623,7 @@
   async function loadUpdate() {
     const card = document.getElementById('updateCard');
     try {
-      const r = await fetch('/update', { headers: authHeaders(), cache: 'no-store' });
+      const r = await adminFetch('/update');
       if (r.status === 401) { card.style.display = 'none'; return; }
       const cur = await r.json(); relayVersion = cur.version || '';
       card.style.display = 'block';
@@ -679,7 +732,7 @@
     if (!box) return;
     let s = null;
     try {
-      const r = await fetch('/relay-app/apk-status', { headers: authHeaders(), cache: 'no-store' });
+      const r = await adminFetch('/relay-app/apk-status');
       if (r.status === 401) { if (card) card.style.display = 'none'; return; }
       if (!r.ok) throw new Error('the relay could not answer (' + r.status + ')');
       s = await r.json();
@@ -1024,10 +1077,14 @@
   // than leaving three cards spinning on "Loading…" with no explanation.
   const STAT_CARDS = ['actCard', 'kindCard', 'topCard'];
   function syncSettingsLock(locked) {
+    // Keep the lock flag in step with the UI. loadConfig()'s setLocked(false) and a /stats 200 both unlock
+    // through here; if statsLocked were only ever written by noteStatsStatus() it would desync after a
+    // setLocked(false) and then swallow the next real /stats 401 (want === statsLocked, so it returns early).
+    statsLocked = locked;
     const el = document.getElementById('dashLocked');
     if (el) el.style.display = locked ? 'block' : 'none';
     for (const id of STAT_CARDS) { const c = document.getElementById(id); if (c) c.style.display = locked ? 'none' : 'block'; }
-    if (locked) for (const id of ['s-today', 's-media']) { const t = document.getElementById(id); if (t) t.textContent = '—'; }
+    if (locked) for (const id of ['s-today', 's-media', 's-churches', 's-members', 's-events', 's-conns', 's-traffic']) { const t = document.getElementById(id); if (t) t.textContent = '—'; }
     // the storage figures come from the same admin-only /stats, so they go with it rather than sitting
     // there as a stale reading from before the token was cleared
     if (locked) { const sr = document.getElementById('storeRow'); if (sr) sr.style.display = 'none'; }
@@ -1165,10 +1222,10 @@
 
   async function loadStats() {
     try {
-      const r = await fetch('/stats?days=10', { headers: authHeaders(), cache: 'no-store' });
-      if (r.status === 401) { syncSettingsLock(true); return; }
+      const r = await adminFetch('/stats?days=10');
+      noteStatsStatus(r.status);
+      if (r.status === 401) return;
       const s = await r.json();
-      syncSettingsLock(false);
       renderActivity(s);
       const kinds = (s.kinds || []).map(k => ({ label: kindName(k.kind), n: k.n }));
       barRows(kinds.slice(0, 7), kinds.reduce((a, k) => a + k.n, 0), 'kindBody');
@@ -1250,8 +1307,8 @@
     let nm = null, cf = null;
     try {
       [nm, cf] = await Promise.all([
-        fetch('/relay-names/mine', { headers: authHeaders(), cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/config?stats=1', { headers: authHeaders(), cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
+        adminFetch('/relay-names/mine').then(r => r.ok ? r.json() : null).catch(() => null),
+        adminFetch('/config?stats=1').then(r => r.ok ? r.json() : null).catch(() => null),
       ]);
     } catch (e) { return; }
     if (!nm || !cf) return;                                   // couldn't read (401 / relay down) — don't guess
