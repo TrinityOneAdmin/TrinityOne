@@ -45,6 +45,7 @@ function engine({ publishError }) {
     _dmEncrypt: (_sk, _p, text) => 'ct:' + text,
     finalizeEvent: (t) => ({ ...t, id: 'ev' + Math.random().toString(36).slice(2), pubkey: 'a'.repeat(64) }),
     _publishBounded: async () => { throw publishError; },
+    dmSendRelays: () => ['wss://test.invalid'],   // step 2c: where the DM goes; this test is about the refusal's wording
   };
   // bind whatever name the bundle gave finalizeEvent inside sendDM, so a rename fails loudly
   const sendBody = fnBody(BUNDLE, 'async sendDM(peerPub, content, replyTo) {', 'sendDM');

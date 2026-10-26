@@ -39,7 +39,7 @@ for (const name of SUBSCRIPTIONS) {
     // The six group readers moved onto groupReadRelays (step 2a, 2026-10-26): relaysForChurch(cp), which ends in
     // _netRelays(..., cp), i.e. still the gate - asserted below by RUNNING nothing, only by reading the two
     // function bodies; the executable proof is a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs.
-    assert.match(body, /_netRelays\(|groupReadRelays\(/,
+    assert.match(body, /_netRelays\(|groupReadRelays\(|dmReadRelays\(/,
       `vendor/fellowship.js: ${name} subscribes over raw window.Fellowship.relays — ` +
       'a fake box at a shipped address receives this member\'s traffic');
     assert.doesNotMatch(body, /pool\.subscribeMany\(window\.Fellowship\.relays\b/,
@@ -52,6 +52,12 @@ test('groupReadRelays ends in the gate on every path (church known: relaysForChu
   assert.match(g, /return _netRelays\(\[\.\.\.CANONICAL_RELAYS\]\)/);
   assert.match(g, /return relaysForChurch\(cp\)/);
   assert.match(fnBody(FELLOW, 'function relaysForChurch', 'relaysForChurch'), /return _netRelays\(/);
+});
+
+test('dmReadRelays (the DM readers, step 2c) ends in the gate on every path: relaysForChurch per church, else the shared pool gated', () => {
+  const g = fnBody(FELLOW, 'function dmReadRelays', 'dmReadRelays');
+  assert.match(g, /relaysForChurch\(cp\)/);
+  assert.match(g, /_netRelays\(\[\.\.\.CANONICAL_RELAYS\]\)/);
 });
 
 test('pool.automaticallyAuth refuses a non-admitted relay', () => {

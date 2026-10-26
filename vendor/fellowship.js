@@ -8123,6 +8123,39 @@
     if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
     return [...set];
   }
+  function _peerInChurch(cp, peer) {
+    if (!peer) return false;
+    if (peer === cp) return true;
+    try {
+      const m = _memHub(cp).byPub.get(peer);
+      return !!(m && (m.joined || m.msgs > 0) && !_superseded(cp, peer));
+    } catch (e) {
+      return false;
+    }
+  }
+  function dmSendRelays(peer) {
+    const set = /* @__PURE__ */ new Set();
+    for (const cp of memberChurchPubs()) {
+      if (!_peerInChurch(cp, peer)) continue;
+      try {
+        for (const u of publishSetFor(cp)) set.add(u);
+      } catch (e) {
+      }
+    }
+    if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+    return [...set];
+  }
+  function dmReadRelays() {
+    const set = /* @__PURE__ */ new Set();
+    for (const cp of memberChurchPubs()) {
+      try {
+        for (const u of relaysForChurch(cp)) set.add(u);
+      } catch (e) {
+      }
+    }
+    if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+    return [...set];
+  }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {
@@ -10095,13 +10128,24 @@
   var _CONNECTION = /timeout|network|websocket|failed to (fetch|connect)|connection|econn|enotfound|socket|offline|unreachable/i;
   var isConnectionFailure = (e) => _CONNECTION.test(String(e && e.message || e || ""));
   var MAX_TRIES = 50;
+  function _outboxRelays(item) {
+    if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+    if (item.relays && item.relays.length) return item.relays;
+    if (item.join) {
+      try {
+        return publishSetFor(item.join);
+      } catch (e) {
+      }
+    }
+    return _netRelays([...CANONICAL_RELAYS]);
+  }
   async function _outboxFlush() {
     if (_flushing || !_outbox.length || !sk) return;
     _flushing = true;
     try {
       for (const item of [..._outbox]) {
         try {
-          await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
+          await _publishBounded(_outboxRelays(item), item.evt);
           _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
           _dmPlain.delete(item.evt.id);
           _outboxSave();
@@ -11879,11 +11923,11 @@
         return null;
       }
       const evt = finalizeEvent2({ kind: 4, created_at: Math.floor(Date.now() / 1e3), tags: [["p", peerPub]], content: ciphertext }, sk);
-      _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+      _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1e3), tries: 0, relays: dmSendRelays(peerPub) });
       _dmPlain.set(evt.id, content);
       _outboxSave();
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(dmSendRelays(peerPub), evt);
         evt._delivered = true;
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _dmPlain.delete(evt.id);
@@ -11951,7 +11995,7 @@
         const msg = msgs.get(tid);
         if (msg) push(msg);
       };
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      const sub = pool.subscribeMany(dmReadRelays(), [
         { kinds: [4], authors: [pub], "#p": [peerPub] },
         // sent by me to peer
         { kinds: [4], authors: [peerPub], "#p": [pub] },
@@ -11978,7 +12022,7 @@
       if (!peerPub || !msgId) return null;
       const evt = finalizeEvent2({ kind: 7, created_at: Math.floor(Date.now() / 1e3), tags: [["e", msgId], ["p", peerPub], ["t", NET], ["k", "4"]], content: emoji || "-" }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(dmSendRelays(peerPub), evt);
       } catch (e) {
         console.warn("[fellowship] reactDM failed", e);
       }
@@ -12007,7 +12051,7 @@
         byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? "You: " : "") + preview });
         emit();
       };
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      const sub = pool.subscribeMany(dmReadRelays(), [
         // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
         // default cap of DM envelopes on EVERY app open, just to render an inbox preview.
         //

@@ -292,8 +292,8 @@ function memberThread(bodies, churchEvents = []) {
   let handler;
   const pool = { subscribeMany: (_u, _f, h) => { handler = h; return { close() {} }; } };
   const W = { Fellowship: { relays: [] } };
-  const lib = new Function('pool', 'window', 'pub', 'sk', '_dmDecrypt', '_netRelays', `return ({ ${felUnwrap}, ${subSrc} });`)(
-    pool, W, ME, new Uint8Array(32), async (_sk, _p, ct) => ct, (u) => u);
+  const lib = new Function('pool', 'window', 'pub', 'sk', '_dmDecrypt', '_netRelays', 'dmReadRelays', `return ({ ${felUnwrap}, ${subSrc} });`)(
+    pool, W, ME, new Uint8Array(32), async (_sk, _p, ct) => ct, (u) => u, () => []);
   W.Fellowship._dmUnwrap = lib._dmUnwrap;
   const { React, draw } = hMiniReact();
   const F = {

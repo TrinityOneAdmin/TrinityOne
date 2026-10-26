@@ -2077,4 +2077,110 @@ export const CASES = [
     replace: `claimOnly = false;`,
     test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
   },
+  {
+    name: `DM (step 2c): sendDM publishes to the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `try { await _publishBounded(dmSendRelays(peerPub), evt); evt._delivered = true;`,
+    replace: `try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true;`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): sendDM's outbox entry records the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `tries: 0, relays: dmSendRelays(peerPub) });`,
+    replace: `tries: 0, relays: [...(window.Fellowship.relays || [])] });`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _outboxRelays falls back to the WHOLE candidate list for an entry with no relays`,
+    file: 'src/fellowship.src.js',
+    find: `  return _netRelays([...CANONICAL_RELAYS]);
+}
+async function _outboxFlush`,
+    replace: `  return window.Fellowship.relays;
+}
+async function _outboxFlush`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _outboxRelays stops re-deriving a queued DM's relays from its peer (an old whole-list entry stays whole)`,
+    file: 'src/fellowship.src.js',
+    find: `  if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+`,
+    replace: `  if (item.peer && !item.groupId && !(item.relays && item.relays.length)) return dmSendRelays(item.peer);
+`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _outboxRelays sends a join to the whole list instead of that church's publish set`,
+    file: 'src/fellowship.src.js',
+    find: `if (item.join) { try { return publishSetFor(item.join); } catch (e) {} }`,
+    replace: `if (item.join) { return window.Fellowship.relays; }`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): reactDM publishes to the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `try { await _publishAny(dmSendRelays(peerPub), evt); }`,
+    replace: `try { await _publishAny(window.Fellowship.relays, evt); }`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): subscribeThread reads the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `    const sub = pool.subscribeMany(dmReadRelays(), [
+      { kinds: [4], authors: [pub], '#p': [peerPub] },`,
+    replace: `    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      { kinds: [4], authors: [pub], '#p': [peerPub] },`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): subscribeDMs reads the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `    const sub = pool.subscribeMany(dmReadRelays(), [
+      // PERF-AUDIT`,
+    replace: `    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      // PERF-AUDIT`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): dmSendRelays ignores whether the peer is in the church (every church of mine gets the DM)`,
+    file: 'src/fellowship.src.js',
+    find: `    if (!_peerInChurch(cp, peer)) continue;
+    try { for (const u of publishSetFor(cp))`,
+    replace: `    try { for (const u of publishSetFor(cp))`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _peerInChurch no longer counts a message to the church's own account`,
+    file: 'src/fellowship.src.js',
+    find: `  if (peer === cp) return true;
+  try {
+    const m = _memHub`,
+    replace: `  try {
+    const m = _memHub`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): dmSendRelays with no shared church falls back to the WHOLE candidate list`,
+    file: 'src/fellowship.src.js',
+    find: `  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
+// WHERE INCOMING`,
+    replace: `  if (!set.size) for (const u of _netRelays(window.Fellowship.relays)) set.add(u);
+  return [...set];
+}
+// WHERE INCOMING`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): dmReadRelays reads only the shared pool (a fellow member's reply via our church's box never arrives)`,
+    file: 'src/fellowship.src.js',
+    find: `try { for (const u of relaysForChurch(cp)) set.add(u); } catch (e) {} }
+  if (!set.size)`,
+    replace: `try { for (const u of []) set.add(u); } catch (e) {} }
+  if (!set.size)`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
 ];

@@ -105,6 +105,7 @@ test('the retry actually re-sends a QUEUED DIRECT MESSAGE, not just group posts'
       _flushing: false, sk: new Uint8Array(32), _dmPlain: new Map(), _outboxSave: () => {},
       _outbox: [{ evt: { id: 'dm1' }, groupId: null, peer: 'p'.repeat(64), tries: 0, relays: ['ws://x'] }],
       _publishBounded: async (r, e) => { sent.push(e.id); return true; },
+      _outboxRelays: (item) => item.relays,   // step 2c: where a retry goes; this test is about WHETHER it retries
       window: { Fellowship: { relays: ['ws://x'] } },
       isPermanentRefusal: () => false, isConnectionFailure: () => true, isRateLimited: () => false,
       _outboxFailed: [], _outboxSubs: new Set(), MAX_TRIES: 50,

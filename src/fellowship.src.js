@@ -1782,6 +1782,41 @@ function profilePublishRelays() {
   if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
   return [...set];
 }
+// WHERE A PRIVATE MESSAGE GOES (owner 2026-10-26, personal traffic): the SHARED servers plus the own box of a
+// church BOTH people belong to - never a box of a church only one of them is in. Sarah (A+B) to Tom (A only):
+// A's box, never B's. No shared church known: the shared pool only, which is today's worst case, never empty.
+//
+// HOW THE PHONE KNOWS THE PEER BELONGS TO C, with no new network read: the member hub for C (_memHub), the same
+// roster the People directory and the member count use - distinct people who joined (member:<C>) or posted to C.
+// _memHub only seeds from the on-device cache (memhub / legacy roster cache), so this is synchronous and local.
+// A peer the hub has not seen is treated as NOT a member of C, which fails toward the shared pool (the safe way).
+// A message to a CHURCH account (peer == C's key, for a church the member follows) counts as "both belong to C".
+function _peerInChurch(cp, peer) {
+  if (!peer) return false;
+  if (peer === cp) return true;
+  try {
+    const m = _memHub(cp).byPub.get(peer);
+    return !!(m && (m.joined || m.msgs > 0) && !_superseded(cp, peer));
+  } catch (e) { return false; }
+}
+function dmSendRelays(peer) {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) {
+    if (!_peerInChurch(cp, peer)) continue;
+    try { for (const u of publishSetFor(cp)) set.add(u); } catch (e) {}
+  }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
+// WHERE INCOMING PRIVATE MESSAGES ARE READ: a fellow member may have sent via ANY church's box we both are on, so
+// the union of every church I belong to's read set (relaysForChurch always includes the shared pool). Messages
+// sent before this change went to the whole list, shared pool included, so they stay readable from it.
+function dmReadRelays() {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) { try { for (const u of relaysForChurch(cp)) set.add(u); } catch (e) {} }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
 const RELAYS_KEY = 'trinityone.relays';
 // THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.
 //
@@ -4007,13 +4042,23 @@ const isConnectionFailure = (e) => _CONNECTION.test(String((e && e.message) || e
 const MAX_TRIES = 50;   // 50 genuine relay REFUSALS (outages don't count) — a backstop so an unanticipated
                         // non-permanent refusal shape isn't retried forever, not a wall-clock limit.
 // Try to deliver everything queued. Safe to call often — it no-ops while already running.
+// WHERE A QUEUED ITEM IS RETRIED. Never the whole candidate list. A DM is re-derived from its peer (so an entry
+// persisted before the owner rule, holding the whole list, is narrowed too); an item with its own list uses it; a
+// join (queued with no list on purpose, audit 2026-09-02 #21) uses that church's live publish set; anything else
+// with no list gets the shared pool only.
+function _outboxRelays(item) {
+  if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+  if (item.relays && item.relays.length) return item.relays;
+  if (item.join) { try { return publishSetFor(item.join); } catch (e) {} }
+  return _netRelays([...CANONICAL_RELAYS]);
+}
 async function _outboxFlush() {
   if (_flushing || !_outbox.length || !sk) return;
   _flushing = true;
   try {
     for (const item of [..._outbox]) {
       try {
-        await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
+        await _publishBounded(_outboxRelays(item), item.evt);
         _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
         _dmPlain.delete(item.evt.id);   // delivered by RETRY — the first-attempt path clears its own; this one was leaking for the session
         _outboxSave();
@@ -5751,10 +5796,10 @@ window.Fellowship = {
     // going to be written to a relay, and the plaintext never leaves memory. The sender can still read their
     // own pending message because the conversation key is symmetric, so a "waiting to send" bubble can show
     // the real words without ever persisting them.
-    _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+    _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1000), tries: 0, relays: dmSendRelays(peerPub) });
     _dmPlain.set(evt.id, content);
     _outboxSave();
-    try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; _outbox = _outbox.filter(o => o.evt.id !== evt.id); _dmPlain.delete(evt.id); _outboxSave(); }   // bounded so offline sets _delivered=false within 12s, not never
+    try { await _publishBounded(dmSendRelays(peerPub), evt); evt._delivered = true; _outbox = _outbox.filter(o => o.evt.id !== evt.id); _dmPlain.delete(evt.id); _outboxSave(); }   // bounded so offline sets _delivered=false within 12s, not never
     catch (e) {
       console.warn('[fellowship] DM publish failed', e);
       evt._delivered = false;   // E1: same as publishMessage — the caller must be able to tell
@@ -5810,7 +5855,7 @@ window.Fellowship = {
       const msg = msgs.get(tid); if (msg) push(msg);
     };
     // Gated: a DM subscription names both people to whatever answers it.
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+    const sub = pool.subscribeMany(dmReadRelays(), [
       { kinds: [4], authors: [pub], '#p': [peerPub] },   // sent by me to peer
       { kinds: [4], authors: [peerPub], '#p': [pub] },   // sent by peer to me
       { kinds: [7], authors: [pub], '#p': [peerPub] },   // my reactions to their DMs
@@ -5823,7 +5868,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     if (!peerPub || !msgId) return null;
     const evt = finalizeEvent({ kind: 7, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['p', peerPub], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
+    try { await _publishAny(dmSendRelays(peerPub), evt); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
     return evt;
   },
   // inbox: every DM involving me, grouped by peer; onConvos([{ peer, lastTs, preview }]). Unsub fn.
@@ -5840,7 +5885,7 @@ window.Fellowship = {
       byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? 'You: ' : '') + preview });
       emit();
     };
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+    const sub = pool.subscribeMany(dmReadRelays(), [
       // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
       // default cap of DM envelopes on EVERY app open, just to render an inbox preview.
       //

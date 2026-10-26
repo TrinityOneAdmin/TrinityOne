@@ -843,6 +843,7 @@ test('a chat message the gate could not publish stays in the outbox and burns no
     _outbox: [item], _outboxFailed: [], _flushing: false, sk: 'k',
     _dmPlain: new Map(), _outboxSave: () => {}, window: undefined,
     _publishBounded: async () => { throw gateErr; },
+    _outboxRelays: (item) => item.relays,   // step 2c: where a retry goes; this test is about the outbox's try-counting
   };
   const scope = scopeOf(state);
   const flush = new Function('scope', `with (scope) { ${body} return _outboxFlush; }`)(scope);
