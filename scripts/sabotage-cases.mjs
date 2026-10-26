@@ -1849,4 +1849,61 @@ export const CASES = [
     replace: ``,
     test: 'scripts/a-key-held-back-by-a-relay-says-which.test.mjs',
   },
+  {
+    name: "relay panel: the console's relay link navigates the page instead of opening the panel (the key is lost on every visit)",
+    file: 'app/stew-dashboard.jsx',
+    find: `  if (e && e.preventDefault) e.preventDefault();
+  window.dispatchEvent(new CustomEvent(STEW_RELAY_PANEL_EVENT`,
+    replace: `  window.dispatchEvent(new CustomEvent(STEW_RELAY_PANEL_EVENT`,
+    test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
+  {
+    name: "relay panel: a console link inside the panel no longer closes it",
+    file: 'relay-app/copy.js',
+    find: `e.preventDefault(); close(); }`,
+    replace: `e.preventDefault(); }`,
+    test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
+  {
+    name: "relay panel: the safety net no longer closes a panel whose frame reached the console",
+    file: 'app/stew-dashboard.jsx',
+    find: `      try { fr.src = 'about:blank'; } catch (e) {}
+      onClose();
+`,
+    replace: `      try { fr.src = 'about:blank'; } catch (e) {}
+`,
+    test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
+  {
+    name: "relay panel: the safety net no longer blanks the frame that reached the console",
+    file: 'app/stew-dashboard.jsx',
+    find: `      try { fr.src = 'about:blank'; } catch (e) {}
+      onClose();
+`,
+    replace: `      onClose();
+`,
+    test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
+  {
+    name: "relay panel: the control panel's Back button does history.back() inside the frame",
+    file: 'relay-app/control.js',
+    find: `if (window.RelayPanelClose) { window.RelayPanelClose(); return; } `,
+    replace: ``,
+    test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
+  {
+    name: "relay panel: activity inside the frame no longer reaches the console's idle timer",
+    file: 'app/stew-dashboard.jsx',
+    find: `    for (const t of ['mousemove', 'mousedown', 'touchstart', 'scroll']) doc.addEventListener(t, () => { try { window.dispatchEvent(new Event(t)); } catch (e) {} }, { passive: true, capture: true });
+`,
+    replace: ``,
+    test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
+  {
+    name: "relay panel: Escape pressed inside the frame no longer closes the panel",
+    file: 'app/stew-dashboard.jsx',
+    find: `if (ev.key === 'Escape' && !ev.defaultPrevented) closeRef.current();`,
+    replace: ``,
+    test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
 ];

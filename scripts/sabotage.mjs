@@ -39,7 +39,7 @@ if (!cases.length) { console.error('no cases match ' + JSON.stringify(filter)); 
 const SCRATCH = process.env.TRINITY_SCRATCH || '/mnt/storage/tmp/trinity-scratch';
 const SANDBOX = mkdtempSync(join(existsSync(SCRATCH) ? SCRATCH : tmpdir(), 'sabotage-'));
 console.log('sandbox: ' + SANDBOX + '\n');
-for (const d of ['src', 'app', 'scripts', 'vendor']) cpSync(join(ROOT, d), join(SANDBOX, d), { recursive: true });
+for (const d of ['src', 'app', 'scripts', 'vendor', 'relay-app']) cpSync(join(ROOT, d), join(SANDBOX, d), { recursive: true });
 // Root-level scripts count too — join.js and pills.js are shipped code with tests of their own, and a case
 // that mutates a file the sandbox never copied dies with ENOENT rather than reporting anything useful.
 for (const f of ['package.json', 'index.html', 'steward.html', 'engine.js', 'join.js', 'join.html',

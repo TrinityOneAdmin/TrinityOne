@@ -1230,6 +1230,76 @@ function stewOnSuite() {
   } catch (e) { return false; }
 }
 
+// THE RELAY PAGES OPEN OVER THE CONSOLE, NOT INSTEAD OF IT (owner, 2026-10).
+// The church key lives only in this page's memory once the PIN has unlocked it. Following a plain link to the
+// relay pages unloads this page, so coming back asked for the PIN every time. On the Suite those two links open
+// the page in a full-window panel (a same-origin <iframe>) with a "Back to console" bar; closing it reveals the
+// console exactly as it was — same page, same memory, nothing stored. Nothing about the key changes.
+//   * the hook: while the panel is open `window.__trinityRelayPanel = { close }` exists. relay-app/copy.js
+//     (loaded by home.html and control.html) finds it from inside the frame and turns every link to
+//     /steward.html into "close the panel" — a second console must never boot inside the frame.
+//   * the safety net: if the frame ever DOES land on /steward.html, it is blanked and the panel closed.
+//   * idle lock: the idle timer (steward-root.jsx) listens on THIS window for mousemove/mousedown/keydown/
+//     touchstart/scroll; activity inside the frame never reaches it, so it is forwarded as the same events.
+//     Nothing else about the idle lock is changed.
+const STEW_RELAY_PANEL_EVENT = 'stew-open-relay-panel';
+const STEW_RELAY_PANEL_TITLES = { '/relay-app/home.html': 'Relay & Suite home', '/relay-app/control.html': 'Relay control panel' };
+function stewOpenRelayPanel(e, url) {
+  if (!stewOnSuite()) return;   // off the Suite the link is a plain link, exactly as before
+  if (e && (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
+  if (e && e.preventDefault) e.preventDefault();
+  window.dispatchEvent(new CustomEvent(STEW_RELAY_PANEL_EVENT, { detail: { url } }));
+}
+function RelayPanelHost() {
+  const [url, setUrl] = React.useState(null);
+  React.useEffect(() => {
+    const f = (e) => { const u = e && e.detail && e.detail.url; if (u) setUrl(u); };
+    window.addEventListener(STEW_RELAY_PANEL_EVENT, f);
+    return () => window.removeEventListener(STEW_RELAY_PANEL_EVENT, f);
+  }, []);
+  return url ? <RelayPanel url={url} onClose={() => setUrl(null)} /> : null;
+}
+function RelayPanel({ url, onClose }) {
+  const dlgRef = useStewDialog(onClose);   // Escape, Android Back, modal count (hides the error banner), focus restore
+  const frameRef = React.useRef(null);
+  const [title, setTitle] = React.useState(STEW_RELAY_PANEL_TITLES[url] || 'Relay');
+  const closeRef = React.useRef(onClose); closeRef.current = onClose;
+  React.useEffect(() => {
+    window.__trinityRelayPanel = { close: () => closeRef.current() };
+    return () => { try { delete window.__trinityRelayPanel; } catch (e) { window.__trinityRelayPanel = undefined; } };
+  }, []);
+  const onLoad = () => {
+    const fr = frameRef.current; if (!fr) return;
+    let doc = null, path = '';
+    try { doc = fr.contentDocument; path = fr.contentWindow.location.pathname; } catch (e) { return; }
+    if (path === '/steward.html') {   // safety net: never leave a second console running in here
+      try { fr.src = 'about:blank'; } catch (e) {}
+      onClose();
+      return;
+    }
+    if (!doc) return;
+    const name = STEW_RELAY_PANEL_TITLES[path]; if (name) setTitle(name);
+    for (const t of ['mousemove', 'mousedown', 'touchstart', 'scroll']) doc.addEventListener(t, () => { try { window.dispatchEvent(new Event(t)); } catch (e) {} }, { passive: true, capture: true });
+    doc.addEventListener('keydown', (ev) => {
+      try { window.dispatchEvent(new Event('keydown')); } catch (e) {}
+      if (ev.key === 'Escape' && !ev.defaultPrevented) closeRef.current();
+    }, true);
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'var(--bg, var(--surface))', display: 'flex', flexDirection: 'column' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', outline: 'none' }}>
+        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid var(--line)', background: 'var(--surface)' }}>
+          <button id="relayPanelBack" onClick={onClose} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 14 }}>← Back to console</button>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+          <div style={{ flex: 1 }} />
+        </div>
+        <iframe id="relayPanelFrame" ref={frameRef} src={url} title={title} onLoad={onLoad} style={{ flex: 1, minHeight: 0, width: '100%', border: 0, background: 'var(--surface)' }} />
+      </div>
+    </div>
+  );
+}
+window.RelayPanel = RelayPanel;
+
 // wizard step chrome — module-level so its component type is stable across renders
 // (defining it inside StewSetupWizard would remount on every keystroke and blur the inputs).
 function WizShell({ step, title, sub, children, footer }) {
@@ -2280,6 +2350,7 @@ function StewDashboard({ initial = 'overview' }) {
             (reference/UI-AUDIT-PLAN-console-apk.md §0). The header that stood here before was a wordmark row,
             the church card, and nine pills wrapping onto three rows: 233px, with the church's content
             starting 235px down a 730px screen. See StewSectionsMenu for the drawer and what it must do. */}
+        <RelayPanelHost />
         {menu ? <StewSectionsMenu nav={nav} tab={tab} onPick={(k) => { setMenu(false); pickTab(k); }} onHelp={() => { setMenu(false); setHelp(true); }} onClose={() => setMenu(false)} /> : null}
         {help && window.StewardHelp ? <window.StewardHelp onClose={() => setHelp(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
@@ -2319,6 +2390,7 @@ function StewDashboard({ initial = 'overview' }) {
       {posting ? <NewPostModal onClose={() => setPosting(false)} /> : null}
       <NewTeamModal open={addingTeam} onClose={() => setAddingTeam(false)} />
       <MemberChatDock />
+      <RelayPanelHost />
         <JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onSettings={openSettings} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
@@ -2374,7 +2446,7 @@ function StewDashboard({ initial = 'overview' }) {
           {/* In the desktop Suite (served from loopback), this box IS the relay — give a one-click door back to the
               relay panel / launcher so stewards don't have to dig through Settings. Hidden on the hosted web console (a8). */}
           {typeof location !== 'undefined' && ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname) && (
-            <a href="/relay-app/home.html" title="Relay & Suite controls" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px 12px', marginTop: 10, borderRadius: 11, border: '1px solid var(--line)', textDecoration: 'none', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
+            <a href="/relay-app/home.html" onClick={e => stewOpenRelayPanel(e, '/relay-app/home.html')} title="Relay & Suite controls" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px 12px', marginTop: 10, borderRadius: 11, border: '1px solid var(--line)', textDecoration: 'none', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)' }}>
               <Icon name="grid2" size={18} color="var(--ink-3)" /> Relay &amp; Suite home
             </a>
           )}
@@ -5062,7 +5134,7 @@ function DashRunRelayCard() {
   if (isRelayApp) return (
     <Panel title="This computer is your relay">
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>It’s running as part of this app — your church uses it automatically. The control panel has the advanced relay settings (make it reachable from anywhere, software updates, storage).</div>
-      <a href="/relay-app/control.html" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none', display: 'inline-flex' }}><Icon name="globe" size={15} color="currentColor" /> Open relay control panel</a>
+      <a href="/relay-app/control.html" onClick={e => stewOpenRelayPanel(e, '/relay-app/control.html')} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none', display: 'inline-flex' }}><Icon name="globe" size={15} color="currentColor" /> Open relay control panel</a>
     </Panel>
   );
   return (
