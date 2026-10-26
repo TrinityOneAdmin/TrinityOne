@@ -8110,6 +8110,71 @@
     }
     return _netRelays([.../* @__PURE__ */ new Set([...persisted, ...signed, ...canonical])], cp);
   }
+  function groupReadRelays(cp) {
+    if (!cp) return _netRelays([...CANONICAL_RELAYS]);
+    return relaysForChurch(cp);
+  }
+  function memberChurchPubs() {
+    const out = /* @__PURE__ */ new Set();
+    try {
+      const l = JSON.parse(localStorage.getItem("trinityone.followedChurches") || "[]") || [];
+      for (const f of l) {
+        if (!f || !f.id || f.kind === "network") continue;
+        const h = toPub(f.id);
+        if (h) out.add(h);
+      }
+    } catch (e) {
+    }
+    try {
+      if (window.Fellowship.churchPub) out.add(window.Fellowship.churchPub);
+    } catch (e) {
+    }
+    return [...out];
+  }
+  function profilePublishRelays() {
+    const set = /* @__PURE__ */ new Set();
+    for (const cp of memberChurchPubs()) {
+      try {
+        for (const u of publishSetFor(cp)) set.add(u);
+      } catch (e) {
+      }
+    }
+    if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+    return [...set];
+  }
+  function _peerInChurch(cp, peer) {
+    if (!peer) return false;
+    if (peer === cp) return true;
+    try {
+      const m = _memHub(cp).byPub.get(peer);
+      return !!(m && (m.joined || m.msgs > 0) && !_superseded(cp, peer));
+    } catch (e) {
+      return false;
+    }
+  }
+  function dmSendRelays(peer) {
+    const set = /* @__PURE__ */ new Set();
+    for (const cp of memberChurchPubs()) {
+      if (!_peerInChurch(cp, peer)) continue;
+      try {
+        for (const u of publishSetFor(cp)) set.add(u);
+      } catch (e) {
+      }
+    }
+    if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+    return [...set];
+  }
+  function dmReadRelays() {
+    const set = /* @__PURE__ */ new Set();
+    for (const cp of memberChurchPubs()) {
+      try {
+        for (const u of relaysForChurch(cp)) set.add(u);
+      } catch (e) {
+      }
+    }
+    if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+    return [...set];
+  }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {
@@ -8496,7 +8561,7 @@
     const authors = [..._profQueue];
     _profQueue.clear();
     if (!authors.length) return;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [0], authors }], {
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
@@ -10082,13 +10147,24 @@
   var _CONNECTION = /timeout|network|websocket|failed to (fetch|connect)|connection|econn|enotfound|socket|offline|unreachable/i;
   var isConnectionFailure = (e) => _CONNECTION.test(String(e && e.message || e || ""));
   var MAX_TRIES = 50;
+  function _outboxRelays(item) {
+    if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+    if (item.relays && item.relays.length) return item.relays;
+    if (item.join) {
+      try {
+        return publishSetFor(item.join);
+      } catch (e) {
+      }
+    }
+    return _netRelays([...CANONICAL_RELAYS]);
+  }
   async function _outboxFlush() {
     if (_flushing || !_outbox.length || !sk) return;
     _flushing = true;
     try {
       for (const item of [..._outbox]) {
         try {
-          await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
+          await _publishBounded(_outboxRelays(item), item.evt);
           _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
           _dmPlain.delete(item.evt.id);
           _outboxSave();
@@ -11635,7 +11711,7 @@
         evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
         sent = true;
         try {
-          await _publishAny(window.Fellowship.relays, evt);
+          await _publishAny(profilePublishRelays(), evt);
         } catch (e) {
           sent = false;
           lost = true;
@@ -11878,11 +11954,11 @@
         return null;
       }
       const evt = finalizeEvent2({ kind: 4, created_at: Math.floor(Date.now() / 1e3), tags: [["p", peerPub]], content: ciphertext }, sk);
-      _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+      _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1e3), tries: 0, relays: dmSendRelays(peerPub) });
       _dmPlain.set(evt.id, content);
       _outboxSave();
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(dmSendRelays(peerPub), evt);
         evt._delivered = true;
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _dmPlain.delete(evt.id);
@@ -11950,7 +12026,7 @@
         const msg = msgs.get(tid);
         if (msg) push(msg);
       };
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      const sub = pool.subscribeMany(dmReadRelays(), [
         { kinds: [4], authors: [pub], "#p": [peerPub] },
         // sent by me to peer
         { kinds: [4], authors: [peerPub], "#p": [pub] },
@@ -11977,7 +12053,7 @@
       if (!peerPub || !msgId) return null;
       const evt = finalizeEvent2({ kind: 7, created_at: Math.floor(Date.now() / 1e3), tags: [["e", msgId], ["p", peerPub], ["t", NET], ["k", "4"]], content: emoji || "-" }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(dmSendRelays(peerPub), evt);
       } catch (e) {
         console.warn("[fellowship] reactDM failed", e);
       }
@@ -12006,7 +12082,7 @@
         byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? "You: " : "") + preview });
         emit();
       };
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      const sub = pool.subscribeMany(dmReadRelays(), [
         // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
         // default cap of DM envelopes on EVERY app open, just to render an inbox preview.
         //
@@ -12067,7 +12143,7 @@
     // happen to share a group id (e.g. "prayer") don't cross-contaminate each other's chat.
     subscribeGroups(groupIds, onEvent) {
       const set = new Set(groupIds);
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1], "#t": groupIds, limit: 500 }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1], "#t": groupIds, limit: 500 }], {
         onevent(e) {
           const cp = window.Fellowship.churchPub;
           if (cp && !e.tags.some((t) => t[0] === "p" && t[1] === cp)) return;
@@ -12111,7 +12187,7 @@
     },
     // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
     subscribeReactions(groupId, onReaction) {
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [7], "#t": [groupId], limit: 400 }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [7], "#t": [groupId], limit: 400 }], {
         onevent(e) {
           const targetId = (e.tags.find((t) => t[0] === "e") || [])[1];
           if (targetId) {
@@ -12134,7 +12210,7 @@
     },
     // live subscription to a group's messages; returns an unsubscribe fn
     subscribeGroup(groupId, onEvent) {
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1, 5], "#t": [groupId], limit: 200 }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1, 5], "#t": [groupId], limit: 200 }], {
         onevent(e) {
           if (!e.tags.some((t) => t[0] === "t" && t[1] === groupId)) return;
           const cp = window.Fellowship.churchPub;
@@ -12193,7 +12269,7 @@
       }
       const PIN_D = "trinityone/pin:";
       let latest = 0;
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#d": [PIN_D + groupId] }], {
+      const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [30078], "#d": [PIN_D + groupId] }], {
         onevent(e) {
           const cp = window.Fellowship.churchPub;
           if (cp && !_groupEventTrusted(cp, groupId, e.pubkey)) return;
@@ -12237,7 +12313,7 @@
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
       const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#t": [groupId] }], {
+      const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
@@ -14930,7 +15006,7 @@
         emit();
       };
       window.addEventListener("trinity-church-trust", onTrust);
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#t": groups }], {
+      const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], "#t": groups }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith("trinityone/event:")) return;
@@ -15606,7 +15682,7 @@
         };
       }
       let latest = 0;
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors: [pubk] }], {
+      const sub = pool.subscribeMany(groupReadRelays(pubk), [{ kinds: [0], authors: [pubk] }], {
         // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
         // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
         onevent(e) {

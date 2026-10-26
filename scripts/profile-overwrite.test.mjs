@@ -93,6 +93,7 @@ function memberSide({ seen = false, cached = {}, answerAfterMs = null, photosOff
     console: { warn() {} },
     CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
     _publishAny: async (_relays, evt) => { state.published.push(evt); },
+    profilePublishRelays: () => ['wss://test.invalid'],   // step 2b: the profile publish set; this test is about WHAT is published, not where
     window: {
       Fellowship: {
         ready: Promise.resolve(),

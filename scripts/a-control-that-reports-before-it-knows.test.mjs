@@ -160,7 +160,7 @@ function profileRunner({ publishFails, alreadyPublished }) {
                   // SLICE it. setProfile started asking `_pubReason(e)` on 2026-09-15 so its failure
                   // advice matches WHICH way the publish failed, and this harness went red with
                   // "_pubReason is not defined" — loudly, which is what the name list is for.
-                  '_pubReason'];
+                  '_pubReason', 'profilePublishRelays'];
   const values = ['sk-bytes', ME,
     { Fellowship: { ready: Promise.resolve(), relays: ['wss://r/relay'], myProfile: null,
                     syncSealedNames() { state.sealedNames++; } },
@@ -172,7 +172,8 @@ function profileRunner({ publishFails, alreadyPublished }) {
     { setItem: (k, v) => { state.stored = v; }, getItem: () => null }, setTimeout, { warn() {} },
     alreadyPublished ? ME : '', alreadyPublished ? JSON.stringify({ about: '', picture: '' }) : '',
     JSON, Date, Math, String, function CustomEvent() {},
-    (e) => (e && e.unsent ? 'not-sent' : e && e.refused ? 'refused' : 'unconfirmed')];
+    (e) => (e && e.unsent ? 'not-sent' : e && e.refused ? 'refused' : 'unconfirmed'),
+    () => ['wss://r/relay']];   // profilePublishRelays (step 2b): where, not what - this test is about the report
   const obj = new Function(...names, 'return ({ ' + liftFellowship('setProfile') + ' })')(...values);
   return { setProfile: obj.setProfile, state };
 }

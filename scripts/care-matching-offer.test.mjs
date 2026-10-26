@@ -207,7 +207,7 @@ test('ENGINE: the REAL subscribeThread delivers m.careOffer (and null for an ord
   const pool = { subscribeMany: (_u, _f, h) => { handler = h; return { close() {} }; } };
   const W = { Fellowship: { relays: [] } };
   const subSrc = fnBody(FEL, 'subscribeThread(peerPub, onMsg) {', 'subscribeThread');
-  const lib = new Function('pool', 'window', 'pub', 'sk', '_dmDecrypt', '_netRelays', `return ({ ${felUnwrap}, ${subSrc} });`)(pool, W, ME, new Uint8Array(32), async (_s, _p, ct) => ct, (u) => u);
+  const lib = new Function('pool', 'window', 'pub', 'sk', '_dmDecrypt', '_netRelays', 'dmReadRelays', `return ({ ${felUnwrap}, ${subSrc} });`)(pool, W, ME, new Uint8Array(32), async (_s, _p, ct) => ct, (u) => u, () => []);
   W.Fellowship._dmUnwrap = lib._dmUnwrap;
   const got = []; lib.subscribeThread(CHURCH, (m) => got.push(m));
   await handler.onevent({ id: 'o1', kind: 4, pubkey: CHURCH, tags: [], created_at: 1, content: fel._dmWrap('offer', null, { careOffer: { needId: 'n1', isoDate: '2026-10-20' } }) });

@@ -262,6 +262,7 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
       _profilePubFor: null, _profilePubBody: null,
       PROFILE_KEY: 'trinityone.profile',
       [finalizeName]: (t) => ({ ...t, id: 'e1', sig: 'x' }),
+      profilePublishRelays: () => ['wss://test.invalid'],   // step 2b: where the profile goes; this test is about the report
       _publishAny: async () => {
         if (!publishFails) return;
         const e = new Error('no relay accepted it');

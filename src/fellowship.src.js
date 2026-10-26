@@ -1760,6 +1760,78 @@ function publishSetFor(cp) {
   } catch (e) {}
   return _netRelays([...new Set([...persisted, ...signed, ...canonical])], cp);
 }
+// THE READ SET FOR A CHURCH'S GROUP TRAFFIC (owner 2026-10-26: a church's box gets only that church's traffic).
+//
+// A group id belongs to the church whose group list it came from, and every group read here already drops
+// events not p-tagged to the church it was opened for (the `cp` check in each onevent) - so the church that
+// OWNS the groups of a subscription is the church the subscription is scoped to: window.Fellowship.churchPub
+// for the member screens, the explicit churchNpub for subscribeGroupEvents. These used to read over the whole
+// candidate list (window.Fellowship.relays), which holds every box ANY followed church signed, so church B's
+// group REQs (group ids, the member's pubkey) reached church A's box.
+//
+// Church unknown (no active church, or one that does not decode): the SHARED POOL ONLY. Never the whole list,
+// which is the leak, and never empty, because CANONICAL_RELAYS is always in it.
+function groupReadRelays(cp) {
+  if (!cp) return _netRelays([...CANONICAL_RELAYS]);
+  return relaysForChurch(cp);
+}
+// THE CHURCHES THIS MEMBER BELONGS TO (owner 2026-10-26, personal traffic). Read from the same place the member
+// app's church list is persisted: trinityone.followedChurches (npub-id entries, written by app.jsx from the
+// churches the member followed/joined), plus the active church. A network entry is not a church and is skipped.
+// Hex pubkeys, de-duplicated; empty when the member has none.
+function memberChurchPubs() {
+  const out = new Set();
+  try {
+    const l = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || [];
+    for (const f of l) { if (!f || !f.id || f.kind === 'network') continue; const h = toPub(f.id); if (h) out.add(h); }
+  } catch (e) {}
+  try { if (window.Fellowship.churchPub) out.add(window.Fellowship.churchPub); } catch (e) {}
+  return [...out];
+}
+// WHERE A MEMBER'S PROFILE (kind 0) IS PUBLISHED: the union, over every church the member belongs to, of that
+// church's publishSetFor (shared pool + that church's own boxes, never another church's doc-adopted box). With
+// no church: the shared pool only. Never empty (CANONICAL_RELAYS is in every publishSetFor).
+function profilePublishRelays() {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) { try { for (const u of publishSetFor(cp)) set.add(u); } catch (e) {} }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
+// WHERE A PRIVATE MESSAGE GOES (owner 2026-10-26, personal traffic): the SHARED servers plus the own box of a
+// church BOTH people belong to - never a box of a church only one of them is in. Sarah (A+B) to Tom (A only):
+// A's box, never B's. No shared church known: the shared pool only, which is today's worst case, never empty.
+//
+// HOW THE PHONE KNOWS THE PEER BELONGS TO C, with no new network read: the member hub for C (_memHub), the same
+// roster the People directory and the member count use - distinct people who joined (member:<C>) or posted to C.
+// _memHub only seeds from the on-device cache (memhub / legacy roster cache), so this is synchronous and local.
+// A peer the hub has not seen is treated as NOT a member of C, which fails toward the shared pool (the safe way).
+// A message to a CHURCH account (peer == C's key, for a church the member follows) counts as "both belong to C".
+function _peerInChurch(cp, peer) {
+  if (!peer) return false;
+  if (peer === cp) return true;
+  try {
+    const m = _memHub(cp).byPub.get(peer);
+    return !!(m && (m.joined || m.msgs > 0) && !_superseded(cp, peer));
+  } catch (e) { return false; }
+}
+function dmSendRelays(peer) {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) {
+    if (!_peerInChurch(cp, peer)) continue;
+    try { for (const u of publishSetFor(cp)) set.add(u); } catch (e) {}
+  }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
+// WHERE INCOMING PRIVATE MESSAGES ARE READ: a fellow member may have sent via ANY church's box we both are on, so
+// the union of every church I belong to's read set (relaysForChurch always includes the shared pool). Messages
+// sent before this change went to the whole list, shared pool included, so they stay readable from it.
+function dmReadRelays() {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) { try { for (const u of relaysForChurch(cp)) set.add(u); } catch (e) {} }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
 const RELAYS_KEY = 'trinityone.relays';
 // THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.
 //
@@ -2347,7 +2419,7 @@ function _flushProfiles() {
   if (!authors.length) return;
   // Gated like every other socket: asking a stranger's relay for a list of members' names tells it who is
   // in this church, which is the read half of the same leak (plan §5 — reads and writes get one rule).
-  const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
+  const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [0], authors }], {
     onevent(e) {
       try {
         const m = JSON.parse(e.content);
@@ -3985,13 +4057,23 @@ const isConnectionFailure = (e) => _CONNECTION.test(String((e && e.message) || e
 const MAX_TRIES = 50;   // 50 genuine relay REFUSALS (outages don't count) — a backstop so an unanticipated
                         // non-permanent refusal shape isn't retried forever, not a wall-clock limit.
 // Try to deliver everything queued. Safe to call often — it no-ops while already running.
+// WHERE A QUEUED ITEM IS RETRIED. Never the whole candidate list. A DM is re-derived from its peer (so an entry
+// persisted before the owner rule, holding the whole list, is narrowed too); an item with its own list uses it; a
+// join (queued with no list on purpose, audit 2026-09-02 #21) uses that church's live publish set; anything else
+// with no list gets the shared pool only.
+function _outboxRelays(item) {
+  if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+  if (item.relays && item.relays.length) return item.relays;
+  if (item.join) { try { return publishSetFor(item.join); } catch (e) {} }
+  return _netRelays([...CANONICAL_RELAYS]);
+}
 async function _outboxFlush() {
   if (_flushing || !_outbox.length || !sk) return;
   _flushing = true;
   try {
     for (const item of [..._outbox]) {
       try {
-        await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
+        await _publishBounded(_outboxRelays(item), item.evt);
         _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
         _dmPlain.delete(item.evt.id);   // delivered by RETRY — the first-attempt path clears its own; this one was leaking for the session
         _outboxSave();
@@ -5475,7 +5557,7 @@ window.Fellowship = {
     } else if (known) {
       evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
       sent = true;
-      try { await _publishAny(window.Fellowship.relays, evt); }
+      try { await _publishAny(profilePublishRelays(), evt); }
       catch (e) {
         sent = false; lost = true; console.warn('[fellowship] profile publish failed', e);
         // SAY SO. The withheld branch below already tells the member, and this one — the publish we DID
@@ -5734,10 +5816,10 @@ window.Fellowship = {
     // going to be written to a relay, and the plaintext never leaves memory. The sender can still read their
     // own pending message because the conversation key is symmetric, so a "waiting to send" bubble can show
     // the real words without ever persisting them.
-    _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+    _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1000), tries: 0, relays: dmSendRelays(peerPub) });
     _dmPlain.set(evt.id, content);
     _outboxSave();
-    try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; _outbox = _outbox.filter(o => o.evt.id !== evt.id); _dmPlain.delete(evt.id); _outboxSave(); }   // bounded so offline sets _delivered=false within 12s, not never
+    try { await _publishBounded(dmSendRelays(peerPub), evt); evt._delivered = true; _outbox = _outbox.filter(o => o.evt.id !== evt.id); _dmPlain.delete(evt.id); _outboxSave(); }   // bounded so offline sets _delivered=false within 12s, not never
     catch (e) {
       console.warn('[fellowship] DM publish failed', e);
       evt._delivered = false;   // E1: same as publishMessage — the caller must be able to tell
@@ -5793,7 +5875,7 @@ window.Fellowship = {
       const msg = msgs.get(tid); if (msg) push(msg);
     };
     // Gated: a DM subscription names both people to whatever answers it.
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+    const sub = pool.subscribeMany(dmReadRelays(), [
       { kinds: [4], authors: [pub], '#p': [peerPub] },   // sent by me to peer
       { kinds: [4], authors: [peerPub], '#p': [pub] },   // sent by peer to me
       { kinds: [7], authors: [pub], '#p': [peerPub] },   // my reactions to their DMs
@@ -5806,7 +5888,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     if (!peerPub || !msgId) return null;
     const evt = finalizeEvent({ kind: 7, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['p', peerPub], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
+    try { await _publishAny(dmSendRelays(peerPub), evt); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
     return evt;
   },
   // inbox: every DM involving me, grouped by peer; onConvos([{ peer, lastTs, preview }]). Unsub fn.
@@ -5823,7 +5905,7 @@ window.Fellowship = {
       byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? 'You: ' : '') + preview });
       emit();
     };
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+    const sub = pool.subscribeMany(dmReadRelays(), [
       // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
       // default cap of DM envelopes on EVERY app open, just to render an inbox preview.
       //
@@ -5859,7 +5941,7 @@ window.Fellowship = {
   // happen to share a group id (e.g. "prayer") don't cross-contaminate each other's chat.
   subscribeGroups(groupIds, onEvent) {
     const set = new Set(groupIds);
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1], '#t': groupIds, limit: 500 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1], '#t': groupIds, limit: 500 }], {
       onevent(e) {
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
@@ -5885,7 +5967,7 @@ window.Fellowship = {
 
   // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
   subscribeReactions(groupId, onReaction) {
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [7], '#t': [groupId], limit: 400 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [7], '#t': [groupId], limit: 400 }], {
       onevent(e) {
         const targetId = (e.tags.find(t => t[0] === 'e') || [])[1];
         if (targetId) { try { onReaction({ targetId, pubkey: e.pubkey, content: e.content, ts: e.created_at }); } catch (err) { console.error(err); } }
@@ -5897,7 +5979,7 @@ window.Fellowship = {
 
   // live subscription to a group's messages; returns an unsubscribe fn
   subscribeGroup(groupId, onEvent) {
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }], {
       onevent(e) {
         // belt-and-suspenders: only deliver events actually tagged for this group
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
@@ -5931,7 +6013,7 @@ window.Fellowship = {
   subscribeGroupPin(groupId, cb) {
     if (!groupId) { cb(null); return () => {}; }
     const PIN_D = 'trinityone/pin:'; let latest = 0;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#d': [PIN_D + groupId] }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [30078], '#d': [PIN_D + groupId] }], {
       onevent(e) {
         const cp = window.Fellowship.churchPub;
         // SECURITY-AUDIT-2026-07-06 M1: a pinned message is authoritative church UI, so only the church, a
@@ -5962,7 +6044,7 @@ window.Fellowship = {
     // whichever ARRIVED last made "un-hide" depend on which relay answered first.
     const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> { at, hidden }
     const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': [groupId] }], {
+    const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], '#t': [groupId] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(HIDE_D)) return;
@@ -8522,7 +8604,7 @@ window.Fellowship = {
     // de6e05a was written to fix, alive here. It also strands events absorbed before the roster arrived.
     const onTrust = () => { _reduceAll(versions, byId, _evTrust); emit(); };
     window.addEventListener('trinity-church-trust', onTrust);
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': groups }], {
+    const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], '#t': groups }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith('trinityone/event:')) return;
@@ -9025,7 +9107,7 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onProfile(null); return () => {}; }
     let latest = 0;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors: [pubk] }], {
+    const sub = pool.subscribeMany(groupReadRelays(pubk), [{ kinds: [0], authors: [pubk] }], {
       // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
       // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
       onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const c = JSON.parse(e.content); _notePhotoPolicy(pubk, c); onProfile(c); } catch {} },
