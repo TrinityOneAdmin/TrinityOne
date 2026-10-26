@@ -486,8 +486,15 @@ async function held(relay, church, prefix) {
 // this the second publish comes back "a newer version of this is already stored" and the test that follows is
 // reading the PREVIOUS test's document.
 let _docAt = Math.floor(Date.now() / 1000);
+// STEPPED BY 10, NOT 1 (diagnosed 2026-10-26 by printing both stamps at the refusal: they were EQUAL). The CONSOLE
+// UNDER TEST also signs relay-net documents, one second newer than the newest it has read - so after a test in
+// which it wrote, the relay holds a document stamped _docAt+1, and the next `++_docAt` here is equal to it, which
+// the relay refuses as "a newer version is already stored". It showed as test 14 failing about two runs in three.
+// A step of 10 leaves room for the console's writes between two of ours and, over ~30 documents, stays far inside
+// the relay's +900s future bound. `Math.max` with the clock keeps a stamp from falling behind real time.
+const RELAY_NET_STEP = 10;
 const relayNetDocFor = (church, rows) => finalizeEvent(
-  { kind: 30078, created_at: ++_docAt, tags: [['d', RELAY_NET_D], ['t', 'trinityone']], content: JSON.stringify(rows) }, church.sk);
+  { kind: 30078, created_at: (_docAt = Math.max(_docAt + RELAY_NET_STEP, Math.floor(Date.now() / 1000))), tags: [['d', RELAY_NET_D], ['t', 'trinityone']], content: JSON.stringify(rows) }, church.sk);
 
 // A console that has typed NOTHING, served from a host that runs no relay, with only the shared pool compiled
 // in — the second phone, exactly as measured.
