@@ -13,9 +13,9 @@
 // observed: globalThis.WebSocket is wrapped so every REQ and EVENT frame is recorded against the box it went to.
 // TLS is the one thing faked (wss://127.0.0.1 -> ws://), as in the sibling tests.
 //
-// setProfile itself is ~170 lines of unrelated machinery and is not lifted; the point-of-use guard for the publish
-// is a slice of the shipped setProfile (vendor, where dead code is removed, so text cannot hide a `false &&`)
-// asserting the publish names profilePublishRelays() and no longer names window.Fellowship.relays.
+// The shipped setProfile IS lifted and run (the 'END TO END' test): only key/storage/photo-policy plumbing is stubbed;
+// the relay choice (profilePublishRelays, memberChurchPubs, publishSetFor, the gate, _publishAny) is the real code.
+// The vendor-text test below is kept as a cheap second guard.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -172,6 +172,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who })
     fnBody(src, 'function _dedupeRelays', '_dedupeRelays'),
     fnBody(src, 'function _publishAny', '_publishAny'),
     // ── the shipped profile readers ──
+    'let _profilePubFor = null, _profilePubBody = null;',
     'const profiles = {}; const pendingProfiles = new Set(); const _profQueue = new Set(); let _profTimer = null; const _k0Seen = new Set();',
     fnBody(src, 'function _flushProfiles', '_flushProfiles'),
   ].join('\n');
@@ -179,6 +180,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who })
   win.Fellowship = { relays: [...relays], churchPub: activeChurch, ready: Promise.resolve() };
   win.Fellowship.addRelay = (u) => { win.Fellowship.relays = [...win.Fellowship.relays, u]; };
   const reqProfiles = fnBody(src, 'requestProfiles(pubkeys) {', 'requestProfiles');
+  const setProf = fnBody(src, 'async setProfile(meta) {', 'setProfile');
   const subChurchProfile = fnBody(src, 'subscribeChurchProfile(churchNpub, onProfile) {', 'subscribeChurchProfile');
   const scope = scopeOf({
     localStorage: store, window: win, pool, console, fetch: netFetch,
@@ -187,13 +189,14 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who })
     normalizeURL, verifyEvent, finalizeEvent, CustomEvent: Ev,
     decode: nip19decode, nip19decode, performance, normalizeURL2: normalizeURL,
     _noteSendResult: () => {}, _checkIfBlocked: () => {}, _notePhotoPolicy: () => {},
-    _recoverOwnProfile: () => {}, saveProfiles: () => {}, _resendMembershipToNewBoxes: async () => {},
+    _recoverOwnProfile: () => {}, _churchPhotosOff: () => false, _myPhotoReset: () => false, _stripPhoto: (p, av) => av, _pubReason: () => '', PROFILE_KEY: 'trinityone.profile', setTimeout, saveProfiles: () => {}, _resendMembershipToNewBoxes: async () => {},
     sk: me.sk, pub: me.pub,
   });
   const api = new Function('scope', `with (scope) { ${body}
-    const _api = { ${reqProfiles}, ${subChurchProfile} };
+    const _api = { ${reqProfiles}, ${subChurchProfile}, ${setProf} };
     window.Fellowship.requestProfiles = (p) => _api.requestProfiles(p);
-    return { requestProfiles: (p) => _api.requestProfiles(p), subscribeChurchProfile: (n, f) => _api.subscribeChurchProfile(n, f),
+    _k0Seen.add(pub);
+    return { setProfile: (m) => _api.setProfile(m), requestProfiles: (p) => _api.requestProfiles(p), subscribeChurchProfile: (n, f) => _api.subscribeChurchProfile(n, f),
              relaysForChurch, publishSetFor, groupReadRelays, memberChurchPubs, profilePublishRelays, _publishAny,
              adopt: (cp) => { window.Fellowship.churchPub = cp; return adoptChurchNetDocAddresses(cp); },
              gate: _gate, churchRelaysRaw }; }`)(scope);
@@ -260,6 +263,19 @@ test('setProfile publishes through profilePublishRelays() - the point of use (ve
   const sp = fnBody(FELLOW, 'async setProfile(meta) {', 'setProfile');
   assert.equal(sp.split('_publishAny(profilePublishRelays(), evt)').length - 1, 1, 'setProfile no longer publishes the kind-0 to profilePublishRelays()');
   assert.equal(sp.split('window.Fellowship.relays, evt').length - 1, 0, 'setProfile still publishes the kind-0 to the whole candidate list');
+});
+
+test('setProfile END TO END (the shipped function, real relay choice): the kind-0 lands on A\'s box and the shared relay, NEVER on stranger C\'s admitted box', async () => {
+  const app = await member({ active: A, followed: [A, B] });
+  try {
+    const mark = 'e2e-' + Date.now();
+    const out = await app.setProfile({ about: mark });
+    assert.ok(out && out.id, 'setProfile did not publish: ' + JSON.stringify(out));
+    await sleep(500);
+    assert.ok(evAt(TA, out.id).length >= 1, 'A\'s own box did not get the kind-0 from setProfile');
+    assert.ok(evAt(SHARED, out.id).length >= 1, 'the shared relay did not get the kind-0 from setProfile');
+    assert.equal(evAt(TC, out.id).length, 0, 'setProfile sent the member\'s kind-0 to C\'s box (a church they are not in)');
+  } finally { app.close(); }
 });
 
 test('profile PUBLISH: a member of A and B reaches A\'s box and the shared servers, and NEVER C\'s box (a church they are not in)', async () => {
