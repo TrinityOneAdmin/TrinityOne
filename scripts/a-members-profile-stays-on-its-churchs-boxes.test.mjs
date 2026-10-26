@@ -155,6 +155,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who })
     fnBody(src, 'function _alreadyAMemberCandidate', '_alreadyAMemberCandidate'),
     stmt(src, 'var MEMBER_NETDOC_ADOPT_MAX = ', 'MEMBER_NETDOC_ADOPT_MAX'),
     stmt(src, 'var _adoptingNetDoc = ', '_adoptingNetDoc'),
+    stmt(src, 'var _netDocAgain = ', '_netDocAgain'),   // fix/member-adopts-in-first-session added this to adoptChurchNetDocAddresses
     fnBody(src, 'function _dropRevokedNetDocRows', '_dropRevokedNetDocRows'),
     fnBody(src, 'async function adoptChurchNetDocAddresses', 'adoptChurchNetDocAddresses'),
     // ── THE THINGS UNDER TEST ──
