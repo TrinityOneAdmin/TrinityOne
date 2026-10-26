@@ -798,3 +798,75 @@ test('a box the church signed at a cleartext ws:// or http:// address on the net
     assert.deepEqual(await ctl.adopt(church.pub), [BOX.wsUrl], 'staging: the loopback spelling of the same box was not adopted');
   } finally { ctl.close(); }
 });
+
+// ── 13. THE SAME BOX AT A NEW ADDRESS REPLACES THE OLD ONE ─────────────────────────────────────────────
+test('a box that keeps moving address (tunnel restarts) is followed every time, and its old addresses leave the phone', async () => {
+  // PR #7 audit, M-1. Measured before this: moves 0–5 adopted, nothing from move 6 — every old address stayed,
+  // filled the cap, and was dialled on every publish and read. A REAL box is moved to a new port (moveRelay keeps
+  // its key and data) CAP + 2 times and the church re-signs the same key at each new address; each is a phone
+  // relaunch over the same store. DECIDES: the `moved` rows in adoptChurchNetDocAddresses — the cap bypass for a
+  // replacement, and the drop + gate forget after the new address proves the key.
+  const NETDOC = 'trinityone.relays.netdoc';
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  const store = memStore();
+  let TUN = await H.startRelay({ name: 'TUN', churches: [church.pub] });
+  let list = [secure(SHARED.wsUrl)], prev = '';
+  try {
+    for (let i = 0; i < CAP + 2; i++) {
+      await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: TUN.relayPub, alwaysOn: true, url: TUN.wsUrl }])]);
+      const app = memberOn({ church, relays: list, canonical: [secure(SHARED.wsUrl)], pins, store });
+      try {
+        await H.publishAll(SHARED, [joinDoc(app.me, church.pub)]);
+        assert.deepEqual(await app.adopt(church.pub), [TUN.wsUrl], 'move ' + i + ': the box\'s new address was not adopted');
+        assert.deepEqual(app.relays(), [secure(SHARED.wsUrl), TUN.wsUrl], 'move ' + i + ': old addresses were kept beside the new one');
+        const rows = (JSON.parse(store.getItem(NETDOC) || '{}')[church.pub] || {}).rows || {};
+        assert.deepEqual(Object.keys(rows), [TUN.wsUrl], 'move ' + i + ': the record still holds an old address');
+        if (prev) assert.equal(app.gate.admits(prev, church.pub), false, 'move ' + i + ': the gate still counts the dead address as proved');
+        // The phone's reads prove the address through the gate (persisted with the store), so on the next move
+        // there is a real proof of the old address for the forget to take away.
+        await app.gate.refresh([TUN.wsUrl], church.pub);
+        assert.equal(app.gate.admits(TUN.wsUrl, church.pub), true, 'staging: the gate did not prove the box\'s address');
+        list = [...app.relays()];
+      } finally { app.close(); }
+      prev = TUN.wsUrl;
+      TUN = await H.moveRelay(TUN);
+    }
+
+    // A PHONE ALREADY FULL OF DEAD ADDRESSES (left by a build before this fix): the cap does not hold back the
+    // box's live address, because adopting it REPLACES them; afterwards only the shared pool and the box remain.
+    {
+      const old = Array.from({ length: CAP - 1 }, (_, k) => 'wss://dead-tunnel-' + k + '.example/relay');
+      await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: TUN.relayPub, alwaysOn: true, url: TUN.wsUrl }])]);
+      const full = memStore();
+      full.setItem(NETDOC, JSON.stringify({ [church.pub]: { hw: 0, rows: Object.fromEntries(old.map(u => [u, TUN.relayPub])) } }));
+      const stuck = memberOn({ church, relays: [secure(SHARED.wsUrl), ...old], canonical: [secure(SHARED.wsUrl)], pins, store: full });
+      try {
+        assert.equal(stuck.relays().length, CAP, 'staging: the phone is not at the cap');
+        await H.publishAll(SHARED, [joinDoc(stuck.me, church.pub)]);
+        assert.deepEqual(await stuck.adopt(church.pub), [TUN.wsUrl], 'a phone at the cap never follows the box to its live address');
+        assert.deepEqual(stuck.relays(), [secure(SHARED.wsUrl), TUN.wsUrl], 'the dead addresses stayed on the phone');
+      } finally { stuck.close(); }
+    }
+
+    // CONTROL 1: the church signs the box at its next address but nothing answers there yet. Nothing is
+    // replaced — the old address goes only once the new one has PROVED the key.
+    const dead = 'ws://127.0.0.1:9/relay';               // the discard port: nothing answers
+    await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: TUN.relayPub, alwaysOn: true, url: dead }])]);
+    const waiting = memberOn({ church, relays: list, canonical: [secure(SHARED.wsUrl)], pins, store });
+    try {
+      await H.publishAll(SHARED, [joinDoc(waiting.me, church.pub)]);
+      assert.deepEqual(await waiting.adopt(church.pub), [], 'staging: an address nothing answers at was adopted');
+      assert.ok(waiting.relays().includes(prev), 'the old address was dropped before the new one proved the key');
+    } finally { waiting.close(); }
+
+    // CONTROL 2: an old address that is ALSO this church's invite box stays on the phone when it is replaced.
+    store.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [prev] }));
+    await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: TUN.relayPub, alwaysOn: true, url: TUN.wsUrl }])]);
+    const kept = memberOn({ church, relays: list, canonical: [secure(SHARED.wsUrl)], pins, store });
+    try {
+      await H.publishAll(SHARED, [joinDoc(kept.me, church.pub)]);
+      assert.deepEqual(await kept.adopt(church.pub), [TUN.wsUrl], 'staging: the box\'s new address was not adopted');
+      assert.ok(kept.relays().includes(prev), 'replacing the box\'s address took away this church\'s invite box');
+    } finally { kept.close(); }
+  } finally { try { TUN.stop(); } catch (e) {} }
+});
