@@ -1966,6 +1966,43 @@ export const CASES = [
     test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
   },
   {
+    name: `relay-net first session: adoptInviteRelays does not re-run adoption once the invite relay is admitted (the church's own box waits for the next launch)`,
+    file: 'src/fellowship.src.js',
+    find: `          try { const _p = adoptChurchNetDocAddresses(cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
+          return true;`,
+    replace: `          return true;`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: a pass already in flight when the invite relay is admitted queues no follow-up`,
+    file: 'src/fellowship.src.js',
+    find: `  if (_adoptingNetDoc) { if (again) _netDocAgain.add(cp); return []; }`,
+    replace: `  if (_adoptingNetDoc) return [];`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: the empty answer cached before the invite relay was known is reused`,
+    file: 'src/fellowship.src.js',
+    find: `if (c0 && !c0.docAt) _relayNetCache.delete(cp);`,
+    replace: `if (false) _relayNetCache.delete(cp);`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: the invite-retry path admits a relay that was down at follow but does not re-run adoption`,
+    file: 'src/fellowship.src.js',
+    find: `        try { const _p = adoptChurchNetDocAddresses(p.cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
+`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: a follow-up queued for a different church than the finishing pass is never run`,
+    file: 'src/fellowship.src.js',
+    find: `    const _queued = [..._netDocAgain]; _netDocAgain.clear();`,
+    replace: `    const _queued = _netDocAgain.delete(cp) ? [cp] : []; _netDocAgain.clear();`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
     name: `relay-net D-2: publishSetFor drops the shared pool again (the old >=2-boxes rule, in its simplest form)`,
     file: 'src/fellowship.src.js',
     find: `  const canonical = CANONICAL_RELAYS;`,
