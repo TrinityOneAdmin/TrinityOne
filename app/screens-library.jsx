@@ -24,11 +24,11 @@ function LibraryScreen({ ctx }) {
   const [view, setView] = React.useState('library');
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
-      {/* segmented: Library / Watch & Listen.
+      {/* segmented: Watch & Listen / Library (Library is still the view that opens first).
           A church that publishes AUDIO sermons had them filed under a tab named "Watch", next to a "Listen"
           section holding only Audio Bibles. Nobody looking for a sermon to listen to opens Watch. */}
       <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 15, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 20 }} data-comment-anchor="dd2234f87c-div-30-7">
-        {[['library', 'Library', 'library'], ['watch', 'Watch & Listen', 'play']].map(([id, label, ic]) => {
+        {[['watch', 'Watch & Listen', 'play'], ['library', 'Library', 'library']].map(([id, label, ic]) => {
           const on = view === id;
           return (
             <button key={id} onClick={() => setView(id)} style={{
