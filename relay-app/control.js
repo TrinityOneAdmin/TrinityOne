@@ -46,6 +46,12 @@
   }
 
   const initials = (n) => (n||'?').split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  // The headline "Churches" figure = churches REGISTERED on this relay (`/status` counts.churches, authed), not
+  // churches with >=1 stored event (`/stats` churches, capped at 8 by qByChurch LIMIT 8). Falls back to the old
+  // active count when the relay (older, or unauthed) sends no counts.
+  function registeredChurches(s, st) {
+    return (s && s.counts && typeof s.counts.churches === 'number') ? s.counts.churches : ((st && st.churches) || []).length;
+  }
   async function poll() {
     // REACHABILITY IS DECIDED BY THE FETCH, NOTHING ELSE. This try used to wrap the fetch AND every DOM
     // update after it, so any rendering error landed in the catch below and told a volunteer their relay
@@ -61,7 +67,8 @@
     // One defect, two findings (round 4, #2 and #3).
     let s;
     try {
-      const r = await fetch('/status', { cache: 'no-store' });
+      // the admin token makes /status add `counts` (REGISTERED churches); without it the field is simply absent.
+      const r = await fetch('/status', { headers: authHeaders(), cache: 'no-store' });
       s = await r.json();
     } catch (e) {
       document.getElementById('dot').className = 'dot off';
@@ -87,7 +94,7 @@
         const kinds = st.kinds || [];
         const total = kinds.reduce((a, k) => a + (k.n || 0), 0);
         const profiles = (kinds.find(k => k.kind === 0) || {}).n;
-        document.getElementById('s-churches').textContent = (st.churches || []).length;
+        document.getElementById('s-churches').textContent = registeredChurches(s, st);
         if (profiles != null) document.getElementById('s-members').textContent = profiles;
         document.getElementById('s-events').textContent = total.toLocaleString();
         if (st.connections != null) document.getElementById('s-conns').textContent = st.connections;
@@ -116,7 +123,6 @@
       try { console.error('[relay panel] render failed after a successful /status', e); } catch (e2) {}
     }
   }
-  poll(); setInterval(poll, 5000);
 
   // ── setup wizard: read/write the relay's write policy (church.json) via /config ──
   const TOKEN_KEY = 'to_relay_admin_token';
@@ -129,6 +135,9 @@
   let cfgChurches = [];
   const esc = (s) => String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const authHeaders = () => adminToken ? { 'Authorization': 'Bearer ' + adminToken } : {};
+  // Started HERE, not where poll() is declared: poll() now calls authHeaders() before its first await, and
+  // adminToken/authHeaders are declared above this line, so starting earlier would hit the temporal dead zone.
+  poll(); setInterval(poll, 5000);
 
   // RELAY-UX-2026-07-20: the church list is a LIVE view of the server, not a form.
   // It used to be an editable array with a Save button, and that shape caused the incident this rewrite
