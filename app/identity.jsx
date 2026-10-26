@@ -599,7 +599,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
             <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>If your church gave you a name for their relay, type it here.</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={cname} onChange={e => { setCname(e.target.value); setRErr(''); }} onKeyDown={e => { if (e.key === 'Enter') tryChurchName(); }}
-                autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="e.g. trinityla"
+                autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="e.g. my-church"
                 style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--paper)', padding: '10px 12px', fontSize: 15, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
               <button onClick={tryChurchName} disabled={!cname.trim() || !!rBusy} style={{ padding: '10px 16px', borderRadius: 12, border: 'none', cursor: (!cname.trim() || rBusy) ? 'not-allowed' : 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 14.5, fontWeight: 700, opacity: (!cname.trim() || rBusy) ? .5 : 1 }}>Find</button>
             </div>
