@@ -8095,6 +8095,34 @@
     if (!cp) return _netRelays([...CANONICAL_RELAYS]);
     return relaysForChurch(cp);
   }
+  function memberChurchPubs() {
+    const out = /* @__PURE__ */ new Set();
+    try {
+      const l = JSON.parse(localStorage.getItem("trinityone.followedChurches") || "[]") || [];
+      for (const f of l) {
+        if (!f || !f.id || f.kind === "network") continue;
+        const h = toPub(f.id);
+        if (h) out.add(h);
+      }
+    } catch (e) {
+    }
+    try {
+      if (window.Fellowship.churchPub) out.add(window.Fellowship.churchPub);
+    } catch (e) {
+    }
+    return [...out];
+  }
+  function profilePublishRelays() {
+    const set = /* @__PURE__ */ new Set();
+    for (const cp of memberChurchPubs()) {
+      try {
+        for (const u of publishSetFor(cp)) set.add(u);
+      } catch (e) {
+      }
+    }
+    if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+    return [...set];
+  }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
     try {
@@ -8481,7 +8509,7 @@
     const authors = [..._profQueue];
     _profQueue.clear();
     if (!authors.length) return;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [0], authors }], {
       onevent(e) {
         try {
           const m = JSON.parse(e.content);
@@ -11608,7 +11636,7 @@
         evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
         sent = true;
         try {
-          await _publishAny(window.Fellowship.relays, evt);
+          await _publishAny(profilePublishRelays(), evt);
         } catch (e) {
           sent = false;
           lost = true;
@@ -15579,7 +15607,7 @@
         };
       }
       let latest = 0;
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors: [pubk] }], {
+      const sub = pool.subscribeMany(groupReadRelays(pubk), [{ kinds: [0], authors: [pubk] }], {
         // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
         // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
         onevent(e) {

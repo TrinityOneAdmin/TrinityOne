@@ -1760,6 +1760,28 @@ function groupReadRelays(cp) {
   if (!cp) return _netRelays([...CANONICAL_RELAYS]);
   return relaysForChurch(cp);
 }
+// THE CHURCHES THIS MEMBER BELONGS TO (owner 2026-10-26, personal traffic). Read from the same place the member
+// app's church list is persisted: trinityone.followedChurches (npub-id entries, written by app.jsx from the
+// churches the member followed/joined), plus the active church. A network entry is not a church and is skipped.
+// Hex pubkeys, de-duplicated; empty when the member has none.
+function memberChurchPubs() {
+  const out = new Set();
+  try {
+    const l = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || [];
+    for (const f of l) { if (!f || !f.id || f.kind === 'network') continue; const h = toPub(f.id); if (h) out.add(h); }
+  } catch (e) {}
+  try { if (window.Fellowship.churchPub) out.add(window.Fellowship.churchPub); } catch (e) {}
+  return [...out];
+}
+// WHERE A MEMBER'S PROFILE (kind 0) IS PUBLISHED: the union, over every church the member belongs to, of that
+// church's publishSetFor (shared pool + that church's own boxes, never another church's doc-adopted box). With
+// no church: the shared pool only. Never empty (CANONICAL_RELAYS is in every publishSetFor).
+function profilePublishRelays() {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) { try { for (const u of publishSetFor(cp)) set.add(u); } catch (e) {} }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
 const RELAYS_KEY = 'trinityone.relays';
 // THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.
 //
@@ -2347,7 +2369,7 @@ function _flushProfiles() {
   if (!authors.length) return;
   // Gated like every other socket: asking a stranger's relay for a list of members' names tells it who is
   // in this church, which is the read half of the same leak (plan §5 — reads and writes get one rule).
-  const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
+  const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [0], authors }], {
     onevent(e) {
       try {
         const m = JSON.parse(e.content);
@@ -5470,7 +5492,7 @@ window.Fellowship = {
     } else if (known) {
       evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
       sent = true;
-      try { await _publishAny(window.Fellowship.relays, evt); }
+      try { await _publishAny(profilePublishRelays(), evt); }
       catch (e) {
         sent = false; lost = true; console.warn('[fellowship] profile publish failed', e);
         // SAY SO. The withheld branch below already tells the member, and this one — the publish we DID
@@ -9020,7 +9042,7 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onProfile(null); return () => {}; }
     let latest = 0;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors: [pubk] }], {
+    const sub = pool.subscribeMany(groupReadRelays(pubk), [{ kinds: [0], authors: [pubk] }], {
       // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
       // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
       onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const c = JSON.parse(e.content); _notePhotoPolicy(pubk, c); onProfile(c); } catch {} },
