@@ -11,9 +11,15 @@
   html, body { height: 100%; margin: 0; }
   body { background: var(--bg); color: var(--ink); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; display: flex; align-items: center; justify-content: center; padding: 28px; }
   .wrap { width: 100%; max-width: 940px; }
-  .brand { font-weight: 800; font-size: 22px; letter-spacing: -.3px; text-align: center; }
+  /* The wordmark is the Suite's logo. Owner, 2026-10-25: "about 2.5X bigger on its first page" — 22px -> 55px.
+     Scoped to this page (control.html has its own .brand). Below 560px it steps down so it never wraps. */
+  .brand { font-weight: 800; font-size: 55px; line-height: 1.15; letter-spacing: -.75px; text-align: center; }
+  @media (max-width: 560px) { .brand { font-size: 38px; letter-spacing: -.5px; } }
   .brand span { color: var(--clay); }
   .sub { text-align: center; color: var(--ink2); font-size: 16px; margin: 8px 0 30px; }
+  /* The app's own tagline (the member app's splash sets it the same way: uppercase, wide tracking), under the
+     wordmark on both views. It replaced the doors' question, owner 2026-10-25. */
+  .tag { text-align: center; color: var(--ink2); font-size: 14px; font-weight: 600; letter-spacing: 3px; text-transform: uppercase; margin: 6px 0 30px; }
   .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 18px; }
   .mode { display: flex; flex-direction: column; text-decoration: none; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px 22px; transition: transform .14s, box-shadow .14s, border-color .14s; }
   .mode:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(0,0,0,.08); border-color: color-mix(in oklab, var(--clay) 40%, var(--line)); }
@@ -45,7 +51,7 @@
 <body>
   <div class="wrap">
     <div class="brand">TrinityOne <span>Suite</span></div>
-    <p class="sub" id="sub">What should this computer do for your church?</p>
+    <p class="tag">Read &middot; Gather &middot; Share</p>
     <p class="sub" id="checking" hidden>Checking this computer&hellip;</p>
     <div class="upd" id="upd">
       <span class="dot"></span>

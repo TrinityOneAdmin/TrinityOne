@@ -219,6 +219,21 @@ const waitFor = async (c, expr, what, ms = 60000) => {
   assert.fail('timed out waiting for ' + what + ' (last read: ' + JSON.stringify(v) + ')');
 };
 const bodyText = (c) => c.evalIn('document.body.innerText').then(String);
+// THE TAGLINE SITS RIGHT UNDER THE WORDMARK, ON SCREEN, and the doors' old question is gone (owner, 2026-10-25:
+// "Read Gather Share" under the larger logo in place of "What should this computer do for your church?").
+// Measured from the laid-out page, never from the HTML source (CLAUDE.md rule 3).
+async function assertTaglineUnderLogo(c, view) {
+  const t = JSON.parse(await c.evalIn(`JSON.stringify((() => {
+    const b = document.querySelector('.brand'); const br = b && b.getBoundingClientRect();
+    const tag = [...document.querySelectorAll('p,div')].find(e => (e.innerText || '').toLowerCase().split(' ').join('') === 'read·gather·share');
+    const tr = tag && tag.getBoundingClientRect();
+    return { found: !!tag, shown: !!(tr && tr.height > 0), gap: (br && tr) ? Math.round(tr.top - br.bottom) : null,
+             question: /What should this computer do/.test(document.body.innerText) };
+  })())`));
+  assert.ok(t.found && t.shown, view + ': "Read · Gather · Share" is not on screen: ' + JSON.stringify(t));
+  assert.ok(t.gap !== null && t.gap >= 0 && t.gap <= 24, view + ': the tagline is not directly under the wordmark: ' + JSON.stringify(t));
+  assert.equal(t.question, false, view + ': the old question is still on screen');
+}
 
 // What the launcher shows: which of the card and the doors is on screen, and the card's three choices.
 const readLauncher = (c) => c.evalIn(`(() => { const on = ${ON};
@@ -309,6 +324,15 @@ test('a first launch shows ONE card with three choices — not the two doors —
     assert.equal(L.card, true, 'the first-run card is not on screen: ' + JSON.stringify(L));
     assert.deepEqual(L.doors, [false, false], 'a door is on screen beside the card: ' + JSON.stringify(L));
     assert.deepEqual([L.all.on, L.relay.on, L.console.on], [true, true, true], 'a choice is not on screen: ' + JSON.stringify(L));
+    // THE LOGO IS ~2.5x ITS OLD SIZE, MEASURED (owner 2026-10-25). The wordmark's rendered text was 195.7 x 25 px
+    // at 22px type; >= 2.2x is 430 x 55. Read from layout in Chromium, not matched in the source. It must also
+    // still fit the Suite's own window (900x780 here) with the first-run card's three choices fully on screen.
+    const logo = JSON.parse(await c.evalIn(`(() => { const e = document.querySelector('.brand'); const r = document.createRange(); r.selectNodeContents(e);
+      const t = r.getBoundingClientRect(); const last = document.getElementById('setupConsole').getBoundingClientRect();
+      return JSON.stringify({ w: t.width, h: t.height, lastBottom: last.bottom, vh: innerHeight, vw: innerWidth, sw: document.documentElement.scrollWidth }); })()`));
+    assert.ok(logo.w >= 195.7 * 2.2 && logo.h >= 25 * 2.2, 'the Suite logo is not ~2.5x its old 195.7x25 size: ' + JSON.stringify(logo));
+    assert.ok(logo.w <= logo.vw && logo.sw <= logo.vw, 'the enlarged logo overflows the window: ' + JSON.stringify(logo));
+    assert.ok(logo.lastBottom <= logo.vh, 'the enlarged logo pushes the first-run choices off the bottom of the window: ' + JSON.stringify(logo));
     assert.equal(L.all.href, '/relay-app/control.html?setup=everything', '"Set up everything" does not open the relay wizard on the everything path');
     assert.equal(L.relay.href, '/relay-app/control.html?setup=relay', '"Just a relay" does not open the relay wizard on the relay path');
     assert.equal(L.console.href, '/steward.html', '"Just the console" does not open the console');
@@ -317,6 +341,7 @@ test('a first launch shows ONE card with three choices — not the two doors —
     const text = await bodyText(c);
     for (const s of ['First time here? Set this computer up.', 'Set up everything', 'Just a relay', 'Just the console']) assert.ok(text.includes(s), 'the page does not say "' + s + '":\n' + text);
     assert.doesNotMatch(text, /What should this computer do/, 'the doors\' question is on screen under the card');
+    await assertTaglineUnderLogo(c, 'first-run card');
     // the honest signals, as the box reports them right now: no church, no name
     assert.equal((await (await fetch(gw.base + '/status')).json()).writePolicy, false, 're-anchor: the fresh box claims a church');
   } finally { c.stop(); gw.stop(); }
@@ -801,6 +826,7 @@ test('"Just the console": the console → a church → "Back to the Suite" → t
     assert.equal(await launcherSettled(c), 'doors', 'the console-only path ended on the launcher with the first-run card');
     const L = await readLauncher(c);
     assert.deepEqual([L.card, L.doors], [false, [true, true]], JSON.stringify(L));
+    await assertTaglineUnderLogo(c, 'two doors');
     assert.equal(await c.evalIn(`localStorage.getItem('trinityone.steward.wizard.done')`), '1');
   } finally { c.stop(); gw.stop(); }
 });
