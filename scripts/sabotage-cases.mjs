@@ -1966,6 +1966,32 @@ export const CASES = [
     test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
   },
   {
+    name: `relay-net join-ack race: announceMembership does not look at what the church's set became while its join was in flight`,
+    file: 'src/fellowship.src.js',
+    find: `      _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);   // not awaited; see its note
+`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net join-ack race: the in-flight re-send does not notice a Leave that landed while the join was in flight`,
+    file: 'src/fellowship.src.js',
+    find: `    if ((_leaveGen[cp] || 0) !== gen) return;   // left while the join was in flight: never re-join someone`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net join-ack race: the in-flight re-send does not check the phone is still on this church`,
+    file: 'src/fellowship.src.js',
+    find: `function _resendJoinToBoxesGainedInFlight(cp, sentTo, gen) {
+  try {
+    if (!cp || window.Fellowship.churchPub !== cp) return;`,
+    replace: `function _resendJoinToBoxesGainedInFlight(cp, sentTo, gen) {
+  try {
+    if (!cp) return;`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
     name: `relay-net first session: adoptInviteRelays does not re-run adoption once the invite relay is admitted (the church's own box waits for the next launch)`,
     file: 'src/fellowship.src.js',
     find: `          try { const _p = adoptChurchNetDocAddresses(cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}

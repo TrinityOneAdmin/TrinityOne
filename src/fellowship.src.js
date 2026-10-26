@@ -1279,6 +1279,32 @@ async function _resendMembershipToNewBoxes(cp, before) {
     if (p && p.catch) p.catch(() => {});
   } catch (e) {}
 }
+// THE OTHER HALF OF THE SAME WINDOW (measured on a phone 2026-10-26, from the relays' own stores): the join was
+// published at 19:33:32 to [invite box, shared]; the church's own box was proved and adopted at ~19:33:35 (the
+// member's name doc published then DID reach it, and it refused it: "not a member"); and
+// _resendMembershipToNewBoxes, run at the end of that adoption, read _joinSentFor(cp) while the join's ack was
+// still in flight, saw false and returned. Nothing re-sent, so the church's box held no join until a relaunch.
+// So announceMembership also looks, at the moment it marks the join sent, at what the church's set has become
+// SINCE the set it published to. Synchronous (publishSetFor only names boxes the gate has already proved, so there
+// is nothing to wait for), fire-and-forget, shares _memberResent with the path above so a box is sent to at most
+// once per launch by either, and re-checks the leaving state at send time.
+// A Leave that landed WHILE the join was in flight clears _joinSent, and then the late ack marks it sent again, so
+// _joinSentFor alone cannot tell a leaver from a member: _leaveGen counts leaves, and a changed count means "left".
+var _leaveGen = {};   // cp -> number of leaveMembership tombstones published for it this launch
+function _resendJoinToBoxesGainedInFlight(cp, sentTo, gen) {
+  try {
+    if (!cp || window.Fellowship.churchPub !== cp) return;
+    if ((_leaveGen[cp] || 0) !== gen) return;   // left while the join was in flight: never re-join someone
+    if (!_joinSentFor(cp)) return;   // left (or never sent): never re-join someone
+    const after = publishSetFor(cp);
+    if (!after.length) return;
+    const gained = after.filter(u => !sentTo.includes(u) && !_memberResent.has(cp + '|' + u));
+    if (!gained.length) return;
+    for (const u of gained) _memberResent.add(cp + '|' + u);
+    const p = window.Fellowship.announceMembership(cp);
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
 // A SECOND PASS, ASKED FOR WHEN THE CANDIDATE SET GROWS (first-session bug, measured on a phone 2026-10-26).
 // On the follow tick the invite relay is not yet in the list, so the first read asks only the shared relays,
 // finds no document, and churchRelayNet caches that empty answer (docAt 0) for a minute — and nothing asked
@@ -4980,9 +5006,12 @@ window.Fellowship = {
     }
     let ok = false;
     try {
-      await _publishAny(publishSetFor(cp), evt);
+      const gen = _leaveGen[cp] || 0;
+      const sentTo = publishSetFor(cp).slice();   // the set THIS publish goes to, for the in-flight check below
+      await _publishAny(sentTo, evt);
       ok = true;
       _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
+      _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);   // not awaited; see its note
       // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
       // does exactly this the moment its publish resolves; this function did not, so the entry sat in the
       // outbox for ever after a publish that WORKED. joinQueued() reads that queue, so the pending screen
@@ -5036,6 +5065,7 @@ window.Fellowship = {
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
     _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
     _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
     try { localStorage.removeItem('trinityone.joinedAt:' + cp); } catch {}

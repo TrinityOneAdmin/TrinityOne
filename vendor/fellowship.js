@@ -7637,6 +7637,23 @@
     } catch (e) {
     }
   }
+  var _leaveGen = {};
+  function _resendJoinToBoxesGainedInFlight(cp, sentTo, gen) {
+    try {
+      if (!cp || window.Fellowship.churchPub !== cp) return;
+      if ((_leaveGen[cp] || 0) !== gen) return;
+      if (!_joinSentFor(cp)) return;
+      const after = publishSetFor(cp);
+      if (!after.length) return;
+      const gained = after.filter((u) => !sentTo.includes(u) && !_memberResent.has(cp + "|" + u));
+      if (!gained.length) return;
+      for (const u of gained) _memberResent.add(cp + "|" + u);
+      const p = window.Fellowship.announceMembership(cp);
+      if (p && p.catch) p.catch(() => {
+      });
+    } catch (e) {
+    }
+  }
   var _netDocAgain = /* @__PURE__ */ new Set();
   async function adoptChurchNetDocAddresses(cp, opts) {
     if (!cp) return [];
@@ -11135,9 +11152,12 @@
       }
       let ok = false;
       try {
-        await _publishAny(publishSetFor(cp), evt);
+        const gen = _leaveGen[cp] || 0;
+        const sentTo = publishSetFor(cp).slice();
+        await _publishAny(sentTo, evt);
         ok = true;
         _markJoinSent(cp, evt);
+        _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _outboxSave();
         if (!firstJoined) {
@@ -11202,6 +11222,7 @@
       } catch (e) {
         return { ok: false, reason: _pubReason(e) };
       }
+      _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
       _clearJoinSent(cp);
       _dropJoinIntent(cp);
       try {

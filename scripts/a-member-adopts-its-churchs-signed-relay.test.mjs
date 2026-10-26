@@ -222,6 +222,8 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var NET = ', 'NET'),
     stmt(src, 'var _memberResent = ', '_memberResent'),
     fnBody(src, 'async function _resendMembershipToNewBoxes', '_resendMembershipToNewBoxes'),
+    stmt(src, 'var _leaveGen = ', '_leaveGen'),
+    fnBody(src, 'function _resendJoinToBoxesGainedInFlight', '_resendJoinToBoxesGainedInFlight'),
     stmt(src, 'var _joinSent = ', '_joinSent'),
     fnBody(src, 'function _joinSentSave', '_joinSentSave'),
     fnBody(src, 'function _markJoinSent', '_markJoinSent'),
@@ -1215,5 +1217,120 @@ test('a follow-up queued for a different church while another church\'s pass is 
     const before = readsForY.length;
     release();
     await until(() => readsForY.length > before, 'church Y\'s queued follow-up pass to read its relay-net document');
+  } finally { app.close(); }
+});
+
+
+// ── 16. THE JOIN'S ACK ARRIVES AFTER THE CHURCH'S BOX WAS ADOPTED (measured on a phone, 2026-10-26) ─────
+// Relay timestamps: the join landed on the invite box at 19:33:32; the church's own box T was proved ~19:33:35
+// (the member's name doc published then reached T and T refused it, "not a member"); _resendMembershipToNewBoxes
+// ran at the end of adoption, read _joinSentFor(cp) while the join's ack was still in flight, saw false and
+// returned. Nothing re-sent, and T held no join until the app was reopened.
+//
+// STAGED FOR REAL, in that order: the join is published (it lands on S) but its ACK is held at the transport —
+// the pool's publish promises are resolved late, announceMembership itself is not touched; adoption completes
+// and the gate proves T; the shipped re-send has run and found nothing to do; THEN the ack is released.
+// DECIDES: _resendJoinToBoxesGainedInFlight, called from announceMembership where it marks the join sent.
+function holdFirstAck(app) {
+  const real = app.pool.publish; let first = true, release; const open = new Promise(r => { release = r; });
+  app.pool.publish = (urls, e) => {
+    const ps = real(urls, e);
+    if (!first) return ps;
+    first = false;
+    return ps.map(p => p.then(v => open.then(() => v), er => open.then(() => { throw er; })));
+  };
+  return { release: () => release() };
+}
+test('a join whose ack arrives after the church\'s box was adopted is sent to that box, with no relaunch', async () => {
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const s = memStore();
+  s.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [secure(SHARED.wsUrl)] }));
+  const app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins, store: s });
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    assert.equal(app.publishSetFor(church.pub).includes(BOX.wsUrl), false, 'staging: the box is already in the publish set');
+    const hold = holdFirstAck(app);
+    const joining = app.announce(church.pub);                            // the join: on S, ack held
+    joining.catch(() => {});
+    await until(() => app.announced.length === 1, 'the join to be called');
+    let onS = 0;
+    for (let i = 0; i < 50 && !onS; i++) { onS = (await memberDocsOn(SHARED, app.me)).length; if (!onS) await sleep(100); }
+    assert.ok(onS, 'staging: the join never reached the invite box');
+    app.setChurch(church.npub);                                          // adoption starts…
+    await until(() => app.relays().includes(BOX.wsUrl), 'the church\'s box to be adopted');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);           // …and T is proved
+    await until(() => app.publishSetFor(church.pub).includes(BOX.wsUrl), 'the box to join the publish set');
+    await sleep(2500);                                                   // the shipped re-send has run and seen joinSent false
+    assert.equal(app.announced.length, 1, 'staging: something re-sent before the ack, so the race is not staged');
+    assert.equal((await memberDocsOn(BOX, app.me)).length, 0, 'staging: the join already reached the church\'s box');
+    hold.release();                                                      // THE ACK ARRIVES
+    assert.ok((await joining) && true, 'the join did not report success');
+    let landed = 0;
+    for (let i = 0; i < 100 && !landed; i++) { landed = (await memberDocsOn(BOX, app.me)).length; if (!landed) await sleep(200); }
+    assert.ok(landed, 'the join\'s ack arrived after the box was adopted and the join NEVER reached the church\'s own box');
+    assert.equal(app.announced.length, 2, 'expected exactly one re-send, got ' + (app.announced.length - 1));
+    // a later pass and a later heartbeat send nothing more to a box already sent to
+    await app.adopt(church.pub);
+    await app.announce(church.pub);                                      // heartbeat: already in the set when it went out
+    await sleep(2500);
+    assert.equal(app.announced.length, 3, 'a box already in the set (or already re-sent) was sent to again: ' + app.announced.length);
+    assert.deepEqual(JSON.parse(app.store.getItem('trinityone.churchboxes'))[church.pub], [secure(SHARED.wsUrl)], 'churchboxes was written');
+    assert.ok(app.publishSetFor(church.pub).includes(secure(SHARED.wsUrl)), 'the shared pool left the publish set');
+  } finally { app.close(); }
+});
+
+test('a member who left while the join\'s ack was in flight is not re-joined to the new box', async () => {
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const s = memStore();
+  s.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [secure(SHARED.wsUrl)] }));
+  const app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins, store: s });
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    const hold = holdFirstAck(app);
+    const joining = app.announce(church.pub); joining.catch(() => {});
+    await until(() => app.announced.length === 1, 'the join to be called');
+    await sleep(800);
+    app.setChurch(church.npub);
+    await until(() => app.relays().includes(BOX.wsUrl), 'the church\'s box to be adopted');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    await until(() => app.publishSetFor(church.pub).includes(BOX.wsUrl), 'the box to join the publish set');
+    // the member leaves (church switch: churchPub moves off this church) before the ack lands
+    app.win.Fellowship.churchPub = 'f'.repeat(64);
+    hold.release();
+    await joining;
+    await sleep(2500);
+    assert.equal(app.announced.length, 1, 'a join was re-sent for a church the phone had moved off');
+    assert.equal((await memberDocsOn(BOX, app.me)).length, 0, 'the church\'s box got a join after the church was switched away');
+  } finally { app.close(); }
+});
+
+test('a member who taps Leave while the join\'s ack is in flight is not re-joined to the church\'s new box', async () => {
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+  const s = memStore();
+  s.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [secure(SHARED.wsUrl)] }));
+  const app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins, store: s });
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    const hold = holdFirstAck(app);
+    const joining = app.announce(church.pub); joining.catch(() => {});
+    await until(() => app.announced.length === 1, 'the join to be called');
+    await sleep(800);
+    app.setChurch(church.npub);
+    await until(() => app.relays().includes(BOX.wsUrl), 'the church\'s box to be adopted');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    await until(() => app.publishSetFor(church.pub).includes(BOX.wsUrl), 'the box to join the publish set');
+    const left = await app.leave(church.pub);                            // LEAVE while the ack is held
+    assert.equal(left.ok, true, 'staging: the leave did not land: ' + JSON.stringify(left));
+    hold.release();
+    await joining;
+    await sleep(2500);
+    assert.equal(app.announced.length, 1, 'a join was re-sent for a member who had left while it was in flight');
+    for (const d of await memberDocsOn(BOX, app.me)) assert.ok(d.tags.some(t => t[0] === 'deleted'), 'a live member doc is on the church\'s box: the leaver was re-joined');
   } finally { app.close(); }
 });
