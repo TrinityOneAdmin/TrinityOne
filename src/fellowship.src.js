@@ -1279,10 +1279,20 @@ async function _resendMembershipToNewBoxes(cp, before) {
     if (p && p.catch) p.catch(() => {});
   } catch (e) {}
 }
-async function adoptChurchNetDocAddresses(cp) {
+// A SECOND PASS, ASKED FOR WHEN THE CANDIDATE SET GROWS (first-session bug, measured on a phone 2026-10-26).
+// On the follow tick the invite relay is not yet in the list, so the first read asks only the shared relays,
+// finds no document, and churchRelayNet caches that empty answer (docAt 0) for a minute — and nothing asked
+// again once the invite relay was proved, so the church's own box was not adopted until the next launch.
+// `opts.again` (set by adoptInviteRelays when it admits an address) drops a cached answer that held NO
+// document — never one that held a real document, whose read did not depend on the missing relay — and, if a
+// pass is already running, queues exactly one follow-up for that church instead of being skipped.
+const _netDocAgain = new Set();
+async function adoptChurchNetDocAddresses(cp, opts) {
   if (!cp) return [];
-  if (_adoptingNetDoc) return [];
+  const again = !!(opts && opts.again);
+  if (_adoptingNetDoc) { if (again) _netDocAgain.add(cp); return []; }
   _adoptingNetDoc = true;
+  if (again) { const c0 = _relayNetCache.get(cp); if (c0 && !c0.docAt) _relayNetCache.delete(cp); }
   // WHAT THIS PATH ADDED, AND FOR WHICH CHURCH AND KEY — so a box the church later TAKES OUT of its signed
   // document can be taken off this phone again (PR #7 audit, finding H-2). Without it the address stayed in
   // window.Fellowship.relays for ever: re-admitted under the `software` root, still sent this member's writes,
@@ -1402,7 +1412,10 @@ async function adoptChurchNetDocAddresses(cp) {
     }
     _resendMembershipToNewBoxes(cp, before).catch(() => {});   // not awaited: adoption's caller never waits on a send
     return added;
-  } finally { _adoptingNetDoc = false; }
+  } finally {
+    _adoptingNetDoc = false;
+    if (_netDocAgain.delete(cp)) { try { const _q = adoptChurchNetDocAddresses(cp, { again: true }); if (_q && _q.catch) _q.catch(() => {}); } catch (e) {} }
+  }
 }
 
 // ── C4: THE GATE, one per surface ───────────────────────────────────────────────────────────────────────
@@ -5129,6 +5142,9 @@ window.Fellowship = {
           _saveChurchBoxes(cp, [..._loadChurchBoxes(cp), url]);
           out.added.push(url);
           _clearInvitePending(cp, url);
+          // The candidate set just grew: read the church's relay-net document again, fresh, so its own box is
+          // adopted this session. Fire-and-forget; the follow flow never waits on it.
+          try { const _p = adoptChurchNetDocAddresses(cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
           return true;
         }
         out.refused.push(url);

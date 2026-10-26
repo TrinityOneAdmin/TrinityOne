@@ -7637,10 +7637,19 @@
     } catch (e) {
     }
   }
-  async function adoptChurchNetDocAddresses(cp) {
+  var _netDocAgain = /* @__PURE__ */ new Set();
+  async function adoptChurchNetDocAddresses(cp, opts) {
     if (!cp) return [];
-    if (_adoptingNetDoc) return [];
+    const again = !!(opts && opts.again);
+    if (_adoptingNetDoc) {
+      if (again) _netDocAgain.add(cp);
+      return [];
+    }
     _adoptingNetDoc = true;
+    if (again) {
+      const c0 = _relayNetCache.get(cp);
+      if (c0 && !c0.docAt) _relayNetCache.delete(cp);
+    }
     const NETDOC_KEY = "trinityone.relays.netdoc";
     const readRec = () => {
       try {
@@ -7758,6 +7767,14 @@
       return added;
     } finally {
       _adoptingNetDoc = false;
+      if (_netDocAgain.delete(cp)) {
+        try {
+          const _q = adoptChurchNetDocAddresses(cp, { again: true });
+          if (_q && _q.catch) _q.catch(() => {
+          });
+        } catch (e) {
+        }
+      }
     }
   }
   var _gate = createRelayGate({
@@ -11306,6 +11323,12 @@
             _saveChurchBoxes(cp, [..._loadChurchBoxes(cp), url]);
             out.added.push(url);
             _clearInvitePending(cp, url);
+            try {
+              const _p = adoptChurchNetDocAddresses(cp, { again: true });
+              if (_p && _p.catch) _p.catch(() => {
+              });
+            } catch (e) {
+            }
             return true;
           }
           out.refused.push(url);

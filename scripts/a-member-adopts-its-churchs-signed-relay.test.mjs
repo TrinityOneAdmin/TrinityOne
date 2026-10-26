@@ -190,6 +190,13 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     fnBody(src, 'function _alreadyAMemberCandidate', '_alreadyAMemberCandidate'),
     stmt(src, 'var MEMBER_NETDOC_ADOPT_MAX = ', 'MEMBER_NETDOC_ADOPT_MAX'),
     stmt(src, 'var _adoptingNetDoc = ', '_adoptingNetDoc'),
+    stmt(src, 'var _netDocAgain = ', '_netDocAgain'),
+    // the shipped invite path: adoptInviteRelays proves the slip's relay and admits it (test 15)
+    fnBody(src, 'function _saveChurchBoxes', '_saveChurchBoxes'),
+    stmt(src, 'var _INVITE_PENDING_KEY = ', '_INVITE_PENDING_KEY'),
+    fnBody(src, 'function _getInvitePending', '_getInvitePending'),
+    fnBody(src, 'function _storeInvitePending', '_storeInvitePending'),
+    fnBody(src, 'function _clearInvitePending', '_clearInvitePending'),
     fnBody(src, 'function _dropRevokedNetDocRows', '_dropRevokedNetDocRows'),
     fnBody(src, 'async function adoptChurchNetDocAddresses', 'adoptChurchNetDocAddresses'),
     // the gate and the read/publish sets it feeds
@@ -256,6 +263,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
   const leaveMembership = fnBody(src, 'async leaveMembership(npubOrHex) {', 'leaveMembership');
   const setChurch = fnBody(src, 'setChurch(npubOrHex) {', 'setChurch');
   const setRelays = fnBody(src, 'setRelays(urls) {', 'setRelays');
+  const adoptInviteRelays = fnBody(src, 'async adoptInviteRelays(npubOrHex, raw) {', 'adoptInviteRelays');
   // THE ONE LINE THIS CHANGE ADDS, asserted present in the slice that is about to run — otherwise every
   // point-of-use assertion would be asking an unchanged setChurch to do something it never did.
   assert.equal(setChurch.split('adoptChurchNetDocAddresses(').length - 1, 1,
@@ -282,13 +290,14 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     _forgetChurch: () => {},   // local-state cleanup after a leave; nothing here reads it
   });
   const api = new Function('scope', `with (scope) { ${body}
-    const _api = { ${setChurch}, ${setRelays}, ${announceMembership}, ${leaveMembership} };
+    const _api = { ${setChurch}, ${setRelays}, ${adoptInviteRelays}, ${announceMembership}, ${leaveMembership} };
     window.Fellowship.setRelays = (u) => _api.setRelays(u);
     window.Fellowship.announceMembership = (n) => { ANNOUNCED.push(n); return _api.announceMembership(n); };
     window.Fellowship.leaveMembership = (n) => _api.leaveMembership(n);
     window.Fellowship.addRelay = (u) => _api.setRelays([...window.Fellowship.relays, u]);
     return { setChurch: (n) => _api.setChurch(n),
              adopt: (cp) => { window.Fellowship.churchPub = cp; return adoptChurchNetDocAddresses(cp); },
+             adoptInvite: (n, raw) => _api.adoptInviteRelays(n, raw),
              dial: _netDocDialUrl,
              churchRelays, churchRelaysRaw, relaysForChurch, publishSetFor,
              gate: _gate, resend: _resendMembershipToNewBoxes }; }`)(scope);
@@ -1068,4 +1077,65 @@ test('the re-send names a box once per launch even when called again with the sa
     await app.resend(church.pub, stale);
     assert.equal(app.announced.length, 2, 'the membership was re-sent again for a box already re-sent this launch');
   } finally { app.close(); }
+});
+
+
+// ── 15. THE FIRST SESSION (measured on a phone, 2026-10-26) ─────────────────────────────────────────────
+// A new member follows from an invite link ?relay=<S>; the church's signed relay-net doc naming its own box T
+// is on S ONLY. On the follow tick S is not yet a candidate, so the first adoption pass reads only the shared
+// relay, finds no document and caches that empty answer; nothing asked again once adoptInviteRelays admitted S,
+// so T waited for the next launch. NO relaunch and NO manual adopt call below: setChurch, then the shipped
+// adoptInviteRelays, then wait. DECIDES: the `adoptChurchNetDocAddresses(cp, { again: true })` call inside
+// adoptInviteRelays' admit branch (sabotage case in scripts/sabotage-cases.mjs).
+async function firstSession({ holdFirstRead }) {
+  // A FRESH CHURCH AND SHARED RELAY: the file's shared one carries other tests' relay-net documents, and a
+  // member who READ a real document (docAt > 0) is rightly not re-read.
+  const church = H.key(); church.npub = npubEncode(church.pub);
+  const SHARED = await H.startRelay({ name: 'SHARED15', churches: [church.pub] });
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  const INV = await H.startRelay({ name: 'INVITE', churches: [church.pub] });
+  const T = await H.startRelay({ name: 'T', churches: [church.pub] });
+  await H.publishAll(INV, [relayNetDocFor(church, [{ pubkey: T.relayPub, alwaysOn: true, url: T.wsUrl }])]);
+  const app = memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins });
+  const memberDocOn = async (relay) => (await H.readAs(relay, app.me,
+    { kinds: [30078], authors: [app.me.pub], '#d': ['trinityone/member:' + church.pub] })).length;
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    const sent = await app.announce(church.pub);                       // the join, before T is known
+    assert.ok(sent && sent.id, 'staging: the join did not land on the shared relay');
+    let release = null;
+    if (holdFirstRead) {
+      // keep the FIRST adoption pass in flight (its relay-net read held) while the invite relay is admitted
+      const real = app.pool.querySync; let first = true;
+      const gateOpen = new Promise(r => { release = r; });
+      app.pool.querySync = async (...a) => {
+        if (first) { first = false; await gateOpen; }
+        return real(...a);
+      };
+    }
+    app.setChurch(church.npub);                                        // the follow tick: S not yet known
+    if (!holdFirstRead) {
+      await sleep(2500);
+      assert.equal(app.relays().includes(T.wsUrl), false, 'control: T was adopted on the first tick, so the stale-read stage never happened');
+    }
+    const out = await app.adoptInvite(church.npub, '?follow=' + church.npub + '&relay=' + encodeURIComponent(secure(INV.wsUrl)));
+    assert.deepEqual(out.added, [secure(INV.wsUrl)], 'staging: the invite relay was not admitted: ' + JSON.stringify(out));
+    if (holdFirstRead) release();
+    await until(() => app.relays().includes(T.wsUrl), 'the church\'s own box to be adopted in the SAME session');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    await until(() => app.publishSetFor(church.pub).includes(T.wsUrl), 'T to join the publish set');
+    let landed = 0;
+    for (let i = 0; i < 100 && !landed; i++) { landed = await memberDocOn(T); if (!landed) await sleep(200); }
+    assert.ok(landed, 'T was adopted but the member\'s join never reached its store');
+    assert.ok(app.publishSetFor(church.pub).includes(secure(SHARED.wsUrl)), 'the shared pool left the publish set');
+    assert.equal(JSON.parse(app.store.getItem('trinityone.churchboxes'))[church.pub].includes(T.wsUrl), false,
+      'T was written to churchboxes — adoption must not');
+  } finally { app.close(); }
+}
+test('a member who follows from an invite link gets the church\'s own box in the same session, with no relaunch', async () => {
+  await firstSession({ holdFirstRead: false });
+});
+test('the same, when the first adoption pass is still in flight as the invite relay is admitted: a follow-up pass is queued, not skipped', async () => {
+  await firstSession({ holdFirstRead: true });
 });
