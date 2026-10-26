@@ -7615,6 +7615,27 @@
     }
     return drop;
   }
+  var _memberResent = /* @__PURE__ */ new Set();
+  async function _resendMembershipToNewBoxes(cp, before) {
+    try {
+      if (!cp || window.Fellowship.churchPub !== cp) return;
+      if (!_joinSentFor(cp)) return;
+      try {
+        await _gate.refresh(window.Fellowship.relays || [], cp);
+      } catch (e) {
+      }
+      if (window.Fellowship.churchPub !== cp) return;
+      const after = publishSetFor(cp);
+      if (!after.length) return;
+      const gained = after.filter((u) => !before.includes(u) && !_memberResent.has(cp + "|" + u));
+      if (!gained.length) return;
+      for (const u of gained) _memberResent.add(cp + "|" + u);
+      const p = window.Fellowship.announceMembership(cp);
+      if (p && p.catch) p.catch(() => {
+      });
+    } catch (e) {
+    }
+  }
   async function adoptChurchNetDocAddresses(cp) {
     if (!cp) return [];
     if (_adoptingNetDoc) return [];
@@ -7634,6 +7655,12 @@
       } catch (e) {
       }
     };
+    let before = [];
+    try {
+      before = publishSetFor(cp);
+    } catch (e) {
+      before = [];
+    }
     try {
       let entries;
       try {
@@ -7725,6 +7752,8 @@
         } catch (err) {
         }
       }
+      _resendMembershipToNewBoxes(cp, before).catch(() => {
+      });
       return added;
     } finally {
       _adoptingNetDoc = false;

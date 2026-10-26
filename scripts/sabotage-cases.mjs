@@ -1941,4 +1941,13 @@ export const CASES = [
     replace: `    if (still.length >= 0) return { removed: true, entries: found, repaired: repairs };`,
     test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
   },
+  {
+    name: `relay-net H-1 timing: the join is not sent again once adoption gives the publish set the church's own box`,
+    file: 'src/fellowship.src.js',
+    // the re-send call itself, inside _resendMembershipToNewBoxes (the helper stays referenced, so the bundler keeps it)
+    find: `    const p = window.Fellowship.announceMembership(cp);
+    if (p && p.catch) p.catch(() => {});`,
+    replace: `    const p = null;`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
 ];

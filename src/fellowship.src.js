@@ -1237,6 +1237,43 @@ function _dropRevokedNetDocRows(cp, gone, rec) {
   try { pool.close(drop); } catch (e) {}
   return drop;
 }
+// A NEW MEMBER'S JOIN CAN LEAVE BEFORE THE CHURCH'S OWN BOX IS KNOWN (PR #8-14 audit, H-1 timing). The follow flow
+// calls announceMembership as soon as the invite proof lands; adoptChurchNetDocAddresses is fire-and-forget from
+// setChurch and finishes LATER, and publishSetFor only includes the church's signed box once adoption has filled
+// _relayNetCache and the gate has proved the key. So the join went to [invite box, shared], succeeded there, and
+// nothing ever retried: the church's own box held no join until the next heartbeat or the next write.
+//
+// So: when adoption leaves publishSetFor(cp) holding a box it did not hold when adoption started, send the
+// membership again. THE SIGNAL FOR "ALREADY ANNOUNCED" IS _joinSentFor(cp), not the heartbeat key
+// (`trinityone.hb:<npub>` is keyed by church, not identity, and is wiped on every lock — see _joinSentFor), and
+// not a flag of our own: _joinSent is set in exactly one place, after a relay ACCEPTED this identity's announce
+// for this church, which only the follow flow does after checkChurch said 'church' (the M-9 rule: a non-church
+// npub must never get a membership doc), and leaveMembership clears it. Nothing here announces for a church
+// that has not already been announced for.
+//
+// At most once per box per launch (_memberResent), never awaited, never blocks the first join (it runs after
+// adoption, which is itself fire-and-forget), and it writes nothing of its own: not _churchRelays, not
+// churchboxes. A box that makes the set no wider is not a reason to send anything.
+const _memberResent = new Set();   // cp|url -> membership already re-sent for this box THIS launch
+async function _resendMembershipToNewBoxes(cp, before) {
+  try {
+    if (!cp || window.Fellowship.churchPub !== cp) return;
+    if (!_joinSentFor(cp)) return;
+    // THE GATE MUST HAVE PROVED THE BOX BEFORE publishSetFor WILL NAME IT. adoption's own proof is private to it
+    // (it goes through the member predicate with a one-off verify), so the gate learns the box only when its own
+    // background proof lands — later than this line. Wait for that proof here (this whole function is
+    // fire-and-forget, so nothing the member does waits on it); admission is unchanged, this only asks sooner.
+    try { await _gate.refresh(window.Fellowship.relays || [], cp); } catch (e) {}
+    if (window.Fellowship.churchPub !== cp) return;
+    const after = publishSetFor(cp);
+    if (!after.length) return;
+    const gained = after.filter(u => !before.includes(u) && !_memberResent.has(cp + '|' + u));
+    if (!gained.length) return;
+    for (const u of gained) _memberResent.add(cp + '|' + u);
+    const p = window.Fellowship.announceMembership(cp);
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
 async function adoptChurchNetDocAddresses(cp) {
   if (!cp) return [];
   if (_adoptingNetDoc) return [];
@@ -1255,6 +1292,8 @@ async function adoptChurchNetDocAddresses(cp) {
   const NETDOC_KEY = 'trinityone.relays.netdoc';
   const readRec = () => { try { const o = JSON.parse(localStorage.getItem(NETDOC_KEY) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch (e) { return {}; } };
   const writeRec = (o) => { try { localStorage.setItem(NETDOC_KEY, JSON.stringify(o)); } catch (e) {} };
+  let before = [];
+  try { before = publishSetFor(cp); } catch (e) { before = []; }
   try {
     let entries;
     try { entries = await churchRelayNet(cp); } catch (e) { return []; }
@@ -1356,6 +1395,7 @@ async function adoptChurchNetDocAddresses(cp) {
         if (moved.length) for (const x of _dropRevokedNetDocRows(cp, moved, rec)) { try { _gate.forget(x); } catch (err) {} }
       } catch (err) {}
     }
+    _resendMembershipToNewBoxes(cp, before).catch(() => {});   // not awaited: adoption's caller never waits on a send
     return added;
   } finally { _adoptingNetDoc = false; }
 }

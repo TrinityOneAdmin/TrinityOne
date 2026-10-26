@@ -203,6 +203,27 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     fnBody(src, 'function relaysForChurch', 'relaysForChurch'),
     fnBody(src, 'function publishSetFor', 'publishSetFor'),
     stmt(src, 'var RELAYS_KEY = ', 'RELAYS_KEY'),
+    // ── THE RE-SEND (PR #8-14 audit H-1 timing) ───────────────────────────────────────────────────────
+    // The SHIPPED announceMembership, and under it the shipped _publishAny / _monotonicF / join-sent stamp.
+    // Only the wedge detector, the blocked-check and the outbox's disk write are stubbed below.
+    stmt(src, 'var NET = ', 'NET'),
+    stmt(src, 'var _memberResent = ', '_memberResent'),
+    fnBody(src, 'async function _resendMembershipToNewBoxes', '_resendMembershipToNewBoxes'),
+    stmt(src, 'var _joinSent = ', '_joinSent'),
+    fnBody(src, 'function _joinSentSave', '_joinSentSave'),
+    fnBody(src, 'function _markJoinSent', '_markJoinSent'),
+    fnBody(src, 'function _joinSentFor', '_joinSentFor'),
+    stmt(src, 'var _lastStampF = ', '_lastStampF'),
+    fnBody(src, 'function _monotonicF', '_monotonicF'),
+    stmt(src, 'var NO_NETWORK_RELAY = ', 'NO_NETWORK_RELAY'),
+    stmt(src, 'var WEDGE_ACK_MS = ', 'WEDGE_ACK_MS'),
+    stmt(src, 'var _PUB_REFUSED = ', '_PUB_REFUSED'),
+    stmt(src, 'var _PUB_FAILED = ', '_PUB_FAILED'),
+    stmt(src, 'var _PUB_SILENT = ', '_PUB_SILENT'),
+    fnBody(src, 'function _wedgeKey', '_wedgeKey'),
+    fnBody(src, 'function _classify', '_classify'),
+    fnBody(src, 'function _dedupeRelays', '_dedupeRelays'),
+    fnBody(src, 'function _publishAny', '_publishAny'),
   ].join('\n');
 
   // GUARDS ON THE LIFT. A slice that stopped containing a load-bearing line would leave every assertion below
@@ -217,11 +238,14 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     'vendor/fellowship.js: adopt no longer puts the address through the member admission predicate');
   assert.match(adopt, /window\.Fellowship\.addRelay\(u\)/,
     'vendor/fellowship.js: adopt no longer writes through the member\'s own Add route');
+  assert.match(adopt, /_resendMembershipToNewBoxes\(cp, before\)/,
+    'vendor/fellowship.js: adopt no longer re-sends the membership when the publish set gains a box');
   assert.doesNotMatch(adopt, /_churchRelays|_saveChurchBoxes|churchboxes/,
     'vendor/fellowship.js: adopt now writes _churchRelays / churchboxes — the remove/re-add churn the plan forbids');
 
   const win = fakeWindow();
   win.Fellowship = { relays: [...relays], churchPub: null, ready: Promise.resolve() };
+  const announceMembership = fnBody(src, 'async announceMembership(npubOrHex) {', 'announceMembership');
   const setChurch = fnBody(src, 'setChurch(npubOrHex) {', 'setChurch');
   const setRelays = fnBody(src, 'setRelays(urls) {', 'setRelays');
   // THE ONE LINE THIS CHANGE ADDS, asserted present in the slice that is about to run — otherwise every
@@ -230,8 +254,9 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     'vendor/fellowship.js: setChurch no longer drives adoptChurchNetDocAddresses exactly once — the defect ' +
     'this change exists to fix, or a duplicate call');
 
+  const ANNOUNCED = [];
   const scope = scopeOf({
-    localStorage: store, window: win, pool, console, fetch: netFetch,
+    ANNOUNCED, localStorage: store, window: win, pool, console, fetch: netFetch,
     CANONICAL_RELAYS: canonical, CANONICAL_RELAY_PUBS: pins, DEFAULT_RELAYS: canonical,
     _native: false, _staticHost: false, _loc: null,
     normalizeURL, verifyEvent, finalizeEvent, CustomEvent: Ev,
@@ -242,10 +267,15 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     // no-op so nothing but adoptChurchNetDocAddresses can put a box in the list here — a box arriving by the
     // other path would be a false pass for THIS feature.
     _watchChurchRelays: () => {},
+    // the member's key, as the module holds it, and the plumbing under the shipped announceMembership that has
+    // nothing to do with WHERE it publishes: the wedge detector, the blocked check, the outbox's disk write.
+    sk: me.sk, pub: me.pub, _outbox: [], _outboxSave: () => {}, _docsHubs: new Map(),
+    normalizeURL2: normalizeURL, _noteSendResult: () => {}, _checkIfBlocked: () => {},
   });
   const api = new Function('scope', `with (scope) { ${body}
-    const _api = { ${setChurch}, ${setRelays} };
+    const _api = { ${setChurch}, ${setRelays}, ${announceMembership} };
     window.Fellowship.setRelays = (u) => _api.setRelays(u);
+    window.Fellowship.announceMembership = (n) => { ANNOUNCED.push(n); return _api.announceMembership(n); };
     window.Fellowship.addRelay = (u) => _api.setRelays([...window.Fellowship.relays, u]);
     return { setChurch: (n) => _api.setChurch(n),
              adopt: (cp) => { window.Fellowship.churchPub = cp; return adoptChurchNetDocAddresses(cp); },
@@ -253,6 +283,8 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
              churchRelays, churchRelaysRaw, relaysForChurch, publishSetFor,
              gate: _gate }; }`)(scope);
   api.pool = pool;
+  api.announced = ANNOUNCED;
+  api.announce = (cp) => win.Fellowship.announceMembership(cp);
   api.me = me;
   api.win = win;
   api.store = store;
@@ -869,4 +901,77 @@ test('a box that keeps moving address (tunnel restarts) is followed every time, 
       assert.ok(kept.relays().includes(prev), 'replacing the box\'s address took away this church\'s invite box');
     } finally { kept.close(); }
   } finally { try { TUN.stop(); } catch (e) {} }
+});
+
+// ── 11. THE JOIN THAT LEFT BEFORE THE CHURCH'S BOX WAS KNOWN (PR #8-14 audit, H-1 timing) ───────────────
+// THE DEFECT. The follow flow calls announceMembership as soon as the invite proof lands; adoption of the
+// church's signed box (adoptChurchNetDocAddresses, fire-and-forget from setChurch) finishes later, and only then
+// does publishSetFor include that box. The join went to [invite box, shared], succeeded there, and nothing
+// retried — the church's own box held no join until the next heartbeat.
+//
+// THE STAGING, IN THE REAL ORDER: an invite-path phone (churchboxes = [S]) whose invite box is already proved
+// announces membership through the SHIPPED announceMembership (over the shipped _publishAny and publishSetFor)
+// BEFORE adoption has run. DECIDES: _resendMembershipToNewBoxes at the end of the shipped adopt.
+// The control that matters is the first assertion: at that moment the box holds no join.
+test('a join sent before the church\'s box was adopted is sent again to it once it is; a member who never joined gets nothing', async () => {
+  const pins = { [secure(SHARED.wsUrl)]: [SHARED.relayPub] };
+  const phone = () => {
+    const s = memStore();
+    s.setItem('trinityone.churchboxes', JSON.stringify({ [church.pub]: [secure(SHARED.wsUrl)] }));
+    return memberOn({ church, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins, store: s });
+  };
+  const memberDocOn = async (relay, who) => (await H.readAs(relay, who,
+    { kinds: [30078], authors: [who.pub], '#d': ['trinityone/member:' + church.pub] })).length;
+  await H.publishAll(SHARED, [relayNetDocFor(church, [{ pubkey: BOX.relayPub, alwaysOn: true, url: BOX.wsUrl }])]);
+
+  // CONTROL — a member who has NOT announced membership for this church (M-9: nobody who was never confirmed
+  // as following a church may get a member doc at it). Adoption puts the box in the publish set; nothing is sent.
+  const idle = phone();
+  try {
+    idle.win.Fellowship.churchPub = church.pub;
+    await idle.gate.refresh(idle.churchRelaysRaw(), church.pub);
+    const pre = idle.publishSetFor(church.pub);
+    assert.equal(pre.includes(BOX.wsUrl), false, 'staging: the box is already in the publish set');
+    idle.setChurch(church.npub);
+    await until(() => idle.relays().includes(BOX.wsUrl), 'the box to reach the idle member\'s relay list');
+    await idle.gate.refresh(idle.churchRelaysRaw(), church.pub);
+    await until(() => idle.publishSetFor(church.pub).includes(BOX.wsUrl), 'the box to join the idle member\'s publish set');
+    await sleep(1500);
+    assert.deepEqual(idle.announced, [], 'a member who never announced for this church had a membership sent for it');
+    assert.equal(await memberDocOn(BOX, idle.me), 0, 'a member who never joined has a member doc on the church\'s box');
+    assert.equal(await memberDocOn(SHARED, idle.me), 0, 'a member who never joined has a member doc on the shared relay');
+  } finally { idle.close(); }
+
+  // THE CASE
+  const app = phone();
+  try {
+    app.win.Fellowship.churchPub = church.pub;
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);          // the invite box is proved, as after the invite proof
+    assert.equal(app.publishSetFor(church.pub).includes(BOX.wsUrl), false, 'staging: the box is already in the publish set');
+    const sent = await app.announce(church.pub);                         // the join, BEFORE adoption
+    assert.ok(sent && sent.id, 'staging: the join did not land on the invite box');
+    assert.equal(app.announced.length, 1);
+    assert.ok(await memberDocOn(SHARED, app.me), 'staging: the join is not on the invite box');
+    assert.equal(await memberDocOn(BOX, app.me), 0,
+      'the join already reached the church\'s own box before it was adopted — the race this test stages is not there');
+
+    app.setChurch(church.npub);                                          // adoption starts and settles
+    await until(() => app.relays().includes(BOX.wsUrl), 'the church\'s box to reach the member\'s relay list');
+    await app.gate.refresh(app.churchRelaysRaw(), church.pub);
+    await until(() => app.publishSetFor(church.pub).includes(BOX.wsUrl), 'the box to join the publish set');
+    await until(() => app.announced.length >= 2, 'the membership to be sent again');
+    let landed = 0;
+    for (let i = 0; i < 100 && !landed; i++) { landed = await memberDocOn(BOX, app.me); if (!landed) await sleep(200); }
+    assert.ok(landed,
+      'the box was adopted, is in the publish set, and the member\'s join STILL never reached it — the church\'s ' +
+      'own box holds no record of the member until the next heartbeat');
+    // …ONCE per box per launch: a second adoption pass (the 90-second tick) sends nothing more.
+    await app.adopt(church.pub);
+    await sleep(2000);
+    assert.equal(app.announced.length, 2, 'the membership was re-sent more than once for one box: ' + app.announced.length);
+    // NOTHING WRITTEN: the re-send routes, it does not persist.
+    assert.deepEqual(JSON.parse(app.store.getItem('trinityone.churchboxes'))[church.pub], [secure(SHARED.wsUrl)],
+      'the re-send wrote to trinityone.churchboxes');
+    assert.ok(app.publishSetFor(church.pub).includes(secure(SHARED.wsUrl)), 'the shared pool left the publish set');
+  } finally { app.close(); }
 });
