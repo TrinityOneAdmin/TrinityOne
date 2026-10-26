@@ -34,7 +34,7 @@ const chevronOf = (btn) => find(btn, n => n.type === Icon).map(n => n.props.name
 
 test('every Library section has a chevron, open (down) by default, with everything showing', () => {
   const t = view();
-  for (const s of ['Modules', 'Listen', 'Recent journal']) {
+  for (const s of ['Modules', 'Audio Modules', 'Recent journal']) {
     const b = toggle(t, 'Collapse ' + s);
     assert.ok(b, `no collapse control on the ${s} section`);
     assert.equal(chevronOf(b), 'chevD');
@@ -62,11 +62,25 @@ test('tapping a chevron hides only that section and flips it up; tapping again r
   assert.equal(chevronOf(toggle(t, 'Collapse Modules')), 'chevD');
 });
 
-test('Listen and Recent journal fold too, and + New stays reachable while the journal is folded', () => {
-  toggle(view(), 'Collapse Listen').props.onClick();
+test('Audio Modules and Recent journal fold too, and + New stays reachable while the journal is folded', () => {
+  toggle(view(), 'Collapse Audio Modules').props.onClick();
   assert.ok(!texts(view()).join(' | ').includes('Audio Bibles'));
   toggle(view(), 'Collapse Recent journal').props.onClick();
   const t = view();
   assert.ok(!texts(t).join(' | ').includes('My reflection'));
   assert.equal(find(t, n => n.type === 'button' && texts(n).join('') === '+ New').length, 1, '+ New vanished with the fold');
+});
+
+test('the Library sections are on screen in order: Modules, Audio Modules, Recent journal (owner 2026-10-26)', () => {
+  // The mini-React keeps state between draws, so reopen whatever an earlier test left folded.
+  for (const s of ['Modules', 'Audio Modules', 'Recent journal']) { const b = toggle(view(), 'Expand ' + s); if (b) b.props.onClick(); }
+  const t = view();
+  const labels = ['Modules', 'Audio Modules', 'Recent journal'];
+  // SectionLabel renders a text node per heading; read them in document order from the rendered tree.
+  const seen = texts(t).filter(x => labels.includes(x));
+  assert.deepEqual(seen, labels, 'THE DEFECT: the sections are not in order Modules, Audio Modules, Recent journal');
+  // And the content follows its own heading: the module tiles, then Audio Bibles, then the journal entry.
+  const flat = texts(t);
+  const at = (s) => flat.findIndex(x => x.includes(s));
+  assert.ok(at('Dictionaries') < at('Audio Bibles') && at('Audio Bibles') < at('My reflection'), flat.join(' | '));
 });
