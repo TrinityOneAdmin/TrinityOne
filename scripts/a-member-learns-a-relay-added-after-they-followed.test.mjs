@@ -796,7 +796,9 @@ test('a church with two proved boxes of its own still has every shared relay in 
       }
       assert.ok(pubSet.includes(secure(BOX.wsUrl)) && pubSet.includes(secure(BOX2.wsUrl)), 'the church\'s own boxes left the publish set: ' + JSON.stringify(pubSet));
 
-      const w = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/member:' + church.pub], ['t', 'trinityone'], ['church', church.pub]], content: '{"hb":1}' }, app.me.sk);
+      // Stamped well after the join seeded on SHARED above (same kind + d-tag): in the same second the relay keeps
+      // the earlier copy and this write would look 'not stored' (~1 run in 5 before this was fixed).
+      const w = finalizeEvent({ kind: 30078, created_at: now() + 60, tags: [['d', 'trinityone/member:' + church.pub], ['t', 'trinityone'], ['church', church.pub]], content: '{"hb":1}' }, app.me.sk);
       await Promise.allSettled(app.pool.publish(pubSet, w));
       const on = async (r) => (await H.readAs(r, app.me, { kinds: [30078], authors: [app.me.pub], '#d': ['trinityone/member:' + church.pub] })).some(e => e.id === w.id);
       assert.ok(await on(SHARED2), 'the member\'s write is not in the second shared relay\'s store');
