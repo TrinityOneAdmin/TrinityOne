@@ -435,7 +435,28 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const swipeSt = React.useRef(null);
   const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
-  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
+  // Keep an open ⋯ menu usable: first reveal it inside the chat's own scroller, then nudge it back inside
+  // the viewport in BOTH axes (a wide bubble pushes its far edge past the gutter; a message low in the sheet
+  // runs its bottom off-screen). Sibling of app/screens-chat.jsx clampMenuIntoView; inert in the hook-light
+  // unit rig (no layout engine — getBoundingClientRect / window absent — so the ref body no-ops there).
+  const menuIntoView = React.useCallback((el) => {
+    if (!el) return;
+    try { if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    try {
+      if (typeof window === 'undefined' || typeof el.getBoundingClientRect !== 'function') return;
+      el.style.transform = '';
+      var docEl = window.document && window.document.documentElement;
+      var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
+      var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
+      if (!vw || !vh) return;
+      var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
+      if (r.right > vw - pad) dx = (vw - pad) - r.right;
+      if (r.left + dx < pad) dx = pad - r.left;
+      if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;
+      if (r.top + dy < pad) dy = pad - r.top;
+      if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+    } catch (e) {}
+  }, []);
   const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
   const inputRef = React.useRef(null);
@@ -459,7 +480,6 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const swipe = (m) => isNative && canReply(m)
     ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
     : {};
-  const lastId = textMsgs.length ? textMsgs[textMsgs.length - 1].id : '';
   const msgById = {};
   textMsgs.forEach(m => { msgById[m.id] = m; });
   React.useEffect(() => {
@@ -487,9 +507,14 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
                 <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={dotsMsg === m.id}
                   {...TrinityReplyKit.dotsProps(isNative, 24, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={14} /></button>
               ) : null}
-              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before. */}
+              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before.
+                  It DROPS FROM THE ⋯ BUTTON (top: 20, just under the 24px button at top:-6), its near edge pinned to the dots'
+                  side (the bubble's INNER edge: left:'100%' for the other person, right:'100%' for mine) and grows inward. It
+                  used to open at `top: 100%` (the bubble's BOTTOM): on a tall message that is far below the dots, detached from
+                  its own message — the defect fixed in the member app (app/screens-chat.jsx). menuIntoView scrolls it into the
+                  sheet and clamps it back into the viewport in both axes. */}
               {dotsMsg === m.id ? (
-                <div data-reply-menu={m.id === lastId ? 'up' : 'down'} ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
+                <div data-reply-menu="down" ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 20, [m.mine ? 'right' : 'left']: '100%', zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
                   <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                 </div>
               ) : null}

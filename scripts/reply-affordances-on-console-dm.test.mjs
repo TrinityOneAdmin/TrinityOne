@@ -147,31 +147,33 @@ test('STEP 1: web console has no swipe row at all', async () => {
 });
 
 // ── STEP 2: an opened ⋯ menu is not left outside the scroller ─────────────────────────────────────────────
-// The menu is absolutely positioned inside an overflowY:auto scroller; below the LAST message it fell outside
-// the visible tile. We can't measure clipping headlessly, so the test asserts the two guards that prevent it:
-// the last message opens UPWARD, and an open menu asks to be scrolled into view. THE REAL CAUSE STILL NEEDS A
-// BROWSER/DEVICE REPRO — see the report.
+// The menu now DROPS FROM THE ⋯ BUTTON (top: 20, hugging it) on EVERY message, not off the bubble bottom:
+// the old `top:'100%'` put it ~230px below the dots on a tall message (owner report), so the per-message
+// up/down branch was removed. menuIntoView still scrolls the card into the overflowY:auto scroller AND now
+// also clamps it back into the viewport. We can't measure pixels headlessly here; the geometry (hug + the
+// clamp) is proven in scripts/console-care-menu-drops-from-the-dots.test.mjs's companion browser probe and
+// NEEDS A DEVICE REPRO before merge (rule 6). Here we assert the anchor the component actually renders.
 async function openMenuOn(w, idx) {
   const dots = find(w.draw(), n => n.type === 'button' && n.props.title === 'Message actions');
   dots[idx].props.onClick();
   return find(w.draw(), n => n.props && n.props['data-reply-menu']);
 }
 
-test('STEP 2: the ⋯ on the LAST message opens its menu upward, with Reply in it', async () => {
+test('STEP 2: the ⋯ on the LAST message drops its menu FROM the dots (top:20), with Reply in it', async () => {
   const w = await win({ native: false });
   const menus = await openMenuOn(w, 2);
   assert.equal(menus.length, 1, 'no menu after pressing ⋯');
-  assert.equal(menus[0].props['data-reply-menu'], 'up');
-  assert.equal(menus[0].props.style.bottom, '100%', 'last message menu is still anchored below, outside the scroller');
-  assert.equal(menus[0].props.style.top, undefined);
+  assert.equal(menus[0].props['data-reply-menu'], 'down', 'the old upward-open last-message anchor is gone');
+  assert.equal(menus[0].props.style.top, 20, 'the menu must hug the ⋯ button, not anchor to the bubble');
+  assert.equal(menus[0].props.style.bottom, undefined, 'no bottom anchor any more');
   assert.ok(texts(menus[0]).join('').includes('Reply'), 'the menu has no Reply');
 });
 
-test('STEP 2: a menu on an earlier message still opens below the bubble (it must not cover the words)', async () => {
+test('STEP 2: a menu on an earlier message anchors the SAME way — from the dots, not the bubble bottom', async () => {
   const w = await win({ native: false });
   const menus = await openMenuOn(w, 0);
   assert.equal(menus[0].props['data-reply-menu'], 'down');
-  assert.equal(menus[0].props.style.top, '100%');
+  assert.equal(menus[0].props.style.top, 20, 'reverting to top:100% (bubble bottom) must fail here');
 });
 
 test('STEP 2: an open menu asks to be scrolled into view', async () => {

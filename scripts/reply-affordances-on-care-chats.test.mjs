@@ -112,10 +112,20 @@ for (const which of ['member', 'steward']) {
     assert.equal(w.menu(w.d()).length, 0, 'the ⋯ menu stayed open after Reply');
   });
 
-  test(`${which}: the last message's ⋯ menu opens upward, an earlier one downward`, () => {
-    const w = build(which, { native: false });
-    w.dots(w.d())[2].props.onClick();
-    assert.equal(w.menu(w.d())[0].props['data-reply-menu'], 'up');
+  test(`${which}: the ⋯ menu drops FROM the dots on every message (hug the button, not the bubble bottom)`, () => {
+    // Was: last message opened upward (bottom:'100%'), earlier below the bubble (top:'100%'). That put the
+    // menu ~230–275px below the ⋯ on a tall message, so it now hugs the button on every message and the
+    // two-axis menuIntoView clamp handles cutoff. 30px ⋯ on the member sheet → top:26; 24px in the console → 20.
+    const hugTop = which === 'member' ? 26 : 20;
+    const last = build(which, { native: false });
+    last.dots(last.d())[2].props.onClick();
+    const m = last.menu(last.d())[0];
+    assert.equal(m.props['data-reply-menu'], 'down', 'the old upward-open last-message anchor is gone');
+    assert.equal(m.props.style.top, hugTop, 'the menu must hug the ⋯ button, not anchor to the bubble');
+    assert.equal(m.props.style.bottom, undefined, 'no bottom anchor any more');
+    const earlier = build(which, { native: false });
+    earlier.dots(earlier.d())[0].props.onClick();
+    assert.equal(earlier.menu(earlier.d())[0].props.style.top, hugTop, 'reverting to top:100% must fail here');
   });
 }
 
