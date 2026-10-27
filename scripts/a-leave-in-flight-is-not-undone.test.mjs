@@ -871,3 +871,27 @@ test('IDENTITY: A\'s parked post + Leave neither hold B\'s Leave nor get dropped
   } finally { asA(); goOnline(SHARED, TA); app.close(); }
 });
 
+test('IDENTITY via the flush: B\'s queued Leave is delivered past A\'s parked post, and A\'s queued join survives B\'s Leave', async () => {
+  forgotten.length = 0;
+  const app = await phoneA();
+  const asA = () => { app.scope.sk = sarah.sk; app.scope.pub = sarah.pub; };
+  const asB = () => { app.scope.sk = tom.sk; app.scope.pub = tom.pub; };
+  try {
+    await goOffline(SHARED, TA);
+    await app.publishMessage('g1', 'A, parked');
+    await app.announceMembership(A.pub);                           // A's join, queued
+    const aIds = app.outbox().map(o => o.evt.id).sort();
+    assert.equal(aIds.length, 2, 'staging: A should have a post and a join queued: ' + JSON.stringify(app.outbox().map(o => o.join ? 'join' : o.groupId)));
+    asB();
+    const rb = await app.leaveMembership(A.npub);                   // offline: B's Leave is queued
+    assert.equal(rb.queued, true, 'CONTROL: B\'s offline Leave is not queued');
+    assert.deepEqual(app.outbox().filter(o => o.evt.pubkey === sarah.pub).map(o => o.evt.id).sort(), aIds, 'B\'s Leave removed A\'s queued join');
+    goOnline(SHARED, TA);
+    const from = EVTS.length;
+    await app._outboxFlush(); await sleep(800);
+    assert.ok(EVTS.slice(from).some(x => x.ev && x.ev.pubkey === tom.pub && JSON.stringify(x.ev.tags).includes('"deleted"')), 'the flush held B\'s Leave behind A\'s parked post');
+    assert.equal(app.leaveQueued(A.npub), false, 'B is still "Leaving…"');
+    assert.deepEqual(app.outbox().map(o => o.evt.id).sort(), aIds, 'A\'s entries changed while B was signed in');
+  } finally { asA(); goOnline(SHARED, TA); app.close(); }
+});
+
