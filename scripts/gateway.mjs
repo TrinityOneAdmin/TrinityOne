@@ -3311,10 +3311,30 @@ function resolveChurch(e) {
     // claims. A skip that names another church, or carries no valid token, is attributed no further than before.
     { const d = dtag(e); if (d.startsWith(SKIP_D)) { const parts = d.slice(SKIP_D.length).split(':'); if (CARE_CHURCH.get(parts[0]) === cp && skipTokOk(e, parts[0], parts[1] || '')) return cp; } }
   }
+  // A SHARED RELAY FILES EACH ITEM UNDER THE CHURCH IT IS ABOUT, NOT UNDER THE AUTHOR'S FIRST CHURCH. The column
+  // decides what a church's own box is handed on sync, what its /export holds and what its retention culls.
+  // (a) a church-suffixed doc names its church in its d-tag: file it there, but only if this relay HOSTS it.
+  if (e.kind === 30078) {
+    const d = dtag(e), suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
+    if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
+  }
+  // (b) a direct message / ungrouped reaction carries only its peer in ['p']: file it under a church BOTH people
+  // belong to (the church key itself counts as the peer's church), the smallest pubkey if several, else ''
+  // (never synced to any church box). It must not fall through to the author's first church.
+  if ((e.kind === 4 || (e.kind === 7 && !gidOf(e))) && !CHURCH_PUBS.has(e.pubkey) && !NETWORKS.has(e.pubkey)) {
+    const pt = (e.tags || []).find(t => t[0] === 'p' && t[1]); const peer = pt ? (toHexPub(pt[1]) || pt[1]) : '';
+    if (peer && CHURCH_PUBS.has(peer)) return memberIn(e.pubkey, peer) ? peer : '';
+    const theirs = peer ? new Set(churchesOf(peer)) : null;
+    const both = theirs ? churchesOf(e.pubkey).filter(c => theirs.has(c)).sort() : [];
+    return both[0] || '';
+  }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
   return anyChurchOf(e.pubkey);
 }
+// Rows whose label the startup relabel re-examines (see store.relabel): DMs, ungrouped reactions, church-suffixed docs.
+const RELABEL_D_PREFIXES = CP_SUFFIXED_D;
+const relabelTarget = (e) => e.kind === 4 || (e.kind === 7 && !gidOf(e)) || (e.kind === 30078 && CP_SUFFIXED_D.some(p => dtag(e).startsWith(p)));
 // (re)build all in-memory church/member/group/care maps from the stored kind-30078 structure docs, oldest-first.
 // Run at startup and after a restore/clone import so the imported church's membership + groups take effect at once.
 let _hydrating = false;
@@ -8161,6 +8181,9 @@ backfillDeletions();   // re-apply every stored kind-5 — heals content that re
 // now that group→church / member→church maps are built, attribute any events stored without a church
 // (migrated chat, or pre-map writes) so per-church retention buckets them correctly
 if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
+// One pass per start: rows filed by an older build under the author's FIRST church (DMs, ungrouped reactions,
+// church-suffixed docs) are re-resolved by the current rule, including to '' (a pair sharing no church).
+if (CHURCH_PUBS.size) { const r = store.relabel(e => relabelTarget(e) ? resolveChurch(e) : null, RELABEL_D_PREFIXES); if (r) console.log(`[relay] relabelled ${r} events to the church they belong to`); }
 
 // ── relay resync (pull-since-cursor): converge each church with the trusted peer relays it authorised ──────────
 // Pull a peer's /sync for a church since our cursor, verify + store new events (dedup by ID for free), apply kind-5

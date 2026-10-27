@@ -135,6 +135,7 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   const cullOldForChurch = db.prepare('DELETE FROM events WHERE id IN (SELECT id FROM events WHERE structured = 0 AND church = ? ORDER BY created_at ASC LIMIT ?)');
   const updChurch        = db.prepare('UPDATE events SET church = ? WHERE id = ?');
   const qUnattributed    = db.prepare("SELECT id, raw FROM events WHERE church = ''");
+  const qRelabelable     = db.prepare('SELECT id, kind, dtag, church, raw FROM events WHERE kind IN (4, 7, 30078)');
 
   // store an event. Returns 'stored' | 'have-newer' (a newer version of a replaceable doc already held) |
   // 'duplicate' (same id already stored) | 'deleted' (its author tombstoned it — a resync must not resurrect it).
@@ -348,6 +349,25 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
+  // re-resolve the church column of rows that ALREADY have one (reattribute only visits ''). resolveFn returns null
+  // for a row it does not want revisited, else the church ('' allowed); the column is rewritten only when it differs.
+  // kind-30078 rows are pre-filtered by d-tag prefix so a big document corpus is not parsed.
+  function relabel(resolveFn, dtagPrefixes) {
+    let n = 0;
+    txBegin();
+    try {
+      for (const r of qRelabelable.all()) {
+        if (r.kind === 30078 && !dtagPrefixes.some(p => String(r.dtag || '').startsWith(p))) continue;
+        let e; try { e = JSON.parse(r.raw); } catch { continue; }
+        const ch = resolveFn(e);
+        if (ch === null || ch === undefined || ch === r.church) continue;
+        updChurch.run(ch, r.id); n++;
+      }
+      txCommit();
+    } catch (err) { txRollback(); throw err; }
+    return n;
+  }
+
   // bulk import (one-time migration from the old JSON array). Wrapped in a transaction for speed.
   function importAll(arr) {
     if (!Array.isArray(arr) || !arr.length) return 0;
@@ -417,5 +437,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
   // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
   const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
-  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
 }
