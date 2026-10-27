@@ -853,6 +853,10 @@ const CARE_SEND_REFUSAL = {
   'unconfirmed': 'We couldn’t confirm that reached your church — it may well have. Don’t send it again yet; check your requests in a moment, or speak to a leader.',
   // SETTLED: nothing left this phone at all.
   'not-sent': 'Your request was NOT sent — it never left this phone. Please speak to a leader in person, and try again when you have a signal.',
+  // NO SIGNAL (G2, owner 2026-10-27): every relay was unreachable. NOT queued — offline the care team cannot be
+  // established, so a queued copy would be sealed to the wrong people. Said plainly; the sheet stays open with
+  // the words in it.
+  'no-signal': 'Not sent — no signal. Try again.',
   // SETTLED: a relay read it and said no. Retrying the same words will get the same answer, so point at a person.
   'refused': 'Your church’s relay would not accept this request, so it was NOT sent. Please speak to a leader in person — they can sort this out.',
 };

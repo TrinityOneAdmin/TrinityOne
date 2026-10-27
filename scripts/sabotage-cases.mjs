@@ -2157,12 +2157,12 @@ export const CASES = [
   {
     name: `DM (step 2c): _outboxRelays falls back to the WHOLE candidate list for an entry with no relays`,
     file: 'src/fellowship.src.js',
-    find: `  return _netRelays([...CANONICAL_RELAYS]);
-}
-async function _outboxFlush`,
-    replace: `  return window.Fellowship.relays;
-}
-async function _outboxFlush`,
+    find: `  if (item.relays && item.relays.length) return item.relays;
+  return _netRelays([...CANONICAL_RELAYS]);
+}`,
+    replace: `  if (item.relays && item.relays.length) return item.relays;
+  return window.Fellowship.relays;
+}`,
     test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
   },
   {

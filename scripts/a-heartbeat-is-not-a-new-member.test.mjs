@@ -37,6 +37,9 @@ test('a first announce writes joined without hb', async () => {
     finalizeEvent2: (tmpl, _sk) => { events.push(tmpl); return { ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }; },
     _outbox: [],
     _outboxSave: () => {},
+    // fix/stress-g2 (2026-10-27): announceMembership now asks the one leaving guard first and reads the leave
+    // generation before signing; leaveMembership queues its tombstone. Neutral here (nobody is leaving).
+    _announceBlocked: () => false, _leaveGen: {}, _outboxDropJoins: () => false,
     _publishAny: async () => true,
     NET: 'trinityone',
     _queueJoinIntent: () => {},
@@ -87,6 +90,9 @@ test('a second announce (heartbeat) writes hb:1 and keeps the original join time
     finalizeEvent2: (tmpl, _sk) => { events.push(tmpl); return { ...tmpl, id: 'e2', sig: 'sig', pubkey: 'pk' }; },
     _outbox: [],
     _outboxSave: () => {},
+    // fix/stress-g2 (2026-10-27): announceMembership now asks the one leaving guard first and reads the leave
+    // generation before signing; leaveMembership queues its tombstone. Neutral here (nobody is leaving).
+    _announceBlocked: () => false, _leaveGen: {}, _outboxDropJoins: () => false,
     _publishAny: async () => true,
     NET: 'trinityone',
     _queueJoinIntent: () => {},

@@ -35,8 +35,9 @@ function lift(src, name, scope) {
 }
 
 // The shipped engine pieces, over one shared queue.
-function engine({ publishError }) {
+function engine({ publishError, failed = 0 }) {
   const scope = {
+    pub: 'a'.repeat(64),   // the signer (finalizeEvent below); the queue readers show only this identity's entries
     _outbox: [], _outboxFailed: [], _outboxSubs: new Set(), _dmPlain: new Map(),
     OUTBOX_KEY: 'k', OUTBOX_FAILED_KEY: 'kf', OUTBOX_MAX: 200,
     localStorage: { setItem() {}, getItem: () => null },
@@ -55,6 +56,14 @@ function engine({ publishError }) {
   scope._PERMANENT = new Function(stmt(BUNDLE, 'var _PERMANENT =', '_PERMANENT').replace(/^var /, 'return ').replace(/;\s*$/, ''))();
   scope.isPermanentRefusal = new Function('_PERMANENT', stmt(BUNDLE, 'var isPermanentRefusal =', 'isPermanentRefusal').replace(/^var /, 'return ').replace(/;\s*$/, ''))(scope._PERMANENT);
   scope._outboxSave = lift(fnBody(BUNDLE, 'function _outboxSave() {', '_outboxSave'), '_outboxSave', scope);
+  scope._outboxFull = lift(fnBody(BUNDLE, 'function _outboxFull() {', '_outboxFull'), '_outboxFull', scope);   // G2 2.3: sendDM refuses a NEW message when the queue is full
+  // owner 2026-10-27: the didn't-send bin is capped at 500 with a visible notice from 450 — all SHIPPED
+  scope._mine = lift(fnBody(BUNDLE, 'function _mine(o) {', '_mine'), '_mine', scope);
+  scope.FAILED_MAX = new Function(stmt(BUNDLE, 'var FAILED_MAX =', 'FAILED_MAX') + '\nreturn FAILED_MAX;')();
+  scope.FAILED_WARN = new Function(stmt(BUNDLE, 'var FAILED_WARN =', 'FAILED_WARN') + '\nreturn FAILED_WARN;')();
+  scope._failedCount = lift(fnBody(BUNDLE, 'function _failedCount() {', '_failedCount'), '_failedCount', scope);
+  scope._failedFull = lift(fnBody(BUNDLE, 'function _failedFull() {', '_failedFull'), '_failedFull', scope);
+  for (let i = 0; i < failed; i++) scope._outboxFailed.push({ evt: { id: 'old' + i, kind: 4, pubkey: 'a'.repeat(64), tags: [['p', 'c'.repeat(64)]], content: 'ct:old' }, peer: 'c'.repeat(64), failed: true });
   const F = {
     relays: ['wss://x.invalid'], ready: Promise.resolve(), myPubkey: 'a'.repeat(64),
     _dmWrap: new Function(fnBody(BUNDLE, '_dmWrap(text, replyTo, meta) {', '_dmWrap').replace(/^_dmWrap/, 'return function _dmWrap'))(),
@@ -62,6 +71,9 @@ function engine({ publishError }) {
   scope.window = { Fellowship: F };
   F.sendDM = lift('(' + sendBody.replace(/^async sendDM/, 'async function sendDM') + ')', 'sendDM', scope);
   F.outboxForPeer = lift('(' + fnBody(BUNDLE, 'outboxForPeer(peerPub) {', 'outboxForPeer').replace(/^outboxForPeer/, 'function outboxForPeer') + ')', 'outboxForPeer', scope);
+  for (const m of ['failedCount', 'failedWarnAt', 'failedMax']) {
+    F[m] = lift('(' + fnBody(BUNDLE, m + '() {', m).replace(new RegExp('^' + m), 'function ' + m) + ')', m, scope);
+  }
   F.dmPlaintextOf = (id) => scope._dmPlain.get(id) || '';
   F.onOutbox = (fn) => { scope._outboxSubs.add(fn); return () => scope._outboxSubs.delete(fn); };
   F.subscribeThread = () => () => {};
@@ -72,8 +84,8 @@ function engine({ publishError }) {
 }
 
 // The REAL DMThread, with a composer we type into and a Send button we press.
-async function thread({ publishError }) {
-  const { F, scope } = engine({ publishError });
+async function thread({ publishError, failed = 0, toasts = [] }) {
+  const { F, scope } = engine({ publishError, failed });
   const { React, draw } = miniReact();
   const mod = loadScreen('app/screens-chat.jsx', ['DMThread'], {
     React, window: { Fellowship: F, addEventListener() {}, removeEventListener() {} },
@@ -88,7 +100,7 @@ async function thread({ publishError }) {
     BottomSheet: ({ open, children }) => (open ? children : null),
     safeCssColor: (c) => c, relTime: () => 'now', D: { GROUPS: [], RELAYS: [] },
   });
-  const ctx = { toast() {}, canDMPeer: () => true, connTick: 0 };
+  const ctx = { toast(m) { toasts.push(String(m)); }, canDMPeer: () => true, connTick: 0 };
   const props = { peer: PEER, open: true, onClose() {}, ctx, docked: false };
   const redraw = () => draw(mod.DMThread, props);
   redraw();                          // subscriptions and the outbox read arrive through effects
@@ -102,7 +114,7 @@ async function thread({ publishError }) {
   send.props.onClick();
   await new Promise(r => setTimeout(r, 25));   // sendDM awaits the (rejected) publish
   tree = redraw();
-  return { tree, words: texts(tree).join(' | '), F, scope };
+  return { tree, words: texts(tree).join(' | '), F, scope, toasts, box: find(tree, n => n.type === 'textarea')[0] };
 }
 
 test('control: a message sent while there is no signal is "Waiting to send" (a transient failure stays queued)', async () => {
@@ -141,3 +153,44 @@ test('…and the ENGINE moved it at once: outboxForPeer has it failed and perman
   assert.equal(q.filter(e => e._pending).length, 0, 'the refused message is still reported pending');
   assert.equal(t.F.dmPlaintextOf(q[0].id), 'Hello, can we talk?', 'the member can no longer read their own words');
 });
+
+// ── THE "DIDN'T SEND" BIN: capped at 500, visibly (owner 2026-10-27) ─────────────────────────────────────────
+test('from 450 unsent items the thread says so, above the composer; below 450 it says nothing', async () => {
+  const near = await thread({ publishError: new Error('timeout'), failed: 450 });
+  assert.match(near.words, /You have 450 unsent items — send or discard some/, 'nothing tells the member the bin is filling: ' + near.words.slice(0, 300));
+  const fine = await thread({ publishError: new Error('timeout'), failed: 449 });
+  assert.doesNotMatch(fine.words, /unsent items/, 'the notice shows below the threshold');
+});
+
+test('at 500 a NEW message is refused at the composer and the words go back — nothing old is evicted', async () => {
+  const toasts = [];
+  const full = await thread({ publishError: new Error('timeout'), failed: 500, toasts });
+  assert.equal(full.box.props.value, 'Hello, can we talk?', 'the words were not handed back to the composer');
+  assert.ok(toasts.some(t => /too many unsent messages/.test(t)), 'the member was not told why: ' + JSON.stringify(toasts));
+  assert.equal(full.scope._outboxFailed.length, 500, 'something was evicted from (or added to) the full bin');
+  assert.equal(full.scope._outbox.length, 0, 'the refused message was queued anyway');
+  assert.match(full.words, /before sending anything new/, 'the notice does not say the bin is full');
+  // another identity's 500 are not this person's: their message goes
+  const other = engine({ publishError: new Error('timeout'), failed: 500 });
+  other.scope._outboxFailed.forEach(o => { o.evt.pubkey = 'd'.repeat(64); });
+  const r = await other.F.sendDM(PEER, 'mine to send');
+  assert.notEqual(r && r._refused, 'failed-full', 'another identity\'s unsent items blocked this one');
+});
+
+test('the "waiting to send" and "didn\'t send" bubbles are THIS identity\'s only (owner 2026-10-27)', () => {
+  const { F, scope } = engine({ publishError: new Error('timeout') });
+  const theirs = (id, failed) => ({ evt: { id, kind: 4, pubkey: 'd'.repeat(64), tags: [['p', PEER]], content: 'ct:theirs' }, peer: PEER, ...(failed ? { failed: true } : {}) });
+  scope._outbox.push(theirs('q1')); scope._outboxFailed.push(theirs('f1', true));
+  assert.deepEqual(F.outboxForPeer(PEER), [], 'another identity\'s queued / refused messages are drawn in this person\'s thread');
+  scope._outbox.push({ ...theirs('q2'), evt: { ...theirs('q2').evt, pubkey: 'a'.repeat(64) } });
+  assert.equal(F.outboxForPeer(PEER).length, 1, 'CONTROL: this identity\'s own queued message is not drawn');
+});
+
+test('a failed JOIN does not count toward the cap — it has no Discard in any thread, so the member could not clear it', async () => {
+  const { F, scope } = engine({ publishError: new Error('timeout') });
+  for (let i = 0; i < 500; i++) scope._outboxFailed.push({ evt: { id: 'j' + i, kind: 30078, pubkey: 'a'.repeat(64), tags: [], content: '{}' }, groupId: null, join: 'c'.repeat(64), failed: true });
+  assert.equal(F.failedCount(), 0, 'failed joins are counted toward a cap the member is told to clear by discarding');
+  const r = await F.sendDM(PEER, 'still allowed');
+  assert.notEqual(r && r._refused, 'failed-full', 'failed joins blocked a new message');
+});
+

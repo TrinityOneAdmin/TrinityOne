@@ -263,7 +263,7 @@ test('the sheet opens a need only when the church says members may, and never fo
   assert.equal(opensNeed({}, false), false, 'a church with no care settings at all offered it');
 });
 
-function sheet({ opensNeed = true, dates = ['2026-09-01'], needAnswer, teamOnly = false }) {
+function sheet({ opensNeed = true, dates = ['2026-09-01'], needAnswer, teamOnly = false, requestAnswer, refusals }) {
   const calls = [];
   const scope = {
     types: ['meals'], _opensNeed: opensNeed, dates, _teamOnly: teamOnly,
@@ -279,10 +279,10 @@ function sheet({ opensNeed = true, dates = ['2026-09-01'], needAnswer, teamOnly 
     _draftId: 'dddddddddddddddd', _clearCareDraft: () => {}, setHeld: () => {},
     careSendUnconfirmed: (r) => !!(r && r.error === 'unconfirmed'),
     onSent: (r) => { calls.push(['sent', r]); },
-    CARE_SEND_REFUSAL: {},
+    CARE_SEND_REFUSAL: refusals || {},
     window: { Fellowship: {
       publishCareNeed: async (f) => { calls.push(['need', f]); return needAnswer; },
-      publishCareRequest: async (f) => { calls.push(['request', f]); return { id: 'req1', teamCount: 2 }; },
+      publishCareRequest: async (f) => { calls.push(['request', f]); return requestAnswer || { id: 'req1', teamCount: 2 }; },
     } },
     console,
   };
@@ -371,4 +371,20 @@ test('the console’s own normaliser carries the kinds through', () => {
   assert.equal(out.type, 'meals');
   const legacy = norm({ displayLabel: 'x', type: 'rides', dates: ['2026-09-01'] });
   assert.deepEqual(legacy.types, ['rides'], 'a need written before `types` existed must still read as its kind');
+});
+
+// fix/stress-g2 (owner 2026-10-27): a care request with no signal is NOT queued; the sheet says so plainly and
+// stays open with the words in it. The refusal map is the SHIPPED one, evaluated out of screens-today.jsx (an
+// object literal of strings — run, not text-matched).
+const REFUSALS = (() => {
+  const at = TODAY.indexOf('const CARE_SEND_REFUSAL = {');
+  assert.ok(at > 0, 'CARE_SEND_REFUSAL has moved — re-anchor');
+  const open = TODAY.indexOf('{', at);
+  return new Function('return ' + grabArrow(TODAY.slice(open - 1), ' {').trim())();
+})();
+test('no signal: the sheet says "Not sent — no signal. Try again." and never thanks them', async () => {
+  const s = sheet({ opensNeed: false, requestAnswer: { error: 'no-signal' }, refusals: REFUSALS });
+  await s.run();
+  assert.deepEqual(s.kinds(), ['request', 'err'], 'the sheet reported something other than the refusal: ' + JSON.stringify(s.kinds()));
+  assert.equal(s.calls.find(c => c[0] === 'err')[1], 'Not sent — no signal. Try again.');
 });

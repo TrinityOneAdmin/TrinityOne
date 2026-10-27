@@ -831,6 +831,7 @@ test('a chat message the gate could not publish stays in the outbox and burns no
     stmt(src, 'var isConnectionFailure = ', 'isConnectionFailure'),
     stmt(src, 'var isRateLimited = ', 'isRateLimited'),
     stmt(src, 'var MAX_TRIES = ', 'MAX_TRIES'),
+    fnBody(src, 'function _itemChurch', '_itemChurch'),   // fix/stress-g2: the flush asks which church an item belongs to
     fnBody(src, 'async function _outboxFlush', '_outboxFlush'),
   ].join('\n');
   assert.match(body, /isConnectionFailure\(e2\) \|\| isNoNetworkRelay\(e2\)/,
@@ -841,6 +842,7 @@ test('a chat message the gate could not publish stays in the outbox and burns no
   const item = { evt: { id: 'e1' }, tries: 0, at: 1, relays: ['wss://x.invalid'] };
   const state = {
     _outbox: [item], _outboxFailed: [], _flushing: false, sk: 'k',
+    _mine: () => true,   // G2 audit F3: the flush sends only this identity's entries; this hand-made item has no signer
     _dmPlain: new Map(), _outboxSave: () => {}, window: undefined,
     _publishBounded: async () => { throw gateErr; },
     _outboxRelays: (item) => item.relays,   // step 2c: where a retry goes; this test is about the outbox's try-counting

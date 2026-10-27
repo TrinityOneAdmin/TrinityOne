@@ -68,6 +68,11 @@ test('leaveMembership clears per-church localStorage keys but keeps the parent\'
     _dropJoinIntent: () => {},
     _joinSent: {},
     _joinIntents: [],
+    // fix/stress-g2 (2026-10-27): leaveMembership queues its tombstone first; the church is now forgotten by the
+    // SHIPPED _leaveDelivered (lifted below) once the tombstone lands. The queue machinery is inert here.
+    _leaveGen: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {}, _flushing: false, _outboxFlush: async () => {},
+    _outboxDropJoins: () => false, _itemChurch: () => '', _left: new Set(), CustomEvent: class { constructor(t, i) { this.type = t; this.detail = i && i.detail; } },
+    isPermanentRefusal: () => false,
     NET: 'trinityone',
     window: { Fellowship: { relays: ['wss://r'], ready: Promise.resolve() } },
     Math, Date, JSON, console, Number, String,
@@ -97,6 +102,8 @@ test('leaveMembership clears per-church localStorage keys but keeps the parent\'
     set: (t, k, v) => { t[k] = v; return true; },
   });
   scope._forgetChurch = new Function('scope', `with (scope) { return (function _forgetChurch(cp) ${FORGETBODY.slice(FORGETBODY.indexOf('{'))}); }`)(proxy);
+  { const LD = fnBody(FELLOWSHIP, 'function _leaveDelivered(', '_leaveDelivered');
+    scope._leaveDelivered = new Function('scope', `with (scope) { return (${LD}); }`)(proxy); }
 
   const body = fnBody(FELLOWSHIP, 'async leaveMembership(npubOrHex) {', 'leaveMembership');
   const fn = new Function('scope', `with (scope) { return (async function leaveMembership(npubOrHex) ${body.slice(body.indexOf('{'))}); }`)(proxy);
@@ -149,6 +156,11 @@ test('CONTROL: a second church\'s data is not affected by leaving the first', as
     _dropJoinIntent: () => {},
     _joinSent: {},
     _joinIntents: [],
+    // fix/stress-g2 (2026-10-27): leaveMembership queues its tombstone first; the church is now forgotten by the
+    // SHIPPED _leaveDelivered (lifted below) once the tombstone lands. The queue machinery is inert here.
+    _leaveGen: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {}, _flushing: false, _outboxFlush: async () => {},
+    _outboxDropJoins: () => false, _itemChurch: () => '', _left: new Set(), CustomEvent: class { constructor(t, i) { this.type = t; this.detail = i && i.detail; } },
+    isPermanentRefusal: () => false,
     NET: 'trinityone',
     window: { Fellowship: { relays: ['wss://r'], ready: Promise.resolve() } },
     Math, Date, JSON, console, Number, String,
@@ -178,6 +190,8 @@ test('CONTROL: a second church\'s data is not affected by leaving the first', as
     set: (t, k, v) => { t[k] = v; return true; },
   });
   scope._forgetChurch = new Function('scope', `with (scope) { return (function _forgetChurch(cp) ${FORGETBODY.slice(FORGETBODY.indexOf('{'))}); }`)(proxy);
+  { const LD = fnBody(FELLOWSHIP, 'function _leaveDelivered(', '_leaveDelivered');
+    scope._leaveDelivered = new Function('scope', `with (scope) { return (${LD}); }`)(proxy); }
 
   const body = fnBody(FELLOWSHIP, 'async leaveMembership(npubOrHex) {', 'leaveMembership');
   const fn = new Function('scope', `with (scope) { return (async function leaveMembership(npubOrHex) ${body.slice(body.indexOf('{'))}); }`)(proxy);

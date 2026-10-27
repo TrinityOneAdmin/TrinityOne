@@ -3623,7 +3623,7 @@ window.addEventListener('trinity-identity-lock', () => {
 // when the signal came back. Persisted, so closing the app doesn't lose it.
 const OUTBOX_KEY = 'trinityone.outbox';
 const OUTBOX_FAILED_KEY = 'trinityone.outbox.failed';   // gave-up messages, persisted (see below)
-const OUTBOX_MAX = 200;            // a bounded queue: past this the oldest is dropped rather than growing forever
+const OUTBOX_MAX = 200;            // a bounded queue — see _outboxFull: a NEW send is refused when it is full
 // The plaintext of a queued private message, IN MEMORY ONLY, keyed by event id. Never persisted.
 // The queued item itself carries only NIP-04 ciphertext (see the note in sendDM), which is right for a phone
 // that may be seized — but it means a "waiting to send" bubble would have nothing readable to show, and round
@@ -3639,14 +3639,84 @@ function _outboxLoad() {
   try { _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; } catch (e) { _outbox = []; }
   try { _outboxFailed = JSON.parse(localStorage.getItem(OUTBOX_FAILED_KEY) || '[]') || []; } catch (e) { _outboxFailed = []; }
 }
+// NOTHING IS SLICED OFF ON SAVE (stress batch 3, 6b, 2026-10-27). This wrote `_outbox.slice(-OUTBOX_MAX)`, so
+// past 200 the OLDEST queued messages were dropped from disk with no failed-bin entry and no notice, while the
+// in-memory queue went on growing unbounded. The bound is now enforced at the one moment the member can still be
+// told — when a new message is QUEUED (_outboxFull) — and the words go back to the composer. The gave-up bin
+// lost its `.slice(-50)` / `shift()` for the same reason: it is the place a refused message goes INSTEAD of
+// being discarded, so capping it silently discarded the 51st.
+// Returns whether the QUEUE reached storage (G2 audit F2): the leaving mark lives only in a queued `leave:` entry,
+// so a Leave whose entry could not be saved must say so rather than pretend it survives a restart.
 function _outboxSave() {
-  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX))); } catch (e) {}
+  let saved = true;
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox)); } catch (e) { saved = false; }
   // The gave-up bin is persisted too. It was memory-only, so a member's refused message — the whole reason
   // this bin exists instead of a silent discard — was itself silently lost on app close, before they could
   // see it, copy it out, or requeue it.
-  try { localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed.slice(-50))); } catch (e) {}
+  try { localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed)); } catch (e) {}
   for (const fn of [..._outboxSubs]) { try { fn(_outbox); } catch (e) {} }
+  return saved;
 }
+// THIS IDENTITY'S, OR PARKED (G2 audit F3). The queue is not per identity: a restore or a second account on the
+// phone inherits it. An entry is signed, so its pubkey says whose it is; the flush sends only the current
+// identity's, and everything that reads "is a Leave waiting" asks about the current identity only. Another
+// identity's entries stay where they are, unsent, until that identity is back.
+function _mine(o) { return !!(o && o.evt && pub && o.evt.pubkey === pub); }
+// Is the queue full for a NEW message? Only the member's own words count: a join, a leave and a profile edit are
+// one entry per church (or per person) — each REPLACES the older one of its kind — so they can never pile up,
+// and refusing a Leave or a join because chat filled the queue would be the wrong thing to refuse.
+// Only THIS identity's entries count (owner 2026-10-27): another identity's parked entries are not this person's queue.
+function _outboxFull() {
+  let n = 0;
+  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
+  return n >= OUTBOX_MAX;
+}
+// THE "DIDN'T SEND" BIN IS CAPPED AT 500, VISIBLY (owner 2026-10-27). Nothing is ever evicted from it. From 450 the
+// threads show "You have N unsent items — send or discard some"; at 500 a NEW message is refused at the composer,
+// the same way a full queue refuses one, so the words go back to the member instead of into a bin that is full.
+// (A message already queued that fails later still goes in — it is never dropped — so the bin can pass 500 by at
+// most what was queued when it filled.)
+const FAILED_MAX = 500, FAILED_WARN = 450;
+// Counted: this identity's messages that have a thread to be sent again or discarded from (a group post, a DM).
+// A failed join or profile edit has no Discard button anywhere, so counting it toward a cap the member is told to
+// clear by discarding would be a limit they cannot act on.
+function _failedCount() { let n = 0; for (const o of _outboxFailed) if (_mine(o) && (o.groupId || o.peer)) n++; return n; }
+function _failedFull() { return _failedCount() >= FAILED_MAX; }
+function _outboxMineCount() { let n = 0; for (const o of _outbox) if (_mine(o)) n++; return n; }
+// THE CHURCH A QUEUED ITEM BELONGS TO, so its relays are worked out when it is SENT, not when it was queued
+// (stress batch 3, 1a/2a/3). A join or leave names it; a group post queued by this build carries `cp`; one queued
+// by an older build carries only its frozen `relays`, and its church is read back from the event's first `p` tag
+// (publishMessage puts the church tag BEFORE any reply tag) — but only when that is a church this member
+// follows, so a reply's author can never be mistaken for a church. A DM belongs to no church ('').
+function _itemChurch(o) {
+  if (!o) return '';
+  if (o.leave) return o.leave;
+  if (o.join) return o.join;
+  if (o.peer && !o.groupId) return '';
+  if (o.cp) return o.cp;
+  if (o.groupId && o.evt && Array.isArray(o.evt.tags)) {
+    const t = o.evt.tags.find(t => Array.isArray(t) && t[0] === 'p');
+    if (t && typeof t[1] === 'string') { try { if (memberChurchPubs().includes(t[1])) return t[1]; } catch (e) {} }
+  }
+  return '';
+}
+// ── LEAVING ─────────────────────────────────────────────────────────────────────────────────────────────────
+// A Leave is a queued `leave:` entry in the outbox until the tombstone is delivered — THAT is the persisted
+// "leaving" mark (no storage key of its own), so an offline Leave survives a restart and nothing re-joins the
+// member in between. Once delivered, `_left` keeps the mark for the rest of this launch, for an announce that
+// was already on its way. Bound to the identity that signed it (cp + pub). Cleared ONLY by an explicit re-follow
+// (clearLeaving, called by followChurch before it announces). Owner decisions 2026-10-27.
+const _left = new Set();   // cp|pub -> this identity's tombstone for cp was delivered this launch
+function _leavingFor(cp) {
+  if (!cp) return false;
+  if (pub && _left.has(cp + '|' + pub)) return true;
+  return _outbox.some(o => o && o.leave === cp && o.evt && (!pub || o.evt.pubkey === pub));
+}
+// THE ONE GUARD every membership announce passes through (announceMembership and the outbox's re-send of a
+// queued join). See the list of callers at announceMembership.
+function _announceBlocked(cp) { return _leavingFor(cp); }
+// Take this church's queued join(s) off the queue — a newer join replaces them, a Leave removes them.
+function _outboxDropJoins(cp) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o))); return _outbox.length !== n; }   // this identity's only
 _outboxLoad();
 
 // ── blocked-member detection ─────────────────────────────────────────────────────────────────────────────
@@ -4090,26 +4160,80 @@ const isConnectionFailure = (e) => _CONNECTION.test(String((e && e.message) || e
 const MAX_TRIES = 50;   // 50 genuine relay REFUSALS (outages don't count) — a backstop so an unanticipated
                         // non-permanent refusal shape isn't retried forever, not a wall-clock limit.
 // Try to deliver everything queued. Safe to call often — it no-ops while already running.
-// WHERE A QUEUED ITEM IS RETRIED. Never the whole candidate list. A DM is re-derived from its peer (so an entry
-// persisted before the owner rule, holding the whole list, is narrowed too); an item with its own list uses it; a
-// join (queued with no list on purpose, audit 2026-09-02 #21) uses that church's live publish set; anything else
-// with no list gets the shared pool only.
+// WHERE A QUEUED ITEM IS RETRIED — WORKED OUT NOW, NOT WHEN IT WAS QUEUED. Never the whole candidate list. A DM is
+// re-derived from its peer. Anything that belongs to a church (a join, a leave, a group post — see _itemChurch) goes
+// to that church's publish set AS IT IS NOW, the same function the live send uses: a group post used to carry the
+// set frozen at queue time, so a box the church ADDED while the phone was offline never got it, a box it REMOVED
+// still did (an owner-rule break: a church's box receives only that church's traffic), and a box that MOVED got
+// the dead address (stress batch 3, 1a/2a/3). A queued profile goes where a live one does. Only an old entry whose
+// church cannot be named falls back to its stored list (which _publishAny still re-gates); anything else with no
+// list gets the shared pool only.
 function _outboxRelays(item) {
   if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+  if (item.profile) { try { return profilePublishRelays(); } catch (e) {} }
+  const cp = _itemChurch(item);
+  if (cp) { try { return publishSetFor(cp); } catch (e) {} }
   if (item.relays && item.relays.length) return item.relays;
-  if (item.join) { try { return publishSetFor(item.join); } catch (e) {} }
   return _netRelays([...CANONICAL_RELAYS]);
 }
-async function _outboxFlush() {
+// THE CHURCH HAS BOXES THIS PHONE HAS NOT PROVED YET. Re-deriving at send time has one new way to go wrong: the
+// flush that runs 3s after a socket comes back can run before the gate has proved the church's own box, so
+// publishSetFor(cp) is the shared servers alone — the post lands there, is taken off the queue as delivered, and
+// the church's box never gets it. So when the church has boxes of its own (persisted) and the set names none of
+// them, ask the gate once for this church (as _resendMembershipToNewBoxes does), and if it still has not proved one,
+// HOLD the item as an outage: no try burned, still queued. Held for at most HOLD_UNPROVED_S from the first hold —
+// a box that never comes back must not keep the member's words off the shared servers for ever; after that it
+// goes where a live send would go right now. `asked` is per flush pass, so the gate is asked once per church.
+const HOLD_UNPROVED_S = 600;
+async function _heldForUnprovedBoxes(item, cp, asked) {
+  const persisted = (_churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : []).concat(_loadChurchBoxes(cp));
+  const own = persisted.filter(u => u && !CANONICAL_RELAYS.includes(u));
+  if (!own.length) return false;
+  const hasOwn = () => { try { return publishSetFor(cp).some(u => !CANONICAL_RELAYS.includes(u)); } catch (e) { return false; } };
+  if (hasOwn()) { if (item.heldSince) delete item.heldSince; return false; }
+  if (!asked.has(cp)) { asked.add(cp); try { await _gate.refresh(window.Fellowship.relays || [], cp); } catch (e) {} }
+  if (hasOwn()) { if (item.heldSince) delete item.heldSince; return false; }
+  const nowS = Math.floor(Date.now() / 1000);
+  if (!item.heldSince) { item.heldSince = nowS; _outboxSave(); }
+  return nowS - item.heldSince < HOLD_UNPROVED_S;
+}
+// The tombstone landed: the member has left. Only now does the church go from this phone (owner 2026-10-27: an
+// offline Leave keeps the church, marked leaving, until this point — _forgetChurch drops the church's boxes, so
+// running it at queue time would have left the queued tombstone nowhere to go but the shared servers).
+function _leaveDelivered(cp, evt) {
+  if (evt && evt.pubkey) _left.add(cp + '|' + evt.pubkey);
+  try { localStorage.removeItem('trinityone.joinedAt:' + cp); } catch (e) {}
+  _forgetChurch(cp);
+  try { window.dispatchEvent(new CustomEvent('trinity-left', { detail: { cp } })); } catch (e) {}
+}
+// `only` (optional) limits a pass to the items it accepts — leaveMembership uses it to send one church's queued
+// posts ahead of its tombstone. ORDER: every leave goes LAST in the pass, and a church's leave is not attempted
+// while any other item of that church is still queued: what the member said before leaving reaches the church
+// before the church is told they have gone (owner 2026-10-27).
+async function _outboxFlush(only) {
   if (_flushing || !_outbox.length || !sk) return;
   _flushing = true;
   try {
-    for (const item of [..._outbox]) {
+    const pass = [..._outbox].filter(o => o && o.evt && (!only || only(o)));
+    const asked = new Set();
+    for (const item of [...pass.filter(o => !o.leave), ...pass.filter(o => o.leave)]) {
+      if (!_outbox.includes(item)) continue;   // taken off the queue since the pass began (a Leave, a re-follow)
+      if (!_mine(item)) continue;              // another identity's: parked, never sent under this one (F3)
+      // PATH 10 of the leave race: a join queued before the Leave is never re-sent after it.
+      if (item.join && _announceBlocked(item.join)) { _outbox = _outbox.filter(o => o !== item); _outboxSave(); continue; }
+      const icp = _itemChurch(item);
+      if (item.leave && _outbox.some(o => o !== item && !o.leave && _mine(o) && _itemChurch(o) === item.leave)) continue;   // another identity's parked items never hold this Leave
+      if (icp && !item.peer && await _heldForUnprovedBoxes(item, icp, asked)) continue;
       try {
         await _publishBounded(_outboxRelays(item), item.evt);
+        // ONE OWNER OF A DELIVERY (G2 audit F1). leaveMembership may be sending this same tombstone, and a re-follow
+        // may have withdrawn it while it was on the wire. Whoever still finds it queued at delivery takes it off
+        // and runs _leaveDelivered; anyone else does nothing.
+        const owned = _outbox.some(o => o.evt.id === item.evt.id);
         _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
         _dmPlain.delete(item.evt.id);   // delivered by RETRY — the first-attempt path clears its own; this one was leaking for the session
         _outboxSave();
+        if (item.leave && owned) _leaveDelivered(item.leave, item.evt);
         if (item.join) { const _cp = item.join; setTimeout(() => { const hub = _docsHubs.get(_cp); if (hub && hub.closer) { const c = hub.closer; hub.closer = null; try { c(); } catch {} _docsHubOpen(hub); } }, 500); }
       } catch (e) {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
@@ -4124,11 +4248,17 @@ async function _outboxFlush() {
         item.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
         if (permanent && errs.some(function(e) { return /^blocked/i.test(String((e && e.message) || '')); })) _checkIfBlocked();
         if (permanent || item.tries >= MAX_TRIES) {
-          // Give up, but do NOT silently bin the member's words — mark it so the thread can show it was
-          // refused and offer to discard or copy it out.
           item.failed = true; item.permanent = !!permanent;
           _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
-          _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
+          if (item.leave) {
+            // A REFUSED LEAVE is not a message to copy out: it has no thread to show in. The leaving mark goes
+            // with it (the mark IS the queued entry), the church stays, and the app says so.
+            try { window.dispatchEvent(new CustomEvent('trinity-leave-refused', { detail: { cp: item.leave } })); } catch (x) {}
+          } else {
+            // Give up, but do NOT silently bin the member's words — mark it so the thread can show it was
+            // refused and offer to discard or copy it out.
+            _outboxFailed.push(item);
+          }
         }
         _outboxSave();
         // The relay said "slow down". Bursting the rest of the queue would just trip it again and burn a
@@ -4157,9 +4287,9 @@ if (typeof window !== 'undefined') {
   const _obDelay = () => Math.min(900000, 45000 * Math.pow(2, Math.min(_obFails, 5)));
   window.__trinityOutboxOk = () => { _obFails = 0; };
   const _obTick = async () => {
-    const before = _outbox.length;
+    const before = _outboxMineCount();   // this identity's: another's parked entries never drain, and must not hold the back-off up
     try { await _outboxFlush(); } catch (e) {}
-    const after = _outbox.length;
+    const after = _outboxMineCount();
     if (after > 0 && after >= before) _obFails++; else _obFails = 0;   // nothing drained → back off
     _obTimer = setTimeout(_obTick, _obDelay());
   };
@@ -4980,9 +5110,22 @@ window.Fellowship = {
   // announce membership of a church (a signed, addressable presence event) so the steward can see
   // people who joined even if they never post. Idempotent (addressable, d=member:<churchPub>).
   // This makes the member's pseudonymous npub visible as a member of this church.
+  //
+  // ── A LEAVE IN FLIGHT IS NEVER UNDONE BY AN ANNOUNCE (G2, 2026-10-27). Every membership announce on this phone
+  // comes through here, so the guard is ONE check (_announceBlocked), not one per caller. The callers:
+  //   app/app.jsx followChurch — confirmed church, after 3 "unknown" answers, and the no-checkChurch fallback
+  //     (each calls clearLeaving FIRST: an explicit follow is the one thing that ends a leave);
+  //   app/app.jsx heartbeat beat(); app/app.jsx retryConnection;
+  //   _resendMembershipToNewBoxes; _resendJoinToBoxesGainedInFlight; the admitted-doc recovery; _consumeJoinIntents.
+  // …and the one path that sends a join WITHOUT coming here: _outboxFlush re-sending a queued join, which checks
+  // the same guard. The leave generation is read BEFORE signing and compared again before "sent" is recorded, so
+  // an announce whose ack lands after a Leave was signed neither marks the join sent nor re-sends it.
   async announceMembership(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return;
+    if (_announceBlocked(cp)) return null;
     if (!sk) { try { await window.Fellowship.ready; } catch { /* fall through: still keyless */ } }
+    if (_announceBlocked(cp)) return null;   // again: the await above is the only one before signing
+    const gen = _leaveGen[cp] || 0;
     // NO KEY: RECORD THE INTENT, RETURN NOTHING. This used to be a bare `return`, before the queue below —
     // so a PIN-locked phone that opened a follow link queued nothing, sent nothing, retried nothing, and its
     // screen said "sent" (device pass 2026-09-06). The intent is bound to the locked identity and consumed
@@ -5014,6 +5157,10 @@ window.Fellowship = {
     // church got a line in the console log. UX audit 2026-08-04.
     const dup = _outbox.some(o => o && o.evt && o.evt.id === evt.id);
     if (!dup) {
+      // ONE QUEUED JOIN PER CHURCH: this newer one replaces any older one (2.3). They are the same document, so
+      // the older could only ever be refused as "a newer version is already stored" — or, worse, land on a box
+      // after the newer one and be counted a failed join.
+      _outboxDropJoins(cp);
       // A JOIN QUEUES WITH NO RELAY LIST, DELIBERATELY. Audit 2026-09-02 #21.
       //
       // Snapshotting the list here froze the set the retry would use — and a join is the one moment the list
@@ -5027,9 +5174,14 @@ window.Fellowship = {
     }
     let ok = false;
     try {
-      const gen = _leaveGen[cp] || 0;
       const sentTo = publishSetFor(cp).slice();   // the set THIS publish goes to, for the in-flight check below
       await _publishAny(sentTo, evt);
+      // LEFT WHILE THIS WAS IN FLIGHT (the stale-"sent" variant): the tombstone was signed after this join, so it
+      // is the newer document and wins at every relay that has both. Do not record "sent" over it, do not re-send.
+      if ((_leaveGen[cp] || 0) !== gen || _announceBlocked(cp)) {
+        _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
+        return null;
+      }
       ok = true;
       _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
       _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);   // not awaited; see its note
@@ -5082,15 +5234,53 @@ window.Fellowship = {
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
     }), sk);
-    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
-    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
-    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    // ── THE LEAVE IS QUEUED BEFORE IT IS SENT, AND THE QUEUED ENTRY IS THE "LEAVING" MARK (G2, 2026-10-27). ──
+    // The generation is bumped HERE, when the tombstone is signed — it used to be bumped only after the publish
+    // resolved, so a join announced during that await signed a NEWER document than the tombstone and re-joined
+    // the leaver. From this line every announce for this church is refused (_announceBlocked), a queued join for
+    // it is removed (it would only re-join them), and "sent" is cleared so the next follow starts from "not yet
+    // asked". A queued group post for this church is NOT removed: it is sent FIRST, then the tombstone.
     _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
-    _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
+    _outboxDropJoins(cp);
+    _outbox = _outbox.filter(o => !(o && o.leave === cp && _mine(o)));   // this identity's only: another's queued Leave is theirs
+    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp && _mine(o)));
+    _outbox.push({ evt, groupId: null, leave: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    const saved = _outboxSave();   // false: storage refused it — the Leave would not survive a restart (F2)
+    _clearJoinSent(cp);   // they are leaving: the next follow starts from "not yet asked", not from "sent"
     _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
-    try { localStorage.removeItem('trinityone.joinedAt:' + cp); } catch {}
-    _forgetChurch(cp);
+    // What they said before leaving goes first (owner 2026-10-27). Wait out a pass already running — it took its
+    // list before this Leave was queued — then send this church's other queued items.
+    for (let i = 0; _flushing && i < 400; i++) await new Promise(r => setTimeout(r, 50));
+    try { await _outboxFlush(o => o !== null && !o.leave && _mine(o) && _itemChurch(o) === cp); } catch (e) {}
+    // Whoever delivers the tombstone first owns the delivery (F1): a flush that ran while we waited may already
+    // have sent it — then this Leave is DONE, not "not sent" — and a re-follow may have withdrawn it.
+    const deliveredElsewhere = () => _left.has(cp + '|' + evt.pubkey);
+    const entry = _outbox.find(o => o && o.leave === cp && o.evt.id === evt.id);
+    if (!entry) return deliveredElsewhere() ? { ok: true, evt } : { ok: false, reason: 'not-sent' };   // else: a re-follow took it back
+    // Still something of theirs for this church waiting (no signal): the Leave waits behind it.
+    if (_outbox.some(o => o && !o.leave && _mine(o) && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: 'not-sent', ...(saved ? {} : { unsaved: true }) };
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise). A refusal (a relay read it and said
+    // no) ends the Leave: the entry goes, so does the mark, and the church stays. Anything else — no signal, no
+    // ack in time — leaves it QUEUED: the outbox delivers it when there is signal and only THEN is the church
+    // dropped from this phone (see _leaveDelivered). The screen says "Leaving…" meanwhile, never "you've left".
+    try { await _publishAny(publishSetFor(cp), evt); }
+    catch (e) {
+      if (deliveredElsewhere()) return { ok: true, evt };   // the flush got it there while this attempt failed
+      const errs = (e && e.errors) ? e.errors : [e];
+      const why = _pubReason(e);
+      if (why === 'refused' || (errs.length && errs.every(isPermanentRefusal))) {
+        _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
+        return { ok: false, reason: 'refused' };
+      }
+      entry.lastTry = Math.floor(Date.now() / 1000); entry.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
+      const saved2 = _outboxSave();
+      return { ok: false, queued: true, reason: why, ...(saved2 ? {} : { unsaved: true }) };
+    }
+    const owned = _outbox.some(o => o.evt.id === evt.id);
+    _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
+    if (owned) _leaveDelivered(cp, evt);
+    else if (!deliveredElsewhere()) return { ok: false, reason: 'not-sent' };   // withdrawn by a re-follow while on the wire: they stay
     return { ok: true, evt };
   },
 
@@ -5601,16 +5791,40 @@ window.Fellowship = {
     // member on a slow link unable to tell their congregation what they are called, which is the one thing
     // they set — a worse failure than the one being fixed, and aimed at exactly the same people. Everything
     // local still happens; only the replaceable publish is withheld.
-    let evt = null, sent = false, lost = false;   // `lost` = a field that TRAVELS did not reach the relay
+    let evt = null, sent = false, lost = false, queued = false;   // `lost` = a field that TRAVELS did not reach the relay; `queued` = it is in the outbox, waiting for signal
     if (wireUnchanged) {
       // nothing on the wire changed, so there is nothing to publish and nothing to lose; the name half below
       // still runs, and still re-seals.
     } else if (known) {
       evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
       sent = true;
+      // A NEWER EDIT REPLACES AN OLDER QUEUED ONE (G2 2.5). Same replaceable document; the older could only be
+      // refused as stale, burning tries, or land after this one somewhere and undo it.
+      { const n0 = _outbox.length; _outbox = _outbox.filter(o => !(o && o.profile && o.evt && o.evt.pubkey === pub)); if (_outbox.length !== n0) _outboxSave(); }
       try { await _publishAny(profilePublishRelays(), evt); }
       catch (e) {
         sent = false; lost = true; console.warn('[fellowship] profile publish failed', e);
+        // NO SIGNAL IS NOT A REFUSAL: QUEUE IT (G2 2.5, owner 2026-10-27). The note below ("nothing retries")
+        // was true when it was written; now the edit goes in the outbox and the flush sends it to the same set
+        // a live save uses (profilePublishRelays, worked out at send time). A relay that READ it and said no is
+        // still a refusal — retrying reproduces it — so that one is not queued and keeps its sentence.
+        // NOT a gate refusal either: "none of your church's relays could be proved" is a configuration problem a
+        // steward fixes, not signal, so it keeps its own sentence below rather than a promise to send later.
+        // So only the two outcomes signal fixes are queued: nobody answered in time, or no socket opened at all.
+        if (_pubReason(e) === 'unconfirmed' || (e && e.unsent && isConnectionFailure(e) && !isNoNetworkRelay(e))) {
+          _outbox.push({ evt, groupId: null, profile: true, at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+          _outboxSave();
+          queued = true; lost = false;
+          // SAID HERE, ONCE, as the failure sentence is (the callers stay quiet on `queued`). On the directory switch
+          // — a privacy control — the state they are actually in comes first, until it lands.
+          {   // ANY queued edit says so (F5) — something that travels changed, or nothing would have been published
+            try { if (window.trinityToast) window.trinityToast(meta && meta.hidden === true
+              ? 'Waiting for signal — you’re still listed in the directory until this reaches your church.'
+              : meta && meta.hidden === false
+              ? 'Waiting for signal — you’re still hidden from the directory until this reaches your church.'
+              : 'Waiting for signal — your profile change will reach your church when this phone has signal.'); } catch (x) {}
+          }
+        } else
         // SAY SO. The withheld branch below already tells the member, and this one — the publish we DID
         // attempt and that no relay accepted — said nothing at all, while the change was still written to
         // this device. So the switch sat in its new position and the church went on seeing the old profile.
@@ -5680,6 +5894,7 @@ window.Fellowship = {
     // it was fixed to stop. Answer the question actually asked: truthy unless something that travels was
     // lost. A name-only edit is a success — the name goes out sealed, through syncSealedNames above.
     if (lost) return null;
+    if (queued) return { queued: true, evt };   // NOT "saved": the caller says it is waiting to send
     return evt || true;
   },
 
@@ -5719,6 +5934,12 @@ window.Fellowship = {
     // _wantsEncrypted: the cache alone answered "no" whenever it had no answer at all.
     const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);
     if (wantsEnc && !gkey) return { _refused: 'nokey' };
+    // LEAVING THIS CHURCH: nothing new is posted to it while the Leave waits for signal (owner 2026-10-27).
+    if (cp && _leavingFor(cp)) return { _refused: 'leaving' };
+    // THE QUEUE IS FULL: refuse THIS message, now, while the words are still in the composer — never drop an
+    // older one to make room (stress batch 3, 6b). The caller hands the words back.
+    if (_outboxFull()) return { _refused: 'queue-full' };
+    if (_failedFull()) return { _refused: 'failed-full' };   // the didn't-send bin is full: refuse the new one, never evict
     if (gkey) {
       try { body = nip44e(content, gkey); encTag = [['enc', '1']]; }
       catch (e) {
@@ -5739,7 +5960,9 @@ window.Fellowship = {
     // on the next reconnect, online event or tick — so it eventually arrives instead of being lost. The UI
     // renders queued items as pending bubbles (outboxFor), and the relay's echo removes them by id.
     const msgRelays = publishSetFor(cp);
-    _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...msgRelays] });
+    // INTENT, NOT A SNAPSHOT: the church is stored and the flush works the relays out when it sends (see
+    // _outboxRelays). `relays` stays in the shape, empty, for anything that reads it.
+    _outbox.push({ evt, groupId, cp: cp || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
     _outboxSave();
     try {
       // _publishBounded, not raw Promise.any: a socket that never opens leaves Promise.any pending forever,
@@ -5758,12 +5981,28 @@ window.Fellowship = {
   // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
   // Is this church's join announce still waiting to send? The pending screen used to say "has been sent" in
   // the past tense with the publish result discarded, which is the one claim it could not make.
-  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp)); },
+  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp && _mine(o))); },   // this identity's (owner 2026-10-27)
+  // Is this identity leaving this church — a Leave queued and not yet delivered, or delivered this launch?
+  leaving(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _leavingFor(cp)); },
+  // Is the Leave still WAITING to be sent (the "Leaving…" row)? Narrower than leaving(): once delivered it is false.
+  leaveQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.leave === cp && _mine(o))); },
+  // AN EXPLICIT RE-FOLLOW ENDS A LEAVE — the only thing that does (owner 2026-10-27). followChurch calls this
+  // before it announces. A queued tombstone is withdrawn (they have changed their mind before it went), and the
+  // delivered-this-launch mark is lifted so the announce that follows is let through.
+  clearLeaving(npubOrHex) {
+    const cp = toPub(npubOrHex); if (!cp) return false;
+    const had = _leavingFor(cp);
+    if (pub) _left.delete(cp + '|' + pub);
+    const n = _outbox.length;
+    _outbox = _outbox.filter(o => !(o && o.leave === cp && _mine(o)));   // only this identity's Leave
+    if (_outbox.length !== n) _outboxSave();
+    return had;
+  },
   // …and whether we GAVE UP on it. _outboxFlush moves a permanently-refused item out of _outbox and into
   // _outboxFailed, so joinQueued alone reads false in that case and the screen falls through to "has been
   // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
   // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
-  joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp)); },
+  joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp && _mine(o))); },
   // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
   // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
   // a join that was never attempted looks like. See JOINSENT_KEY.
@@ -5784,26 +6023,28 @@ window.Fellowship = {
   // _outboxFailed, and joinFailed() goes true again on a join that actually succeeded.
   retryJoin(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return false;
-    const had = _outboxFailed.some(o => o && o.join === cp);
+    const had = _outboxFailed.some(o => o && o.join === cp && _mine(o));
     if (!had) return false;
-    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp));
-    _outbox = _outbox.filter(o => !(o && o.join === cp));   // no stale duplicate racing the fresh one
+    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp && _mine(o)));
+    _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o)));   // no stale duplicate racing the fresh one
     _outboxSave();
     return true;
   },
   outboxFor(groupId) { return [
-    ..._outbox.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
+    ..._outbox.filter(o => o.groupId === groupId && _mine(o)).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.groupId === groupId && _mine(o)).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
   ]; },
   // The DM thread's equivalent of outboxFor(groupId). A private conversation is keyed by the PEER, not by a
   // group id, so without this the queue exists and the member still stares at an empty thread — the same
   // silence with extra steps. Same shape as outboxFor so the screen can share one rendering path.
   outboxForPeer(peerPub) { const p = toPub(peerPub) || peerPub; return [
-    ..._outbox.filter(o => o.peer === p).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
+    ..._outbox.filter(o => o.peer === p && _mine(o)).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.peer === p && _mine(o)).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
   ]; },
   dmPlaintextOf(id) { return _dmPlain.get(id) || ''; },
-  outboxCount() { return _outbox.length; },
+  outboxCount() { return _outboxMineCount(); },   // this identity's (another's parked entries are not theirs to wait on)
+  // the didn't-send bin, for the threads' notice: this identity's count, and where the notice starts / the cap is
+  failedCount() { return _failedCount(); }, failedWarnAt() { return FAILED_WARN; }, failedMax() { return FAILED_MAX; },
   onOutbox(fn) { _outboxSubs.add(fn); return () => _outboxSubs.delete(fn); },
   flushOutbox() { return _outboxFlush(); },
   // give up on one queued message (the member chose to discard it)
@@ -5850,6 +6091,8 @@ window.Fellowship = {
   },
   async sendDM(peerPub, content, replyTo) {
     if (!sk) await window.Fellowship.ready;
+    if (_outboxFull()) return { _refused: 'queue-full' };   // see publishMessage: refuse the new one, never drop an old one
+    if (_failedFull()) return { _refused: 'failed-full' };
     const body = window.Fellowship._dmWrap(content, replyTo);
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, body); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
@@ -5893,7 +6136,7 @@ window.Fellowship = {
         if (item) {
           item.failed = true; item.permanent = true; item.lastError = evt._refused.slice(0, 120);
           _outbox = _outbox.filter(o => o.evt.id !== evt.id);
-          _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
+          _outboxFailed.push(item);   // never shifted off silently — see _outboxSave
           _outboxSave();
         }
       }
@@ -8070,6 +8313,11 @@ window.Fellowship = {
       // person instead. (memory: fix-the-control-not-the-label — six controls have toasted success over a
       // send that never happened; this is the reason a seventh is not being added here.)
       if (isNoNetworkRelay(e)) return { error: 'no-network-relay' };
+      // NO SIGNAL — every relay was unreachable, nothing left the phone. NOT queued, deliberately (G2, owner
+      // 2026-10-27): offline the audience cannot be established (_fetchCareTeam answers null), so the sealed copy
+      // would freeze a narrowed or stale audience, and re-sealing later would mean keeping the plaintext on disk.
+      // So the answer is plain and the words stay on the sheet.
+      if (e && e.unsent && isConnectionFailure(e)) return { error: 'no-signal' };
       // ⚠ THREE ANSWERS, NOT TWO, AND THIS RETURNED `null` FOR ALL OF THEM. `null` is rendered by the sheet
       // as "Couldn't send — check your connection and try again", which is a false sentence over the
       // commonest of the three: `unconfirmed` means nobody answered inside WEDGE_ACK_MS, and the event is
