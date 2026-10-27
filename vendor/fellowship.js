@@ -9818,9 +9818,11 @@
     }
   }
   function _outboxSave() {
+    let saved = true;
     try {
       localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox));
     } catch (e) {
+      saved = false;
     }
     try {
       localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed));
@@ -9832,6 +9834,10 @@
       } catch (e) {
       }
     }
+    return saved;
+  }
+  function _mine(o) {
+    return !!(o && o.evt && pub && o.evt.pubkey === pub);
   }
   function _outboxFull() {
     let n = 0;
@@ -10272,6 +10278,7 @@
       const asked = /* @__PURE__ */ new Set();
       for (const item of [...pass.filter((o) => !o.leave), ...pass.filter((o) => o.leave)]) {
         if (!_outbox.includes(item)) continue;
+        if (!_mine(item)) continue;
         if (item.join && _announceBlocked(item.join)) {
           _outbox = _outbox.filter((o) => o !== item);
           _outboxSave();
@@ -10282,10 +10289,11 @@
         if (icp && !item.peer && await _heldForUnprovedBoxes(item, icp, asked)) continue;
         try {
           await _publishBounded(_outboxRelays(item), item.evt);
+          const owned = _outbox.some((o) => o.evt.id === item.evt.id);
           _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
           _dmPlain.delete(item.evt.id);
           _outboxSave();
-          if (item.leave) _leaveDelivered(item.leave, item.evt);
+          if (item.leave && owned) _leaveDelivered(item.leave, item.evt);
           if (item.join) {
             const _cp = item.join;
             setTimeout(() => {
@@ -11347,7 +11355,7 @@
       _outbox = _outbox.filter((o) => !(o && o.leave === cp));
       _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp));
       _outbox.push({ evt, groupId: null, leave: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
-      _outboxSave();
+      const saved = _outboxSave();
       _clearJoinSent(cp);
       _dropJoinIntent(cp);
       for (let i3 = 0; _flushing && i3 < 400; i3++) await new Promise((r) => setTimeout(r, 50));
@@ -11355,12 +11363,14 @@
         await _outboxFlush((o) => o !== null && !o.leave && _itemChurch(o) === cp);
       } catch (e) {
       }
+      const deliveredElsewhere = () => _left.has(cp + "|" + evt.pubkey);
       const entry = _outbox.find((o) => o && o.leave === cp && o.evt.id === evt.id);
-      if (!entry) return { ok: false, reason: "not-sent" };
-      if (_outbox.some((o) => o && !o.leave && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: "not-sent" };
+      if (!entry) return deliveredElsewhere() ? { ok: true, evt } : { ok: false, reason: "not-sent" };
+      if (_outbox.some((o) => o && !o.leave && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: "not-sent", ...saved ? {} : { unsaved: true } };
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
+        if (deliveredElsewhere()) return { ok: true, evt };
         const errs = e && e.errors ? e.errors : [e];
         const why = _pubReason(e);
         if (why === "refused" || errs.length && errs.every(isPermanentRefusal)) {
@@ -11370,12 +11380,14 @@
         }
         entry.lastTry = Math.floor(Date.now() / 1e3);
         entry.lastError = String(errs[0] && errs[0].message || "").slice(0, 120);
-        _outboxSave();
-        return { ok: false, queued: true, reason: why };
+        const saved2 = _outboxSave();
+        return { ok: false, queued: true, reason: why, ...saved2 ? {} : { unsaved: true } };
       }
+      const owned = _outbox.some((o) => o.evt.id === evt.id);
       _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
       _outboxSave();
-      _leaveDelivered(cp, evt);
+      if (owned) _leaveDelivered(cp, evt);
+      else if (!deliveredElsewhere()) return { ok: false, reason: "not-sent" };
       return { ok: true, evt };
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)
@@ -11893,7 +11905,7 @@
             _outboxSave();
             queued = true;
             lost = false;
-            if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+            {
               try {
                 if (window.trinityToast) window.trinityToast(meta && meta.hidden === true ? "Waiting for signal \u2014 you\u2019re still listed in the directory until this reaches your church." : meta && meta.hidden === false ? "Waiting for signal \u2014 you\u2019re still hidden from the directory until this reaches your church." : "Waiting for signal \u2014 your profile change will reach your church when this phone has signal.");
               } catch (x) {
@@ -12007,7 +12019,7 @@
     // Is the Leave still WAITING to be sent (the "Leaving…" row)? Narrower than leaving(): once delivered it is false.
     leaveQueued(npubOrHex) {
       const cp = toPub(npubOrHex);
-      return !!(cp && _outbox.some((o) => o && o.leave === cp));
+      return !!(cp && _outbox.some((o) => o && o.leave === cp && _mine(o)));
     },
     // AN EXPLICIT RE-FOLLOW ENDS A LEAVE — the only thing that does (owner 2026-10-27). followChurch calls this
     // before it announces. A queued tombstone is withdrawn (they have changed their mind before it went), and the

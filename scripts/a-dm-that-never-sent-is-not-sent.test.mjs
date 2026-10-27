@@ -91,6 +91,13 @@ test('…and the outcomes that DO mean something still read correctly', async ()
   assert.deepEqual(sent.toasts, ['Sent to Anna'], 'a share that really went is no longer reported as sent');
 });
 
+test('a share refused because the queue is full says it was NOT shared — the sheet has closed, so no "your words are still here" (G2 audit F4)', async () => {
+  const full = shareTo({ _refused: 'queue-full' }); await full.run(); await tick();
+  assert.equal(full.toasts.length, 1);
+  assert.match(full.toasts[0], /^Not shared/, 'a refused share was not reported as not shared: ' + full.toasts[0]);
+  assert.doesNotMatch(full.toasts[0], /still here/, 'the share sheet has closed with the comment in it; saying the words are still here is false');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 2. app/screens-chat.jsx — the member's DM composer
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────

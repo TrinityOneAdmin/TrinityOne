@@ -109,6 +109,7 @@ test('the retry actually re-sends a QUEUED DIRECT MESSAGE, not just group posts'
       window: { Fellowship: { relays: ['ws://x'] } },
       isPermanentRefusal: () => false, isConnectionFailure: () => true, isRateLimited: () => false,
       _outboxFailed: [], _outboxSubs: new Set(), MAX_TRIES: 50,
+      _mine: () => true,   // G2 audit F3: the flush sends only this identity's entries; this hand-made DM has no signer
     };
     // fix/stress-g2: the flush asks which church an item belongs to (a DM: none). The SHIPPED _itemChurch.
     src = fnBody(VENDOR, 'function _itemChurch', '_itemChurch') + '\n' + src;

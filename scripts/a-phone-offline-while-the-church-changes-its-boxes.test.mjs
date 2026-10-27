@@ -211,6 +211,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     stmt(src, 'var isNoNetworkRelay = ', 'isNoNetworkRelay'),
     fnBody(src, 'function _outboxFull', '_outboxFull'),
     fnBody(src, 'function _itemChurch', '_itemChurch'),
+    fnBody(src, 'function _mine', '_mine'),   // G2 audit F3: only this identity's entries are sent
     stmt(src, 'var _left = ', '_left'),
     fnBody(src, 'function _leavingFor', '_leavingFor'),
     fnBody(src, 'function _announceBlocked', '_announceBlocked'),
@@ -621,5 +622,27 @@ test('7. a queued post is HELD while the church\'s own box is unproved, then rea
     assert.ok(grpLanded(TA, 'queued before the box was proved', from) >= 1, 'the church\'s box never got the held post once it was proved');
     assert.ok(grpLanded(SHARED, 'queued before the box was proved', from) >= 1, 'CONTROL: the shared server never got it');
     assert.equal(app.outbox().length, 0);
+  } finally { FETCH_DOWN.clear(); goOnline(SHARED, TA); app.close(); }
+});
+
+test('7b. the hold ENDS: after HOLD_UNPROVED_S a held post goes where a live send would (the shared server) rather than wait for ever', async () => {
+  const app = phone({
+    who: sarah, relays: [secure(SHARED.wsUrl)], canonical: [secure(SHARED.wsUrl)], pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] },
+    activeChurch: A.pub, followed: [A], netdoc: { [A.pub]: { hw: 1, rows: { [secure(TA.wsUrl)]: TA.relayPub } } }, roster: { [A.pub]: [tom.pub, sarah.pub] },
+  });
+  try {
+    FETCH_DOWN.add(hostOf(TA.wsUrl));
+    app.saveBoxes(A.pub, [secure(TA.wsUrl)]);
+    await goOffline(SHARED, TA);
+    const from = EVTS.length;
+    await app.publishMessage('g1', 'held, then let go');
+    goOnline(SHARED, TA);
+    await app._outboxFlush(); await sleep(400);
+    assert.equal(app.outbox().length, 1, 'CONTROL: the post was not held');
+    assert.ok(app.outbox()[0].heldSince > 0, 'CONTROL: no hold was recorded');
+    app.outbox()[0].heldSince -= 601;                                // ten minutes and a second later
+    await app._outboxFlush(); await sleep(600);
+    assert.ok(grpLanded(SHARED, 'held, then let go', from) >= 1, 'a post held past HOLD_UNPROVED_S never went anywhere');
+    assert.equal(app.outbox().length, 0, 'the post is still held after the hold expired');
   } finally { FETCH_DOWN.clear(); goOnline(SHARED, TA); app.close(); }
 });

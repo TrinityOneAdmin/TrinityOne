@@ -233,6 +233,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     'const profiles = {}; const pendingProfiles = new Set(); const _profQueue = new Set(); let _profTimer = null; const _k0Seen = new Set();',
     fnBody(src, 'function _outboxFull', '_outboxFull'),
     fnBody(src, 'function _itemChurch', '_itemChurch'),
+    fnBody(src, 'function _mine', '_mine'),   // G2 audit F3: only this identity's entries are sent
     stmt(src, 'var _left = ', '_left'),
     fnBody(src, 'function _leavingFor', '_leavingFor'),
     fnBody(src, 'function _announceBlocked', '_announceBlocked'),
@@ -288,6 +289,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
   win.Fellowship.leaveQueued = api.leaveQueued;
   win.Fellowship.toPub = api.toPub;
   api.win = win; api.pool = pool; api.me = me; api.store = store;
+  api.scope = scope;   // G2 audit F3: the identity switch test sets scope.sk / scope.pub
   api.close = () => { try { pool.shutdown(); } catch (e) {} };
   return api;
 }
@@ -659,4 +661,164 @@ test('PROFILE: an edit made with no signal is queued (not "saved"), a newer edit
     assert.equal(k0(SHARED, first.evt.id) + k0(TA, first.evt.id), 0, 'the superseded edit was sent');
     assert.equal(app.outbox().filter(o => o.profile).length, 0, 'the delivered profile is still queued');
   } finally { goOnline(SHARED, TA); app.close(); }
+});
+
+// ════════ G2 audit follow-ups (F1, F2, F3, F5, restart) ═════════════════════════════════════════════════════
+const leftEvents = (app) => { const seen = []; app.win.addEventListener('trinity-left', (e) => seen.push(e.detail.cp)); return seen; };
+const waitFor = async (pred, ms = 5000) => { const t0 = Date.now(); while (!pred() && Date.now() - t0 < ms) await sleep(50); return pred(); };
+const followStubs = (app) => Object.assign(app.win.Fellowship, {
+  CANONICAL_RELAYS: [], addRelay: () => {}, adoptInviteRelays: () => null,
+  checkChurch: async () => 'church', subscribeChurchProfile: () => () => {}, subscribeChurchRelays: () => () => {},
+});
+
+test('F1: a flush that delivers the tombstone while Leave is still waiting on its own send is ONE delivery, and the Leave is DONE', async () => {
+  forgotten.length = 0;
+  const app = await phoneA();
+  try {
+    const left = leftEvents(app);
+    const s = appScope(app);
+    const leaveChurch = liftApp(s.proxy, fnBody(APP, 'const leaveChurch = async (npub) =>', 'leaveChurch'));
+    const from = EVTS.length;
+    let release; ACK_HOLD = new Promise(r => { release = r; });
+    const p = leaveChurch(A.npub);                                  // its tombstone goes out; its acks are held
+    assert.ok(await waitFor(() => tombsFrom(from).length >= 1), 'staging: the tombstone never went on the wire');
+    ACK_HOLD = null;
+    await app._outboxFlush();                                       // the 45s tick / `online` / relay-returned flush
+    release();
+    const out = await p;
+    await sleep(300);
+    assert.equal(out, true, 'the Leave the flush delivered was reported as not done: ' + JSON.stringify(s.state.toasts));
+    assert.deepEqual(s.state.churches.map(c => c.id), [], 'the church stayed on the phone after its Leave was delivered');
+    assert.equal(forgotten.filter(c => c === A.pub).length, 1, 'the church was forgotten ' + forgotten.length + ' times (want exactly one owner of the delivery)');
+    assert.equal(left.length, 1, 'trinity-left fired ' + left.length + ' times');
+    // A RESTART: _left is per launch. The app has dropped the church, so the heartbeat has nothing to re-join.
+    const app2 = await phoneA({ outbox: JSON.parse(app.store.getItem('trinityone.outbox') || '[]') });
+    try {
+      const s2 = appScope(app2); s2.state.churches = s.state.churches; s2.state.active = s.state.active;
+      const from2 = EVTS.length;
+      liftApp(s2.proxy, arrowAfter('// membership heartbeat: refresh the member event on launch', 'heartbeat effect'))();
+      await sleep(1200);
+      assert.equal(joinsFrom(from2).length, 0, 'after a restart the heartbeat re-joined the member who left');
+    } finally { app2.close(); }
+  } finally { ACK_HOLD = null; app.close(); }
+});
+
+test('F1: a re-follow while the tombstone is on the wire keeps the church (no _leaveDelivered, no trinity-left)', async () => {
+  forgotten.length = 0;
+  const app = await phoneA();
+  try {
+    const left = leftEvents(app);
+    followStubs(app);
+    const s = appScope(app);
+    const followChurch = liftApp(s.proxy, fnBody(APP, 'const followChurch = (raw, opts) =>', 'followChurch'));
+    const from = EVTS.length;
+    let release; ACK_HOLD = new Promise(r => { release = r; });
+    const l = app.leaveMembership(A.npub);
+    assert.ok(await waitFor(() => tombsFrom(from).length >= 1), 'staging: the tombstone never went on the wire');
+    ACK_HOLD = null;
+    followChurch(A.npub);                                           // they change their mind mid-send
+    release();
+    const r = await l;
+    await sleep(1200);
+    assert.notEqual(r.ok, true, 'a Leave the member took back was reported as done');
+    assert.equal(forgotten.includes(A.pub), false, 'the church was forgotten although the member re-followed');
+    assert.equal(left.length, 0, 'trinity-left fired for a Leave the member took back');
+    assert.equal(s.state.churches.length, 1, 'the church left the phone');
+    assert.equal(await heldAt(SHARED), 'member', 'the re-follow did not land after the withdrawn tombstone');
+  } finally { ACK_HOLD = null; app.close(); }
+});
+
+test('F2: a Leave whose queue entry storage refused says so — never "Leaving…" as if it would survive a restart', async () => {
+  const app = await phoneA();
+  try {
+    const real = app.store.setItem;
+    app.store.setItem = (k, v) => { if (k === 'trinityone.outbox') throw new Error('QuotaExceededError'); return real(k, v); };
+    await goOffline(SHARED, TA);
+    const r = await app.leaveMembership(A.npub);
+    assert.equal(r.queued, true, 'CONTROL: the offline Leave is not queued');
+    assert.equal(r.unsaved, true, 'a Leave storage refused was reported as safely queued');
+    const s = appScope(app);
+    app.win.Fellowship.leaveMembership = async () => r;   // the same answer, through the shipped screen
+    const out = await liftApp(s.proxy, fnBody(APP, 'const leaveChurch = async (npub) =>', 'leaveChurch'))(A.npub);
+    assert.equal(out, 'queued');
+    assert.match(s.state.toasts[0], /couldn’t save/, 'the screen did not say the Leave is not saved: ' + s.state.toasts[0]);
+    app.store.setItem = real;
+    const ok = await app.leaveMembership(A.npub);
+    assert.equal(ok.unsaved, undefined, 'CONTROL: a Leave that WAS saved is reported as unsaved');
+  } finally { goOnline(SHARED, TA); app.close(); }
+});
+
+test('F3: a Leave queued by one identity is parked under another — nothing of it is sent, and that church is untouched', async () => {
+  forgotten.length = 0;
+  const app = await phoneA();
+  try {
+    await goOffline(SHARED, TA);
+    const r = await app.leaveMembership(A.npub);
+    assert.equal(r.queued, true, 'CONTROL: the offline Leave is not queued');
+    app.scope.sk = tom.sk; app.scope.pub = tom.pub;              // a restore / second account on this phone
+    assert.equal(app.leaveQueued(A.npub), false, 'the other identity sees a Leave it never asked for');
+    goOnline(SHARED, TA);
+    const from = EVTS.length;
+    await app._outboxFlush(); await sleep(800);
+    assert.equal(EVTS.slice(from).filter(x => x.ev && x.ev.pubkey === sarah.pub).length, 0, 'the first identity\'s queue was sent while the second was signed in');
+    assert.equal(forgotten.includes(A.pub), false, 'the second identity lost the church to the first identity\'s Leave');
+    assert.equal(app.outbox().filter(o => o.leave).length, 1, 'the parked Leave was dropped');
+    app.scope.sk = sarah.sk; app.scope.pub = sarah.pub;           // CONTROL: back to its owner, it goes
+    assert.equal(app.leaveQueued(A.npub), true);
+    await app._outboxFlush(); await sleep(800);
+    assert.ok(tombsFrom(from).length >= 1, 'CONTROL: the owner\'s Leave never went once they were back');
+  } finally { app.scope.sk = sarah.sk; app.scope.pub = sarah.pub; goOnline(SHARED, TA); app.close(); }
+});
+
+test('RESTART mid-Leave: the reloaded queue restores the mark before the heartbeat, and the Leave goes on reconnect', async () => {
+  const app = await phoneA();
+  let app2;
+  try {
+    await goOffline(SHARED, TA);
+    const r = await app.leaveMembership(A.npub);
+    assert.equal(r.queued, true, 'CONTROL: the offline Leave is not queued');
+    const saved = JSON.parse(app.store.getItem('trinityone.outbox'));
+    app.close();
+    app2 = await phoneA({ outbox: saved });                         // a fresh bundle instance over the same queue
+    assert.equal(app2.leaveQueued(A.npub), true, 'the restart lost the Leave');
+    goOnline(SHARED, TA);
+    const s = appScope(app2); const from = EVTS.length;
+    liftApp(s.proxy, arrowAfter('// membership heartbeat: refresh the member event on launch', 'heartbeat effect'))();
+    await sleep(1200);
+    assert.equal(joinsFrom(from).length, 0, 'the first heartbeat after a restart re-joined a member whose Leave was queued');
+    await app2._outboxFlush(); await sleep(800);
+    assert.ok(tombsFrom(from).length >= 1, 'the reloaded Leave was never delivered');
+  } finally { goOnline(SHARED, TA); app.close(); if (app2) app2.close(); }
+});
+
+test('F5: ANY queued profile edit says it is waiting — not only about/picture/av/hidden', async () => {
+  const app = await phoneA();
+  try {
+    const toasts = []; app.win.trinityToast = (m) => toasts.push(m);
+    await goOffline(SHARED, TA);
+    const out = await app.setProfile({ name: 'Sarah' });            // the kind-0 still goes out on a first save
+    assert.ok(out && out.queued, 'CONTROL: the edit was not queued: ' + JSON.stringify(out && Object.keys(out)));
+    assert.equal(toasts.length, 1, 'a queued profile edit said nothing: ' + JSON.stringify(toasts));
+    assert.match(toasts[0], /Waiting for signal/);
+  } finally { goOnline(SHARED, TA); app.close(); }
+});
+
+test('F1: Leave\'s own send and a flush both in flight — whichever lands first owns the delivery, the other does nothing', async () => {
+  forgotten.length = 0;
+  const app = await phoneA();
+  try {
+    const left = leftEvents(app);
+    const from = EVTS.length;
+    let release; ACK_HOLD = new Promise(r => { release = r; });
+    const l = app.leaveMembership(A.npub);                          // its send is held
+    assert.ok(await waitFor(() => tombsFrom(from).length >= 1), 'staging: the tombstone never went on the wire');
+    const f = app._outboxFlush();                                   // the flush's send of the same tombstone, also held
+    await sleep(300);
+    ACK_HOLD = null; release();
+    const [r] = await Promise.all([l, f]);
+    await sleep(300);
+    assert.equal(r.ok, true, 'the Leave was not reported done: ' + JSON.stringify(r));
+    assert.equal(forgotten.filter(c => c === A.pub).length, 1, 'the church was forgotten ' + forgotten.filter(c => c === A.pub).length + ' times');
+    assert.equal(left.length, 1, 'trinity-left fired ' + left.length + ' times');
+  } finally { ACK_HOLD = null; app.close(); }
 });

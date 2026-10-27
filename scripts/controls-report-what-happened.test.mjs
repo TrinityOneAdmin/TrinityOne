@@ -324,10 +324,15 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
   assert.doesNotMatch(about[0], /still listed in the directory/,
     'an ordinary profile save now claims the member is listed in a directory, which is not what happened');
 
-  // and a save that lost nothing must not cry wolf
-  assert.deepEqual(await run({ meta: { name: 'Ruth' } }), [],
+  // and a save that lost nothing must not cry wolf.
+  // CHANGED 2026-10-27 (G2 audit F5): this harness's first save still republishes the kind-0, and with no ack it is
+  // now QUEUED — and every queued profile edit says it is waiting. That is not a failure alarm; what must never
+  // appear here is "couldn't save".
+  const nameOnly = await run({ meta: { name: 'Ruth' } });
+  for (const t of nameOnly) assert.doesNotMatch(t, /Couldn’t save|not saved/i,
     'a name-only save warns that nothing was saved — the name does not travel in kind-0 at all, so that is ' +
-    'a false alarm');
+    'a false alarm. Got: ' + t);
+  assert.ok(nameOnly.every(t => /Waiting for signal/.test(t)), 'unexpected sentence on a name-only save: ' + JSON.stringify(nameOnly));
 
   // …and a publish that WORKED says nothing
   assert.deepEqual(await run({ meta: { hidden: true }, publishFails: false }), [],

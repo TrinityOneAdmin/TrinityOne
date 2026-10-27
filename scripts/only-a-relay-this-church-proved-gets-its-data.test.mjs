@@ -842,6 +842,7 @@ test('a chat message the gate could not publish stays in the outbox and burns no
   const item = { evt: { id: 'e1' }, tries: 0, at: 1, relays: ['wss://x.invalid'] };
   const state = {
     _outbox: [item], _outboxFailed: [], _flushing: false, sk: 'k',
+    _mine: () => true,   // G2 audit F3: the flush sends only this identity's entries; this hand-made item has no signer
     _dmPlain: new Map(), _outboxSave: () => {}, window: undefined,
     _publishBounded: async () => { throw gateErr; },
     _outboxRelays: (item) => item.relays,   // step 2c: where a retry goes; this test is about the outbox's try-counting

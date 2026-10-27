@@ -2132,6 +2132,9 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
         // returns "we’ll send it as soon as you’re back online", which promises a retry that cannot happen.
         // AUDIT-2026-08-30.
         if (!evt) { ctx.toast('Couldn’t send to ' + (m.name || 'them') + ' — nothing was sent. Please try again.'); return; }
+        // A FULL QUEUE REFUSED IT, and this sheet has already closed with the comment in it (onClose below), so
+        // "your words are still here" would be false here. Say what is true.
+        if (evt._refused === 'queue-full') { ctx.toast('Not shared — too many messages are waiting to send. Share it again when you have signal.'); return; }
         ctx.toast(evt._refused || evt._delivered === false ? dmFailWording(evt) : 'Sent to ' + (m.name || 'them'));
       })
       .catch(() => ctx.toast('Couldn’t send — please try again.'));

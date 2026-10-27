@@ -135,7 +135,7 @@ function leaveWriter(mode, { locked = false, intent = false } = {}) {
     // church's queued posts are sent ahead of it. Inert here — an empty queue and a flush that sends nothing — so
     // the one publish these tests read is still the tombstone's. isPermanentRefusal is the shipped one.
     _leaveGen: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {}, _flushing: false, _outboxFlush: async () => {},
-    _itemChurch: (o) => (o && (o.leave || o.join || o.cp)) || '', _leaveDelivered: () => {}, _outboxDropJoins: () => false,
+    _itemChurch: (o) => (o && (o.leave || o.join || o.cp)) || '', _leaveDelivered: () => {}, _outboxDropJoins: () => false, _left: new Set(),
     isPermanentRefusal: new Function(stmt(SHIP, 'var _PERMANENT = ', '_PERMANENT') + '\n' + stmt(SHIP, 'var isPermanentRefusal = ', 'isPermanentRefusal') + '\nreturn isPermanentRefusal;')(),
     String, JSON, Date, Math, Number, Array, Object, Boolean, console, Promise,
   };

@@ -185,6 +185,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     // church an item belongs to (a DM: none). Both SHIPPED.
     fnBody(src, 'function _outboxFull', '_outboxFull'),
     fnBody(src, 'function _itemChurch', '_itemChurch'),
+    fnBody(src, 'function _mine', '_mine'),   // G2 audit F3: only this identity's entries are sent
     '_outboxLoad();',
     'let _flushing = false;',
     stmt(src, 'var _CONNECTION = ', '_CONNECTION'),

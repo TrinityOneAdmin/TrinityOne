@@ -1036,7 +1036,9 @@ function App() {
       // Not "you've left" (it has not gone), not "couldn't tell your church" (it will be told).
       if (told && told.queued) {
         bumpLeave(x => x + 1);
-        toast('Leaving… this will finish when you have signal.');
+        // …unless storage refused the queue entry (full phone): then it lives only until the app closes. Say so.
+        if (told.unsaved) toast('Leaving… but this phone couldn’t save that, so it is lost if the app closes before you have signal. Keep the app open, or try again.', { error: true });
+        else toast('Leaving… this will finish when you have signal.');
         return 'queued';
       }
       if (!(told && told.ok)) {

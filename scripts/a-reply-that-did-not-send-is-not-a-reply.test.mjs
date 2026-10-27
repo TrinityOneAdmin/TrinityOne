@@ -89,9 +89,9 @@ function runner(name, { publishFails, how }) {
   const isPermanentRefusal = new Function(stmt(BUNDLE, 'var _PERMANENT = ', '_PERMANENT') + '\n' +
     stmt(BUNDLE, 'var isPermanentRefusal = ', 'isPermanentRefusal') + '\nreturn isPermanentRefusal;')();
   const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch', '_sealChurchDocMember', '_monotonicF',
-    '_leaveGen', '_outbox', '_outboxFailed', '_outboxSave', '_flushing', '_outboxFlush', '_itemChurch', 'isPermanentRefusal', '_leaveDelivered', '_outboxDropJoins',
+    '_leaveGen', '_outbox', '_outboxFailed', '_outboxSave', '_flushing', '_outboxFlush', '_itemChurch', 'isPermanentRefusal', '_leaveDelivered', '_outboxDropJoins', '_left',
     'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember, _monotonicF,
-    {}, [], [], () => {}, false, async () => {}, (o) => (o && (o.leave || o.join || o.cp)) || '', isPermanentRefusal, () => {}, () => false);
+    {}, [], [], () => {}, false, async () => {}, (o) => (o && (o.leave || o.join || o.cp)) || '', isPermanentRefusal, () => {}, () => false, new Set());
   return { fn: obj[name], calls };
 }
 
