@@ -482,6 +482,10 @@ function publishErrorMessage(reason, evt, opts) {
   // time passes the date it carries. That is bounded — put() in scripts/event-store.mjs refuses anything
   // more than 900s ahead of the relay's own clock — so the wait is at most about fifteen minutes and then
   // the change saves normally. Saying "reload" instead cost the steward that fact.
+  // CLOCK VISIBILITY ONLY (owner 2026-10-27): when this console has MEASURED its own clock as wrong, say so first.
+  // Nothing about the save changes — the stamp, the refusal and the wait are exactly as before.
+  if (/newer version/i.test(r) && (() => { try { return !!(window.Steward && window.Steward.clockLooksWrong && window.Steward.clockLooksWrong()); } catch (e) { return false; } })()) return { wrongChurch: false, sticky: true,
+    msg: 'Your change wasn’t saved: a newer version is already stored, and this device’s clock looks wrong, which is the likeliest reason. Fix the date and time, then try again.' };
   if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
     msg: 'A newer version of this is already stored, so your change wasn’t saved. Either another console saved while you were editing, or a copy was stamped from a clock running ahead — including this console’s own, before it was corrected. Reloading won’t change that. The stored copy stops winning once the time catches up with its date, which is at most about fifteen minutes; make the change again then.' };
   if (/deleted by its author/i.test(r)) return { wrongChurch: false, sticky: true,

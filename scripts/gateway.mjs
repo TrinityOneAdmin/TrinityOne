@@ -780,11 +780,42 @@ function _blobMember(req, ownerCp, host, path) {
 
 // backup export gate: a fresh NIP-98 (kind 27235) proof bound to THIS url, signed by the church key OR one of
 // its stewards. Returns the authorised church pubkey (cp) or null — only they may pull a church's full corpus.
+// CLOCK VISIBILITY (owner 2026-10-27: make clock failures visible, correct nothing). _exportAuth / _syncAuth refuse a
+// proof outside +-300 s with the SAME bare 401 as every other refusal, so a box whose clock (or whose peer's) is 6 min
+// out looked healthy for ever. The reason is named ONLY when the signature already verified and the time window is the
+// first failing check after it — so it says nothing about whether the key is trusted — and the body is one fixed
+// string for every caller. `clockSuspect` is a latched timestamp, refreshed at most once a minute, logged once an hour.
+const _TIME_REFUSAL = 'unauthorized: the proof\u2019s timestamp is outside the allowed window - the clock on one of the two machines may be wrong';
+const CLOCK_SUSPECT_TTL = Math.max(1, parseInt(process.env.RELAY_CLOCK_SUSPECT_TTL_SEC || '3600', 10) || 3600);   // env only so a test can watch it expire
+let _clockSuspectAt = 0, _clockSuspectLogged = 0;
+function _noteTimeRefusal(req) {
+  try { req._authWhy = 'time'; } catch {}
+  const t = Math.floor(Date.now() / 1000);
+  // LATCHED PER WINDOW: an unauthenticated caller can raise this with one old-dated self-signed proof, so a refusal inside
+  // the window does NOT extend it - it expires CLOCK_SUSPECT_TTL after the refusal that raised it, and only a refusal after
+  // that raises it again. A real skew re-raises it within minutes; a stranger has to come back every window.
+  if (t - _clockSuspectAt >= CLOCK_SUSPECT_TTL) _clockSuspectAt = t;
+  if (t - _clockSuspectLogged >= 3600) { _clockSuspectLogged = t; console.log('[clock] refused a relay proof for its timestamp - this box or the asking one has a wrong clock'); }
+}
+function _unauthBody(req, dflt) { return req && req._authWhy === 'time' ? _TIME_REFUSAL : dflt; }
+// The asking side: a peer answered 401. Recorded per peer (the peers are OUR configured ones, so the map is bounded),
+// logged once an hour per peer, and reported through _lastSync. Peer addresses are shown only to an admin (see /status).
+const _peerRefused = new Map();   // peerBase -> { at, logged }
+let _passRefused = 0;
+function _notePeer401(peerBase, r) {
+  if (!r || r.status !== 401) return;
+  const t = Math.floor(Date.now() / 1000);
+  const k = String(peerBase);
+  const e = _peerRefused.get(k) || { at: 0, logged: 0 };
+  e.at = t; _passRefused++;
+  if (t - e.logged >= 3600) { e.logged = t; console.log('[sync] ' + k + ' refused our proof (401) - its trust list or a clock may be wrong'); }
+  _peerRefused.set(k, e);
+}
 function _exportAuth(req, host, path) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
   if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
-  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return null;   // fresh (±5 min, anti-replay)
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) { _noteTimeRefusal(req); return null; }   // fresh (±5 min, anti-replay)
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || (CHURCH_PUBS.has(ev.pubkey) ? ev.pubkey : '');
@@ -833,7 +864,7 @@ function _syncAuth(req, host, path) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
   if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
-  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return null;
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) { _noteTimeRefusal(req); return null; }
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || '';
@@ -6569,7 +6600,8 @@ function serveStatic(req, res) {
           return { ref, sha, short: sha.slice(0, 7), builtAt: d.status === 0 ? d.stdout.trim() : '' };
         } catch { return { ref, sha: null }; }
       })() } : {}),
-      sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },   // is auto-sync actually working?
+      sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },
+      ...(_clockSuspectAt && Math.floor(Date.now() / 1000) - _clockSuspectAt < CLOCK_SUSPECT_TTL ? { clockSuspect: { at: _clockSuspectAt } } : {}),   // a proof was refused for its timestamp: this box's clock, or an asker's, may be wrong. No identity in it.   // is auto-sync actually working?
       // AN UNPROVEN CLAIM, and it must keep reading as one. This is a bare string over an unauthenticated
       // GET: any host can serve this box's /status verbatim and be believed. It is fine for what it is used
       // for (a church authorises this pubkey as a trusted sync peer; the relay-to-relay path then makes the
@@ -6585,6 +6617,7 @@ function serveStatic(req, res) {
       // who arrived with only the church's name (red-team, 2026-08-18). The neighbouring /stats already treats
       // per-church counts as seizure-sensitive; /status now agrees. Everything above — health, disk, build —
       // stays public, because a fleet dashboard legitimately needs it and none of it identifies a soul.
+      ...(adminOK(req) && _peerRefused.size ? { syncRefusedBy: [..._peerRefused].map(([peer, v]) => ({ peer, at: v.at })) } : {}),   // WHICH peers: admin only — a church box's peers are seizure-sensitive
       ...(adminOK(req) ? { counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 } } : {}),
       serves: { app: SETTINGS.serveApp, modules: SETTINGS.serveModules, audio: SETTINGS.serveAudio },   // what this relay also hosts (toggleable in the control dashboard)
     }));
@@ -6786,7 +6819,7 @@ function serveStatic(req, res) {
   // to owner-only before that and the three route comments were not moved with it (AUDIT round 4, F3).
   if (route === '/export') {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized: needs a fresh NIP-98 proof signed by the church key, bound to this URL'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized: needs a fresh NIP-98 proof signed by the church key, bound to this URL')); return; }
     const events = store.exportChurch(cp);
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Content-Disposition': 'attachment; filename="trinityone-church-backup.jsonl"', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.write(JSON.stringify({ _manifest: { format: 'trinityone-church-backup', version: 1, church: cp, exportedAt: Math.floor(Date.now() / 1000), events: events.length, relay: ORIGIN } }) + '\n');
@@ -6799,7 +6832,7 @@ function serveStatic(req, res) {
   // the bytes themselves come from GET /blob/<sha> (the church key passes _blobMember for its own blobs).
   if (route === '/export-media') {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     const blobs = _churchBlobList(cp);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, blobs, totalBytes: blobs.reduce((a, b) => a + b.size, 0) }));
@@ -6814,7 +6847,7 @@ function serveStatic(req, res) {
   if (route === '/sync' && req.method === 'GET') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync');
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     const since = parseInt(q.get('since') || '0', 10) || 0;
     const events = store.exportChurchSince(cp, since);
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
@@ -6835,7 +6868,7 @@ function serveStatic(req, res) {
   if (route === '/sync-media' && req.method === 'GET') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-media');
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     // `at` on a blob and `deletedAt` are ADDITIVE: a relay that predates them reads `blobs[].sha/size` and
     // `deleted` exactly as before. See _blobSince.
     const blobs = _churchBlobList(cp).map(b => ({ ...b, at: _sinceOf(b.sha, cp) }));
@@ -6850,7 +6883,7 @@ function serveStatic(req, res) {
     const sha = route.slice('/sync-blob/'.length).toLowerCase();
     const cp = _syncAuth(req, req.headers['host'] || '', route);
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || !_blobOwners(sha).has(cp)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }   // R-4: check owners set, not just primary
+    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || !_blobOwners(sha).has(cp)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }   // R-4: check owners set, not just primary
     const file = join(BLOB_DIR, sha); let st; try { st = statSync(file); } catch { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end('not found'); return; }
     res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': 'no-store', ...SEC_HEADERS });
     createReadStream(file).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);   // stream, don't buffer a 200MB blob in RAM
@@ -6861,7 +6894,7 @@ function serveStatic(req, res) {
   if (route === '/sync-digest' && req.method === 'GET') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-digest');
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, buckets: _bucketDigest(cp) }));
     return;
@@ -6871,7 +6904,7 @@ function serveStatic(req, res) {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-ids');
     const q = new URL(req.url, 'http://x').searchParams;
     const bucket = (q.get('bucket') || '').toLowerCase();
-    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{2}$/.test(bucket)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{2}$/.test(bucket)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, bucket, ids: store.churchEventIds(cp).filter((id) => id.slice(0, 2) === bucket) }));
     return;
@@ -6879,7 +6912,7 @@ function serveStatic(req, res) {
   // negentropy resync (events): the raw events for the IDs a peer found it's missing (POSTed id list, bounded).
   if (route === '/sync-events' && req.method === 'POST') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-events');
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     const chunks = []; let n = 0, big = false;
     req.on('data', (c) => { if (big) return; n += c.length; if (n > 4 * 1024 * 1024) { big = true; try { res.writeHead(413, { 'Cache-Control': 'no-store' }); res.end('too many ids'); } catch {} req.destroy(); return; } chunks.push(c); });
     req.on('end', () => {
@@ -6900,7 +6933,7 @@ function serveStatic(req, res) {
   if (route === '/import' && req.method === 'POST') {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key, bound to /import"}'); return; }
+    if (!cp) { res.writeHead(401, H); res.end(req._authWhy === 'time' ? JSON.stringify({ error: _TIME_REFUSAL }) : '{"error":"unauthorized: a fresh NIP-98 proof by the church key, bound to /import"}'); return; }
     const chunks = []; let n = 0, tooBig = false;
     req.on('data', (c) => { if (tooBig) return; n += c.length; if (n > MAX_IMPORT) { tooBig = true; try { res.writeHead(413, H); res.end('{"error":"import too large"}'); } catch {} req.destroy(); return; } chunks.push(c); });   // respond BEFORE destroy — destroy skips 'end', so a deferred 413 would hang the request (→ 502)
     req.on('end', () => {
@@ -8231,7 +8264,7 @@ async function syncChurchFromPeer(cp, peerBase) {
   let maxTs = SYNC_CURSORS[key] || 0, imported = 0;
   try {
     const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } });
-    if (!r.ok) return { ok: false, status: r.status };
+    if (!r.ok) { _notePeer401(peerBase, r); return { ok: false, status: r.status }; }
     await forEachNdjsonLine(r, MAX_IMPORT, (s) => {   // stream the corpus line-by-line (bounded memory)
       let e; try { e = JSON.parse(s); } catch { return; }
       if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
@@ -8274,7 +8307,7 @@ function _bucketDigest(cp) {
 // ours, and pull only the events we're missing. Runs ALONGSIDE the v1 cursor pull (kept as a correctness backstop).
 async function reconcileChurchWithPeer(cp, peerBase) {
   const digUrl = peerBase + '/sync-digest?church=' + encodeURIComponent(cp);
-  let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) return 0; peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
+  let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); return 0; } peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
   const mine = _bucketDigest(cp), missing = [];
   // PERF (audit 2026-07-24): this used to call store.churchEventIds(cp) — the church's ENTIRE id list —
   // once per mismatched bucket, inside the loop. Buckets are the first two hex chars of an event id, so there
@@ -8293,7 +8326,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (const b in peerBuckets) {
     if (mine[b] && mine[b].fp === peerBuckets[b].fp) continue;   // bucket identical on both sides -> nothing to do
     const idsUrl = peerBase + '/sync-ids?church=' + encodeURIComponent(cp) + '&bucket=' + b;
-    let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) continue; peerIds = (await r.json()).ids || []; } catch { continue; }
+    let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); continue; } peerIds = (await r.json()).ids || []; } catch { continue; }
     const have = haveIn(b);
     for (const id of peerIds) if (/^[0-9a-f]{64}$/.test(id) && !have.has(id)) missing.push(id);
   }
@@ -8301,7 +8334,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   let imported = 0;
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
-    let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
+    let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) { _notePeer401(peerBase, r); continue; } body = await readCapped(r, MAX_IMPORT); } catch { continue; }
     for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
@@ -8316,7 +8349,7 @@ async function syncMediaFromPeer(cp, peerBase) {
   // uploading to a peer it controls and letting trusted-relay sync pull them — bypassing the PUT-gate.
   if (mediaRequiresHost() && !MEDIA_HOSTS.has(cp)) return 0;
   const manUrl = peerBase + '/sync-media?church=' + encodeURIComponent(cp);
-  let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
+  let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); return 0; } man = await r.json(); } catch { return 0; }
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
     if (!b || !/^[0-9a-f]{64}$/.test(b.sha)) continue;
@@ -8343,6 +8376,7 @@ async function syncMediaFromPeer(cp, peerBase) {
     const tmp = join(BLOB_DIR, '.dl-' + randomBytes(12).toString('hex') + '.tmp');
     try {
       const r = await fetch(blobUrl, { headers: { Authorization: relayProof(blobUrl, 'GET', cp) } });
+      if (!r.ok) _notePeer401(peerBase, r);
       if (!r.ok || !r.body) continue;
       // stream to a temp file, hashing as it flows — never buffer a 200MB blob in RAM, and never write straight to
       // the final <sha> path (a crash there wedges a truncated file that existsSync skips forever with no self-heal).
@@ -8433,7 +8467,16 @@ let _lastSync = { at: 0, imported: 0, ok: null, error: '' };
 async function runSync() {
   if (_syncing) return null;
   _syncing = true;
-  try { const n = await syncAllChurches(); _lastSync = { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: true, error: '' }; return n; }
+  _passRefused = 0;
+  try {
+    const n = await syncAllChurches();
+    // A peer that answered 401 this pass is NOT a healthy pass, even though nothing threw (every peer failure is swallowed).
+    // Fixed string on purpose: /status is unauthenticated, so no peer address or key goes in it (see the admin block).
+    _lastSync = _passRefused
+      ? { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: false, error: 'a peer refused this box - its trust list or a clock may be wrong' }
+      : { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: true, error: '' };
+    return n;
+  }
   catch (e) { _lastSync = { at: Math.floor(Date.now() / 1000), imported: 0, ok: false, error: String((e && e.message) || e).slice(0, 200) }; throw e; }
   finally { _syncing = false; }
 }
