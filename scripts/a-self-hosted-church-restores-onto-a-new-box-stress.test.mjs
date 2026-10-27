@@ -169,7 +169,7 @@ test('B4: a long-lived member follows the church from T to T2 with no manual ste
   } finally { app.close(); }
 });
 
-test('B5: the dead box T is forgotten by the admission cache once the church stops signing its key', { todo: 'FINDING: revocation (key no longer signed) drops the address from the list but never calls gate.forget; only the same-key MOVE path does' }, () => {
+test('B5: the dead box T is forgotten by the admission cache once the church stops signing its key', () => {
   const st = globalThis.__B.stale;
   console.log('B5 measured: ' + JSON.stringify(st));
   assert.equal(st.deadStillAdmitted, false, 'the gate still admits the revoked box\'s address (cached proof, up to 30 days)');
