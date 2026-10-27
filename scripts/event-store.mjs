@@ -244,6 +244,10 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);');
   const qMetaGet = db.prepare('SELECT v FROM meta WHERE k = ?');
   const qMetaSet = db.prepare('INSERT INTO meta (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v = excluded.v');
+  // the authors of every stored kind-30078 doc at one d-tag (current AND tombstoned copies: a leave replaces the join
+  // with a ['deleted'] copy at the same address). Used once per store by the gateway's startup relabel.
+  const qAuthorsAtD = db.prepare('SELECT DISTINCT pubkey FROM events WHERE kind = 30078 AND dtag = ?');
+  function authorsOfDoc(dtag) { return qAuthorsAtD.all(String(dtag)).map(r => r.pubkey); }
   function getMeta(k) { const r = qMetaGet.get(k); return r ? r.v : null; }
   function setMeta(k, v) { qMetaSet.run(k, String(v)); }
   function countDeletions() { return db.prepare('SELECT COUNT(*) AS n FROM deletions').get().n; }
@@ -348,8 +352,9 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  // re-resolve the church column of rows that ALREADY have one (reattribute only visits ''). resolveFn returns null
-  // for a row it does not want revisited, else the church ('' allowed); the column is rewritten only when it differs.
+  // re-resolve the church column of rows that ALREADY have one (reattribute only visits ''). resolveFn(event, current)
+  // gets the row's CURRENT label as its second argument and returns null for a row it does not want revisited, else
+  // the church ('' allowed); the column is rewritten only when it differs.
   // Returns { changed, scanned }: scanned = rows the SQL handed back (what was JSON-parsed), so a caller or test can
   // see that the filter worked.
   // SQL filters kind-30078 rows by d-tag range [prefix, prefix with its last char bumped), so raw is never
@@ -374,7 +379,7 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
         scanned++;
         if (r.kind === 30078 && !dtagPrefixes.some(p => String(r.dtag || '').startsWith(p))) continue;
         let e; try { e = JSON.parse(r.raw); } catch { continue; }
-        const ch = resolveFn(e);
+        const ch = resolveFn(e, r.church);
         if (ch === null || ch === undefined || ch === r.church) continue;
         updChurch.run(ch, r.id); changed++;
       }
@@ -452,5 +457,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
   // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
   const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
-  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, authorsOfDoc, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
 }

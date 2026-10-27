@@ -146,5 +146,9 @@ test('relabel: touches only DMs, ungrouped reactions and prefixed 30078 rows; th
   for (const id of other) assert.equal(label(id), 'OLD', 'an unrelated doc was touched');
   assert.equal(st.relabel(ev => null, P).changed, 0, 'null = skip');
   assert.ok(st.relabel(ev => 'NEW', ['x/']).scanned > 3000, 'a prefix not ending in : falls back to the unfiltered read');
+  // resolveFn is handed the row's CURRENT label (the gateway keeps a label both people still share)
+  const seen = new Map(); st.relabel((ev, cur) => { seen.set(ev.id, cur); return null; }, P);
+  assert.equal(seen.get(dm.id), 'NEW');
+  assert.equal(seen.get(wrong[0]), 'NEW');
   st.close();
 });

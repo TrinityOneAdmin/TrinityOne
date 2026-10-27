@@ -3289,7 +3289,31 @@ function skipTokOk(e, careId, date) {
   const wantHash = want && ((want.perDay && want.perDay.get(date)) || want.legacy || '');
   return !!(wantHash && tok && createHash('sha256').update(String(tok)).digest('hex') === wantHash);
 }
+// (b) of resolveChurch: a direct message / ungrouped reaction by a person carries only its peer in ['p']. It is filed
+// under a church BOTH people belong to (the church key itself counts as the peer's church), the smallest pubkey if
+// several, else '' (never synced to any church box). It must not fall through to the author's first church.
+const isPersonDm = (e) => (e.kind === 4 || (e.kind === 7 && !gidOf(e))) && !CHURCH_PUBS.has(e.pubkey) && !NETWORKS.has(e.pubkey);
+const dmPeer = (e) => { const pt = (e.tags || []).find(t => t[0] === 'p' && t[1]); return pt ? (toHexPub(pt[1]) || pt[1]) : ''; };
+function dmChurch(e) {
+  const peer = dmPeer(e);
+  if (peer && CHURCH_PUBS.has(peer)) return memberIn(e.pubkey, peer) ? peer : '';
+  const theirs = peer ? new Set(churchesOf(peer)) : null;
+  const both = theirs ? churchesOf(e.pubkey).filter(c => theirs.has(c)).sort() : [];
+  return both[0] || '';
+}
+// Is `cp` a church BOTH people of a person's DM belong to, or once belonged to, on this relay? `isIn(pubkey, cp)`
+// decides belonging; the startup relabel passes "currently OR formerly". It keeps such a label.
+function dmLabelShared(e, cp, isIn) {
+  if (!cp) return false;
+  const peer = dmPeer(e);
+  if (peer && CHURCH_PUBS.has(peer)) return cp === peer && isIn(e.pubkey, peer);
+  return !!peer && isIn(e.pubkey, cp) && isIn(peer, cp);
+}
 function resolveChurch(e) {
+  // (b) RUNS BEFORE THE HONOURED ['church'] TAG (stress 2026-10-27, label-adversarial 8a). No shipped client puts a
+  // church tag on a kind 4 or an ungrouped kind 7, so the tag branch below could only ever be reached here by a
+  // modified client filing a DM under any church IT belongs to, into the backup and box of a church the peer is not in.
+  if (isPersonDm(e)) return dmChurch(e);
   // SECURITY-2026-07-13: honor a self-declared ['church',cp] tag ONLY when the author actually BELONGS to cp. Trusting
   // it blindly let a member of church A tag events ['church', B] and inject them into B's per-church retention bucket
   // (culling B's real chat), B's /export backup, and the corpus B replicates to its trusted relays. Entitled = cp
@@ -3317,16 +3341,6 @@ function resolveChurch(e) {
   if (e.kind === 30078) {
     const d = dtag(e), suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
     if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
-  }
-  // (b) a direct message / ungrouped reaction carries only its peer in ['p']: file it under a church BOTH people
-  // belong to (the church key itself counts as the peer's church), the smallest pubkey if several, else ''
-  // (never synced to any church box). It must not fall through to the author's first church.
-  if ((e.kind === 4 || (e.kind === 7 && !gidOf(e))) && !CHURCH_PUBS.has(e.pubkey) && !NETWORKS.has(e.pubkey)) {
-    const pt = (e.tags || []).find(t => t[0] === 'p' && t[1]); const peer = pt ? (toHexPub(pt[1]) || pt[1]) : '';
-    if (peer && CHURCH_PUBS.has(peer)) return memberIn(e.pubkey, peer) ? peer : '';
-    const theirs = peer ? new Set(churchesOf(peer)) : null;
-    const both = theirs ? churchesOf(e.pubkey).filter(c => theirs.has(c)).sort() : [];
-    return both[0] || '';
   }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
@@ -6905,7 +6919,7 @@ function serveStatic(req, res) {
         if (fresh && !(OFFER_OPEN || SETTINGS.offerHosting) && CHURCH_PUBS.size) { res.writeHead(403, H); res.end('{"error":"this relay is already set up for its church — ask the operator to add yours, or turn on Offer to host other churches"}'); return; }
         if (fresh && CHURCH_PUBS.size >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
         if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
-        let imported = 0, duplicates = 0, invalid = 0;
+        let imported = 0, duplicates = 0, skipped = 0, invalid = 0;
         for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
           const s = line.trim(); if (!s) continue;
           let e; try { e = JSON.parse(s); } catch { invalid++; continue; }
@@ -6934,12 +6948,13 @@ function serveStatic(req, res) {
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
             if (r === 'stored') imported++;
+            else if (r === 'duplicate' || r === 'have-newer') duplicates++;   // already there (this copy or a newer version)
+            else skipped++;                                          // 'deleted' (its author tombstoned it) / 'future'
             if (e.kind === 5) applyDeletions(e);   // ALWAYS — a kind-5 we already hold ('duplicate') still has to be applied, or a restore silently resurrects everything it deleted
-            else duplicates++;
           } catch { invalid++; }
         }
         // respond BEFORE the heavy re-scan so a slow hydrate can't time the request out at the proxy (→ 502)
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, skipped, invalid }));
         // WHY THERE IS NO accept() PASS HERE. One was added on 2026-08-20 and reverted the same day: it
         // deleted a church's entire finance journal on a legitimate restore, and every message ever written
         // by anyone who has since left. accept() is a WRITE-TIME ADMISSION GATE — "may this author add this,
@@ -8181,9 +8196,29 @@ backfillDeletions();   // re-apply every stored kind-5 — heals content that re
 // now that group→church / member→church maps are built, attribute any events stored without a church
 // (migrated chat, or pre-map writes) so per-church retention buckets them correctly
 if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
-// One pass per start: rows filed by an older build under the author's FIRST church (DMs, ungrouped reactions,
-// church-suffixed docs) are re-resolved by the current rule, including to '' (a pair sharing no church).
-if (CHURCH_PUBS.size) { const r = store.relabel(e => relabelTarget(e) ? resolveChurch(e) : null, RELABEL_D_PREFIXES).changed; if (r) console.log(`[relay] relabelled ${r} events to the church they belong to`); }
+// ONCE PER STORE (meta key RELABEL_META): rows filed by an older build under the author's FIRST church (DMs, ungrouped
+// reactions, church-suffixed docs) are re-resolved by the current rule, including to '' (a pair sharing no church).
+// It used to run on EVERY start, and so re-derived labels from whatever member docs the relay held that day: a member
+// leaving moved her whole history with the church out of its backup, and a box missing a join doc moved a synced DM
+// to '' or to another hosted church (stress 2026-10-27, label-adversarial 4/4b/6/6b). Live puts still use
+// resolveChurch; reattribute ('' rows) still runs every start. A future rule change bumps the version in the key.
+// A person's DM whose current label names a church both people belong to here, OR ONCE DID, keeps it (one shared
+// church's box is enough). "Once did" = the author of a stored member:<cp> doc, tombstoned (left) or not: without it,
+// a member who LEFT before this pass (an upgraded store, or a restore onto a fresh box - the key stays unset until a
+// church exists, so the start after an /import runs it) took every DM she exchanged with the church out of its
+// backup and box. A label naming a church one of them NEVER joined is the misfile this pass exists to fix: it moves.
+const RELABEL_META = 'relabel:church-label-v1';
+if (CHURCH_PUBS.size && store.getMeta(RELABEL_META) === null) {
+  const everJoined = new Map();   // cp -> Set(authors of a stored member:<cp> doc), built lazily for this pass only
+  const everIn = (pk, cp) => {
+    if (memberIn(pk, cp)) return true;
+    let s = everJoined.get(cp); if (!s) { s = new Set(store.authorsOfDoc(MEMBER_D + cp)); everJoined.set(cp, s); }
+    return s.has(pk);
+  };
+  const r = store.relabel((e, cur) => !relabelTarget(e) ? null : (isPersonDm(e) && dmLabelShared(e, cur, everIn)) ? null : resolveChurch(e), RELABEL_D_PREFIXES).changed;
+  store.setMeta(RELABEL_META, String(Math.floor(Date.now() / 1000)));
+  if (r) console.log(`[relay] relabelled ${r} events to the church they belong to`);
+}
 
 // ── relay resync (pull-since-cursor): converge each church with the trusted peer relays it authorised ──────────
 // Pull a peer's /sync for a church since our cursor, verify + store new events (dedup by ID for free), apply kind-5
