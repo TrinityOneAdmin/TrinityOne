@@ -1435,9 +1435,20 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // `withdrawn` keeps the tab too: a withdrawal now empties the phone (owner 2026-09-11), so without it the tab
   // would simply vanish and a worker would read that as the app breaking. The tab stays to say what happened.
   const kidsOn = !!(_ckReg.cleared || _ckReg.notYet || _ckReg.withdrawn || (_ckReg.keysHeld > 0));
-  const _tabs = [['serving', 'Serving', 'hand'], ...(canSeeRota ? [['rota', 'Rota', 'users']] : []), ...(kidsOn ? [['kids', 'Kids', 'child']] : []), ['events', 'Events', 'calendar'], ['calendar', 'Calendar', 'calCheck'], ...(careOn ? [['care', 'Care', 'heart']] : [])];
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). A steward hides serving/rota or events/calendar
+  // from the member app in Settings → Congregation features. Serving AND Rota ride on `rota`; Events AND
+  // Calendar ride on `calendar`. Unset means on, so an existing church is unchanged. Kids and Care keep their
+  // own gates (checkin / meals) above.
+  const _svFeat = (ctx.church && ctx.church.features) || {};
+  const rotaOn = _svFeat.rota !== false;
+  const calOn = _svFeat.calendar !== false;
+  const _tabs = [...(rotaOn ? [['serving', 'Serving', 'hand']] : []), ...(rotaOn && canSeeRota ? [['rota', 'Rota', 'users']] : []), ...(kidsOn ? [['kids', 'Kids', 'child']] : []), ...(calOn ? [['events', 'Events', 'calendar']] : []), ...(calOn ? [['calendar', 'Calendar', 'calCheck']] : []), ...(careOn ? [['care', 'Care', 'heart']] : [])];
   const _tabKeys = _tabs.map(t => t[0]).join(',');
   React.useEffect(() => {
+    // ALL GONE IS A REAL STATE NOW. With rota AND calendar both off and no Kids/Care tab, `_tabs` is empty, and
+    // the old `setTab(_tabs[0][0])` threw on `undefined[0]`. The render shows a quiet empty state instead; here
+    // we simply must not index an empty array. (A church may legitimately run with these off — DOMAIN.md.)
+    if (!_tabs.length) return;
     if (_tabs.some(t => t[0] === tab)) return;
     setTab(_tabs[0][0]);
   }, [_tabKeys, tab]);
@@ -1505,7 +1516,11 @@ function ServingScreen({ open, onClose, ctx, docked }) {
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 28px' }}>
-        {tab === 'serving' ? (
+        {_tabs.length === 0 ? (
+          <div style={{ fontSize: 14, color: 'var(--ink-3)', padding: '28px 8px', lineHeight: 1.55, textAlign: 'center' }}>
+            Nothing to show here yet — your church has not turned on serving, events or the calendar.
+          </div>
+        ) : tab === 'serving' ? (
           <React.Fragment>
             {pendingLocked.length ? (
               <div style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
@@ -1884,9 +1899,9 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             <SafetyBanner ctx={ctx} persistent />
             <CareCard ctx={ctx} embedded />
           </React.Fragment>
-        ) : (
+        ) : tab === 'calendar' ? (
           <MyMonth ctx={ctx} onManage={(it) => setSheet({ kind: 'manage', item: it })} onRunsheet={(it) => setSheet({ kind: 'runsheet', item: it })} />
-        )}
+        ) : null}
       </div>
 
       <RespondSheet open={sheet && sheet.kind === 'respond'} req={sheet && sheet.kind === 'respond' ? sheet.item : null} onClose={close} onSwap={(req) => setSheet({ kind: 'swap', item: req })} ctx={ctx} />
