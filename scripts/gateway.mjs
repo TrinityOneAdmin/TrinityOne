@@ -8183,7 +8183,7 @@ backfillDeletions();   // re-apply every stored kind-5 — heals content that re
 if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
 // One pass per start: rows filed by an older build under the author's FIRST church (DMs, ungrouped reactions,
 // church-suffixed docs) are re-resolved by the current rule, including to '' (a pair sharing no church).
-if (CHURCH_PUBS.size) { const r = store.relabel(e => relabelTarget(e) ? resolveChurch(e) : null, RELABEL_D_PREFIXES); if (r) console.log(`[relay] relabelled ${r} events to the church they belong to`); }
+if (CHURCH_PUBS.size) { const r = store.relabel(e => relabelTarget(e) ? resolveChurch(e) : null, RELABEL_D_PREFIXES).changed; if (r) console.log(`[relay] relabelled ${r} events to the church they belong to`); }
 
 // ── relay resync (pull-since-cursor): converge each church with the trusted peer relays it authorised ──────────
 // Pull a peer's /sync for a church since our cursor, verify + store new events (dedup by ID for free), apply kind-5

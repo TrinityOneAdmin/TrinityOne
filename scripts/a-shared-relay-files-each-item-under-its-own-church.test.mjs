@@ -38,9 +38,12 @@ const ev = {};
 
 before(async () => {
   [S, T] = await setup('p');
+  // the client's real DM-reaction shape (src/fellowship.src.js ~5920): e, p, t=trinityone, k=4. Sarah (A and B) reacts to Bob (B only).
+  ev.reactBob = finalizeEvent({ kind: 7, created_at: at(), tags: [['e', 'f'.repeat(64)], ['p', bob.pub], ['t', 'trinityone'], ['k', '4']], content: '+' }, sarah.sk);
+  ev.reactTom = finalizeEvent({ kind: 7, created_at: at(), tags: [['e', 'e'.repeat(64)], ['p', tom.pub], ['t', 'trinityone'], ['k', '4']], content: '+' }, sarah.sk);
   ev.tomA = member(tom, A); ev.sarahA = member(sarah, A); ev.sarahB = member(sarah, B); ev.bobB = member(bob, B);
   ev.dmTom = dm(sarah, tom); ev.dmB = dm(sarah, B); ev.dmBob = dm(sarah, bob); ev.dmTomBob = dm(tom, bob);
-  const res = await H.publishAll(S, [ev.tomA, ev.sarahA, ev.sarahB, ev.bobB, ev.dmTom, ev.dmB, ev.dmBob, ev.dmTomBob]);
+  const res = await H.publishAll(S, [ev.tomA, ev.sarahA, ev.sarahB, ev.bobB, ev.dmTom, ev.dmB, ev.dmBob, ev.dmTomBob, ev.reactBob, ev.reactTom]);
   assert.ok(res, 'publish ran');
   // a member's very FIRST join copy: carol joins B once and nothing re-sends it
   ev.carolB = member(carol, B);
@@ -89,20 +92,23 @@ test('4. a DM between two people who share no church is in neither backup', asyn
 
 test('5. startup relabel repairs rows filed under the old wrong church', async () => {
   const [S2, T2] = await setup('r');
-  const e = { sarahA: member(sarah, A), sarahB: member(sarah, B), bobB: member(bob, B), dmB: dm(sarah, B), dmTom: dm(sarah, tom) };
+  const e = { sarahA: member(sarah, A), sarahB: member(sarah, B), bobB: member(bob, B), dmB: dm(sarah, B), dmTom: dm(sarah, tom),
+    reactBob: finalizeEvent({ kind: 7, created_at: at(), tags: [['e', 'd'.repeat(64)], ['p', bob.pub], ['t', 'trinityone'], ['k', '4']], content: '+' }, sarah.sk) };
   e.tomA = member(tom, A);
-  await H.publishAll(S2, [e.tomA, e.sarahA, e.sarahB, e.bobB, e.dmTom, e.dmB]);
+  await H.publishAll(S2, [e.tomA, e.sarahA, e.sarahB, e.bobB, e.dmTom, e.dmB, e.reactBob]);
   // stop S2 and put the OLD wrong label back, as a relay that ran the previous build would have written it
   S2.proc.kill('SIGKILL'); await new Promise(r => S2.proc.once('exit', r));
   const db = new DatabaseSync(join(S2.dataDir, 'relay.sqlite'));
   try {
-    for (const id of [e.sarahB.id, e.dmB.id]) db.prepare('UPDATE events SET church = ? WHERE id = ?').run(A.pub, id);
+    for (const id of [e.sarahB.id, e.dmB.id, e.reactBob.id]) db.prepare('UPDATE events SET church = ? WHERE id = ?').run(A.pub, id);
     assert.equal(db.prepare('SELECT church FROM events WHERE id = ?').get(e.dmB.id).church, A.pub, 'CONTROL: the wrong label is in place');
   } finally { db.close(); }
   const S3 = await H.moveRelay(S2);
   const b = await exportIds(S3, B), a = await exportIds(S3, A);
   assert.equal(b.has(e.sarahB.id), true, 'relabelled: Sarah\'s B join now in B\'s backup');
   assert.equal(b.has(e.dmB.id), true, 'relabelled: her DM to B now in B\'s backup');
+  assert.equal(b.has(e.reactBob.id), true, 'relabelled: her reaction to Bob now in B\'s backup');
+  assert.equal(a.has(e.reactBob.id), false);
   assert.equal(a.has(e.sarahB.id), false);
   assert.equal(a.has(e.dmB.id), false);
   assert.equal(a.has(e.dmTom.id), true, 'CONTROL: the correctly-labelled A row stayed in A');
@@ -114,4 +120,14 @@ test('5. startup relabel repairs rows filed under the old wrong church', async (
   assert.equal(holds(T2, e.dmTom.id), true, 'CONTROL: A traffic synced');
   assert.equal(holds(T2, e.sarahB.id), false);
   assert.equal(holds(T2, e.dmB.id), false);
+});
+
+test('6. a DM reaction follows its peer: Sarah\'s reaction to Bob (B) is B\'s, her reaction to Tom (A) is A\'s', async () => {
+  const b = await exportIds(S, B), a = await exportIds(S, A);
+  assert.equal(a.has(ev.reactTom.id), true, 'CONTROL: reaction to an A-only member is in A\'s backup');
+  assert.equal(b.has(ev.reactBob.id), true, 'reaction to Bob is in B\'s backup');
+  assert.equal(a.has(ev.reactBob.id), false, 'and not in A\'s');
+  await H.syncNow(T);
+  await H.waitFor(async () => holds(T, ev.reactTom.id), { label: 'T syncing the A reaction' });
+  assert.equal(holds(T, ev.reactBob.id), false, 'the reaction to Bob must not reach A\'s box');
 });

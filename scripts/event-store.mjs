@@ -135,7 +135,6 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   const cullOldForChurch = db.prepare('DELETE FROM events WHERE id IN (SELECT id FROM events WHERE structured = 0 AND church = ? ORDER BY created_at ASC LIMIT ?)');
   const updChurch        = db.prepare('UPDATE events SET church = ? WHERE id = ?');
   const qUnattributed    = db.prepare("SELECT id, raw FROM events WHERE church = ''");
-  const qRelabelable     = db.prepare('SELECT id, kind, dtag, church, raw FROM events WHERE kind IN (4, 7, 30078)');
 
   // store an event. Returns 'stored' | 'have-newer' (a newer version of a replaceable doc already held) |
   // 'duplicate' (same id already stored) | 'deleted' (its author tombstoned it — a resync must not resurrect it).
@@ -351,21 +350,37 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
 
   // re-resolve the church column of rows that ALREADY have one (reattribute only visits ''). resolveFn returns null
   // for a row it does not want revisited, else the church ('' allowed); the column is rewritten only when it differs.
-  // kind-30078 rows are pre-filtered by d-tag prefix so a big document corpus is not parsed.
+  // Returns { changed, scanned }: scanned = rows the SQL handed back (what was JSON-parsed), so a caller or test can
+  // see that the filter worked.
+  // SQL filters kind-30078 rows by d-tag range [prefix, prefix with its last char bumped), so raw is never
+  // materialised in JS for a non-matching doc. NO INDEX IS CLAIMED: SQLite scans by kind and tests dtag per row.
+  // The bump is only a correct upper bound when a prefix ends in ':' (every shipped CP_SUFFIXED_D does) -- any other
+  // last char, or U+FFFF, makes this fall back to selecting ALL kind-30078 rows and leaving the JS prefix check to
+  // decide: slower, never wrong.
   function relabel(resolveFn, dtagPrefixes) {
-    let n = 0;
+    let changed = 0, scanned = 0;
+    const ranges = [], args = []; let unbounded = false;
+    for (const p of dtagPrefixes) {
+      if (!p) continue;
+      const last = p.charCodeAt(p.length - 1);
+      if (p[p.length - 1] !== ':' || last === 0xFFFF) { unbounded = true; continue; }
+      ranges.push('(dtag >= ? AND dtag < ?)'); args.push(p, p.slice(0, -1) + String.fromCharCode(last + 1));
+    }
+    const arm = unbounded ? ' OR kind = 30078' : ranges.length ? ' OR (kind = 30078 AND (' + ranges.join(' OR ') + '))' : '';
+    const q = db.prepare('SELECT id, kind, dtag, church, raw FROM events WHERE kind IN (4, 7)' + arm);
     txBegin();
     try {
-      for (const r of qRelabelable.all()) {
+      for (const r of q.all(...(unbounded ? [] : args))) {
+        scanned++;
         if (r.kind === 30078 && !dtagPrefixes.some(p => String(r.dtag || '').startsWith(p))) continue;
         let e; try { e = JSON.parse(r.raw); } catch { continue; }
         const ch = resolveFn(e);
         if (ch === null || ch === undefined || ch === r.church) continue;
-        updChurch.run(ch, r.id); n++;
+        updChurch.run(ch, r.id); changed++;
       }
       txCommit();
     } catch (err) { txRollback(); throw err; }
-    return n;
+    return { changed, scanned };
   }
 
   // bulk import (one-time migration from the old JSON array). Wrapped in a transaction for speed.
