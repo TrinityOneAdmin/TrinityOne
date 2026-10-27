@@ -29,7 +29,7 @@ const wire = (u) => String(u || '').replace(/^wss:\/\/(127\.0\.0\.1[:/])/i, 'ws:
 const netFetch = (u, o) => globalThis.fetch(wire(typeof u === 'string' ? u : String(u)), o);
 
 // ── the wire recorder: every REQ frame, against the address it was sent to ──────────────────────────────
-const PUBLOG = []; const REQS = []; const EVTS = [];   // { url, filters } / { url, ev }
+const PUBLOG = []; const REQS = []; const EVTS = []; let ACK_HOLD = null;   // { url, filters } / { url, ev }
 const RealWS = globalThis.WebSocket;
 const OFFLINE = new Set(); const LIVE_SOCKS = new Set();
 class RecordingWS extends RealWS {
@@ -54,7 +54,9 @@ function wirePool(signer) {
   const api = {
     querySync: (urls, f, o) => p.querySync(list(urls), f, o),
     subscribeMany: (urls, f, h) => p.subscribeMany(list(urls), f, h),
-    publish: (urls, e) => { PUBLOG.push({ at: Date.now(), urls: list(urls), id: e.id }); return p.publish(list(urls), e); },
+    // ACK_HOLD: while set, the ACKS of a publish made now are held until it resolves (the event itself goes on the
+    // wire at once). The RACE test uses it to land a Leave between a join reaching the relay and its ack arriving.
+    publish: (urls, e) => { PUBLOG.push({ at: Date.now(), urls: list(urls), id: e.id }); const ps = p.publish(list(urls), e); const hold = ACK_HOLD; return hold ? ps.map(pr => pr.then(async (v) => { await hold; return v; }, async (x) => { await hold; throw x; })) : ps; },
     ensureRelay: (u, o) => p.ensureRelay(wire(u), o),
     listConnectionStatus: () => {
       const out = new Map();
@@ -394,24 +396,30 @@ async function heldAt(relay) {
 }
 
 // ════════ the ENGINE half: announceMembership, its callers inside the bundle, and the outbox ═══════════════
-test('RACE: an announce already in flight when Leave is tapped neither re-joins the member nor marks the join "sent"', async () => {
+test('RACE: a join whose ACK arrives after Leave was tapped neither re-joins the member nor marks the join "sent"', async () => {
   const app = await phoneA();
   try {
+    // Warm the sockets so the join goes on the wire at once and only its ACK is what waits.
+    await app.publishMessage('g1', 'warm-up'); await sleep(300);
     const from = EVTS.length;
-    // Same tick, as a heartbeat and a Leave tap can be: the announce signs and goes on the wire, THEN Leave signs.
-    const a = app.announceMembership(A.pub);
-    const l = app.leaveMembership(A.npub);
-    const [ra, rl] = await Promise.all([a, l]);
-    await sleep(800);
+    let release; ACK_HOLD = new Promise(r => { release = r; });
+    const a = app.announceMembership(A.pub);   // the join is published now; its acks are held
+    ACK_HOLD = null;
+    await sleep(800);                           // the join reaches the relays and is stored
+    assert.ok(joinsFrom(from).length >= 1, 'staging: the join never went on the wire, so there is no race to see');
+    const rl = await app.leaveMembership(A.npub);   // Leave tapped while the join's ack is still in flight
+    release();                                      // …and only now does the join's ack arrive
+    const ra = await a;
+    await sleep(500);
     assert.equal(rl.ok, true, 'CONTROL: the online Leave did not land: ' + JSON.stringify(rl));
-    assert.equal(app.joinSentFor(A.pub), false, 'the late ack of the racing announce marked the join "sent" AFTER the Leave (the stale-flag variant)');
+    assert.equal(app.joinSentFor(A.pub), false, 'the late ack of the racing join marked it "sent" AFTER the Leave (the stale-flag variant)');
     assert.equal(ra, null, 'the racing announce reported a landed join after the member left');
     const j = joinsFrom(from), t = tombsFrom(from);
     assert.ok(t.length >= 1, 'CONTROL: no tombstone on the wire');
     for (const x of j) assert.ok(x.ev.created_at < t[0].ev.created_at, 'a join was signed NEWER than the tombstone');
     assert.equal(await heldAt(SHARED), 'left', 'the shared server still holds the member as joined');
     assert.equal(await heldAt(TA), 'left', 'the church\'s box still holds the member as joined');
-  } finally { app.close(); }
+  } finally { ACK_HOLD = null; app.close(); }
 });
 
 test('GUARD: while a Leave waits for signal, and after it lands, no announce goes out; an explicit re-follow (clearLeaving) lets one through', async () => {
