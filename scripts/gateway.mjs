@@ -1801,6 +1801,9 @@ const SYNC_CURSOR_FILE = join(DATA_DIR,'sync-cursors.json');   // { "<cp>@<peerU
 let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
 let _cursorsDirty = false;   // written once per sync pass, atomically (tmp+rename) — see saveCursors()
 function saveCursors() { if (!_cursorsDirty) return; _cursorsDirty = false; try { const tmp = SYNC_CURSOR_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SYNC_CURSORS)); renameSync(tmp, SYNC_CURSOR_FILE); } catch {} }
+const SYNC_PAGE = Math.max(1, parseInt(process.env.RELAY_SYNC_PAGE, 10) || 10000);          // events per /sync page we ASK for
+const SYNC_PAGE_MAX = 50000;                                                                  // …and the most a server will hand out per page
+const SYNC_SAVE_EVERY = Math.max(1, parseInt(process.env.RELAY_SYNC_SAVE_EVERY, 10) || 2000); // lines between mid-pass cursor saves
 const SYNC_OVERLAP = 600;   // re-pull a 10-min window before the cursor each time, so an event that arrived out-of-order isn't missed
 const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
 // A member pubkey -> the SET of churches they belong to. This was a single-valued map, last write wins, and
@@ -6849,7 +6852,28 @@ function serveStatic(req, res) {
     const q = new URL(req.url, 'http://x').searchParams;
     if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     const since = parseInt(q.get('since') || '0', 10) || 0;
+    // PAGED MODE, only when the caller asks (`limit=N`): at most N events strictly after the (created_at, id) position
+    // `after=<ts>:<id>` (or from `since` on the first page), oldest-first with id as the tie-break. X-Sync-Limit says
+    // "this server honoured the limit" (a server that predates it sends no such header, which is how a client knows to
+    // read one full body, as before); X-Sync-Next is present only when the page was full, i.e. more may follow. With no
+    // `limit` the answer is exactly what it always was — the whole church since `since` — because the harness corpus(),
+    // the backup/restore checks and every deployed client ask that way and would read a silently truncated default as
+    // "done" and advance their cursor over a gap.
+    const limit = Math.min(SYNC_PAGE_MAX, parseInt(q.get('limit') || '0', 10) || 0);
+    if (limit > 0) {
+      let aTs = Math.max(0, since), aId = '';
+      const am = /^(\d{1,12}):([0-9a-f]{0,64})$/.exec(q.get('after') || '');
+      if (am) { aTs = parseInt(am[1], 10); aId = am[2]; }
+      const page = store.exportChurchPage(cp, aTs, aId, limit);
+      const last = page[page.length - 1];
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Sync-Limit': String(limit), ...(page.length >= limit && last ? { 'X-Sync-Next': last.created_at + ':' + last.id } : {}), ...SEC_HEADERS });
+      if (process.env.RELAY_SYNC_TRACE) console.log(`[sync-trace] church=${cp.slice(0, 8)} since=${since} after=${q.get('after') || ''} limit=${limit} sent=${page.length}`);   // test aid, off unless set
+      for (const p of page) res.write(JSON.stringify(p.event) + '\n');
+      res.end();
+      return;
+    }
     const events = store.exportChurchSince(cp, since);
+    if (process.env.RELAY_SYNC_TRACE) console.log(`[sync-trace] church=${cp.slice(0, 8)} since=${since} after= limit=0 sent=${events.length}`);   // test aid, off unless set
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     for (const e of events) res.write(JSON.stringify(e) + '\n');
     res.end();
@@ -8204,7 +8228,8 @@ function serveStatic(req, res) {
 const store = openStore(SQLITE_DB, { maxEvents: MAX_EVENTS });
 // NOTHING USED TO CLOSE THE STORE. There was no SIGTERM/SIGINT handler and no store.close() anywhere, so an
 // ordinary `systemctl stop` left the church's data in the -wal side file — see the note on checkpoint() in
-// event-store.mjs. Registered once, idempotent, and it re-raises the signal so the exit code stays honest.
+// event-store.mjs. (That checkpoint() was itself inert until 2026-10-27: it called db.pragma(), which DatabaseSync lacks, so
+// close() folded nothing in; it now uses db.exec.) Registered once, idempotent, and it re-raises the signal so the exit code stays honest.
 let _shuttingDown = false;
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
@@ -8260,25 +8285,50 @@ if (CHURCH_PUBS.size && store.getMeta(RELABEL_META) === null) {
 async function syncChurchFromPeer(cp, peerBase) {
   const key = cp + '@' + peerBase;
   const since = Math.max(0, (SYNC_CURSORS[key] || 0) - SYNC_OVERLAP);
-  const url = peerBase + '/sync?church=' + encodeURIComponent(cp) + '&since=' + since;
-  let maxTs = SYNC_CURSORS[key] || 0, imported = 0;
+  let maxTs = SYNC_CURSORS[key] || 0, imported = 0, lines = 0, saved = maxTs;
+  // Persist the resume cursor — ONLY as far as the last fully handled line (maxTs), never to the end of a page we
+  // have not finished reading. The stream is oldest-first, so every event older than maxTs has already been handled;
+  // rows tied at maxTs are re-pulled by the SYNC_OVERLAP window. store.flushDurable() goes FIRST: WAL+synchronous=NORMAL
+  // can lose just-stored rows on a power cut, and a cursor that outlived them would be a silent permanent gap.
+  const persist = () => {
+    if (maxTs <= saved) return;
+    store.flushDurable();
+    SYNC_CURSORS[key] = maxTs; _cursorsDirty = true; saveCursors(); saved = maxTs;
+  };
+  const onLine = (s) => {   // one stored line; bounded memory
+    let e; try { e = JSON.parse(s); } catch { return; }
+    if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
+    if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
+    if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
+    if (!arrivalIdOk(e, dtag(e))) return;                  // …and never an arrival at another member's address
+    if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
+    const put = store.put(e, cp);
+    if (put === 'stored') { imported++; note(e); }
+    if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
+    // A FUTURE-dated event (put says 'future': more than 15 min ahead) must not move the cursor: a peer could otherwise push it
+    // an hour ahead and make us skip every honest event in between. 'duplicate', 'deleted' and 'have-newer' are real events from
+    // the past that this relay already holds or refuses on purpose, so advancing over them is right.
+    if (put !== 'future' && (e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
+    if (++lines % SYNC_SAVE_EVERY === 0) persist();
+  };
+  let status = 0, failed = false;
   try {
-    const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } });
-    if (!r.ok) { _notePeer401(peerBase, r); return { ok: false, status: r.status }; }
-    await forEachNdjsonLine(r, MAX_IMPORT, (s) => {   // stream the corpus line-by-line (bounded memory)
-      let e; try { e = JSON.parse(s); } catch { return; }
-      if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
-      if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
-      if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
-      if (!arrivalIdOk(e, dtag(e))) return;                  // …and never an arrival at another member's address
-      if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
-      const put = store.put(e, cp);
-      if (put === 'stored') { imported++; note(e); }
-      if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
-      if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
-    });
-  } catch { return { ok: false }; }
+    let after = '', prevAfter = null;
+    for (let page = 0; page < 100000; page++) {
+      const url = peerBase + '/sync?church=' + encodeURIComponent(cp) + '&since=' + since + '&limit=' + SYNC_PAGE + (after ? '&after=' + after : '');
+      const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } });
+      if (!r.ok) { _notePeer401(peerBase, r); status = r.status; failed = true; break; }
+      await forEachNdjsonLine(r, MAX_IMPORT, onLine);   // stream the page line-by-line (bounded memory)
+      // A server that predates paging ignores `limit` and sent everything in one body: nothing more to ask for.
+      if (!r.headers.get('x-sync-limit')) break;
+      const next = r.headers.get('x-sync-next');
+      if (!next || next === prevAfter) break;   // short page = done (a repeated position would loop for ever)
+      prevAfter = after = next;
+    }
+  } catch { failed = true; }
+  persist();   // also on failure: progress already made (e.g. an answer over MAX_IMPORT) is kept, not redone
   if (maxTs !== (SYNC_CURSORS[key] || 0)) { SYNC_CURSORS[key] = maxTs; _cursorsDirty = true; }   // persisted once per pass by saveCursors()
+  if (failed) return status ? { ok: false, status } : { ok: false };
   return { ok: true, imported };
 }
 // negentropy set reconciliation: partition a church's event IDs into buckets by ID prefix (256 buckets) and
