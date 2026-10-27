@@ -456,7 +456,7 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   //
   // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
   // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
-  const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
+  const checkpoint = () => { try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };   // db.exec: node:sqlite's DatabaseSync has no .pragma(), so this returned false and did nothing until 2026-10-27
   // Make everything stored so far survive a POWER CUT. WAL + synchronous=NORMAL fsyncs the WAL only at a checkpoint, so
   // a row put() just stored can vanish on power loss. A caller about to persist a resume cursor that says "everything
   // up to here is held" must call this first, or the cursor can outlive the rows. (Not checkpoint() above: that one

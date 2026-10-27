@@ -7,7 +7,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { openStore } from './event-store.mjs';
@@ -129,10 +129,14 @@ test('RESUME: SIGKILL right after a cursor save (and again inside the tie run), 
   S.stop(); T.stop();
 });
 
-test('store: flushDurable really runs a WAL checkpoint (the existing checkpoint() has never worked: DatabaseSync has no .pragma)', () => {
+test('store: checkpoint() and flushDurable() really checkpoint the WAL (checkpoint() used to call a method DatabaseSync lacks)', () => {
   const d = mkdtempSync(join(tmpdir(), 'trin-fd-')); const st = openStore(join(d, 'relay.sqlite'), { maxEvents: 1000 });
   st.importAll(events.slice(0, 50));
-  assert.equal(st.checkpoint(), false, 'checkpoint() is expected to be inert; if this fails it was fixed, so use it and drop flushDurable');
+  const wal = join(d, 'relay.sqlite-wal');
+  assert.ok(existsSync(wal) && statSync(wal).size > 0, 'control: rows are sitting in the WAL');
+  assert.equal(st.checkpoint(), true, 'checkpoint() must report success');
+  assert.equal(statSync(wal).size, 0, 'checkpoint() must fold the WAL into the main file (TRUNCATE)');
+  st.importAll(events.slice(50, 100));
   const r = st.flushDurable(); assert.ok(r && r.log > 0 && r.checkpointed === r.log, JSON.stringify(r));
   assert.equal(st.exportChurchPage(church.pub, 0, '', 10).length, 10);
   st.close();
@@ -163,5 +167,23 @@ test('MIXED: OLD client, NEW server (no limit sent): converges as before', async
   await publishList([S, T], at());
   const passes = await sync(T);
   const d = await H.corpusDiff(S, T, church); assert.deepEqual([d.onlyOnA.length, d.onlyOnB.length], [0, 0], JSON.stringify(passes));
+  S.stop(); T.stop();
+});
+
+test('a FUTURE-dated event on the peer does not drag the cursor ahead: an honest event published afterwards is still pulled', async () => {
+  const S = await start('S', { dataDir: seed() }); const T = await start('T');
+  await publishList([S, T], at());
+  const m = members[0], nowS = H.now();
+  const mk = (i, ts) => finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/carereq:' + m.pub.slice(0, 16) + '-' + i], ['t', 'trinityone'], ['church', church.pub]], content: 'sealed?iv=BBBB' + 'z'.repeat(50) + i }, m.sk);
+  const rawInsert = (relay, e) => { const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite')); try { db.exec('PRAGMA busy_timeout=5000'); db.prepare('INSERT INTO events (id,pubkey,kind,created_at,dtag,church,repl,structured,raw) VALUES (?,?,?,?,?,?,?,?,?)').run(e.id, e.pubkey, e.kind, e.created_at, e.tags[0][1], church.pub, null, 0, JSON.stringify(e)); } finally { db.close(); } };
+  const future = mk(90001, nowS + 3600), honest = mk(90002, nowS - 60);
+  rawInsert(S, future);                        // S holds an event dated an hour ahead (S itself would refuse it over the wire; a hostile peer would not)
+  await sync(T, 3);
+  assert.ok(!rowsIds(T).has(future.id), 'T stored the future-dated event');
+  const c1 = cursorTs(T);
+  assert.ok(c1 > 0 && c1 < nowS, 'cursor after pass 1 is ' + c1 + ' (now ' + nowS + '): the future event moved it');
+  rawInsert(S, honest);                        // an ordinary event arrives on S afterwards
+  await H.syncNow(T);
+  assert.ok(rowsIds(T).has(honest.id), 'the honest event was skipped: the cursor had been dragged past it');
   S.stop(); T.stop();
 });

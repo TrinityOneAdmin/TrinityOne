@@ -8178,7 +8178,8 @@ function serveStatic(req, res) {
 const store = openStore(SQLITE_DB, { maxEvents: MAX_EVENTS });
 // NOTHING USED TO CLOSE THE STORE. There was no SIGTERM/SIGINT handler and no store.close() anywhere, so an
 // ordinary `systemctl stop` left the church's data in the -wal side file — see the note on checkpoint() in
-// event-store.mjs. Registered once, idempotent, and it re-raises the signal so the exit code stays honest.
+// event-store.mjs. (That checkpoint() was itself inert until 2026-10-27: it called db.pragma(), which DatabaseSync lacks, so
+// close() folded nothing in; it now uses db.exec.) Registered once, idempotent, and it re-raises the signal so the exit code stays honest.
 let _shuttingDown = false;
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
@@ -8234,7 +8235,10 @@ async function syncChurchFromPeer(cp, peerBase) {
     const put = store.put(e, cp);
     if (put === 'stored') { imported++; note(e); }
     if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
-    if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
+    // A FUTURE-dated event (put says 'future': more than 15 min ahead) must not move the cursor: a peer could otherwise push it
+    // an hour ahead and make us skip every honest event in between. 'duplicate', 'deleted' and 'have-newer' are real events from
+    // the past that this relay already holds or refuses on purpose, so advancing over them is right.
+    if (put !== 'future' && (e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
     if (++lines % SYNC_SAVE_EVERY === 0) persist();
   };
   let status = 0, failed = false;
