@@ -13413,8 +13413,28 @@ function StewDmWindow({ peer, offset, onClose }) {
   const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
   const canReply = (m) => !m._pending && !m._failed;   // a waiting message has nothing on the relay to quote yet
   const byId = {}; shown.forEach(m => { byId[m.id] = m; });
-  const lastId = shown.length ? shown[shown.length - 1].id : '';
-  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
+  // Keep an open ⋯ menu usable: first reveal it inside the chat's own scroller, then nudge it back inside
+  // the viewport in BOTH axes (a wide bubble pushes its far edge past the gutter; a message low in the tile
+  // runs its bottom off-screen). Sibling of app/screens-chat.jsx clampMenuIntoView; inert in the hook-light
+  // unit rig (no layout engine — getBoundingClientRect / window absent — so the ref body no-ops there).
+  const menuIntoView = React.useCallback((el) => {
+    if (!el) return;
+    try { if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    try {
+      if (typeof window === 'undefined' || typeof el.getBoundingClientRect !== 'function') return;
+      el.style.transform = '';
+      var docEl = window.document && window.document.documentElement;
+      var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
+      var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
+      if (!vw || !vh) return;
+      var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
+      if (r.right > vw - pad) dx = (vw - pad) - r.right;
+      if (r.left + dx < pad) dx = pad - r.left;
+      if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;
+      if (r.top + dy < pad) dy = pad - r.top;
+      if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+    } catch (e) {}
+  }, []);
   // SWIPE TO REPLY (APK) — the shared TrinityReplyKit handlers (app/reply-kit.jsx): the row follows the finger, a
   // reply arrow fills in at 48px, letting go past it replies (a cancel past it too), a vertical drag abandons it.
   // One row is dragged at a time, so one ref + one {id, dx} state serves the whole list.
@@ -13452,14 +13472,15 @@ function StewDmWindow({ peer, offset, onClose }) {
                     {...TrinityReplyKit.dotsProps(isNative, 24, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={13} /></button>
                 ) : null}
                 {menuFor === m.id ? (
-                  // ⚠ THE MENU LIVES INSIDE THE `overflowY: auto` MESSAGE SCROLLER, which CLIPS it. Below the LAST
-                  // message there is nothing to scroll into, so `top: 100%` put Reply outside the visible tile and
-                  // the steward saw the ⋯ do nothing (owner, members page: "reply is not working"). The docked tile
-                  // is only 420px tall, so this bites hardest here. Two guards: the last message opens its menu
-                  // UPWARD (over the message before it, never over its own words), and any open menu scrolls itself
-                  // into view so a message near the bottom edge can't hide it either. NEEDS A DEVICE/BROWSER REPRO
-                  // to confirm this was the whole cause.
-                  <div ref={menuIntoView} data-dm-menu="1" data-reply-menu={m.id === lastId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
+                  // THE MENU DROPS FROM THE ⋯ BUTTON (top: 20, just under the 24px button at top:-6), its NEAR
+                  // edge pinned to the side the dots sit on — the bubble's INNER edge (left:'100%' for the other
+                  // person, whose dots are at the bubble's right; right:'100%' for mine) — so it hangs FROM the
+                  // dots and grows inward, never off to the opposite corner. It used to open at `top: 100%`
+                  // (the bubble's BOTTOM): on a tall message that is far below the dots, detached from the
+                  // message it acts on — the same defect fixed in the member app (app/screens-chat.jsx). The
+                  // menu lives inside the `overflowY: auto` scroller, so menuIntoView both scrolls it into the
+                  // tile and clamps it back into the viewport in both axes. Matches member Row/DMSwipe.
+                  <div ref={menuIntoView} data-dm-menu="1" data-reply-menu="down" style={{ position: 'absolute', top: 20, [m.mine ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
                     <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer', padding: '7px 9px', borderRadius: 7, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
                       <Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                   </div>
