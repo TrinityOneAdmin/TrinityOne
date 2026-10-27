@@ -186,3 +186,11 @@ test('the "waiting to send" and "didn\'t send" bubbles are THIS identity\'s only
   assert.equal(F.outboxForPeer(PEER).length, 1, 'CONTROL: this identity\'s own queued message is not drawn');
 });
 
+test('a failed JOIN does not count toward the cap — it has no Discard in any thread, so the member could not clear it', async () => {
+  const { F, scope } = engine({ publishError: new Error('timeout') });
+  for (let i = 0; i < 500; i++) scope._outboxFailed.push({ evt: { id: 'j' + i, kind: 30078, pubkey: 'a'.repeat(64), tags: [], content: '{}' }, groupId: null, join: 'c'.repeat(64), failed: true });
+  assert.equal(F.failedCount(), 0, 'failed joins are counted toward a cap the member is told to clear by discarding');
+  const r = await F.sendDM(PEER, 'still allowed');
+  assert.notEqual(r && r._refused, 'failed-full', 'failed joins blocked a new message');
+});
+

@@ -55,7 +55,7 @@ function phone(T, { stamp = 'real' } = {}) {
   let now = T * 1000;
   const FakeDate = { now: () => now };
   const scope = {
-    sk: MEMBER_SK,
+    sk: MEMBER_SK, pub: getPublicKey(MEMBER_SK),   // the queue helpers act on this identity's entries only
     NET: 'trinityone',
     Date: FakeDate,
     Math, JSON, Number, String, Array, Object, Promise, console, Boolean,
@@ -100,7 +100,7 @@ function phone(T, { stamp = 'real' } = {}) {
     : (t) => t;   // CONTROL ONLY: the stamp removed
   // The SHIPPED queue helpers the Leave uses: it removes this church's queued join (a stub here once left the join
   // queued, and the Leave then waited behind it), and finds what else of the church's is still queued.
-  for (const [k, anchor] of [['_outboxDropJoins', 'function _outboxDropJoins('], ['_itemChurch', 'function _itemChurch(']]) {
+  for (const [k, anchor] of [['_outboxDropJoins', 'function _outboxDropJoins('], ['_itemChurch', 'function _itemChurch('], ['_mine', 'function _mine(']]) {
     scope[k] = new Function('scope', 'with (scope) { return (' + fnBody(SHIP, anchor, k) + '); }')(proxy);
   }
   const writers = { ...lift(SRC_FN.rsvp), ...lift(SRC_FN.announce), ...lift(SRC_FN.leave), ...lift(SRC_FN.fill) };

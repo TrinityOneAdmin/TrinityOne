@@ -229,6 +229,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     fnBody(src, 'function _leavingFor', '_leavingFor'),
     fnBody(src, 'function _announceBlocked', '_announceBlocked'),
     fnBody(src, 'function _outboxDropJoins', '_outboxDropJoins'),
+    fnBody(src, 'function _mine', '_mine'),   // the queue helpers act on this identity's entries only
     fnBody(src, 'function _itemChurch', '_itemChurch'),
     fnBody(src, 'function memberChurchPubs', 'memberChurchPubs'),
     fnBody(src, 'function _leaveDelivered', '_leaveDelivered'),

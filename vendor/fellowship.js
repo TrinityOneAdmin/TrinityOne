@@ -9848,11 +9848,16 @@
   var FAILED_WARN = 450;
   function _failedCount() {
     let n = 0;
-    for (const o of _outboxFailed) if (_mine(o)) n++;
+    for (const o of _outboxFailed) if (_mine(o) && (o.groupId || o.peer)) n++;
     return n;
   }
   function _failedFull() {
     return _failedCount() >= FAILED_MAX;
+  }
+  function _outboxMineCount() {
+    let n = 0;
+    for (const o of _outbox) if (_mine(o)) n++;
+    return n;
   }
   function _itemChurch(o) {
     if (!o) return "";
@@ -9882,7 +9887,7 @@
   }
   function _outboxDropJoins(cp) {
     const n = _outbox.length;
-    _outbox = _outbox.filter((o) => !(o && o.join === cp));
+    _outbox = _outbox.filter((o) => !(o && o.join === cp && _mine(o)));
     return _outbox.length !== n;
   }
   _outboxLoad();
@@ -10295,7 +10300,7 @@
           continue;
         }
         const icp = _itemChurch(item);
-        if (item.leave && _outbox.some((o) => o !== item && !o.leave && _itemChurch(o) === item.leave)) continue;
+        if (item.leave && _outbox.some((o) => o !== item && !o.leave && _mine(o) && _itemChurch(o) === item.leave)) continue;
         if (icp && !item.peer && await _heldForUnprovedBoxes(item, icp, asked)) continue;
         try {
           await _publishBounded(_outboxRelays(item), item.evt);
@@ -10376,12 +10381,12 @@
       _obFails = 0;
     };
     const _obTick = async () => {
-      const before = _outbox.length;
+      const before = _outboxMineCount();
       try {
         await _outboxFlush();
       } catch (e) {
       }
-      const after = _outbox.length;
+      const after = _outboxMineCount();
       if (after > 0 && after >= before) _obFails++;
       else _obFails = 0;
       _obTimer = setTimeout(_obTick, _obDelay());
@@ -11362,21 +11367,21 @@
       }), sk);
       _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
       _outboxDropJoins(cp);
-      _outbox = _outbox.filter((o) => !(o && o.leave === cp));
-      _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp));
+      _outbox = _outbox.filter((o) => !(o && o.leave === cp && _mine(o)));
+      _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp && _mine(o)));
       _outbox.push({ evt, groupId: null, leave: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
       const saved = _outboxSave();
       _clearJoinSent(cp);
       _dropJoinIntent(cp);
       for (let i3 = 0; _flushing && i3 < 400; i3++) await new Promise((r) => setTimeout(r, 50));
       try {
-        await _outboxFlush((o) => o !== null && !o.leave && _itemChurch(o) === cp);
+        await _outboxFlush((o) => o !== null && !o.leave && _mine(o) && _itemChurch(o) === cp);
       } catch (e) {
       }
       const deliveredElsewhere = () => _left.has(cp + "|" + evt.pubkey);
       const entry = _outbox.find((o) => o && o.leave === cp && o.evt.id === evt.id);
       if (!entry) return deliveredElsewhere() ? { ok: true, evt } : { ok: false, reason: "not-sent" };
-      if (_outbox.some((o) => o && !o.leave && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: "not-sent", ...saved ? {} : { unsaved: true } };
+      if (_outbox.some((o) => o && !o.leave && _mine(o) && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: "not-sent", ...saved ? {} : { unsaved: true } };
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -12042,7 +12047,7 @@
       const had = _leavingFor(cp);
       if (pub) _left.delete(cp + "|" + pub);
       const n = _outbox.length;
-      _outbox = _outbox.filter((o) => !(o && o.leave === cp));
+      _outbox = _outbox.filter((o) => !(o && o.leave === cp && _mine(o)));
       if (_outbox.length !== n) _outboxSave();
       return had;
     },
@@ -12081,10 +12086,10 @@
     retryJoin(npubOrHex) {
       const cp = toPub(npubOrHex);
       if (!cp) return false;
-      const had = _outboxFailed.some((o) => o && o.join === cp);
+      const had = _outboxFailed.some((o) => o && o.join === cp && _mine(o));
       if (!had) return false;
-      _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp));
-      _outbox = _outbox.filter((o) => !(o && o.join === cp));
+      _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp && _mine(o)));
+      _outbox = _outbox.filter((o) => !(o && o.join === cp && _mine(o)));
       _outboxSave();
       return true;
     },
@@ -12108,8 +12113,9 @@
       return _dmPlain.get(id) || "";
     },
     outboxCount() {
-      return _outbox.length;
+      return _outboxMineCount();
     },
+    // this identity's (another's parked entries are not theirs to wait on)
     // the didn't-send bin, for the threads' notice: this identity's count, and where the notice starts / the cap is
     failedCount() {
       return _failedCount();

@@ -3670,8 +3670,12 @@ function _outboxFull() {
 // (A message already queued that fails later still goes in — it is never dropped — so the bin can pass 500 by at
 // most what was queued when it filled.)
 const FAILED_MAX = 500, FAILED_WARN = 450;
-function _failedCount() { let n = 0; for (const o of _outboxFailed) if (_mine(o)) n++; return n; }
+// Counted: this identity's messages that have a thread to be sent again or discarded from (a group post, a DM).
+// A failed join or profile edit has no Discard button anywhere, so counting it toward a cap the member is told to
+// clear by discarding would be a limit they cannot act on.
+function _failedCount() { let n = 0; for (const o of _outboxFailed) if (_mine(o) && (o.groupId || o.peer)) n++; return n; }
 function _failedFull() { return _failedCount() >= FAILED_MAX; }
+function _outboxMineCount() { let n = 0; for (const o of _outbox) if (_mine(o)) n++; return n; }
 // THE CHURCH A QUEUED ITEM BELONGS TO, so its relays are worked out when it is SENT, not when it was queued
 // (stress batch 3, 1a/2a/3). A join or leave names it; a group post queued by this build carries `cp`; one queued
 // by an older build carries only its frozen `relays`, and its church is read back from the event's first `p` tag
@@ -3705,7 +3709,7 @@ function _leavingFor(cp) {
 // queued join). See the list of callers at announceMembership.
 function _announceBlocked(cp) { return _leavingFor(cp); }
 // Take this church's queued join(s) off the queue — a newer join replaces them, a Leave removes them.
-function _outboxDropJoins(cp) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.join === cp)); return _outbox.length !== n; }
+function _outboxDropJoins(cp) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o))); return _outbox.length !== n; }   // this identity's only
 _outboxLoad();
 
 // ── blocked-member detection ─────────────────────────────────────────────────────────────────────────────
@@ -4211,7 +4215,7 @@ async function _outboxFlush(only) {
       // PATH 10 of the leave race: a join queued before the Leave is never re-sent after it.
       if (item.join && _announceBlocked(item.join)) { _outbox = _outbox.filter(o => o !== item); _outboxSave(); continue; }
       const icp = _itemChurch(item);
-      if (item.leave && _outbox.some(o => o !== item && !o.leave && _itemChurch(o) === item.leave)) continue;
+      if (item.leave && _outbox.some(o => o !== item && !o.leave && _mine(o) && _itemChurch(o) === item.leave)) continue;   // another identity's parked items never hold this Leave
       if (icp && !item.peer && await _heldForUnprovedBoxes(item, icp, asked)) continue;
       try {
         await _publishBounded(_outboxRelays(item), item.evt);
@@ -4276,9 +4280,9 @@ if (typeof window !== 'undefined') {
   const _obDelay = () => Math.min(900000, 45000 * Math.pow(2, Math.min(_obFails, 5)));
   window.__trinityOutboxOk = () => { _obFails = 0; };
   const _obTick = async () => {
-    const before = _outbox.length;
+    const before = _outboxMineCount();   // this identity's: another's parked entries never drain, and must not hold the back-off up
     try { await _outboxFlush(); } catch (e) {}
-    const after = _outbox.length;
+    const after = _outboxMineCount();
     if (after > 0 && after >= before) _obFails++; else _obFails = 0;   // nothing drained → back off
     _obTimer = setTimeout(_obTick, _obDelay());
   };
@@ -5217,8 +5221,8 @@ window.Fellowship = {
     // asked". A queued group post for this church is NOT removed: it is sent FIRST, then the tombstone.
     _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
     _outboxDropJoins(cp);
-    _outbox = _outbox.filter(o => !(o && o.leave === cp));
-    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp));
+    _outbox = _outbox.filter(o => !(o && o.leave === cp && _mine(o)));   // this identity's only: another's queued Leave is theirs
+    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp && _mine(o)));
     _outbox.push({ evt, groupId: null, leave: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
     const saved = _outboxSave();   // false: storage refused it — the Leave would not survive a restart (F2)
     _clearJoinSent(cp);   // they are leaving: the next follow starts from "not yet asked", not from "sent"
@@ -5226,14 +5230,14 @@ window.Fellowship = {
     // What they said before leaving goes first (owner 2026-10-27). Wait out a pass already running — it took its
     // list before this Leave was queued — then send this church's other queued items.
     for (let i = 0; _flushing && i < 400; i++) await new Promise(r => setTimeout(r, 50));
-    try { await _outboxFlush(o => o !== null && !o.leave && _itemChurch(o) === cp); } catch (e) {}
+    try { await _outboxFlush(o => o !== null && !o.leave && _mine(o) && _itemChurch(o) === cp); } catch (e) {}
     // Whoever delivers the tombstone first owns the delivery (F1): a flush that ran while we waited may already
     // have sent it — then this Leave is DONE, not "not sent" — and a re-follow may have withdrawn it.
     const deliveredElsewhere = () => _left.has(cp + '|' + evt.pubkey);
     const entry = _outbox.find(o => o && o.leave === cp && o.evt.id === evt.id);
     if (!entry) return deliveredElsewhere() ? { ok: true, evt } : { ok: false, reason: 'not-sent' };   // else: a re-follow took it back
     // Still something of theirs for this church waiting (no signal): the Leave waits behind it.
-    if (_outbox.some(o => o && !o.leave && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: 'not-sent', ...(saved ? {} : { unsaved: true }) };
+    if (_outbox.some(o => o && !o.leave && _mine(o) && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: 'not-sent', ...(saved ? {} : { unsaved: true }) };
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise). A refusal (a relay read it and said
     // no) ends the Leave: the entry goes, so does the mark, and the church stays. Anything else — no signal, no
@@ -5969,7 +5973,7 @@ window.Fellowship = {
     const had = _leavingFor(cp);
     if (pub) _left.delete(cp + '|' + pub);
     const n = _outbox.length;
-    _outbox = _outbox.filter(o => !(o && o.leave === cp));
+    _outbox = _outbox.filter(o => !(o && o.leave === cp && _mine(o)));   // only this identity's Leave
     if (_outbox.length !== n) _outboxSave();
     return had;
   },
@@ -5998,10 +6002,10 @@ window.Fellowship = {
   // _outboxFailed, and joinFailed() goes true again on a join that actually succeeded.
   retryJoin(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return false;
-    const had = _outboxFailed.some(o => o && o.join === cp);
+    const had = _outboxFailed.some(o => o && o.join === cp && _mine(o));
     if (!had) return false;
-    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp));
-    _outbox = _outbox.filter(o => !(o && o.join === cp));   // no stale duplicate racing the fresh one
+    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp && _mine(o)));
+    _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o)));   // no stale duplicate racing the fresh one
     _outboxSave();
     return true;
   },
@@ -6017,7 +6021,7 @@ window.Fellowship = {
     ..._outboxFailed.filter(o => o.peer === p && _mine(o)).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
   ]; },
   dmPlaintextOf(id) { return _dmPlain.get(id) || ''; },
-  outboxCount() { return _outbox.length; },
+  outboxCount() { return _outboxMineCount(); },   // this identity's (another's parked entries are not theirs to wait on)
   // the didn't-send bin, for the threads' notice: this identity's count, and where the notice starts / the cap is
   failedCount() { return _failedCount(); }, failedWarnAt() { return FAILED_WARN; }, failedMax() { return FAILED_MAX; },
   onOutbox(fn) { _outboxSubs.add(fn); return () => _outboxSubs.delete(fn); },

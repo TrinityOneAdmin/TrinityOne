@@ -64,7 +64,7 @@ function lift(overrides = {}) {
   });
   const helpers = ['function _joinSentSave', 'function _markJoinSent', 'function _clearJoinSent', 'function _joinSentFor',
     'function _joinIntentSave', 'function _lockedPubHex', 'function _queueJoinIntent', 'function _dropJoinIntent', 'function _consumeJoinIntents',
-    'function _leavingFor', 'function _announceBlocked', 'function _outboxDropJoins']
+    'function _leavingFor', 'function _announceBlocked', 'function _outboxDropJoins', 'function _mine']
     .map(a => fnBody(VENDOR, a, a)).join('\n');
   // Full signatures as anchors: a bare 'joinSent' matches `let _joinSent = {}` first and lifts an assignment.
   const methods = ['async announceMembership(npubOrHex)', 'async leaveMembership(npubOrHex)', '  joinSent(npubOrHex)', '  joinIntent(npubOrHex)', '  joinQueued(npubOrHex)']

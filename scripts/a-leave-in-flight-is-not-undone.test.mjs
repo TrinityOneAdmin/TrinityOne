@@ -236,6 +236,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     fnBody(src, 'function _mine', '_mine'),   // G2 audit F3: only this identity's entries are sent
     stmt(src, 'var FAILED_MAX = ', 'FAILED_MAX'), stmt(src, 'var FAILED_WARN = ', 'FAILED_WARN'),   // owner 2026-10-27: the didn't-send bin cap
     fnBody(src, 'function _failedCount', '_failedCount'), fnBody(src, 'function _failedFull', '_failedFull'),
+    fnBody(src, 'function _outboxMineCount', '_outboxMineCount'),
     stmt(src, 'var _left = ', '_left'),
     fnBody(src, 'function _leavingFor', '_leavingFor'),
     fnBody(src, 'function _announceBlocked', '_announceBlocked'),
@@ -259,6 +260,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     fnBody(src, 'async announceMembership(npubOrHex) {', 'announceMembership'),
     fnBody(src, 'clearLeaving(npubOrHex) {', 'clearLeaving'),
     fnBody(src, 'leaveQueued(npubOrHex) {', 'leaveQueued'),
+    fnBody(src, 'outboxCount() {', 'outboxCount'),
     fnBody(src, 'async setProfile(meta) {', 'setProfile'),
     fnBody(src, 'subscribeThread(peerPub, onMsg) {', 'subscribeThread'),
     fnBody(src, 'subscribeDMs(onConvos) {', 'subscribeDMs'),
@@ -281,7 +283,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
              subscribeThread: (p, f) => _api.subscribeThread(p, f), subscribeDMs: (f) => _api.subscribeDMs(f),
              relaysForChurch, publishSetFor, memberChurchPubs, dmSendRelays, dmReadRelays, _outboxRelays, _outboxFlush,
              outbox: () => _outbox, failed: () => _outboxFailed, leaving: (c) => _leavingFor(c), gate: _gate, churchRelaysRaw,
-             announceMembership: (c) => _api.announceMembership(c), clearLeaving: (c) => _api.clearLeaving(c), leaveQueued: (c) => _api.leaveQueued(c),
+             announceMembership: (c) => _api.announceMembership(c), clearLeaving: (c) => _api.clearLeaving(c), leaveQueued: (c) => _api.leaveQueued(c), outboxCount: () => _api.outboxCount(),
              joinSentFor: _joinSentFor, markJoinSent: _markJoinSent, leaveGen: () => _leaveGen, setIntents: (a) => { _joinIntents = a; },
              setProfile: (m) => { _k0Seen.add(pub); return _api.setProfile(m); },
              consumeJoinIntents: _consumeJoinIntents, resendNew: _resendMembershipToNewBoxes, resendGained: _resendJoinToBoxesGainedInFlight, toPub }; }`)(scope);
@@ -837,3 +839,35 @@ test('F1: Leave\'s own send and a flush both in flight — whichever lands first
     assert.equal(left.length, 1, 'trinity-left fired ' + left.length + ' times');
   } finally { ACK_HOLD = null; app.close(); }
 });
+
+// ════════ G2 follow-up audit: another identity's entries neither block nor get dropped ════════════════════════
+test('IDENTITY: A\'s parked post + Leave neither hold B\'s Leave nor get dropped by it; B\'s re-follow leaves A\'s Leave alone; counts are B\'s', async () => {
+  forgotten.length = 0;
+  const app = await phoneA();
+  const asA = () => { app.scope.sk = sarah.sk; app.scope.pub = sarah.pub; };
+  const asB = () => { app.scope.sk = tom.sk; app.scope.pub = tom.pub; };
+  try {
+    await goOffline(SHARED, TA);
+    const post = await app.publishMessage('g1', 'A said this before leaving');
+    assert.equal(post._delivered, false, 'CONTROL: A\'s post was not queued');
+    const ra = await app.leaveMembership(A.npub);
+    assert.equal(ra.queued, true, 'CONTROL: A\'s Leave was not queued');
+    const aIds = app.outbox().map(o => o.evt.id).sort();
+    assert.equal(aIds.length, 2, 'staging: A should have a post and a Leave queued');
+    asB();
+    assert.equal(app.outboxCount(), 0, 'B is told A\'s entries are waiting to send');
+    goOnline(SHARED, TA);
+    const from = EVTS.length;
+    const rb = await app.leaveMembership(A.npub);
+    assert.equal(rb.ok, true, 'B\'s Leave was held behind A\'s parked post (stuck "Leaving…"): ' + JSON.stringify(rb));
+    assert.ok(EVTS.slice(from).some(x => x.ev && x.ev.pubkey === tom.pub && JSON.stringify(x.ev.tags).includes('"deleted"')), 'B\'s tombstone never went');
+    assert.deepEqual(app.outbox().map(o => o.evt.id).sort(), aIds, 'B\'s Leave dropped or changed A\'s queued entries');
+    assert.equal(EVTS.slice(from).filter(x => x.ev && x.ev.pubkey === sarah.pub).length, 0, 'A\'s entries were sent while B was signed in');
+    assert.equal(app.clearLeaving(A.npub), true, 'CONTROL: B\'s own delivered Leave is not seen by clearLeaving');
+    assert.equal(app.outbox().filter(o => o.leave && o.evt.pubkey === sarah.pub).length, 1, 'B\'s re-follow dropped A\'s queued Leave');
+    asA();
+    assert.equal(app.outboxCount(), 2, 'CONTROL: A\'s own entries are not counted for A');
+    assert.equal(app.leaveQueued(A.npub), true, 'CONTROL: A\'s Leave is not A\'s any more');
+  } finally { asA(); goOnline(SHARED, TA); app.close(); }
+});
+
