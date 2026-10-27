@@ -9,6 +9,10 @@ import { finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import * as H from './relay-network-harness.mjs';
 import { memberOn, secure, sleep, RELAY_NET_D } from './stress2-member-lift.mjs';
+import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
+const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+const restoreResultMessage = new Function(fnBody(DASH, 'function restoreResultMessage(', 'restoreResultMessage') + '\nreturn restoreResultMessage;')();
 
 const now = () => Math.floor(Date.now() / 1000);
 let _at = now();
@@ -184,4 +188,17 @@ test('B6: /import answers truthfully: a first import of 7 new events is not also
   const r2 = await importTo(T4, A, nd);
   console.log('B6 measured (second import): ' + JSON.stringify({ imported: r2.imported, duplicates: r2.duplicates, skipped: r2.skipped }));
   assert.deepEqual([r2.imported, r2.duplicates, r2.skipped], [0, n, 0], 'a repeat import reports every event as already there');
+  B6R.r2 = r2;
+});
+
+const B6R = {};
+test('B6b: the console\'s restore message (lifted and run) reports skipped records, so "Restored 0" is not the whole story', () => {
+  const all = restoreResultMessage({ imported: 0, duplicates: 0, skipped: 3, invalid: 0, mediaTotal: 0 }, '');
+  console.log('B6b message (all skipped): ' + all);
+  assert.match(all, /^Restored 0 records \(3 skipped\)\.$/, all);
+  const rep = restoreResultMessage({ ...(B6R.r2 || { imported: 0, duplicates: 8, skipped: 0 }), mediaTotal: 0 }, '');
+  console.log('B6b message (repeat import, from B6): ' + rep);
+  assert.match(rep, /already there\)/, 'CONTROL: the real repeat-import result reads as already there: ' + rep);
+  assert.doesNotMatch(rep, /skipped/, 'no "skipped" when nothing was skipped: ' + rep);
+  assert.ok(B6R.r2, 'CONTROL: B6 ran first and handed over its real /import result');
 });

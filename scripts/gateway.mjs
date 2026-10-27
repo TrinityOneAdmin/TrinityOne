@@ -3301,12 +3301,13 @@ function dmChurch(e) {
   const both = theirs ? churchesOf(e.pubkey).filter(c => theirs.has(c)).sort() : [];
   return both[0] || '';
 }
-// Is `cp` still a church BOTH people of a person's DM belong to on this relay? (the startup relabel keeps such a label)
-function dmLabelStillShared(e, cp) {
+// Is `cp` a church BOTH people of a person's DM belong to, or once belonged to, on this relay? `isIn(pubkey, cp)`
+// decides belonging; the startup relabel passes "currently OR formerly". It keeps such a label.
+function dmLabelShared(e, cp, isIn) {
   if (!cp) return false;
   const peer = dmPeer(e);
-  if (peer && CHURCH_PUBS.has(peer)) return cp === peer && memberIn(e.pubkey, peer);
-  return !!peer && memberIn(e.pubkey, cp) && memberIn(peer, cp);
+  if (peer && CHURCH_PUBS.has(peer)) return cp === peer && isIn(e.pubkey, peer);
+  return !!peer && isIn(e.pubkey, cp) && isIn(peer, cp);
 }
 function resolveChurch(e) {
   // (b) RUNS BEFORE THE HONOURED ['church'] TAG (stress 2026-10-27, label-adversarial 8a). No shipped client puts a
@@ -8201,11 +8202,20 @@ if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) conso
 // leaving moved her whole history with the church out of its backup, and a box missing a join doc moved a synced DM
 // to '' or to another hosted church (stress 2026-10-27, label-adversarial 4/4b/6/6b). Live puts still use
 // resolveChurch; reattribute ('' rows) still runs every start. A future rule change bumps the version in the key.
-// A person's DM whose current label names a church both people still belong to here keeps it (one shared church's
-// box is enough; only a label naming a church the pair does not share is a misfile).
+// A person's DM whose current label names a church both people belong to here, OR ONCE DID, keeps it (one shared
+// church's box is enough). "Once did" = the author of a stored member:<cp> doc, tombstoned (left) or not: without it,
+// a member who LEFT before this pass (an upgraded store, or a restore onto a fresh box - the key stays unset until a
+// church exists, so the start after an /import runs it) took every DM she exchanged with the church out of its
+// backup and box. A label naming a church one of them NEVER joined is the misfile this pass exists to fix: it moves.
 const RELABEL_META = 'relabel:church-label-v1';
 if (CHURCH_PUBS.size && store.getMeta(RELABEL_META) === null) {
-  const r = store.relabel((e, cur) => !relabelTarget(e) ? null : (isPersonDm(e) && dmLabelStillShared(e, cur)) ? null : resolveChurch(e), RELABEL_D_PREFIXES).changed;
+  const everJoined = new Map();   // cp -> Set(authors of a stored member:<cp> doc), built lazily for this pass only
+  const everIn = (pk, cp) => {
+    if (memberIn(pk, cp)) return true;
+    let s = everJoined.get(cp); if (!s) { s = new Set(store.authorsOfDoc(MEMBER_D + cp)); everJoined.set(cp, s); }
+    return s.has(pk);
+  };
+  const r = store.relabel((e, cur) => !relabelTarget(e) ? null : (isPersonDm(e) && dmLabelShared(e, cur, everIn)) ? null : resolveChurch(e), RELABEL_D_PREFIXES).changed;
   store.setMeta(RELABEL_META, String(Math.floor(Date.now() / 1000)));
   if (r) console.log(`[relay] relabelled ${r} events to the church they belong to`);
 }

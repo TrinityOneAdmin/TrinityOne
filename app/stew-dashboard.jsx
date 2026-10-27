@@ -12221,6 +12221,11 @@ const BACKUP_META_NO_RELAY = 'Your other stewards’ consoles will still show th
 // delegate is not sent to pick a file or wait on a real backup only to be told "the relay returned 401".
 const BACKUP_EXPORT_OWNER_ONLY = 'Only the church’s own console can back up or restore this church’s data. Ask whoever holds the church key.';
 // Phase 1 backup: save the church's complete corpus to a file (native share sheet / web download) + a reminder cadence.
+// The console's "Restored …" line for a /import result (+ media counts). Lifted and RUN by
+// scripts/a-self-hosted-church-restores-onto-a-new-box-stress.test.mjs (B6b), never text-matched.
+function restoreResultMessage(r, relayUrl) {
+  return 'Restored ' + r.imported + ' records' + (r.duplicates ? ' (' + r.duplicates + ' already there)' : '') + (r.skipped ? ' (' + r.skipped + ' skipped)' : '') + (r.mediaTotal ? ' + ' + r.mediaRestored + '/' + r.mediaTotal + ' media' : '') + (r.registered ? ' — church set up on ' + (relayUrl ? 'that' : 'this') + ' relay.' : '.') + (r.invalid ? ' ' + r.invalid + ' entries were skipped (couldn’t verify).' : '');
+}
 function DashBackup() {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState(null);   // { ok, text }
@@ -12318,7 +12323,7 @@ function DashBackup() {
       const relayUrl = restoreTarget === 'other' ? restoreUrl.trim() : '';
       if (restoreTarget === 'other' && !/^wss?:\/\/|^https?:\/\//i.test(relayUrl)) throw new Error('Enter the other relay’s web address (https://…).');
       const r = await window.Steward.restoreChurchData(restoreFile.bytes, { relayUrl: relayUrl.replace(/^ws/i, 'http'), onProgress: (phase, done, total) => setRestoreProg({ phase, done, total }) });
-      setRestoreMsg({ ok: true, text: 'Restored ' + r.imported + ' records' + (r.duplicates ? ' (' + r.duplicates + ' already there)' : '') + (r.mediaTotal ? ' + ' + r.mediaRestored + '/' + r.mediaTotal + ' media' : '') + (r.registered ? ' — church set up on ' + (relayUrl ? 'that' : 'this') + ' relay.' : '.') + (r.invalid ? ' ' + r.invalid + ' entries were skipped (couldn’t verify).' : '') });
+      setRestoreMsg({ ok: true, text: restoreResultMessage(r, relayUrl) });
       setRestoreFile(null);
     } catch (e) { setRestoreMsg({ ok: false, text: e.message || 'Restore failed' }); }
     setRestoreBusy(false); setRestoreProg(null);

@@ -244,6 +244,10 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);');
   const qMetaGet = db.prepare('SELECT v FROM meta WHERE k = ?');
   const qMetaSet = db.prepare('INSERT INTO meta (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v = excluded.v');
+  // the authors of every stored kind-30078 doc at one d-tag (current AND tombstoned copies: a leave replaces the join
+  // with a ['deleted'] copy at the same address). Used once per store by the gateway's startup relabel.
+  const qAuthorsAtD = db.prepare('SELECT DISTINCT pubkey FROM events WHERE kind = 30078 AND dtag = ?');
+  function authorsOfDoc(dtag) { return qAuthorsAtD.all(String(dtag)).map(r => r.pubkey); }
   function getMeta(k) { const r = qMetaGet.get(k); return r ? r.v : null; }
   function setMeta(k, v) { qMetaSet.run(k, String(v)); }
   function countDeletions() { return db.prepare('SELECT COUNT(*) AS n FROM deletions').get().n; }
@@ -453,5 +457,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
   // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
   const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
-  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, authorsOfDoc, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
 }

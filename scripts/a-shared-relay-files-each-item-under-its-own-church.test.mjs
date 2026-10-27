@@ -164,6 +164,62 @@ test('7. the relabel runs ONCE per store: a second restart changes nothing, and 
   assert.equal(a5.has(dmST.id), true, 'CONTROL: ...to the church they share');
 });
 
+// A MEMBER WHO LEFT KEEPS HER HISTORY IN THE CHURCH. The one-time relabel runs on a store from before it (upgrade) and
+// on the first start after a restore onto a fresh box (the key stays unset until a church exists). Both used to move a
+// DM with someone who has since LEFT the church to '' - out of its /export and its box. A label naming a church one of
+// the pair NEVER joined (the old first-church misfile) must still move.
+const leaveOf = (who, cp) => finalizeEvent({ kind: 30078, created_at: at(), tags: [['d', 'trinityone/member:' + cp.pub], ['t', 'trinityone'], ['p', cp.pub], ['deleted', '1']], content: '' }, who.sk);
+const metaOf = (relay) => { const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true }); try { const r = db.prepare('SELECT v FROM meta WHERE k = ?').get(RELABEL_META); return r ? r.v : null; } finally { db.close(); } };
+const ARCHIVE = {};
+test('8a. upgrade: a DM with a member who has since LEFT stays in the church\'s backup; a never-member misfile still moves', async () => {
+  const [U] = await setup('lv');
+  const ann = H.key(), ben = H.key(), tim = H.key();     // Ann (A,B), Ben (B, then leaves), Tim (A only)
+  const e = { annA: member(ann, A), annB: member(ann, B), benB: member(ben, B), timA: member(tim, A) };
+  await H.publishAll(U, [e.annA, e.annB, e.benB, e.timA]);
+  e.annBen = dm(ann, ben); e.benAnn = dm(ben, ann); e.benTim = dm(ben, tim);
+  await H.publishAll(U, [e.annBen, e.benAnn, e.benTim]);
+  const b0 = await exportIds(U, B);
+  assert.ok(b0.has(e.annBen.id) && b0.has(e.benAnn.id), 'CONTROL: Ann<->Ben is B\'s while Ben is a member');
+  await H.publishAll(U, [leaveOf(ben, B)]);
+  U.proc.kill('SIGKILL'); await new Promise(r => U.proc.once('exit', r));
+  const db = new DatabaseSync(join(U.dataDir, 'relay.sqlite'));
+  try {
+    assert.equal(db.prepare('DELETE FROM meta WHERE k = ?').run(RELABEL_META).changes, 1, 'CONTROL: make it a pre-fix store');
+    // what a previous build wrote: Ben's DM to Tim under Ben's first church B - Tim never joined B
+    db.prepare('UPDATE events SET church = ? WHERE id = ?').run(B.pub, e.benTim.id);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM events WHERE pubkey = ? AND dtag = ? AND raw LIKE '%\"deleted\"%'").get(ben.pub, 'trinityone/member:' + B.pub).n, 1, 'CONTROL: Ben\'s leave (tombstone) is what the store holds');
+  } finally { db.close(); }
+  const U2 = await H.moveRelay(U);
+  assert.ok(metaOf(U2), 'CONTROL: the one-time relabel ran on this start');
+  const b1 = await exportIds(U2, B);
+  assert.equal(b1.has(e.annBen.id), true, 'Ann->Ben left B\'s backup when Ben left B');
+  assert.equal(b1.has(e.benAnn.id), true, 'Ben->Ann left B\'s backup when Ben left B');
+  assert.equal(b1.has(e.benTim.id), false, 'CONTROL: a DM filed under a church Tim never joined still moves out of it');
+  ARCHIVE.text = await (async () => { const url = `${U2.base}/export`; const r = await fetch(url, { headers: { Authorization: H.nip98(B.sk, url, 'GET', B.pub) } }); return r.text(); })();
+  ARCHIVE.benTim = e.benTim; ARCHIVE.annBen = e.annBen; ARCHIVE.benAnn = e.benAnn;
+});
+
+test('8b. restore onto a fresh box: a departed member\'s DM is still in the church\'s backup after the next start', async () => {
+  assert.ok(ARCHIVE.text, 'CONTROL: 8a produced B\'s archive');
+  // the archive an OLD shared server would have written also carried the Ben->Tim misfile under B: add it back
+  const nd = ARCHIVE.text.replace(/\n*$/, '\n') + JSON.stringify(ARCHIVE.benTim) + '\n';
+  const F = await H.startRelay({ name: 'freshF' });
+  const url = `${F.base}/import`;
+  const r = await fetch(url, { method: 'POST', body: nd, headers: { Authorization: H.nip98(B.sk, url, 'POST', B.pub) } });
+  const j = await r.json();
+  assert.equal(j.registered, true, 'CONTROL: the import registered B on the fresh box: ' + JSON.stringify(j));
+  const f0 = await exportIds(F, B);
+  assert.ok(f0.has(ARCHIVE.annBen.id) && f0.has(ARCHIVE.benTim.id), 'CONTROL: everything imported under B');
+  assert.equal(metaOf(F), null, 'CONTROL: a box with no church at its first start has not run the one-time relabel');
+  F.proc.kill('SIGKILL'); await new Promise(res => F.proc.once('exit', res));
+  const F2 = await H.moveRelay(F);
+  assert.ok(metaOf(F2), 'CONTROL: the one-time relabel ran on the start after the restore');
+  const f1 = await exportIds(F2, B);
+  assert.equal(f1.has(ARCHIVE.annBen.id), true, 'Ann->Ben (Ben left before the backup) dropped out of B\'s restored backup');
+  assert.equal(f1.has(ARCHIVE.benAnn.id), true, 'Ben->Ann dropped out of B\'s restored backup');
+  assert.equal(f1.has(ARCHIVE.benTim.id), false, 'CONTROL: the never-member misfile still moves out of B');
+});
+
 test('6. a DM reaction follows its peer: Sarah\'s reaction to Bob (B) is B\'s, her reaction to Tom (A) is A\'s', async () => {
   const b = await exportIds(S, B), a = await exportIds(S, A);
   assert.equal(a.has(ev.reactTom.id), true, 'CONTROL: reaction to an A-only member is in A\'s backup');
