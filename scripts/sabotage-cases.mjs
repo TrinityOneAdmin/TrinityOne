@@ -1300,10 +1300,72 @@ export const CASES = [
   {
     name: 'relay-gate: one church\'s signature admits a relay for every church on the device',
     file: 'src/relay-net.src.js',
-    find: `  if (!e.cp) return true;                 // canonical / same-origin: church-independent
-  return !cp || e.cp === String(cp).toLowerCase();`,
+    find: `  return !!_admittingScope(e, cp, nowSec);`,
     replace: `  return true;`,
     test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
+  },
+  {
+    name: 'relay-gate: proving a box for one church erases another church\'s proof of it',
+    file: 'src/relay-net.src.js',
+    find: `  if (had && had.pub === p) for (const [s, w] of Object.entries(_scopesOf(had))) if (w && w.until > nowSec) cps[s] = w;`,
+    replace: ``,
+    test: 'scripts/a-box-two-churches-sign-stays-proved-for-both.test.mjs',
+  },
+  {
+    name: 'member adoption: a cleartext ws:// address off this device is adopted from the relay-net doc',
+    file: 'src/fellowship.src.js',
+    find: `      if (/^ws:/i.test(u) && !/^ws:\\/\\/(127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|localhost|\\[::1\\])(:\\d+)?\\/relay$/i.test(u)) continue;`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: 'console own-relay: the automatic pass remembers the box alone, not the tunnel address it is signed under',
+    file: 'src/steward.src.js',
+    find: `  const key = pub + '|' + own + '|' + selfPublicRelay() + '|' + selfRelayName();`,
+    replace: `  const key = pub + '|' + own;`,
+    test: 'scripts/a-console-signs-its-own-relay.test.mjs',
+  },
+  {
+    name: 'console own-relay: the dashboard does not re-run the pass when the tunnel address changes',
+    file: 'app/stew-dashboard.jsx',
+    find: `    const EVENTS = ['steward-relay-returned', 'focus', 'steward-relays'];`,
+    replace: `    const EVENTS = ['steward-relay-returned', 'focus'];`,
+    test: 'scripts/a-console-signs-its-own-relay.test.mjs',
+  },
+  {
+    name: 'console own-relay: a new relay name is not announced',
+    file: 'src/steward.src.js',
+    find: `if (v !== selfRelayName()) { lsSet(SELF_NAME_LS, v); window.dispatchEvent(new CustomEvent('steward-relays')); }`,
+    replace: `if (v !== selfRelayName()) { lsSet(SELF_NAME_LS, v); }`,
+    test: 'scripts/a-console-signs-its-own-relay.test.mjs',
+  },
+  {
+    name: 'member adoption: a box at a new address is added beside its old ones (the cap still holds it back)',
+    file: 'src/fellowship.src.js',
+    find: `      if (!claimOnly && !moved.length && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;`,
+    replace: `      if (!claimOnly && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: 'member adoption: a box\'s old addresses stay on the phone after it moves',
+    file: 'src/fellowship.src.js',
+    find: `        if (moved.length) for (const x of _dropRevokedNetDocRows(cp, moved, rec)) { try { _gate.forget(x); } catch (err) {} }`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: 'member adoption: the gate keeps a moved box\'s dead address as proved',
+    file: 'src/fellowship.src.js',
+    find: `for (const x of _dropRevokedNetDocRows(cp, moved, rec)) { try { _gate.forget(x); } catch (err) {} }`,
+    replace: `_dropRevokedNetDocRows(cp, moved, rec);`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: 'member adoption: a moved box\'s old rows stay in the record',
+    file: 'src/fellowship.src.js',
+    find: `        for (const x of moved) delete mine.rows[x];`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
   },
   {
     name: 'relay-gate: the verified set is never persisted',
@@ -1905,5 +1967,340 @@ export const CASES = [
     find: `if (ev.key === 'Escape' && !ev.defaultPrevented) closeRef.current();`,
     replace: ``,
     test: 'scripts/the-console-stays-unlocked-behind-the-relay-panel.test.mjs',
+  },
+  {
+    name: `relay-net M-5: enrolment reports published from the publish result, not the read-back`,
+    file: 'src/steward.src.js',
+    find: `    if (wanted.every(t => landed(found, t))) return { published: true,`,
+    replace: `    if (wanted.length >= 0) return { published: true,`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
+  {
+    name: `relay-net M-5: an incomplete read-back is treated as a missing change (re-signs over a list it could not see)`,
+    file: 'src/steward.src.js',
+    find: `    if (!_readCovers(back)) return { published: false, unknown: true, unverified: true, entries: list,`,
+    replace: `    if (false && !_readCovers(back)) return { published: false, unknown: true, unverified: true, entries: list,`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
+  {
+    name: `relay-net M-5: the repair is signed no newer than the list it merged onto`,
+    file: 'src/steward.src.js',
+    find: `    list = reapply(found);
+    floorAt = newest ? (newest.created_at || 0) + 1 : 0;`,
+    replace: `    list = reapply(found);
+    floorAt = 0;`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
+  {
+    name: `relay-net M-5: Remove reports removed from the publish result, not the read-back`,
+    file: 'src/steward.src.js',
+    find: `    if (!still.length) return { removed: true, entries: found, repaired: repairs };`,
+    replace: `    if (still.length >= 0) return { removed: true, entries: found, repaired: repairs };`,
+    test: 'scripts/two-consoles-signing-the-relay-list-lose-nothing.test.mjs',
+  },
+  {
+    name: `relay-net H-1 timing: the join is not sent again once adoption gives the publish set the church's own box`,
+    file: 'src/fellowship.src.js',
+    // the re-send call itself, inside _resendMembershipToNewBoxes (the helper stays referenced, so the bundler keeps it)
+    find: `    const p = window.Fellowship.announceMembership(cp);
+    if (p && p.catch) p.catch(() => {});`,
+    replace: `    const p = null;`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net H-1 timing audit A: the re-send does not ask again after the gate wait whether the member has since left`,
+    file: 'src/fellowship.src.js',
+    find: `    if (!_joinSentFor(cp)) return;
+    const after = publishSetFor(cp);`,
+    replace: `    const after = publishSetFor(cp);`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net H-1 timing audit B: the once-per-box-per-launch guard (_memberResent) is not consulted`,
+    file: 'src/fellowship.src.js',
+    find: ` && !_memberResent.has(cp + '|' + u));`,
+    replace: `);`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net join-ack race: announceMembership does not look at what the church's set became while its join was in flight`,
+    file: 'src/fellowship.src.js',
+    find: `      _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);   // not awaited; see its note
+`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net join-ack race: the in-flight re-send does not notice a Leave that landed while the join was in flight`,
+    file: 'src/fellowship.src.js',
+    find: `    if ((_leaveGen[cp] || 0) !== gen) return;   // left while the join was in flight: never re-join someone`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net join-ack race: the in-flight re-send does not check the phone is still on this church`,
+    file: 'src/fellowship.src.js',
+    find: `function _resendJoinToBoxesGainedInFlight(cp, sentTo, gen) {
+  try {
+    if (!cp || window.Fellowship.churchPub !== cp) return;`,
+    replace: `function _resendJoinToBoxesGainedInFlight(cp, sentTo, gen) {
+  try {
+    if (!cp) return;`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: adoptInviteRelays does not re-run adoption once the invite relay is admitted (the church's own box waits for the next launch)`,
+    file: 'src/fellowship.src.js',
+    find: `          try { const _p = adoptChurchNetDocAddresses(cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
+          return true;`,
+    replace: `          return true;`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: a pass already in flight when the invite relay is admitted queues no follow-up`,
+    file: 'src/fellowship.src.js',
+    find: `  if (_adoptingNetDoc) { if (again) _netDocAgain.add(cp); return []; }`,
+    replace: `  if (_adoptingNetDoc) return [];`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: the empty answer cached before the invite relay was known is reused`,
+    file: 'src/fellowship.src.js',
+    find: `if (c0 && !c0.docAt) _relayNetCache.delete(cp);`,
+    replace: `if (false) _relayNetCache.delete(cp);`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: the invite-retry path admits a relay that was down at follow but does not re-run adoption`,
+    file: 'src/fellowship.src.js',
+    find: `        try { const _p = adoptChurchNetDocAddresses(p.cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
+`,
+    replace: ``,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net first session: a follow-up queued for a different church than the finishing pass is never run`,
+    file: 'src/fellowship.src.js',
+    find: `    const _queued = [..._netDocAgain]; _netDocAgain.clear();`,
+    replace: `    const _queued = _netDocAgain.delete(cp) ? [cp] : []; _netDocAgain.clear();`,
+    test: 'scripts/a-member-adopts-its-churchs-signed-relay.test.mjs',
+  },
+  {
+    name: `relay-net D-2: publishSetFor drops the shared pool again (the old >=2-boxes rule, in its simplest form)`,
+    file: 'src/fellowship.src.js',
+    find: `  const canonical = CANONICAL_RELAYS;`,
+    replace: `  const canonical = [];`,
+    test: 'scripts/a-member-learns-a-relay-added-after-they-followed.test.mjs',
+  },
+  {
+    name: `relay-net D-2: relaysForChurch's final return no longer appends the shared pool`,
+    file: 'src/fellowship.src.js',
+    find: `  return _netRelays([...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);`,
+    replace: `  return _netRelays([...new Set([...global, ...ownUrls])], cp);`,
+    test: 'scripts/a-member-learns-a-relay-added-after-they-followed.test.mjs',
+  },
+  {
+    name: `group traffic (step 2a): subscribeGroups reads over the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1], '#t': groupIds, limit: 500 }]`,
+    replace: `_netRelays(window.Fellowship.relays), [{ kinds: [1], '#t': groupIds, limit: 500 }]`,
+    test: 'scripts/a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs',
+  },
+  {
+    name: `group traffic (step 2a): subscribeReactions reads over the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `groupReadRelays(window.Fellowship.churchPub), [{ kinds: [7], '#t': [groupId], limit: 400 }]`,
+    replace: `_netRelays(window.Fellowship.relays), [{ kinds: [7], '#t': [groupId], limit: 400 }]`,
+    test: 'scripts/a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs',
+  },
+  {
+    name: `group traffic (step 2a): subscribeGroup reads over the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }]`,
+    replace: `_netRelays(window.Fellowship.relays), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }]`,
+    test: 'scripts/a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs',
+  },
+  {
+    name: `group traffic (step 2a): subscribeGroupPin reads over the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `groupReadRelays(window.Fellowship.churchPub), [{ kinds: [30078], '#d': [PIN_D + groupId] }]`,
+    replace: `_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#d': [PIN_D + groupId] }]`,
+    test: 'scripts/a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs',
+  },
+  {
+    name: `group traffic (step 2a): subscribeHidden reads over the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `groupReadRelays(cp), [{ kinds: [30078], '#t': [groupId] }]`,
+    replace: `_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': [groupId] }]`,
+    test: 'scripts/a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs',
+  },
+  {
+    name: `group traffic (step 2a): subscribeGroupEvents reads over the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `groupReadRelays(cp), [{ kinds: [30078], '#t': groups }]`,
+    replace: `_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': groups }]`,
+    test: 'scripts/a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs',
+  },
+  {
+    name: `group traffic (step 2a): groupReadRelays with no church falls back to the WHOLE candidate list`,
+    file: 'src/fellowship.src.js',
+    find: `  if (!cp) return _netRelays([...CANONICAL_RELAYS]);`,
+    replace: `  if (!cp) return _netRelays(window.Fellowship.relays);`,
+    test: 'scripts/a-churchs-group-traffic-stays-on-its-own-boxes.test.mjs',
+  },
+  {
+    name: `profile (step 2b): setProfile publishes the kind-0 to the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `try { await _publishAny(profilePublishRelays(), evt); }`,
+    replace: `try { await _publishAny(window.Fellowship.relays, evt); }`,
+    test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
+  },
+  {
+    name: `profile (step 2b): profilePublishRelays unions the whole candidate list instead of each church's publishSetFor`,
+    file: 'src/fellowship.src.js',
+    find: `for (const u of publishSetFor(cp)) set.add(u);`,
+    replace: `for (const u of window.Fellowship.relays) set.add(u);`,
+    test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
+  },
+  {
+    name: `profile (step 2b): profilePublishRelays with no church falls back to the WHOLE candidate list`,
+    file: 'src/fellowship.src.js',
+    find: `if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);`,
+    replace: `if (!set.size) for (const u of _netRelays(window.Fellowship.relays)) set.add(u);`,
+    test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
+  },
+  {
+    name: `profile (step 2b): _flushProfiles (member-profile read) reads the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [0], authors }], {`,
+    replace: `const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {`,
+    test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
+  },
+  {
+    name: `profile (step 2b): subscribeChurchProfile reads the whole candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `const sub = pool.subscribeMany(groupReadRelays(pubk), [{ kinds: [0], authors: [pubk] }], {`,
+    replace: `const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors: [pubk] }], {`,
+    test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
+  },
+  {
+    name: `profile (step 2b): memberChurchPubs forgets the followed churches (only the active church counts)`,
+    file: 'src/fellowship.src.js',
+    find: `for (const f of l) { if (!f || !f.id || f.kind === 'network') continue;`,
+    replace: `for (const f of []) { if (!f || !f.id || f.kind === 'network') continue;`,
+    test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
+  },
+  {
+    name: `claim path (step 2b): adoptChurchNetDocAddresses stops claiming a box another church adopted first`,
+    file: 'src/fellowship.src.js',
+    find: `claimOnly = elsewhere && !mineAlready && _alreadyAMemberCandidate(u);`,
+    replace: `claimOnly = false;`,
+    test: 'scripts/a-members-profile-stays-on-its-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): sendDM publishes to the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `try { await _publishBounded(dmSendRelays(peerPub), evt); evt._delivered = true;`,
+    replace: `try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true;`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): sendDM's outbox entry records the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `tries: 0, relays: dmSendRelays(peerPub) });`,
+    replace: `tries: 0, relays: [...(window.Fellowship.relays || [])] });`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _outboxRelays falls back to the WHOLE candidate list for an entry with no relays`,
+    file: 'src/fellowship.src.js',
+    find: `  if (item.relays && item.relays.length) return item.relays;
+  return _netRelays([...CANONICAL_RELAYS]);
+}`,
+    replace: `  if (item.relays && item.relays.length) return item.relays;
+  return window.Fellowship.relays;
+}`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _outboxRelays stops re-deriving a queued DM's relays from its peer (an old whole-list entry stays whole)`,
+    file: 'src/fellowship.src.js',
+    find: `  if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+`,
+    replace: `  if (item.peer && !item.groupId && !(item.relays && item.relays.length)) return dmSendRelays(item.peer);
+`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _outboxRelays sends a join to the whole list instead of that church's publish set`,
+    file: 'src/fellowship.src.js',
+    find: `if (item.join) { try { return publishSetFor(item.join); } catch (e) {} }`,
+    replace: `if (item.join) { return window.Fellowship.relays; }`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): reactDM publishes to the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `try { await _publishAny(dmSendRelays(peerPub), evt); }`,
+    replace: `try { await _publishAny(window.Fellowship.relays, evt); }`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): subscribeThread reads the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `    const sub = pool.subscribeMany(dmReadRelays(), [
+      { kinds: [4], authors: [pub], '#p': [peerPub] },`,
+    replace: `    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      { kinds: [4], authors: [pub], '#p': [peerPub] },`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): subscribeDMs reads the WHOLE candidate list again`,
+    file: 'src/fellowship.src.js',
+    find: `    const sub = pool.subscribeMany(dmReadRelays(), [
+      // PERF-AUDIT`,
+    replace: `    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+      // PERF-AUDIT`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): dmSendRelays ignores whether the peer is in the church (every church of mine gets the DM)`,
+    file: 'src/fellowship.src.js',
+    find: `    if (!_peerInChurch(cp, peer)) continue;
+    try { for (const u of publishSetFor(cp))`,
+    replace: `    try { for (const u of publishSetFor(cp))`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): _peerInChurch no longer counts a message to the church's own account`,
+    file: 'src/fellowship.src.js',
+    find: `  if (peer === cp) return true;
+  try {
+    const m = _memHub`,
+    replace: `  try {
+    const m = _memHub`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): dmSendRelays with no shared church falls back to the WHOLE candidate list`,
+    file: 'src/fellowship.src.js',
+    find: `  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
+// WHERE INCOMING`,
+    replace: `  if (!set.size) for (const u of _netRelays(window.Fellowship.relays)) set.add(u);
+  return [...set];
+}
+// WHERE INCOMING`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
+  },
+  {
+    name: `DM (step 2c): dmReadRelays reads only the shared pool (a fellow member's reply via our church's box never arrives)`,
+    file: 'src/fellowship.src.js',
+    find: `try { for (const u of relaysForChurch(cp)) set.add(u); } catch (e) {} }
+  if (!set.size)`,
+    replace: `try { for (const u of []) set.add(u); } catch (e) {} }
+  if (!set.size)`,
+    test: 'scripts/a-private-messages-stay-on-a-shared-churchs-boxes.test.mjs',
   },
 ];

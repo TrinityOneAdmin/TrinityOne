@@ -119,6 +119,8 @@ function gateSource(src) {
     fnBody(src, 'function readVerified', 'readVerified'),
     fnBody(src, 'function writeVerified', 'writeVerified'),
     fnBody(src, 'function admitCached', 'admitCached'),
+    fnBody(src, 'function _scopesOf', '_scopesOf'),
+    fnBody(src, 'function _admittingScope', '_admittingScope'),
     fnBody(src, 'function rememberVerified', 'rememberVerified'),
     fnBody(src, 'function createRelayGate', 'createRelayGate'),
   ].join('\n');
@@ -150,6 +152,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function _netRelays', '_netRelays'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
+    fnBody(src, 'function _otherChurchesNetDocRows', '_otherChurchesNetDocRows'),
   ].join('\n');
   const win = fakeWindow();
   win.Fellowship = { relays: [...relays], churchPub: church.pub, ready: Promise.resolve() };
@@ -215,6 +218,9 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], name
     stmt(src, 'var RELAYS_LS = ', 'RELAYS_LS'),
     stmt(src, 'var NAMES_LS = ', 'NAMES_LS'),
     fnBody(src, 'function normRelay', 'normRelay'),
+    // Round 9: addRelay (and refreshNamedRelays) refuse a spelling of a shared relay through this helper.
+    fnBody(src, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
+    fnBody(src, 'function isOwnRelaySpelling(u) {', 'isOwnRelaySpelling'),
     fnBody(src, 'function ownRelay', 'ownRelay'),
     fnBody(src, 'function extraRelays', 'extraRelays'),
     fnBody(src, 'function relaysRaw', 'relaysRaw'),

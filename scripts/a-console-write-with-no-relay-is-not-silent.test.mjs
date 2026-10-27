@@ -139,6 +139,8 @@ function consoleWriters({ church, origin, canonical = [], pins = {}, extra = [],
     fnBody(src, 'function readVerified', 'readVerified'),
     fnBody(src, 'function writeVerified', 'writeVerified'),
     fnBody(src, 'function admitCached', 'admitCached'),
+    fnBody(src, 'function _scopesOf', '_scopesOf'),
+    fnBody(src, 'function _admittingScope', '_admittingScope'),
     fnBody(src, 'function rememberVerified', 'rememberVerified'),
     fnBody(src, 'function createRelayGate', 'createRelayGate'),
     // the console's own list assembly

@@ -1031,7 +1031,46 @@ function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays ||
 // empty, and when it is, every caller takes the failure it already had: a chat message, DM or join queues in
 // the outbox; a care request comes back not-sent. See src/relay-net.src.js for why the order is this way
 // round and why nothing here builds a queue.
-function churchRelays() { return _netRelays(churchRelaysRaw()); }
+function churchRelays() {
+  // NOT ANOTHER CHURCH'S BOX (PR #7 audit, H-3): the active church's reads and writes skip a box another
+  // church's signed document put on this phone. See _otherChurchesNetDocRows.
+  const foreign = _otherChurchesNetDocRows(window.Fellowship.churchPub);
+  return _netRelays(churchRelaysRaw().filter(u => !foreign.has(u)));
+}
+// THE BOXES ON THIS PHONE THAT BELONG TO A DIFFERENT CHURCH (PR #7 audit, finding H-3).
+//
+// The candidate list (window.Fellowship.relays) is ONE list for every church a member follows. When church A's
+// signed relay-net document added A's own box, that box was then used for church B too: B's reads went to it,
+// and B's writes — which A's box refuses, and records for ever in its rejected.log as "this member's key wrote
+// trinityone/member:<B>". A seizure of A's box then told whoever held it which OTHER churches A's members
+// belong to.
+//
+// This answers "which candidates must church `cp` not use": every address adoptChurchNetDocAddresses recorded
+// for ANOTHER church (trinityone.relays.netdoc, written there — the same key string), unless this church also
+// claims it — its own record (a box both churches sign: mutual hosting), its invite/kind-10002 boxes
+// (churchboxes / _churchRelays, READ only, never written), or the shared pool. Addresses the member typed are
+// never recorded, so they are never excluded. With no record at all, or no church, the answer is empty and
+// every list is exactly what it was before.
+//
+// This deliberately leaves churchRelaysRaw() — the UNGATED bootstrap read (RELAY-ADMISSION trap 3) — alone.
+function _otherChurchesNetDocRows(cp) {
+  const out = new Set();
+  if (!cp) return out;
+  try {
+    const rec = JSON.parse(localStorage.getItem('trinityone.relays.netdoc') || '{}') || {};
+    const mine = (rec[cp] && rec[cp].rows) || {};
+    let boxes = []; try { boxes = _loadChurchBoxes(cp) || []; } catch (e) { boxes = []; }
+    const live = _churchRelays.get(cp);
+    for (const c of Object.keys(rec)) {
+      if (c === cp || !rec[c] || !rec[c].rows || typeof rec[c].rows !== 'object') continue;
+      for (const u of Object.keys(rec[c].rows)) {
+        if (mine[u] || boxes.includes(u) || (live && live.has && live.has(u)) || CANONICAL_RELAYS.includes(u)) continue;
+        out.add(u);
+      }
+    }
+  } catch (e) {}
+  return out;
+}
 // THE CHURCH'S OWN LIST, GATED - narrower than churchRelays() on purpose, for traffic that must go only to
 // the relays THIS church is on. churchRelays() unions CANONICAL_RELAYS in, which is right for church content;
 // it is wrong for a member's personal unread marks (owner, DOMAIN.md 2026-10-13: "Marks should only go to the
@@ -1058,7 +1097,7 @@ function _adoptionOrigin() {
 // network still know what it knew yesterday — belongs to the gate that would otherwise re-decide under time
 // pressure (plan C4). Nothing here decides anything yet, so persisting a membership answer now would ship a
 // cache with no reader and a stale-data question nobody has to answer.
-const _relayNetCache = new Map();   // cp -> { at, entries }
+const _relayNetCache = new Map();   // cp -> { at, entries, docAt } (docAt: the signed document's created_at, 0 if none came back)
 const RELAY_NET_TTL_MS = 60000;
 async function churchRelayNet(cp, opts) {
   if (!cp) return [];
@@ -1076,10 +1115,16 @@ async function churchRelayNet(cp, opts) {
     let best = null;
     for (const e of (evs || [])) {
       if (!e || e.pubkey !== cp) continue;
-      if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+      // A TIE IN created_at GOES TO THE LOWEST id, as the servers decide it (NIP-01), so two phones that were
+      // answered in a different order still settle on the same list (G3 3.3).
+      if (!best || (e.created_at || 0) > (best.created_at || 0)
+        || ((e.created_at || 0) === (best.created_at || 0) && String(e.id || '') < String(best.id || ''))) best = e;
     }
     entries = best ? parseRelayNet(best.content) : [];
-    _relayNetCache.set(cp, { at: Date.now(), entries });
+    // `docAt`: the signed document's own created_at, 0 when no relay returned one. It is what separates
+    // "the church signed an EMPTY list" from "nobody answered" — the first may revoke a box, the second
+    // never does (adoptChurchNetDocAddresses).
+    _relayNetCache.set(cp, { at: Date.now(), entries, docAt: best ? (best.created_at || 0) : 0 });
   } catch {
     // Unreachable is NOT "the church has no relays". Return the last answer if we have one and leave the
     // cache alone so the next call retries, rather than caching an empty list over a real membership.
@@ -1095,6 +1140,317 @@ function isNetworkRelay(cp, url) {
     origin: _adoptionOrigin(),
     pins: CANONICAL_RELAY_PUBS,
   });
+}
+
+// ── STEP 1 (MEMBER SIDE): KEEP THE ADDRESSES THE CHURCH HAS ALREADY SIGNED ───────────────────────────────
+//
+// PLAN-relay-address-gossip-2026-10-22 §4, the member half of step 1 — the mirror of the console's
+// adoptNetDocAddresses (src/steward.src.js, commit b759bfa4). Measured 2026-10-22 on two phones: a steward
+// typed the church's own relay into one console; a member who had ALREADY followed that church never learned
+// it. `churchRelayNet` already reads the church's signed relay-net document (d = trinityone/relay-net) and
+// carries each box's pubkey + url — but it was read for the admission gate's `netEntries` dep alone: the KEY
+// was used to admit and the ADDRESS was thrown away. This keeps the address, so an existing member's phone
+// can dial a box the church added after the member joined, without anyone re-following or re-typing anything.
+//
+// FIVE THINGS THIS DELIBERATELY DOES NOT DO (each is a known failure mode — see the console commit):
+//
+//  · IT DOES NOT WRITE `_churchRelays`. That map is relaysForChurch's list of the church's adopted OWN relays,
+//    and `_applyChurchList` revokes anything in it that is not in the newest kind-10002 list — which a
+//    doc-discovered address never is — so putting one there produces a remove/re-add loop with a pool.close
+//    on every churn (the Phase 3 audit's finding). This writes ONLY window.Fellowship.relays, via addRelay.
+//  · IT DOES NOT WRITE `_saveChurchBoxes` / trinityone.churchboxes either — it stays a candidate-only mirror
+//    of the console, which writes only its own extra-relays store. The invite path (adoptInviteRelays) does
+//    write churchboxes; this one does not, on purpose.
+//  · IT DOES NOT GATE THE BOOTSTRAP READ. churchRelayNet still reads over churchRelaysRaw() (unfiltered) —
+//    RELAY-ADMISSION trap 3: the proof a box is ours is a document read from a box not yet proved, so gating
+//    that read deadlocks the bootstrap. This only ever ADDS candidates to the list that read already sees.
+//  · IT DOES NOT DROP THE SHARED POOL. CANONICAL_RELAYS/DEFAULT_RELAYS are skipped here and appended
+//    unconditionally elsewhere (churchRelaysRaw), so a church is never isolated from the shared relays
+//    (owner decision 2026-10-23). Nothing here touches relaysForChurch / publishSetFor / churchRelaysRaw.
+//  · IT DOES NOT MATCH ON THE URL. Admission is the KEY the box proves at the address dialled
+//    (RELAY-ADMISSION trap 2). The entry's url is only a hint about where to look; the entry's pubkey is
+//    checked against what the box proves, and then the member admission predicate decides.
+//
+// THE DIALLING FORM — copied verbatim from the console's _netDocDialUrl (b759bfa4), because the document's
+// `url` arrives in the same four shapes here. scripts/gateway.mjs destroys any upgrade whose path is not
+// exactly /relay, so an origin with no path connects to nothing; every entry is reduced to its origin and
+// given the one path the relay answers at, the scheme carried through (http→ws, https→wss), and anything
+// with a leftover path, query, fragment or userinfo dropped rather than guessed at.
+function _netDocDialUrl(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  s = s.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+  if (!/^wss?:\/\//i.test(s)) return '';
+  s = s.replace(/\/+$/, '').replace(/\/relay$/i, '').replace(/\/+$/, '');
+  if (!/^wss?:\/\/[^/\s?#@]+$/i.test(s)) return '';
+  return s + '/relay';
+}
+// IS THIS ADDRESS ALREADY A CANDIDATE, UNDER ANY SPELLING THIS PHONE USES? addRelay refuses only an exact
+// string repeat of something already in window.Fellowship.relays, so the normalisations that disagree at the
+// edges are checked here too. The console uses relayAddrKey (scheme-blind) AND normalizeURL; grepped at this
+// commit, `relayAddrKey` is NOT imported in src/fellowship.src.js (it lives in relay-net.src.js and is not
+// re-exported here) while `normalizeURL` IS (from nostr-tools/utils). So this uses the fallback the brief
+// names: exact-string compare, normalizeURL compare, and a compare of the _netDocDialUrl-canonical form —
+// which collapses a trailing slash, a bare slash and a /relay suffix, and is scheme-sensitive. Compared
+// against churchRelaysRaw() (window.Fellowship.relays ∪ CANONICAL_RELAYS) so neither a shared-pool spelling
+// nor a typed address gets a second row.
+function _alreadyAMemberCandidate(u) {
+  const n = (x) => { try { return normalizeURL(x); } catch (e) { return ''; } };
+  const d = (x) => { try { return _netDocDialUrl(x); } catch (e) { return ''; } };
+  const vn = n(u), vd = d(u);
+  let list = []; try { list = churchRelaysRaw(); } catch (e) { list = []; }
+  for (const r of list) {
+    if (!r) continue;
+    if (r === u) return true;
+    if (vn && n(r) === vn) return true;
+    if (vd && d(r) === vd) return true;
+  }
+  return false;
+}
+// HOW FAR THIS PATH MAY GROW THE MEMBER CANDIDATE STORE. Chosen here, 2026-10-22 — NOT copied from a
+// pre-existing constant: the plan cited a `CHURCH_BOXES_MAX = 8` and there is no such bound in this tree
+// (_saveChurchBoxes is uncapped). The console chose 8 for the same reason; this matches it so the two sides
+// churn the same way. It bounds window.Fellowship.relays AS A WHOLE, so a box behind a free tunnel — a new
+// provable address on every restart — cannot grow the list for ever at one dial per dead address per read.
+const MEMBER_NETDOC_ADOPT_MAX = 8;
+// Module-level re-entrancy guard. setChurch is on the launch/foreground/unlock/online/resume/90s-beat effect
+// (app.jsx, keyed [activeChurch, churches, connTick]), so this fires-and-is-never-awaited repeatedly; the
+// guard + churchRelayNet's 60s cache + the _alreadyAMemberCandidate short-circuit keep repeated ticks cheap.
+let _adoptingNetDoc = false;
+// THE MERGE. Fire-and-forget from setChurch (see there); never awaited, so a slow or dead box cannot delay a
+// church switch, and it is safe to run twice because every step is idempotent.
+// TAKE A REVOKED ADDRESS OFF THIS PHONE (adoptChurchNetDocAddresses, PR #7 audit H-2) — but never one that
+// something else still needs: the shared pool, another church's doc-adopted box, any church's invite or
+// kind-10002 boxes. The same refusals as _maybeDropRelay, plus the doc records of the other churches. Kept out
+// of adoptChurchNetDocAddresses so that function still never so much as names _churchRelays or churchboxes
+// (its tests assert it does not write them; this only reads them).
+function _dropRevokedNetDocRows(cp, gone, rec) {
+  let boxes = {}; try { boxes = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || '{}') || {}; } catch (e) { boxes = {}; }
+  const stillNeeded = (u) => {
+    if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) return true;
+    for (const c of Object.keys(rec || {})) { if (c !== cp && rec[c] && rec[c].rows && rec[c].rows[u]) return true; }
+    for (const c of Object.keys(boxes)) { if (Array.isArray(boxes[c]) && boxes[c].includes(u)) return true; }
+    for (const [, m] of _churchRelays) { if (m && m.has && m.has(u)) return true; }
+    return false;
+  };
+  // THE GATE FORGETS THIS CHURCH'S PROOF OF EVERY ADDRESS IT REVOKED (G3 3.2), including one another church still
+  // signs and which therefore stays on the phone: forgetScope removes only THIS church's scope, so the other
+  // church keeps its own proof.
+  for (const u of (gone || [])) { try { _gate.forgetScope(u, cp); } catch (e) {} }
+  const drop = (gone || []).filter(u => !stillNeeded(u));
+  if (!drop.length) return [];
+  const now = window.Fellowship.relays || [];
+  if (now.some(u => drop.includes(u))) window.Fellowship.setRelays(now.filter(u => !drop.includes(u)));
+  try { pool.close(drop); } catch (e) {}
+  return drop;
+}
+// A NEW MEMBER'S JOIN CAN LEAVE BEFORE THE CHURCH'S OWN BOX IS KNOWN (PR #8-14 audit, H-1 timing). The follow flow
+// calls announceMembership as soon as the invite proof lands; adoptChurchNetDocAddresses is fire-and-forget from
+// setChurch and finishes LATER, and publishSetFor only includes the church's signed box once adoption has filled
+// _relayNetCache and the gate has proved the key. So the join went to [invite box, shared], succeeded there, and
+// nothing ever retried: the church's own box held no join until the next heartbeat or the next write.
+//
+// So: when adoption leaves publishSetFor(cp) holding a box it did not hold when adoption started, send the
+// membership again. THE SIGNAL FOR "ALREADY ANNOUNCED" IS _joinSentFor(cp), not the heartbeat key
+// (`trinityone.hb:<npub>` is keyed by church, not identity, and is wiped on every lock — see _joinSentFor), and
+// not a flag of our own: _joinSent is set in exactly one place, after a relay ACCEPTED this identity's announce
+// for this church, which only the follow flow does after checkChurch said 'church' (the M-9 rule: a non-church
+// npub must never get a membership doc), and leaveMembership clears it. Nothing here announces for a church
+// that has not already been announced for.
+//
+// At most once per box per launch (_memberResent), never awaited, never blocks the first join (it runs after
+// adoption, which is itself fire-and-forget), and it writes nothing of its own: not _churchRelays, not
+// churchboxes. A box that makes the set no wider is not a reason to send anything.
+const _memberResent = new Set();   // cp|url -> membership already re-sent for this box THIS launch
+async function _resendMembershipToNewBoxes(cp, before) {
+  try {
+    if (!cp || window.Fellowship.churchPub !== cp) return;
+    if (!_joinSentFor(cp)) return;
+    // THE GATE MUST HAVE PROVED THE BOX BEFORE publishSetFor WILL NAME IT. adoption's own proof is private to it
+    // (it goes through the member predicate with a one-off verify), so the gate learns the box only when its own
+    // background proof lands — later than this line. Wait for that proof here (this whole function is
+    // fire-and-forget, so nothing the member does waits on it); admission is unchanged, this only asks sooner.
+    try { await _gate.refresh(window.Fellowship.relays || [], cp); } catch (e) {}
+    if (window.Fellowship.churchPub !== cp) return;
+    // …AND ASK AGAIN AFTER THE WAIT. The first _joinSentFor above was read BEFORE the await. leaveMembership
+    // publishes its tombstone and clears _joinSent without touching churchPub, so a Leave tapped while the gate
+    // refresh was in flight passed the churchPub check and announceMembership then published a fresh join NEWER
+    // than the tombstone: a leaver re-joined. Nothing awaits between this line and announceMembership's signing.
+    if (!_joinSentFor(cp)) return;
+    const after = publishSetFor(cp);
+    if (!after.length) return;
+    const gained = after.filter(u => !before.includes(u) && !_memberResent.has(cp + '|' + u));
+    if (!gained.length) return;
+    for (const u of gained) _memberResent.add(cp + '|' + u);
+    const p = window.Fellowship.announceMembership(cp);
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
+// THE OTHER HALF OF THE SAME WINDOW (measured on a phone 2026-10-26, from the relays' own stores): the join was
+// published at 19:33:32 to [invite box, shared]; the church's own box was proved and adopted at ~19:33:35 (the
+// member's name doc published then DID reach it, and it refused it: "not a member"); and
+// _resendMembershipToNewBoxes, run at the end of that adoption, read _joinSentFor(cp) while the join's ack was
+// still in flight, saw false and returned. Nothing re-sent, so the church's box held no join until a relaunch.
+// So announceMembership also looks, at the moment it marks the join sent, at what the church's set has become
+// SINCE the set it published to. Synchronous (publishSetFor only names boxes the gate has already proved, so there
+// is nothing to wait for), fire-and-forget, shares _memberResent with the path above so a box is sent to at most
+// once per launch by either, and re-checks the leaving state at send time.
+// A Leave that landed WHILE the join was in flight clears _joinSent, and then the late ack marks it sent again, so
+// _joinSentFor alone cannot tell a leaver from a member: _leaveGen counts leaves, and a changed count means "left".
+var _leaveGen = {};   // cp -> number of leaveMembership tombstones published for it this launch
+function _resendJoinToBoxesGainedInFlight(cp, sentTo, gen) {
+  try {
+    if (!cp || window.Fellowship.churchPub !== cp) return;
+    if ((_leaveGen[cp] || 0) !== gen) return;   // left while the join was in flight: never re-join someone
+    if (!_joinSentFor(cp)) return;   // left (or never sent): never re-join someone
+    const after = publishSetFor(cp);
+    if (!after.length) return;
+    const gained = after.filter(u => !sentTo.includes(u) && !_memberResent.has(cp + '|' + u));
+    if (!gained.length) return;
+    for (const u of gained) _memberResent.add(cp + '|' + u);
+    const p = window.Fellowship.announceMembership(cp);
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
+// A SECOND PASS, ASKED FOR WHEN THE CANDIDATE SET GROWS (first-session bug, measured on a phone 2026-10-26).
+// On the follow tick the invite relay is not yet in the list, so the first read asks only the shared relays,
+// finds no document, and churchRelayNet caches that empty answer (docAt 0) for a minute — and nothing asked
+// again once the invite relay was proved, so the church's own box was not adopted until the next launch.
+// `opts.again` (set by adoptInviteRelays when it admits an address) drops a cached answer that held NO
+// document — never one that held a real document, whose read did not depend on the missing relay — and, if a
+// pass is already running, queues exactly one follow-up for that church instead of being skipped.
+const _netDocAgain = new Set();
+async function adoptChurchNetDocAddresses(cp, opts) {
+  if (!cp) return [];
+  const again = !!(opts && opts.again);
+  if (_adoptingNetDoc) { if (again) _netDocAgain.add(cp); return []; }
+  _adoptingNetDoc = true;
+  if (again) { const c0 = _relayNetCache.get(cp); if (c0 && !c0.docAt) _relayNetCache.delete(cp); }
+  // WHAT THIS PATH ADDED, AND FOR WHICH CHURCH AND KEY — so a box the church later TAKES OUT of its signed
+  // document can be taken off this phone again (PR #7 audit, finding H-2). Without it the address stayed in
+  // window.Fellowship.relays for ever: re-admitted under the `software` root, still sent this member's writes,
+  // AUTH and IP long after the steward pressed Remove and was told it was gone.
+  //
+  // `trinityone.relays.netdoc` = { [churchPub]: { hw: <newest document created_at seen>, rows: { [url]: <key> } } }.
+  // ONLY ADDRESSES THIS FUNCTION ADDED are recorded, so revocation can never take away a relay the member
+  // typed, an invite relay, or the shared pool. NOT IN ANY BACKUP: app/backup.jsx exports members by an
+  // allowlist (MEMBER_PREFIXES), and `trinityone.relays` is deliberately absent from it — the same reason the
+  // candidate list and the gate's verified set stay out (closed-network plan C5): routing is rebuilt from the
+  // church's own signed document, never from a file.
+  const NETDOC_KEY = 'trinityone.relays.netdoc';
+  const readRec = () => { try { const o = JSON.parse(localStorage.getItem(NETDOC_KEY) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch (e) { return {}; } };
+  const writeRec = (o) => { try { localStorage.setItem(NETDOC_KEY, JSON.stringify(o)); } catch (e) {} };
+  let before = [];
+  try { before = publishSetFor(cp); } catch (e) { before = []; }
+  try {
+    let entries;
+    try { entries = await churchRelayNet(cp); } catch (e) { return []; }
+    if (window.Fellowship.churchPub !== cp) return [];   // the church switched while we read
+    // THE REVOCATION, before anything is added. Only on a document that was REALLY READ (docAt > 0 — a relay
+    // returned the church's signed event): "nobody answered" is never "the church removed its box". And only
+    // on a document at least as new as the newest this phone has acted on (`hw`), so a relay serving an
+    // older copy cannot put back a box the church has since removed — the rollback the audit's hardening
+    // note names.
+    const cached = _relayNetCache.get(cp);
+    const docAt = (cached && cached.docAt) || 0;
+    if (docAt > 0) {
+      const rec = readRec();
+      const mine = (rec[cp] && typeof rec[cp] === 'object') ? rec[cp] : { hw: 0, rows: {} };
+      if (!mine.rows || typeof mine.rows !== 'object') mine.rows = {};
+      if (docAt < (Number(mine.hw) || 0)) return [];      // an older copy than one already acted on: ignore it whole
+      mine.hw = docAt;
+      // MATCHED ON THE KEY (RELAY-ADMISSION trap 2): a row goes when the KEY it was adopted for is no longer
+      // signed. A box that merely moved address keeps its key and is not revoked here.
+      const signedKeys = new Set((entries || []).map(e => String((e && e.pubkey) || '').toLowerCase()).filter(Boolean));
+      const gone = Object.keys(mine.rows).filter(u => !signedKeys.has(String(mine.rows[u] || '').toLowerCase()));
+      for (const u of gone) delete mine.rows[u];
+      rec[cp] = mine;
+      writeRec(rec);
+      if (gone.length) _dropRevokedNetDocRows(cp, gone, rec);
+    }
+    const added = [];
+    for (const e of (entries || [])) {
+      const u = _netDocDialUrl(e && e.url);
+      if (!u) continue;
+      // NO CLEARTEXT. Every other route a phone learns a box by refuses anything but wss:// (adoptInviteRelays,
+      // resolveRelayName, kind-10002 `r` tags); a console served over plain http signs a ws:// origin, and dialling
+      // it would send AUTH and church traffic unencrypted across the parish wifi (PR #7 audit, M-4). Loopback is
+      // the one exception: it never leaves the device.
+      if (/^ws:/i.test(u) && !/^ws:\/\/(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|localhost|\[::1\])(:\d+)?\/relay$/i.test(u)) continue;
+      // The shared pool is added unconditionally by churchRelaysRaw; a second spelling of it only buys a dial.
+      if (CANONICAL_RELAYS.includes(u) || DEFAULT_RELAYS.includes(u)) continue;
+      // A BOX TWO CHURCHES BOTH SIGN (mutual hosting — DOMAIN: churches host each other). It is already on this
+      // phone because ANOTHER church's document put it there, and is recorded under that church only — so
+      // _otherChurchesNetDocRows would keep it out of THIS church's read and publish sets. Claim it for this
+      // church too: prove the key this church signed, record it, add nothing to the list (it is already there).
+      let claimOnly = false;
+      try {
+        const r0 = readRec();
+        const elsewhere = Object.keys(r0).some(c => c !== cp && r0[c] && r0[c].rows && r0[c].rows[u]);
+        const mineAlready = !!(r0[cp] && r0[cp].rows && r0[cp].rows[u]);
+        claimOnly = elsewhere && !mineAlready && _alreadyAMemberCandidate(u);
+      } catch (err) { claimOnly = false; }
+      // THE SAME BOX AT A NEW ADDRESS (PR #7 audit, M-1). A box behind a free tunnel comes back on a new address
+      // every restart, and the church re-signs the SAME key there. Each old address this path recorded for this
+      // church under that key is REPLACED, not kept beside it: kept, they filled the cap after about five
+      // restarts (so the box's live address was never adopted again) and were dialled on every publish and read.
+      // So a replacement is not held back by the cap — it does not grow the list — and the old rows go once the
+      // new address has proved the key (below). Matched on the KEY, never the URL (RELAY-ADMISSION trap 2).
+      const wantKey = String((e && e.pubkey) || '').toLowerCase();
+      let moved = [];
+      try {
+        const r1 = readRec();
+        const rows = (r1[cp] && r1[cp].rows) || {};
+        moved = Object.keys(rows).filter(x => x !== u && String(rows[x] || '').toLowerCase() === wantKey);
+      } catch (err) { moved = []; }
+      if (!claimOnly && !moved.length && (window.Fellowship.relays || []).length >= MEMBER_NETDOC_ADOPT_MAX) break;
+      if (!claimOnly && _alreadyAMemberCandidate(u)) continue;
+      // THE BOX AT THAT ADDRESS MUST PROVE THE KEY THE ENTRY NAMES (RELAY-ADMISSION trap 2). Without this a
+      // recycled tunnel hostname answering with a DIFFERENT key would be adopted. verifyRelayIdentityDetailed
+      // tells "unreachable" apart from "answered, not ours"; the proof is reused one line down so the address
+      // is proved and admitted in ONE round trip (the invite-path idiom, adoptInviteRelays).
+      let detail;
+      try { detail = await verifyRelayIdentityDetailed(u); } catch (err) { detail = { proof: null, reached: false }; }
+      const proof = detail && detail.proof;
+      if (!proof) continue;
+      if (String(proof.relayPub || '').toLowerCase() !== String((e && e.pubkey) || '').toLowerCase()) continue;
+      // ADMIT via the member predicate, reusing the proof. Same roots as every other add route.
+      const ok = await _isNetworkRelay(cp, u, {
+        verify: async () => proof,
+        netEntries: churchRelayNet,
+        origin: _adoptionOrigin(),
+        pins: CANONICAL_RELAY_PUBS,
+      });
+      if (!ok) continue;
+      if (window.Fellowship.churchPub !== cp) break;       // switched while proving
+      if (!claimOnly) {
+        if (_alreadyAMemberCandidate(u)) continue;         // added while we waited
+        try { window.Fellowship.addRelay(u); added.push(u); } catch (err) {}
+      }
+      // RECORD IT, for the revocation above: this church, the key it proved. Re-read, because the proofs above
+      // took round trips and another pass may have written.
+      try {
+        const rec = readRec();
+        const mine = (rec[cp] && typeof rec[cp] === 'object') ? rec[cp] : { hw: docAt, rows: {} };
+        if (!mine.rows || typeof mine.rows !== 'object') mine.rows = {};
+        mine.rows[u] = String(proof.relayPub || '').toLowerCase();
+        for (const x of moved) delete mine.rows[x];
+        rec[cp] = mine;
+        writeRec(rec);
+        // …and off the phone, unless something else still needs the old address (_dropRevokedNetDocRows refuses
+        // the shared pool, another church's row, and any church's invite or kind-10002 box). The gate forgets
+        // what was dropped, so a dead address is not kept as "proved" for the rest of its 30 days.
+        if (moved.length) for (const x of _dropRevokedNetDocRows(cp, moved, rec)) { try { _gate.forget(x); } catch (err) {} }
+      } catch (err) {}
+    }
+    _resendMembershipToNewBoxes(cp, before).catch(() => {});   // not awaited: adoption's caller never waits on a send
+    return added;
+  } finally {
+    _adoptingNetDoc = false;
+    // every church queued while this pass ran, once each (a different church's follow-up must not linger)
+    const _queued = [..._netDocAgain]; _netDocAgain.clear();
+    for (const q of _queued) { try { const _q = adoptChurchNetDocAddresses(q, { again: true }); if (_q && _q.catch) _q.catch(() => {}); } catch (e) {} }
+  }
 }
 
 // ── C4: THE GATE, one per surface ───────────────────────────────────────────────────────────────────────
@@ -1190,7 +1546,7 @@ function _restoreFold() {
 }
 // FEDERATION Phase 4 — decentralise the default. Track the enforcing relays each church declares as its OWN
 // (from its NIP-65 list, non-canonical), so we can read a self-hosted church WITHOUT the shared a8 fallback.
-const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. keys = read union; distinct non-null values = distinct relay BOXES (R3 self-sufficiency, dedup by identity not URL).
+const _churchRelays = new Map();   // cp -> Map(wssUrl -> relayPub|null): the church's adopted OWN relays. keys = read union; distinct non-null values = distinct relay BOXES (dedup by identity not URL).
 const _churchList   = new Map();   // cp -> { at, want:Set(url) }: the newest ACCEPTED church-signed relay-list, held in memory; drives (re)adoption + revocation.
 const _applying     = new Set();   // cp currently inside _applyChurchList — coalesces re-entrant churn (addRelay itself fires 'trinity-relays').
 const LISTHW_KEY = 'trinityone.relaylist.hw';   // persisted {cp: created_at} high-water — blocks a replayed OLDER list from downgrading or resurrecting a burned relay (R2 anti-replay).
@@ -1286,33 +1642,228 @@ async function _reResolveRelayName(cp) {
     }
   } finally { _resolving.delete(cp); }
 }
-// relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
-// self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
-// no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
-// + reversible: dropping a8 for a self-hosted church never affects a church still using it, and a8 stays in code.
+// ── THE CHURCH'S SIGNED RELAY LIST IS READ ON EVERY LAUNCH, NOT ONLY WHEN SOMEBODY FOLLOWS ──────────────
+//
+// MEASURED 2026-10-22, two phones against live relays: a relay typed into one steward console never reached
+// a second console of the SAME church — five reads over 3.5 minutes, including a reload and a PIN unlock.
+// Church DATA propagated fine over the shared relay in the same window; it is specifically ADDRESSES that
+// did not move. The member half of that is here. `subscribeChurchRelays` reads the church's signed kind-10002
+// list and adopts the relays it declares, and it had exactly ONE caller — app/app.jsx's followChurch, the
+// moment somebody follows a church. So on an ordinary launch the read never ran at all: `_churchRelays`
+// stayed empty, `_reResolveRelayName` was never driven, and every existing member of an established church
+// never learned about a box added after they joined. (PLAN-relay-address-gossip-2026-10-22 §4 step 2.)
+//
+// WHAT DRIVES IT NOW — and it is deliberately NOT a new signal. `setChurch` below, which the member app
+// already calls from one effect keyed on [activeChurch, churches, connTick]. connTick is the app's single
+// reconnect scheduler, and foregrounding, `online`, the native resume, a PIN unlock's `trinity-reconnect`,
+// the advisory `trinity-relay-returned` and the 90-second beat ALL bump it. So church-active, focus/resume
+// and relay-returned arrive here through the debounce and jitter the app already has. A second set of
+// listeners and a second 90-second timer in this file would be a second schedule that can run out of step
+// with that one, and app.jsx's own note explains why the two reconnect signals are deliberately not merged.
+//
+// WHY A COOLDOWN IS NOT OPTIONAL. Each call to `subscribeChurchRelays` opens a pool subscription AND installs
+// a `trinity-relays` listener, and returns the one function that undoes both. That effect's `churches` dep is
+// memoised on the STORED church list, which is rewritten whenever a church's kind-0 profile merges in, so
+// setChurch legitimately fires several times during one launch. Calling the read per signal without the
+// teardown leaks one subscription and one listener each time — strictly worse than the bug being fixed.
+//
+// SO: at most ONE live read, for the church that is active, and the previous one is CLOSED before the next is
+// opened. A re-open for the SAME church is rate-limited; a church SWITCH is not, because the member is
+// looking at a different congregation whose list this device may never have read.
+//
+// THIS WRITES NOTHING ITSELF. Everything it can change to a relay list, it changes through the existing
+// `subscribeChurchRelays` -> `_applyChurchList`, unaltered: the same church-signature check, the same
+// newest-wins high-water, the same NIP-11 capability gate, the same revocation. What is new is only HOW OFTEN
+// that runs. Re-reading does not make it revoke more: an equal-timestamp re-application yields the identical
+// `want` set, so nothing is dropped and `_maybeDropRelay`/`pool.close` are not reached (see the re-read test
+// in scripts/a-member-learns-a-relay-added-after-they-followed.test.mjs, which counts both).
+// TWO FLOORS, because "is this read still working?" cannot be answered in the first seconds of one.
+//   · REREAD: a HEALTHY read is not re-opened inside this window. Foregrounding, `online`, a PIN unlock and
+//     a relay returning all arrive through app.jsx's one scheduler, so this is the real rate limit on them.
+//   · SETTLE: NO re-open inside this window, healthy or not. A read whose socket has not finished opening
+//     reads as unhealthy, and the launch tick arrives while exactly that is true — without this floor the
+//     first second of every launch would open and close a read per tick. Long enough for a loopback or a
+//     tunnel to connect; short enough that a PIN unlock's own tick, which lands a few seconds in, is not
+//     swallowed and left holding the sockets reconnectAll() has just closed.
+const CHURCHLIST_REREAD_MS = 20000;
+const CHURCHLIST_SETTLE_MS = 3000;
+let _crWatch = null;      // { cp, stop, over } — the one live read, or null
+let _crLast = 0;          // monotonic ms at which it was opened
+let _crOpening = false;   // re-entrancy guard: adoption fires `trinity-relays`, and the gate's onChange fires `trinity-relay-returned`
+// A MONOTONIC CLOCK, for the reason app.jsx's auth retry uses one: the faults this code sits next to include a
+// wrong wall clock, and a clock corrected BACKWARDS makes a Date.now() difference negative, which would
+// suppress the re-read for exactly as long as the original skew — the one window it is needed.
+function _crMono() { try { return performance.now(); } catch (e) { return Date.now(); } }
+function _stopChurchRelaysWatch() {
+  const w = _crWatch; _crWatch = null;
+  if (w) { try { w.stop(); } catch (e) {} }
+}
+function _watchChurchRelays(cp) {
+  if (_crOpening) return _crWatch;                       // a signal raised by our own adoption: the open in flight covers it
+  if (!cp) { _stopChurchRelaysWatch(); return null; }    // no active church (the app passes null when it clears the scope)
+  const same = !!_crWatch && _crWatch.cp === cp;
+  if (same && _crWatch.over > 0) {
+    const age = _crMono() - _crLast;
+    if (age < CHURCHLIST_SETTLE_MS) return _crWatch;                   // too young to judge
+    if (age < CHURCHLIST_REREAD_MS && _crHealthy()) return _crWatch;   // working, and recent
+  }
+  _crOpening = true;
+  try {
+    _stopChurchRelaysWatch();
+    let stop = null;
+    try { stop = window.Fellowship.subscribeChurchRelays(cp); } catch (e) {}
+    // WHAT THIS READ WENT OVER, because an empty answer and an unasked question are not the same thing.
+    let over = 0; try { over = churchRelays().length; } catch (e) {}
+    _crWatch = { cp, stop: (typeof stop === 'function') ? stop : () => {}, over };
+    _crLast = _crMono();
+  } finally { _crOpening = false; }
+  return _crWatch;
+}
+// TWO CASES THE RE-READ COOLDOWN MUST NOT SWALLOW, and they are the two that matter on a real phone.
+//
+//   • A READ THAT WENT OVER NOTHING (`over === 0`). On a cold boot the gate has proved nothing yet, so
+//     churchRelays() is empty and the subscription reaches no relay at all. The next signal — which is what
+//     the gate's own onChange fires the moment it admits one — must be allowed to open a read that can
+//     answer. This cannot feed itself: a read over an empty set contacts nothing, so it raises no signal.
+//   • A READ WHOSE SOCKETS ARE GONE. A PIN unlock runs reconnectAll(), which closes every socket and with it
+//     every subscription this read owns, and the unlock's own tick arrives within a second or two of launch.
+//     A flat cooldown would swallow precisely that signal and leave the member on a dead read until the
+//     90-second beat. `relaysHealthy()` is the same question that beat already asks — one live socket among
+//     the publish set — so asking it here cannot drift away from the app's own definition of a dead link.
+//
+// Unreachable or throwing is treated as NOT healthy, so the fallback is to re-read. The whole cost of being
+// wrong that way is one REQ for one kind on one author.
+function _crHealthy() { try { return window.Fellowship.relaysHealthy() === true; } catch (e) { return false; } }
+// relaysForChurch(cp): the read set for ONE church: the phone's relay list (minus other churches' boxes), the
+// church's own adopted boxes, and ALWAYS the shared pool (CANONICAL_RELAYS). Owner decision 2026-10-26 (audit
+// D-2, consistent with 2026-10-23 "never isolate a church"): this used to DROP the shared pool once a church had
+// >=2 distinct boxes of its own, so a church whose two boxes both went quiet read over nothing. Adding a box can
+// only ever widen this set now.
 function relaysForChurch(cp) {
   const own = cp && _churchRelays.get(cp);   // Map(url -> relayPub|null)
-  const global = window.Fellowship.relays || [];
+  // NOT ANOTHER CHURCH'S BOX (PR #7 audit, H-3): see _otherChurchesNetDocRows.
+  const foreign = _otherChurchesNetDocRows(cp);
+  const global = (window.Fellowship.relays || []).filter(u => !foreign.has(u));
   const ownUrls = own ? [...own.keys()] : [];
-  // R3: "self-sufficient" (safe to drop the shared canonical fallback) requires >=2 DISTINCT relay BOXES of the
-  // church's own — counted by identity key (relayPub), NOT by URL. Two routes to one relay (Cloudflare + Tailscale,
-  // the a8 pattern) share a relayPub and count ONCE, so a church that only LOOKS redundant keeps its safety net.
-  // Relays too old to advertise an identity (null) aren't counted, so this stays conservative (fallback retained).
-  const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-  // C4: the gate runs LAST, on the assembled list, so the self-sufficiency rule above still decides which
-  // candidates there are and the gate only decides which of them proved themselves. `cp` is passed through,
-  // because a relay admitted by ANOTHER church's signature is not admitted for this one.
-  if (boxes >= 2) return _netRelays([...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])], cp);
+  // C4: the gate runs LAST, on the assembled list: it decides which candidates proved themselves, and nothing
+  // here removes a candidate first. `cp` is passed through, because a relay admitted by ANOTHER church's
+  // signature is not admitted for this one. CANONICAL_RELAYS is unconditional (owner 2026-10-26).
   return _netRelays([...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
 }
+// THE PUBLISH SET FOR ONE CHURCH.
+//
+// THE BOXES THE CHURCH HAS SIGNED ARE ALWAYS IN IT. A member who followed with an invite link has
+// `trinityone.churchboxes[cp]` = the link's relay (adoptInviteRelays), and the branch below used to send every
+// church write — membership, posts, reactions, RSVPs, care — to that list plus the shared pool, and nowhere
+// else. A box the church added LATER reaches this phone only through the church's signed relay-net document
+// (adoptChurchNetDocAddresses), which writes window.Fellowship.relays and deliberately never churchboxes or
+// _churchRelays. So that box was proved, connected, in the read set — and sent nothing. Measured 2026-10-24
+// with two real relays: publishSetFor = [S, shared], relaysForChurch = [shared, S, T]; the member's join
+// landed on S and never on T, and T then refused the member's DMs as "not a member". On the device test of
+// PR #7 the church's own box held 0 of the member's events, which is this.
+//
+// MATCHED ON THE KEY, NEVER THE URL (RELAY-ADMISSION trap 2). A candidate is added only when the gate has an
+// admitted proof for it AND that proved key is one this church's own signed document names. The document is
+// read from the cache churchRelayNet keeps (synchronous here, never a new read); with no cached document
+// nothing is added, which is exactly the old behaviour. Nothing is written: not _churchRelays, not
+// churchboxes, not the candidate list — and the shared pool is still appended below, because adding a box can
+// only ever widen this set. The shared pool is appended whatever the number of boxes, so this cannot drop
+// CANONICAL_RELAYS (owner decision 2026-10-23: a church is never isolated).
+//
+// Scoped to THIS church's document, so another church's box sitting in the global candidate list is not
+// pulled into this church's writes by this line.
 function publishSetFor(cp) {
   const live = cp && _churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : [];
   const persisted = live.length ? live : _loadChurchBoxes(cp);
   if (!persisted.length) return relaysForChurch(cp);
-  const own = cp && _churchRelays.get(cp);
-  const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
-  const canonical = distinctBoxes >= 2 ? [] : CANONICAL_RELAYS;
-  return _netRelays([...new Set([...persisted, ...canonical])], cp);
+  // THE SHARED POOL IS ALWAYS IN THE SET (owner 2026-10-26, audit D-2). It used to be dropped at >=2 distinct
+  // boxes of the church's own; a church whose boxes both went quiet then published to nothing it could reach.
+  const canonical = CANONICAL_RELAYS;
+  const signed = [];
+  try {
+    const doc = cp && _relayNetCache.get(cp);
+    const keys = new Set(((doc && doc.entries) || []).map(e => String((e && e.pubkey) || '').toLowerCase()).filter(Boolean));
+    if (keys.size) {
+      for (const u of (window.Fellowship.relays || [])) {
+        if (!u || persisted.includes(u)) continue;
+        const k = _gate.provedKey(u, cp);
+        if (k && keys.has(k)) signed.push(u);
+      }
+    }
+  } catch (e) {}
+  return _netRelays([...new Set([...persisted, ...signed, ...canonical])], cp);
+}
+// THE READ SET FOR A CHURCH'S GROUP TRAFFIC (owner 2026-10-26: a church's box gets only that church's traffic).
+//
+// A group id belongs to the church whose group list it came from, and every group read here already drops
+// events not p-tagged to the church it was opened for (the `cp` check in each onevent) - so the church that
+// OWNS the groups of a subscription is the church the subscription is scoped to: window.Fellowship.churchPub
+// for the member screens, the explicit churchNpub for subscribeGroupEvents. These used to read over the whole
+// candidate list (window.Fellowship.relays), which holds every box ANY followed church signed, so church B's
+// group REQs (group ids, the member's pubkey) reached church A's box.
+//
+// Church unknown (no active church, or one that does not decode): the SHARED POOL ONLY. Never the whole list,
+// which is the leak, and never empty, because CANONICAL_RELAYS is always in it.
+function groupReadRelays(cp) {
+  if (!cp) return _netRelays([...CANONICAL_RELAYS]);
+  return relaysForChurch(cp);
+}
+// THE CHURCHES THIS MEMBER BELONGS TO (owner 2026-10-26, personal traffic). Read from the same place the member
+// app's church list is persisted: trinityone.followedChurches (npub-id entries, written by app.jsx from the
+// churches the member followed/joined), plus the active church. A network entry is not a church and is skipped.
+// Hex pubkeys, de-duplicated; empty when the member has none.
+function memberChurchPubs() {
+  const out = new Set();
+  try {
+    const l = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || [];
+    for (const f of l) { if (!f || !f.id || f.kind === 'network') continue; const h = toPub(f.id); if (h) out.add(h); }
+  } catch (e) {}
+  try { if (window.Fellowship.churchPub) out.add(window.Fellowship.churchPub); } catch (e) {}
+  return [...out];
+}
+// WHERE A MEMBER'S PROFILE (kind 0) IS PUBLISHED: the union, over every church the member belongs to, of that
+// church's publishSetFor (shared pool + that church's own boxes, never another church's doc-adopted box). With
+// no church: the shared pool only. Never empty (CANONICAL_RELAYS is in every publishSetFor).
+function profilePublishRelays() {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) { try { for (const u of publishSetFor(cp)) set.add(u); } catch (e) {} }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
+// WHERE A PRIVATE MESSAGE GOES (owner 2026-10-26, personal traffic): the SHARED servers plus the own box of a
+// church BOTH people belong to - never a box of a church only one of them is in. Sarah (A+B) to Tom (A only):
+// A's box, never B's. No shared church known: the shared pool only, which is today's worst case, never empty.
+//
+// HOW THE PHONE KNOWS THE PEER BELONGS TO C, with no new network read: the member hub for C (_memHub), the same
+// roster the People directory and the member count use - distinct people who joined (member:<C>) or posted to C.
+// _memHub only seeds from the on-device cache (memhub / legacy roster cache), so this is synchronous and local.
+// A peer the hub has not seen is treated as NOT a member of C, which fails toward the shared pool (the safe way).
+// A message to a CHURCH account (peer == C's key, for a church the member follows) counts as "both belong to C".
+function _peerInChurch(cp, peer) {
+  if (!peer) return false;
+  if (peer === cp) return true;
+  try {
+    const m = _memHub(cp).byPub.get(peer);
+    return !!(m && (m.joined || m.msgs > 0) && !_superseded(cp, peer));
+  } catch (e) { return false; }
+}
+function dmSendRelays(peer) {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) {
+    if (!_peerInChurch(cp, peer)) continue;
+    try { for (const u of publishSetFor(cp)) set.add(u); } catch (e) {}
+  }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
+}
+// WHERE INCOMING PRIVATE MESSAGES ARE READ: a fellow member may have sent via ANY church's box we both are on, so
+// the union of every church I belong to's read set (relaysForChurch always includes the shared pool). Messages
+// sent before this change went to the whole list, shared pool included, so they stay readable from it.
+function dmReadRelays() {
+  const set = new Set();
+  for (const cp of memberChurchPubs()) { try { for (const u of relaysForChurch(cp)) set.add(u); } catch (e) {} }
+  if (!set.size) for (const u of _netRelays([...CANONICAL_RELAYS])) set.add(u);
+  return [...set];
 }
 const RELAYS_KEY = 'trinityone.relays';
 // THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.
@@ -1901,7 +2452,7 @@ function _flushProfiles() {
   if (!authors.length) return;
   // Gated like every other socket: asking a stranger's relay for a list of members' names tells it who is
   // in this church, which is the read half of the same leak (plan §5 — reads and writes get one rule).
-  const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors }], {
+  const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [0], authors }], {
     onevent(e) {
       try {
         const m = JSON.parse(e.content);
@@ -2627,7 +3178,7 @@ function _docsHubOpen(hub) {
   const since = _hubSince(hub);
   const filters = [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
   if (since) for (const f of filters) f.since = since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
+  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
     onevent(e) {
       const d = _dtag(e);
       const key = e.pubkey + '|' + d;
@@ -2818,7 +3369,7 @@ function _memHubOpen(hub) {
   if (since) filters[1].since = since;
   const k1since = _hubSinceKind1(hub);
   if (k1since) filters[0].since = k1since;
-  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (a8 dropped once it's self-sufficient)
+  const sub = pool.subscribeMany(relaysForChurch(cp), filters, {   // Phase 4: this church's relays (the shared pool is always included)
     onevent(e) {
       _hubCursor(hub, e);
       if (e.pubkey === cp) { _memHubSaveSoon(hub); return; }
@@ -3072,7 +3623,7 @@ window.addEventListener('trinity-identity-lock', () => {
 // when the signal came back. Persisted, so closing the app doesn't lose it.
 const OUTBOX_KEY = 'trinityone.outbox';
 const OUTBOX_FAILED_KEY = 'trinityone.outbox.failed';   // gave-up messages, persisted (see below)
-const OUTBOX_MAX = 200;            // a bounded queue: past this the oldest is dropped rather than growing forever
+const OUTBOX_MAX = 200;            // a bounded queue — see _outboxFull: a NEW send is refused when it is full
 // The plaintext of a queued private message, IN MEMORY ONLY, keyed by event id. Never persisted.
 // The queued item itself carries only NIP-04 ciphertext (see the note in sendDM), which is right for a phone
 // that may be seized — but it means a "waiting to send" bubble would have nothing readable to show, and round
@@ -3088,14 +3639,84 @@ function _outboxLoad() {
   try { _outbox = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; } catch (e) { _outbox = []; }
   try { _outboxFailed = JSON.parse(localStorage.getItem(OUTBOX_FAILED_KEY) || '[]') || []; } catch (e) { _outboxFailed = []; }
 }
+// NOTHING IS SLICED OFF ON SAVE (stress batch 3, 6b, 2026-10-27). This wrote `_outbox.slice(-OUTBOX_MAX)`, so
+// past 200 the OLDEST queued messages were dropped from disk with no failed-bin entry and no notice, while the
+// in-memory queue went on growing unbounded. The bound is now enforced at the one moment the member can still be
+// told — when a new message is QUEUED (_outboxFull) — and the words go back to the composer. The gave-up bin
+// lost its `.slice(-50)` / `shift()` for the same reason: it is the place a refused message goes INSTEAD of
+// being discarded, so capping it silently discarded the 51st.
+// Returns whether the QUEUE reached storage (G2 audit F2): the leaving mark lives only in a queued `leave:` entry,
+// so a Leave whose entry could not be saved must say so rather than pretend it survives a restart.
 function _outboxSave() {
-  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX))); } catch (e) {}
+  let saved = true;
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox)); } catch (e) { saved = false; }
   // The gave-up bin is persisted too. It was memory-only, so a member's refused message — the whole reason
   // this bin exists instead of a silent discard — was itself silently lost on app close, before they could
   // see it, copy it out, or requeue it.
-  try { localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed.slice(-50))); } catch (e) {}
+  try { localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed)); } catch (e) {}
   for (const fn of [..._outboxSubs]) { try { fn(_outbox); } catch (e) {} }
+  return saved;
 }
+// THIS IDENTITY'S, OR PARKED (G2 audit F3). The queue is not per identity: a restore or a second account on the
+// phone inherits it. An entry is signed, so its pubkey says whose it is; the flush sends only the current
+// identity's, and everything that reads "is a Leave waiting" asks about the current identity only. Another
+// identity's entries stay where they are, unsent, until that identity is back.
+function _mine(o) { return !!(o && o.evt && pub && o.evt.pubkey === pub); }
+// Is the queue full for a NEW message? Only the member's own words count: a join, a leave and a profile edit are
+// one entry per church (or per person) — each REPLACES the older one of its kind — so they can never pile up,
+// and refusing a Leave or a join because chat filled the queue would be the wrong thing to refuse.
+// Only THIS identity's entries count (owner 2026-10-27): another identity's parked entries are not this person's queue.
+function _outboxFull() {
+  let n = 0;
+  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
+  return n >= OUTBOX_MAX;
+}
+// THE "DIDN'T SEND" BIN IS CAPPED AT 500, VISIBLY (owner 2026-10-27). Nothing is ever evicted from it. From 450 the
+// threads show "You have N unsent items — send or discard some"; at 500 a NEW message is refused at the composer,
+// the same way a full queue refuses one, so the words go back to the member instead of into a bin that is full.
+// (A message already queued that fails later still goes in — it is never dropped — so the bin can pass 500 by at
+// most what was queued when it filled.)
+const FAILED_MAX = 500, FAILED_WARN = 450;
+// Counted: this identity's messages that have a thread to be sent again or discarded from (a group post, a DM).
+// A failed join or profile edit has no Discard button anywhere, so counting it toward a cap the member is told to
+// clear by discarding would be a limit they cannot act on.
+function _failedCount() { let n = 0; for (const o of _outboxFailed) if (_mine(o) && (o.groupId || o.peer)) n++; return n; }
+function _failedFull() { return _failedCount() >= FAILED_MAX; }
+function _outboxMineCount() { let n = 0; for (const o of _outbox) if (_mine(o)) n++; return n; }
+// THE CHURCH A QUEUED ITEM BELONGS TO, so its relays are worked out when it is SENT, not when it was queued
+// (stress batch 3, 1a/2a/3). A join or leave names it; a group post queued by this build carries `cp`; one queued
+// by an older build carries only its frozen `relays`, and its church is read back from the event's first `p` tag
+// (publishMessage puts the church tag BEFORE any reply tag) — but only when that is a church this member
+// follows, so a reply's author can never be mistaken for a church. A DM belongs to no church ('').
+function _itemChurch(o) {
+  if (!o) return '';
+  if (o.leave) return o.leave;
+  if (o.join) return o.join;
+  if (o.peer && !o.groupId) return '';
+  if (o.cp) return o.cp;
+  if (o.groupId && o.evt && Array.isArray(o.evt.tags)) {
+    const t = o.evt.tags.find(t => Array.isArray(t) && t[0] === 'p');
+    if (t && typeof t[1] === 'string') { try { if (memberChurchPubs().includes(t[1])) return t[1]; } catch (e) {} }
+  }
+  return '';
+}
+// ── LEAVING ─────────────────────────────────────────────────────────────────────────────────────────────────
+// A Leave is a queued `leave:` entry in the outbox until the tombstone is delivered — THAT is the persisted
+// "leaving" mark (no storage key of its own), so an offline Leave survives a restart and nothing re-joins the
+// member in between. Once delivered, `_left` keeps the mark for the rest of this launch, for an announce that
+// was already on its way. Bound to the identity that signed it (cp + pub). Cleared ONLY by an explicit re-follow
+// (clearLeaving, called by followChurch before it announces). Owner decisions 2026-10-27.
+const _left = new Set();   // cp|pub -> this identity's tombstone for cp was delivered this launch
+function _leavingFor(cp) {
+  if (!cp) return false;
+  if (pub && _left.has(cp + '|' + pub)) return true;
+  return _outbox.some(o => o && o.leave === cp && o.evt && (!pub || o.evt.pubkey === pub));
+}
+// THE ONE GUARD every membership announce passes through (announceMembership and the outbox's re-send of a
+// queued join). See the list of callers at announceMembership.
+function _announceBlocked(cp) { return _leavingFor(cp); }
+// Take this church's queued join(s) off the queue — a newer join replaces them, a Leave removes them.
+function _outboxDropJoins(cp) { const n = _outbox.length; _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o))); return _outbox.length !== n; }   // this identity's only
 _outboxLoad();
 
 // ── blocked-member detection ─────────────────────────────────────────────────────────────────────────────
@@ -3539,16 +4160,80 @@ const isConnectionFailure = (e) => _CONNECTION.test(String((e && e.message) || e
 const MAX_TRIES = 50;   // 50 genuine relay REFUSALS (outages don't count) — a backstop so an unanticipated
                         // non-permanent refusal shape isn't retried forever, not a wall-clock limit.
 // Try to deliver everything queued. Safe to call often — it no-ops while already running.
-async function _outboxFlush() {
+// WHERE A QUEUED ITEM IS RETRIED — WORKED OUT NOW, NOT WHEN IT WAS QUEUED. Never the whole candidate list. A DM is
+// re-derived from its peer. Anything that belongs to a church (a join, a leave, a group post — see _itemChurch) goes
+// to that church's publish set AS IT IS NOW, the same function the live send uses: a group post used to carry the
+// set frozen at queue time, so a box the church ADDED while the phone was offline never got it, a box it REMOVED
+// still did (an owner-rule break: a church's box receives only that church's traffic), and a box that MOVED got
+// the dead address (stress batch 3, 1a/2a/3). A queued profile goes where a live one does. Only an old entry whose
+// church cannot be named falls back to its stored list (which _publishAny still re-gates); anything else with no
+// list gets the shared pool only.
+function _outboxRelays(item) {
+  if (item.peer && !item.groupId) return dmSendRelays(item.peer);
+  if (item.profile) { try { return profilePublishRelays(); } catch (e) {} }
+  const cp = _itemChurch(item);
+  if (cp) { try { return publishSetFor(cp); } catch (e) {} }
+  if (item.relays && item.relays.length) return item.relays;
+  return _netRelays([...CANONICAL_RELAYS]);
+}
+// THE CHURCH HAS BOXES THIS PHONE HAS NOT PROVED YET. Re-deriving at send time has one new way to go wrong: the
+// flush that runs 3s after a socket comes back can run before the gate has proved the church's own box, so
+// publishSetFor(cp) is the shared servers alone — the post lands there, is taken off the queue as delivered, and
+// the church's box never gets it. So when the church has boxes of its own (persisted) and the set names none of
+// them, ask the gate once for this church (as _resendMembershipToNewBoxes does), and if it still has not proved one,
+// HOLD the item as an outage: no try burned, still queued. Held for at most HOLD_UNPROVED_S from the first hold —
+// a box that never comes back must not keep the member's words off the shared servers for ever; after that it
+// goes where a live send would go right now. `asked` is per flush pass, so the gate is asked once per church.
+const HOLD_UNPROVED_S = 600;
+async function _heldForUnprovedBoxes(item, cp, asked) {
+  const persisted = (_churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : []).concat(_loadChurchBoxes(cp));
+  const own = persisted.filter(u => u && !CANONICAL_RELAYS.includes(u));
+  if (!own.length) return false;
+  const hasOwn = () => { try { return publishSetFor(cp).some(u => !CANONICAL_RELAYS.includes(u)); } catch (e) { return false; } };
+  if (hasOwn()) { if (item.heldSince) delete item.heldSince; return false; }
+  if (!asked.has(cp)) { asked.add(cp); try { await _gate.refresh(window.Fellowship.relays || [], cp); } catch (e) {} }
+  if (hasOwn()) { if (item.heldSince) delete item.heldSince; return false; }
+  const nowS = Math.floor(Date.now() / 1000);
+  if (!item.heldSince) { item.heldSince = nowS; _outboxSave(); }
+  return nowS - item.heldSince < HOLD_UNPROVED_S;
+}
+// The tombstone landed: the member has left. Only now does the church go from this phone (owner 2026-10-27: an
+// offline Leave keeps the church, marked leaving, until this point — _forgetChurch drops the church's boxes, so
+// running it at queue time would have left the queued tombstone nowhere to go but the shared servers).
+function _leaveDelivered(cp, evt) {
+  if (evt && evt.pubkey) _left.add(cp + '|' + evt.pubkey);
+  try { localStorage.removeItem('trinityone.joinedAt:' + cp); } catch (e) {}
+  _forgetChurch(cp);
+  try { window.dispatchEvent(new CustomEvent('trinity-left', { detail: { cp } })); } catch (e) {}
+}
+// `only` (optional) limits a pass to the items it accepts — leaveMembership uses it to send one church's queued
+// posts ahead of its tombstone. ORDER: every leave goes LAST in the pass, and a church's leave is not attempted
+// while any other item of that church is still queued: what the member said before leaving reaches the church
+// before the church is told they have gone (owner 2026-10-27).
+async function _outboxFlush(only) {
   if (_flushing || !_outbox.length || !sk) return;
   _flushing = true;
   try {
-    for (const item of [..._outbox]) {
+    const pass = [..._outbox].filter(o => o && o.evt && (!only || only(o)));
+    const asked = new Set();
+    for (const item of [...pass.filter(o => !o.leave), ...pass.filter(o => o.leave)]) {
+      if (!_outbox.includes(item)) continue;   // taken off the queue since the pass began (a Leave, a re-follow)
+      if (!_mine(item)) continue;              // another identity's: parked, never sent under this one (F3)
+      // PATH 10 of the leave race: a join queued before the Leave is never re-sent after it.
+      if (item.join && _announceBlocked(item.join)) { _outbox = _outbox.filter(o => o !== item); _outboxSave(); continue; }
+      const icp = _itemChurch(item);
+      if (item.leave && _outbox.some(o => o !== item && !o.leave && _mine(o) && _itemChurch(o) === item.leave)) continue;   // another identity's parked items never hold this Leave
+      if (icp && !item.peer && await _heldForUnprovedBoxes(item, icp, asked)) continue;
       try {
-        await _publishBounded(item.relays && item.relays.length ? item.relays : window.Fellowship.relays, item.evt);
+        await _publishBounded(_outboxRelays(item), item.evt);
+        // ONE OWNER OF A DELIVERY (G2 audit F1). leaveMembership may be sending this same tombstone, and a re-follow
+        // may have withdrawn it while it was on the wire. Whoever still finds it queued at delivery takes it off
+        // and runs _leaveDelivered; anyone else does nothing.
+        const owned = _outbox.some(o => o.evt.id === item.evt.id);
         _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
         _dmPlain.delete(item.evt.id);   // delivered by RETRY — the first-attempt path clears its own; this one was leaking for the session
         _outboxSave();
+        if (item.leave && owned) _leaveDelivered(item.leave, item.evt);
         if (item.join) { const _cp = item.join; setTimeout(() => { const hub = _docsHubs.get(_cp); if (hub && hub.closer) { const c = hub.closer; hub.closer = null; try { c(); } catch {} _docsHubOpen(hub); } }, 500); }
       } catch (e) {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
@@ -3563,11 +4248,17 @@ async function _outboxFlush() {
         item.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
         if (permanent && errs.some(function(e) { return /^blocked/i.test(String((e && e.message) || '')); })) _checkIfBlocked();
         if (permanent || item.tries >= MAX_TRIES) {
-          // Give up, but do NOT silently bin the member's words — mark it so the thread can show it was
-          // refused and offer to discard or copy it out.
           item.failed = true; item.permanent = !!permanent;
           _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
-          _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
+          if (item.leave) {
+            // A REFUSED LEAVE is not a message to copy out: it has no thread to show in. The leaving mark goes
+            // with it (the mark IS the queued entry), the church stays, and the app says so.
+            try { window.dispatchEvent(new CustomEvent('trinity-leave-refused', { detail: { cp: item.leave } })); } catch (x) {}
+          } else {
+            // Give up, but do NOT silently bin the member's words — mark it so the thread can show it was
+            // refused and offer to discard or copy it out.
+            _outboxFailed.push(item);
+          }
         }
         _outboxSave();
         // The relay said "slow down". Bursting the rest of the queue would just trip it again and burn a
@@ -3596,9 +4287,9 @@ if (typeof window !== 'undefined') {
   const _obDelay = () => Math.min(900000, 45000 * Math.pow(2, Math.min(_obFails, 5)));
   window.__trinityOutboxOk = () => { _obFails = 0; };
   const _obTick = async () => {
-    const before = _outbox.length;
+    const before = _outboxMineCount();   // this identity's: another's parked entries never drain, and must not hold the back-off up
     try { await _outboxFlush(); } catch (e) {}
-    const after = _outbox.length;
+    const after = _outboxMineCount();
     if (after > 0 && after >= before) _obFails++; else _obFails = 0;   // nothing drained → back off
     _obTimer = setTimeout(_obTick, _obDelay());
   };
@@ -3770,6 +4461,20 @@ function _forgetChurch(cp) {
   _nameKeys.delete(cp); _nameKeyTs.delete(cp);
   _churchRoster.delete(cp); _churchRelays.delete(cp); _churchList.delete(cp); _dropChurchBoxes(cp);
   _applying.delete(cp); _relayNetCache.delete(cp);
+  // THE BOXES ONLY THIS CHURCH PUT ON THE PHONE GO WITH IT (G3 3.1). adoptChurchNetDocAddresses added them to the
+  // shared candidate list and recorded them under this church in trinityone.relays.netdoc; left there, a box
+  // nobody on this phone signs any more stayed in every remaining church's read set. Only addresses that have a
+  // record are pruned (a hand-added or shared relay has none), and _dropRevokedNetDocRows keeps any that the
+  // shared pool, another church's record or any church's invite/kind-10002 box still needs.
+  try {
+    const rec = JSON.parse(localStorage.getItem('trinityone.relays.netdoc') || '{}') || {};
+    if (rec[cp]) {
+      const rows = Object.keys((rec[cp] && rec[cp].rows) || {});
+      delete rec[cp];
+      localStorage.setItem('trinityone.relays.netdoc', JSON.stringify(rec));
+      if (rows.length) _dropRevokedNetDocRows(cp, rows, rec);
+    }
+  } catch (e) {}
   _reseatOld.delete(cp); _reseatAt.delete(cp); _ckMemberKeys.delete(cp);
   _churchVoices.delete(cp);
   delete _carekeys[cp]; delete _carekeyRev[cp]; delete _carekeyTs[cp];
@@ -3820,6 +4525,8 @@ async function _retryInvitePending() {
       try { ok = await isNetworkRelay(p.cp, p.url); } catch { ok = false; }
       if (ok) {
         if (!(window.Fellowship.relays || []).includes(p.url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), p.url]);
+        // The candidate set just grew (a follower on a flaky link): read the church's relay-net document again, fresh.
+        try { const _p = adoptChurchNetDocAddresses(p.cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
         try { window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url: p.url } })); } catch {}
       } else { p.lastTry = now; kept.push(p); }
     }
@@ -4224,6 +4931,19 @@ window.Fellowship = {
   setChurch(npubOrHex) {
     window.Fellowship.churchPub = toPub(npubOrHex);
     try { _gate.refresh(churchRelaysRaw(), window.Fellowship.churchPub); } catch (e) {}
+    // THE CHURCH IS ACTIVE, SO READ THE LIST IT SIGNED. Until this line the kind-10002 read had one caller —
+    // the moment somebody follows a church — so an existing member never learned about a box the church added
+    // afterwards. See _watchChurchRelays above for what drives this, why there is at most one live read, and
+    // why the re-open is rate-limited. Nothing waits on it and nothing here can throw into the caller: a
+    // church whose box cannot be reached keeps exactly the relays this device already had.
+    try { _watchChurchRelays(window.Fellowship.churchPub); } catch (e) {}
+    // AND KEEP THE ADDRESSES OUT OF THE CHURCH'S SIGNED relay-net DOCUMENT, not just the keys (relay address
+    // gossip, step 1; see adoptChurchNetDocAddresses above). The mirror of the console's own tick. Without it
+    // a member who followed before the church added a box never learns that box — measured on two phones,
+    // 2026-10-22. Fire-and-forget, like the _watchChurchRelays read above and the gate refresh: setChurch is
+    // synchronous and on the unlock path, so a slow or gone box must cost the member nothing, and the guard +
+    // 60s cache make every later tick a no-op. Rides the existing [activeChurch, churches, connTick] effect.
+    try { const _p = adoptChurchNetDocAddresses(window.Fellowship.churchPub); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
     return window.Fellowship.churchPub;
   },
   // C4, for the Relays sheet: is this address carrying this church's traffic? A relay the gate has not
@@ -4390,9 +5110,22 @@ window.Fellowship = {
   // announce membership of a church (a signed, addressable presence event) so the steward can see
   // people who joined even if they never post. Idempotent (addressable, d=member:<churchPub>).
   // This makes the member's pseudonymous npub visible as a member of this church.
+  //
+  // ── A LEAVE IN FLIGHT IS NEVER UNDONE BY AN ANNOUNCE (G2, 2026-10-27). Every membership announce on this phone
+  // comes through here, so the guard is ONE check (_announceBlocked), not one per caller. The callers:
+  //   app/app.jsx followChurch — confirmed church, after 3 "unknown" answers, and the no-checkChurch fallback
+  //     (each calls clearLeaving FIRST: an explicit follow is the one thing that ends a leave);
+  //   app/app.jsx heartbeat beat(); app/app.jsx retryConnection;
+  //   _resendMembershipToNewBoxes; _resendJoinToBoxesGainedInFlight; the admitted-doc recovery; _consumeJoinIntents.
+  // …and the one path that sends a join WITHOUT coming here: _outboxFlush re-sending a queued join, which checks
+  // the same guard. The leave generation is read BEFORE signing and compared again before "sent" is recorded, so
+  // an announce whose ack lands after a Leave was signed neither marks the join sent nor re-sends it.
   async announceMembership(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return;
+    if (_announceBlocked(cp)) return null;
     if (!sk) { try { await window.Fellowship.ready; } catch { /* fall through: still keyless */ } }
+    if (_announceBlocked(cp)) return null;   // again: the await above is the only one before signing
+    const gen = _leaveGen[cp] || 0;
     // NO KEY: RECORD THE INTENT, RETURN NOTHING. This used to be a bare `return`, before the queue below —
     // so a PIN-locked phone that opened a follow link queued nothing, sent nothing, retried nothing, and its
     // screen said "sent" (device pass 2026-09-06). The intent is bound to the locked identity and consumed
@@ -4424,6 +5157,10 @@ window.Fellowship = {
     // church got a line in the console log. UX audit 2026-08-04.
     const dup = _outbox.some(o => o && o.evt && o.evt.id === evt.id);
     if (!dup) {
+      // ONE QUEUED JOIN PER CHURCH: this newer one replaces any older one (2.3). They are the same document, so
+      // the older could only ever be refused as "a newer version is already stored" — or, worse, land on a box
+      // after the newer one and be counted a failed join.
+      _outboxDropJoins(cp);
       // A JOIN QUEUES WITH NO RELAY LIST, DELIBERATELY. Audit 2026-09-02 #21.
       //
       // Snapshotting the list here froze the set the retry would use — and a join is the one moment the list
@@ -4437,9 +5174,17 @@ window.Fellowship = {
     }
     let ok = false;
     try {
-      await _publishAny(publishSetFor(cp), evt);
+      const sentTo = publishSetFor(cp).slice();   // the set THIS publish goes to, for the in-flight check below
+      await _publishAny(sentTo, evt);
+      // LEFT WHILE THIS WAS IN FLIGHT (the stale-"sent" variant): the tombstone was signed after this join, so it
+      // is the newer document and wins at every relay that has both. Do not record "sent" over it, do not re-send.
+      if ((_leaveGen[cp] || 0) !== gen || _announceBlocked(cp)) {
+        _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
+        return null;
+      }
       ok = true;
       _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
+      _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);   // not awaited; see its note
       // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
       // does exactly this the moment its publish resolves; this function did not, so the entry sat in the
       // outbox for ever after a publish that WORKED. joinQueued() reads that queue, so the pending screen
@@ -4489,14 +5234,53 @@ window.Fellowship = {
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
     }), sk);
-    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
-    // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
-    // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
-    _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
+    // ── THE LEAVE IS QUEUED BEFORE IT IS SENT, AND THE QUEUED ENTRY IS THE "LEAVING" MARK (G2, 2026-10-27). ──
+    // The generation is bumped HERE, when the tombstone is signed — it used to be bumped only after the publish
+    // resolved, so a join announced during that await signed a NEWER document than the tombstone and re-joined
+    // the leaver. From this line every announce for this church is refused (_announceBlocked), a queued join for
+    // it is removed (it would only re-join them), and "sent" is cleared so the next follow starts from "not yet
+    // asked". A queued group post for this church is NOT removed: it is sent FIRST, then the tombstone.
+    _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
+    _outboxDropJoins(cp);
+    _outbox = _outbox.filter(o => !(o && o.leave === cp && _mine(o)));   // this identity's only: another's queued Leave is theirs
+    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp && _mine(o)));
+    _outbox.push({ evt, groupId: null, leave: cp, at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+    const saved = _outboxSave();   // false: storage refused it — the Leave would not survive a restart (F2)
+    _clearJoinSent(cp);   // they are leaving: the next follow starts from "not yet asked", not from "sent"
     _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
-    try { localStorage.removeItem('trinityone.joinedAt:' + cp); } catch {}
-    _forgetChurch(cp);
+    // What they said before leaving goes first (owner 2026-10-27). Wait out a pass already running — it took its
+    // list before this Leave was queued — then send this church's other queued items.
+    for (let i = 0; _flushing && i < 400; i++) await new Promise(r => setTimeout(r, 50));
+    try { await _outboxFlush(o => o !== null && !o.leave && _mine(o) && _itemChurch(o) === cp); } catch (e) {}
+    // Whoever delivers the tombstone first owns the delivery (F1): a flush that ran while we waited may already
+    // have sent it — then this Leave is DONE, not "not sent" — and a re-follow may have withdrawn it.
+    const deliveredElsewhere = () => _left.has(cp + '|' + evt.pubkey);
+    const entry = _outbox.find(o => o && o.leave === cp && o.evt.id === evt.id);
+    if (!entry) return deliveredElsewhere() ? { ok: true, evt } : { ok: false, reason: 'not-sent' };   // else: a re-follow took it back
+    // Still something of theirs for this church waiting (no signal): the Leave waits behind it.
+    if (_outbox.some(o => o && !o.leave && _mine(o) && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: 'not-sent', ...(saved ? {} : { unsaved: true }) };
+    // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
+    // _publishAny THROWS when no relay accepted (and resolves true otherwise). A refusal (a relay read it and said
+    // no) ends the Leave: the entry goes, so does the mark, and the church stays. Anything else — no signal, no
+    // ack in time — leaves it QUEUED: the outbox delivers it when there is signal and only THEN is the church
+    // dropped from this phone (see _leaveDelivered). The screen says "Leaving…" meanwhile, never "you've left".
+    try { await _publishAny(publishSetFor(cp), evt); }
+    catch (e) {
+      if (deliveredElsewhere()) return { ok: true, evt };   // the flush got it there while this attempt failed
+      const errs = (e && e.errors) ? e.errors : [e];
+      const why = _pubReason(e);
+      if (why === 'refused' || (errs.length && errs.every(isPermanentRefusal))) {
+        _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
+        return { ok: false, reason: 'refused' };
+      }
+      entry.lastTry = Math.floor(Date.now() / 1000); entry.lastError = String((errs[0] && errs[0].message) || '').slice(0, 120);
+      const saved2 = _outboxSave();
+      return { ok: false, queued: true, reason: why, ...(saved2 ? {} : { unsaved: true }) };
+    }
+    const owned = _outbox.some(o => o.evt.id === evt.id);
+    _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
+    if (owned) _leaveDelivered(cp, evt);
+    else if (!deliveredElsewhere()) return { ok: false, reason: 'not-sent' };   // withdrawn by a re-follow while on the wire: they stay
     return { ok: true, evt };
   },
 
@@ -4685,6 +5469,9 @@ window.Fellowship = {
           _saveChurchBoxes(cp, [..._loadChurchBoxes(cp), url]);
           out.added.push(url);
           _clearInvitePending(cp, url);
+          // The candidate set just grew: read the church's relay-net document again, fresh, so its own box is
+          // adopted this session. Fire-and-forget; the follow flow never waits on it.
+          try { const _p = adoptChurchNetDocAddresses(cp, { again: true }); if (_p && _p.catch) _p.catch(() => {}); } catch (e) {}
           return true;
         }
         out.refused.push(url);
@@ -5004,16 +5791,40 @@ window.Fellowship = {
     // member on a slow link unable to tell their congregation what they are called, which is the one thing
     // they set — a worse failure than the one being fixed, and aimed at exactly the same people. Everything
     // local still happens; only the replaceable publish is withheld.
-    let evt = null, sent = false, lost = false;   // `lost` = a field that TRAVELS did not reach the relay
+    let evt = null, sent = false, lost = false, queued = false;   // `lost` = a field that TRAVELS did not reach the relay; `queued` = it is in the outbox, waiting for signal
     if (wireUnchanged) {
       // nothing on the wire changed, so there is nothing to publish and nothing to lose; the name half below
       // still runs, and still re-seals.
     } else if (known) {
       evt = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: body }, sk);
       sent = true;
-      try { await _publishAny(window.Fellowship.relays, evt); }
+      // A NEWER EDIT REPLACES AN OLDER QUEUED ONE (G2 2.5). Same replaceable document; the older could only be
+      // refused as stale, burning tries, or land after this one somewhere and undo it.
+      { const n0 = _outbox.length; _outbox = _outbox.filter(o => !(o && o.profile && o.evt && o.evt.pubkey === pub)); if (_outbox.length !== n0) _outboxSave(); }
+      try { await _publishAny(profilePublishRelays(), evt); }
       catch (e) {
         sent = false; lost = true; console.warn('[fellowship] profile publish failed', e);
+        // NO SIGNAL IS NOT A REFUSAL: QUEUE IT (G2 2.5, owner 2026-10-27). The note below ("nothing retries")
+        // was true when it was written; now the edit goes in the outbox and the flush sends it to the same set
+        // a live save uses (profilePublishRelays, worked out at send time). A relay that READ it and said no is
+        // still a refusal — retrying reproduces it — so that one is not queued and keeps its sentence.
+        // NOT a gate refusal either: "none of your church's relays could be proved" is a configuration problem a
+        // steward fixes, not signal, so it keeps its own sentence below rather than a promise to send later.
+        // So only the two outcomes signal fixes are queued: nobody answered in time, or no socket opened at all.
+        if (_pubReason(e) === 'unconfirmed' || (e && e.unsent && isConnectionFailure(e) && !isNoNetworkRelay(e))) {
+          _outbox.push({ evt, groupId: null, profile: true, at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
+          _outboxSave();
+          queued = true; lost = false;
+          // SAID HERE, ONCE, as the failure sentence is (the callers stay quiet on `queued`). On the directory switch
+          // — a privacy control — the state they are actually in comes first, until it lands.
+          {   // ANY queued edit says so (F5) — something that travels changed, or nothing would have been published
+            try { if (window.trinityToast) window.trinityToast(meta && meta.hidden === true
+              ? 'Waiting for signal — you’re still listed in the directory until this reaches your church.'
+              : meta && meta.hidden === false
+              ? 'Waiting for signal — you’re still hidden from the directory until this reaches your church.'
+              : 'Waiting for signal — your profile change will reach your church when this phone has signal.'); } catch (x) {}
+          }
+        } else
         // SAY SO. The withheld branch below already tells the member, and this one — the publish we DID
         // attempt and that no relay accepted — said nothing at all, while the change was still written to
         // this device. So the switch sat in its new position and the church went on seeing the old profile.
@@ -5083,6 +5894,7 @@ window.Fellowship = {
     // it was fixed to stop. Answer the question actually asked: truthy unless something that travels was
     // lost. A name-only edit is a success — the name goes out sealed, through syncSealedNames above.
     if (lost) return null;
+    if (queued) return { queued: true, evt };   // NOT "saved": the caller says it is waiting to send
     return evt || true;
   },
 
@@ -5122,6 +5934,12 @@ window.Fellowship = {
     // _wantsEncrypted: the cache alone answered "no" whenever it had no answer at all.
     const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);
     if (wantsEnc && !gkey) return { _refused: 'nokey' };
+    // LEAVING THIS CHURCH: nothing new is posted to it while the Leave waits for signal (owner 2026-10-27).
+    if (cp && _leavingFor(cp)) return { _refused: 'leaving' };
+    // THE QUEUE IS FULL: refuse THIS message, now, while the words are still in the composer — never drop an
+    // older one to make room (stress batch 3, 6b). The caller hands the words back.
+    if (_outboxFull()) return { _refused: 'queue-full' };
+    if (_failedFull()) return { _refused: 'failed-full' };   // the didn't-send bin is full: refuse the new one, never evict
     if (gkey) {
       try { body = nip44e(content, gkey); encTag = [['enc', '1']]; }
       catch (e) {
@@ -5142,7 +5960,9 @@ window.Fellowship = {
     // on the next reconnect, online event or tick — so it eventually arrives instead of being lost. The UI
     // renders queued items as pending bubbles (outboxFor), and the relay's echo removes them by id.
     const msgRelays = publishSetFor(cp);
-    _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...msgRelays] });
+    // INTENT, NOT A SNAPSHOT: the church is stored and the flush works the relays out when it sends (see
+    // _outboxRelays). `relays` stays in the shape, empty, for anything that reads it.
+    _outbox.push({ evt, groupId, cp: cp || '', at: Math.floor(Date.now() / 1000), tries: 0, relays: [] });
     _outboxSave();
     try {
       // _publishBounded, not raw Promise.any: a socket that never opens leaves Promise.any pending forever,
@@ -5161,12 +5981,28 @@ window.Fellowship = {
   // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
   // Is this church's join announce still waiting to send? The pending screen used to say "has been sent" in
   // the past tense with the publish result discarded, which is the one claim it could not make.
-  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp)); },
+  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp && _mine(o))); },   // this identity's (owner 2026-10-27)
+  // Is this identity leaving this church — a Leave queued and not yet delivered, or delivered this launch?
+  leaving(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _leavingFor(cp)); },
+  // Is the Leave still WAITING to be sent (the "Leaving…" row)? Narrower than leaving(): once delivered it is false.
+  leaveQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.leave === cp && _mine(o))); },
+  // AN EXPLICIT RE-FOLLOW ENDS A LEAVE — the only thing that does (owner 2026-10-27). followChurch calls this
+  // before it announces. A queued tombstone is withdrawn (they have changed their mind before it went), and the
+  // delivered-this-launch mark is lifted so the announce that follows is let through.
+  clearLeaving(npubOrHex) {
+    const cp = toPub(npubOrHex); if (!cp) return false;
+    const had = _leavingFor(cp);
+    if (pub) _left.delete(cp + '|' + pub);
+    const n = _outbox.length;
+    _outbox = _outbox.filter(o => !(o && o.leave === cp && _mine(o)));   // only this identity's Leave
+    if (_outbox.length !== n) _outboxSave();
+    return had;
+  },
   // …and whether we GAVE UP on it. _outboxFlush moves a permanently-refused item out of _outbox and into
   // _outboxFailed, so joinQueued alone reads false in that case and the screen falls through to "has been
   // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
   // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
-  joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp)); },
+  joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp && _mine(o))); },
   // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
   // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
   // a join that was never attempted looks like. See JOINSENT_KEY.
@@ -5187,26 +6023,28 @@ window.Fellowship = {
   // _outboxFailed, and joinFailed() goes true again on a join that actually succeeded.
   retryJoin(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return false;
-    const had = _outboxFailed.some(o => o && o.join === cp);
+    const had = _outboxFailed.some(o => o && o.join === cp && _mine(o));
     if (!had) return false;
-    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp));
-    _outbox = _outbox.filter(o => !(o && o.join === cp));   // no stale duplicate racing the fresh one
+    _outboxFailed = _outboxFailed.filter(o => !(o && o.join === cp && _mine(o)));
+    _outbox = _outbox.filter(o => !(o && o.join === cp && _mine(o)));   // no stale duplicate racing the fresh one
     _outboxSave();
     return true;
   },
   outboxFor(groupId) { return [
-    ..._outbox.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
+    ..._outbox.filter(o => o.groupId === groupId && _mine(o)).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.groupId === groupId && _mine(o)).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
   ]; },
   // The DM thread's equivalent of outboxFor(groupId). A private conversation is keyed by the PEER, not by a
   // group id, so without this the queue exists and the member still stares at an empty thread — the same
   // silence with extra steps. Same shape as outboxFor so the screen can share one rendering path.
   outboxForPeer(peerPub) { const p = toPub(peerPub) || peerPub; return [
-    ..._outbox.filter(o => o.peer === p).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
+    ..._outbox.filter(o => o.peer === p && _mine(o)).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.peer === p && _mine(o)).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
   ]; },
   dmPlaintextOf(id) { return _dmPlain.get(id) || ''; },
-  outboxCount() { return _outbox.length; },
+  outboxCount() { return _outboxMineCount(); },   // this identity's (another's parked entries are not theirs to wait on)
+  // the didn't-send bin, for the threads' notice: this identity's count, and where the notice starts / the cap is
+  failedCount() { return _failedCount(); }, failedWarnAt() { return FAILED_WARN; }, failedMax() { return FAILED_MAX; },
   onOutbox(fn) { _outboxSubs.add(fn); return () => _outboxSubs.delete(fn); },
   flushOutbox() { return _outboxFlush(); },
   // give up on one queued message (the member chose to discard it)
@@ -5253,6 +6091,8 @@ window.Fellowship = {
   },
   async sendDM(peerPub, content, replyTo) {
     if (!sk) await window.Fellowship.ready;
+    if (_outboxFull()) return { _refused: 'queue-full' };   // see publishMessage: refuse the new one, never drop an old one
+    if (_failedFull()) return { _refused: 'failed-full' };
     const body = window.Fellowship._dmWrap(content, replyTo);
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, body); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);
@@ -5270,10 +6110,10 @@ window.Fellowship = {
     // going to be written to a relay, and the plaintext never leaves memory. The sender can still read their
     // own pending message because the conversation key is symmetric, so a "waiting to send" bubble can show
     // the real words without ever persisting them.
-    _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+    _outbox.push({ evt, groupId: null, peer: peerPub, at: Math.floor(Date.now() / 1000), tries: 0, relays: dmSendRelays(peerPub) });
     _dmPlain.set(evt.id, content);
     _outboxSave();
-    try { await _publishBounded(window.Fellowship.relays, evt); evt._delivered = true; _outbox = _outbox.filter(o => o.evt.id !== evt.id); _dmPlain.delete(evt.id); _outboxSave(); }   // bounded so offline sets _delivered=false within 12s, not never
+    try { await _publishBounded(dmSendRelays(peerPub), evt); evt._delivered = true; _outbox = _outbox.filter(o => o.evt.id !== evt.id); _dmPlain.delete(evt.id); _outboxSave(); }   // bounded so offline sets _delivered=false within 12s, not never
     catch (e) {
       console.warn('[fellowship] DM publish failed', e);
       evt._delivered = false;   // E1: same as publishMessage — the caller must be able to tell
@@ -5296,7 +6136,7 @@ window.Fellowship = {
         if (item) {
           item.failed = true; item.permanent = true; item.lastError = evt._refused.slice(0, 120);
           _outbox = _outbox.filter(o => o.evt.id !== evt.id);
-          _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
+          _outboxFailed.push(item);   // never shifted off silently — see _outboxSave
           _outboxSave();
         }
       }
@@ -5329,7 +6169,7 @@ window.Fellowship = {
       const msg = msgs.get(tid); if (msg) push(msg);
     };
     // Gated: a DM subscription names both people to whatever answers it.
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+    const sub = pool.subscribeMany(dmReadRelays(), [
       { kinds: [4], authors: [pub], '#p': [peerPub] },   // sent by me to peer
       { kinds: [4], authors: [peerPub], '#p': [pub] },   // sent by peer to me
       { kinds: [7], authors: [pub], '#p': [peerPub] },   // my reactions to their DMs
@@ -5342,7 +6182,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     if (!peerPub || !msgId) return null;
     const evt = finalizeEvent({ kind: 7, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['p', peerPub], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
+    try { await _publishAny(dmSendRelays(peerPub), evt); } catch (e) { console.warn('[fellowship] reactDM failed', e); }
     return evt;
   },
   // inbox: every DM involving me, grouped by peer; onConvos([{ peer, lastTs, preview }]). Unsub fn.
@@ -5359,7 +6199,7 @@ window.Fellowship = {
       byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? 'You: ' : '') + preview });
       emit();
     };
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
+    const sub = pool.subscribeMany(dmReadRelays(), [
       // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
       // default cap of DM envelopes on EVERY app open, just to render an inbox preview.
       //
@@ -5395,7 +6235,7 @@ window.Fellowship = {
   // happen to share a group id (e.g. "prayer") don't cross-contaminate each other's chat.
   subscribeGroups(groupIds, onEvent) {
     const set = new Set(groupIds);
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1], '#t': groupIds, limit: 500 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1], '#t': groupIds, limit: 500 }], {
       onevent(e) {
         const cp = window.Fellowship.churchPub;
         if (cp && !e.tags.some(t => t[0] === 'p' && t[1] === cp)) return;
@@ -5421,7 +6261,7 @@ window.Fellowship = {
 
   // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
   subscribeReactions(groupId, onReaction) {
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [7], '#t': [groupId], limit: 400 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [7], '#t': [groupId], limit: 400 }], {
       onevent(e) {
         const targetId = (e.tags.find(t => t[0] === 'e') || [])[1];
         if (targetId) { try { onReaction({ targetId, pubkey: e.pubkey, content: e.content, ts: e.created_at }); } catch (err) { console.error(err); } }
@@ -5433,7 +6273,7 @@ window.Fellowship = {
 
   // live subscription to a group's messages; returns an unsubscribe fn
   subscribeGroup(groupId, onEvent) {
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [1, 5], '#t': [groupId], limit: 200 }], {
       onevent(e) {
         // belt-and-suspenders: only deliver events actually tagged for this group
         if (!e.tags.some(t => t[0] === 't' && t[1] === groupId)) return;
@@ -5467,7 +6307,7 @@ window.Fellowship = {
   subscribeGroupPin(groupId, cb) {
     if (!groupId) { cb(null); return () => {}; }
     const PIN_D = 'trinityone/pin:'; let latest = 0;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#d': [PIN_D + groupId] }], {
+    const sub = pool.subscribeMany(groupReadRelays(window.Fellowship.churchPub), [{ kinds: [30078], '#d': [PIN_D + groupId] }], {
       onevent(e) {
         const cp = window.Fellowship.churchPub;
         // SECURITY-AUDIT-2026-07-06 M1: a pinned message is authoritative church UI, so only the church, a
@@ -5498,7 +6338,7 @@ window.Fellowship = {
     // whichever ARRIVED last made "un-hide" depend on which relay answered first.
     const HIDE_D = 'trinityone/hidden:'; const hidden = new Map();   // msgId -> { at, hidden }
     const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': [groupId] }], {
+    const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], '#t': [groupId] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(HIDE_D)) return;
@@ -7473,6 +8313,11 @@ window.Fellowship = {
       // person instead. (memory: fix-the-control-not-the-label — six controls have toasted success over a
       // send that never happened; this is the reason a seventh is not being added here.)
       if (isNoNetworkRelay(e)) return { error: 'no-network-relay' };
+      // NO SIGNAL — every relay was unreachable, nothing left the phone. NOT queued, deliberately (G2, owner
+      // 2026-10-27): offline the audience cannot be established (_fetchCareTeam answers null), so the sealed copy
+      // would freeze a narrowed or stale audience, and re-sealing later would mean keeping the plaintext on disk.
+      // So the answer is plain and the words stay on the sheet.
+      if (e && e.unsent && isConnectionFailure(e)) return { error: 'no-signal' };
       // ⚠ THREE ANSWERS, NOT TWO, AND THIS RETURNED `null` FOR ALL OF THEM. `null` is rendered by the sheet
       // as "Couldn't send — check your connection and try again", which is a false sentence over the
       // commonest of the three: `unconfirmed` means nobody answered inside WEDGE_ACK_MS, and the event is
@@ -8058,7 +8903,7 @@ window.Fellowship = {
     // de6e05a was written to fix, alive here. It also strands events absorbed before the roster arrived.
     const onTrust = () => { _reduceAll(versions, byId, _evTrust); emit(); };
     window.addEventListener('trinity-church-trust', onTrust);
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#t': groups }], {
+    const sub = pool.subscribeMany(groupReadRelays(cp), [{ kinds: [30078], '#t': groups }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith('trinityone/event:')) return;
@@ -8530,8 +9375,10 @@ window.Fellowship = {
   // proved — never wider than the old ungated read (CLAUDE.md rule 10). PROVED WITHOUT RECORDING: a relay the
   // gate already admits for this church (_gate.admits, read-only), or one that passes isNetworkRelay now — the
   // same proof the gate and adoptInviteRelays use, which writes nothing. It used _gate.refresh(list, cp), and the
-  // gate keeps ONE church label per address, so checking church X re-labelled a shared relay away from a church
-  // the member already follows, dropping it there until the next re-proof (audit of 9862cdd, finding 4).
+  // gate then kept ONE church label per address, so checking church X re-labelled a shared relay away from a church
+  // the member already follows, dropping it there until the next re-proof (audit of 9862cdd, finding 4). The gate
+  // keeps one label per church now (2026-10-24), and this stays read-only anyway: checking a church the member
+  // may never join should leave nothing behind.
   //
   // THE ANSWER: 'church' if any proved relay returns that document; 'not-found' only if EVERY proved relay
   // really answered (a genuine end-of-results, not the library's timer) and the invite's own relay is not
@@ -8559,7 +9406,7 @@ window.Fellowship = {
     const pubk = toPub(churchNpub);
     if (!pubk) { onProfile(null); return () => {}; }
     let latest = 0;
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors: [pubk] }], {
+    const sub = pool.subscribeMany(groupReadRelays(pubk), [{ kinds: [0], authors: [pubk] }], {
       // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
       // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
       onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const c = JSON.parse(e.content); _notePhotoPolicy(pubk, c); onProfile(c); } catch {} },

@@ -482,6 +482,10 @@ function publishErrorMessage(reason, evt, opts) {
   // time passes the date it carries. That is bounded — put() in scripts/event-store.mjs refuses anything
   // more than 900s ahead of the relay's own clock — so the wait is at most about fifteen minutes and then
   // the change saves normally. Saying "reload" instead cost the steward that fact.
+  // CLOCK VISIBILITY ONLY (owner 2026-10-27): when this console has MEASURED its own clock as wrong, say so first.
+  // Nothing about the save changes — the stamp, the refusal and the wait are exactly as before.
+  if (/newer version/i.test(r) && (() => { try { return !!(window.Steward && window.Steward.clockLooksWrong && window.Steward.clockLooksWrong()); } catch (e) { return false; } })()) return { wrongChurch: false, sticky: true,
+    msg: 'Your change wasn’t saved: a newer version is already stored, and this device’s clock looks wrong, which is the likeliest reason. Fix the date and time, then try again.' };
   if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
     msg: 'A newer version of this is already stored, so your change wasn’t saved. Either another console saved while you were editing, or a copy was stamped from a clock running ahead — including this console’s own, before it was corrected. Reloading won’t change that. The stored copy stops winning once the time catches up with its date, which is at most about fifteen minutes; make the change again then.' };
   if (/deleted by its author/i.test(r)) return { wrongChurch: false, sticky: true,
@@ -955,6 +959,27 @@ function KeyDistributor() {
     window.addEventListener('steward-key', onKey);
     return () => window.removeEventListener('steward-key', onKey);
   }, []);
+  // ── SIGN THIS CONSOLE'S OWN RELAY INTO THE CHURCH'S LIST (self-hosting P1, B2). On mount with a key and on
+  //    every unlock. Only the box that served this console is ever signed here (B4) — a typed relay needs the
+  //    steward's Connect on the Add-a-relay card. Deferred so it never competes with the first paint; once per
+  //    (church, box) per page load, decided inside autoEnrolRelayNet. scripts/a-console-signs-its-own-relay
+  //    .test.mjs slices and RUNS this effect, from the line below to the end marker.
+  //    Tried again when a relay comes back and when the console window regains focus, so a console left open
+  //    for days recovers from a box that was briefly offline (audit 2026-10-21, finding 7); a pass that already
+  //    worked is a no-op. Events, not a timer: the same churn signals the rest of the console follows.
+  //    And when the tunnel address or relay name changes ('steward-relays'), so the list follows a restart.
+  React.useEffect(() => {
+    const run = () => {
+      try { const p = window.Steward && window.Steward.autoEnrolRelayNet && window.Steward.autoEnrolRelayNet(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    };
+    const t = setTimeout(run, 4000);
+    // 'steward-relays': the tunnel address or relay name changed (setSelfPublicRelay / setSelfRelayName), so
+    // what the church's list should say has changed too (PR #7 audit, M-2).
+    const EVENTS = ['steward-relay-returned', 'focus', 'steward-relays'];
+    for (const ev of EVENTS) window.addEventListener(ev, run);
+    return () => { clearTimeout(t); for (const ev of EVENTS) window.removeEventListener(ev, run); };
+  }, [unlockTick]);
+  // ── end of the own-relay enrolment effect
   // THE THREE KEY SUBSCRIPTIONS FOLLOW THE CHURCH AND THE CONNECTION — [idv, conn, church], like makeSub in
   // steward-root.jsx. They were mounted with `[]`, so after a church switch they went on reading the PREVIOUS
   // church's envelopes and never read the new one's: switching A→B→A left the name key empty (every member
@@ -1411,21 +1436,10 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   const [relayToken, setRelayToken] = React.useState('');
   const [relayMsg, setRelayMsg] = React.useState('');
   const [relayBusy, setRelayBusy] = React.useState(false);
-  const [relayAddr, setRelayAddr] = React.useState('');
-  const [addrMsg, setAddrMsg] = React.useState('');
   // The desktop "church-in-a-box" build serves the console from its OWN relay, so there is nothing to add.
   // Was: "did they come through the full-suite door?" — a question about the LAUNCHER. Now: "does this
   // computer actually hold this church?" — a question about the church. See whereChurchLives.
   const isRelayApp = !!(window.Steward && window.Steward.isSelfHosted && window.Steward.isSelfHosted());
-  const addOwnRelay = () => {
-    const u = (relayAddr || '').trim(); if (!u) return;
-    // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
-    // The version of this that shipped before treated every outcome as success, so a leader who typoed their
-    // address saw a green tick and walked away believing their church was reachable there.
-    const ok = window.Steward.addRelay ? window.Steward.addRelay(u) : false;
-    if (ok) { setAddrMsg('✓ Added — your church now uses this relay too.'); setRelayAddr(''); }
-    else setAddrMsg('✗ Couldn’t add that. Check it starts with wss:// and isn’t one you’ve already added.');
-  };
   const phrase = (() => { try { return window.Steward.exportMnemonic() || ''; } catch { return ''; } })();
   const npub = church.npub || window.Steward.npub || '';
   // backup check: after they tick "written down", make them re-type 3 of the 12 words before continuing
@@ -1797,14 +1811,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
                 <b>This app is your relay.</b> Your church already publishes here — there’s nothing to connect.
               </div>
             ) : (
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Have your relay’s <b>address</b>? Add it so your church publishes and reads there as well as on the shared relays.</div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input value={relayAddr} onChange={e => setRelayAddr(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
-                  <button onClick={addOwnRelay} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
-                </div>
-                {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{addrMsg}</div> : null}
-              </div>
+              <WizAddRelay />
             )}
           </div>
         )}
@@ -5250,6 +5257,53 @@ function DashRelaysCard() {
   // has no relay, no name, and an address on screen that may already be stale — and the member app's own
   // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
   const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
+  // REMOVE ALSO UN-SIGNS (owner decision B, 2026-10-21). Connecting a relay signs it into the church's relay list;
+  // removing it must take it out again, or a steward's consent could never be withdrawn. Says so when it could not.
+  const [dropNote, setDropNote] = React.useState('');
+  // THE REMOVALS IN FLIGHT (fifth audit, finding 7; seventh audit, findings 2 and 4): EVERY url being removed, not
+  // only the last one. It is the one source of the "Removing…" line, shown in the neutral colour (it is progress,
+  // not a warning), and a row in it has no Remove button. The ref is the guard: a second Remove of a relay already
+  // being removed does nothing, even from a stale render. A url stays in it until its row has actually LEFT the
+  // list (the real removeRelay takes a moment to drop the row), so the row cannot be tapped again meanwhile.
+  const [dropping, setDropping] = React.useState([]);
+  // Lazily filled, React's idiom for an object initial value (and no new Set built on every draw).
+  const droppingRef = React.useRef(null);   // every url being removed
+  const leavingRef = React.useRef(null);    // …of which these were taken off the console, row not yet gone
+  const genRef = React.useRef(null);        // url -> which removal of it is current (eighth audit, finding 3)
+  if (!droppingRef.current) droppingRef.current = new Set();
+  if (!leavingRef.current) leavingRef.current = new Set();
+  if (!genRef.current) genRef.current = new Map();
+  const syncDropping = () => setDropping(Array.from(droppingRef.current));
+  const release = (u) => { leavingRef.current.delete(u); if (droppingRef.current.delete(u)) syncDropping(); };
+  const listedNow = status.map(r => (r && r.url) || '');
+  React.useEffect(() => {
+    for (const u of Array.from(leavingRef.current)) if (!listedNow.includes(u)) release(u);
+  }, [listedNow.join(' '), dropping.join(' ')]);
+  // OUT OF THE CHURCH'S LIST FIRST, THEN OFF THIS SCREEN (fourth audit 2026-10-21, finding 2). Removing the row
+  // first left a steward told "remove it again" with no row left to remove — and adding it back to retry signs it
+  // straight back in. So the row stays, with the reason, until the church's list no longer names the relay.
+  const dropRelay = async (url) => {
+    setConfirmDrop(null);
+    if (droppingRef.current.has(url)) return;
+    const gen = (genRef.current.get(url) || 0) + 1;
+    genRef.current.set(url, gen);
+    droppingRef.current.add(url); syncDropping(); setDropNote('');
+    let leaving = false;
+    try {
+      let r = null; try { r = window.Steward.unsignRelay ? await window.Steward.unsignRelay(url) : null; } catch (e) { r = { error: String((e && e.message) || e || '') }; }
+      const out = dropOutcome(r, url);
+      if (out.drop) { try { window.Steward.removeRelay(url); leaving = true; } catch (e) {} }
+      setDropNote(out.note);
+    } finally {
+      if (leaving) {
+        // Held until the row leaves the list (the effect above). If it never does, let go after 10s, so a row that
+        // stays for some other reason is not stuck in "Removing…" for ever. The timer frees only ITS OWN removal: if
+        // the relay was removed, added back and removed again meanwhile, a newer removal is current and is left alone.
+        leavingRef.current.add(url);
+        setTimeout(() => { if (genRef.current.get(url) === gen) release(url); }, 10000);
+      } else release(url);
+    }
+  };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
   // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
@@ -5351,7 +5405,8 @@ function DashRelaysCard() {
                   {refused ? <SkPill tint="clay">Refused our last change</SkPill> : null}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Answering' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
-                  {!self && r.url !== own && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
+                  {dropping.includes(r.url) ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Removing…</span> : null}
+                  {!self && r.url !== own && !dropping.includes(r.url) && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
                 {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
                     the name goes too, and that — not the address on screen — is what would bring it back. */}
@@ -5365,13 +5420,14 @@ function DashRelaysCard() {
                           was written. The whole file already uses ’; this is why. */}
                       Stop sending this church’s data to this relay?{relayName(r.url) ? ' It was added by the name “' + relayName(r.url) + '” — that name is forgotten too, so write it down if you may want it back.' : ' You would need this exact address to add it again.'}
                     </span>
-                    <button onClick={() => { window.Steward.removeRelay(r.url); setConfirmDrop(null); }} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
+                    <button onClick={() => dropRelay(r.url)} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
                     <button onClick={() => setConfirmDrop(null)} title="Keep this relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Keep it</button>
                   </div>
                 ) : null}
               </div>
             );
           })}
+          {(dropping.length || dropNote) ? <div role="status" style={{ fontSize: 12, color: dropping.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropping.length ? 'Removing ' + dropping.join(', ') + '…' : dropNote}</div> : null}
         </div>
         {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
             `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct
@@ -5430,6 +5486,116 @@ function DashRelaysCard() {
   );
 }
 
+// THE SETUP WIZARD'S "HAVE YOUR RELAY'S ADDRESS?" BOX, as its own component (audit 2026-10-21, finding 4) so the
+// consent line it shows can be rendered and pressed in a test — scripts/a-console-signs-its-own-relay.test.mjs —
+// rather than only the handler being lifted, which left the consent box itself unguarded.
+function WizAddRelay() {
+  // The wizard's own field style, carried with the box when it moved out (StewSetupWizard keeps its copy).
+  const fld = { width: '100%', boxSizing: 'border-box', height: 48, padding: '0 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 15.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 600 };
+  const [relayAddr, setRelayAddr] = React.useState('');
+  const [addrMsg, setAddrMsg] = React.useState('');
+  const [addrAsk, setAddrAsk] = React.useState(false);   // the consent line is showing (see RelayConsent)
+  const addOwnRelay = (confirmed) => {
+    const u = (relayAddr || '').trim(); if (!u) return;
+    // A spelling of a shared relay is refused before the consent line (ninth audit): it would be a second row for a
+    // relay the church already uses, and one Remove could not be trusted on.
+    if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(u)) { setAddrAsk(false); setAddrMsg('✗ ' + 'That’s already one of TrinityOne’s relays.'); return; }
+    // …and this console's own relay, however it is spelled (phone test 2026-10-22: it used to show consent, then fail silently).
+    if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(u)) { setAddrAsk(false); setAddrMsg('✗ ' + 'That’s this console’s own relay — it’s already on your list.'); return; }
+    if (confirmed !== true) { setAddrAsk(true); return; }   // first tap shows what connecting means
+    setAddrAsk(false);
+    // addRelay RETURNS false for a malformed address, a duplicate, or this church's own relay — it never throws.
+    // The version of this that shipped before treated every outcome as success, so a leader who typoed their
+    // address saw a green tick and walked away believing their church was reachable there.
+    const ok = (window.Steward.addRelay ? window.Steward.addRelay(u) : false) || (window.Steward.knownRelay ? window.Steward.knownRelay(u) : '');
+    if (ok) {
+      setAddrMsg('Connecting…'); setRelayAddr('');
+      // Signed into the church's relay list on the steward's consent — the same as the Add-a-relay card — and
+      // only called added once that is true (audit 2026-10-21, finding 4: it used to say "✓ Added" regardless).
+      const p = window.Steward.signRelay ? Promise.resolve().then(() => window.Steward.signRelay(ok)) : Promise.resolve(null);
+      return p.then((r) => {
+        const why = window.Steward.signRelay ? signOutcome(r, ok) : '';
+        setAddrMsg(why ? '✗ ' + why : '✓ Added — your church now uses this relay too.');
+      }, () => setAddrMsg('✗ ' + signOutcome(null, ok)));
+    }
+    else setAddrMsg('✗ Couldn’t add that. Check it starts with wss:// and isn’t one you’ve already added.');
+  };
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 9 }}>Have your relay’s <b>address</b>? Add it so your church publishes and reads there as well as on the shared relays.</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input value={relayAddr} onChange={e => { setRelayAddr(e.target.value); setAddrAsk(false); }} onKeyDown={e => { if (e.key === 'Enter') addOwnRelay(); }} placeholder="wss://relay.yourchurch.org" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ ...fld, height: 44, fontWeight: 400, fontFamily: 'var(--mono)', fontSize: 13 }} />
+        <button onClick={() => addOwnRelay()} disabled={!relayAddr.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap', opacity: relayAddr.trim() ? 1 : .5 }}>Add</button>
+      </div>
+      {addrAsk ? <RelayConsent onYes={() => addOwnRelay(true)} onNo={() => setAddrAsk(false)} /> : null}
+      {addrMsg ? <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: 600, color: addrMsg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{addrMsg}</div> : null}
+    </div>
+  );
+}
+
+// THE CONSENT LINE (owner, 2026-10-21). Shown on the first tap of Add relay / Connect / Auto-find / the setup
+// wizard's Add; nothing is added or signed until "Yes, connect" here is tapped. The sentence is the owner's, and it is the whole point: connecting a
+// relay is the church vouching for it to every member's phone, not a connection test.
+const RELAY_CONSENT_TEXT = 'Connecting this relay lets your whole church’s data go to it.';
+// WHAT A REMOVE ANSWERED: whether the row may leave this screen (`drop`), and what to tell the steward (`note`, ''
+// when there is nothing to say). Every answer that is not a success says so (third audit, finding 3), and the row
+// leaves the screen only once the church's list no longer names the relay, or never did (fourth audit, finding 2).
+function dropOutcome(r, url) {
+  if (r && r.removed) return { drop: true, note: '' };
+  // Not in the church's list: `notListed` is only answered after the list was read from every relay asked (bar this
+  // one), and it names this relay neither by address nor by the key it proved. A relay that proved no key (a typo, a
+  // relay that is not TrinityOne) leaves too, and the steward is told the plain fact (fifth audit, finding 2: it used
+  // to stay for ever behind a "try again" that could never come true).
+  if (r && r.notListed) return { drop: true, note: r.proven === false ? 'Removed from this console. Your church’s relay list doesn’t name ' + url + '.' : '' };
+  if (r && r.ownBox) return { drop: true, note: 'Removed from this console. ' + url + ' is the box this console runs on, so it stays in your church’s relay list.' };
+  if (r && r.skipped) return { drop: true, note: 'Removed from this console. Only your church’s own console can take it out of the church’s relay list.' };
+  if (r && r.changed) return { drop: false, note: 'This console switched church while removing ' + url + ', so it is still in your church’s relay list. Remove it again.' };
+  if (r && r.error) return { drop: false, note: 'Couldn’t take ' + url + ' out of your church’s relay list (' + r.error + '), so it is still connected.' };
+  // `unknown` now means a relay OTHER than this one is silent (fifth audit, finding 1: the relay being removed need not
+  // answer). If that one is gone for good it would block every change for ever, so the steward is told the way out.
+  return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' + ((r && r.unknown) ? ' If a relay you added is gone for good, remove it first.' : '') };
+}
+const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
+// WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
+// the Add-a-relay card and the wizard so neither can say "Added" over a relay that was not signed (second audit,
+// finding 8: a skipped or unknown result used to read as success).
+function signOutcome(r, url) {
+  if (!r) return 'Couldn’t sign that relay into your church’s list. Try again.';
+  // `changed` first: a church switch mid-signing also reads as unknown, and is neither "a relay isn't answering"
+  // nor "not your church's own console" (third audit, finding 8). And nothing is ever added automatically later —
+  // the automatic pass signs only the console's own box (B4) — so the unknown line says to connect again (finding 2).
+  if (r.changed) return 'Added to this console, but it switched church while saving, so the relay isn’t in your church’s list yet. Connect it again.';
+  if (r.skipped) return 'Added to this console. Only your church’s own console can put it in the church’s relay list.';
+  // One line for two cases (fifth audit, finding 3): nothing was signed (`unknown`), or the list found names the relay
+  // but came from a read not every relay answered, so it may be a stale copy (`full === false`). True for both.
+  const UNREAD = 'Added to this console, but your church’s relay list could not be read in full just now (a relay isn’t answering), so it can’t be confirmed in the list yet. Connect it again once your relays are answering.';
+  if (r.unknown) return UNREAD;
+  // Compared the way Steward.signRelay normalises (normRelay: wss:// added, trailing slashes dropped), so a
+  // resolved name or a pasted address with a trailing slash still finds its own proof.
+  const n = (x) => { let v = String(x || '').trim(); if (v && !/^wss?:\/\//i.test(v)) v = 'wss://' + v.replace(/^\/+/, ''); return v.replace(/\/+$/, '').toLowerCase(); };
+  const p = (r.proven || []).find(x => n(x.url) === n(url)) || null;
+  if (!p) return 'It could not prove it runs TrinityOne yet, so it is not in your church’s relay list. Connect it again once it is online.';
+  if (p.shared) return 'That is one of TrinityOne’s shared relays. Your church already uses it, so it doesn’t need adding to your church’s own list.';
+  if (r.full === false) return UNREAD;
+  if (!(r.entries || []).some(e => e.pubkey === p.pubkey)) return 'Couldn’t put it in your church’s relay list. Try again.';
+  return '';
+}
+// `detail` names what is about to be connected (the address a name resolved to, or the relays Auto-find chose),
+// so the steward agrees to a box and not merely to a word (audit 2026-10-21, finding 8). The button says
+// "Yes, connect" so it cannot be confused with the Connect beside the name field (finding 10).
+function RelayConsent({ onYes, onNo, detail, text, note }) {
+  return (
+    <div role="alertdialog" aria-label="Confirm connecting this relay" style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+      <b style={{ color: 'var(--ink)' }}>{text || RELAY_CONSENT_TEXT}</b> {note || 'Only connect a relay your church runs or trusts.'}
+      {detail ? <div style={{ marginTop: 5, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink)', wordBreak: 'break-all', whiteSpace: 'pre-line' }}>{detail}</div> : null}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button onClick={onYes} className="sk-btn sk-btn--clay" style={{ padding: '6px 12px', fontSize: 12 }}>Yes, connect</button>
+        <button onClick={onNo} className="sk-btn sk-btn--ghost" style={{ padding: '6px 12px', fontSize: 12 }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 // ── ADD A RELAY: one page, three ways in — a typed address, auto-find, or the relay's claimed name.
 //    Split off the Relays card 2026-09-09. All three are rare, all three sat expanded on the everyday page,
 //    and between them they were most of its measured 1000px.
@@ -5449,27 +5615,61 @@ function DashAddRelayCard() {
   // Round 9's vicar did exactly that and stopped: "I typed our second office computer's address into the Add
   // relay box and pressed Add relay... Because of that I never got to the bit about keeping the two in step."
   const [addedNote, setAddedNote] = React.useState('');
-  const addRelay = () => {
-    const r = window.Steward.addRelay && window.Steward.addRelay(draft);
-    if (!r) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+  // INFORMED CONSENT BEFORE A RELAY IS SIGNED (owner, 2026-10-21, B4). Connecting a relay signs it into the
+  // church's own relay list, and every member's phone then sends the church's data to it. So the first tap
+  // only shows what that means; the steward's second tap — `confirmed` — is the consent, and only then is the
+  // relay added and signed. `ask` holds which action is waiting: 'add' or 'name'.
+  const [ask, setAsk] = React.useState('');
+  const [signNote, setSignNote] = React.useState('');
+  const signIt = async (url) => {
+    setSignNote('');
+    let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(url) : null; } catch (e) { r = null; }
+    setSignNote(window.Steward.signRelay ? signOutcome(r, url) : '');
+    return r;
+  };
+  const addRelay = async (confirmed) => {
+    if (!(draft || '').trim()) { setErr('Enter a relay address, e.g. wss://relay.yourchurch.org'); setAddedNote(''); return; }
+    // Ninth audit: a spelling of a shared relay is refused, and the steward is told why, before the consent line.
+    if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(draft)) { setAsk(''); setErr('That’s already one of TrinityOne’s relays.'); setAddedNote(''); return; }
+    // This console's own relay, however it is spelled, is refused before consent and says why (phone test 2026-10-22).
+    if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(draft)) { setAsk(''); setErr('That’s this console’s own relay — it’s already on your list.'); setAddedNote(''); return; }
+    if (confirmed !== true) { setAsk('add'); return; }
+    setAsk('');
+    // ALREADY LISTED IS NOT AN ERROR (audit 2026-10-21, finding 1): a relay added before consent existed, or one
+    // that was offline the first time, is signed now rather than refused as "please enter an address".
+    const r = (window.Steward.addRelay && window.Steward.addRelay(draft)) || (window.Steward.knownRelay && window.Steward.knownRelay(draft));
+    // A non-empty address that still could not be added is never answered "Enter a relay address" (phone test 2026-10-22).
+    if (!r) { setErr('Couldn’t add ' + draft.trim() + '. Check it is a relay address (wss://…) and try again.'); setAddedNote(''); return; }
     setDraft(''); setErr('');
     setAddedNote(String(r));
+    await signIt(String(r));
   };
   // Connect a church to a relay by its memorable NAME (Phase 2): resolve the handle at the directory → add the
   // relay. (Registering write-access still uses the token/pairing below.)
   const [byName, setByName] = React.useState('');
   const [byNameMsg, setByNameMsg] = React.useState(null);
   const RELAY_DIRECTORY = 'https://app.trinityone.church';
-  const connectByName = async () => {
+  // The address a name resolved to, held while the consent line asks about it — so the steward agrees to the
+  // box itself, and the box agreed to is the one connected (finding 8: no second lookup after consent).
+  const [named, setNamed] = React.useState(null);
+  const connectByName = async (confirmed) => {
     const n = (byName || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); if (!n) return;   // "Quiet Dove 45" → "quiet-dove-45"
-    setByNameMsg({ text: 'Looking up “' + n + '”…' });
+    const held = (confirmed === true && named && named.n === n) ? named : null;
+    if (!held) setByNameMsg({ text: 'Looking up “' + n + '”…' });
     try {
-      const j = await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
+      const j = held || await window.Steward.resolveRelayName(n);   // mirrored directory — tries this church's relay + the shared hosts
       // C5: the resolver now refuses two things it used to pass on — a cleartext (ws://) answer, and an
       // address this church has not signed into its own relay-net document. "No relay is registered under
       // that name" would be a plain untruth for the second, and this project has shipped six controls that
       // told a steward a comforting story about something that did not happen. Say both possibilities.
       if (!j || !j.url) { setByNameMsg({ ok: false, text: '✗ Couldn’t use “' + n + '” — either no relay is registered under that name, or it isn’t in your church’s network yet. Add its address under Add relay, then enrol it.' }); return; }
+      // THE CONSENT LINE, naming the address the name led to. Nothing is added, registered or signed until the
+      // steward taps "Yes, connect" — see `ask` above.
+      // Ninth audit: a name that leads to a spelling of a shared relay adds nothing.
+      if (window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(j.url)) { setAsk(''); setNamed(null); setByNameMsg({ ok: false, text: '✗ ' + 'That’s already one of TrinityOne’s relays.' }); return; }
+      if (window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(j.url)) { setAsk(''); setNamed(null); setByNameMsg({ ok: false, text: '✗ ' + 'That’s this console’s own relay — it’s already on your list.' }); return; }
+      if (confirmed !== true) { setNamed({ n, url: j.url }); setByNameMsg(null); setAsk('name'); return; }
+      setAsk(''); setNamed(null);
       // READ WHAT addRelay ANSWERED. Its sibling at the Add-relay field already does. It returns false when
       // the address is already in the list, or when it IS this console's own relay — and in both cases the
       // message below said "Added", which is at best confusing and at worst tells a steward they have a
@@ -5487,6 +5687,7 @@ function DashAddRelayCard() {
         ? { ok: false, text: '⚠ Added “' + n + '”, but your church has no name yet — a relay will not accept a church it cannot identify, so nothing you post will save. Set your church’s name first, then connect again.' }
         : { ok: true, text: reg.ok ? ((added ? '✓ Connected to “' : '✓ “') + n + (added ? '” — your church is registered and can post.' : '” was already on your list — your church is registered there and can post.')) : '✓ ' + (added ? 'Added “' : 'Already had “') + n + '”. If it rejects your posts, the relay operator may need to approve your church (register below).' });
       setByName('');
+      await signIt(j.url);
     } catch (e) { setByNameMsg({ ok: false, text: '✗ Couldn’t reach the relay directory.' }); }
   };
   // ── end of the connect-by-name flow. scripts/connect-by-name-names-the-church.test.mjs slices this
@@ -5495,18 +5696,49 @@ function DashAddRelayCard() {
   // FEDERATION Phase 3c — auto-find open relays (primary + backup) that have offered to host new churches.
   const [finding, setFinding] = React.useState(false);
   const [findMsg, setFindMsg] = React.useState('');
-  const autoFind = async () => {
+  // AUTO-FIND ASKS FIRST TOO, AND NAMES WHAT IT FOUND (owner decisions, 2026-10-21): it connects relays somebody
+  // ELSE runs, which is exactly when the steward most needs to know where the church's data will go. So it finds
+  // first (adding nothing), shows the relays it found on the consent line, and connects and signs exactly those
+  // on "Yes, connect".
+  const [found, setFound] = React.useState(null);
+  const autoFind = async (confirmed) => {
+    if (confirmed !== true) {
+      setFinding(true); setFindMsg(''); setFound(null);
+      try {
+        // Ninth audit: never offer a spelling of a shared relay (the church already uses those).
+        const picks = (window.Steward.findRelays ? (await window.Steward.findRelays(2)) || [] : [])
+          .filter(p => !(window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(p && p.url)))
+          .filter(p => !(window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(p && p.url)));
+        if (picks && picks.length) { setFound(picks); setAsk('find'); }
+        else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
+      } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
+      setFinding(false);
+      return;
+    }
+    const chosen = found || [];
+    setAsk(''); setFound(null);
     setFinding(true); setFindMsg('');
     try {
-      const picks = window.Steward.autoPickRelays ? await window.Steward.autoPickRelays(2) : [];
-      if (picks && picks.length) setFindMsg('✓ Added ' + picks.length + ' relay' + (picks.length > 1 ? 's' : '') + ' for backup: ' + picks.map(p => p.name || p.url).join(', '));
+      const picks = (window.Steward.connectFoundRelays && chosen.length) ? await window.Steward.connectFoundRelays(chosen) : [];
+      // EACH RELAY'S OWN ANSWER (third audit, finding 4): "✓ Added" only for a relay now in the church's signed list.
+      const added = [], missed = [];
+      for (const p of (picks || [])) {
+        let r = null; try { r = window.Steward.signRelay ? await window.Steward.signRelay(p.url) : null; } catch (e) { r = null; }
+        const why = window.Steward.signRelay ? signOutcome(r, p.url) : '';
+        // Auto-find will not offer a relay this console already has, so the way to retry is Add a relay (fourth audit, finding 7).
+        if (why) missed.push((p.name || p.url) + ': ' + why + ' To try again, enter ' + p.url + ' under Add a relay.'); else added.push(p);
+      }
+      const lines = [];
+      if (added.length) lines.push('✓ Added ' + added.length + ' relay' + (added.length > 1 ? 's' : '') + ' for backup: ' + added.map(p => p.name || p.url).join(', '));
+      for (const m of missed) lines.push('✗ ' + m);
+      if (lines.length) setFindMsg(lines.join(' '));
       else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
     } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
     setFinding(false);
   };
   return (
       <Panel title="Add a relay">
-        <div className="set-note" style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Three ways to add a relay your church runs. Any of them lets your church read from it straight away; it only starts carrying your church once it is registered there.</div>
+        <div className="set-note" style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Three ways to add a relay. Connecting one sends your church’s data to it; it only stores it once your church is registered there.</div>
         {/* ADD ANOTHER RELAY THIS CHURCH RUNS (redundancy) — never somebody else's.
             The placeholder below used to name two generic public Nostr relays and the error under it named
             a third. A steward who typed one of those in was following the product's own instructions, and
@@ -5516,41 +5748,46 @@ function DashAddRelayCard() {
             the second box it runs itself; what is gone is the suggestion of anybody else's. */}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 9 }}>
-            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
+            <input value={draft} onChange={e => { setDraft(e.target.value); setErr(''); if (ask === 'add') setAsk(''); }} onKeyDown={e => { if (e.key === 'Enter') addRelay(); }}
               aria-label="Relay address to add"
               placeholder="wss://relay.yourchurch.org" spellCheck={false} autoCapitalize="none"
               style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-            <button onClick={addRelay} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
+            <button onClick={() => addRelay()} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add relay</button>
           </div>
           {err ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7 }}>{err}</div> : null}
+          {ask === 'add' ? <RelayConsent onYes={() => addRelay(true)} onNo={() => setAsk('')} detail={(draft || '').trim()} /> : null}
+          {signNote ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', marginTop: 7, lineHeight: 1.45 }}>{signNote}</div> : null}
           {/* The step nobody was told about. Says what was added, what it does NOT yet do, and the one thing
               left to do about it — in a steward's words, not the relay's. */}
           {addedNote ? (
             <div style={{ marginTop: 9, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-              <b style={{ color: 'var(--ink)' }}>Added {addedNote}</b> — your church will now read from it.
+              <b style={{ color: 'var(--ink)' }}>Connected {addedNote}</b> — your church’s data now goes to it.
               <div style={{ marginTop: 4 }}>
-                It is not yet holding your church, though. A relay only carries a church once that church is
-                <b> registered</b> on it — until then it stays a spare you read from, and it will not count
-                towards keeping two copies. If it is your own relay, open its setup page and add this church;
-                if someone else runs it, ask them to.
+                It only keeps it once your church is <b>registered</b> there — until then it refuses your
+                posts and will not count towards keeping two copies. If it is your own relay, open its setup
+                page and add this church; if someone else runs it, ask them to.
               </div>
               <button onClick={() => setAddedNote('')} className="sk-btn sk-btn--ghost" style={{ marginTop: 8, padding: '6px 10px', fontSize: 12 }}>Got it</button>
             </div>
           ) : null}
-          <button onClick={autoFind} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
+          <button onClick={() => autoFind()} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies.</div>
+          {ask === 'find' && found ? <RelayConsent onYes={() => autoFind(true)} onNo={() => { setAsk(''); setFound(null); }}
+            text={RELAY_CONSENT_FOUND} note="They are run by other people who offer to host churches."
+            detail={found.map(p => (p.name ? p.name + ' — ' : '') + p.url).join('\n')} /> : null}
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
           {/* connect to a relay by its memorable name (resolved via the directory) */}
           <div style={{ marginTop: 13 }}>
             <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', marginBottom: 4 }}>OR CONNECT BY NAME</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 7, lineHeight: 1.45 }}>The name its operator claimed. It follows the relay’s current address, even when the tunnel URL changes.</div>
             <div style={{ display: 'flex', gap: 9 }}>
-              <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
+              <input value={byName} onChange={e => { setByName(e.target.value); setByNameMsg(null); if (ask === 'name') { setAsk(''); setNamed(null); } }} onKeyDown={e => { if (e.key === 'Enter') connectByName(); }}
                 placeholder="your relay’s name, e.g. grace-city" spellCheck={false} autoCapitalize="none"
                 aria-label="Relay name to connect to" title="Type the name the relay’s operator claimed (e.g. grace-city). It resolves to the relay’s current address, so it keeps working even after the tunnel URL changes."
                 style={{ flex: 1, height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--ink)', outline: 'none' }} />
-              <button onClick={connectByName} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
+              <button onClick={() => connectByName()} aria-label="Connect to relay by name" title="Look up this name in the relay directory and add its relay to your church." className="sk-btn sk-btn--ghost" style={{ padding: '0 16px', fontSize: 13, whiteSpace: 'nowrap' }}><Icon name="globe" size={15} color="currentColor" /> Connect</button>
             </div>
+            {ask === 'name' && named ? <RelayConsent onYes={() => connectByName(true)} onNo={() => { setAsk(''); setNamed(null); }} detail={'“' + named.n + '” is ' + named.url} /> : null}
             {byNameMsg ? <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600, color: byNameMsg.ok === false ? 'var(--clay-ink)' : byNameMsg.ok ? 'var(--sage-ink)' : 'var(--ink-3)' }}>{byNameMsg.text}</div> : null}
           </div>
         </div>
@@ -12102,6 +12339,11 @@ const BACKUP_META_NO_RELAY = 'Your other stewards’ consoles will still show th
 // delegate is not sent to pick a file or wait on a real backup only to be told "the relay returned 401".
 const BACKUP_EXPORT_OWNER_ONLY = 'Only the church’s own console can back up or restore this church’s data. Ask whoever holds the church key.';
 // Phase 1 backup: save the church's complete corpus to a file (native share sheet / web download) + a reminder cadence.
+// The console's "Restored …" line for a /import result (+ media counts). Lifted and RUN by
+// scripts/a-self-hosted-church-restores-onto-a-new-box-stress.test.mjs (B6b), never text-matched.
+function restoreResultMessage(r, relayUrl) {
+  return 'Restored ' + r.imported + ' records' + (r.duplicates ? ' (' + r.duplicates + ' already there)' : '') + (r.skipped ? ' (' + r.skipped + ' skipped)' : '') + (r.mediaTotal ? ' + ' + r.mediaRestored + '/' + r.mediaTotal + ' media' : '') + (r.registered ? ' — church set up on ' + (relayUrl ? 'that' : 'this') + ' relay.' : '.') + (r.invalid ? ' ' + r.invalid + ' entries were skipped (couldn’t verify).' : '');
+}
 function DashBackup() {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState(null);   // { ok, text }
@@ -12199,7 +12441,7 @@ function DashBackup() {
       const relayUrl = restoreTarget === 'other' ? restoreUrl.trim() : '';
       if (restoreTarget === 'other' && !/^wss?:\/\/|^https?:\/\//i.test(relayUrl)) throw new Error('Enter the other relay’s web address (https://…).');
       const r = await window.Steward.restoreChurchData(restoreFile.bytes, { relayUrl: relayUrl.replace(/^ws/i, 'http'), onProgress: (phase, done, total) => setRestoreProg({ phase, done, total }) });
-      setRestoreMsg({ ok: true, text: 'Restored ' + r.imported + ' records' + (r.duplicates ? ' (' + r.duplicates + ' already there)' : '') + (r.mediaTotal ? ' + ' + r.mediaRestored + '/' + r.mediaTotal + ' media' : '') + (r.registered ? ' — church set up on ' + (relayUrl ? 'that' : 'this') + ' relay.' : '.') + (r.invalid ? ' ' + r.invalid + ' entries were skipped (couldn’t verify).' : '') });
+      setRestoreMsg({ ok: true, text: restoreResultMessage(r, relayUrl) });
       setRestoreFile(null);
     } catch (e) { setRestoreMsg({ ok: false, text: e.message || 'Restore failed' }); }
     setRestoreBusy(false); setRestoreProg(null);

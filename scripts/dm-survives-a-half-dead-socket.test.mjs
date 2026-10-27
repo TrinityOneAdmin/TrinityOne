@@ -99,16 +99,20 @@ test('the retry actually re-sends a QUEUED DIRECT MESSAGE, not just group posts'
   // below drives a hand-rolled queue of its own — a mirror test, by this project's own definition — so the
   // shipped flush was never executed at all. This lifts the real one and gives it a DM.
   const flush = (() => {
-    const src = fnBody(VENDOR, 'async function _outboxFlush', '_outboxFlush');
+    let src = fnBody(VENDOR, 'async function _outboxFlush', '_outboxFlush');
     const sent = [];
     const scope = {
       _flushing: false, sk: new Uint8Array(32), _dmPlain: new Map(), _outboxSave: () => {},
       _outbox: [{ evt: { id: 'dm1' }, groupId: null, peer: 'p'.repeat(64), tries: 0, relays: ['ws://x'] }],
       _publishBounded: async (r, e) => { sent.push(e.id); return true; },
+      _outboxRelays: (item) => item.relays,   // step 2c: where a retry goes; this test is about WHETHER it retries
       window: { Fellowship: { relays: ['ws://x'] } },
       isPermanentRefusal: () => false, isConnectionFailure: () => true, isRateLimited: () => false,
       _outboxFailed: [], _outboxSubs: new Set(), MAX_TRIES: 50,
+      _mine: () => true,   // G2 audit F3: the flush sends only this identity's entries; this hand-made DM has no signer
     };
+    // fix/stress-g2: the flush asks which church an item belongs to (a DM: none). The SHIPPED _itemChurch.
+    src = fnBody(VENDOR, 'function _itemChurch', '_itemChurch') + '\n' + src;
     // CLAIM APP IDENTIFIERS ONLY. `has: () => true` traps EVERY name the function mentions, globals included, so
   // the lifted code could not reach String/JSON/Object and died with "needs a stub for String". Claim a name
   // only when we are stubbing it or it is not a real global — that keeps the useful part (an unstubbed app

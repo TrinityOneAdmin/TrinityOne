@@ -780,11 +780,42 @@ function _blobMember(req, ownerCp, host, path) {
 
 // backup export gate: a fresh NIP-98 (kind 27235) proof bound to THIS url, signed by the church key OR one of
 // its stewards. Returns the authorised church pubkey (cp) or null — only they may pull a church's full corpus.
+// CLOCK VISIBILITY (owner 2026-10-27: make clock failures visible, correct nothing). _exportAuth / _syncAuth refuse a
+// proof outside +-300 s with the SAME bare 401 as every other refusal, so a box whose clock (or whose peer's) is 6 min
+// out looked healthy for ever. The reason is named ONLY when the signature already verified and the time window is the
+// first failing check after it — so it says nothing about whether the key is trusted — and the body is one fixed
+// string for every caller. `clockSuspect` is a latched timestamp, refreshed at most once a minute, logged once an hour.
+const _TIME_REFUSAL = 'unauthorized: the proof\u2019s timestamp is outside the allowed window - the clock on one of the two machines may be wrong';
+const CLOCK_SUSPECT_TTL = Math.max(1, parseInt(process.env.RELAY_CLOCK_SUSPECT_TTL_SEC || '3600', 10) || 3600);   // env only so a test can watch it expire
+let _clockSuspectAt = 0, _clockSuspectLogged = 0;
+function _noteTimeRefusal(req) {
+  try { req._authWhy = 'time'; } catch {}
+  const t = Math.floor(Date.now() / 1000);
+  // LATCHED PER WINDOW: an unauthenticated caller can raise this with one old-dated self-signed proof, so a refusal inside
+  // the window does NOT extend it - it expires CLOCK_SUSPECT_TTL after the refusal that raised it, and only a refusal after
+  // that raises it again. A real skew re-raises it within minutes; a stranger has to come back every window.
+  if (t - _clockSuspectAt >= CLOCK_SUSPECT_TTL) _clockSuspectAt = t;
+  if (t - _clockSuspectLogged >= 3600) { _clockSuspectLogged = t; console.log('[clock] refused a relay proof for its timestamp - this box or the asking one has a wrong clock'); }
+}
+function _unauthBody(req, dflt) { return req && req._authWhy === 'time' ? _TIME_REFUSAL : dflt; }
+// The asking side: a peer answered 401. Recorded per peer (the peers are OUR configured ones, so the map is bounded),
+// logged once an hour per peer, and reported through _lastSync. Peer addresses are shown only to an admin (see /status).
+const _peerRefused = new Map();   // peerBase -> { at, logged }
+let _passRefused = 0;
+function _notePeer401(peerBase, r) {
+  if (!r || r.status !== 401) return;
+  const t = Math.floor(Date.now() / 1000);
+  const k = String(peerBase);
+  const e = _peerRefused.get(k) || { at: 0, logged: 0 };
+  e.at = t; _passRefused++;
+  if (t - e.logged >= 3600) { e.logged = t; console.log('[sync] ' + k + ' refused our proof (401) - its trust list or a clock may be wrong'); }
+  _peerRefused.set(k, e);
+}
 function _exportAuth(req, host, path) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
   if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
-  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return null;   // fresh (±5 min, anti-replay)
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) { _noteTimeRefusal(req); return null; }   // fresh (±5 min, anti-replay)
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || (CHURCH_PUBS.has(ev.pubkey) ? ev.pubkey : '');
@@ -833,7 +864,7 @@ function _syncAuth(req, host, path) {
   const m = /^Nostr\s+(.+)$/i.exec(req.headers['authorization'] || ''); if (!m) return null;
   let ev; try { ev = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')); } catch { return null; }
   if (!ev || ev.kind !== 27235 || !verifyEvent(ev)) return null;
-  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) return null;
+  if (Math.abs(Math.floor(Date.now() / 1000) - (ev.created_at || 0)) > 300) { _noteTimeRefusal(req); return null; }
   const uTag = (ev.tags.find(t => t[0] === 'u') || [])[1] || '';
   try { const uu = new URL(uTag); if (uu.host !== host || uu.pathname !== path) return null; } catch { return null; }
   const cp = (ev.tags.find(t => t[0] === 'church') || [])[1] || '';
@@ -1770,6 +1801,9 @@ const SYNC_CURSOR_FILE = join(DATA_DIR,'sync-cursors.json');   // { "<cp>@<peerU
 let SYNC_CURSORS = {}; try { SYNC_CURSORS = JSON.parse(readFileSync(SYNC_CURSOR_FILE, 'utf8')) || {}; } catch {}
 let _cursorsDirty = false;   // written once per sync pass, atomically (tmp+rename) — see saveCursors()
 function saveCursors() { if (!_cursorsDirty) return; _cursorsDirty = false; try { const tmp = SYNC_CURSOR_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SYNC_CURSORS)); renameSync(tmp, SYNC_CURSOR_FILE); } catch {} }
+const SYNC_PAGE = Math.max(1, parseInt(process.env.RELAY_SYNC_PAGE, 10) || 10000);          // events per /sync page we ASK for
+const SYNC_PAGE_MAX = 50000;                                                                  // …and the most a server will hand out per page
+const SYNC_SAVE_EVERY = Math.max(1, parseInt(process.env.RELAY_SYNC_SAVE_EVERY, 10) || 2000); // lines between mid-pass cursor saves
 const SYNC_OVERLAP = 600;   // re-pull a 10-min window before the cursor each time, so an event that arrived out-of-order isn't missed
 const GROUP_CHURCH = new Map();  // groupId -> owning church/network pubkey — per-church retention attribution for chat
 // A member pubkey -> the SET of churches they belong to. This was a single-valued map, last write wins, and
@@ -3289,7 +3323,31 @@ function skipTokOk(e, careId, date) {
   const wantHash = want && ((want.perDay && want.perDay.get(date)) || want.legacy || '');
   return !!(wantHash && tok && createHash('sha256').update(String(tok)).digest('hex') === wantHash);
 }
+// (b) of resolveChurch: a direct message / ungrouped reaction by a person carries only its peer in ['p']. It is filed
+// under a church BOTH people belong to (the church key itself counts as the peer's church), the smallest pubkey if
+// several, else '' (never synced to any church box). It must not fall through to the author's first church.
+const isPersonDm = (e) => (e.kind === 4 || (e.kind === 7 && !gidOf(e))) && !CHURCH_PUBS.has(e.pubkey) && !NETWORKS.has(e.pubkey);
+const dmPeer = (e) => { const pt = (e.tags || []).find(t => t[0] === 'p' && t[1]); return pt ? (toHexPub(pt[1]) || pt[1]) : ''; };
+function dmChurch(e) {
+  const peer = dmPeer(e);
+  if (peer && CHURCH_PUBS.has(peer)) return memberIn(e.pubkey, peer) ? peer : '';
+  const theirs = peer ? new Set(churchesOf(peer)) : null;
+  const both = theirs ? churchesOf(e.pubkey).filter(c => theirs.has(c)).sort() : [];
+  return both[0] || '';
+}
+// Is `cp` a church BOTH people of a person's DM belong to, or once belonged to, on this relay? `isIn(pubkey, cp)`
+// decides belonging; the startup relabel passes "currently OR formerly". It keeps such a label.
+function dmLabelShared(e, cp, isIn) {
+  if (!cp) return false;
+  const peer = dmPeer(e);
+  if (peer && CHURCH_PUBS.has(peer)) return cp === peer && isIn(e.pubkey, peer);
+  return !!peer && isIn(e.pubkey, cp) && isIn(peer, cp);
+}
 function resolveChurch(e) {
+  // (b) RUNS BEFORE THE HONOURED ['church'] TAG (stress 2026-10-27, label-adversarial 8a). No shipped client puts a
+  // church tag on a kind 4 or an ungrouped kind 7, so the tag branch below could only ever be reached here by a
+  // modified client filing a DM under any church IT belongs to, into the backup and box of a church the peer is not in.
+  if (isPersonDm(e)) return dmChurch(e);
   // SECURITY-2026-07-13: honor a self-declared ['church',cp] tag ONLY when the author actually BELONGS to cp. Trusting
   // it blindly let a member of church A tag events ['church', B] and inject them into B's per-church retention bucket
   // (culling B's real chat), B's /export backup, and the corpus B replicates to its trusted relays. Entitled = cp
@@ -3311,10 +3369,20 @@ function resolveChurch(e) {
     // claims. A skip that names another church, or carries no valid token, is attributed no further than before.
     { const d = dtag(e); if (d.startsWith(SKIP_D)) { const parts = d.slice(SKIP_D.length).split(':'); if (CARE_CHURCH.get(parts[0]) === cp && skipTokOk(e, parts[0], parts[1] || '')) return cp; } }
   }
+  // A SHARED RELAY FILES EACH ITEM UNDER THE CHURCH IT IS ABOUT, NOT UNDER THE AUTHOR'S FIRST CHURCH. The column
+  // decides what a church's own box is handed on sync, what its /export holds and what its retention culls.
+  // (a) a church-suffixed doc names its church in its d-tag: file it there, but only if this relay HOSTS it.
+  if (e.kind === 30078) {
+    const d = dtag(e), suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
+    if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
+  }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
   return anyChurchOf(e.pubkey);
 }
+// Rows whose label the startup relabel re-examines (see store.relabel): DMs, ungrouped reactions, church-suffixed docs.
+const RELABEL_D_PREFIXES = CP_SUFFIXED_D;
+const relabelTarget = (e) => e.kind === 4 || (e.kind === 7 && !gidOf(e)) || (e.kind === 30078 && CP_SUFFIXED_D.some(p => dtag(e).startsWith(p)));
 // (re)build all in-memory church/member/group/care maps from the stored kind-30078 structure docs, oldest-first.
 // Run at startup and after a restore/clone import so the imported church's membership + groups take effect at once.
 let _hydrating = false;
@@ -6535,7 +6603,8 @@ function serveStatic(req, res) {
           return { ref, sha, short: sha.slice(0, 7), builtAt: d.status === 0 ? d.stdout.trim() : '' };
         } catch { return { ref, sha: null }; }
       })() } : {}),
-      sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },   // is auto-sync actually working?
+      sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },
+      ...(_clockSuspectAt && Math.floor(Date.now() / 1000) - _clockSuspectAt < CLOCK_SUSPECT_TTL ? { clockSuspect: { at: _clockSuspectAt } } : {}),   // a proof was refused for its timestamp: this box's clock, or an asker's, may be wrong. No identity in it.   // is auto-sync actually working?
       // AN UNPROVEN CLAIM, and it must keep reading as one. This is a bare string over an unauthenticated
       // GET: any host can serve this box's /status verbatim and be believed. It is fine for what it is used
       // for (a church authorises this pubkey as a trusted sync peer; the relay-to-relay path then makes the
@@ -6551,6 +6620,7 @@ function serveStatic(req, res) {
       // who arrived with only the church's name (red-team, 2026-08-18). The neighbouring /stats already treats
       // per-church counts as seizure-sensitive; /status now agrees. Everything above — health, disk, build —
       // stays public, because a fleet dashboard legitimately needs it and none of it identifies a soul.
+      ...(adminOK(req) && _peerRefused.size ? { syncRefusedBy: [..._peerRefused].map(([peer, v]) => ({ peer, at: v.at })) } : {}),   // WHICH peers: admin only — a church box's peers are seizure-sensitive
       ...(adminOK(req) ? { counts: { churches: CHURCH_PUBS.size, members: MEMBERS.size, broadcastGroups: BROADCAST.size, events: store.count(), connections: wss ? wss.clients.size : 0 } } : {}),
       serves: { app: SETTINGS.serveApp, modules: SETTINGS.serveModules, audio: SETTINGS.serveAudio },   // what this relay also hosts (toggleable in the control dashboard)
     }));
@@ -6752,7 +6822,7 @@ function serveStatic(req, res) {
   // to owner-only before that and the three route comments were not moved with it (AUDIT round 4, F3).
   if (route === '/export') {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized: needs a fresh NIP-98 proof signed by the church key, bound to this URL'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized: needs a fresh NIP-98 proof signed by the church key, bound to this URL')); return; }
     const events = store.exportChurch(cp);
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Content-Disposition': 'attachment; filename="trinityone-church-backup.jsonl"', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.write(JSON.stringify({ _manifest: { format: 'trinityone-church-backup', version: 1, church: cp, exportedAt: Math.floor(Date.now() / 1000), events: events.length, relay: ORIGIN } }) + '\n');
@@ -6765,7 +6835,7 @@ function serveStatic(req, res) {
   // the bytes themselves come from GET /blob/<sha> (the church key passes _blobMember for its own blobs).
   if (route === '/export-media') {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     const blobs = _churchBlobList(cp);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, blobs, totalBytes: blobs.reduce((a, b) => a + b.size, 0) }));
@@ -6780,9 +6850,30 @@ function serveStatic(req, res) {
   if (route === '/sync' && req.method === 'GET') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync');
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     const since = parseInt(q.get('since') || '0', 10) || 0;
+    // PAGED MODE, only when the caller asks (`limit=N`): at most N events strictly after the (created_at, id) position
+    // `after=<ts>:<id>` (or from `since` on the first page), oldest-first with id as the tie-break. X-Sync-Limit says
+    // "this server honoured the limit" (a server that predates it sends no such header, which is how a client knows to
+    // read one full body, as before); X-Sync-Next is present only when the page was full, i.e. more may follow. With no
+    // `limit` the answer is exactly what it always was — the whole church since `since` — because the harness corpus(),
+    // the backup/restore checks and every deployed client ask that way and would read a silently truncated default as
+    // "done" and advance their cursor over a gap.
+    const limit = Math.min(SYNC_PAGE_MAX, parseInt(q.get('limit') || '0', 10) || 0);
+    if (limit > 0) {
+      let aTs = Math.max(0, since), aId = '';
+      const am = /^(\d{1,12}):([0-9a-f]{0,64})$/.exec(q.get('after') || '');
+      if (am) { aTs = parseInt(am[1], 10); aId = am[2]; }
+      const page = store.exportChurchPage(cp, aTs, aId, limit);
+      const last = page[page.length - 1];
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Sync-Limit': String(limit), ...(page.length >= limit && last ? { 'X-Sync-Next': last.created_at + ':' + last.id } : {}), ...SEC_HEADERS });
+      if (process.env.RELAY_SYNC_TRACE) console.log(`[sync-trace] church=${cp.slice(0, 8)} since=${since} after=${q.get('after') || ''} limit=${limit} sent=${page.length}`);   // test aid, off unless set
+      for (const p of page) res.write(JSON.stringify(p.event) + '\n');
+      res.end();
+      return;
+    }
     const events = store.exportChurchSince(cp, since);
+    if (process.env.RELAY_SYNC_TRACE) console.log(`[sync-trace] church=${cp.slice(0, 8)} since=${since} after= limit=0 sent=${events.length}`);   // test aid, off unless set
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     for (const e of events) res.write(JSON.stringify(e) + '\n');
     res.end();
@@ -6801,7 +6892,7 @@ function serveStatic(req, res) {
   if (route === '/sync-media' && req.method === 'GET') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-media');
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     // `at` on a blob and `deletedAt` are ADDITIVE: a relay that predates them reads `blobs[].sha/size` and
     // `deleted` exactly as before. See _blobSince.
     const blobs = _churchBlobList(cp).map(b => ({ ...b, at: _sinceOf(b.sha, cp) }));
@@ -6816,7 +6907,7 @@ function serveStatic(req, res) {
     const sha = route.slice('/sync-blob/'.length).toLowerCase();
     const cp = _syncAuth(req, req.headers['host'] || '', route);
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || !_blobOwners(sha).has(cp)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }   // R-4: check owners set, not just primary
+    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || !_blobOwners(sha).has(cp)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }   // R-4: check owners set, not just primary
     const file = join(BLOB_DIR, sha); let st; try { st = statSync(file); } catch { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end('not found'); return; }
     res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': 'no-store', ...SEC_HEADERS });
     createReadStream(file).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);   // stream, don't buffer a 200MB blob in RAM
@@ -6827,7 +6918,7 @@ function serveStatic(req, res) {
   if (route === '/sync-digest' && req.method === 'GET') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-digest');
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, buckets: _bucketDigest(cp) }));
     return;
@@ -6837,7 +6928,7 @@ function serveStatic(req, res) {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-ids');
     const q = new URL(req.url, 'http://x').searchParams;
     const bucket = (q.get('bucket') || '').toLowerCase();
-    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{2}$/.test(bucket)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{2}$/.test(bucket)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.end(JSON.stringify({ church: cp, bucket, ids: store.churchEventIds(cp).filter((id) => id.slice(0, 2) === bucket) }));
     return;
@@ -6845,7 +6936,7 @@ function serveStatic(req, res) {
   // negentropy resync (events): the raw events for the IDs a peer found it's missing (POSTed id list, bounded).
   if (route === '/sync-events' && req.method === 'POST') {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-events');
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end(_unauthBody(req, 'unauthorized')); return; }
     const chunks = []; let n = 0, big = false;
     req.on('data', (c) => { if (big) return; n += c.length; if (n > 4 * 1024 * 1024) { big = true; try { res.writeHead(413, { 'Cache-Control': 'no-store' }); res.end('too many ids'); } catch {} req.destroy(); return; } chunks.push(c); });
     req.on('end', () => {
@@ -6866,7 +6957,7 @@ function serveStatic(req, res) {
   if (route === '/import' && req.method === 'POST') {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key, bound to /import"}'); return; }
+    if (!cp) { res.writeHead(401, H); res.end(req._authWhy === 'time' ? JSON.stringify({ error: _TIME_REFUSAL }) : '{"error":"unauthorized: a fresh NIP-98 proof by the church key, bound to /import"}'); return; }
     const chunks = []; let n = 0, tooBig = false;
     req.on('data', (c) => { if (tooBig) return; n += c.length; if (n > MAX_IMPORT) { tooBig = true; try { res.writeHead(413, H); res.end('{"error":"import too large"}'); } catch {} req.destroy(); return; } chunks.push(c); });   // respond BEFORE destroy — destroy skips 'end', so a deferred 413 would hang the request (→ 502)
     req.on('end', () => {
@@ -6885,7 +6976,7 @@ function serveStatic(req, res) {
         if (fresh && !(OFFER_OPEN || SETTINGS.offerHosting) && CHURCH_PUBS.size) { res.writeHead(403, H); res.end('{"error":"this relay is already set up for its church — ask the operator to add yours, or turn on Offer to host other churches"}'); return; }
         if (fresh && CHURCH_PUBS.size >= CHURCH_REPLACE_CAP) { res.writeHead(429, H); res.end('{"error":"registration capacity reached — contact the relay operator"}'); return; }
         if (fresh) { addChurch(cp); persistChurches(); }   // clone onto a new relay: the church key registers its own church
-        let imported = 0, duplicates = 0, invalid = 0;
+        let imported = 0, duplicates = 0, skipped = 0, invalid = 0;
         for (const line of Buffer.concat(chunks).toString('utf8').split('\n')) {
           const s = line.trim(); if (!s) continue;
           let e; try { e = JSON.parse(s); } catch { invalid++; continue; }
@@ -6914,12 +7005,13 @@ function serveStatic(req, res) {
           try {
             const r = store.put(e, cp);                              // attribute to the authed church
             if (r === 'stored') imported++;
+            else if (r === 'duplicate' || r === 'have-newer') duplicates++;   // already there (this copy or a newer version)
+            else skipped++;                                          // 'deleted' (its author tombstoned it) / 'future'
             if (e.kind === 5) applyDeletions(e);   // ALWAYS — a kind-5 we already hold ('duplicate') still has to be applied, or a restore silently resurrects everything it deleted
-            else duplicates++;
           } catch { invalid++; }
         }
         // respond BEFORE the heavy re-scan so a slow hydrate can't time the request out at the proxy (→ 502)
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, invalid }));
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, church: cp, registered: fresh, imported, duplicates, skipped, invalid }));
         // WHY THERE IS NO accept() PASS HERE. One was added on 2026-08-20 and reverted the same day: it
         // deleted a church's entire finance journal on a legitimate restore, and every message ever written
         // by anyone who has since left. accept() is a WRITE-TIME ADMISSION GATE — "may this author add this,
@@ -8136,7 +8228,8 @@ function serveStatic(req, res) {
 const store = openStore(SQLITE_DB, { maxEvents: MAX_EVENTS });
 // NOTHING USED TO CLOSE THE STORE. There was no SIGTERM/SIGINT handler and no store.close() anywhere, so an
 // ordinary `systemctl stop` left the church's data in the -wal side file — see the note on checkpoint() in
-// event-store.mjs. Registered once, idempotent, and it re-raises the signal so the exit code stays honest.
+// event-store.mjs. (That checkpoint() was itself inert until 2026-10-27: it called db.pragma(), which DatabaseSync lacks, so
+// close() folded nothing in; it now uses db.exec.) Registered once, idempotent, and it re-raises the signal so the exit code stays honest.
 let _shuttingDown = false;
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
@@ -8161,6 +8254,29 @@ backfillDeletions();   // re-apply every stored kind-5 — heals content that re
 // now that group→church / member→church maps are built, attribute any events stored without a church
 // (migrated chat, or pre-map writes) so per-church retention buckets them correctly
 if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) console.log(`[relay] attributed ${r} events to a church (per-church retention)`); }
+// ONCE PER STORE (meta key RELABEL_META): rows filed by an older build under the author's FIRST church (DMs, ungrouped
+// reactions, church-suffixed docs) are re-resolved by the current rule, including to '' (a pair sharing no church).
+// It used to run on EVERY start, and so re-derived labels from whatever member docs the relay held that day: a member
+// leaving moved her whole history with the church out of its backup, and a box missing a join doc moved a synced DM
+// to '' or to another hosted church (stress 2026-10-27, label-adversarial 4/4b/6/6b). Live puts still use
+// resolveChurch; reattribute ('' rows) still runs every start. A future rule change bumps the version in the key.
+// A person's DM whose current label names a church both people belong to here, OR ONCE DID, keeps it (one shared
+// church's box is enough). "Once did" = the author of a stored member:<cp> doc, tombstoned (left) or not: without it,
+// a member who LEFT before this pass (an upgraded store, or a restore onto a fresh box - the key stays unset until a
+// church exists, so the start after an /import runs it) took every DM she exchanged with the church out of its
+// backup and box. A label naming a church one of them NEVER joined is the misfile this pass exists to fix: it moves.
+const RELABEL_META = 'relabel:church-label-v1';
+if (CHURCH_PUBS.size && store.getMeta(RELABEL_META) === null) {
+  const everJoined = new Map();   // cp -> Set(authors of a stored member:<cp> doc), built lazily for this pass only
+  const everIn = (pk, cp) => {
+    if (memberIn(pk, cp)) return true;
+    let s = everJoined.get(cp); if (!s) { s = new Set(store.authorsOfDoc(MEMBER_D + cp)); everJoined.set(cp, s); }
+    return s.has(pk);
+  };
+  const r = store.relabel((e, cur) => !relabelTarget(e) ? null : (isPersonDm(e) && dmLabelShared(e, cur, everIn)) ? null : resolveChurch(e), RELABEL_D_PREFIXES).changed;
+  store.setMeta(RELABEL_META, String(Math.floor(Date.now() / 1000)));
+  if (r) console.log(`[relay] relabelled ${r} events to the church they belong to`);
+}
 
 // ── relay resync (pull-since-cursor): converge each church with the trusted peer relays it authorised ──────────
 // Pull a peer's /sync for a church since our cursor, verify + store new events (dedup by ID for free), apply kind-5
@@ -8169,25 +8285,50 @@ if (CHURCH_PUBS.size) { const r = store.reattribute(resolveChurch); if (r) conso
 async function syncChurchFromPeer(cp, peerBase) {
   const key = cp + '@' + peerBase;
   const since = Math.max(0, (SYNC_CURSORS[key] || 0) - SYNC_OVERLAP);
-  const url = peerBase + '/sync?church=' + encodeURIComponent(cp) + '&since=' + since;
-  let maxTs = SYNC_CURSORS[key] || 0, imported = 0;
+  let maxTs = SYNC_CURSORS[key] || 0, imported = 0, lines = 0, saved = maxTs;
+  // Persist the resume cursor — ONLY as far as the last fully handled line (maxTs), never to the end of a page we
+  // have not finished reading. The stream is oldest-first, so every event older than maxTs has already been handled;
+  // rows tied at maxTs are re-pulled by the SYNC_OVERLAP window. store.flushDurable() goes FIRST: WAL+synchronous=NORMAL
+  // can lose just-stored rows on a power cut, and a cursor that outlived them would be a silent permanent gap.
+  const persist = () => {
+    if (maxTs <= saved) return;
+    store.flushDurable();
+    SYNC_CURSORS[key] = maxTs; _cursorsDirty = true; saveCursors(); saved = maxTs;
+  };
+  const onLine = (s) => {   // one stored line; bounded memory
+    let e; try { e = JSON.parse(s); } catch { return; }
+    if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
+    if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
+    if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
+    if (!arrivalIdOk(e, dtag(e))) return;                  // …and never an arrival at another member's address
+    if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
+    const put = store.put(e, cp);
+    if (put === 'stored') { imported++; note(e); }
+    if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
+    // A FUTURE-dated event (put says 'future': more than 15 min ahead) must not move the cursor: a peer could otherwise push it
+    // an hour ahead and make us skip every honest event in between. 'duplicate', 'deleted' and 'have-newer' are real events from
+    // the past that this relay already holds or refuses on purpose, so advancing over them is right.
+    if (put !== 'future' && (e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
+    if (++lines % SYNC_SAVE_EVERY === 0) persist();
+  };
+  let status = 0, failed = false;
   try {
-    const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } });
-    if (!r.ok) return { ok: false, status: r.status };
-    await forEachNdjsonLine(r, MAX_IMPORT, (s) => {   // stream the corpus line-by-line (bounded memory)
-      let e; try { e = JSON.parse(s); } catch { return; }
-      if (!e || !e.id || !e.sig || !verifyEvent(e)) return;   // integrity: never store an unverifiable event
-      if (!carereqIdOk(e, dtag(e))) return;                  // …and never a request written at somebody else's id
-      if (!checkinSessionOkOnIngest(e, dtag(e))) return;      // …and never a check-in record at another session's address (RED TEAM F1)
-      if (!arrivalIdOk(e, dtag(e))) return;                  // …and never an arrival at another member's address
-      if (!checkinPermFutureOk(e, dtag(e))) return;           // …and never a clearance dated into the future (RED TEAM F5)
-      const put = store.put(e, cp);
-      if (put === 'stored') { imported++; note(e); }
-      if (e.kind === 5) applyDeletions(e);   // ALWAYS, as the live path does — see the restore path
-      if ((e.created_at || 0) > maxTs) maxTs = e.created_at || 0;
-    });
-  } catch { return { ok: false }; }
+    let after = '', prevAfter = null;
+    for (let page = 0; page < 100000; page++) {
+      const url = peerBase + '/sync?church=' + encodeURIComponent(cp) + '&since=' + since + '&limit=' + SYNC_PAGE + (after ? '&after=' + after : '');
+      const r = await fetch(url, { headers: { Authorization: relayProof(url, 'GET', cp) } });
+      if (!r.ok) { _notePeer401(peerBase, r); status = r.status; failed = true; break; }
+      await forEachNdjsonLine(r, MAX_IMPORT, onLine);   // stream the page line-by-line (bounded memory)
+      // A server that predates paging ignores `limit` and sent everything in one body: nothing more to ask for.
+      if (!r.headers.get('x-sync-limit')) break;
+      const next = r.headers.get('x-sync-next');
+      if (!next || next === prevAfter) break;   // short page = done (a repeated position would loop for ever)
+      prevAfter = after = next;
+    }
+  } catch { failed = true; }
+  persist();   // also on failure: progress already made (e.g. an answer over MAX_IMPORT) is kept, not redone
   if (maxTs !== (SYNC_CURSORS[key] || 0)) { SYNC_CURSORS[key] = maxTs; _cursorsDirty = true; }   // persisted once per pass by saveCursors()
+  if (failed) return status ? { ok: false, status } : { ok: false };
   return { ok: true, imported };
 }
 // negentropy set reconciliation: partition a church's event IDs into buckets by ID prefix (256 buckets) and
@@ -8216,7 +8357,7 @@ function _bucketDigest(cp) {
 // ours, and pull only the events we're missing. Runs ALONGSIDE the v1 cursor pull (kept as a correctness backstop).
 async function reconcileChurchWithPeer(cp, peerBase) {
   const digUrl = peerBase + '/sync-digest?church=' + encodeURIComponent(cp);
-  let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) return 0; peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
+  let peerBuckets; try { const r = await fetch(digUrl, { headers: { Authorization: relayProof(digUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); return 0; } peerBuckets = (await r.json()).buckets || {}; } catch { return 0; }
   const mine = _bucketDigest(cp), missing = [];
   // PERF (audit 2026-07-24): this used to call store.churchEventIds(cp) — the church's ENTIRE id list —
   // once per mismatched bucket, inside the loop. Buckets are the first two hex chars of an event id, so there
@@ -8235,7 +8376,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   for (const b in peerBuckets) {
     if (mine[b] && mine[b].fp === peerBuckets[b].fp) continue;   // bucket identical on both sides -> nothing to do
     const idsUrl = peerBase + '/sync-ids?church=' + encodeURIComponent(cp) + '&bucket=' + b;
-    let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) continue; peerIds = (await r.json()).ids || []; } catch { continue; }
+    let peerIds; try { const r = await fetch(idsUrl, { headers: { Authorization: relayProof(idsUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); continue; } peerIds = (await r.json()).ids || []; } catch { continue; }
     const have = haveIn(b);
     for (const id of peerIds) if (/^[0-9a-f]{64}$/.test(id) && !have.has(id)) missing.push(id);
   }
@@ -8243,7 +8384,7 @@ async function reconcileChurchWithPeer(cp, peerBase) {
   let imported = 0;
   for (let i = 0; i < missing.length; i += 1000) {   // pull the missing events in bounded batches
     const evUrl = peerBase + '/sync-events';
-    let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) continue; body = await readCapped(r, MAX_IMPORT); } catch { continue; }
+    let body; try { const r = await fetch(evUrl, { method: 'POST', headers: { Authorization: relayProof(evUrl, 'POST', cp), 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: missing.slice(i, i + 1000) }) }); if (!r.ok) { _notePeer401(peerBase, r); continue; } body = await readCapped(r, MAX_IMPORT); } catch { continue; }
     for (const line of body.split('\n')) { const s = line.trim(); if (!s) continue; let e; try { e = JSON.parse(s); } catch { continue; } if (!e || !e.id || !e.sig) continue; let ok = false; try { ok = verifyEvent(e); } catch { ok = false; } if (!ok) continue; if (!carereqIdOk(e, dtag(e))) continue; if (!arrivalIdOk(e, dtag(e))) continue; if (!checkinSessionOkOnIngest(e, dtag(e))) continue; if (!checkinPermFutureOk(e, dtag(e))) continue; if (store.put(e, cp) === 'stored') { imported++; note(e); } if (e.kind === 5) applyDeletions(e); }
   }
   return imported;
@@ -8258,7 +8399,7 @@ async function syncMediaFromPeer(cp, peerBase) {
   // uploading to a peer it controls and letting trusted-relay sync pull them — bypassing the PUT-gate.
   if (mediaRequiresHost() && !MEDIA_HOSTS.has(cp)) return 0;
   const manUrl = peerBase + '/sync-media?church=' + encodeURIComponent(cp);
-  let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
+  let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) { _notePeer401(peerBase, r); return 0; } man = await r.json(); } catch { return 0; }
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
     if (!b || !/^[0-9a-f]{64}$/.test(b.sha)) continue;
@@ -8285,6 +8426,7 @@ async function syncMediaFromPeer(cp, peerBase) {
     const tmp = join(BLOB_DIR, '.dl-' + randomBytes(12).toString('hex') + '.tmp');
     try {
       const r = await fetch(blobUrl, { headers: { Authorization: relayProof(blobUrl, 'GET', cp) } });
+      if (!r.ok) _notePeer401(peerBase, r);
       if (!r.ok || !r.body) continue;
       // stream to a temp file, hashing as it flows — never buffer a 200MB blob in RAM, and never write straight to
       // the final <sha> path (a crash there wedges a truncated file that existsSync skips forever with no self-heal).
@@ -8375,7 +8517,16 @@ let _lastSync = { at: 0, imported: 0, ok: null, error: '' };
 async function runSync() {
   if (_syncing) return null;
   _syncing = true;
-  try { const n = await syncAllChurches(); _lastSync = { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: true, error: '' }; return n; }
+  _passRefused = 0;
+  try {
+    const n = await syncAllChurches();
+    // A peer that answered 401 this pass is NOT a healthy pass, even though nothing threw (every peer failure is swallowed).
+    // Fixed string on purpose: /status is unauthenticated, so no peer address or key goes in it (see the admin block).
+    _lastSync = _passRefused
+      ? { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: false, error: 'a peer refused this box - its trust list or a clock may be wrong' }
+      : { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: true, error: '' };
+    return n;
+  }
   catch (e) { _lastSync = { at: Math.floor(Date.now() / 1000), imported: 0, ok: false, error: String((e && e.message) || e).slice(0, 200) }; throw e; }
   finally { _syncing = false; }
 }

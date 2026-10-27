@@ -35,7 +35,7 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
-import { fnBody, stripComments, liftSgMine, liftFetchMyClearance, liftWithoutBlocked } from './test-slice.mjs';
+import { fnBody, stmt, stripComments, liftSgMine, liftFetchMyClearance, liftWithoutBlocked } from './test-slice.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -48,7 +48,7 @@ const joyceSk = generateSecretKey(), joycePub = getPublicKey(joyceSk);
 // Lift the shipped method and give it the free variables it closes over. Everything here is a stub EXCEPT
 // the function under test and the real NIP-44 primitives — the seal has to be genuine or "can Anne open it?"
 // is not a real question.
-function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed }) {
+function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed, pubError }) {
   const published = [];
   const body = fnBody(VENDOR, 'async publishCareRequest(fields) {', 'publishCareRequest');
   // ONE PHONE IS NOT ONE PERSON. The child/adult branch is chosen from `_sgSelf`, and `_sgSelf` is a single
@@ -90,7 +90,9 @@ function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed
     nip44ck: (a, b) => nip44.utils.getConversationKey(a, b),
     _hex: hex,
     finalizeEvent,
-    _publishAny: async (_relays, evt) => { published.push(evt); return evt; },
+    _publishAny: async (_relays, evt) => { published.push(evt); if (pubError) throw pubError(); return evt; },
+    // fix/stress-g2: a publish that reached no relay at all answers 'no-signal'. The SHIPPED classifier, lifted.
+    isConnectionFailure: new Function(stmt(VENDOR, 'var _CONNECTION = ', '_CONNECTION') + '\nreturn (e) => _CONNECTION.test(String((e && e.message) || e || ""));')(),
     churchRelays: () => ['wss://test.invalid'],
     publishSetFor: () => ['wss://test.invalid'],
     isNoNetworkRelay: () => false,
@@ -439,4 +441,20 @@ test('and the screen has words for it', () => {
   assert.match(map, /update the app/i, 'the message does not say what to do');
   assert.match(map, /speak to a leader/i,
     'it does not offer the one route that always works when the app cannot help');
+});
+
+// ── NO SIGNAL (fix/stress-g2, owner 2026-10-27): NOT queued, and said plainly ────────────────────────────────
+// Offline the care team cannot be established, so a queued copy would be sealed to the wrong audience; the owner
+// chose "Not sent — no signal. Try again." with the words kept on the sheet. The error below is the shape the
+// shipped _publishAny throws when every relay's socket failed (`unsent`, a "connection failure" message).
+test('a care request with no signal answers no-signal, and only that case does', async () => {
+  const offline = () => { const e = new Error('connection failure: connect ECONNREFUSED 127.0.0.1:1'); e.unsent = true; return e; };
+  const { fn } = loadPublish({ team: [annePub], pubError: offline });
+  const out = await fn({ type: 'meals', note: 'help' });
+  assert.equal(out && out.error, 'no-signal', 'no signal was not reported as no signal: ' + JSON.stringify(out));
+  // CONTROLS: a relay that answered "no" and one that never acknowledged keep their own reasons.
+  const refused = () => { const e = new Error('restricted: no'); e.refused = true; return e; };
+  assert.equal((await loadPublish({ team: [annePub], pubError: refused }).fn({ type: 'meals' })).error, 'refused');
+  const quiet = () => new Error('no relay accepted this');
+  assert.equal((await loadPublish({ team: [annePub], pubError: quiet }).fn({ type: 'meals' })).error, 'unconfirmed');
 });

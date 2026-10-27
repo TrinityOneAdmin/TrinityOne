@@ -150,8 +150,15 @@ function liftFellowship(name) {
   throw new Error('unbalanced braces slicing ' + name);
 }
 
-function profileRunner({ publishFails, alreadyPublished }) {
-  const state = { stored: null, sealedNames: 0, toasts: [] };
+// The shipped failure classifiers setProfile consults (fix/stress-g2), lifted from the bundle with what they need.
+const bundleVar = (name) => { const m = FELLOWSHIP.match(new RegExp('^  var ' + name + ' = .*;$', 'm')); assert.ok(m, name + ' is not in the bundle — re-anchor'); return m[0]; };
+const CLASSIFY = new Function([bundleVar('NO_NETWORK_RELAY'), bundleVar('isNoNetworkRelay'), bundleVar('_CONNECTION'),
+  bundleVar('isConnectionFailure'), 'return { isNoNetworkRelay, isConnectionFailure };'].join('\n'))();
+
+function profileRunner({ publishFails, alreadyPublished, failure = 'refused' }) {
+  const state = { stored: null, sealedNames: 0, toasts: [], outbox: [] };
+  // setProfile REASSIGNS _outbox (`_outbox = _outbox.filter(…)`); filter in place so state.outbox stays the queue.
+  state.outbox.filter = function (fn) { const keep = Array.prototype.filter.call(this, fn); this.length = 0; this.push(...keep); return this; };
   const profiles = { [ME]: { name: 'Jane Smith', about: '', picture: '', hidden: false } };
   const names  = ['sk', 'pub', 'window', 'profiles', '_k0Seen', '_publishAny', 'finalizeEvent2', '_churchPhotosOff',
                   '_myPhotoReset', '_stripPhoto', 'PROFILE_KEY', 'localStorage', 'setTimeout', 'console',
@@ -160,19 +167,25 @@ function profileRunner({ publishFails, alreadyPublished }) {
                   // SLICE it. setProfile started asking `_pubReason(e)` on 2026-09-15 so its failure
                   // advice matches WHICH way the publish failed, and this harness went red with
                   // "_pubReason is not defined" — loudly, which is what the name list is for.
-                  '_pubReason'];
+                  '_pubReason', 'profilePublishRelays',
+                  // fix/stress-g2 (merged 2026-10-27): an edit nobody acknowledged is QUEUED; setProfile now asks the
+                  // shipped failure classifiers which failures a signal would fix. Lifted, not stubbed.
+                  '_outbox', '_outboxSave', 'isConnectionFailure', 'isNoNetworkRelay'];
   const values = ['sk-bytes', ME,
     { Fellowship: { ready: Promise.resolve(), relays: ['wss://r/relay'], myProfile: null,
                     syncSealedNames() { state.sealedNames++; } },
       trinityToast: (m) => state.toasts.push(String(m)),
       dispatchEvent() {} },
     profiles, new Set([ME]),
-    async () => { if (publishFails) throw new Error('NO_NETWORK_RELAY: nothing accepted it'); return true; },
+    // fix/stress-g2 (owner 2026-10-27): a REFUSAL is final (null, not queued); "nobody answered" is QUEUED for signal.
+    async () => { if (publishFails) throw Object.assign(new Error('NO_NETWORK_RELAY: nothing accepted it'), failure === 'refused' ? { refused: true } : {}); return true; },
     (e) => ({ ...e, id: 'evt-id' }), () => false, () => false, (p, av) => av, 'trinityone.profile',
     { setItem: (k, v) => { state.stored = v; }, getItem: () => null }, setTimeout, { warn() {} },
     alreadyPublished ? ME : '', alreadyPublished ? JSON.stringify({ about: '', picture: '' }) : '',
     JSON, Date, Math, String, function CustomEvent() {},
-    (e) => (e && e.unsent ? 'not-sent' : e && e.refused ? 'refused' : 'unconfirmed')];
+    (e) => (e && e.unsent ? 'not-sent' : e && e.refused ? 'refused' : 'unconfirmed'),
+    () => ['wss://r/relay'],   // profilePublishRelays (step 2b): where, not what - this test is about the report
+    state.outbox, () => {}, CLASSIFY.isConnectionFailure, CLASSIFY.isNoNetworkRelay];
   const obj = new Function(...names, 'return ({ ' + liftFellowship('setProfile') + ' })')(...values);
   return { setProfile: obj.setProfile, state };
 }
@@ -182,6 +195,16 @@ test('a profile the relay refused does NOT come back as saved', async () => {
   assert.equal(await setProfile({ name: 'Jane Smith', about: 'new bio' }), null,
     'setProfile returned its event after every relay refused it, so the sheet said "Profile saved" while the ' +
     'church went on showing the old profile — the exact failure its caller was fixed to stop');
+});
+
+test('a profile nobody answered for is QUEUED, not reported saved (fix/stress-g2, owner 2026-10-27)', async () => {
+  const { setProfile, state } = profileRunner({ publishFails: true, alreadyPublished: false, failure: 'unconfirmed' });
+  const out = await setProfile({ name: 'Jane Smith', about: 'new bio' });
+  assert.ok(out && out.queued === true, 'an unanswered save did not come back as queued: ' + JSON.stringify(out));
+  assert.equal(state.outbox.length, 1, 'the unanswered save was not put in the queue, so "waiting for signal" would be a promise nothing keeps');
+  const { setProfile: sp2, state: st2 } = profileRunner({ publishFails: true, alreadyPublished: false });
+  assert.equal(await sp2({ name: 'Jane Smith', about: 'new bio' }), null, 'CONTROL: a refusal must stay final');
+  assert.equal(st2.outbox.length, 0, 'CONTROL: a refused save was queued — retrying a refusal reproduces it for ever');
 });
 
 test('a NAME-ONLY edit is a success, and is actually saved', async () => {

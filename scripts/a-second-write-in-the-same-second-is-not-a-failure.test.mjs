@@ -55,7 +55,7 @@ function phone(T, { stamp = 'real' } = {}) {
   let now = T * 1000;
   const FakeDate = { now: () => now };
   const scope = {
-    sk: MEMBER_SK,
+    sk: MEMBER_SK, pub: getPublicKey(MEMBER_SK),   // the queue helpers act on this identity's entries only
     NET: 'trinityone',
     Date: FakeDate,
     Math, JSON, Number, String, Array, Object, Promise, console, Boolean,
@@ -69,6 +69,11 @@ function phone(T, { stamp = 'real' } = {}) {
     // announceMembership schedules a 500ms docs-hub reopen after a rejoin; with no hub open it is a no-op. Unstubbed, the
     // timer fires after the test ended, throws ReferenceError, and node --test reports a bare "test failed".
     _docsHubs: new Map(),
+    // fix/stress-g2 (2026-10-27): announceMembership now asks the one leaving guard first and reads the leave
+    // generation before signing; leaveMembership queues its tombstone. Neutral here (nobody is leaving).
+    _announceBlocked: () => false, _leaveGen: {}, _outboxFailed: [], _flushing: false, _outboxFlush: async () => {},
+    _leaveDelivered: () => {}, _resendJoinToBoxesGainedInFlight: () => {},   // the join-ack resend is its own test (a-member-adopts-*)
+    isPermanentRefusal: (e) => /^(blocked|invalid|restricted)/i.test(String((e && e.message) || e || '')),
     _outbox: [], _outboxSave: () => {}, _markJoinSent: () => {}, _clearJoinSent: () => {}, _dropJoinIntent: () => {},
     _queueJoinIntent: () => {}, _forgetChurch: () => {}, _joinSent: {}, _joinIntents: [],
     publishSetFor: () => ['wss://relay.test/relay'],
@@ -93,6 +98,11 @@ function phone(T, { stamp = 'real' } = {}) {
   scope._monotonicF = stamp === 'real'
     ? new Function('scope', 'with (scope) { return (' + SRC_FN.monotonic.replace(/^function _monotonicF/, 'function') + '); }')(proxy)
     : (t) => t;   // CONTROL ONLY: the stamp removed
+  // The SHIPPED queue helpers the Leave uses: it removes this church's queued join (a stub here once left the join
+  // queued, and the Leave then waited behind it), and finds what else of the church's is still queued.
+  for (const [k, anchor] of [['_outboxDropJoins', 'function _outboxDropJoins('], ['_itemChurch', 'function _itemChurch('], ['_mine', 'function _mine(']]) {
+    scope[k] = new Function('scope', 'with (scope) { return (' + fnBody(SHIP, anchor, k) + '); }')(proxy);
+  }
   const writers = { ...lift(SRC_FN.rsvp), ...lift(SRC_FN.announce), ...lift(SRC_FN.leave), ...lift(SRC_FN.fill) };
   return { writers, store, results, tick: () => {} };
 }

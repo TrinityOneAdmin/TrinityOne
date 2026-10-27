@@ -127,3 +127,28 @@ test('exportChurchSince returns a church\'s events at/after a cursor, oldest-fir
   assert.deepEqual(since.map(e => e.created_at), [2002, 2003, 2004]);             // oldest-first, ≥ cursor, church-scoped
   s.close();
 });
+
+test('relabel: touches only DMs, ungrouped reactions and prefixed 30078 rows; thousands of other docs are left alone', () => {
+  const st = openStore(':memory:', { maxEvents: 100000 });
+  const P = ['trinityone/member:', 'trinityone/minors:'];
+  let k = 0; const e = (o) => ({ id: 'rl' + (++k), pubkey: 'pk' + (k % 7), kind: 30078, created_at: 1000 + k, tags: [], content: 'x', ...o });
+  const wrong = [], other = [];
+  for (let i = 0; i < 3000; i++) { const x = e({ tags: [['d', 'trinityone/other-doc:' + i]] }); st.put(x, 'OLD'); other.push(x.id); }
+  for (let i = 0; i < 40; i++) { const x = e({ tags: [['d', (i % 2 ? P[0] : P[1]) + 'cp' + i]] }); st.put(x, 'OLD'); wrong.push(x.id); }
+  // near-miss d-tags just outside the range of each prefix
+  for (const d of ['trinityone/member', 'trinityone/membes:x', 'trinityone/member;x', 'trinityone/minor:x']) { const x = e({ tags: [['d', d]] }); st.put(x, 'OLD'); other.push(x.id); }
+  const dm = e({ kind: 4, tags: [['p', 'peer']] }); st.put(dm, 'OLD'); wrong.push(dm.id);
+  const label = (id) => st.db.prepare('SELECT church FROM events WHERE id = ?').get(id).church;
+  const { changed: n, scanned } = st.relabel(ev => (ev.kind === 4 || (ev.tags[0] && P.some(p => ev.tags[0][1].startsWith(p)))) ? 'NEW' : 'WRONGLY-REACHED', P);
+  assert.ok(scanned < 200, 'SQL must not hand back the 3000 unrelated docs, got ' + scanned);
+  assert.equal(n, wrong.length, 'exactly the DM and the prefixed docs were rewritten');
+  for (const id of wrong) assert.equal(label(id), 'NEW');
+  for (const id of other) assert.equal(label(id), 'OLD', 'an unrelated doc was touched');
+  assert.equal(st.relabel(ev => null, P).changed, 0, 'null = skip');
+  assert.ok(st.relabel(ev => 'NEW', ['x/']).scanned > 3000, 'a prefix not ending in : falls back to the unfiltered read');
+  // resolveFn is handed the row's CURRENT label (the gateway keeps a label both people still share)
+  const seen = new Map(); st.relabel((ev, cur) => { seen.set(ev.id, cur); return null; }, P);
+  assert.equal(seen.get(dm.id), 'NEW');
+  assert.equal(seen.get(wrong[0]), 'NEW');
+  st.close();
+});

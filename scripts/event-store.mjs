@@ -244,6 +244,10 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);');
   const qMetaGet = db.prepare('SELECT v FROM meta WHERE k = ?');
   const qMetaSet = db.prepare('INSERT INTO meta (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v = excluded.v');
+  // the authors of every stored kind-30078 doc at one d-tag (current AND tombstoned copies: a leave replaces the join
+  // with a ['deleted'] copy at the same address). Used once per store by the gateway's startup relabel.
+  const qAuthorsAtD = db.prepare('SELECT DISTINCT pubkey FROM events WHERE kind = 30078 AND dtag = ?');
+  function authorsOfDoc(dtag) { return qAuthorsAtD.all(String(dtag)).map(r => r.pubkey); }
   function getMeta(k) { const r = qMetaGet.get(k); return r ? r.v : null; }
   function setMeta(k, v) { qMetaSet.run(k, String(v)); }
   function countDeletions() { return db.prepare('SELECT COUNT(*) AS n FROM deletions').get().n; }
@@ -310,6 +314,11 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // (like exportChurch) — NOT via a #church filter, which matchFilter would wrongly narrow to tag-carrying events.
   const qExportChurchSince = db.prepare('SELECT raw FROM events WHERE church = ? AND created_at >= ? ORDER BY created_at ASC');
   function exportChurchSince(cp, since) { const out = []; for (const r of qExportChurchSince.all(cp, since || 0)) { try { out.push(JSON.parse(r.raw)); } catch {} } return out; }
+  // PAGED form of the above, for the cursor pull's `limit=` mode: strictly AFTER the (created_at, id) position
+  // (afterTs, afterId), oldest-first with id as the tie-break so a page boundary inside a run of equal
+  // created_at never loses or repeats a row. Row-value comparison; served by idx_church_created.
+  const qExportChurchPage = db.prepare('SELECT id, created_at, raw FROM events WHERE church = ? AND (created_at, id) > (?, ?) ORDER BY created_at ASC, id ASC LIMIT ?');
+  function exportChurchPage(cp, afterTs, afterId, limit) { const out = []; for (const r of qExportChurchPage.all(cp, afterTs || 0, afterId || '', limit)) { try { out.push({ id: r.id, created_at: r.created_at, event: JSON.parse(r.raw) }); } catch {} } return out; }
   // negentropy resync: just the event IDs a church holds (for bucketed set-difference), and the raw events for a
   // given ID list (to pull only the true difference). Cheap ID-only scan; the events fetch is bounded by the caller.
   const qChurchIds = db.prepare('SELECT id FROM events WHERE church = ?');
@@ -346,6 +355,42 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     try { for (const r of rows) { let e; try { e = JSON.parse(r.raw); } catch { continue; } const ch = resolveFn(e); if (ch) { updChurch.run(ch, r.id); n++; } } txCommit(); }
     catch (err) { txRollback(); throw err; }
     return n;
+  }
+
+  // re-resolve the church column of rows that ALREADY have one (reattribute only visits ''). resolveFn(event, current)
+  // gets the row's CURRENT label as its second argument and returns null for a row it does not want revisited, else
+  // the church ('' allowed); the column is rewritten only when it differs.
+  // Returns { changed, scanned }: scanned = rows the SQL handed back (what was JSON-parsed), so a caller or test can
+  // see that the filter worked.
+  // SQL filters kind-30078 rows by d-tag range [prefix, prefix with its last char bumped), so raw is never
+  // materialised in JS for a non-matching doc. NO INDEX IS CLAIMED: SQLite scans by kind and tests dtag per row.
+  // The bump is only a correct upper bound when a prefix ends in ':' (every shipped CP_SUFFIXED_D does) -- any other
+  // last char, or U+FFFF, makes this fall back to selecting ALL kind-30078 rows and leaving the JS prefix check to
+  // decide: slower, never wrong.
+  function relabel(resolveFn, dtagPrefixes) {
+    let changed = 0, scanned = 0;
+    const ranges = [], args = []; let unbounded = false;
+    for (const p of dtagPrefixes) {
+      if (!p) continue;
+      const last = p.charCodeAt(p.length - 1);
+      if (p[p.length - 1] !== ':' || last === 0xFFFF) { unbounded = true; continue; }
+      ranges.push('(dtag >= ? AND dtag < ?)'); args.push(p, p.slice(0, -1) + String.fromCharCode(last + 1));
+    }
+    const arm = unbounded ? ' OR kind = 30078' : ranges.length ? ' OR (kind = 30078 AND (' + ranges.join(' OR ') + '))' : '';
+    const q = db.prepare('SELECT id, kind, dtag, church, raw FROM events WHERE kind IN (4, 7)' + arm);
+    txBegin();
+    try {
+      for (const r of q.all(...(unbounded ? [] : args))) {
+        scanned++;
+        if (r.kind === 30078 && !dtagPrefixes.some(p => String(r.dtag || '').startsWith(p))) continue;
+        let e; try { e = JSON.parse(r.raw); } catch { continue; }
+        const ch = resolveFn(e, r.church);
+        if (ch === null || ch === undefined || ch === r.church) continue;
+        updChurch.run(ch, r.id); changed++;
+      }
+      txCommit();
+    } catch (err) { txRollback(); throw err; }
+    return { changed, scanned };
   }
 
   // bulk import (one-time migration from the old JSON array). Wrapped in a transaction for speed.
@@ -416,6 +461,11 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   //
   // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
   // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
-  const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
-  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
+  const checkpoint = () => { try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };   // db.exec: node:sqlite's DatabaseSync has no .pragma(), so this returned false and did nothing until 2026-10-27
+  // Make everything stored so far survive a POWER CUT. WAL + synchronous=NORMAL fsyncs the WAL only at a checkpoint, so
+  // a row put() just stored can vanish on power loss. A caller about to persist a resume cursor that says "everything
+  // up to here is held" must call this first, or the cursor can outlive the rows. PASSIVE never
+  // waits for readers; it still syncs the WAL first. Returns {busy, log, checkpointed} or null on failure.
+  const flushDurable = () => { try { const r = db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get(); return { busy: r.busy, log: r.log, checkpointed: r.checkpointed }; } catch (e) { return null; } };
+  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, authorsOfDoc, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, exportChurchPage, flushDurable, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
 }

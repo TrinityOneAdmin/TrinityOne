@@ -128,6 +128,8 @@ function gateSource(src) {
     fnBody(src, 'function readVerified', 'readVerified'),
     fnBody(src, 'function writeVerified', 'writeVerified'),
     fnBody(src, 'function admitCached', 'admitCached'),
+    fnBody(src, 'function _scopesOf', '_scopesOf'),
+    fnBody(src, 'function _admittingScope', '_admittingScope'),
     fnBody(src, 'function rememberVerified', 'rememberVerified'),
     fnBody(src, 'function createRelayGate', 'createRelayGate'),
   ].join('\n');
@@ -159,6 +161,9 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'function lsSet', 'lsSet'),
     stmt(src, 'var RELAYS_LS = ', 'RELAYS_LS'),
     fnBody(src, 'function normRelay', 'normRelay'),
+    // Round 9: addRelay (and refreshNamedRelays) refuse a spelling of a shared relay through this helper.
+    fnBody(src, 'function isSharedRelaySpelling(u) {', 'isSharedRelaySpelling'),
+    fnBody(src, 'function isOwnRelaySpelling(u) {', 'isOwnRelaySpelling'),
     fnBody(src, 'function ownRelay', 'ownRelay'),
     fnBody(src, 'function extraRelays', 'extraRelays'),
     fnBody(src, 'function relaysRaw', 'relaysRaw'),
@@ -166,7 +171,25 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     fnBody(src, 'function relayNetCandidates', 'relayNetCandidates'),
     fnBody(src, 'function _oneComplete', '_oneComplete'),
     fnBody(src, 'function relayNetDoc', 'relayNetDoc'),
+    // Round 6: the read rule enrolRelayNet now consults.
+    fnBody(src, 'function _readCovers', '_readCovers'),
     fnBody(src, 'async function relayNetEntries', 'relayNetEntries'),
+    stmt(src, 'var _isLoopbackRelay = ', '_isLoopbackRelay'),
+    // RELAY-ADDRESS-GOSSIP, 2026-10-23: `removeRelay` now records the removal so the church's signed
+    // relay list cannot put the row back on the next unlock, and `addRelay` clears it. The REAL
+    // functions, not stubs — a stub here would let a change to either one go unnoticed in this file.
+    stmt(src, 'var DECLINED_LS = ', 'DECLINED_LS'),
+    stmt(src, 'var DECLINED_MAX = ', 'DECLINED_MAX'),
+    fnBody(src, 'function declinedRelays', 'declinedRelays'),
+    fnBody(src, 'function setDeclinedRelays', 'setDeclinedRelays'),
+    stmt(src, 'var _declineKey = ', '_declineKey'),
+    fnBody(src, 'function declineRelay', 'declineRelay'),
+    fnBody(src, 'function undeclineRelay', 'undeclineRelay'),
+    stmt(src, 'var ADOPTED_LS = ', 'ADOPTED_LS'),
+    fnBody(src, 'function adoptedRelays', 'adoptedRelays'),
+    fnBody(src, 'function setAdoptedRelays', 'setAdoptedRelays'),
+    stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),
+    stmt(src, 'var RELAYNET_SEEN = ', 'RELAYNET_SEEN'),
     fnBody(src, 'async function enrolRelayNet', 'enrolRelayNet'),
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function relays()', 'relays'),
@@ -175,7 +198,10 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
   ].join('\n');
   assertGateLift(body, 'vendor/steward.js');
   assert.match(body, /const _targets = relays\(\);/, 'vendor/steward.js: publish() no longer assembles through the gated list');
-  assert.match(body, /pool\.subscribeMany\(relaysRaw\(\)/, 'vendor/steward.js: the one-shot reader has been moved onto the FILTERED list — the read-side deadlock');
+  // CHANGED 2026-10-21 (self-hosting P1, B0 steps 2-3): _oneComplete now opens one subscription per relay so a
+  // failure can be told from an answer, so the list it reads is taken once into `urls`. Same property, pinned
+  // inside the reader itself: the list it walks is relaysRaw(), never the filtered relays().
+  assert.match(fnBody(src, 'function _oneComplete', '_oneComplete'), /const urls = relaysRaw\(\);/, 'vendor/steward.js: the one-shot reader has been moved onto the FILTERED list — the read-side deadlock');
   // The tests below warm the gate with `gate.refresh(relaysRaw(), pub)` because that is what the console does
   // the moment it learns which church it is running (setKey). If that call ever leaves setKey, these tests
   // would still pass while a real console published nothing until its first background pass — so the claim is
@@ -205,6 +231,8 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     // in this file measures what it measured before.
     _monotonic: (t) => t,
     setNamedRelays: () => {}, getNamedRelays: () => [],
+    // Self-hosting P1: this church's own console (B1), nameless, no public address.
+    actingChurch: '', _viewingNetwork: () => false, selfRelayName: () => '', selfPublicRelay: () => '',
   });
   store.setItem('trinityone.steward.extra-relays', JSON.stringify(extra));
   // The Add-relay control the steward actually presses, taken as the METHOD it is on window.Steward — the
@@ -455,6 +483,33 @@ test('a never-yet-admitted box on the console\'s own origin is adopted, and the 
   } finally { con.close(); BOX.stop(); }
 });
 
+// ── 6b. a console served by the SHARED pool signs nothing — owner decision 6 (self-hosting P1, 2026-10-21) ─
+test('a console served from the shared community relay never signs that relay into a church\'s list', async () => {
+  // A church that does not self-host must be left exactly as it was. Its console is served by the shared
+  // relay, so the "own box" the automatic enrolment would sign IS the shared relay — and a signed list
+  // naming it would make that church look self-hosting to every later rule built on the list.
+  const flock = H.key();
+  const SHARED = await H.startRelay({ name: 'SHARED', churches: [flock.pub] });
+  const con = consoleOn({
+    church: flock, extra: [],
+    origin: { protocol: 'http:', host: SHARED.base.replace(/^https?:\/\//, '') },
+    canonical: [SHARED.wsUrl], pins: { [SHARED.wsUrl]: [SHARED.relayPub] },
+  });
+  try {
+    assert.deepEqual(con.relayNetCandidates(), [SHARED.wsUrl], 'precondition: the census sees the serving box');
+    // Warm the gate the way setKey() does on unlock, so a document WOULD land if one were signed. Without this
+    // the publish set is empty and the row passes whatever enrolRelayNet decides (measured: a sabotage that
+    // removed the skip went uncaught until this line was added).
+    await con.gate.refresh(con.relaysRaw(), flock.pub);
+    assert.ok(con.relays().includes(SHARED.wsUrl), 'precondition: the shared relay is in the publish set');
+    const res = await con.enrolRelayNet();
+    assert.ok(res.proven.some(p => p.pubkey === SHARED.relayPub), 'precondition: the shared relay proved its key');
+    assert.equal(res.published, false, 'a list was signed for a church whose only relay is the shared pool');
+    assert.deepEqual(await storedRelayNet(SHARED, flock), [],
+      'THE SHARED RELAY WAS SIGNED INTO A NON-SELF-HOSTING CHURCH\'S LIST — owner decision 6 says such a church is unaffected');
+  } finally { con.close(); SHARED.stop(); }
+});
+
 // ── 7. a box that MOVED, and an address that changed hands ─────────────────────────────────────────────
 test('a relay that moved re-proves at its new address; an address answering with a new key loses its entry', async () => {
   const flock = H.key();
@@ -632,6 +687,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var NO_NETWORK_RELAY = ', 'NO_NETWORK_RELAY'),
     stmt(src, 'var isNoNetworkRelay = ', 'isNoNetworkRelay'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
+    fnBody(src, 'function _otherChurchesNetDocRows', '_otherChurchesNetDocRows'),
     fnBody(src, 'function relaysForChurch', 'relaysForChurch'),
     fnBody(src, 'function publishSetFor', 'publishSetFor'),
     stmt(src, 'var _PUB_FAILED = ', '_PUB_FAILED'),
@@ -775,6 +831,7 @@ test('a chat message the gate could not publish stays in the outbox and burns no
     stmt(src, 'var isConnectionFailure = ', 'isConnectionFailure'),
     stmt(src, 'var isRateLimited = ', 'isRateLimited'),
     stmt(src, 'var MAX_TRIES = ', 'MAX_TRIES'),
+    fnBody(src, 'function _itemChurch', '_itemChurch'),   // fix/stress-g2: the flush asks which church an item belongs to
     fnBody(src, 'async function _outboxFlush', '_outboxFlush'),
   ].join('\n');
   assert.match(body, /isConnectionFailure\(e2\) \|\| isNoNetworkRelay\(e2\)/,
@@ -785,8 +842,10 @@ test('a chat message the gate could not publish stays in the outbox and burns no
   const item = { evt: { id: 'e1' }, tries: 0, at: 1, relays: ['wss://x.invalid'] };
   const state = {
     _outbox: [item], _outboxFailed: [], _flushing: false, sk: 'k',
+    _mine: () => true,   // G2 audit F3: the flush sends only this identity's entries; this hand-made item has no signer
     _dmPlain: new Map(), _outboxSave: () => {}, window: undefined,
     _publishBounded: async () => { throw gateErr; },
+    _outboxRelays: (item) => item.relays,   // step 2c: where a retry goes; this test is about the outbox's try-counting
   };
   const scope = scopeOf(state);
   const flush = new Function('scope', `with (scope) { ${body} return _outboxFlush; }`)(scope);

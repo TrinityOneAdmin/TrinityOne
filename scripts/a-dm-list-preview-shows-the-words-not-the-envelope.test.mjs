@@ -20,7 +20,7 @@ const coalesce = /\n  function _coalesce\(fn\) \{[\s\S]*?\n  \}\n/.exec(FEL);
 assert.ok(coalesce, '_coalesce not found in the bundle');
 
 const ME = 'a'.repeat(64), PEER = 'b'.repeat(64);
-const make = new Function('pool', 'window', 'pub', 'sk', '_dmDecrypt', '_netRelays',
+const make = new Function('pool', 'window', 'pub', 'sk', '_dmDecrypt', '_netRelays', 'dmReadRelays',
   `${coalesce[0]}\nreturn ({ ${wrap}, ${unwrap}, ${sub} });`);
 
 // `events`: [{ from: 'me'|'peer', body (the decrypted text) | undecryptable: true, ts }]
@@ -29,7 +29,7 @@ async function inbox(events) {
   const pool = { subscribeMany: (_u, _f, h) => { handler = h.onevent; return { close() {} }; } };
   const window = { Fellowship: { relays: [] } };
   const dec = async (_sk, _peer, ct) => { if (ct === 'BAD') throw new Error('x'); return ct; };
-  const o = make(pool, window, ME, new Uint8Array(32), dec, u => u);
+  const o = make(pool, window, ME, new Uint8Array(32), dec, u => u, () => []);
   window.Fellowship._dmUnwrap = o._dmUnwrap;   // as in the app: the methods live on window.Fellowship
   let last = null;
   o.subscribeDMs(c => { last = c; });

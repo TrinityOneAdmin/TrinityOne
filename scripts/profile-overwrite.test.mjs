@@ -88,11 +88,14 @@ function memberSide({ seen = false, cached = {}, answerAfterMs = null, photosOff
     profiles: Object.keys(cached).length ? { [pub]: { ...cached } } : {},
     _k0Seen: new Set(seen ? [pub] : []),
     _profilePubFor: '', _profilePubBody: '',
+    // fix/stress-g2: setProfile replaces an older queued edit and queues one with no signal; inert here.
+    _outbox: [], _outboxSave: () => {}, isConnectionFailure: () => false, isNoNetworkRelay: () => false,
     PROFILE_KEY: 'trinityone.profile',
     localStorage: { setItem: (k, v) => { state.saved[k] = v; }, getItem: (k) => state.saved[k] || null },
     console: { warn() {} },
     CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
     _publishAny: async (_relays, evt) => { state.published.push(evt); },
+    profilePublishRelays: () => ['wss://test.invalid'],   // step 2b: the profile publish set; this test is about WHAT is published, not where
     window: {
       Fellowship: {
         ready: Promise.resolve(),

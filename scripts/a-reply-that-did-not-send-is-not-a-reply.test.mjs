@@ -22,7 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
@@ -82,8 +82,16 @@ function runner(name, { publishFails, how }) {
   // `_monotonicF` (owner: same-second writes must be monotonic). Lifted, never stubbed — the writers' outcome is
   // what these rows measure, and a stub would answer for the stamp.
   const _monotonicF = liftMonotonicF();
+  // fix/stress-g2 (2026-10-27): leaveMembership now QUEUES its tombstone before sending it (the queued entry is the
+  // "leaving" mark), sends that church's queued posts first, and drops the church only once delivered. Its new
+  // collaborators are given here; the outbox ones are inert (an empty queue, a flush that sends nothing), so the
+  // ONE publish these rows count is still the tombstone's. isPermanentRefusal is the shipped one.
+  const isPermanentRefusal = new Function(stmt(BUNDLE, 'var _PERMANENT = ', '_PERMANENT') + '\n' +
+    stmt(BUNDLE, 'var isPermanentRefusal = ', 'isPermanentRefusal') + '\nreturn isPermanentRefusal;')();
   const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch', '_sealChurchDocMember', '_monotonicF',
-    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember, _monotonicF);
+    '_leaveGen', '_outbox', '_outboxFailed', '_outboxSave', '_flushing', '_outboxFlush', '_itemChurch', 'isPermanentRefusal', '_leaveDelivered', '_outboxDropJoins', '_left',
+    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember, _monotonicF,
+    {}, [], [], () => {}, false, async () => {}, (o) => (o && (o.leave || o.join || o.cp)) || '', isPermanentRefusal, () => {}, () => false, new Set());
   return { fn: obj[name], calls };
 }
 

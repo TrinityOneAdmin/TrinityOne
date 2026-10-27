@@ -164,11 +164,20 @@ const shippedCanRemove = () => {
 
 test('a relay that cannot be removed is not offered a bin', () => {
   const can = shippedCanRemove();
+  // The two shipped addresses: removeRelay only filters extraRelays() and these are appended unconditionally, so a
+  // bin would remove nothing, return true and still forget any name→url binding.
   for (const url of ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay']) {
     assert.equal(can(url), false,
       url + ' is offered for removal. removeRelay only filters extraRelays(), and the canonical addresses ' +
       'are appended unconditionally — so the click removes nothing, returns true, and still forgets any ' +
       'name→url binding, while the row stays put and nothing explains why.');
+  }
+  // CHANGED round 9 (ninth audit): another SPELLING of a shared relay is a row the console ADDED (it is in
+  // extraRelays, and removeRelay does take it out). Such rows are now refused at Add; one an older install already
+  // holds must be removable, or a dead spelling (ws://…) freezes the church's list. So these get a bin.
+  for (const url of ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'wss://app.trinityone.church/relay/',
+    'ws://trinityone-master-01.tailbeaac0.ts.net/relay', 'wss://app.trinityone.church//relay']) {
+    assert.equal(can(url), true, url + ': A ROW THE CONSOLE ADDED HAS NO REMOVE — a dead spelling stays and holds the church\'s list');
   }
   assert.equal(can('wss://ourbox.ts.net/relay'), false,
     "the church's own relay is offered for removal");
@@ -177,6 +186,11 @@ test('a relay that cannot be removed is not offered a bin', () => {
 test('CONTROL: a relay the church added itself is still removable', () => {
   // The cheap way to pass the test above is to refuse everything, which would leave a church unable to stop
   // using a relay it chose — worse than the bug.
+  // Eighth audit, finding 1: a path that differs only in CASE is a different address (relayAddrKey keeps path case;
+  // the server answers 502). A dead typo like this must stay removable, or it freezes the church's list for ever.
+  assert.equal(shippedCanRemove()('wss://app.trinityone.church/Relay'), true,
+    'A MISTYPED SHARED-LOOKING ADDRESS (/Relay) GOT NO REMOVE — it is not the shared relay, never answers, and keeps ' +
+    'every change to the church\'s relay list waiting for ever');
   assert.equal(shippedCanRemove()('wss://a-friend-church.ts.net/relay'), true,
     'a relay the church added itself can no longer be removed — the control has been disabled rather than ' +
     'corrected, and a church cannot take its data off a box it no longer trusts.');
@@ -214,16 +228,21 @@ const renderRelayCard = (rows) => {
 test('the console does not PUT a bin on a relay it cannot remove', () => {
   const bins = renderRelayCard([
     { url: CANON, status: 'on' },
+    { url: 'wss://App.TrinityOne.church:443/relay/', status: 'on' },   // the same shared relay, spelled differently
     { url: OWN, status: 'on' },
     { url: 'wss://friend.ts.net/relay', status: 'on' },
   ]);
-  assert.equal(bins.length, 1,
-    'expected exactly one bin — on the relay the church added itself. Got ' + bins.length + '. A bin against ' +
+  // Two: the relay the church added, and the added second spelling of the shared relay (round 9: every added row).
+  assert.equal(bins.length, 2,
+    'expected exactly two bins — on the two rows the church added itself. Got ' + bins.length + '. A bin against ' +
     'a canonical relay or the church\'s own box does nothing when clicked: removeRelay filters extraRelays() ' +
     'and those are appended unconditionally, so it returns true, the row stays, and nothing says why.');
 });
 
 test('CONTROL: the console still offers a bin on a relay the church added', () => {
+  // …and on a dead /Relay typo of a shared address (eighth audit, finding 1), on the rendered card.
+  assert.equal(renderRelayCard([{ url: CANON, status: 'on' }, { url: 'wss://app.trinityone.church/Relay', status: 'off' }]).length, 1,
+    'THE CARD OFFERS NO REMOVE ON A DEAD /Relay TYPO — the row, and the church\'s list with it, is stuck');
   const bins = renderRelayCard([{ url: 'wss://friend.ts.net/relay', status: 'on' }]);
   assert.equal(bins.length, 1,
     'the bin has gone from a relay the church chose and can remove — the control has been disabled rather ' +

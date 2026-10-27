@@ -120,7 +120,7 @@ test('a fresh join re-opens the docs hub so the relay can serve gated docs', () 
   assert.match(src, /_docsHubOpen\(hub\)/,
     'the hub must be re-opened, not just closed — closing without re-opening drops the subscription');
   // The same fix in _outboxFlush: the announce may fail and land via retry.
-  const flush = fnBody(FELLOW, 'async function _outboxFlush()', '_outboxFlush');
+  const flush = fnBody(FELLOW, 'async function _outboxFlush(', '_outboxFlush');   // re-anchored 2026-10-27: it takes `only` now (G2)
   const fs2 = stripComments(flush);
   assert.match(fs2, /item\.join.*_docsHubs/s,
     'when a queued join lands via outbox retry, the docs hub must also be re-opened');
