@@ -15,9 +15,10 @@
 // would hide it. CLAUDE.md rule 3: that condition is not matched as text anywhere below — the room is
 // rendered and the tree is read.
 //
-// WHAT THIS CANNOT PROVE. It reads the declared geometry (`top: 100%`, and which edge the card hangs from),
-// not painted pixels: there is no layout engine here. "The bubble is still readable at 411px and 360px" is a
-// claim only a device can settle, and nothing here makes it.
+// WHAT THIS CANNOT PROVE. It reads the declared geometry (the card drops from the ⋯ button — top: 24, and
+// which edge it hangs from), not painted pixels: there is no layout engine here. Where the card lands once a
+// tall or low-on-screen message makes clampMenuIntoView pull it back on-viewport is a claim only a device (or
+// the chromium tests below) can settle, and the harness assertions do not make it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, texts, find, compileScreen } from './render-jsx-screen.mjs';
@@ -122,15 +123,26 @@ test('…and it is still on every message when a private reply is not allowed (t
     'Reply went with it');
 });
 
-test('THE ROOM MENU OPENS BELOW THE BUBBLE, NOT ACROSS IT', () => {
+// CONTRACT CHANGED (owner, Oppo, 2026-10-27): this test used to require the menu to open fully BELOW the
+// bubble (top:'100%'). On a TALL message that put the card ~600px under the ⋯, beside the FOLLOWING message,
+// detached from the one it acts on. The owner's call: drop the card straight from the ⋯ button (a context
+// menu at the tap), overlaying the top of its own message if need be. So the menu now hugs the button —
+// top just under it (the ⋯ is top:-7, height 30 → bottom at 23) — NOT at the bubble bottom and NOT at the
+// old top:18 offset that covered the whole message.
+test('THE ROOM MENU DROPS FROM THE ⋯ BUTTON (top of the message), not from the bubble bottom', () => {
   const draw = room();
-  dots(draw())[0].props.onClick();
+  const d = dots(draw())[0];
+  d.props.onClick();
   const card = menuCard(draw());
   assert.equal(card.length, 1, 're-anchor: the open actions menu is not a positioned card any more');
   const s = card[0].props.style;
-  assert.equal(s.top, '100%',
-    'the menu is laid over the message it acts on, so the words being answered are hidden. top was: ' + JSON.stringify(s.top));
-  assert.notEqual(s.top, 18, 'the menu is back at the offset that covered the bubble');
+  assert.notEqual(s.top, '100%',
+    'the menu still drops to the BOTTOM of the bubble — detached from a tall message. top was: ' + JSON.stringify(s.top));
+  assert.notEqual(s.top, 18, 'the menu is back at the old offset that covered the whole message');
+  const btn = d.props.style;
+  const btnBottom = btn.top + (btn.height || 30);                 // the ⋯ is top:-7, height 30 → bottom at 23
+  assert.ok(typeof s.top === 'number' && s.top >= btnBottom && s.top - btnBottom <= 8,
+    'the menu is not hugging the ⋯ button: button bottom ' + btnBottom + ', menu top ' + JSON.stringify(s.top));
 });
 
 // The DEFECT this replaces: the ⋯ button hangs off the bubble's INNER edge (style.left:-30 for my own
@@ -159,7 +171,7 @@ test('the menu hangs from the SAME side as the ⋯ button — someone else’s m
   assert.equal(theirs.left, '100%',
     'the menu is not pinned to the ⋯ button’s (inner) edge — it still opens from the far edge of the bubble');
   assert.equal(theirs.right, undefined);
-  assert.equal(theirs.top, '100%', 'the menu no longer opens BELOW the bubble, so it can cover the message');
+  assert.equal(theirs.top, 24, 'the menu no longer drops from the ⋯ button (top of the message)');
 
   // my own message (dots[1]): ⋯ at the bubble's LEFT edge → menu must hang LEFT too.
   const b = room();
@@ -170,7 +182,7 @@ test('the menu hangs from the SAME side as the ⋯ button — someone else’s m
     'my own message drops its menu to the OPPOSITE corner from its ⋯ button');
   assert.equal(own.right, '100%', 'my own menu is not pinned to the ⋯ button’s (inner) edge');
   assert.equal(own.left, undefined);
-  assert.equal(own.top, '100%', 'my own menu no longer opens BELOW the bubble');
+  assert.equal(own.top, 24, 'my own menu no longer drops from the ⋯ button (top of the message)');
 });
 
 test('the menu is bounded in width, so a long item cannot stretch it off a narrow screen', () => {
@@ -319,7 +331,9 @@ async function inBrowser(body) {
 
 // In-page: what is on top at the centre of the open menu?
 const HIT = `
-  const menu = document.querySelector('[data-msg-menu][style*="position: absolute"][style*="top: 100%"], [data-dm-menu][style*="top: 100%"]');
+  // the open card is the DIV carrying the data flag (the ⋯ itself is a BUTTON with the same flag); the menu
+  // no longer sits at top:100% — it drops from the button — so select by element + flag, not by offset.
+  const menu = document.querySelector('div[data-msg-menu], div[data-dm-menu]');
   if (!menu) return { menu: false };
   const r = menu.getBoundingClientRect();
   const x = r.left + r.width / 2, y = r.top + r.height / 2;

@@ -970,23 +970,29 @@ function shareTextOf(m) {
   if (m.kind === 'poll' && m.poll) return '📊 ' + (m.poll.question || 'Poll');
   return '';
 }
-// Keep an open message-actions menu on the screen. The menu pins its NEAR edge to the ⋯ button's side (the
-// bubble's inner edge, via left:'100%' / right:'100%') and grows INWARD toward the centre, so its near edge
-// can never leave the viewport. But a bubble that is itself almost full width puts that inner edge close to
-// the FAR gutter, and a 150–240px card can then run its far edge past the opposite screen edge. There is no
-// pure-CSS way to measure that offset, so once the card has mounted we read its box and, if it overflows,
-// slide it back horizontally with a transform (right overflow first, then guard the left edge). Used by both
-// Row and DMSwipe. The render-jsx-screen unit harness has no layout engine and never invokes element refs,
-// so this is inert there; it runs in a real browser and on device, which is where the clamp must be checked.
+// Keep an open message-actions menu on the screen. The menu drops from the ⋯ button: top: 24 (just under it)
+// and its NEAR edge pinned to the button's side (the bubble's inner edge, via left:'100%' / right:'100%'),
+// growing INWARD toward the centre so that near edge can never leave the viewport. But a bubble that is
+// itself almost full width puts the inner edge close to the FAR gutter, and a 150–240px card can run its far
+// edge past the opposite screen edge; and a message low on the screen can run the card's bottom off the
+// viewport. There is no pure-CSS way to measure those offsets, so once the card has mounted we read its box
+// and, if it overflows, slide it back with a transform — horizontally (right overflow first, then guard the
+// left edge) and vertically (bottom overflow first, then guard the top edge). Used by both Row and DMSwipe.
+// The render-jsx-screen unit harness has no layout engine and never invokes element refs, so this is inert
+// there; it runs in a real browser and on device, which is where the clamp must be checked.
 function clampMenuIntoView(el) {
   if (!el || typeof el.getBoundingClientRect !== 'function' || typeof window === 'undefined') return;
   el.style.transform = '';                                                   // measure the un-nudged CSS position
-  var vw = window.innerWidth || (window.document && window.document.documentElement && window.document.documentElement.clientWidth) || 0;
-  if (!vw) return;
-  var pad = 6, r = el.getBoundingClientRect(), dx = 0;
+  var docEl = window.document && window.document.documentElement;
+  var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
+  var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
+  if (!vw || !vh) return;
+  var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
   if (r.right > vw - pad) dx = (vw - pad) - r.right;                         // far edge past the right gutter → slide left
   if (r.left + dx < pad) dx = pad - r.left;                                  // …but never past the left gutter
-  if (dx) el.style.transform = 'translateX(' + Math.round(dx) + 'px)';
+  if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;                       // card runs off the bottom → slide up
+  if (r.top + dy < pad) dy = pad - r.top;                                    // …but never above the top edge
+  if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
 }
 function Row({ me, m, children, ctx, mod }) {
   const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
@@ -1065,25 +1071,24 @@ function Row({ me, m, children, ctx, mod }) {
         {(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM) || M.onReply) ? (
           <React.Fragment>
             <button data-msg-menu="1" onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!M.menuOpen} {...(() => { const base = { position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }; const replyOnly = !(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)); return replyOnly ? TrinityReplyKit.dotsProps(true, 30, base) : { style: base }; })()}><Icon name="dots" size={15} /></button>
-            {/* ⚠ THE MENU MUST NOT COVER THE MESSAGE IT ACTS ON. It used to open at `top: 18, left: 0` —
-                18px DOWN FROM THE TOP OF THE BUBBLE, i.e. across it — so a steward deciding whether to
-                reply, or to reply privately, could no longer read the words they were answering. Device
-                screenshot, Oppo at 411px: the message was completely hidden behind the menu card. This is
-                the same mistake as the Bible highlight card that covered the verse the reader had just
-                selected; once is enough.
-                `top: 100%` opens it BELOW the bubble (and below the reaction chips, which are inside this
-                column too), so the message stays readable and the menu overlaps only the message after it.
-                Its NEAR edge is pinned to the side the ⋯ button sits on — the bubble's INNER edge (`left:'100%'`
-                for everyone else's message, whose dots are at the bubble's right edge; `right:'100%'` for my
-                own, whose dots are at the left edge) — so the card hangs FROM the button instead of dropping
-                to the opposite corner (Oppo report: the menu looked detached, below-and-to-the-far-side). It
-                grows from that near edge INWARD toward the centre, so the near edge can never leave the
-                screen. A bubble that is itself almost full width can still push the menu's FAR edge past the
-                opposite gutter, so `clampMenuIntoView` (the ref) measures the mounted card and slides it back
-                on-screen. The unit harness has no layout engine and never runs that ref — the horizontal
-                clamp is a device/browser check. */}
+            {/* THE MENU DROPS FROM THE ⋯ BUTTON, like a phone context menu at the tap point. History, because
+                this corner has been wrong twice: it first opened at `top: 18` (across the bubble, hiding the
+                words being answered — Oppo screenshot, 411px). The fix for THAT was `top: 100%` (below the
+                whole bubble) — but on a TALL message (a long broadcast) the ⋯ is at the message's top while
+                `100%` is ~600px lower, so the card rendered down beside the FOLLOWING message, detached from
+                the one it acts on (Oppo, owner-reported). The owner's call: open it AT the button and let it
+                overlay the top of its own message — a context menu at the finger beats one that floats off.
+                So it hugs the ⋯ in BOTH axes. Vertically: `top: 24`, just under the button (the button is
+                `top: -7`, height 30, so its bottom is at 23). Horizontally: the NEAR edge is pinned to the
+                button's side — the bubble's INNER edge (`left:'100%'` for everyone else's message, whose dots
+                are at the bubble's right edge; `right:'100%'` for my own, whose dots are at the left edge) —
+                and it grows INWARD toward the centre, so that near edge can never leave the screen. A bubble
+                that is itself almost full width, or a message low on the screen, can still push the card's FAR
+                or BOTTOM edge off-viewport, so `clampMenuIntoView` (the ref) measures the mounted card and
+                slides it back in both axes. The unit harness has no layout engine and never runs that ref —
+                the clamp is a device/browser check. */}
             {M.menuOpen ? (
-              <div data-msg-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div data-msg-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: 24, [me ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
                     · not my own message (replying privately to yourself is nonsense), and
@@ -2269,12 +2274,13 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
           {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
             justifyContent: 'center', boxShadow: 'var(--shadow)' })}><Icon name="dots" size={15} /></button>
-        {/* below the bubble, its NEAR edge pinned to the side the dots actually sit on (the bubble's inner
-            edge: left:'100%' for the other person, right:'100%' for mine), growing inward and clamped back
-            on-screen by clampMenuIntoView — see the long note in Row. Until now this read `[…]: 0`, which hung
-            the card off the OPPOSITE corner from the ⋯, the same detached-menu defect Row carried. */}
+        {/* drops straight from the ⋯ — top: 24 (just under the button) and its NEAR edge pinned to the side
+            the dots actually sit on (the bubble's inner edge: left:'100%' for the other person, right:'100%'
+            for mine), growing inward and clamped back on-screen in both axes by clampMenuIntoView — see the
+            long note in Row. This used to read `top:'100%', […]:0`, which dropped the card to the bubble's
+            BOTTOM and OPPOSITE corner — detached on a tall message, the same defect Row carried. */}
         {menuOpen ? (
-          <div data-dm-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
+          <div data-dm-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: 24, [mine ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
             borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
               padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>
