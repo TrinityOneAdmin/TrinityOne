@@ -18,7 +18,7 @@ const M = (...a) => console.log('MEASURE', ...a);
 const C = loadOrBuild();
 const church = { pub: C.church.pub, sk: Uint8Array.from(Buffer.from(C.church.sk, 'hex')) };
 const TOTAL = C.events.length;
-const ENV = { RELAY_MAX_EVENTS: '200000' };   // the gateway default; the harness would otherwise set 5000
+const ENV = { RELAY_MAX_EVENTS: '200000', RELAY_SYNC_TRACE: '1' };   // TRACE: each box logs every /sync it serves (since, lines sent) — A3 counts them   // the gateway default; the harness would otherwise set 5000
 const rows = (relay, where = '1=1', args = []) => { const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true }); try { return db.prepare('SELECT COUNT(*) n FROM events WHERE ' + where).get(...args).n; } finally { db.close(); } };
 const byChurch = (relay) => { const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true }); try { return Object.fromEntries(db.prepare('SELECT church c, COUNT(*) n FROM events GROUP BY church').all().map(r => [r.c.slice(0, 8) || '(none)', r.n])); } finally { db.close(); } };
 const oldest = (relay, kind) => { const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true }); try { return db.prepare('SELECT MIN(created_at) t FROM events WHERE kind = ?').get(kind).t; } finally { db.close(); } };
@@ -28,7 +28,7 @@ const publishList = async (relays, at) => { const doc = H.relaysDoc(church, rela
 
 let S, T;
 let stamp = H.now();
-let freshMs = 0;   // A1's wall time for a first sync from nothing (A3 must resume in well under this)
+const freshMs = 0;   // only quoted in a MEASURE line; A3 no longer depends on A1
 const at = () => ++stamp;
 after(() => { H.stopAll(); setTimeout(() => process.exit(process.exitCode || 0), 2000).unref(); });
 
@@ -58,7 +58,7 @@ test('A1 first sync: wall time, passes, imported per pass, S responsiveness duri
     if (rows(T, 'church = ?', [church.pub]) >= TOTAL) break;
   }
   stop = true; await probe;
-  freshMs = Date.now() - t0;
+  M('A1 fresh sync wall', Date.now() - t0, 'ms');
   M('A1 passes:', JSON.stringify(passes), 'total wall', Date.now() - t0, 'ms; S /status latency during the pull: max', Math.max(...lat), 'ms, p50', lat.sort((a, b) => a - b)[lat.length >> 1], 'ms, samples', lat.length);
   const d = await H.corpusDiff(S, T, church);
   assert.deepEqual([d.onlyOnA.length, d.onlyOnB.length], [0, 0], 'T and S hold different sets after the first sync');
@@ -88,17 +88,37 @@ test('A3 SIGKILL T halfway through its first sync, restart on the same dataDir, 
   const passes = [];
   const onDiskAtRestart = rows(T2b, 'church = ?', [church.pub]);
   assert.ok(existsSync(cur), 'no cursor file survived the SIGKILL: the restart can only start from zero');
+  // COUNT-BASED proof of resume (wall time is only a MEASURE line: it depends on what else the box is doing).
+  //  - the cursor saved before the kill is > 0 and no newer than the newest corpus row actually stored;
+  //  - the restart's FIRST /sync to each peer that had a cursor starts at (cursor - overlap), not at 0;
+  //  - the lines each such peer streams to the restarted box are <= the corpus events at or after that point (+ a few).
+  const OVERLAP = 600, MARGIN = 10;
+  const saved = JSON.parse(readFileSync(cur, 'utf8'));
+  const stored = new Set(); { const db = new DatabaseSync(join(T2b.dataDir, 'relay.sqlite'), { readOnly: true }); try { for (const r of db.prepare('SELECT id FROM events WHERE church = ?').all(church.pub)) stored.add(r.id); } finally { db.close(); } }
+  const newestStored = Math.max(...C.events.filter(e => stored.has(e.id)).map(e => e.created_at));
+  const traces = (relay) => relay.log.filter(l => l.includes('[sync-trace]') && l.includes('church=' + church.pub.slice(0, 8))).map(l => ({ since: +/since=(\d+)/.exec(l)[1], sent: +/sent=(\d+)/.exec(l)[1] }));
+  const before = new Map([[S, traces(S).length], [T, traces(T).length]]);
+  const cursorOf = (relay) => saved[church.pub + '@' + relay.base] || 0;
+  const withCursor = [S, T].filter(r => cursorOf(r) > 0);
+  assert.ok(withCursor.length >= 1, 'no peer has a saved cursor: ' + JSON.stringify(saved));
+  for (const r of withCursor) assert.ok(cursorOf(r) <= newestStored, `${r.name}: cursor ${cursorOf(r)} is newer than the newest stored corpus row ${newestStored}`);
+  M('A3 cursor file at the kill:', JSON.stringify(saved), 'newest stored corpus row', newestStored, 'rows on disk', onDiskAtRestart);
   for (let i = 0; i < 6; i++) {
     const [r, ms] = await timed(() => H.syncNow(T2b));
     passes.push({ imported: r.imported, ms, rows: rows(T2b, 'church = ?', [church.pub]) });
     if (rows(T2b, 'church = ?', [church.pub]) >= TOTAL) break;
   }
-  M('A3 passes after restart:', JSON.stringify(passes), 'cursor file now:', existsSync(cur) ? readFileSync(cur, 'utf8').slice(0, 200) : '(none)');
-  // REAL RESUME, not just convergence: the first pass after the restart imports only what the killed pass had not
-  // stored (rows already on disk are duplicates, never imported), and takes well under a from-scratch sync.
-  const remainder = TOTAL - onDiskAtRestart;
-  assert.ok(passes[0].imported <= remainder + 5, `restart pass imported ${passes[0].imported}, more than the ${remainder} rows that were missing`);
-  assert.ok(passes[0].ms < freshMs * 0.8, `restart pass took ${passes[0].ms} ms vs ${freshMs} ms from scratch: it did not resume`);
+  M('A3 passes after restart:', JSON.stringify(passes), 'cursor file now:', existsSync(cur) ? readFileSync(cur, 'utf8').slice(0, 200) : '(none)', '(fresh sync was', freshMs || 'n/a', 'ms)');
+  for (const r of withCursor) {
+    const after = traces(r).slice(before.get(r)), c = cursorOf(r);
+    assert.ok(after.length >= 1, `${r.name} never served the restarted box`);
+    const wantSince = Math.max(0, c - OVERLAP);
+    assert.ok(after[0].since >= wantSince, `${r.name}: the restart's first /sync began at since=${after[0].since}, before the saved cursor ${c} less the overlap (${wantSince}): it restarted from the past`);
+    const streamed = after.reduce((n, t) => n + t.sent, 0), allowed = C.events.filter(e => e.created_at >= wantSince).length + MARGIN;
+    M('A3', r.name, 'first since', after[0].since, 'cursor', c, 'lines streamed to the restarted box', streamed, 'allowed', allowed, 'of', TOTAL);
+    assert.ok(streamed <= allowed, `${r.name} streamed ${streamed} lines after the restart, more than the ${allowed} at/after the saved cursor: not a resume`);
+  }
+  assert.ok(passes[0].imported <= TOTAL - onDiskAtRestart + 5, `restart pass imported ${passes[0].imported}, more than the ${TOTAL - onDiskAtRestart} missing`);
   const d = await H.corpusDiff(S, T2b, church);
   assert.deepEqual([d.onlyOnA.filter(i => true).length > 1 ? d.onlyOnA.length : 0, d.onlyOnB.length], [0, 0], 'gaps or extras after the restart');
   assert.equal(rows(T2b, 'id IN (SELECT id FROM events GROUP BY id HAVING COUNT(*) > 1)'), 0);

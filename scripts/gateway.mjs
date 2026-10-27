@@ -6820,11 +6820,13 @@ function serveStatic(req, res) {
       const page = store.exportChurchPage(cp, aTs, aId, limit);
       const last = page[page.length - 1];
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Sync-Limit': String(limit), ...(page.length >= limit && last ? { 'X-Sync-Next': last.created_at + ':' + last.id } : {}), ...SEC_HEADERS });
+      if (process.env.RELAY_SYNC_TRACE) console.log(`[sync-trace] church=${cp.slice(0, 8)} since=${since} after=${q.get('after') || ''} limit=${limit} sent=${page.length}`);   // test aid, off unless set
       for (const p of page) res.write(JSON.stringify(p.event) + '\n');
       res.end();
       return;
     }
     const events = store.exportChurchSince(cp, since);
+    if (process.env.RELAY_SYNC_TRACE) console.log(`[sync-trace] church=${cp.slice(0, 8)} since=${since} after= limit=0 sent=${events.length}`);   // test aid, off unless set
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     for (const e of events) res.write(JSON.stringify(e) + '\n');
     res.end();
