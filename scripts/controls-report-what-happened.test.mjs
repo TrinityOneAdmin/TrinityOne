@@ -247,9 +247,18 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
   // ⚠ `failAs` DRIVES THE THREE SHAPES `_publishAny` ACTUALLY THROWS, because the advice now depends on
   // which one it was — and the first version of this fix told everyone to "try again when you have a
   // signal", which is false for two of them. 'unconfirmed' is the plain Error the old stub threw.
+  const QUEUED = [];   // fix/stress-g2: what setProfile put in the outbox, per run
   const run = async ({ meta, publishFails = true, failAs = 'unconfirmed' }) => {
     const toasts = [];
+    const outbox = []; QUEUED.push(outbox);
+    // setProfile REASSIGNS _outbox (`_outbox = _outbox.filter(…)`), and here _outbox is a function parameter, so
+    // the reassignment would leave `outbox` behind. Filter in place so this array stays the queue it reads.
+    outbox.filter = function (fn) { const keep = Array.prototype.filter.call(this, fn); this.length = 0; this.push(...keep); return this; };
     const scope = {
+      // fix/stress-g2 (owner 2026-10-27): an edit nobody acknowledged is QUEUED and sent when there is signal.
+      _outbox: outbox, _outboxSave: () => {},
+      isConnectionFailure: (e) => /connection|network|offline|timeout/i.test(String((e && e.message) || e || '')),
+      isNoNetworkRelay: (e) => /^no-network-relay/i.test(String((e && e.message) || e || '')),
       sk: new Uint8Array(32), pub: ME,
       _k0Seen: new Set([ME]),           // our own kind-0 has arrived, so this is the DID-TRY branch
       profiles: {},
@@ -345,9 +354,16 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
   assert.doesNotMatch(refusedT[0], /Try again when you have a signal/,
     'still telling them to retry a refusal');
 
+  // CHANGED 2026-10-27 (fix/stress-g2, owner: queue profile edits offline). "Nothing retries" is no longer true
+  // for the one outcome a signal fixes: the edit is QUEUED and the outbox sends it. So the sentence says it is
+  // waiting — and still the true state first — instead of asking the member to tap again. The note above
+  // ("if a retry is ever built, the reassurance comes back WITH it") is what this is.
   const unconf = await run({ meta: { hidden: true }, failAs: 'unconfirmed' });
-  assert.match(unconf[0], /Try again when you have a signal/,
-    'nobody answered in time — this IS the case a signal fixes, and the advice has been lost. Got: ' + unconf[0]);
+  assert.match(unconf[0], /Waiting for signal/,
+    'nobody answered in time and the edit is queued, but the member is not told it is waiting. Got: ' + unconf[0]);
+  assert.equal(QUEUED[QUEUED.length - 1].length, 1, 'the unacknowledged opt-out was not queued, so "waiting" would be a promise nothing keeps');
+  assert.equal(QUEUED[QUEUED.length - 2].length, 0, 'a REFUSED opt-out was queued — retrying a refusal reproduces it for ever');
+  assert.equal(QUEUED[QUEUED.length - 3].length, 0, 'a gate-refused (not-sent) opt-out was queued as if it were signal');
 
   for (const t of [notSent[0], refusedT[0], unconf[0]]) {
     assert.match(t, /still listed in the directory/,

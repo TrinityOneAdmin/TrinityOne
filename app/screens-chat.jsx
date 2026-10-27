@@ -94,8 +94,9 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
 
   const saveProfile = async () => {
     if (!(FS && FS.setProfile)) { ctx.toast('Chat transport not ready'); return; }
-    await FS.setProfile({ name: nameInput, av: avInput || undefined });
-    ctx.toast(nameInput.trim() ? 'Profile saved' : 'Name cleared'); setPane('main');
+    const r = await FS.setProfile({ name: nameInput, av: avInput || undefined });
+    if (!(r && r.queued)) ctx.toast(nameInput.trim() ? 'Profile saved' : 'Name cleared');   // queued: setProfile has said it is waiting
+    setPane('main');
   };
 
   // poll real relay connection status while the sheet is open
@@ -1602,7 +1603,11 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           // true, but it is the same shape as the share sheet saying "Shared" over a message it lost.
           const kept = !!(extra && extra.text);
           let why = 'Couldn’t lock this message, so it wasn’t sent. Try again in a moment.';
-          if (evt._refused === 'nokey') {
+          // Two refusals that are not about encryption at all (G2, 2026-10-27): the member is leaving this church
+          // (a Leave is waiting for signal), or too many messages are already waiting to send. Nothing was queued.
+          if (evt._refused === 'leaving') why = 'You’re leaving this church, so this wasn’t sent.' + (kept ? ' Your words are still here.' : '');
+          else if (evt._refused === 'queue-full') why = 'Too many messages are waiting to send, so this one wasn’t queued.' + (kept ? ' Your words are still here — try again when you have signal.' : ' Try again when you have signal.');
+          else if (evt._refused === 'nokey') {
             // `settled` matters here for the same reason it does in the empty state: relayReady() is false
             // for the whole of a cold start, because proving who you are is a round trip AFTER connecting.
             // Branching straight on it told a member who had just opened the app that they were offline. The
@@ -2102,6 +2107,8 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
     // fails the day a fourth exit is added. AUDIT-2026-08-30.
     Promise.resolve(FS.publishMessage(g.id, asText + (comment.trim() ? '\n\n' + comment.trim() : ''), [], { encrypted: !!g.encrypted }))
       .then(evt => {
+        if (evt && evt._refused === 'leaving') { ctx.toast('Not shared — you’re leaving ' + g.name + '’s church.'); return; }
+        if (evt && evt._refused === 'queue-full') { ctx.toast('Not shared — too many messages are waiting to send. Try again when you have signal.'); return; }
         if (evt && evt._refused) { ctx.toast('Not shared — ' + g.name + ' is encrypted and your key hasn’t arrived yet. Try again shortly.'); return; }
         if (evt && evt._delivered === false) { ctx.toast('No signal — we’ll share it to ' + g.name + ' when you’re back online.'); return; }
         ctx.toast('Shared to ' + g.name);
@@ -2272,6 +2279,7 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
 function dmFailWording(evt) {
   const refused = evt && evt._refused;
   if (!refused) return 'No signal — we’ll send it as soon as you’re back online.';
+  if (refused === 'queue-full') return 'Too many messages are waiting to send, so this one wasn’t queued — your words are still here. Try again when you have signal.';
   return 'Not delivered. Private messages with this person are limited for safeguarding — a steward can help if you need to reach them.';
 }
 
@@ -2428,6 +2436,11 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
         if (!evt) {
           setDraft(d => d || text);
           if (ctx && ctx.toast) ctx.toast('Couldn’t lock this message, so nothing was sent — your words are still here. Try again in a moment.');
+          return;
+        }
+        if (evt._refused === 'queue-full') {   // nothing was queued: the words go back (G2, 2026-10-27)
+          setDraft(d => d || text);
+          if (ctx && ctx.toast) ctx.toast(dmFailWording(evt));
           return;
         }
         if (evt._refused && ctx && ctx.toast) ctx.toast(dmFailWording(evt));

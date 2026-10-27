@@ -9819,11 +9819,11 @@
   }
   function _outboxSave() {
     try {
-      localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox.slice(-OUTBOX_MAX)));
+      localStorage.setItem(OUTBOX_KEY, JSON.stringify(_outbox));
     } catch (e) {
     }
     try {
-      localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed.slice(-50)));
+      localStorage.setItem(OUTBOX_FAILED_KEY, JSON.stringify(_outboxFailed));
     } catch (e) {
     }
     for (const fn of [..._outboxSubs]) {
@@ -9832,6 +9832,42 @@
       } catch (e) {
       }
     }
+  }
+  function _outboxFull() {
+    let n = 0;
+    for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile) n++;
+    return n >= OUTBOX_MAX;
+  }
+  function _itemChurch(o) {
+    if (!o) return "";
+    if (o.leave) return o.leave;
+    if (o.join) return o.join;
+    if (o.peer && !o.groupId) return "";
+    if (o.cp) return o.cp;
+    if (o.groupId && o.evt && Array.isArray(o.evt.tags)) {
+      const t = o.evt.tags.find((t2) => Array.isArray(t2) && t2[0] === "p");
+      if (t && typeof t[1] === "string") {
+        try {
+          if (memberChurchPubs().includes(t[1])) return t[1];
+        } catch (e) {
+        }
+      }
+    }
+    return "";
+  }
+  var _left = /* @__PURE__ */ new Set();
+  function _leavingFor(cp) {
+    if (!cp) return false;
+    if (pub && _left.has(cp + "|" + pub)) return true;
+    return _outbox.some((o) => o && o.leave === cp && o.evt && (!pub || o.evt.pubkey === pub));
+  }
+  function _announceBlocked(cp) {
+    return _leavingFor(cp);
+  }
+  function _outboxDropJoins(cp) {
+    const n = _outbox.length;
+    _outbox = _outbox.filter((o) => !(o && o.join === cp));
+    return _outbox.length !== n;
   }
   _outboxLoad();
   var _amBlocked = false;
@@ -10166,25 +10202,90 @@
   var MAX_TRIES = 50;
   function _outboxRelays(item) {
     if (item.peer && !item.groupId) return dmSendRelays(item.peer);
-    if (item.relays && item.relays.length) return item.relays;
-    if (item.join) {
+    if (item.profile) {
       try {
-        return publishSetFor(item.join);
+        return profilePublishRelays();
       } catch (e) {
       }
     }
+    const cp = _itemChurch(item);
+    if (cp) {
+      try {
+        return publishSetFor(cp);
+      } catch (e) {
+      }
+    }
+    if (item.relays && item.relays.length) return item.relays;
     return _netRelays([...CANONICAL_RELAYS]);
   }
-  async function _outboxFlush() {
+  var HOLD_UNPROVED_S = 600;
+  async function _heldForUnprovedBoxes(item, cp, asked) {
+    const persisted = (_churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : []).concat(_loadChurchBoxes(cp));
+    const own = persisted.filter((u) => u && !CANONICAL_RELAYS.includes(u));
+    if (!own.length) return false;
+    const hasOwn = () => {
+      try {
+        return publishSetFor(cp).some((u) => !CANONICAL_RELAYS.includes(u));
+      } catch (e) {
+        return false;
+      }
+    };
+    if (hasOwn()) {
+      if (item.heldSince) delete item.heldSince;
+      return false;
+    }
+    if (!asked.has(cp)) {
+      asked.add(cp);
+      try {
+        await _gate.refresh(window.Fellowship.relays || [], cp);
+      } catch (e) {
+      }
+    }
+    if (hasOwn()) {
+      if (item.heldSince) delete item.heldSince;
+      return false;
+    }
+    const nowS = Math.floor(Date.now() / 1e3);
+    if (!item.heldSince) {
+      item.heldSince = nowS;
+      _outboxSave();
+    }
+    return nowS - item.heldSince < HOLD_UNPROVED_S;
+  }
+  function _leaveDelivered(cp, evt) {
+    if (evt && evt.pubkey) _left.add(cp + "|" + evt.pubkey);
+    try {
+      localStorage.removeItem("trinityone.joinedAt:" + cp);
+    } catch (e) {
+    }
+    _forgetChurch(cp);
+    try {
+      window.dispatchEvent(new CustomEvent("trinity-left", { detail: { cp } }));
+    } catch (e) {
+    }
+  }
+  async function _outboxFlush(only) {
     if (_flushing || !_outbox.length || !sk) return;
     _flushing = true;
     try {
-      for (const item of [..._outbox]) {
+      const pass = [..._outbox].filter((o) => o && o.evt && (!only || only(o)));
+      const asked = /* @__PURE__ */ new Set();
+      for (const item of [...pass.filter((o) => !o.leave), ...pass.filter((o) => o.leave)]) {
+        if (!_outbox.includes(item)) continue;
+        if (item.join && _announceBlocked(item.join)) {
+          _outbox = _outbox.filter((o) => o !== item);
+          _outboxSave();
+          continue;
+        }
+        const icp = _itemChurch(item);
+        if (item.leave && _outbox.some((o) => o !== item && !o.leave && _itemChurch(o) === item.leave)) continue;
+        if (icp && !item.peer && await _heldForUnprovedBoxes(item, icp, asked)) continue;
         try {
           await _publishBounded(_outboxRelays(item), item.evt);
           _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
           _dmPlain.delete(item.evt.id);
           _outboxSave();
+          if (item.leave) _leaveDelivered(item.leave, item.evt);
           if (item.join) {
             const _cp = item.join;
             setTimeout(() => {
@@ -10215,8 +10316,14 @@
             item.failed = true;
             item.permanent = !!permanent;
             _outbox = _outbox.filter((o) => o.evt.id !== item.evt.id);
-            _outboxFailed.push(item);
-            if (_outboxFailed.length > 50) _outboxFailed.shift();
+            if (item.leave) {
+              try {
+                window.dispatchEvent(new CustomEvent("trinity-leave-refused", { detail: { cp: item.leave } }));
+              } catch (x) {
+              }
+            } else {
+              _outboxFailed.push(item);
+            }
           }
           _outboxSave();
           if (rateLimited) break;
@@ -11112,15 +11219,28 @@
     // announce membership of a church (a signed, addressable presence event) so the steward can see
     // people who joined even if they never post. Idempotent (addressable, d=member:<churchPub>).
     // This makes the member's pseudonymous npub visible as a member of this church.
+    //
+    // ── A LEAVE IN FLIGHT IS NEVER UNDONE BY AN ANNOUNCE (G2, 2026-10-27). Every membership announce on this phone
+    // comes through here, so the guard is ONE check (_announceBlocked), not one per caller. The callers:
+    //   app/app.jsx followChurch — confirmed church, after 3 "unknown" answers, and the no-checkChurch fallback
+    //     (each calls clearLeaving FIRST: an explicit follow is the one thing that ends a leave);
+    //   app/app.jsx heartbeat beat(); app/app.jsx retryConnection;
+    //   _resendMembershipToNewBoxes; _resendJoinToBoxesGainedInFlight; the admitted-doc recovery; _consumeJoinIntents.
+    // …and the one path that sends a join WITHOUT coming here: _outboxFlush re-sending a queued join, which checks
+    // the same guard. The leave generation is read BEFORE signing and compared again before "sent" is recorded, so
+    // an announce whose ack lands after a Leave was signed neither marks the join sent nor re-sends it.
     async announceMembership(npubOrHex) {
       const cp = toPub(npubOrHex);
       if (!cp) return;
+      if (_announceBlocked(cp)) return null;
       if (!sk) {
         try {
           await window.Fellowship.ready;
         } catch {
         }
       }
+      if (_announceBlocked(cp)) return null;
+      const gen = _leaveGen[cp] || 0;
       if (!sk) {
         _queueJoinIntent(cp);
         return;
@@ -11147,14 +11267,19 @@
       }), sk);
       const dup = _outbox.some((o) => o && o.evt && o.evt.id === evt.id);
       if (!dup) {
+        _outboxDropJoins(cp);
         _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
         _outboxSave();
       }
       let ok = false;
       try {
-        const gen = _leaveGen[cp] || 0;
         const sentTo = publishSetFor(cp).slice();
         await _publishAny(sentTo, evt);
+        if ((_leaveGen[cp] || 0) !== gen || _announceBlocked(cp)) {
+          _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+          _outboxSave();
+          return null;
+        }
         ok = true;
         _markJoinSent(cp, evt);
         _resendJoinToBoxesGainedInFlight(cp, sentTo, gen);
@@ -11217,19 +11342,40 @@
         tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp], ["deleted", "1"]],
         content: ""
       }), sk);
+      _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
+      _outboxDropJoins(cp);
+      _outbox = _outbox.filter((o) => !(o && o.leave === cp));
+      _outboxFailed = _outboxFailed.filter((o) => !(o && o.join === cp));
+      _outbox.push({ evt, groupId: null, leave: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
+      _outboxSave();
+      _clearJoinSent(cp);
+      _dropJoinIntent(cp);
+      for (let i3 = 0; _flushing && i3 < 400; i3++) await new Promise((r) => setTimeout(r, 50));
+      try {
+        await _outboxFlush((o) => o !== null && !o.leave && _itemChurch(o) === cp);
+      } catch (e) {
+      }
+      const entry = _outbox.find((o) => o && o.leave === cp && o.evt.id === evt.id);
+      if (!entry) return { ok: false, reason: "not-sent" };
+      if (_outbox.some((o) => o && !o.leave && _itemChurch(o) === cp)) return { ok: false, queued: true, reason: "not-sent" };
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
-        return { ok: false, reason: _pubReason(e) };
+        const errs = e && e.errors ? e.errors : [e];
+        const why = _pubReason(e);
+        if (why === "refused" || errs.length && errs.every(isPermanentRefusal)) {
+          _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+          _outboxSave();
+          return { ok: false, reason: "refused" };
+        }
+        entry.lastTry = Math.floor(Date.now() / 1e3);
+        entry.lastError = String(errs[0] && errs[0].message || "").slice(0, 120);
+        _outboxSave();
+        return { ok: false, queued: true, reason: why };
       }
-      _leaveGen[cp] = (_leaveGen[cp] || 0) + 1;
-      _clearJoinSent(cp);
-      _dropJoinIntent(cp);
-      try {
-        localStorage.removeItem("trinityone.joinedAt:" + cp);
-      } catch {
-      }
-      _forgetChurch(cp);
+      _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+      _outboxSave();
+      _leaveDelivered(cp, evt);
       return { ok: true, evt };
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)
@@ -11726,18 +11872,34 @@
       if (p.hidden) wire.hidden = true;
       const body = JSON.stringify(wire);
       const wireUnchanged = _profilePubFor === pub && _profilePubBody === body;
-      let evt = null, sent = false, lost = false;
+      let evt = null, sent = false, lost = false, queued = false;
       if (wireUnchanged) {
       } else if (known) {
         evt = finalizeEvent2({ kind: 0, created_at: Math.floor(Date.now() / 1e3), tags: [], content: body }, sk);
         sent = true;
+        {
+          const n0 = _outbox.length;
+          _outbox = _outbox.filter((o) => !(o && o.profile && o.evt && o.evt.pubkey === pub));
+          if (_outbox.length !== n0) _outboxSave();
+        }
         try {
           await _publishAny(profilePublishRelays(), evt);
         } catch (e) {
           sent = false;
           lost = true;
           console.warn("[fellowship] profile publish failed", e);
-          if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+          if (_pubReason(e) === "unconfirmed" || e && e.unsent && isConnectionFailure(e) && !isNoNetworkRelay(e)) {
+            _outbox.push({ evt, groupId: null, profile: true, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
+            _outboxSave();
+            queued = true;
+            lost = false;
+            if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
+              try {
+                if (window.trinityToast) window.trinityToast(meta && meta.hidden === true ? "Waiting for signal \u2014 you\u2019re still listed in the directory until this reaches your church." : meta && meta.hidden === false ? "Waiting for signal \u2014 you\u2019re still hidden from the directory until this reaches your church." : "Waiting for signal \u2014 your profile change will reach your church when this phone has signal.");
+              } catch (x) {
+              }
+            }
+          } else if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
             let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
             const _why = _pubReason(e);
             const _advice = _why === "not-sent" ? "It didn\u2019t leave this phone \u2014 none of your church\u2019s relays could be confirmed. Ask a steward." : _why === "refused" ? "Your church\u2019s relay refused it, so trying again won\u2019t help. Ask a steward." : "Try again when you have a signal.";
@@ -11778,6 +11940,7 @@
       }
       window.dispatchEvent(new CustomEvent("trinity-profiles", { detail: { pubkey: pub } }));
       if (lost) return null;
+      if (queued) return { queued: true, evt };
       return evt || true;
     },
     // fetch kind-0 for pubkeys we haven't resolved yet; fires 'trinity-profiles' on arrival
@@ -11799,6 +11962,8 @@
       const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
       const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);
       if (wantsEnc && !gkey) return { _refused: "nokey" };
+      if (cp && _leavingFor(cp)) return { _refused: "leaving" };
+      if (_outboxFull()) return { _refused: "queue-full" };
       if (gkey) {
         try {
           body = encrypt(content, gkey);
@@ -11814,7 +11979,7 @@
         content: body
       }, sk);
       const msgRelays = publishSetFor(cp);
-      _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...msgRelays] });
+      _outbox.push({ evt, groupId, cp: cp || "", at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
       _outboxSave();
       try {
         await _publishBounded(msgRelays, evt);
@@ -11833,6 +11998,29 @@
     joinQueued(npubOrHex) {
       const cp = toPub(npubOrHex);
       return !!(cp && _outbox.some((o) => o && o.join === cp));
+    },
+    // Is this identity leaving this church — a Leave queued and not yet delivered, or delivered this launch?
+    leaving(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _leavingFor(cp));
+    },
+    // Is the Leave still WAITING to be sent (the "Leaving…" row)? Narrower than leaving(): once delivered it is false.
+    leaveQueued(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      return !!(cp && _outbox.some((o) => o && o.leave === cp));
+    },
+    // AN EXPLICIT RE-FOLLOW ENDS A LEAVE — the only thing that does (owner 2026-10-27). followChurch calls this
+    // before it announces. A queued tombstone is withdrawn (they have changed their mind before it went), and the
+    // delivered-this-launch mark is lifted so the announce that follows is let through.
+    clearLeaving(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      if (!cp) return false;
+      const had = _leavingFor(cp);
+      if (pub) _left.delete(cp + "|" + pub);
+      const n = _outbox.length;
+      _outbox = _outbox.filter((o) => !(o && o.leave === cp));
+      if (_outbox.length !== n) _outboxSave();
+      return had;
     },
     // …and whether we GAVE UP on it. _outboxFlush moves a permanently-refused item out of _outbox and into
     // _outboxFailed, so joinQueued alone reads false in that case and the screen falls through to "has been
@@ -11966,6 +12154,7 @@
     },
     async sendDM(peerPub, content, replyTo) {
       if (!sk) await window.Fellowship.ready;
+      if (_outboxFull()) return { _refused: "queue-full" };
       const body = window.Fellowship._dmWrap(content, replyTo);
       let ciphertext;
       try {
@@ -11996,7 +12185,6 @@
             item.lastError = evt._refused.slice(0, 120);
             _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
             _outboxFailed.push(item);
-            if (_outboxFailed.length > 50) _outboxFailed.shift();
             _outboxSave();
           }
         }
@@ -14304,6 +14492,7 @@
         console.warn("[fellowship] care request publish failed", e);
         if (/update the app/i.test(String(e && e.message || ""))) return { error: "stale-app" };
         if (isNoNetworkRelay(e)) return { error: "no-network-relay" };
+        if (e && e.unsent && isConnectionFailure(e)) return { error: "no-signal" };
         return { error: _pubReason(e) };
       }
       return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };

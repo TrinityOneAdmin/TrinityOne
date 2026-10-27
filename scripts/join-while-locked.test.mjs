@@ -39,6 +39,11 @@ function lift(overrides = {}) {
     // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
     _monotonicF: (t) => t,
     _docsHubs: new Map(),   // announceMembership schedules a 500ms hub reopen on rejoin; no hub open = no-op (unstubbed it threw after the test ended)
+    // fix/stress-g2 (2026-10-27): announceMembership now asks the one leaving guard first and reads the leave
+    // generation before signing; leaveMembership queues its tombstone. The guard is the SHIPPED one (lifted below); the queue machinery is inert.
+    _leaveGen: {}, _left: new Set(), _flushing: false, _outboxFlush: async () => {}, _leaveDelivered: () => {}, _resendJoinToBoxesGainedInFlight: () => {},
+    _itemChurch: (o) => (o && (o.leave || o.join || o.cp)) || '',
+    isPermanentRefusal: (e) => /^(blocked|invalid|restricted)/i.test(String((e && e.message) || e || '')),
     _joinSent: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {},
     _publishAny: async (relays, evt) => { published.push(evt); if (scope.refuse) throw new Error(scope.refuse); return true; },
     publishSetFor: () => ['ws://x'],
@@ -58,7 +63,8 @@ function lift(overrides = {}) {
     set: (t, k, v) => { t[k] = v; return true; },
   });
   const helpers = ['function _joinSentSave', 'function _markJoinSent', 'function _clearJoinSent', 'function _joinSentFor',
-    'function _joinIntentSave', 'function _lockedPubHex', 'function _queueJoinIntent', 'function _dropJoinIntent', 'function _consumeJoinIntents']
+    'function _joinIntentSave', 'function _lockedPubHex', 'function _queueJoinIntent', 'function _dropJoinIntent', 'function _consumeJoinIntents',
+    'function _leavingFor', 'function _announceBlocked', 'function _outboxDropJoins']
     .map(a => fnBody(VENDOR, a, a)).join('\n');
   // Full signatures as anchors: a bare 'joinSent' matches `let _joinSent = {}` first and lifts an assignment.
   const methods = ['async announceMembership(npubOrHex)', 'async leaveMembership(npubOrHex)', '  joinSent(npubOrHex)', '  joinIntent(npubOrHex)', '  joinQueued(npubOrHex)']

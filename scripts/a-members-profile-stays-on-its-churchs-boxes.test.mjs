@@ -176,6 +176,10 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who })
     'let _profilePubFor = null, _profilePubBody = null;',
     'const profiles = {}; const pendingProfiles = new Set(); const _profQueue = new Set(); let _profTimer = null; const _k0Seen = new Set();',
     fnBody(src, 'function _flushProfiles', '_flushProfiles'),
+    // fix/stress-g2: setProfile replaces an older queued profile edit (and queues one with no signal). Inert here.
+    'let _outbox = []; const _outboxSave = () => {};',
+    stmt(src, 'var _CONNECTION = ', '_CONNECTION'), 'const isConnectionFailure = (e) => _CONNECTION.test(String((e && e.message) || e || ""));',
+    stmt(src, 'var isNoNetworkRelay = ', 'isNoNetworkRelay'),
   ].join('\n');
   const win = fakeWindow();
   win.Fellowship = { relays: [...relays], churchPub: activeChurch, ready: Promise.resolve() };

@@ -949,6 +949,13 @@ function App() {
       if (F.adoptInviteRelays) { try { _adoption = F.adoptInviteRelays(npub, raw); } catch (e) {} }
     }
     const alreadyFollowed = churches.find(c => c.id === npub);
+    // AN EXPLICIT FOLLOW ENDS A LEAVE — the only thing that does (owner 2026-10-27). While a Leave is queued or
+    // was delivered this launch, the engine refuses every membership announce for this church
+    // (announceMembership's guard), so this must run BEFORE any announce below. An automatic re-follow
+    // (opts.auto) is not the member choosing to come back and does not clear it.
+    let _wasLeaving = false;
+    if (!(opts && opts.auto) && F && F.clearLeaving) { try { _wasLeaving = !!F.clearLeaving(npub); } catch (e) {} }
+    if (_wasLeaving) bumpLeave(x => x + 1);
     // Marked BEFORE setActiveChurch below: the heartbeat effect runs on the render that follows it.
     if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) unconfirmedChurches.current.add(npub);
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
@@ -995,6 +1002,10 @@ function App() {
     } else if (!alreadyFollowed) {
       // Fallback when checkChurch is not available (stale bundle)
       if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
+    } else if (_wasLeaving && window.Fellowship && window.Fellowship.announceMembership) {
+      // Still on the phone because the Leave had not gone yet, and they have followed again: they are staying.
+      // The church is already confirmed (it is in the list), so announce now.
+      window.Fellowship.announceMembership(npub);
     }
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     const _stopProfile = window.Fellowship.subscribeChurchProfile(npub, (p) => {
@@ -1014,10 +1025,20 @@ function App() {
     const F = window.Fellowship;
     if (F && F.leaveMembership) {
       let told = null;
+      leavingNow.current.add(npub);
       try { told = await F.leaveMembership(npub); } catch (e) { told = null; }
+      leavingNow.current.delete(npub);
       // ⚠ `told.ok`, NEVER `if (told)`. leaveMembership answers with an OBJECT now and an object is always
       // truthy, so truth-testing it would drop the church from this phone over a tombstone nobody accepted —
       // the exact optimism audit #6 removed. (Same trap as markSafe in chunk 1.)
+      // NO SIGNAL: THE LEAVE IS QUEUED (owner 2026-10-27). The church stays on this phone, marked "Leaving…",
+      // until the tombstone is delivered — then the engine fires `trinity-left` and the listener below drops it.
+      // Not "you've left" (it has not gone), not "couldn't tell your church" (it will be told).
+      if (told && told.queued) {
+        bumpLeave(x => x + 1);
+        toast('Leaving… this will finish when you have signal.');
+        return 'queued';
+      }
       if (!(told && told.ok)) {
         // "YOU'RE STILL A MEMBER THERE" IS FALSE IN THE ONE DIRECTION THAT MATTERS. Nobody answering inside
         // the ack window is not a refusal: the tombstone is signed, on the wire, and the church may already
@@ -1039,6 +1060,39 @@ function App() {
     toast('You’ve left the church');
     return true;
   };
+  // A QUEUED LEAVE, DELIVERED LATER — this launch or a later one. leavingNow holds a church while leaveChurch is
+  // itself waiting on leaveMembership: a Leave that goes at once is reported THERE, so the listener stays quiet
+  // for it and the member is told once. leaveTick re-renders the "Leaving…" rows whenever the queue moves.
+  const leavingNow = React.useRef(new Set());
+  const [leaveTick, bumpLeave] = useA(0);
+  useAE(() => {
+    const F = window.Fellowship;
+    const offQ = (F && F.onOutbox) ? F.onOutbox(() => bumpLeave(x => x + 1)) : () => {};
+    const onLeft = (e) => {
+      const cp = e && e.detail && e.detail.cp; if (!cp) return;
+      const gone = churches.find(c => { try { return F && F.toPub && F.toPub(c.id) === cp; } catch (x) { return false; } });
+      if (!gone || leavingNow.current.has(gone.id)) return;
+      setChurches(cs => cs.filter(c => c.id !== gone.id));
+      setActiveChurch(ac => {
+        if (ac !== gone.id) return ac;
+        const rem = churches.filter(c => c.id !== gone.id);
+        const next = (rem.find(c => c.npub) || rem[0] || {}).id || null;
+        lsSet('trinityone.activeChurch', next);
+        return next;
+      });
+      toast('You’ve left the church');
+    };
+    const onRefused = (e) => {
+      const cp = e && e.detail && e.detail.cp; if (!cp) return;
+      const c = churches.find(x => { try { return F && F.toPub && F.toPub(x.id) === cp; } catch (y) { return false; } });
+      if (!c || leavingNow.current.has(c.id)) return;   // leaveChurch reports its own refusal
+      bumpLeave(x => x + 1);
+      toast('Your church refused the Leave — you’re still a member there. Ask a steward.', { error: true });
+    };
+    window.addEventListener('trinity-left', onLeft);
+    window.addEventListener('trinity-leave-refused', onRefused);
+    return () => { try { offQ(); } catch (x) {} window.removeEventListener('trinity-left', onLeft); window.removeEventListener('trinity-leave-refused', onRefused); };
+  }, [churches]);
   // membership heartbeat: refresh the member event on launch so quiet members (who read but never
   // post) don't look inactive, and so an uninstalled app stops refreshing and ages out. Throttled ~12h.
   useAE(() => {
@@ -2267,6 +2321,8 @@ function App() {
     addChurch: (c) => { setChurches(cs => cs.find(x => x.id === c.id) ? cs : [...cs, c]); setActiveChurch(c.id); lsSet('trinityone.activeChurch', c.id); },
     followChurch,   // follow a real church by npub (from a scanned/pasted invite); false if invalid
     leaveChurch,    // leave a church: tombstone membership + unfollow locally
+    // the church's Leave is queued, waiting for signal: its row says "Leaving…" and offers no second Leave
+    leaveQueued: (id) => { void leaveTick; try { return !!(window.Fellowship && window.Fellowship.leaveQueued && window.Fellowship.leaveQueued(id)); } catch (e) { return false; } },
     activeChurchId: activeChurch,
     // ---- user-owned data: everything routes through window.MyData (local now, Nostr later) ----
     myData: MD,

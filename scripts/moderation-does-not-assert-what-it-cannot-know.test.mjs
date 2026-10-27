@@ -25,7 +25,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody, stripComments } from './test-slice.mjs';
+import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const SHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
@@ -131,6 +131,12 @@ function leaveWriter(mode, { locked = false, intent = false } = {}) {
       throw err;
     },
     _pubReason: new Function(fnBody(SHIP, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')(),
+    // fix/stress-g2 (2026-10-27): the tombstone is queued first (the queued entry is the "leaving" mark) and the
+    // church's queued posts are sent ahead of it. Inert here — an empty queue and a flush that sends nothing — so
+    // the one publish these tests read is still the tombstone's. isPermanentRefusal is the shipped one.
+    _leaveGen: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {}, _flushing: false, _outboxFlush: async () => {},
+    _itemChurch: (o) => (o && (o.leave || o.join || o.cp)) || '', _leaveDelivered: () => {}, _outboxDropJoins: () => false,
+    isPermanentRefusal: new Function(stmt(SHIP, 'var _PERMANENT = ', '_PERMANENT') + '\n' + stmt(SHIP, 'var isPermanentRefusal = ', 'isPermanentRefusal') + '\nreturn isPermanentRefusal;')(),
     String, JSON, Date, Math, Number, Array, Object, Boolean, console, Promise,
   };
   const proxy = new Proxy(scope, {
@@ -194,6 +200,7 @@ function leaveScreen(result) {
     setActiveChurch: () => {},
     lsSet: () => {},
     toast: (m, o) => toasts.push(String(m)),
+    leavingNow: { current: new Set() }, bumpLeave: () => {},   // fix/stress-g2: the queued-Leave bookkeeping
     window: { Fellowship: { leaveMembership: async () => { if (result instanceof Error) throw result; return result; } } },
     String, JSON, Date, Math, Number, Array, Object, Boolean, console, Promise,
   };

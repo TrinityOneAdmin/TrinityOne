@@ -1529,7 +1529,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
               if (needFull && !twoWords(name)) return;
               setEdit(false);
               Promise.resolve(onSave({ name: name.trim(), avatar: av }))
-                .then((ok) => (ok ? ctx.toast('Profile saved') : ctx.toast('Couldn’t save your profile — your church still sees the old name. Try again.', { error: true })))
+                .then((ok) => (ok && ok.queued ? null /* queued: the engine has said it is waiting (setProfile) */ : ok ? ctx.toast('Profile saved') : ctx.toast('Couldn’t save your profile — your church still sees the old name. Try again.', { error: true })))
                 .catch(() => ctx.toast('Couldn’t save your profile — try again.', { error: true }));
             }} disabled={needFull && !twoWords(name)} style={{
               border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', padding: '9px 16px', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: (needFull && !twoWords(name)) ? 0.5 : 1 }}>Save</button>

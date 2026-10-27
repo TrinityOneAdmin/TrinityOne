@@ -254,6 +254,8 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
             {churches.map(c => {
               const on = c.id === activeId;
               const followed = !!c.npub;   // a real followed church (vs a built-in/sample) can be left
+              // A Leave tapped with no signal is queued: the church stays here until it is delivered (owner 2026-10-27)
+              const _leaving = !!(followed && ctx && ctx.leaveQueued && ctx.leaveQueued(c.id));
               return (
                 <div key={c.id} style={{
                   display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18,
@@ -269,7 +271,7 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
                         {c.verified ? <Icon name="check" size={14} stroke={3} color="var(--sage)" /> : null}
                       </div>
                       {c.tagline ? <div style={{ fontFamily: 'var(--font-read)', fontSize: 13.5, color: 'var(--ink-2)', fontStyle: 'italic', lineHeight: 1.35, marginTop: 1 }}>“{c.tagline}”</div> : null}
-                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> {c.members === 1 ? 'member' : 'members'}</React.Fragment>}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5 }}>{_leaving ? 'Leaving… will finish when you have signal' : c.kind === 'network' ? 'A network of churches' : <React.Fragment><b style={{ color: 'var(--ink-2)' }}>{c.members}</b> {c.members === 1 ? 'member' : 'members'}</React.Fragment>}</div>
                     </div>
                   </div>
                   {/* LEAVING IS NOT A TOGGLE. This was two taps of the SAME small button — Leave, then Confirm
@@ -278,7 +280,7 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
                       with it, with no warning of either. Leaving is also not symmetrical with joining: he then
                       could not get back in. So: a real dialog, naming what goes, in the middle of the screen
                       rather than under the finger that just tapped Leave. */}
-                  {followed ? (
+                  {followed && !_leaving ? (
                     <button onClick={() => setConfirmLeave(c.id)} title="Leave this church" style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 12.5, padding: '7px 11px', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
                   ) : (on ? <div style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="check" size={15} stroke={2.8} color="var(--on-clay)" /></div>
                     : <div style={{ width: 24, height: 24, borderRadius: 999, border: '2px solid var(--line)', flexShrink: 0 }} />)}

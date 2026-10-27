@@ -831,6 +831,7 @@ test('a chat message the gate could not publish stays in the outbox and burns no
     stmt(src, 'var isConnectionFailure = ', 'isConnectionFailure'),
     stmt(src, 'var isRateLimited = ', 'isRateLimited'),
     stmt(src, 'var MAX_TRIES = ', 'MAX_TRIES'),
+    fnBody(src, 'function _itemChurch', '_itemChurch'),   // fix/stress-g2: the flush asks which church an item belongs to
     fnBody(src, 'async function _outboxFlush', '_outboxFlush'),
   ].join('\n');
   assert.match(body, /isConnectionFailure\(e2\) \|\| isNoNetworkRelay\(e2\)/,

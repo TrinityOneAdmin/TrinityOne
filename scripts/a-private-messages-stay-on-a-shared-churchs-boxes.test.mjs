@@ -181,6 +181,10 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     'const _dmPlain = new Map(); let _outbox = []; let _outboxFailed = []; const _outboxSubs = new Set();',
     fnBody(src, 'function _outboxLoad', '_outboxLoad'),
     fnBody(src, 'function _outboxSave', '_outboxSave'),
+    // fix/stress-g2: sendDM refuses a NEW message when the queue is full; the flush and _outboxRelays ask which
+    // church an item belongs to (a DM: none). Both SHIPPED.
+    fnBody(src, 'function _outboxFull', '_outboxFull'),
+    fnBody(src, 'function _itemChurch', '_itemChurch'),
     '_outboxLoad();',
     'let _flushing = false;',
     stmt(src, 'var _CONNECTION = ', '_CONNECTION'),

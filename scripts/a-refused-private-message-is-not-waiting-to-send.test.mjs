@@ -55,6 +55,7 @@ function engine({ publishError }) {
   scope._PERMANENT = new Function(stmt(BUNDLE, 'var _PERMANENT =', '_PERMANENT').replace(/^var /, 'return ').replace(/;\s*$/, ''))();
   scope.isPermanentRefusal = new Function('_PERMANENT', stmt(BUNDLE, 'var isPermanentRefusal =', 'isPermanentRefusal').replace(/^var /, 'return ').replace(/;\s*$/, ''))(scope._PERMANENT);
   scope._outboxSave = lift(fnBody(BUNDLE, 'function _outboxSave() {', '_outboxSave'), '_outboxSave', scope);
+  scope._outboxFull = lift(fnBody(BUNDLE, 'function _outboxFull() {', '_outboxFull'), '_outboxFull', scope);   // G2 2.3: sendDM refuses a NEW message when the queue is full
   const F = {
     relays: ['wss://x.invalid'], ready: Promise.resolve(), myPubkey: 'a'.repeat(64),
     _dmWrap: new Function(fnBody(BUNDLE, '_dmWrap(text, replyTo, meta) {', '_dmWrap').replace(/^_dmWrap/, 'return function _dmWrap'))(),
