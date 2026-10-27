@@ -71,6 +71,12 @@ could not install at all. Server boxes now default to
 `--dry` does everything but the upload. An `-rc` tag is a prerelease, which `latest` ignores — a box only
 gets it by naming `…/releases/download/<tag>` as its `--src`.
 
+**Upgrade order: shared servers FIRST.** Upgrade the shared servers before any church switches on its own box.
+A shared server on a build before the church-label fix (fix/server-church-label) files a member's DMs under their
+first church and syncs them to that church's box. While old and new relays are paired, the old side also re-fetches
+some members' join docs on every sync pass until it is upgraded (harmless, but wasted work). The first start on the
+new build re-files old rows once (`relabel:church-label-v1` in the store's meta table).
+
 ## Signing keys — BACK THESE UP (loss is unrecoverable)
 
 Two irreplaceable secrets live **only** on the dev/release box (both gitignored, disk-only). If either is

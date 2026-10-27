@@ -35,6 +35,8 @@ const setup = async (name) => {
   return [s, t];
 };
 const ev = {};
+const RELABEL_META = 'relabel:church-label-v1';   // scripts/gateway.mjs
+const RELABELLED = {};
 
 before(async () => {
   [S, T] = await setup('p');
@@ -96,10 +98,12 @@ test('5. startup relabel repairs rows filed under the old wrong church', async (
     reactBob: finalizeEvent({ kind: 7, created_at: at(), tags: [['e', 'd'.repeat(64)], ['p', bob.pub], ['t', 'trinityone'], ['k', '4']], content: '+' }, sarah.sk) };
   e.tomA = member(tom, A);
   await H.publishAll(S2, [e.tomA, e.sarahA, e.sarahB, e.bobB, e.dmTom, e.dmB, e.reactBob]);
-  // stop S2 and put the OLD wrong label back, as a relay that ran the previous build would have written it
+  // stop S2 and put the OLD wrong label back, as a relay that ran the previous build would have written it. A store
+  // from before the one-time relabel has no RELABEL_META key either, so remove the one S2's first start wrote.
   S2.proc.kill('SIGKILL'); await new Promise(r => S2.proc.once('exit', r));
   const db = new DatabaseSync(join(S2.dataDir, 'relay.sqlite'));
   try {
+    assert.equal(db.prepare('DELETE FROM meta WHERE k = ?').run(RELABEL_META).changes, 1, 'CONTROL: a store started on this build has the one-time key');
     for (const id of [e.sarahB.id, e.dmB.id, e.reactBob.id]) db.prepare('UPDATE events SET church = ? WHERE id = ?').run(A.pub, id);
     assert.equal(db.prepare('SELECT church FROM events WHERE id = ?').get(e.dmB.id).church, A.pub, 'CONTROL: the wrong label is in place');
   } finally { db.close(); }
@@ -120,6 +124,44 @@ test('5. startup relabel repairs rows filed under the old wrong church', async (
   assert.equal(holds(T2, e.dmTom.id), true, 'CONTROL: A traffic synced');
   assert.equal(holds(T2, e.sarahB.id), false);
   assert.equal(holds(T2, e.dmB.id), false);
+  RELABELLED.S = S3; RELABELLED.e = e;
+});
+
+test('7. the relabel runs ONCE per store: a second restart changes nothing, and keeps a label both people still share', async () => {
+  const S3 = RELABELLED.S, e = RELABELLED.e;
+  assert.ok(S3 && e, 'CONTROL: test 5 ran first');
+  const dmTomBob = dm(tom, bob);   // Tom (A only) and Bob (B only) share no church: filed under ''
+  await H.publishAll(S3, [dmTomBob]);
+  S3.proc.kill('SIGKILL'); await new Promise(r => S3.proc.once('exit', r));
+  const db = new DatabaseSync(join(S3.dataDir, 'relay.sqlite'));
+  try {
+    assert.ok(db.prepare('SELECT v FROM meta WHERE k = ?').get(RELABEL_META), 'CONTROL: the one-time relabel recorded itself');
+    // a wrong label put back AFTER the one-time pass: the restart must leave it (the pass does not run again)
+    db.prepare('UPDATE events SET church = ? WHERE id = ?').run(A.pub, e.dmB.id);
+    assert.equal(db.prepare('SELECT church FROM events WHERE id = ?').get(dmTomBob.id).church, '', 'CONTROL: a pair sharing no church is filed under ""');
+  } finally { db.close(); }
+  const S4 = await H.moveRelay(S3);
+  const a = await exportIds(S4, A), b = await exportIds(S4, B);
+  assert.equal(a.has(e.dmB.id), true, 'the second restart re-ran the relabel (moved the row back to B)');
+  assert.equal(b.has(e.sarahB.id), true, 'CONTROL: the first pass\'s result is still in place');
+  // ...and on a pre-fix store the one-time pass KEEPS a label that names a church both people still share,
+  // while still moving one that names a church the peer is not in.
+  const dmSD = dm(sarah, dave), dmST = dm(sarah, tom);   // Sarah (A,B) <-> Dave (A,B): A and B both shared
+  const notPick = [A.pub, B.pub].sort()[1];   // live rule files dmSD under the OTHER one
+  await H.publishAll(S4, [member(dave, A), member(dave, B), dmSD, dmST]);
+  S4.proc.kill('SIGKILL'); await new Promise(r => S4.proc.once('exit', r));
+  const db2 = new DatabaseSync(join(S4.dataDir, 'relay.sqlite'));
+  try {
+    db2.prepare('DELETE FROM meta WHERE k = ?').run(RELABEL_META);
+    db2.prepare('UPDATE events SET church = ? WHERE id = ?').run(notPick, dmSD.id);   // shared, but not the smallest-pubkey rule's pick
+    db2.prepare('UPDATE events SET church = ? WHERE id = ?').run(B.pub, dmST.id);   // Tom is not in B
+  } finally { db2.close(); }
+  const S5 = await H.moveRelay(S4);
+  const a5 = await exportIds(S5, A), b5 = await exportIds(S5, B);
+  assert.equal((notPick === A.pub ? a5 : b5).has(dmSD.id), true, 'a label naming a church both people still belong to is kept');
+  assert.equal((notPick === A.pub ? b5 : a5).has(dmSD.id), false, 'and not moved to the smallest-pubkey pick');
+  assert.equal(b5.has(dmST.id), false, 'a label naming a church the peer is not in is moved');
+  assert.equal(a5.has(dmST.id), true, 'CONTROL: ...to the church they share');
 });
 
 test('6. a DM reaction follows its peer: Sarah\'s reaction to Bob (B) is B\'s, her reaction to Tom (A) is A\'s', async () => {

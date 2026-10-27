@@ -348,8 +348,9 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
     return n;
   }
 
-  // re-resolve the church column of rows that ALREADY have one (reattribute only visits ''). resolveFn returns null
-  // for a row it does not want revisited, else the church ('' allowed); the column is rewritten only when it differs.
+  // re-resolve the church column of rows that ALREADY have one (reattribute only visits ''). resolveFn(event, current)
+  // gets the row's CURRENT label as its second argument and returns null for a row it does not want revisited, else
+  // the church ('' allowed); the column is rewritten only when it differs.
   // Returns { changed, scanned }: scanned = rows the SQL handed back (what was JSON-parsed), so a caller or test can
   // see that the filter worked.
   // SQL filters kind-30078 rows by d-tag range [prefix, prefix with its last char bumped), so raw is never
@@ -374,7 +375,7 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
         scanned++;
         if (r.kind === 30078 && !dtagPrefixes.some(p => String(r.dtag || '').startsWith(p))) continue;
         let e; try { e = JSON.parse(r.raw); } catch { continue; }
-        const ch = resolveFn(e);
+        const ch = resolveFn(e, r.church);
         if (ch === null || ch === undefined || ch === r.church) continue;
         updChurch.run(ch, r.id); changed++;
       }
