@@ -20,11 +20,11 @@ import { normalizeURL } from 'nostr-tools/utils';
 import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
-import { verifyRelayIdentity } from './relay-identity.src.js';
+import { verifyRelayIdentity, relayAddrKey } from './relay-identity.src.js';
 // …and then decide whether the key it proved is one this church's network contains, and write the document
 // that says so. Shared with the member app so both surfaces answer that question the same way.
 // …and C4's gate, which is what keeps this church's documents off a relay that cannot prove itself.
-import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay, createRelayGate } from './relay-net.src.js';
+import { RELAY_NET_D, CANONICAL_RELAY_PUBS, parseRelayNet, isNetworkRelay as _isNetworkRelay, createRelayGate, sharedRelayKeys as _sharedRelayKeys } from './relay-net.src.js';
 import { finalizeEvent, getPublicKey, generateSecretKey } from 'nostr-tools/pure';
 // Subpath imports, matching src/identity.src.js — the wordlist is needed to CHECKSUM a restored church phrase
 // (see restoreKey). Twelve arbitrary words otherwise derive a valid-looking key over the wreckage of the real one.
@@ -5017,6 +5017,56 @@ function isNetworkRelay(cp, url) {
   });
 }
 
+// ── RELAY LABEL: "Self-hosted" / "Shared" / "Added" from the PROVEN identity, never the page address ──────
+//
+// DISPLAY ONLY. Nothing here admits a relay, schedules a proof, opens a socket, or changes what relays()
+// returns — it reads an answer the C4 gate already computed and reports it on the Relays card. The old pill
+// decided Self-hosted vs Shared with `r.url.includes(location.host)`: a string test against the address the
+// CONSOLE happened to be served from, not the relay's identity. So the one physical box reached at two
+// addresses showed one label at each, and a SHARED community relay served at the console's own address was
+// labelled "Self-hosted". The label now follows the identity key the box PROVED (relayAddrKey-keyed, from the
+// gate's verified cache), so two addresses of one box agree and canonical is never mistaken for own.
+
+// The relay identity key PROVED at `url`, read synchronously from the C4 gate's verified-identity cache
+// (`rememberVerified`: the nonce-bound `/relay-identity` proof — see src/relay-net.src.js and
+// reference/RELAY-ADMISSION.md). '' when nothing has proved itself at this address yet. It NEVER reads
+// `relayPub` from `/status` or NIP-11: that string is unauthenticated and is not proof (RELAY-ADMISSION.md
+// hard rule). Keyed exactly as the gate keys the cache, with the same raw-string fallback as `_relayKey`.
+function provenRelayPub(url) {
+  let k;
+  try { k = relayAddrKey(String(url || '')); } catch { k = String(url || ''); }
+  try {
+    const e = _gate && _gate._map && _gate._map.get(k);
+    return (e && e.pub) ? String(e.pub).toLowerCase() : '';
+  } catch (e) { return ''; }
+}
+
+// PURE classifier, exported into the console bundle so a test can import vendor/steward.js and RUN it
+// (CLAUDE.md rule 3: app/*.jsx ships unbundled, so a text-match on the pill would pass even if deleted).
+// `info`:
+//   pub              — the relay's PROVEN identity key (from provenRelayPub); '' / non-hex = not proved yet.
+//   isLoopbackOrigin — this row IS the console's own loopback-served origin box (the desktop Suite); the
+//                      origin root, URL-bound by construction exactly as proveRelay's origin root is.
+//   canonicalKeys    — the shipped SHARED community relay keys (SHARED_RELAY_KEYS, via sharedRelayKeys()).
+//   churchEntryPubs  — the pubkeys the church has SIGNED into its relay-net document (own/added boxes).
+//
+// PRECEDENCE (audit 2026-10-27): canonical key → 'shared' FIRST; else loopback-origin → 'self'; else a
+// church-signed key → 'self'; else 'neutral'. Canonical is checked first so a canonical relay the console is
+// served FROM (app.trinityone.church) reads 'shared', not 'self'. Loopback-origin comes BEFORE the signed
+// list because enrolment effectively never runs, so a real own box is usually absent from the document and
+// the loopback-origin signal is the only thing that catches it.
+function classifyRelay(info) {
+  const o = info || {};
+  const pub = String(o.pub || '').toLowerCase();
+  const isHex = /^[0-9a-f]{64}$/.test(pub);
+  const canon = (Array.isArray(o.canonicalKeys) ? o.canonicalKeys : []).map(k => String(k).toLowerCase());
+  if (isHex && canon.includes(pub)) return 'shared';
+  if (o.isLoopbackOrigin) return 'self';
+  const entries = (Array.isArray(o.churchEntryPubs) ? o.churchEntryPubs : []).map(k => String(k).toLowerCase());
+  if (isHex && entries.includes(pub)) return 'self';
+  return 'neutral';
+}
+
 // One-shot read per d-tag, keeping TWO events per document: the newest we wrote (`ours`) and the newest from
 // anyone at all (`top`). Both are needed because a replaceable event is keyed by (pubkey, kind, d), so the
 // church's copy of a member's clearance and a steward's copy are separate documents that never collide — and
@@ -5893,6 +5943,11 @@ window.Steward = {
   // deadlock rule above enrolRelayNet.
   relayNet: relayNetEntries,
   relayNetCandidates,
+  // RELAY LABEL (display only): the proven identity per address, the shipped shared keys, and the pure
+  // classifier the Relays card renders its pill from. None of these admit a relay or change routing.
+  provenRelayPub,
+  classifyRelay,
+  sharedRelayKeys() { return _sharedRelayKeys(CANONICAL_RELAY_PUBS); },
   // Signs the boxes this console can prove into the church's own membership document. Additive: it never
   // drops an entry that is merely unreachable.
   //
