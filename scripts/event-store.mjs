@@ -310,6 +310,11 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // (like exportChurch) — NOT via a #church filter, which matchFilter would wrongly narrow to tag-carrying events.
   const qExportChurchSince = db.prepare('SELECT raw FROM events WHERE church = ? AND created_at >= ? ORDER BY created_at ASC');
   function exportChurchSince(cp, since) { const out = []; for (const r of qExportChurchSince.all(cp, since || 0)) { try { out.push(JSON.parse(r.raw)); } catch {} } return out; }
+  // PAGED form of the above, for the cursor pull's `limit=` mode: strictly AFTER the (created_at, id) position
+  // (afterTs, afterId), oldest-first with id as the tie-break so a page boundary inside a run of equal
+  // created_at never loses or repeats a row. Row-value comparison; served by idx_church_created.
+  const qExportChurchPage = db.prepare('SELECT id, created_at, raw FROM events WHERE church = ? AND (created_at, id) > (?, ?) ORDER BY created_at ASC, id ASC LIMIT ?');
+  function exportChurchPage(cp, afterTs, afterId, limit) { const out = []; for (const r of qExportChurchPage.all(cp, afterTs || 0, afterId || '', limit)) { try { out.push({ id: r.id, created_at: r.created_at, event: JSON.parse(r.raw) }); } catch {} } return out; }
   // negentropy resync: just the event IDs a church holds (for bucketed set-difference), and the raw events for a
   // given ID list (to pull only the true difference). Cheap ID-only scan; the events fetch is bounded by the caller.
   const qChurchIds = db.prepare('SELECT id FROM events WHERE church = ?');
@@ -452,5 +457,11 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
   // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
   const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
-  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
+  // Make everything stored so far survive a POWER CUT. WAL + synchronous=NORMAL fsyncs the WAL only at a checkpoint, so
+  // a row put() just stored can vanish on power loss. A caller about to persist a resume cursor that says "everything
+  // up to here is held" must call this first, or the cursor can outlive the rows. (Not checkpoint() above: that one
+  // calls db.pragma(), which node:sqlite's DatabaseSync does not have, so it has never done anything.) PASSIVE never
+  // waits for readers; it still syncs the WAL first. Returns {busy, log, checkpointed} or null on failure.
+  const flushDurable = () => { try { const r = db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get(); return { busy: r.busy, log: r.log, checkpointed: r.checkpointed }; } catch (e) { return null; } };
+  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, exportChurchPage, flushDurable, churchEventIds, syncEventsByIds, cull, reattribute, relabel, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
 }
