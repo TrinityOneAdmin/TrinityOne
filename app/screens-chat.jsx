@@ -970,6 +970,24 @@ function shareTextOf(m) {
   if (m.kind === 'poll' && m.poll) return '📊 ' + (m.poll.question || 'Poll');
   return '';
 }
+// Keep an open message-actions menu on the screen. The menu pins its NEAR edge to the ⋯ button's side (the
+// bubble's inner edge, via left:'100%' / right:'100%') and grows INWARD toward the centre, so its near edge
+// can never leave the viewport. But a bubble that is itself almost full width puts that inner edge close to
+// the FAR gutter, and a 150–240px card can then run its far edge past the opposite screen edge. There is no
+// pure-CSS way to measure that offset, so once the card has mounted we read its box and, if it overflows,
+// slide it back horizontally with a transform (right overflow first, then guard the left edge). Used by both
+// Row and DMSwipe. The render-jsx-screen unit harness has no layout engine and never invokes element refs,
+// so this is inert there; it runs in a real browser and on device, which is where the clamp must be checked.
+function clampMenuIntoView(el) {
+  if (!el || typeof el.getBoundingClientRect !== 'function' || typeof window === 'undefined') return;
+  el.style.transform = '';                                                   // measure the un-nudged CSS position
+  var vw = window.innerWidth || (window.document && window.document.documentElement && window.document.documentElement.clientWidth) || 0;
+  if (!vw) return;
+  var pad = 6, r = el.getBoundingClientRect(), dx = 0;
+  if (r.right > vw - pad) dx = (vw - pad) - r.right;                         // far edge past the right gutter → slide left
+  if (r.left + dx < pad) dx = pad - r.left;                                  // …but never past the left gutter
+  if (dx) el.style.transform = 'translateX(' + Math.round(dx) + 'px)';
+}
 function Row({ me, m, children, ctx, mod }) {
   const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
   const canDM = !!(m.pubkey && ctx && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));   // safeguarding gate
@@ -1055,11 +1073,17 @@ function Row({ me, m, children, ctx, mod }) {
                 selected; once is enough.
                 `top: 100%` opens it BELOW the bubble (and below the reaction chips, which are inside this
                 column too), so the message stays readable and the menu overlaps only the message after it.
-                It is anchored to the bubble edge the dots sit on — right for my own messages, left for
-                everyone else's — which is also what keeps it on a narrow screen: a menu wider than its
-                bubble can then only grow INWARD, toward the middle of the screen, never off the edge. */}
+                Its NEAR edge is pinned to the side the ⋯ button sits on — the bubble's INNER edge (`left:'100%'`
+                for everyone else's message, whose dots are at the bubble's right edge; `right:'100%'` for my
+                own, whose dots are at the left edge) — so the card hangs FROM the button instead of dropping
+                to the opposite corner (Oppo report: the menu looked detached, below-and-to-the-far-side). It
+                grows from that near edge INWARD toward the centre, so the near edge can never leave the
+                screen. A bubble that is itself almost full width can still push the menu's FAR edge past the
+                opposite gutter, so `clampMenuIntoView` (the ref) measures the mounted card and slides it back
+                on-screen. The unit harness has no layout engine and never runs that ref — the horizontal
+                clamp is a device/browser check. */}
             {M.menuOpen ? (
-              <div data-msg-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div data-msg-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
                     · not my own message (replying privately to yourself is nonsense), and
@@ -2245,9 +2269,12 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
           {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
             justifyContent: 'center', boxShadow: 'var(--shadow)' })}><Icon name="dots" size={15} /></button>
-        {/* below the bubble, anchored to the side the dots are on — see the long note in Row */}
+        {/* below the bubble, its NEAR edge pinned to the side the dots actually sit on (the bubble's inner
+            edge: left:'100%' for the other person, right:'100%' for mine), growing inward and clamped back
+            on-screen by clampMenuIntoView — see the long note in Row. Until now this read `[…]: 0`, which hung
+            the card off the OPPOSITE corner from the ⋯, the same detached-menu defect Row carried. */}
         {menuOpen ? (
-          <div data-dm-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
+          <div data-dm-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
             borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
               padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>

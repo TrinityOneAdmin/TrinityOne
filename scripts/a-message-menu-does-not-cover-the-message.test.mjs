@@ -133,20 +133,44 @@ test('THE ROOM MENU OPENS BELOW THE BUBBLE, NOT ACROSS IT', () => {
   assert.notEqual(s.top, 18, 'the menu is back at the offset that covered the bubble');
 });
 
-test('…anchored to the LEFT edge for someone else’s message and the RIGHT edge for my own', () => {
-  const a = room();
-  dots(a())[0].props.onClick();
-  const theirs = menuCard(a())[0].props.style;
-  assert.equal(theirs.left, 0, 'an incoming message opens its menu from the wrong edge');
-  assert.equal(theirs.right, undefined);
+// The DEFECT this replaces: the ⋯ button hangs off the bubble's INNER edge (style.left:-30 for my own
+// message, style.right:-30 for everyone else's), but the menu used to open from the OPPOSITE edge (right:0 /
+// left:0), so after you tapped the ⋯ the card dropped to the far corner and looked detached (Oppo report).
+// The fix pins the menu's NEAR edge to the button's side — the bubble's inner edge, left:'100%' for the other
+// person (dots at the bubble's right edge), right:'100%' for mine (dots at the left edge) — so it hangs FROM
+// the ⋯. We read both the button and the card from the rendered tree and assert they land on the same
+// physical side. (The viewport clamp for an almost-full-width bubble is a browser/device check — see the two
+// BROWSER tests below and the note in Row; there is no layout engine here.)
+//
+// Which physical side a style sits on: the ⋯ uses left/right:-30; the menu pins its near edge with
+// left/right:'100%' (near edge at the bubble's OPPOSITE css edge) or, in the old code, 0.
+const sideOfDots = (s) => (s.right !== undefined ? 'right' : s.left !== undefined ? 'left' : null);
+const sideOfMenu = (s) => (s.left === '100%' ? 'right' : s.right === '100%' ? 'left'
+  : s.left === 0 ? 'left' : s.right === 0 ? 'right' : null);
 
+test('the menu hangs from the SAME side as the ⋯ button — someone else’s message and my own', () => {
+  // someone else's message (dots[0]): ⋯ at the bubble's RIGHT edge → menu must hang RIGHT too.
+  const a = room();
+  const theirDots = dots(a())[0];
+  theirDots.props.onClick();
+  const theirs = menuCard(a())[0].props.style;
+  assert.equal(sideOfMenu(theirs), sideOfDots(theirDots.props.style),
+    'an incoming message drops its menu to the OPPOSITE corner from its ⋯ button');
+  assert.equal(theirs.left, '100%',
+    'the menu is not pinned to the ⋯ button’s (inner) edge — it still opens from the far edge of the bubble');
+  assert.equal(theirs.right, undefined);
+  assert.equal(theirs.top, '100%', 'the menu no longer opens BELOW the bubble, so it can cover the message');
+
+  // my own message (dots[1]): ⋯ at the bubble's LEFT edge → menu must hang LEFT too.
   const b = room();
-  dots(b())[1].props.onClick();
+  const myDots = dots(b())[1];
+  myDots.props.onClick();
   const own = menuCard(b())[0].props.style;
-  assert.equal(own.right, 0,
-    'my own message hangs its menu off the LEFT edge of a RIGHT-aligned bubble, which pushes the card '
-    + 'toward the screen edge on a narrow phone');
+  assert.equal(sideOfMenu(own), sideOfDots(myDots.props.style),
+    'my own message drops its menu to the OPPOSITE corner from its ⋯ button');
+  assert.equal(own.right, '100%', 'my own menu is not pinned to the ⋯ button’s (inner) edge');
   assert.equal(own.left, undefined);
+  assert.equal(own.top, '100%', 'my own menu no longer opens BELOW the bubble');
 });
 
 test('the menu is bounded in width, so a long item cannot stretch it off a narrow screen', () => {
