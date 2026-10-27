@@ -1839,7 +1839,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           `position: fixed/absolute; inset: 0` — nesting GroupInfo there would clip the whole panel to the
           thin header strip. Kept a sibling so it fills the screen; the header's tap only flips `infoOpen`. */}
       <GroupInfo group={group} open={infoOpen} onClose={() => setInfoOpen(false)} ctx={ctx} />
-      {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
+      {composeEvt && calFeatOn ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
 
       {/* WHO SPEAKS IN THIS ROOM, SAID ONCE, AT THE TOP. Hiding the composer is not an explanation: a
           member tapped in, found nowhere to type and was left to guess whether the room was broken, whether
@@ -2013,7 +2013,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                   <button key={f.id} onClick={() => { setFlag(on ? null : f); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: on ? 'color-mix(in oklab, ' + ac + ' 14%, var(--surface))' : 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name={f.icon} size={18} color={ac} fill={on} /> {f.label}{on ? ' · on' : ''}</button>
                 ); })}
                 <button onClick={() => { setPollOpen(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="sliders" size={18} color="var(--clay)" /> Poll</button>
-                {canAddEvent ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
+                {canAddEvent && calFeatOn ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
               </div>
             ) : null}
           </div>

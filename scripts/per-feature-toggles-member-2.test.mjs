@@ -36,7 +36,9 @@ const vis = (n, out = []) => {
 
 // ═══ calendar — the in-group events card + EVENT button (app/screens-chat.jsx ChatRoom) ═════════════════════
 const EVS = [{ id: 'e1', title: 'Pizza night', date: '2026-10-04', time: '18:00', groupId: 'g1', accent: '#888' }];
-function room({ features = {}, events = EVS, canAdd = false } = {}) {
+// a re-renderable mount — hook state survives across draws, so a popover opened by a click is seen on the next
+// draw (miniReact keeps each component's hook store across re-renders of the same tree shape).
+function mkRoom({ features = {}, events = EVS, canAdd = false } = {}) {
   const { React, draw } = miniReact();
   const group = { id: 'g1', name: 'Youth', kind: 'Group', accent: '#888' };
   const Fellowship = {
@@ -62,9 +64,11 @@ function room({ features = {}, events = EVS, canAdd = false } = {}) {
   const ctx = { toast() {}, church: { npub: 'npub1church', name: 'St Aidan', id: 'c1', features }, myLeaderGroups: [], churchEvents: events,
     safeguard: {}, myPubkey: 'me', openDM() {}, canDMPeer: () => true, connTick: 0,
     joinState: { loaded: true, isPending: false, removed: false, offline: false } };
-  return draw(mod.ChatRoom, { group, open: true, onClose() {}, ctx, docked: true });
+  return { ctx, render: () => draw(mod.ChatRoom, { group, open: true, onClose() {}, ctx, docked: true }) };
 }
+const room = (opts) => mkRoom(opts).render();
 const eventBtn = (t) => find(t, n => n.type === 'button' && vis(n).join('').trim() === 'EVENT');
+const btnByText = (t, label) => find(t, n => n.type === 'button' && vis(n).join('').trim() === label);
 
 test('calendar ON: the in-group events card shows', () => {
   assert.match(allText(room({ features: {} })), /UPCOMING IN THIS GROUP/, 're-anchor: the events card is gone even with calendar on');
@@ -80,6 +84,41 @@ test('calendar ON + leader: the "EVENT" compose button is offered', () => {
 test('calendar OFF: a leader is NOT offered the "EVENT" compose button', () => {
   assert.equal(eventBtn(room({ features: { calendar: false }, events: [], canAdd: true })).length, 0,
     'features.calendar === false but the create-event button is still offered in group chat');
+});
+
+// The OTHER create-event path the re-audit found: the message composer "+" actions popover → "New event",
+// and the GroupEventComposer it mounts. The card's "EVENT" button is not the only door. Drive the popover
+// OPEN (the earlier tests never did), then look for the item and the mounted composer ("Post event" is unique
+// to GroupEventComposer; the popover item is a <button> whose visible text is "New event").
+const openActions = (d) => {   // click the composer "+" ("More options") and re-render so the popover is in the tree
+  const more = find(d.render(), n => n.type === 'button' && n.props && n.props['aria-label'] === 'More options');
+  assert.equal(more.length, 1, 're-anchor: the composer "+" (More options) button is not on the room');
+  more[0].props.onClick();
+  return d.render();
+};
+test('calendar ON + leader: the "+" popover offers "New event" and it mounts the composer', () => {
+  const d = mkRoom({ features: {}, events: [], canAdd: true });
+  const t = openActions(d);
+  assert.equal(btnByText(t, 'New event').length, 1, 're-anchor: the "+" popover has no "New event" item with calendar on');
+  btnByText(t, 'New event')[0].props.onClick();
+  assert.equal(btnByText(d.render(), 'Post event').length, 1, 're-anchor: tapping "New event" did not mount the GroupEventComposer with calendar on');
+});
+test('calendar OFF: the "+" popover has NO "New event" item and the composer cannot mount', () => {
+  const d = mkRoom({ features: { calendar: false }, events: [], canAdd: true });
+  const t = openActions(d);
+  assert.equal(btnByText(t, 'New event').length, 0,
+    'features.calendar === false but the "+" actions popover still offers "New event" — the create-event leak is open');
+  assert.equal(btnByText(t, 'Post event').length, 0,
+    'the GroupEventComposer is mounted with calendar off — its mount gate (composeEvt && calFeatOn) is missing');
+});
+test('calendar turned OFF while the composer is OPEN unmounts it (the mount gate, isolated from the item gate)', () => {
+  const d = mkRoom({ features: {}, events: [], canAdd: true });   // calendar ON
+  const t = openActions(d);
+  btnByText(t, 'New event')[0].props.onClick();                   // composeEvt = true, composer mounts
+  assert.equal(btnByText(d.render(), 'Post event').length, 1, 're-anchor: the composer did not mount with calendar on');
+  d.ctx.church.features = { calendar: false };                    // a steward hides calendar mid-session
+  assert.equal(btnByText(d.render(), 'Post event').length, 0,
+    'calendar was turned off but the already-open GroupEventComposer stayed mounted — the mount gate (composeEvt && calFeatOn) is missing');
 });
 
 // ═══ rota — the "You're serving" folded line on the Community hub card (ServingEntry) ═══════════════════════
