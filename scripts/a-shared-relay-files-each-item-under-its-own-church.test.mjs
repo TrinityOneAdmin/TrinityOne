@@ -181,6 +181,10 @@ test('8a. upgrade: a DM with a member who has since LEFT stays in the church\'s 
   const b0 = await exportIds(U, B);
   assert.ok(b0.has(e.annBen.id) && b0.has(e.benAnn.id), 'CONTROL: Ann<->Ben is B\'s while Ben is a member');
   await H.publishAll(U, [leaveOf(ben, B)]);
+  // B's backup as a steward would take it now, after Ben left (8b restores it; taken BEFORE this test's own relabel,
+  // so 8b does not depend on anything 8a asserts)
+  ARCHIVE.text = await (async () => { const url = `${U.base}/export`; const r = await fetch(url, { headers: { Authorization: H.nip98(B.sk, url, 'GET', B.pub) } }); assert.equal(r.status, 200); return r.text(); })();
+  ARCHIVE.benTim = e.benTim; ARCHIVE.annBen = e.annBen; ARCHIVE.benAnn = e.benAnn;
   U.proc.kill('SIGKILL'); await new Promise(r => U.proc.once('exit', r));
   const db = new DatabaseSync(join(U.dataDir, 'relay.sqlite'));
   try {
@@ -195,12 +199,11 @@ test('8a. upgrade: a DM with a member who has since LEFT stays in the church\'s 
   assert.equal(b1.has(e.annBen.id), true, 'Ann->Ben left B\'s backup when Ben left B');
   assert.equal(b1.has(e.benAnn.id), true, 'Ben->Ann left B\'s backup when Ben left B');
   assert.equal(b1.has(e.benTim.id), false, 'CONTROL: a DM filed under a church Tim never joined still moves out of it');
-  ARCHIVE.text = await (async () => { const url = `${U2.base}/export`; const r = await fetch(url, { headers: { Authorization: H.nip98(B.sk, url, 'GET', B.pub) } }); return r.text(); })();
-  ARCHIVE.benTim = e.benTim; ARCHIVE.annBen = e.annBen; ARCHIVE.benAnn = e.benAnn;
 });
 
 test('8b. restore onto a fresh box: a departed member\'s DM is still in the church\'s backup after the next start', async () => {
-  assert.ok(ARCHIVE.text, 'CONTROL: 8a produced B\'s archive');
+  assert.ok(ARCHIVE.text, 'CONTROL: 8a took B\'s archive (before its restart)');
+  assert.ok(ARCHIVE.text.includes(ARCHIVE.annBen.id), 'CONTROL: the archive holds Ann->Ben');
   // the archive an OLD shared server would have written also carried the Ben->Tim misfile under B: add it back
   const nd = ARCHIVE.text.replace(/\n*$/, '\n') + JSON.stringify(ARCHIVE.benTim) + '\n';
   const F = await H.startRelay({ name: 'freshF' });
