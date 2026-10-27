@@ -179,9 +179,13 @@ window.DesktopNav = DesktopNav;
 // ── Bible / Plans segmented toggle (the Read tab holds both views) ──
 function ReadPlansTabs({ ctx, style = {} }) {
   const v = ctx.readView || 'bible';
+  // The Plans tab is the `resources` feature (reading plans & devotionals); a steward can hide it from the
+  // member app in Settings → Congregation features. Default-on (unset means on). app.jsx forces the Bible
+  // view when resources is off, so this just removes the way back to Plans.
+  const resourcesOn = !(ctx.church && ctx.church.features && ctx.church.features.resources === false);
   return (
     <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', ...style }}>
-      {[['bible', 'Bible', 'read'], ['plans', 'Plans', 'plans']].map(([id, label, ic]) => {
+      {[['bible', 'Bible', 'read'], ...(resourcesOn ? [['plans', 'Plans', 'plans']] : [])].map(([id, label, ic]) => {
         const on = v === id;
         return (
           <button key={id} onClick={() => ctx.setReadView(id)} style={{

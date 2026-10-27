@@ -2659,7 +2659,7 @@ function App() {
     // wrapped in `Bible.loaded ? … : <EmptyState/>`, so a module download that failed or had not finished took
     // Today, Community, groups, Care and the emergency safety check with it. The empty state belongs here.
     read: !Bible.loaded ? <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
-      : readView === 'plans' ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
+      : (readView === 'plans' && !(ctx.church && ctx.church.features && ctx.church.features.resources === false)) ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
     chat: <ChatScreen ctx={ctx} />,
     library: <LibraryScreen ctx={ctx} />,
   };

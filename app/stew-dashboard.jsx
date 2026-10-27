@@ -152,6 +152,42 @@ const NAV = [
   // { key: 'giving', label: 'Giving', ic: 'gift' },   // parked for the pilot (chat first)
 ];
 
+// PER-FEATURE VISIBILITY (church.features, same mechanism as read / community / library). A steward hides a
+// whole section from the console — and, where it has one, from the member app — by turning it off in
+// Settings → Congregation features. DEFAULT ON WHEN UNSET (`features[k] !== false`), so every church that
+// predates these toggles is unchanged. These two helpers are PURE on purpose: app/*.jsx ships UNBUNDLED, so
+// CLAUDE.md rule 3 forbids proving the gate by matching text — a point-of-use test RUNS these instead, and a
+// deleted gate then fails (rules 1 & 3). stewNav is the whole church nav memo body, lifted out so the test
+// can build the real nav with features set and see a hidden section gone / a padlock still correct.
+//
+// ⚠ CHURCH VIEW ONLY. The network view builds its own nav elsewhere and must never reach here; the caller's
+// memo is what decides which one runs.
+function stewFinanceOn(church, opts) {
+  // The per-church Finance toggle folds INTO the existing gate (module loaded + capability held). So
+  // features.finance === false hides Finance EVEN with DashFinance present and the capability granted; unset
+  // keeps it on. This is the NEW gate, distinct from the pre-existing "module + capability" finOn.
+  const f = (church && church.features) || {};
+  return !!(opts && opts.financePresent) && opts.capState('finance').allowed && f.finance !== false;
+}
+function stewNav(NAV, church, opts) {
+  const f = (church && church.features) || {};
+  const featOn = (k) => f[k] !== false;   // default-on congregation features
+  const GATED = ['rota', 'calendar', 'rooms', 'resources'];   // base-NAV sections a church can hide
+  const copy = NAV.filter(n => GATED.indexOf(n.key) < 0 || featOn(n.key));
+  // Mark rather than hide for CAPABILITY — a missing tab reads as a broken console; a locked one that
+  // explains itself reads as a church that has scoped you. (Feature-hiding above is the church's own choice,
+  // which is a different thing from a delegate's scope.)
+  const capOf = { groups: 'content', rota: 'content', calendar: 'content', rooms: 'content',
+                  resources: 'content', members: 'members', meals: 'care', checkin: 'safeguarding' };
+  const mark = (n) => { const c = capOf[n.key]; if (!c) return n; const st = opts.capState(c); return st.allowed ? n : { ...n, locked: true, cap: c }; };
+  const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
+  if (opts.checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
+  if (opts.finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
+  if (opts.mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
+  if (opts.mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
+  return copy.map(mark);
+}
+
 // sidebar identity control: switch the WHOLE console between the church and any network it owns.
 // With no owned networks it's just the church name button (tap to rename).
 //
@@ -2130,32 +2166,33 @@ function StewDashboard({ initial = 'overview' }) {
   // write to it. A delegate who was NOT granted it still sees the padlock rather than a missing tab.
   // A stable string for "which capabilities do I hold" — the thing every padlock below is computed from.
   const _capsSig = JSON.stringify((window.Steward && window.Steward.myStewardCaps && window.Steward.myStewardCaps()) || null);
-  const finOn = !!window.DashFinance && stewCapState('finance').allowed;
+  // Per-church feature visibility (church.features; default-on). These booleans are read here, NOT only inside
+  // the memo, because they are DEPENDENCIES of it — a church toggling one must rebuild the nav (and the
+  // snap-back effect below needs them too). See the stale-padlock note at the deps array.
+  const _cf = church.features || {};
+  const rotaNavOn = _cf.rota !== false;
+  const calNavOn = _cf.calendar !== false;
+  const roomsNavOn = _cf.rooms !== false;
+  const resourcesNavOn = _cf.resources !== false;
+  const finOn = stewFinanceOn(church, { financePresent: !!window.DashFinance, capState: stewCapState });   // now folds the per-church Finance toggle into the module+capability gate
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
-  const nav = React.useMemo(() => {
-    const copy = NAV.slice();
-    // Mark rather than hide. A missing tab reads as a broken console ("where is Members?"); a locked one
-    // that explains itself reads as a church that has scoped you, which is the truth.
-    const capOf = { groups: 'content', rota: 'content', calendar: 'content', rooms: 'content',
-                    resources: 'content', members: 'members', meals: 'care', checkin: 'safeguarding' };
-    const mark = (n) => { const c = capOf[n.key]; if (!c) return n; const st = stewCapState(c); return st.allowed ? n : { ...n, locked: true, cap: c }; };
-    const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
-    if (checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
-    if (finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
-    if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
-    if (mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
-    return copy.map(mark);
-    // THE CAPABILITY LIST IS A DEPENDENCY. mark() calls stewCapState() for eight tabs, but the deps listed
-    // only the four module toggles — so when an owner granted or withdrew a capability, every padlock except
-    // Finance's (which happens to feed finOn) kept the state it had at mount. A delegate given Members went
-    // on seeing "your church hasn't given you Members" until they restarted the console, and — the direction
-    // that matters — a delegate whose capability was WITHDRAWN went on seeing the tab unlocked.
-    //
-    // The screens themselves re-check, so this was never the security boundary; it is what the person is
-    // told, and being told the wrong thing about your own permissions is its own defect.
-  }, [finOn, mannaOn, mealsOn, checkinOn, _capsSig]);
+  // THE MEMO BODY LIVES IN stewNav() (module scope) so a point-of-use test can run it (CLAUDE.md rules 1 & 3).
+  const nav = React.useMemo(() => stewNav(NAV, church, { finOn, mannaOn, mealsOn, checkinOn, capState: stewCapState }),
+    // THE CAPABILITY LIST AND EVERY FEATURE FLAG ARE DEPENDENCIES. mark() calls stewCapState() for eight tabs
+    // and stewNav() filters four sections by church.features; a dep left off here leaves the padlock or the
+    // section stale until the console restarts. A delegate given Members once went on seeing "your church
+    // hasn't given you Members"; the direction that matters is a withdrawn capability still reading unlocked.
+    // The screens re-check, so this was never the security boundary — it is what the person is TOLD.
+    [finOn, mannaOn, mealsOn, checkinOn, rotaNavOn, calNavOn, roomsNavOn, resourcesNavOn, _capsSig]);
+  // A church feature turned OFF while its page is open would leave a blank pane: the nav tab is gone but `tab`
+  // still points at it, and the body switch below still renders that section. Snap back to Overview. These
+  // keys are church-view only (the network nav has none of them), so this never fires in the network view.
+  React.useEffect(() => {
+    if ((tab === 'rota' && !rotaNavOn) || (tab === 'calendar' && !calNavOn) || (tab === 'rooms' && !roomsNavOn) ||
+        (tab === 'resources' && !resourcesNavOn) || (tab === 'finance' && !finOn)) setTab('overview');
+  }, [tab, rotaNavOn, calNavOn, roomsNavOn, resourcesNavOn, finOn]);
   // WHAT A DELEGATE IS TOLD WHEN THEY ARRIVE. Once per church, not a tour. Before this, the only way to
   // learn the shape of the job was to press things: two of the most serious bugs found on 2026-07-28 were in
   // delegated paths precisely because nobody goes there, and an agent in a simulation would report each
@@ -11376,6 +11413,21 @@ function DashFeaturesPanel({ church, show = null }) {
   const toggle = (k) => { window.Steward.publishProfile({ features: { ...f, [k]: !on(k) } }); };          // default-on features
   const toggleOpt = (k) => { window.Steward.publishProfile({ features: { ...f, [k]: !onOpt(k) } }); };     // opt-in extras
   const ITEMS = [['read', 'Bible', 'Scripture reading, plans & devotionals'], ['community', 'Community', 'Group chat, prayer & people'], ['library', 'Library', 'Books, commentaries & study tools']];
+  // The other sections a church can hide, each a default-on `church.features` key (toggle/on above, same
+  // mechanism as ITEMS). Rota / Calendar / Resources hide from the console AND the member app; Rooms and
+  // Finance have no member surface and hide only the console section (noted in the sub-text).
+  const MODULES = [
+    ['rota', 'Rota & serving', 'Serving teams and who serves when'],
+    ['calendar', 'Calendar & events', 'Church events and upcoming dates'],
+    ['rooms', 'Rooms & booking', 'Building rooms and bookings (console only)'],
+    ['resources', 'Reading plans & devotionals', 'Reading plans and devotionals'],
+    ['finance', 'Finance', 'Giving and expenses (console only)'],
+  ];
+  // OWNER-ONLY. publishProfile refuses a DELEGATED steward (src/steward.src.js — it would republish the other
+  // church's kind-0), returning null while dispatching a banner — a SILENT fail at the caller. A delegate must
+  // therefore never be shown a switch that cannot work, so these rows render only on the owner's own console.
+  // `!actingChurch` is exactly the condition publishProfile itself refuses on.
+  const featOwner = !(window.Steward && window.Steward.actingChurch);
   // opt-in extras (default OFF, switchable per church) — kids check-in
   const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code']];
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
@@ -11508,6 +11560,19 @@ function DashFeaturesPanel({ church, show = null }) {
             </button>
           </div>
         ))}
+        {/* OWNER ONLY — see featOwner above. A delegate cannot publish the profile these write to, so the row
+            would silently do nothing; it is not shown to them rather than failing under their hand. */}
+        {featOwner ? MODULES.map(([k, label, sub]) => (
+          <div key={k} onClick={() => toggle(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); toggle(k); }} aria-label={'Toggle ' + label} role="switch" aria-checked={on(k)} title={(on(k) ? 'Turn off ' : 'Turn on ') + label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: on(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
+          </div>
+        )) : null}
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Today (home) and Giving are controlled separately. Members see changes on their next sync.</div>
 

@@ -2457,6 +2457,14 @@ function TodayScreen({ ctx }) {
   const dismissCareBanner = (e) => { if (e) e.stopPropagation(); try { if (myCareNeed) localStorage.setItem('trinityone.care.bannerDismiss', JSON.stringify({ id: myCareNeed.id, ts: myCareNeed.ts })); } catch {} if (ctx.toast) ctx.toast('Okay — this comes back if anything about your care changes.'); setCareDismissTick(t => t + 1); };
   const pNext = plan ? (plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1]) : null;
 
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). A steward can hide the serving strip (`rota`)
+  // and the reading-plan/devotional cards (`resources`) from the member app in Settings → Congregation
+  // features. Unset means on, so an existing church is unchanged. The "What's happening" hub card itself is
+  // left visible — it is the member's only entry to the Serving overlay, where Kids and Care (their own
+  // toggles) also live — and the serving overlay gates its own serving/events tabs.
+  const _tdFeat = (ctx.church && ctx.church.features) || {};
+  const rotaOn = _tdFeat.rota !== false;
+  const resourcesOn = _tdFeat.resources !== false;
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;
@@ -2575,7 +2583,7 @@ function TodayScreen({ ctx }) {
             {/* SINGLE-LINE SERVING NOTICE (owner 2026-10-14): "You’re serving" / "Can you serve?" folded onto the
                 What’s happening card as ONE line under it, not a separate alternate card. Pending is prioritised
                 and gold; otherwise the next serving slot. nowrap + ellipsis keeps it to one line. */}
-            {(servPendingN || (servNext && !servStripDismissed)) ? (
+            {rotaOn && (servPendingN || (servNext && !servStripDismissed)) ? (
               <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", borderTop: "1px solid var(--line)",
                 background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 8%, var(--surface))",
                 color: servPendingN ? "#8a6717" : "var(--sage)", fontSize: 12.5, fontWeight: 700, minWidth: 0 }}>
@@ -2817,9 +2825,10 @@ function TodayScreen({ ctx }) {
         </div>
       ) : null}
 
-      {/* Plan + (real) devotional cards */}
-      {plan || churchDevo ? <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel> : null}
-      {plan || churchDevo ? <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
+      {/* Plan + (real) devotional cards — the `resources` feature (reading plans & devotionals). A steward can
+          hide these from the member app; unset means on. */}
+      {resourcesOn && (plan || churchDevo) ? <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel> : null}
+      {resourcesOn && (plan || churchDevo) ? <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
         {plan ? <div onClick={() => ctx.openPlan(plan)} style={{
           flex: 1, padding: 16, borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)',
           boxShadow: 'var(--shadow)', cursor: 'pointer',
