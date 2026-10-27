@@ -104,6 +104,7 @@ function schNoKey() {
   // key hasn't arrived", which sent people looking for a fault that was not there.
   let fail = '';
   try { const S1 = window.Steward; fail = (S1 && S1.lastSaveFailure) ? String(S1.lastSaveFailure() || '') : ''; } catch (e) { fail = ''; }
+  if (fail === 'clash' && (() => { try { return !!(window.Steward && window.Steward.clockLooksWrong && window.Steward.clockLooksWrong()); } catch (e) { return false; } })()) return 'Not saved — a newer copy is already stored and this device’s clock looks wrong. Fix the date and time, then try again.';
   if (fail === 'clash') return 'Not saved — someone saved this a moment ago. Check what they changed, then try again.';
   if (fail === 'locked') return 'Not saved — this console can’t read the saved copy yet, and saving now would overwrite it. Try again shortly.';
   if (fail === 'relay') return 'Not saved — no relay took it. Check your connection and try again.';

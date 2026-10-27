@@ -101,7 +101,7 @@
         else {
           const mins = Math.floor((Date.now() / 1000 - s.sync.at) / 60);
           const when = mins < 1 ? 'just now' : mins === 1 ? '1 minute ago' : mins < 60 ? mins + ' minutes ago' : Math.floor(mins / 60) + 'h ago';
-          sw.textContent = s.sync.ok === false ? when + ' \u2014 failed' : when + (s.sync.imported ? ' \u00b7 pulled ' + s.sync.imported : ' \u00b7 nothing new');
+          sw.textContent = s.sync.ok === false ? when + ' \u2014 failed' + (/clock/i.test(String(s.sync.error || '')) ? ' \u00b7 a clock may be wrong' : '') : when + (s.sync.imported ? ' \u00b7 pulled ' + s.sync.imported : ' \u00b7 nothing new');
           sw.style.color = s.sync.ok === false ? 'var(--clay-ink)' : '';
         }
       }
