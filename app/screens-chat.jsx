@@ -1607,6 +1607,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           // (a Leave is waiting for signal), or too many messages are already waiting to send. Nothing was queued.
           if (evt._refused === 'leaving') why = 'You’re leaving this church, so this wasn’t sent.' + (kept ? ' Your words are still here.' : '');
           else if (evt._refused === 'queue-full') why = 'Too many messages are waiting to send, so this one wasn’t queued.' + (kept ? ' Your words are still here — try again when you have signal.' : ' Try again when you have signal.');
+          else if (evt._refused === 'failed-full') why = 'You have too many unsent messages, so this one wasn’t sent.' + (kept ? ' Your words are still here — send or discard some of the unsent ones first.' : ' Send or discard some of the unsent ones first.');
           else if (evt._refused === 'nokey') {
             // `settled` matters here for the same reason it does in the empty state: relayReady() is false
             // for the whole of a cold start, because proving who you are is a round trip AFTER connecting.
@@ -1964,6 +1965,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       </div>
 
       <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
+        <UnsentNotice />
         {(ctx.joinState && ctx.joinState.isPending && !ctx.joinState.authFailed) ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center', lineHeight: 1.45 }}>
             <Icon name="shield" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} /> Waiting for a steward to approve you — you’ll be able to post once you’re in.
@@ -2109,6 +2111,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
       .then(evt => {
         if (evt && evt._refused === 'leaving') { ctx.toast('Not shared — you’re leaving ' + g.name + '’s church.'); return; }
         if (evt && evt._refused === 'queue-full') { ctx.toast('Not shared — too many messages are waiting to send. Try again when you have signal.'); return; }
+        if (evt && evt._refused === 'failed-full') { ctx.toast('Not shared — you have too many unsent messages. Send or discard some first.'); return; }
         if (evt && evt._refused) { ctx.toast('Not shared — ' + g.name + ' is encrypted and your key hasn’t arrived yet. Try again shortly.'); return; }
         if (evt && evt._delivered === false) { ctx.toast('No signal — we’ll share it to ' + g.name + ' when you’re back online.'); return; }
         ctx.toast('Shared to ' + g.name);
@@ -2135,6 +2138,7 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
         // A FULL QUEUE REFUSED IT, and this sheet has already closed with the comment in it (onClose below), so
         // "your words are still here" would be false here. Say what is true.
         if (evt._refused === 'queue-full') { ctx.toast('Not shared — too many messages are waiting to send. Share it again when you have signal.'); return; }
+        if (evt._refused === 'failed-full') { ctx.toast('Not shared — you have too many unsent messages. Send or discard some first.'); return; }
         ctx.toast(evt._refused || evt._delivered === false ? dmFailWording(evt) : 'Sent to ' + (m.name || 'them'));
       })
       .catch(() => ctx.toast('Couldn’t send — please try again.'));
@@ -2279,10 +2283,27 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
 // The wording must not say WHY the other person is restricted. Telling an uncleared adult "that account
 // belongs to a child" would use a safeguarding refusal to disclose exactly what safeguarding protects — and
 // this app never serves the minors list to ordinary members for the same reason.
+// THE "DIDN'T SEND" BIN IS NEARLY FULL (owner 2026-10-27: capped at 500, visibly, never emptied silently). Shown in
+// both threads, above the composer, from 450. At the cap the composer refuses new messages (failed-full).
+function UnsentNotice() {
+  const F = window.Fellowship;
+  const [n, setN] = useC(() => (F && F.failedCount ? F.failedCount() : 0));
+  useCE(() => {
+    if (!F || !F.onOutbox || !F.failedCount) return;
+    const r = () => setN(F.failedCount());
+    r();
+    return F.onOutbox(r);
+  }, []);
+  if (!F || !F.failedWarnAt || n < F.failedWarnAt()) return null;
+  const full = F.failedMax && n >= F.failedMax();
+  return <div role="status" data-unsent-notice="1" style={{ margin: '0 0 8px', padding: '8px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--ink)', fontSize: 13, lineHeight: 1.4 }}>{'You have ' + n + ' unsent items — send or discard some' + (full ? ' before sending anything new.' : '.')}</div>;
+}
+
 function dmFailWording(evt) {
   const refused = evt && evt._refused;
   if (!refused) return 'No signal — we’ll send it as soon as you’re back online.';
   if (refused === 'queue-full') return 'Too many messages are waiting to send, so this one wasn’t queued — your words are still here. Try again when you have signal.';
+  if (refused === 'failed-full') return 'You have too many unsent messages, so this one wasn’t sent — your words are still here. Send or discard some of the unsent ones first.';
   return 'Not delivered. Private messages with this person are limited for safeguarding — a steward can help if you need to reach them.';
 }
 
@@ -2441,7 +2462,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
           if (ctx && ctx.toast) ctx.toast('Couldn’t lock this message, so nothing was sent — your words are still here. Try again in a moment.');
           return;
         }
-        if (evt._refused === 'queue-full') {   // nothing was queued: the words go back (G2, 2026-10-27)
+        if (evt._refused === 'queue-full' || evt._refused === 'failed-full') {   // nothing was queued: the words go back (G2, 2026-10-27)
           setDraft(d => d || text);
           if (ctx && ctx.toast) ctx.toast(dmFailWording(evt));
           return;
@@ -2528,6 +2549,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
       {dmReply ? TrinityReplyKit.bar({ variant: 'dm', who: dmReply.mine ? 'yourself' : d.handle, text: dmReply.content, onCancel: () => setDmReply(null) }) : null}
       {allowDM ? (
         <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
+          <UnsentNotice />
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9 }}>
             <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={1}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}

@@ -128,7 +128,7 @@ function sendRig({ cache = [{ id: 'g1', encrypted: true }], hint, key = null, se
     _outboxSave: () => {},
     // fix/stress-g2: publishMessage refuses a post to a church being left, and a NEW post when the queue is full.
     // Neither is this file's subject; nobody is leaving and the queue is empty.
-    _leavingFor: () => false, _outboxFull: () => false,
+    _leavingFor: () => false, _outboxFull: () => false, _failedFull: () => false,
     _publishBounded: async (_r, e) => { published.push(e); return true; },
     publishSetFor: () => ['wss://r'],
     console: { warn: () => {} },

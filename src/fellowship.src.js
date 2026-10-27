@@ -3658,11 +3658,20 @@ function _mine(o) { return !!(o && o.evt && pub && o.evt.pubkey === pub); }
 // Is the queue full for a NEW message? Only the member's own words count: a join, a leave and a profile edit are
 // one entry per church (or per person) — each REPLACES the older one of its kind — so they can never pile up,
 // and refusing a Leave or a join because chat filled the queue would be the wrong thing to refuse.
+// Only THIS identity's entries count (owner 2026-10-27): another identity's parked entries are not this person's queue.
 function _outboxFull() {
   let n = 0;
-  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile) n++;
+  for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
   return n >= OUTBOX_MAX;
 }
+// THE "DIDN'T SEND" BIN IS CAPPED AT 500, VISIBLY (owner 2026-10-27). Nothing is ever evicted from it. From 450 the
+// threads show "You have N unsent items — send or discard some"; at 500 a NEW message is refused at the composer,
+// the same way a full queue refuses one, so the words go back to the member instead of into a bin that is full.
+// (A message already queued that fails later still goes in — it is never dropped — so the bin can pass 500 by at
+// most what was queued when it filled.)
+const FAILED_MAX = 500, FAILED_WARN = 450;
+function _failedCount() { let n = 0; for (const o of _outboxFailed) if (_mine(o)) n++; return n; }
+function _failedFull() { return _failedCount() >= FAILED_MAX; }
 // THE CHURCH A QUEUED ITEM BELONGS TO, so its relays are worked out when it is SENT, not when it was queued
 // (stress batch 3, 1a/2a/3). A join or leave names it; a group post queued by this build carries `cp`; one queued
 // by an older build carries only its frozen `relays`, and its church is read back from the event's first `p` tag
@@ -5905,6 +5914,7 @@ window.Fellowship = {
     // THE QUEUE IS FULL: refuse THIS message, now, while the words are still in the composer — never drop an
     // older one to make room (stress batch 3, 6b). The caller hands the words back.
     if (_outboxFull()) return { _refused: 'queue-full' };
+    if (_failedFull()) return { _refused: 'failed-full' };   // the didn't-send bin is full: refuse the new one, never evict
     if (gkey) {
       try { body = nip44e(content, gkey); encTag = [['enc', '1']]; }
       catch (e) {
@@ -5946,7 +5956,7 @@ window.Fellowship = {
   // the queue, for the UI: pending messages for one group (oldest first), and a change subscription
   // Is this church's join announce still waiting to send? The pending screen used to say "has been sent" in
   // the past tense with the publish result discarded, which is the one claim it could not make.
-  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp)); },
+  joinQueued(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outbox.some(o => o && o.join === cp && _mine(o))); },   // this identity's (owner 2026-10-27)
   // Is this identity leaving this church — a Leave queued and not yet delivered, or delivered this launch?
   leaving(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _leavingFor(cp)); },
   // Is the Leave still WAITING to be sent (the "Leaving…" row)? Narrower than leaving(): once delivered it is false.
@@ -5967,7 +5977,7 @@ window.Fellowship = {
   // _outboxFailed, so joinQueued alone reads false in that case and the screen falls through to "has been
   // sent — a steward usually lets people in within a day." Nothing is retrying and that day never comes.
   // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
-  joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp)); },
+  joinFailed(npubOrHex) { const cp = toPub(npubOrHex); return !!(cp && _outboxFailed.some(o => o && o.join === cp && _mine(o))); },
   // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
   // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
   // a join that was never attempted looks like. See JOINSENT_KEY.
@@ -5996,18 +6006,20 @@ window.Fellowship = {
     return true;
   },
   outboxFor(groupId) { return [
-    ..._outbox.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.groupId === groupId).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
+    ..._outbox.filter(o => o.groupId === groupId && _mine(o)).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.groupId === groupId && _mine(o)).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
   ]; },
   // The DM thread's equivalent of outboxFor(groupId). A private conversation is keyed by the PEER, not by a
   // group id, so without this the queue exists and the member still stares at an empty thread — the same
   // silence with extra steps. Same shape as outboxFor so the screen can share one rendering path.
   outboxForPeer(peerPub) { const p = toPub(peerPub) || peerPub; return [
-    ..._outbox.filter(o => o.peer === p).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
+    ..._outbox.filter(o => o.peer === p && _mine(o)).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+    ..._outboxFailed.filter(o => o.peer === p && _mine(o)).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
   ]; },
   dmPlaintextOf(id) { return _dmPlain.get(id) || ''; },
   outboxCount() { return _outbox.length; },
+  // the didn't-send bin, for the threads' notice: this identity's count, and where the notice starts / the cap is
+  failedCount() { return _failedCount(); }, failedWarnAt() { return FAILED_WARN; }, failedMax() { return FAILED_MAX; },
   onOutbox(fn) { _outboxSubs.add(fn); return () => _outboxSubs.delete(fn); },
   flushOutbox() { return _outboxFlush(); },
   // give up on one queued message (the member chose to discard it)
@@ -6055,6 +6067,7 @@ window.Fellowship = {
   async sendDM(peerPub, content, replyTo) {
     if (!sk) await window.Fellowship.ready;
     if (_outboxFull()) return { _refused: 'queue-full' };   // see publishMessage: refuse the new one, never drop an old one
+    if (_failedFull()) return { _refused: 'failed-full' };
     const body = window.Fellowship._dmWrap(content, replyTo);
     let ciphertext; try { ciphertext = _dmEncrypt(sk, peerPub, body); } catch (e) { console.warn('[fellowship] DM encrypt failed', e); return null; }
     const evt = finalizeEvent({ kind: 4, created_at: Math.floor(Date.now() / 1000), tags: [['p', peerPub]], content: ciphertext }, sk);

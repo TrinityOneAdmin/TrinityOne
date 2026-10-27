@@ -136,7 +136,7 @@ function gateSource(src) {
 
 // ── the phone ──────────────────────────────────────────────────────────────────────────────────────────
 const forgotten = [];
-function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, roster, outbox }) {
+function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, roster, outbox, failed }) {
   const src = FELLOW;
   const me = who || H.key();
   const pool = wirePool(me);
@@ -146,6 +146,7 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
   // the on-device member roster the app already keeps per church (what _memHub seeds from)
   for (const [cp, people] of Object.entries(roster || {})) store.setItem('trinityone.memhub.' + cp, JSON.stringify({ since: 0, fullAt: 0, members: people.map(p => ({ pubkey: p, joined: 1700000000, msgs: 0 })) }));
   if (outbox) store.setItem('trinityone.outbox', JSON.stringify(outbox));
+  if (failed) store.setItem('trinityone.outbox.failed', JSON.stringify(failed));
   const body = [
     gateSource(src),
     fnBody(src, 'function toPub', 'toPub'),
@@ -212,6 +213,8 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     fnBody(src, 'function _outboxFull', '_outboxFull'),
     fnBody(src, 'function _itemChurch', '_itemChurch'),
     fnBody(src, 'function _mine', '_mine'),   // G2 audit F3: only this identity's entries are sent
+    stmt(src, 'var FAILED_MAX = ', 'FAILED_MAX'), stmt(src, 'var FAILED_WARN = ', 'FAILED_WARN'),   // owner 2026-10-27: the didn't-send bin cap
+    fnBody(src, 'function _failedCount', '_failedCount'), fnBody(src, 'function _failedFull', '_failedFull'),
     stmt(src, 'var _left = ', '_left'),
     fnBody(src, 'function _leavingFor', '_leavingFor'),
     fnBody(src, 'function _announceBlocked', '_announceBlocked'),
@@ -330,14 +333,14 @@ async function churchChangesBoxes(app, church, boxes, extraCandidates = []) {
   await H.publishAll(SHARED, [relayNetDocFor(church, boxes.map(b => ({ url: secure(b.wsUrl), pubkey: b.relayPub })))]);
   await app.gate.refresh(app.churchRelaysRaw(), church.pub);
 }
-async function phoneA({ relays = [TA], extra = [] , who, outbox, store } = {}) {
+async function phoneA({ relays = [TA], extra = [] , who, outbox, store, failed } = {}) {
   const app = phone({
     who: who || sarah,
     relays: [secure(SHARED.wsUrl), ...relays.map(r => secure(r.wsUrl))],
     canonical: [secure(SHARED.wsUrl)], pins: { [secure(SHARED.wsUrl)]: [SHARED.relayPub] },
     activeChurch: A.pub, followed: [A],
     netdoc: { [A.pub]: { hw: 1, rows: Object.fromEntries(relays.map(r => [secure(r.wsUrl), r.relayPub])) } },
-    roster: { [A.pub]: [tom.pub, sarah.pub] }, outbox,
+    roster: { [A.pub]: [tom.pub, sarah.pub] }, outbox, failed,
   });
   app.saveBoxes(A.pub, relays.map(r => secure(r.wsUrl)));
   for (const r of extra) app.win.Fellowship.relays.push(secure(r.wsUrl));
@@ -645,4 +648,29 @@ test('7b. the hold ENDS: after HOLD_UNPROVED_S a held post goes where a live sen
     assert.ok(grpLanded(SHARED, 'held, then let go', from) >= 1, 'a post held past HOLD_UNPROVED_S never went anywhere');
     assert.equal(app.outbox().length, 0, 'the post is still held after the hold expired');
   } finally { FETCH_DOWN.clear(); goOnline(SHARED, TA); app.close(); }
+});
+
+// ── 8. the didn't-send bin is capped at 500, and both limits count only THIS identity (owner 2026-10-27) ───────
+const fakeEntry = (who, i, extra) => ({ evt: { id: who.pub.slice(0, 8) + '-' + i, kind: 1, pubkey: who.pub, created_at: now(), tags: [['p', A.pub]], content: 'old ' + i }, groupId: 'g1', cp: A.pub, at: now(), tries: 0, relays: [], ...(extra || {}) });
+test('8a. with 500 of this person\'s messages in the didn\'t-send bin a NEW post is refused (words handed back); nothing is evicted', async () => {
+  const failed = Array.from({ length: 500 }, (_, i) => fakeEntry(sarah, i, { failed: true }));
+  const app = await phoneA({ failed });
+  try {
+    const r = await app.publishMessage('g1', 'one more');
+    assert.equal(r && r._refused, 'failed-full', 'a post was accepted into a full bin\'s path: ' + JSON.stringify(r && Object.keys(r)));
+    assert.equal(app.failed().length, 500, 'the bin changed size');
+    assert.equal(app.outbox().length, 0, 'the refused post was queued');
+    const ok = await phoneA({ failed: failed.slice(1) });           // CONTROL: 499 is not full
+    try { const r2 = await ok.publishMessage('g1', 'one more'); assert.notEqual(r2 && r2._refused, 'failed-full'); } finally { ok.close(); }
+  } finally { app.close(); }
+});
+test('8b. another identity\'s parked entries count toward NEITHER limit', async () => {
+  const outbox = Array.from({ length: 200 }, (_, i) => fakeEntry(tom, i));
+  const failed = Array.from({ length: 500 }, (_, i) => fakeEntry(tom, 1000 + i, { failed: true }));
+  const app = await phoneA({ outbox, failed });
+  try {
+    await goOffline(SHARED, TA);
+    const r = await app.publishMessage('g1', 'sarah, not tom');
+    assert.ok(r && !r._refused, 'another identity\'s queue / bin refused this person\'s post: ' + JSON.stringify(r && r._refused));
+  } finally { goOnline(SHARED, TA); app.close(); }
 });

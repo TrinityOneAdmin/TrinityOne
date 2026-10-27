@@ -9841,8 +9841,18 @@
   }
   function _outboxFull() {
     let n = 0;
-    for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile) n++;
+    for (const o of _outbox) if (o && !o.join && !o.leave && !o.profile && _mine(o)) n++;
     return n >= OUTBOX_MAX;
+  }
+  var FAILED_MAX = 500;
+  var FAILED_WARN = 450;
+  function _failedCount() {
+    let n = 0;
+    for (const o of _outboxFailed) if (_mine(o)) n++;
+    return n;
+  }
+  function _failedFull() {
+    return _failedCount() >= FAILED_MAX;
   }
   function _itemChurch(o) {
     if (!o) return "";
@@ -11976,6 +11986,7 @@
       if (wantsEnc && !gkey) return { _refused: "nokey" };
       if (cp && _leavingFor(cp)) return { _refused: "leaving" };
       if (_outboxFull()) return { _refused: "queue-full" };
+      if (_failedFull()) return { _refused: "failed-full" };
       if (gkey) {
         try {
           body = encrypt(content, gkey);
@@ -12009,8 +12020,9 @@
     // the past tense with the publish result discarded, which is the one claim it could not make.
     joinQueued(npubOrHex) {
       const cp = toPub(npubOrHex);
-      return !!(cp && _outbox.some((o) => o && o.join === cp));
+      return !!(cp && _outbox.some((o) => o && o.join === cp && _mine(o)));
     },
+    // this identity's (owner 2026-10-27)
     // Is this identity leaving this church — a Leave queued and not yet delivered, or delivered this launch?
     leaving(npubOrHex) {
       const cp = toPub(npubOrHex);
@@ -12040,7 +12052,7 @@
     // Three states, three answers: queued (trying), failed (stopped), neither (it landed).
     joinFailed(npubOrHex) {
       const cp = toPub(npubOrHex);
-      return !!(cp && _outboxFailed.some((o) => o && o.join === cp));
+      return !!(cp && _outboxFailed.some((o) => o && o.join === cp && _mine(o)));
     },
     // …and whether a relay has ACCEPTED this identity's announce for this church — the positive fact the pending
     // screen must have before it says "sent". Neither of the two above answers that: an empty queue is also what
@@ -12078,8 +12090,8 @@
     },
     outboxFor(groupId) {
       return [
-        ..._outbox.filter((o) => o.groupId === groupId).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-        ..._outboxFailed.filter((o) => o.groupId === groupId).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "" }))
+        ..._outbox.filter((o) => o.groupId === groupId && _mine(o)).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+        ..._outboxFailed.filter((o) => o.groupId === groupId && _mine(o)).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "" }))
       ];
     },
     // The DM thread's equivalent of outboxFor(groupId). A private conversation is keyed by the PEER, not by a
@@ -12088,8 +12100,8 @@
     outboxForPeer(peerPub) {
       const p = toPub(peerPub) || peerPub;
       return [
-        ..._outbox.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-        ..._outboxFailed.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "", _permanent: !!o.permanent }))
+        ..._outbox.filter((o) => o.peer === p && _mine(o)).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
+        ..._outboxFailed.filter((o) => o.peer === p && _mine(o)).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "", _permanent: !!o.permanent }))
       ];
     },
     dmPlaintextOf(id) {
@@ -12097,6 +12109,16 @@
     },
     outboxCount() {
       return _outbox.length;
+    },
+    // the didn't-send bin, for the threads' notice: this identity's count, and where the notice starts / the cap is
+    failedCount() {
+      return _failedCount();
+    },
+    failedWarnAt() {
+      return FAILED_WARN;
+    },
+    failedMax() {
+      return FAILED_MAX;
     },
     onOutbox(fn) {
       _outboxSubs.add(fn);
@@ -12167,6 +12189,7 @@
     async sendDM(peerPub, content, replyTo) {
       if (!sk) await window.Fellowship.ready;
       if (_outboxFull()) return { _refused: "queue-full" };
+      if (_failedFull()) return { _refused: "failed-full" };
       const body = window.Fellowship._dmWrap(content, replyTo);
       let ciphertext;
       try {

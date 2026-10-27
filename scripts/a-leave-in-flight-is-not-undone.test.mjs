@@ -234,6 +234,8 @@ function phone({ relays, canonical, pins, activeChurch, followed, netdoc, who, r
     fnBody(src, 'function _outboxFull', '_outboxFull'),
     fnBody(src, 'function _itemChurch', '_itemChurch'),
     fnBody(src, 'function _mine', '_mine'),   // G2 audit F3: only this identity's entries are sent
+    stmt(src, 'var FAILED_MAX = ', 'FAILED_MAX'), stmt(src, 'var FAILED_WARN = ', 'FAILED_WARN'),   // owner 2026-10-27: the didn't-send bin cap
+    fnBody(src, 'function _failedCount', '_failedCount'), fnBody(src, 'function _failedFull', '_failedFull'),
     stmt(src, 'var _left = ', '_left'),
     fnBody(src, 'function _leavingFor', '_leavingFor'),
     fnBody(src, 'function _announceBlocked', '_announceBlocked'),
