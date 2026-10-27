@@ -743,6 +743,19 @@ test('F2: a Leave whose queue entry storage refused says so — never "Leaving�
     assert.equal(out, 'queued');
     assert.match(s.state.toasts[0], /couldn’t save/, 'the screen did not say the Leave is not saved: ' + s.state.toasts[0]);
     app.store.setItem = real;
+    // …and on the other queued branch: a post of theirs is still waiting, so the Leave waits behind it.
+    const app3 = await phoneA();
+    try {
+      await goOffline(SHARED, TA);
+      const post = await app3.publishMessage('g1', 'said before leaving, storage full');
+      assert.equal(post._delivered, false, 'CONTROL: the post was not queued');
+      const real3 = app3.store.setItem;
+      app3.store.setItem = (k, v) => { if (k === 'trinityone.outbox') throw new Error('QuotaExceededError'); return real3(k, v); };
+      const r2 = await app3.leaveMembership(A.npub);
+      app3.store.setItem = real3;
+      assert.equal(r2.queued, true, 'CONTROL: the Leave behind a waiting post is not queued: ' + JSON.stringify(r2));
+      assert.equal(r2.unsaved, true, 'a Leave waiting behind a post, which storage refused, was reported as safely queued');
+    } finally { app3.close(); }
     const ok = await app.leaveMembership(A.npub);
     assert.equal(ok.unsaved, undefined, 'CONTROL: a Leave that WAS saved is reported as unsaved');
   } finally { goOnline(SHARED, TA); app.close(); }
