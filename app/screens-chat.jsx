@@ -1138,6 +1138,10 @@ function evtToMsg(e) {
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). The folded "You're serving" / "requests
+  // waiting" line is the `rota` feature — gated here to MATCH the identical strip on Today (screens-today.jsx).
+  // The hub card itself stays: it is the member's entry to the Serving overlay, where Care also lives.
+  const rotaFeatOn = !(ctx.church && ctx.church.features && ctx.church.features.rota === false);
   // same per-slot dismiss as the Today strip (same localStorage key); a pending ask is never dismissable
   const [, setDismissTick] = React.useState(0);
   const servKey = next ? [next.id || '', next.date || '', next.teamName || '', next.role || ''].join('|') : '';
@@ -1157,7 +1161,7 @@ function ServingEntry({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
-        {(pending || (next && !dismissed)) ? (
+        {rotaFeatOn && (pending || (next && !dismissed)) ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderTop: '1px solid var(--line)', fontSize: 12.5, fontWeight: 700, minWidth: 0,
             background: pending ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 8%, var(--surface))', color: pending ? '#8a6717' : 'var(--sage)' }}>
             <Icon name={pending ? 'sparkle' : 'calCheck'} size={14} color="currentColor" />
@@ -1790,6 +1794,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
   const todayIso = todayISO();
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). When the steward hides `calendar`, the
+  // in-group events card AND the "EVENT" compose button go with it — a church that turned events off must not
+  // still see event cards or be offered the create-event form here. Unset means on (existing churches unchanged).
+  const calFeatOn = !(ctx.church && ctx.church.features && ctx.church.features.calendar === false);
   const groupEvents = (ctx.churchEvents || [])
     .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= todayIso)
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
@@ -1891,7 +1899,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             "Not encrypted" on its face. The EXPLANATION moved to Help ("Is my church chat private?"), where
             someone asking the question can find it, instead of being shouted at everyone who is not.
             no-overclaims.test.mjs follows it there. */}
-        {(groupEvents.length || canAddEvent) ? (
+        {calFeatOn && (groupEvents.length || canAddEvent) ? (
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
               <Icon name="calendar" size={14} color="var(--clay)" /> <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>

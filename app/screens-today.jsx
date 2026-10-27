@@ -2242,6 +2242,9 @@ function wereHereOffers(ctx) {
 }
 
 function servingNewCount(ctx, seenTs) {
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). The "something new" dot counts church events;
+  // if the steward hid `calendar`, there are no event surfaces to open, so nothing counts toward the badge.
+  if (ctx && ctx.church && ctx.church.features && ctx.church.features.calendar === false) return 0;
   const seen = Number(seenTs) || 0;
   if (!seen) return 0;   // no mark yet -> nothing is new. A member who joined a church with fifty events on
                          // its calendar this morning is not fifty things behind.
@@ -2657,8 +2660,9 @@ function TodayScreen({ ctx }) {
           the "Care" link on the What's happening card above, which shows a count when there are open days to
           sign up for. The "Your church is caring for you" banner above points a recipient there. */}
 
-      {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages. */}
-      {ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {
+      {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages.
+          Gated on `resources` (owner 2026-10-27: sermons are part of the resources feature). */}
+      {resourcesOn && ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {
         const ps = ctx.pinnedSermon;
         const fresh = (Date.now() / 1000 - (ps.ts || ps.at || 0)) < 7 * 86400;
         const isVid = String(ps.mime || '').startsWith('video');
@@ -2682,15 +2686,17 @@ function TodayScreen({ ctx }) {
         );
       })() : null}
 
-      {/* Church verse prompt — steward-pushed verse for the whole congregation */}
-      {vpPage && vpVisible && churchReadingFolded ? (
+      {/* Church verse prompt — steward-pushed verse for the whole congregation. Gated on `resources` (owner
+          2026-10-27: the "Your church is reading" card is part of the resources feature). The built-in Verse
+          of the Day below is NOT gated — it is a reader feature that works with no church at all. */}
+      {resourcesOn && vpPage && vpVisible && churchReadingFolded ? (
         <button type="button" onClick={toggleChurchReading} aria-expanded={false} aria-label="Expand Your church is reading" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 16, cursor: 'pointer', background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)', color: '#fff', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
           <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Your church is reading · {vpPage.ref}</div>
           <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
         </button>
       ) : null}
-      {vpPage && vpVisible && !churchReadingFolded ? (
+      {resourcesOn && vpPage && vpVisible && !churchReadingFolded ? (
         <div
           onTouchStart={(e) => { vpTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
           onTouchEnd={(e) => {
