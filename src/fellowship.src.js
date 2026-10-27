@@ -1115,7 +1115,10 @@ async function churchRelayNet(cp, opts) {
     let best = null;
     for (const e of (evs || [])) {
       if (!e || e.pubkey !== cp) continue;
-      if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+      // A TIE IN created_at GOES TO THE LOWEST id, as the servers decide it (NIP-01), so two phones that were
+      // answered in a different order still settle on the same list (G3 3.3).
+      if (!best || (e.created_at || 0) > (best.created_at || 0)
+        || ((e.created_at || 0) === (best.created_at || 0) && String(e.id || '') < String(best.id || ''))) best = e;
     }
     entries = best ? parseRelayNet(best.content) : [];
     // `docAt`: the signed document's own created_at, 0 when no relay returned one. It is what separates
@@ -1232,6 +1235,9 @@ function _dropRevokedNetDocRows(cp, gone, rec) {
   };
   const drop = (gone || []).filter(u => !stillNeeded(u));
   if (!drop.length) return [];
+  // THE GATE FORGETS THIS CHURCH'S PROOF OF THE DROPPED ADDRESS (G3 3.2) - this church's scope only, and only for an
+  // address nothing else needs (stillNeeded above), so a box another church still signs keeps that church's proof.
+  for (const u of drop) { try { _gate.forgetScope(u, cp); } catch (e) {} }
   const now = window.Fellowship.relays || [];
   if (now.some(u => drop.includes(u))) window.Fellowship.setRelays(now.filter(u => !drop.includes(u)));
   try { pool.close(drop); } catch (e) {}
@@ -4324,6 +4330,20 @@ function _forgetChurch(cp) {
   _nameKeys.delete(cp); _nameKeyTs.delete(cp);
   _churchRoster.delete(cp); _churchRelays.delete(cp); _churchList.delete(cp); _dropChurchBoxes(cp);
   _applying.delete(cp); _relayNetCache.delete(cp);
+  // THE BOXES ONLY THIS CHURCH PUT ON THE PHONE GO WITH IT (G3 3.1). adoptChurchNetDocAddresses added them to the
+  // shared candidate list and recorded them under this church in trinityone.relays.netdoc; left there, a box
+  // nobody on this phone signs any more stayed in every remaining church's read set. Only addresses that have a
+  // record are pruned (a hand-added or shared relay has none), and _dropRevokedNetDocRows keeps any that the
+  // shared pool, another church's record or any church's invite/kind-10002 box still needs.
+  try {
+    const rec = JSON.parse(localStorage.getItem('trinityone.relays.netdoc') || '{}') || {};
+    if (rec[cp]) {
+      const rows = Object.keys((rec[cp] && rec[cp].rows) || {});
+      delete rec[cp];
+      localStorage.setItem('trinityone.relays.netdoc', JSON.stringify(rec));
+      if (rows.length) _dropRevokedNetDocRows(cp, rows, rec);
+    }
+  } catch (e) {}
   _reseatOld.delete(cp); _reseatAt.delete(cp); _ckMemberKeys.delete(cp);
   _churchVoices.delete(cp);
   delete _carekeys[cp]; delete _carekeyRev[cp]; delete _carekeyTs[cp];

@@ -4088,6 +4088,29 @@
           changed();
         }
       },
+      // FORGET ONE CHURCH'S PROOF OF THIS ADDRESS, and only that church's. A box the church stopped signing must not stay
+      // admitted for it for the rest of the 30-day cache, but another church's proof of the same machine is untouched.
+      // The church-independent scope ('': canonical / same-origin) is NEVER removed here: that proof does not belong to a
+      // church, so a revoked box that was admitted under it stays admitted, and the caller is told by the return value.
+      // Returns true when a scope was removed.
+      forgetScope(url, cp) {
+        const k = _relayKey(url), sc = _isHex64(cp) ? String(cp).toLowerCase() : "";
+        if (!k || !sc) return false;
+        const e = map.get(k);
+        if (!e) return false;
+        const cps = { ..._scopesOf(e) };
+        if (!Object.prototype.hasOwnProperty.call(cps, sc)) return false;
+        delete cps[sc];
+        const rest = Object.values(cps);
+        if (!rest.length) map.delete(k);
+        else {
+          const until = Math.max(...rest.map((w) => w.until || 0));
+          map.set(k, { ...e, cp: Object.keys(cps)[0], until, cps });
+        }
+        writeVerified(d.store, map);
+        changed();
+        return true;
+      },
       _map: map
     };
   }
@@ -7527,7 +7550,7 @@
       let best = null;
       for (const e of evs || []) {
         if (!e || e.pubkey !== cp) continue;
-        if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+        if (!best || (e.created_at || 0) > (best.created_at || 0) || (e.created_at || 0) === (best.created_at || 0) && String(e.id || "") < String(best.id || "")) best = e;
       }
       entries = best ? parseRelayNet(best.content) : [];
       _relayNetCache.set(cp, { at: Date.now(), entries, docAt: best ? best.created_at || 0 : 0 });
@@ -7607,6 +7630,12 @@
     };
     const drop = (gone || []).filter((u) => !stillNeeded(u));
     if (!drop.length) return [];
+    for (const u of drop) {
+      try {
+        _gate.forgetScope(u, cp);
+      } catch (e) {
+      }
+    }
     const now = window.Fellowship.relays || [];
     if (now.some((u) => drop.includes(u))) window.Fellowship.setRelays(now.filter((u) => !drop.includes(u)));
     try {
@@ -10356,6 +10385,16 @@
     _dropChurchBoxes(cp);
     _applying.delete(cp);
     _relayNetCache.delete(cp);
+    try {
+      const rec = JSON.parse(localStorage.getItem("trinityone.relays.netdoc") || "{}") || {};
+      if (rec[cp]) {
+        const rows = Object.keys(rec[cp] && rec[cp].rows || {});
+        delete rec[cp];
+        localStorage.setItem("trinityone.relays.netdoc", JSON.stringify(rec));
+        if (rows.length) _dropRevokedNetDocRows(cp, rows, rec);
+      }
+    } catch (e) {
+    }
     _reseatOld.delete(cp);
     _reseatAt.delete(cp);
     _ckMemberKeys.delete(cp);
