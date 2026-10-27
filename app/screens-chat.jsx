@@ -1499,6 +1499,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   // other route (a shared link, sample data, an older cached list) so this can never quietly become false
   // for a room the relay will still refuse a post to.
   const isBroadcast = !!group && (group.broadcast === true || group.kind === 'Broadcast');   // one-to-many: members read, only church/leaders post
+  // The SAME predicate that gates the composer below (~:1966): in a broadcast room a non-leader cannot post,
+  // so they also get no PUBLIC reply (swipe + menu "Reply"). "Reply privately" is independent (gated on openDM)
+  // and stays. Named once so the composer and the per-message reply can never drift apart.
+  const canPostHere = !(isBroadcast && !isLeader);
   const id = useIdentity();
   const scRef = useCR();
   // { gid, ids } — the message ids already shown, kept ACROSS a reconnect so the relay's replay is deduped
@@ -1791,11 +1795,11 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     live={!!window.Fellowship}
     canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
     menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
-    onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
+    onReply={canPostHere ? (() => { setReplyTo(m); setMenuFor(null); }) : null} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
     onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} />
   </React.Fragment>),
-    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, canPostHere, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles; `canPostHere` so a mid-session promotion to leader restores public reply
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
@@ -1978,7 +1982,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center', lineHeight: 1.45 }}>
             <Icon name="shield" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} /> Waiting for a steward to approve you — you’ll be able to post once you’re in.
           </div>
-        ) : (isBroadcast && !isLeader) ? (
+        ) : !canPostHere ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
             <Icon name="send" size={16} color="var(--ink-3)" /> Your church posts here — you’ll see everything it sends.
           </div>
