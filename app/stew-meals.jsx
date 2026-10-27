@@ -1082,18 +1082,31 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
           const skipped = isSkipped(iso);
           const fills = slotsByDate[iso] || [];
           return (
-            <div key={iso} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '12px 13px', borderRadius: 11, border: '1px solid var(--line)', background: skipped ? 'var(--surface-2)' : 'var(--surface)', opacity: skipped ? 0.55 : 1 }}>
-              <div style={{ width: 104, flexShrink: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{mealsFmtDate(iso)}</div>
-                {need.type === 'meals' ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMealsOf(iso).map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
+            <div key={iso} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 13px', borderRadius: 11, border: '1px solid var(--line)', background: skipped ? 'var(--surface-2)' : 'var(--surface)', opacity: skipped ? 0.55 : 1 }}>
+              {/* The day is a VERTICAL STACK now: the date is its own header line, the meal rows sit full-width
+                  beneath it. It used to be a side-by-side [date width:104 | meals] row, and on a phone the fixed
+                  date column squeezed the meals column below the 310px its three non-shrinking columns need, so
+                  they spilled off the right edge and pushed the whole page sideways. No fixed-width date column
+                  here, so the meal row gets the full card width. */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 11 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{mealsFmtDate(iso)}</div>
+                  {/* The day-meals summary stays ONLY on a covered day. A covered day renders "Covered ..." and
+                      no per-meal rows, so this line is the only place that lists which meals were covered. On a
+                      normal day the per-meal rows below already carry each meal's name, so the summary here was a
+                      duplicate (the owner's second complaint) and is dropped. */}
+                  {need.type === 'meals' && skipped ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMealsOf(iso).map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
+                </div>
+                {/* Skip/Undo stays on the date line, pinned top-right: alignItems:flex-start keeps it from being
+                    stretched into a full-width bar now that the day is a column. */}
+                {fills.length === 0 ? <button onClick={() => doSkip(iso, !skipped)} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>{skipped ? 'Undo' : 'Skip'}</button> : null}
               </div>
-              <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>
+              <div style={{ minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>
                 {skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Covered{skipByDate[iso] && skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
                   : (need.type === 'meals' && dayMealsOf(iso).length) ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{dayMealsOf(iso).map(m => { const mf = fills.filter(f => (f.meal || '') === m || (f.meal || '') === ''); return <div key={m} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}><span style={{ fontWeight: 700, color: 'var(--ink)', width: 76, flexShrink: 0 }}>{MEAL_SHORT[m] || m}:</span><span style={{ width: 84, flexShrink: 0 }}>{mf.length ? <span style={{ color: 'var(--sage-ink)', fontWeight: 600 }}>Covered</span> : <span style={{ color: 'var(--ink-3)' }}>Open</span>}</span><span style={{ width: 120, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' }}>{mf.map(f => nameOf(f.pubkey)).join(', ')}</span><span style={{ flex: 1, minWidth: 0, color: 'var(--ink-2)' }}>{mf.map(f => f.note).filter(Boolean).join(', ')}</span></div>; })}</div>
                   : fills.length === 0 ? <span style={{ color: 'var(--ink-3)' }}>Open</span>
                   : fills.map((f, i) => <span key={i} style={{ marginRight: 10 }}><Icon name="check" size={12} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>)}
               </div>
-              {fills.length === 0 ? <button onClick={() => doSkip(iso, !skipped)} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>{skipped ? 'Undo' : 'Skip'}</button> : null}
             </div>
           );
         })}
