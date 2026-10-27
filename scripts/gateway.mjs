@@ -786,11 +786,15 @@ function _blobMember(req, ownerCp, host, path) {
 // first failing check after it — so it says nothing about whether the key is trusted — and the body is one fixed
 // string for every caller. `clockSuspect` is a latched timestamp, refreshed at most once a minute, logged once an hour.
 const _TIME_REFUSAL = 'unauthorized: the proof\u2019s timestamp is outside the allowed window - the clock on one of the two machines may be wrong';
+const CLOCK_SUSPECT_TTL = Math.max(1, parseInt(process.env.RELAY_CLOCK_SUSPECT_TTL_SEC || '3600', 10) || 3600);   // env only so a test can watch it expire
 let _clockSuspectAt = 0, _clockSuspectLogged = 0;
 function _noteTimeRefusal(req) {
   try { req._authWhy = 'time'; } catch {}
   const t = Math.floor(Date.now() / 1000);
-  if (t - _clockSuspectAt >= 60) _clockSuspectAt = t;
+  // LATCHED PER WINDOW: an unauthenticated caller can raise this with one old-dated self-signed proof, so a refusal inside
+  // the window does NOT extend it - it expires CLOCK_SUSPECT_TTL after the refusal that raised it, and only a refusal after
+  // that raises it again. A real skew re-raises it within minutes; a stranger has to come back every window.
+  if (t - _clockSuspectAt >= CLOCK_SUSPECT_TTL) _clockSuspectAt = t;
   if (t - _clockSuspectLogged >= 3600) { _clockSuspectLogged = t; console.log('[clock] refused a relay proof for its timestamp - this box or the asking one has a wrong clock'); }
 }
 function _unauthBody(req, dflt) { return req && req._authWhy === 'time' ? _TIME_REFUSAL : dflt; }
@@ -804,7 +808,7 @@ function _notePeer401(peerBase, r) {
   const k = String(peerBase);
   const e = _peerRefused.get(k) || { at: 0, logged: 0 };
   e.at = t; _passRefused++;
-  if (t - e.logged >= 3600) { e.logged = t; console.log('[sync] ' + k + ' refused our proof (401) - clocks may differ'); }
+  if (t - e.logged >= 3600) { e.logged = t; console.log('[sync] ' + k + ' refused our proof (401) - its trust list or a clock may be wrong'); }
   _peerRefused.set(k, e);
 }
 function _exportAuth(req, host, path) {
@@ -6583,7 +6587,7 @@ function serveStatic(req, res) {
         } catch { return { ref, sha: null }; }
       })() } : {}),
       sync: { ..._lastSync, running: _syncing, peers: PEER_URLS.size },
-      ...(_clockSuspectAt ? { clockSuspect: { at: _clockSuspectAt } } : {}),   // a proof was refused for its timestamp: this box's clock, or an asker's, may be wrong. No identity in it.   // is auto-sync actually working?
+      ...(_clockSuspectAt && Math.floor(Date.now() / 1000) - _clockSuspectAt < CLOCK_SUSPECT_TTL ? { clockSuspect: { at: _clockSuspectAt } } : {}),   // a proof was refused for its timestamp: this box's clock, or an asker's, may be wrong. No identity in it.   // is auto-sync actually working?
       // AN UNPROVEN CLAIM, and it must keep reading as one. This is a bare string over an unauthenticated
       // GET: any host can serve this box's /status verbatim and be believed. It is fine for what it is used
       // for (a church authorises this pubkey as a trusted sync peer; the relay-to-relay path then makes the
@@ -8434,7 +8438,7 @@ async function runSync() {
     // A peer that answered 401 this pass is NOT a healthy pass, even though nothing threw (every peer failure is swallowed).
     // Fixed string on purpose: /status is unauthenticated, so no peer address or key goes in it (see the admin block).
     _lastSync = _passRefused
-      ? { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: false, error: 'a peer refused our proof - clocks may differ' }
+      ? { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: false, error: 'a peer refused this box - its trust list or a clock may be wrong' }
       : { at: Math.floor(Date.now() / 1000), imported: n | 0, ok: true, error: '' };
     return n;
   }

@@ -125,7 +125,7 @@ for (const skew of [360, -360]) {
     const ss = await s.status(), ts = await t.status();
     for (const [who, st] of [['skewed box asking', ts], ['healthy box asking', ss]]) {
       assert.equal(st.sync.ok, false, who + ': sync reads as healthy while every request was refused');
-      assert.match(st.sync.error, /clocks may differ/, who);
+      assert.match(st.sync.error, /trust list or a clock may be wrong/, who);
       assert.ok(st.sync.at > 0, who);
     }
     assert.ok(ss.clockSuspect && ss.clockSuspect.at > 0, 'the healthy box refused the skewed one for time and does not say so');
@@ -188,4 +188,37 @@ test('5.3 the schedule clash message names the clock when it is measured wrong, 
   const msg = (wrong) => liftFn(SCHED, 'function schNoKey() {', 'schNoKey', { window: stewWindow(wrong, 'clash') })();
   assert.match(msg(true), /clock looks wrong/);
   assert.match(msg(false), /someone saved this a moment ago/, 'CONTROL: unchanged for a right clock');
+});
+
+// ---- clockSuspect must EXPIRE ---------------------------------------------------------------------------------
+// An unauthenticated caller can raise it with one self-signed old-dated proof, so it cannot be allowed to stick.
+test('clockSuspect expires, is not extended by further refusals, and a fresh refusal raises it again', async () => {
+  const r = await H.startRelay({ name: 'ttl', churches: [church.pub], env: { RELAY_CLOCK_SUSPECT_TTL_SEC: '3' } });
+  const url = r.base + '/sync?church=' + church.pub + '&since=0', stranger = H.key();
+  const poke = () => fetch(url, { headers: { Authorization: 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: nowS() - 400, tags: [['u', url], ['method', 'GET'], ['church', church.pub]], content: '' }, stranger.sk))).toString('base64') } });
+  assert.equal((await r.status()).clockSuspect, undefined, 'CONTROL: nothing flagged before any refusal');
+  await poke();
+  const first = (await r.status()).clockSuspect;
+  assert.ok(first && first.at > 0, 'a time refusal did not raise the flag');
+  await sleep(1500); await poke();
+  assert.equal((await r.status()).clockSuspect.at, first.at, 'a later refusal inside the window EXTENDED the flag - it could be held up for ever');
+  await sleep(2500);   // past 3 s from the refusal that raised it
+  assert.equal((await r.status()).clockSuspect, undefined, 'the flag did not expire');
+  await poke();
+  const again = (await r.status()).clockSuspect;
+  assert.ok(again && again.at >= first.at + 3, 'a fresh refusal after expiry did not raise it again');
+});
+
+// ---- the relay dashboard's sync line (relay-app/control.js) ------------------------------------------------------
+const CONTROL = readFileSync(new URL('../relay-app/control.js', import.meta.url), 'utf8');
+test('the dashboard sync line says trust-or-clock only when a peer refused, and keeps its other lines', () => {
+  const line = liftFn(CONTROL, 'function syncLineText(sync, nowSec) {', 'syncLineText', {});
+  const now = 1e6;
+  const refused = line({ at: now - 30, ok: false, error: 'a peer refused this box - its trust list or a clock may be wrong' }, now);
+  assert.match(refused, /failed/); assert.match(refused, /trust list or a clock may be wrong/);
+  assert.doesNotMatch(line({ at: now - 30, ok: false, error: 'ECONNREFUSED' }, now), /clock|trust/, 'CONTROL: another failure must not blame clocks or trust');
+  assert.equal(line({ at: now - 30, ok: true, imported: 0 }, now), 'just now · nothing new');
+  assert.equal(line({ at: now - 600, ok: true, imported: 3 }, now), '10 minutes ago · pulled 3');
+  assert.equal(line({ running: true }, now), 'checking now…');
+  assert.equal(line({ at: 0, peers: 0 }, now), 'no other relays to check');
 });

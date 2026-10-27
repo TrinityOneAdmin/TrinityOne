@@ -9,6 +9,16 @@
   // Clipboard handling lives in copy.js so control.js and home.js cannot drift apart.
   const { copyText, flashCopied, showCopyFallback, copyWithFeedback } = window.RelayCopy;
 
+  // The sync card's one line. A failed pass says WHY in four words when the relay named a cause: a 401 can mean this
+  // box's clock, the peer's clock, or that the peer no longer trusts this box, and the relay cannot tell which.
+  function syncLineText(sync, nowSec) {
+    if (sync.running) return 'checking now\u2026';
+    if (!sync.at) return sync.peers ? 'not yet \u2014 first check runs shortly' : 'no other relays to check';
+    const mins = Math.floor((nowSec - sync.at) / 60);
+    const when = mins < 1 ? 'just now' : mins === 1 ? '1 minute ago' : mins < 60 ? mins + ' minutes ago' : Math.floor(mins / 60) + 'h ago';
+    if (sync.ok === false) return when + ' \u2014 failed' + (/peer refused/i.test(String(sync.error || '')) ? ' \u00b7 trust list or a clock may be wrong' : '');
+    return when + (sync.imported ? ' \u00b7 pulled ' + sync.imported : ' \u00b7 nothing new');
+  }
   function reachInfo() {
     const wssUrl = publicBase.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:') + '/relay';
     const consoleUrl = publicBase + '/steward.html';
@@ -96,14 +106,8 @@
       // sync health — the point of the card is 'is this working?', not a button
       const sw = document.getElementById('syncWhen');
       if (sw && s.sync) {
-        if (s.sync.running) { sw.textContent = 'checking now\u2026'; }
-        else if (!s.sync.at) { sw.textContent = s.sync.peers ? 'not yet \u2014 first check runs shortly' : 'no other relays to check'; }
-        else {
-          const mins = Math.floor((Date.now() / 1000 - s.sync.at) / 60);
-          const when = mins < 1 ? 'just now' : mins === 1 ? '1 minute ago' : mins < 60 ? mins + ' minutes ago' : Math.floor(mins / 60) + 'h ago';
-          sw.textContent = s.sync.ok === false ? when + ' \u2014 failed' + (/clock/i.test(String(s.sync.error || '')) ? ' \u00b7 a clock may be wrong' : '') : when + (s.sync.imported ? ' \u00b7 pulled ' + s.sync.imported : ' \u00b7 nothing new');
-          sw.style.color = s.sync.ok === false ? 'var(--clay-ink)' : '';
-        }
+        sw.textContent = syncLineText(s.sync, Date.now() / 1000);
+        sw.style.color = (!s.sync.running && s.sync.at && s.sync.ok === false) ? 'var(--clay-ink)' : '';
       }
     } catch (e) {
       // THE RELAY ANSWERED. Whatever went wrong here is ours — a field that changed shape, a missing

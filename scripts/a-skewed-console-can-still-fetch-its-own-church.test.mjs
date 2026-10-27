@@ -44,7 +44,7 @@ function relayGates(clockOffsetSec, churchPub) {
   const src = [
     fnBody(GATEWAY, 'function _blobUploader(req, action)', '_blobUploader'),
     // _exportAuth now records a time-window refusal (clock visibility, 2026-10-27); lift the real recorder with its state.
-    'let _clockSuspectAt = 0, _clockSuspectLogged = 0;',
+    'const CLOCK_SUSPECT_TTL = 3600; let _clockSuspectAt = 0, _clockSuspectLogged = 0;',
     fnBody(GATEWAY, 'function _noteTimeRefusal(req)', '_noteTimeRefusal'),
     fnBody(GATEWAY, 'function _exportAuth(req, host, path)', '_exportAuth'),
   ].join('\n');
