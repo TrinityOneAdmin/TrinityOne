@@ -18877,6 +18877,31 @@ zoo`.split("\n");
       pins: CANONICAL_RELAY_PUBS
     });
   }
+  function provenRelayPub(url) {
+    let k;
+    try {
+      k = relayAddrKey(String(url || ""));
+    } catch {
+      k = String(url || "");
+    }
+    try {
+      const e = _gate && _gate._map && _gate._map.get(k);
+      return e && e.pub ? String(e.pub).toLowerCase() : "";
+    } catch (e) {
+      return "";
+    }
+  }
+  function classifyRelay(info) {
+    const o = info || {};
+    const pub2 = String(o.pub || "").toLowerCase();
+    const isHex = /^[0-9a-f]{64}$/.test(pub2);
+    const canon = (Array.isArray(o.canonicalKeys) ? o.canonicalKeys : []).map((k) => String(k).toLowerCase());
+    if (isHex && canon.includes(pub2)) return "shared";
+    if (o.isLoopbackOrigin) return "self";
+    const entries = (Array.isArray(o.churchEntryPubs) ? o.churchEntryPubs : []).map((k) => String(k).toLowerCase());
+    if (isHex && entries.includes(pub2)) return "self";
+    return "neutral";
+  }
   var _beatsDoc = (a, b) => {
     if (!b) return true;
     const aa = a.created_at || 0, bb = b.created_at || 0;
@@ -19476,6 +19501,13 @@ zoo`.split("\n");
     // deadlock rule above enrolRelayNet.
     relayNet: relayNetEntries,
     relayNetCandidates,
+    // RELAY LABEL (display only): the proven identity per address, the shipped shared keys, and the pure
+    // classifier the Relays card renders its pill from. None of these admit a relay or change routing.
+    provenRelayPub,
+    classifyRelay,
+    sharedRelayKeys() {
+      return sharedRelayKeys(CANONICAL_RELAY_PUBS);
+    },
     // Signs the boxes this console can prove into the church's own membership document. Additive: it never
     // drops an entry that is merely unreachable.
     //

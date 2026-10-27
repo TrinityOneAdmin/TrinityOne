@@ -5187,6 +5187,23 @@ function DashRelaysCard() {
   const checking = status.length === 0;
   const allUp = online === status.length;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
+  const selfHostedConsole = !!(window.Steward.isSelfHosted && window.Steward.isSelfHosted());
+  // THE PILL IS LABELLED FROM THE PROVEN IDENTITY, NOT THE PAGE ADDRESS. The shipped shared-relay keys and
+  // the church's own signed relay-net pubkeys are what decide Shared vs Self-hosted vs Added; the render is
+  // synchronous, so the church's signed set (relayNet() is async) is pre-resolved into state here. Display
+  // only — see classifyRelay/provenRelayPub in src/steward.src.js; nothing here changes relay admission.
+  const canonicalKeys = (window.Steward.sharedRelayKeys ? window.Steward.sharedRelayKeys() : []);
+  const [churchEntryPubs, setChurchEntryPubs] = React.useState([]);
+  React.useEffect(() => {
+    let ok = true;
+    (async () => {
+      try {
+        const entries = window.Steward.relayNet ? await window.Steward.relayNet() : [];
+        if (ok) setChurchEntryPubs((entries || []).map(e => String((e && e.pubkey) || '').toLowerCase()).filter(Boolean));
+      } catch (e) {}
+    })();
+    return () => { ok = false; };
+  }, [status.length]);
   const [regOpen, setRegOpen] = React.useState(false);
   // shown only after this relay has actually refused a write — see noteRelayRejection(). Pasting a
   // relay's admin token hands over full control of that relay, so it is not something to leave sitting
@@ -5292,7 +5309,19 @@ function DashRelaysCard() {
             two short addresses. Everything sits inline and wraps only if the card actually gets narrow. */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {status.map(r => {
+            // `self` is UNCHANGED and still URL-based ON PURPOSE: it gates the Remove (trash) button below,
+            // where "is this the box serving this console" is the right question. The LABEL no longer rides
+            // on it — see relayKind.
             const self = host && r.url.includes(host);
+            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). isLoopbackOrigin
+            // is the origin root — this row is the console's own loopback-served box (desktop Suite) — URL-bound
+            // by construction, exactly as proveRelay's origin root is. canonical → Shared, own box → Self-hosted,
+            // otherwise Added. Display only; it does not touch admission.
+            const proven = window.Steward.provenRelayPub ? window.Steward.provenRelayPub(r.url) : '';
+            const isLoopbackOrigin = selfHostedConsole && !!own && r.url === own;
+            const relayKind = window.Steward.classifyRelay
+              ? window.Steward.classifyRelay({ pub: proven, isLoopbackOrigin, canonicalKeys, churchEntryPubs })
+              : (self ? 'self' : 'shared');
             const up = r.status === 'on';
             const refused = refusedSet.has(String(r.url || '').trim().toLowerCase().replace(/\/+$/, ''));
             const refusedWhy = refused ? refusedSet.get(String(r.url || '').trim().toLowerCase().replace(/\/+$/, '')) : '';
@@ -5308,7 +5337,7 @@ function DashRelaysCard() {
                     line and on a phone the status drops under the chips. `maxWidth: 100%` keeps it inside
                     the card's padding box rather than letting `flexShrink: 0` overrule the wrap. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
-                  {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
+                  {relayKind === 'self' ? <SkPill tint="clay">Self-hosted</SkPill> : relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : <SkPill tint="ink">Added</SkPill>}
                   {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
                       the other must not look fine. Under the closed network nothing is published to an
                       address until it has PROVED it holds a key this church's network contains, so a live
