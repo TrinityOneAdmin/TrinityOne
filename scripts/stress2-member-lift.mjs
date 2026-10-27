@@ -183,6 +183,18 @@ export function memberOn({ church, relays = [], canonical = [], pins = {}, store
     fnBody(src, 'async function _resendMembershipToNewBoxes', '_resendMembershipToNewBoxes'),
     stmt(src, 'var _leaveGen = ', '_leaveGen'),
     fnBody(src, 'function _resendJoinToBoxesGainedInFlight', '_resendJoinToBoxesGainedInFlight'),
+    // fix/stress-g2 (merged 2026-10-27): the one leaving guard every announce passes, and the queue helpers the Leave
+    // uses — SHIPPED, lifted the same way a-member-adopts-its-churchs-signed-relay.test.mjs lifts them.
+    stmt(src, 'var _left = ', '_left'),
+    fnBody(src, 'function _leavingFor', '_leavingFor'),
+    fnBody(src, 'function _announceBlocked', '_announceBlocked'),
+    fnBody(src, 'function _outboxDropJoins', '_outboxDropJoins'),
+    fnBody(src, 'function _mine', '_mine'),
+    fnBody(src, 'function _itemChurch', '_itemChurch'),
+    fnBody(src, 'function memberChurchPubs', 'memberChurchPubs'),
+    fnBody(src, 'function _leaveDelivered', '_leaveDelivered'),
+    stmt(src, 'var _PERMANENT = ', '_PERMANENT'),
+    stmt(src, 'var isPermanentRefusal = ', 'isPermanentRefusal'),
     stmt(src, 'var _joinSent = ', '_joinSent'),
     fnBody(src, 'function _joinSentSave', '_joinSentSave'),
     fnBody(src, 'function _markJoinSent', '_markJoinSent'),
@@ -253,6 +265,7 @@ export function memberOn({ church, relays = [], canonical = [], pins = {}, store
     // the member's key, as the module holds it, and the plumbing under the shipped announceMembership that has
     // nothing to do with WHERE it publishes: the wedge detector, the blocked check, the outbox's disk write.
     sk: me.sk, pub: me.pub, _outbox: [], _outboxSave: () => {}, _docsHubs: new Map(),
+    _outboxFailed: [], _flushing: false, _outboxFlush: async () => {},   // fix/stress-g2: the Leave sends this church's queued posts first; none here
     normalizeURL2: normalizeURL, _noteSendResult: () => {}, _checkIfBlocked: () => {},
     _forgetChurch: () => {},   // local-state cleanup after a leave; nothing here reads it
   });
