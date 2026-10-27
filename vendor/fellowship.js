@@ -7628,14 +7628,14 @@
       }
       return false;
     };
-    const drop = (gone || []).filter((u) => !stillNeeded(u));
-    if (!drop.length) return [];
-    for (const u of drop) {
+    for (const u of gone || []) {
       try {
         _gate.forgetScope(u, cp);
       } catch (e) {
       }
     }
+    const drop = (gone || []).filter((u) => !stillNeeded(u));
+    if (!drop.length) return [];
     const now = window.Fellowship.relays || [];
     if (now.some((u) => drop.includes(u))) window.Fellowship.setRelays(now.filter((u) => !drop.includes(u)));
     try {

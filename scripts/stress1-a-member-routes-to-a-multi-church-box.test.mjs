@@ -160,7 +160,7 @@ function phone({ relays, activeChurch, followed, netdoc, who, roster, store: giv
   });
   const api = new Function('scope', `with (scope) { ${body}
     return { relaysForChurch, publishSetFor, groupReadRelays, profilePublishRelays, dmSendRelays, memberChurchPubs,
-             gate: _gate, churchRelaysRaw, churchRelayNet, _netRelays, forgetChurch: _forgetChurch }; }`)(scope);
+             gate: _gate, churchRelaysRaw, churchRelayNet, _netRelays, forgetChurch: _forgetChurch, dropRevoked: _dropRevokedNetDocRows }; }`)(scope);
   api.relays = () => [...win.Fellowship.relays];
   api.win = win; api.store = store; api.close = () => { try { pool.shutdown(); } catch (e) {} };
   return api;
@@ -325,5 +325,23 @@ test('CONTROL: an A+C member who leaves A keeps H, because C still signs it', as
     const s = sets(app, [['C', C.pub]]);
     for (const k of ['publishSetFor(C)', 'relaysForChurch(C)', 'groupReadRelays(C)']) assert.ok(has(s[k], HB), k + ' lost H: ' + J(s[k]));
     assert.ok(app.gate.admits(u(HB), C.pub), 'C\'s proof of H was forgotten when A left');
+  } finally { app.close(); }
+});
+
+// G3 follow-up: C revokes a box that A still signs. The address stays (A needs it) but C's cached proof goes.
+test('C revokes H while A still signs it: H stays for A, and C\'s cached proof of H is forgotten', async () => {
+  const rows = { [A.pub]: { hw: 1, rows: rowsOf(HB) }, [C.pub]: { hw: 1, rows: rowsOf(HB) } };
+  const app = phone({ who: H.key(), relays: [S, HB].map(u), activeChurch: A.pub, followed: [A, C], netdoc: rows, churchboxes: { [A.pub]: [u(HB)] } });
+  try {
+    for (const ch of [A, C]) await app.gate.refresh(app.churchRelaysRaw(), ch.pub);
+    assert.ok(app.gate.admits(u(HB), A.pub) && app.gate.admits(u(HB), C.pub), 'control: H admitted for both before the revoke');
+    const after = { ...rows, [C.pub]: { hw: 2, rows: {} } };
+    const dropped = app.dropRevoked(C.pub, [u(HB)], after);
+    assert.deepEqual(dropped, [], 'H must not be taken off the phone: A still signs it');
+    assert.equal(app.gate.admits(u(HB), C.pub), false, 'C still has a cached proof of the box it revoked');
+    assert.equal(app.gate.admits(u(HB), A.pub), true, 'A lost its proof of H');
+    assert.ok(app.relays().includes(u(HB)), 'H left the phone');
+    assert.ok(has(app.publishSetFor(A.pub), HB) && has(app.relaysForChurch(A.pub), HB), 'H left A\'s sets');
+    assert.ok(!has(app.relaysForChurch(C.pub), HB), 'H is still in C\'s reads: ' + J(app.relaysForChurch(C.pub)));
   } finally { app.close(); }
 });

@@ -1233,11 +1233,12 @@ function _dropRevokedNetDocRows(cp, gone, rec) {
     for (const [, m] of _churchRelays) { if (m && m.has && m.has(u)) return true; }
     return false;
   };
+  // THE GATE FORGETS THIS CHURCH'S PROOF OF EVERY ADDRESS IT REVOKED (G3 3.2), including one another church still
+  // signs and which therefore stays on the phone: forgetScope removes only THIS church's scope, so the other
+  // church keeps its own proof.
+  for (const u of (gone || [])) { try { _gate.forgetScope(u, cp); } catch (e) {} }
   const drop = (gone || []).filter(u => !stillNeeded(u));
   if (!drop.length) return [];
-  // THE GATE FORGETS THIS CHURCH'S PROOF OF THE DROPPED ADDRESS (G3 3.2) - this church's scope only, and only for an
-  // address nothing else needs (stillNeeded above), so a box another church still signs keeps that church's proof.
-  for (const u of drop) { try { _gate.forgetScope(u, cp); } catch (e) {} }
   const now = window.Fellowship.relays || [];
   if (now.some(u => drop.includes(u))) window.Fellowship.setRelays(now.filter(u => !drop.includes(u)));
   try { pool.close(drop); } catch (e) {}
