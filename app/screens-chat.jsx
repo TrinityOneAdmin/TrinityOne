@@ -2325,7 +2325,7 @@ function dmAnnounceLabel(m, events) {
   const name = ev && String(ev.title || '').trim();
   return name ? name + ' Announcement' : 'Event announcement';
 }
-function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
+function DMSwipe({ mine, onReply, onDelete, menuOpen, onOpenMenu, children }) {
   // The swipe lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with Row and the console
   // DM. ⚠ its offset is a REF, never state read at lift time: see the note on the same trap in the kit.
   const sw = TrinityReplyKit.useSwipe(onReply);
@@ -2354,6 +2354,13 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
               padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>
               <Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button>
+            {/* DELETE — own messages only (wired in DMThread for m.mine). A 1:1 DM is kind-4: the relay
+                tombstones the sender's OWN copy (NIP-09, self-authorship enforced) and it is durable for the
+                sender, but the recipient already received and decrypted it and our thread/inbox subs do not
+                request kind-5 — so the wording promises "for you", never "for everyone". */}
+            {onDelete ? <button onClick={onDelete} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
+              padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}>
+              <Icon name="trash" size={15} color="var(--clay)" /> Delete</button> : null}
           </div>
         ) : null}
       </div>
@@ -2585,6 +2592,17 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
         </div>
         {shownMsgs.map(m => (
           <DMSwipe key={m.id} mine={m.mine} onReply={() => { setDmReply(m); setDmMenuFor(null); }}
+            onDelete={m.mine && FS && FS.deleteOwnDM ? () => {
+              setDmMenuFor(null);
+              // v1 is "delete for you" (owner 2026-10-28): removed from this device now, and a best-effort NIP-09
+              // kind-5 asks the relay to tombstone the sender's own copy — durable for the sender, best-effort for
+              // the recipient. dropQueued cancels a copy still waiting in the outbox; the filter clears a sent one.
+              if (confirm("Delete this message? It'll be removed for you. The other person may still have their copy.")) {
+                setMsgs(prev => prev.filter(x => x.id !== m.id));
+                if (FS.dropQueued) FS.dropQueued(m.id);
+                FS.deleteOwnDM(peer, m.id);
+              }
+            } : null}
             menuOpen={dmMenuFor === m.id} onOpenMenu={() => setDmMenuFor(dmMenuFor === m.id ? null : m.id)}>
             {/* the message this one answers, shown the same way a group room shows it */}
             {m.replyTo && msgById[m.replyTo]
