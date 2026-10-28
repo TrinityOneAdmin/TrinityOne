@@ -5250,9 +5250,25 @@ function DashRelaysCard() {
   // panel working rather than throw over the whole relay list.
   const skew = window.useStewardClockSkew ? window.useStewardClockSkew() : null;
   const host = (typeof location !== 'undefined' && location.host) || '';
-  const online = status.filter(r => r.status === 'on').length;
+  // COUNT DISTINCT BOXES, NOT ADDRESSES. One physical relay answers at several addresses (the a8's
+  // Cloudflare + Tailscale routes both prove the SAME identity key), and each address is a row in `status`.
+  // The badge is a redundancy/health summary, so it must count BOXES: group the rows by the identity each
+  // address PROVED — provenRelayPub, the same gate-cache key the per-row label reads below and the same
+  // identity backupState dedups by — falling back to the address only while nothing has proved there yet. A
+  // box is "online" if ANY of its addresses is answering (the WS status==='on' probe, kept so this agrees
+  // with the per-row dots). Because provenRelayPub reads the verified-identity CACHE, a box that is momentarily
+  // offline keeps its identity and stays in the denominator as a down box, so the badge can still go red.
+  // Display only — nothing here admits a relay, opens a socket, or changes which relays the church talks to.
+  const boxKey = (u) => {
+    const p = (window.Steward.provenRelayPub ? window.Steward.provenRelayPub(u) : '') || '';
+    return /^[0-9a-f]{64}$/.test(p) ? 'k:' + p : 'u:' + String(u || '').trim().toLowerCase().replace(/\/+$/, '');
+  };
+  const boxUp = new Map();   // boxKey -> online (true if any of its addresses is answering)
+  for (const r of status) { const k = boxKey(r.url); boxUp.set(k, (boxUp.get(k) || false) || (r.status === 'on')); }
+  const boxes = boxUp.size;
+  const online = [...boxUp.values()].filter(Boolean).length;
   const checking = status.length === 0;
-  const allUp = online === status.length;
+  const allUp = online === boxes;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
   const selfHostedConsole = !!(window.Steward.isSelfHosted && window.Steward.isSelfHosted());
   // THE PILL IS LABELLED FROM THE PROVEN IDENTITY, NOT THE PAGE ADDRESS. The shipped shared-relay keys and
@@ -5393,7 +5409,7 @@ function DashRelaysCard() {
     setRegBusy(false);
   };
   return (
-      <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{status.length} online</span> : null}>
+      <Panel title="Relays" action={!checking ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: allUp ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: allUp ? 'var(--sage)' : 'var(--clay)' }} /> {online}/{boxes} online</span> : null}>
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Where your church publishes. Add your own (self-host with the Suite) plus public ones — if one is offline, members reach another.</div>
         {/* D2: single-point-of-failure nudge (counts DISTINCT relay boxes by identity — two routes to one box don't
             count as redundancy) — or a "backup on" reassurance once the church runs 2+ separate relays that mirror. */}
