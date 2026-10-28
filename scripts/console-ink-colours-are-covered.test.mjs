@@ -429,7 +429,11 @@ const BARE_INVENTORY = [
     [1, "background: on ? 'var(--clay)' : 'var(--surface)'"],
     [1, "background: on ? 'var(--clay)' : 'var(--surface-2)'"],
     [3, "background: on ? 'var(--sage)' : 'transparent'"],
-    [1, "background: on(k) ? 'var(--sage)' : 'var(--line)'"],
+    // 2026-10-28: TWO now — the per-feature visibility toggles (feat/per-feature-visibility-toggles) render a
+    // second identical switch TRACK. Both are role="switch" pills carrying no text (1.4.11's 3:1, not 1.4.3's
+    // 4.5:1 — like every other switch track in this file); --sage-ink would make these two a different colour
+    // from every other switch in the console. Covers these two tracks only; any --sage behind TEXT still fails.
+    [2, "background: on(k) ? 'var(--sage)' : 'var(--line)'"],
     [1, "background: onOpt(k) ? 'var(--sage)' : 'var(--line)'"],
     [1, "background: photosOn ? 'var(--clay)' : 'var(--line)'"],
     [1, "background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)'"],

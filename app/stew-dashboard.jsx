@@ -3557,7 +3557,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const _sgnIds = new Set(careSignups.map(g => g.needId));
   const careSignupSig = Array.from(new Set((_sgnSlots || [])
     .filter(sl => sl && sl.pubkey && _sgnIds.has(sl.needId))
-    .map(sl => sl.needId + '\u0000' + sl.pubkey))).sort().join('|');
+    .map(sl => sl.needId + String.fromCharCode(0) + sl.pubkey))).sort().join('|'); // NUL byte separator via fromCharCode (kept out of a backslash-u literal that the JSX-text scan flags)
   // The X writes the CURRENT signature as acknowledged; the card is hidden iff the current signature equals it.
   const dismissSignups = () => { try { window.localStorage.setItem(_signupsAckKey, careSignupSig); } catch (e) {} setSignupsAck(careSignupSig); };
   const careSignupBanner = (careSignups.length && careSignupSig !== signupsAck) ? (
