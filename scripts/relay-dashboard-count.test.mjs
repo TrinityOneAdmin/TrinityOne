@@ -1,5 +1,5 @@
 // Relay dashboard "Churches" headline = REGISTERED churches (authed /status counts.churches), not active ones.
-//   Run: node --test scripts/relay-dashboard-count.test.mjs      (own port 8891; never run with other relay tests)
+//   Run: node --test scripts/relay-dashboard-count.test.mjs      (own port 8886; never run with other relay tests)
 //
 // Test 1 drives the REAL relay-app/control.js: it runs the real poll() (extracted from source, with a stubbed
 // fetch/DOM) and reads what lands in #s-churches. Reverting the client to (st.churches||[]).length, or dropping the
@@ -16,7 +16,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
 const SRC = readFileSync(new URL('../relay-app/control.js', import.meta.url), 'utf8');
-const PORT = 8891;
+const PORT = 8886;
 
 function liftPoll(fetchStub) {
   const reg = SRC.match(/  function registeredChurches\(s, st\) \{[\s\S]*?\n  \}\n/);

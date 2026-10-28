@@ -31,7 +31,7 @@ import { toHtml, page } from './console-banner-geometry.mjs';
 import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const CDP = 9371;
+const CDP = 9374;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const LONG = 'The key was saved, and “Musicians” is now sealed on 1 of 4 relays. relay.example.org, '
   + 'other.example.net, third.example.com would not take it, so messages that go through them can still be '

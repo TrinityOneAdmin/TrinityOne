@@ -86,7 +86,7 @@ test('Bible book picker: header sits at the top of the screen, no status-bar gap
   { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
     await requireFreePort(CDP, 'bible-book-picker-header-has-no-gap.test.mjs (Chrome debug port)');
     dir = mkdtempSync(join(tmpdir(), 'trin-bkpick-'));
-    chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
+    chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu', '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9',
       `--user-data-dir=${join(dir, 'prof')}`, 'about:blank'], { stdio: 'ignore' });
     let targets = null;
     for (let i = 0; i < 50 && !(targets && targets.length); i++) { await sleep(300); try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); } catch {} }
