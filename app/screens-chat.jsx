@@ -2296,10 +2296,15 @@ function DMSwipe({ mine, onReply, onDelete, menuOpen, onOpenMenu, children }) {
         {children}
         {/* AN ANNOUNCEMENT IS STILL REPLYABLE (owner 2026-10-15: keep the label, allow replies). The `nr` flag
             only drives the label now; every DM gets the swipe, the dots menu and Reply. */}
+        {/* WHERE THE MENU OFFERS MORE THAN REPLY, THE ⋯ IS NOT REPLY-ONLY — it stays a full visible pill, exactly
+            as Row does (reply-kit.jsx ~230, owner 2026-10-15). An own message's menu carries Delete, so the ⋯
+            has to be tappable: the reply-only hidden-on-touch style (dotsProps 'at' mode) renders a 1×1,
+            opacity-0 opener a human cannot find on a phone, and the swipe only ever fires Reply — so Delete
+            would be unreachable (found on the Oppo). The other person's message is reply-only and UNCHANGED. */}
         <button data-dm-menu="1" onClick={onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!menuOpen}
-          {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
+          {...(() => { const base = { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', boxShadow: 'var(--shadow)' })}><Icon name="dots" size={15} /></button>
+            justifyContent: 'center', boxShadow: 'var(--shadow)' }; return onDelete ? { style: base } : TrinityReplyKit.dotsProps(true, 30, base); })()}><Icon name="dots" size={15} /></button>
         {/* drops straight from the ⋯ — top: 24 (just under the button) and its NEAR edge pinned to the side
             the dots actually sit on (the bubble's inner edge: left:'100%' for the other person, right:'100%'
             for mine), growing inward and clamped back on-screen in both axes by clampMenuIntoView — see the

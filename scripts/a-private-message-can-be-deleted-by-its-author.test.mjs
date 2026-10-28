@@ -157,3 +157,26 @@ test('DMThread wires onDelete on DMSwipe, gated on m.mine and FS.deleteOwnDM', (
   assert.match(src, /onDelete=\{m\.mine && FS && FS\.deleteOwnDM \?/, 'the Delete row must be gated on m.mine and the engine method');
   assert.match(src, /function DMSwipe\(\{ mine, onReply, onDelete,/, 'DMSwipe must accept the onDelete prop');
 });
+
+// ── REACHABILITY: the ⋯ that opens the Delete menu must be a real tappable pill on a touch phone ─────────────
+// The device gap (Oppo): DMSwipe's ⋯ used dotsProps(true,30,base), which on touch (replyOnlyDots(true) === false
+// → 'at' mode) renders the opener as a hidden 1×1, opacity-0 node, reachable only by assistive tech. The swipe,
+// the touch route, only fires Reply. So a human could not open the menu to reach Delete. A menu nobody can open
+// is not a feature (CLAUDE.md rule 1), and the earlier test — which called onOpenMenu directly — could not see
+// it. These render in the TOUCH context: the harness window has no matchMedia, so replyOnlyDots(true) is false
+// and a reply-only ⋯ goes to 'at' (hidden) exactly as on the phone. We read the opener's OWN style.
+test('POINT OF USE (touch) — the ⋯ on your OWN DM is a VISIBLE tappable pill, not the hidden reply-only opener', () => {
+  const t = thread();
+  const dots = find(t.tree(), n => n.type === 'button' && n.props && n.props['aria-label'] === 'Message actions');
+  assert.equal(dots.length, 2, 're-anchor: a DM bubble no longer has a ⋯');
+  const own = dots[0].props.style, their = dots[1].props.style;   // thread order: mine (ts 1000) then theirs (ts 2000)
+  // my own message carries Delete → the ⋯ must be a full, visible, tappable pill
+  assert.equal(own.width, 30, 'the ⋯ on my own message is not a full 30px pill — Delete is unreachable by tap on a phone');
+  assert.notEqual(own.width, '1px', 'the ⋯ on my own message is the hidden 1×1 reply-only opener');
+  assert.ok(own.opacity === undefined || own.opacity === 1, 'the ⋯ on my own message is drawn invisible (opacity ' + own.opacity + ')');
+  assert.equal(dots[0].props.onFocus, undefined, 'a visible ⋯ needs no assistive-tech reveal handler');
+  // the other person's message is reply-only → its ⋯ stays hidden-on-touch (swipe is the reply route), UNCHANGED
+  assert.equal(their.width, '1px', 'the reply-only ⋯ must stay visually hidden on touch');
+  assert.equal(their.opacity, 0, 'the reply-only ⋯ must stay opacity 0 on touch');
+  assert.equal(typeof dots[1].props.onFocus, 'function', 'the reply-only ⋯ keeps its assistive-tech focus reveal');
+});
