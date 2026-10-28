@@ -166,31 +166,34 @@ test('the control has an accessible name and a tooltip, not a bare icon', () => 
 const menuCard = (tree) => find(tree, n => n.type === 'div' && n.props && n.props.style
   && n.props.style.position === 'absolute' && n.props.style.zIndex === 5 && texts(n).join(' ').includes('Reply'));
 
-test('THE ACTIONS MENU DOES NOT COVER THE MESSAGE IT ACTS ON — it opens BELOW the bubble', () => {
+test('THE ACTIONS MENU DOES NOT COVER THE MESSAGE IT ACTS ON — it drops from the ⋯ button', () => {
+  // a98b37ae re-anchored this: the menu drops FROM the ⋯ button (top:24, just under it) rather than being laid
+  // over the bubble body, so the member can still read the message they are deciding whether to answer.
   const t = thread();
   dots(t.redraw())[0].props.onClick();
   const card = menuCard(t.redraw());
   assert.equal(card.length, 1, 're-anchor: the open actions menu is not a positioned card any more');
   const s = card[0].props.style;
-  assert.equal(s.top, '100%',
-    'the menu is laid over the bubble instead of under it, so the member cannot read the message they are '
-    + 'deciding whether to answer. top was: ' + JSON.stringify(s.top));
+  assert.equal(s.top, 24,
+    'the menu no longer drops from just under the ⋯ button (top:24) — it is laid over the message body again, '
+    + 'so the member cannot read what they are answering. top was: ' + JSON.stringify(s.top));
   assert.equal(s.bottom, undefined, 'the menu is anchored upward as well as downward, which is ambiguous');
 });
 
-test('…and it is anchored to the bubble edge the dots sit on, on BOTH sides of the conversation', () => {
+test('…and its near edge is pinned to the ⋯ side, on BOTH sides of the conversation', () => {
   const t = thread();
-  // their message: bubble is left-aligned, dots sit to its right, menu opens rightwards from the left edge
+  // their message: incoming bubble, ⋯ sits to its right; the menu's near edge hangs from that side (left:100%)
   dots(t.redraw())[0].props.onClick();
   const theirs = menuCard(t.redraw())[0].props.style;
-  assert.equal(theirs.left, 0, 'an incoming message opens its menu from the wrong edge');
+  assert.equal(theirs.left, '100%', 'an incoming message opens its menu from the wrong edge');
   assert.equal(theirs.right, undefined);
-  // my message: bubble is right-aligned, so the menu must hang from its RIGHT edge or it runs off-screen
+  // my message: outgoing bubble, ⋯ sits to its left; the menu hangs from that side (right:100%) so a 150px-wide
+  // card on a narrow phone does not run off the right edge (clampMenuIntoView then nudges it fully on-screen).
   const u = thread();
   dots(u.redraw())[1].props.onClick();
   const own = menuCard(u.redraw())[0].props.style;
-  assert.equal(own.right, 0,
-    'my own message opens its menu from the left edge of a right-aligned bubble, which on a narrow phone '
+  assert.equal(own.right, '100%',
+    'my own message opens its menu from the wrong edge of a right-aligned bubble, which on a narrow phone '
     + 'pushes a 150px-wide card off the screen');
   assert.equal(own.left, undefined);
 });

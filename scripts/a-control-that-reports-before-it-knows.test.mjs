@@ -51,36 +51,59 @@ function memberScreen(care, extraCtx) {
 }
 
 // ── the meal-slot note ────────────────────────────────────────────────────────────────────────────────────
+// c38dbb56 ("quiet controls") replaced the synchronous "✓ Saved" flash with the quiet signal the console
+// uses everywhere now: on a CONFIRMED save the note input COLLAPSES to show the dish; a save that did not
+// land leaves the input open so it can be retried. The control is unchanged in spirit — a save that DID land
+// is reflected, a save that did NOT is not shown as done — so it is asserted on that collapse. `setEditing`
+// is the line c38dbb56 changed, so the test drives the edit flow (reopen an existing note, change it, save)
+// to exercise exactly it. The stub mirrors the real contract: a confirmed setNote persists onto the slot.
 const NEED = { id: 'care-1', type: 'meals', displayLabel: 'The Ellis family', dates: ['2026-09-10'] };
-const MY_SLOT = [{ needId: 'care-1', isoDate: '2026-09-10', pubkey: ME, note: '' }];
+const NOTE = 'lasagne, no nuts';
+const noteInput = (tree) => find(tree, n => n.type === 'input' && n.props && /bringing/i.test(n.props.placeholder || ''));
+// the dish, once SAVED, is a <button> (tap to re-edit) carrying the note — never the open <input>, whose
+// value also carries the draft text. So "is the dish shown as recorded" is a button test, not a text test.
+const dishSaved = (tree) => find(tree, n => n.type === 'button' && texts(n).join('').includes(NOTE));
 
 async function saveTheNote(setNoteResult) {
-  const said = [];
-  const care = { myPub: ME, slots: MY_SLOT, skips: [], setNote: async () => setNoteResult,
-                 fill: async () => setNoteResult, toast: (m, o) => said.push({ m, e: !!(o && o.error) }) };
+  const slot = [{ needId: 'care-1', isoDate: '2026-09-10', pubkey: ME, meal: '', note: 'an old note' }];
+  const care = { myPub: ME, slots: slot, skips: [],
+    setNote: async (_id, _iso, note) => { if (setNoteResult && setNoteResult.ok) slot[0].note = note; return setNoteResult; },
+    fill: async () => setNoteResult, toast: () => {} };
   const { draw, CareNeedRow } = memberScreen(care);
-  const props = { need: NEED, slots: MY_SLOT, skips: [], care, canManage: false, expanded: true, onToggle() {} };
+  const props = { need: NEED, slots: slot, skips: [], care, canManage: false, expanded: true, onToggle() {} };
   let tree = draw(CareNeedRow, props);
+  const pencil = find(tree, n => n.type === 'button' && /an old note/.test(texts(n).join('')))[0];
+  assert.ok(pencil, 'no editable dish to reopen — re-anchor this test');
+  pencil.props.onClick({ stopPropagation() {} });                 // reopen the input on my existing note
+  tree = draw(CareNeedRow, props);
+  const inp = noteInput(tree)[0];
+  assert.ok(inp, 'the pencil did not reopen the note input — re-anchor this test');
+  inp.props.onChange({ target: { value: NOTE } });                // change what I'm bringing
+  tree = draw(CareNeedRow, props);
   const b = button(tree, 'Save')[0];
   assert.ok(b, 'no Save control on an expanded slot I am filling — re-anchor this test');
   await b.props.onClick({ stopPropagation() {} });
-  tree = draw(CareNeedRow, props);
-  return texts(tree).join(' ');
+  return draw(CareNeedRow, props);
 }
 
-test('the note does NOT say "✓ Saved" when it did not save', async () => {
-  const words = await saveTheNote(null);
-  assert.ok(!/✓ Saved/.test(words),
-    'a green "✓ Saved" was drawn beside the error toast saying the same note had not reached the church');
+test('a note that did NOT save is not shown as done — the input stays open to retry', async () => {
+  const tree = await saveTheNote(null);
+  assert.ok(noteInput(tree).length,
+    'the input collapsed as if the note had saved, over a save that did not reach the church');
+  assert.ok(!dishSaved(tree).length,
+    'the changed dish is shown as recorded, over a note that did not land');
 });
 
-// ⚠ `{ ok: true, evt }`, NOT a bare event. fillCareSlot (which is what care.setNote reaches) answers
+// ⚠ `{ ok: true }`, NOT a bare event. fillCareSlot (which is what care.setNote reaches) answers
 // { ok, reason } since 2026-09-16, so the screen tests `r && r.ok` — a bare `{ id: 'evt' }` has no `.ok`
 // and would be read as a failure. This CONTROL went red the moment the shape changed, which is exactly
 // what a stub that mirrors the real contract is for.
-test('CONTROL: a note that DID save still says so', async () => {
-  const words = await saveTheNote({ ok: true, evt: { id: 'evt' } });
-  assert.match(words, /✓ Saved/, 'the confirmation was lost — without this control the fix could be "never confirm"');
+test('CONTROL: a note that DID save is reflected — the input collapses to the dish', async () => {
+  const tree = await saveTheNote({ ok: true, evt: { id: 'evt' } });
+  assert.ok(!noteInput(tree).length,
+    'the confirmation was lost — the input stayed open over a save that landed; without this control the '
+    + 'fix could be "never confirm"');
+  assert.ok(dishSaved(tree).length, 'the saved dish is not shown after a confirmed save');
 });
 
 // ── "I'm here to help", coming OFF the list ───────────────────────────────────────────────────────────────
