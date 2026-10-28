@@ -236,7 +236,10 @@ function renderOverview({ needs, slots, careOn = true, allowed = true }) {
   const noop = () => {};
   const scope = {
     h, Frag: 'Frag',
-    React: { useState: (v) => [typeof v === 'function' ? v() : v, noop], useEffect: noop, useMemo: (f) => f(), useRef: () => ({ current: null }), useCallback: (f) => f, useLayoutEffect: noop },
+    // signupsOpen now defaults COLLAPSED (owner 2026-10-28); this test checks the care data → names flow when the
+    // card is OPEN, so render it expanded. signupsOpen is the ONLY React.useState(false) in DashOverview, so turning a
+    // false initial into true targets exactly that card. Collapsed-by-default is covered by overview-signups-card-collapses.test.mjs.
+    React: { useState: (v) => { const iv = typeof v === 'function' ? v() : v; return [iv === false ? true : iv, noop]; }, useEffect: noop, useMemo: (f) => f(), useRef: () => ({ current: null }), useCallback: (f) => f, useLayoutEffect: noop },
     window: {
       useStewardGroups: () => [], useStewardMembers: () => [], useStewardRosters: () => [], useStewardRelays: () => [], useStewardStats: () => ({}),
       useStewardActivity: () => [], useStewardJoinPolicy: () => false, useStewardIdv: () => 0, useStewardConn: () => 0, useStewardBlocked: () => [],
