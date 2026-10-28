@@ -63,17 +63,35 @@ const namesShown = (tree) => texts(tree).join('|').includes('Callum, Desmond');
 const iconOf = (el) => find(el, n => n.type === 'icon')[0].props.name;
 
 for (const narrow of [false, true]) {
-  test(`(narrow=${narrow}) the sign-ups card has a chevron, open by default, naming who signed up`, () => {
-    const tree = overview({ narrow }).redraw();
-    assert.equal(chevron(tree).length, 1, 'no collapse control on the sign-ups card');
-    assert.equal(chevron(tree)[0].props['aria-expanded'], true);
-    assert.equal(iconOf(chevron(tree)[0]), 'chevD');
-    assert.ok(namesShown(tree), 'control: names show while expanded');
-  });
-
-  test(`(narrow=${narrow}) tapping the chevron hides the names but keeps the heading; tapping again restores`, () => {
+  test(`(narrow=${narrow}) the sign-ups card is COLLAPSED by default; tapping the chevron reveals who signed up`, () => {
+    // Owner 2026-10-28: the names start folded away on BOTH phone and desktop (one flag, all three layouts).
     const o = overview({ narrow });
     let tree = o.redraw();
+    assert.equal(chevron(tree).length, 1, 'no collapse control on the sign-ups card');
+    assert.equal(chevron(tree)[0].props['aria-expanded'], false, 'card must open COLLAPSED by default');
+    assert.equal(iconOf(chevron(tree)[0]), 'chevU');
+    assert.equal(namesShown(tree), false, 'names must be hidden until the steward expands the card');
+    assert.ok(texts(tree).includes('People have signed up to help'), 'the heading must still show while collapsed');
+    // the chevron reveals them
+    let stopped = false;
+    chevron(tree)[0].props.onClick({ stopPropagation() { stopped = true; } });
+    assert.ok(stopped, 'must stop the tap reaching the card, or expanding would also open Care');
+    tree = o.redraw();
+    assert.ok(namesShown(tree), 'the chevron did not reveal the names');
+    assert.equal(chevron(tree)[0].props['aria-expanded'], true);
+    assert.equal(iconOf(chevron(tree)[0]), 'chevD');
+    assert.deepEqual(o.clicks, [], 'folding must not navigate');
+  });
+
+  test(`(narrow=${narrow}) the chevron round-trips: expand shows names, collapse hides them, heading stays`, () => {
+    const o = overview({ narrow });
+    let tree = o.redraw();
+    // starts collapsed (new default) -> expand
+    chevron(tree)[0].props.onClick({ stopPropagation() {} });
+    tree = o.redraw();
+    assert.ok(namesShown(tree), 'expanding did not show the names');
+    assert.equal(iconOf(chevron(tree)[0]), 'chevD');
+    // collapse again
     let stopped = false;
     chevron(tree)[0].props.onClick({ stopPropagation() { stopped = true; } });
     assert.ok(stopped, 'must stop the tap reaching the card, or folding would also open Care');
@@ -82,10 +100,6 @@ for (const narrow of [false, true]) {
     assert.ok(texts(tree).includes('People have signed up to help'), 'heading must stay when collapsed');
     assert.equal(chevron(tree)[0].props['aria-expanded'], false);
     assert.equal(iconOf(chevron(tree)[0]), 'chevU');
-    chevron(tree)[0].props.onClick({ stopPropagation() {} });
-    tree = o.redraw();
-    assert.ok(namesShown(tree));
-    assert.equal(iconOf(chevron(tree)[0]), 'chevD');
     assert.deepEqual(o.clicks, [], 'folding must not navigate');
   });
 

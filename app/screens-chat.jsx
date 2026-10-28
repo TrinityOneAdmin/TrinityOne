@@ -1165,6 +1165,44 @@ function evtToMsg(e) {
   return { ...base, text: e.content };
 }
 
+// THE ONE-FRAME GAP WHERE A JUST-SENT MESSAGE BLINKS OUT. A message is published, the relay ACKs it, and the
+// engine drops it from the outbox ON THAT ACK (sendMessage / sendDM: `_outbox = _outbox.filter(...)` → _outboxSave
+// → onOutbox → the `queued`/`dmQueued` state loses it). But the authoritative copy only lands in `msgs` a beat
+// later, through the SEPARATE subscription echo (subscribeGroup kinds [1,5] / subscribeThread kind 4). For that
+// beat the message is in NEITHER `msgs` NOR `queued`, so a plain `[...msgs, ...queued.filter(not-have)]` drops
+// it — it vanishes and then reappears when the echo arrives. (The old "no flicker because the echo swaps the
+// same id" reasoning describes the id-dedup that stops a DUPLICATE in the overlap window; it never covered this
+// ACK-before-echo GAP, which is the real flicker.)
+//
+// Shared by ChatRoom and DMThread: keep a "delivered, awaiting echo" SHADOW of every still-pending item. While
+// the item is queued it is drawn from `queued` (as "Waiting to send"); the instant it leaves the queue
+// (delivered) but before its echo is in `msgs`, it is drawn from the shadow — as a NORMAL settled bubble, never
+// "Waiting to send". The shadow is released the moment its id turns up in `msgs`, and the same `!have.has(id)`
+// filter that already stops the queued/msgs overlap from double-drawing stops the shadow doubling too, so no
+// duplicate survives once the echo lands. `retainedPrev` is last render's shadow map and the caller threads
+// `retainedNext` back (via a ref). PURE and idempotent: run twice on the same (msgs, queued) it yields the same
+// retainedNext, so it is safe to call during render. Callers clear the ref on room/peer change and on resubscribe.
+function reconcileVisible(msgs, queued, retainedPrev) {
+  const have = new Set((msgs || []).map(m => m.id));
+  const qIds = new Set((queued || []).map(q => q.id));
+  const retainedNext = {};
+  // carry a prior shadow forward only until its echo lands (now in `msgs`) or it re-enters the queue
+  for (const id of Object.keys(retainedPrev || {})) {
+    if (!have.has(id) && !qIds.has(id)) retainedNext[id] = retainedPrev[id];
+  }
+  // remember every still-pending queued item, so if it is delivered (and leaves the queue) before its echo
+  // we still hold its words — stamped settled (_pending/_failed false), so it never draws as "Waiting to send"
+  for (const q of (queued || [])) {
+    if (q && q._pending && !have.has(q.id)) retainedNext[q.id] = { ...q, _pending: false, _failed: false, _retained: true };
+  }
+  const visible = [
+    ...(msgs || []),
+    ...(queued || []).filter(q => !have.has(q.id)),
+    ...Object.keys(retainedNext).filter(id => !have.has(id) && !qIds.has(id)).map(id => retainedNext[id]),
+  ];
+  return { visible, retainedNext };
+}
+
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
@@ -1758,10 +1796,15 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     refresh();
     return F.onOutbox(refresh);
   }, [group && group.id]);
+  // retain just-sent bubbles across the ACK→echo gap — see reconcileVisible. Cleared when the room changes or
+  // the subscription is re-issued (connTick), where the full history reloads into `msgs` and covers everything.
+  const retainRef = React.useRef({});
+  React.useEffect(() => { retainRef.current = {}; }, [group && group.id, ctx.connTick]);
   const visibleMsgs = React.useMemo(() => {
     const shown = msgs.filter(m => !hideSet.has(m.id));
-    const have = new Set(shown.map(m => m.id));
-    return [...shown, ...queued.filter(q => !have.has(q.id))];
+    const { visible, retainedNext } = reconcileVisible(shown, queued, retainRef.current);
+    retainRef.current = retainedNext;
+    return visible;
   }, [msgs, hidden, queued]);   // eslint-disable-line
   const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
   // perf #2: memoize the rendered bubbles so a composer keystroke (draft state) doesn't re-render the whole
@@ -2282,7 +2325,7 @@ function dmAnnounceLabel(m, events) {
   const name = ev && String(ev.title || '').trim();
   return name ? name + ' Announcement' : 'Event announcement';
 }
-function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
+function DMSwipe({ mine, onReply, onDelete, menuOpen, onOpenMenu, children }) {
   // The swipe lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with Row and the console
   // DM. ⚠ its offset is a REF, never state read at lift time: see the note on the same trap in the kit.
   const sw = TrinityReplyKit.useSwipe(onReply);
@@ -2296,10 +2339,15 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
         {children}
         {/* AN ANNOUNCEMENT IS STILL REPLYABLE (owner 2026-10-15: keep the label, allow replies). The `nr` flag
             only drives the label now; every DM gets the swipe, the dots menu and Reply. */}
+        {/* WHERE THE MENU OFFERS MORE THAN REPLY, THE ⋯ IS NOT REPLY-ONLY — it stays a full visible pill, exactly
+            as Row does (reply-kit.jsx ~230, owner 2026-10-15). An own message's menu carries Delete, so the ⋯
+            has to be tappable: the reply-only hidden-on-touch style (dotsProps 'at' mode) renders a 1×1,
+            opacity-0 opener a human cannot find on a phone, and the swipe only ever fires Reply — so Delete
+            would be unreachable (found on the Oppo). The other person's message is reply-only and UNCHANGED. */}
         <button data-dm-menu="1" onClick={onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!menuOpen}
-          {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
+          {...(() => { const base = { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', boxShadow: 'var(--shadow)' })}><Icon name="dots" size={15} /></button>
+            justifyContent: 'center', boxShadow: 'var(--shadow)' }; return onDelete ? { style: base } : TrinityReplyKit.dotsProps(true, 30, base); })()}><Icon name="dots" size={15} /></button>
         {/* drops straight from the ⋯ — top: 24 (just under the button) and its NEAR edge pinned to the side
             the dots actually sit on (the bubble's inner edge: left:'100%' for the other person, right:'100%'
             for mine), growing inward and clamped back on-screen in both axes by clampMenuIntoView — see the
@@ -2311,6 +2359,13 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
               padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>
               <Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button>
+            {/* DELETE — own messages only (wired in DMThread for m.mine). A 1:1 DM is kind-4: the relay
+                tombstones the sender's OWN copy (NIP-09, self-authorship enforced) and it is durable for the
+                sender, but the recipient already received and decrypted it and our thread/inbox subs do not
+                request kind-5 — so the wording promises "for you", never "for everyone". */}
+            {onDelete ? <button onClick={onDelete} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
+              padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay)', textAlign: 'left' }}>
+              <Icon name="trash" size={15} color="var(--clay)" /> Delete</button> : null}
           </div>
         ) : null}
       </div>
@@ -2448,8 +2503,11 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   const FS = window.Fellowship;
   const DM_EMOJI = REACT_EMOJIS;   // shared with group rooms — see the note on REACT_EMOJIS
   const d = (FS && FS.displayFor && peer) ? FS.displayFor(peer) : { handle: 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
+  // retain just-sent bubbles across the ACK→echo gap — see reconcileVisible. Reset here, so a peer switch or a
+  // reconnect (connTick) starts clean and the reloaded thread carries nothing stale from the last conversation.
+  const dmRetainRef = useCR({});
   useCE(() => {
-    setMsgs([]); setDraft('');
+    setMsgs([]); setDraft(''); dmRetainRef.current = {};
     if (!peer || !FS || !FS.subscribeThread) return;
     if (FS.requestProfiles) FS.requestProfiles([peer]);
     return FS.subscribeThread(peer, (m) => setMsgs(prev => {
@@ -2480,8 +2538,9 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
     return F.onOutbox(refresh);
   }, [peer]);
   const shownMsgs = React.useMemo(() => {
-    const have = new Set(msgs.map(m => m.id));
-    return [...msgs, ...dmQueued.filter(q => !have.has(q.id))];
+    const { visible, retainedNext } = reconcileVisible(msgs, dmQueued, dmRetainRef.current);
+    dmRetainRef.current = retainedNext;
+    return visible;
   }, [msgs, dmQueued]);   // eslint-disable-line
   useCE(() => { if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, open]);
   if (!peer) return null;
@@ -2538,6 +2597,17 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
         </div>
         {shownMsgs.map(m => (
           <DMSwipe key={m.id} mine={m.mine} onReply={() => { setDmReply(m); setDmMenuFor(null); }}
+            onDelete={m.mine && FS && FS.deleteOwnDM ? () => {
+              setDmMenuFor(null);
+              // v1 is "delete for you" (owner 2026-10-28): removed from this device now, and a best-effort NIP-09
+              // kind-5 asks the relay to tombstone the sender's own copy — durable for the sender, best-effort for
+              // the recipient. dropQueued cancels a copy still waiting in the outbox; the filter clears a sent one.
+              if (confirm("Delete this message? It'll be removed for you. The other person may still have their copy.")) {
+                setMsgs(prev => prev.filter(x => x.id !== m.id));
+                if (FS.dropQueued) FS.dropQueued(m.id);
+                FS.deleteOwnDM(peer, m.id);
+              }
+            } : null}
             menuOpen={dmMenuFor === m.id} onOpenMenu={() => setDmMenuFor(dmMenuFor === m.id ? null : m.id)}>
             {/* the message this one answers, shown the same way a group room shows it */}
             {m.replyTo && msgById[m.replyTo]

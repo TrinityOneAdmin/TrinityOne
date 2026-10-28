@@ -6298,6 +6298,21 @@ window.Fellowship = {
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] deleteOwnMessage failed', e); return null; }
     return evt;
   },
+  // NIP-09 for a 1:1 DM — retract one of MY OWN kind-4 messages. A SIBLING of deleteOwnMessage, not an overload:
+  // a DM has no group, its deletion must reach the same boxes the DM went to (dmSendRelays(peer), not the group
+  // publish set), and it carries ['p', peerPub] rather than a group/church tag. The relay verifies self-authorship
+  // (applyDeletion checks the stored row) and tombstones the sender's own copy, so this is DURABLE FOR THE
+  // SENDER — a fresh thread subscription will not re-serve it. It is only BEST-EFFORT for the recipient: they
+  // already received and decrypted the message, and the DM thread/inbox subscriptions request kinds [4]/[7],
+  // not kind-5, so no open client reflects it live. The UI wording therefore promises "for you", never "for
+  // everyone" (unlike the group room, where subscribeGroup honours the kind-5). Recipient-side honour is a v2.
+  async deleteOwnDM(peerPub, msgId) {
+    if (!sk) await window.Fellowship.ready;
+    const peer = toPub(peerPub) || peerPub;
+    const evt = finalizeEvent({ kind: 5, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['t', NET], ['p', peer]], content: '' }, sk);
+    try { await _publishAny(dmSendRelays(peer), evt); } catch (e) { console.warn('[fellowship] deleteOwnDM failed', e); return null; }
+    return evt;
+  },
 
   // ── moderation: pinned message + removed (hidden) messages (read-only on the member side) ──
   // Pin/hide docs are kind-30078 written by the church (steward) OR a group's leaders. The relay only
