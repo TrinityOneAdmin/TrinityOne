@@ -275,6 +275,113 @@ test('a room reached without the list’s mapping is still treated as a broadcas
   assert.notEqual(note(tree), '', 'that room is also given no explanation');
 });
 
+// ── PUBLIC reply vs REPLY PRIVATELY, gated by whether the member can post (Fix 2, 2026-10-27) ─────────────
+// A broadcast room is the church speaking to everyone; a member who cannot POST there must not be offered a
+// PUBLIC reply (the swipe and the menu "Reply"), because that reply is itself a post to the room and the relay
+// refuses it. "Reply privately" is a DIFFERENT control — it opens a DM to the message author, which in a
+// broadcast room is the church key the stewards read — and it MUST stay. The gate is one predicate,
+// canPostHere = !(isBroadcast && !isLeader), the same one that already hides the composer; a LEADER, who can
+// post, keeps the public reply.
+//
+// Asserted at the ChatRoom level, NOT on a Bubble handed a null prop (that would be vacuous — CLAUDE.md rule
+// 1): a real message is fed through Fellowship.subscribeGroup, the real ChatRoom renders it and wires the
+// menu, and we open the menu ChatRoom built and read it. Delete the onReply gate at the Bubble mapping and
+// the public "Reply" reappears here, failing the first test; gate the private path by mistake and the second
+// fails.
+function roomThread(group, { leader = false, msgs = [] } = {}) {
+  const { React, draw } = miniReact();
+  const Fellowship = {
+    myPubkey: 'mehex', relays: ['wss://relay.example'], relayReady: () => true,
+    groupEncState: () => 'clear',
+    subscribeGroup: (_g, cb) => { msgs.forEach(cb); return () => {}; },
+    subscribeReactions: () => () => {},
+    subscribeGroupPin: (_g, cb) => { cb(null); return () => {}; },
+    subscribeHidden: (_g, cb) => { cb(new Set()); return () => {}; },
+    subscribeMessageTags: () => () => {},
+    displayFor: () => ({ handle: 'sam', color: '#888' }),
+    requestProfiles: () => {}, outboxFor: () => [], onOutbox: () => () => {},
+    canAddGroupEvent: () => false, react: () => {},
+  };
+  const mod = loadScreen('app/screens-chat.jsx', ['ChatRoom'], {
+    React,
+    window: {
+      Fellowship,
+      TrinityData: { CHAT_IDENTITY: { handle: 'me', color: '#123456' }, GROUPS: [], RELAYS: [] },
+      TrinityIdentity: { current: { handle: 'me', color: '#123456' } },
+      addEventListener: () => {}, removeEventListener: () => {},
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      confirm: () => true,
+    },
+    document: { createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} }, addEventListener() {}, removeEventListener() {} },
+    location: { search: '', href: 'https://app.trinityone.church/' },
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    lsGet: (_k, d) => d, lsSet: () => {},
+    todayISO: () => '2026-09-01',
+    Icon: iconStub(React),
+    IconBtn: ({ name, title, onClick }) => React.createElement('button', { title: title || name, onClick }),
+    Overlay: ({ open, children }) => (open ? children : null),
+    UserAvatar: () => null, SectionLabel: ({ children }) => children,
+    BottomSheet: ({ children }) => children,
+    safeCssColor: (c) => c,
+    D: { GROUPS: [], RELAYS: [] },
+  });
+  const ctx = {
+    toast: () => {},
+    church: { npub: 'npub1church', name: 'St Aidan’s', id: 'c1' },
+    myLeaderGroups: leader ? [{ id: group.id }] : [],
+    churchEvents: [], safeguard: {}, myPubkey: 'mehex', openDM: () => {},
+    joinState: { loaded: true, isPending: false, removed: false, offline: false },
+  };
+  const render = () => draw(mod.ChatRoom, { group, open: true, onClose: () => {}, ctx, docked: true });
+  render();   // first draw queues the subscribe effect
+  render();   // the effect has fed the message; this draw shows the bubble
+  return { render };
+}
+
+// a plain text message from SOMEONE ELSE — so it is not "me" (Reply-privately only offers on another's
+// message) and carries no k-tag, i.e. an ordinary bubble with the reply affordances on it.
+const MSG_FROM_OTHER = { id: 'm1', pubkey: 'otherhex', created_at: 1756700000, content: 'Welcome along', tags: [], kind: 1 };
+
+function openMsgMenu(render) {
+  const dots = find(render(), n => n.type === 'button' && n.props.title === 'Message actions');
+  assert.equal(dots.length, 1, `expected exactly one message-actions button, found ${dots.length} — re-anchor`);
+  dots[0].props.onClick();
+  // the ⋯ BUTTON also carries data-msg-menu="1"; the open panel is the <div> that carries it.
+  const panel = find(render(), n => n.type === 'div' && n.props && n.props['data-msg-menu'] === '1');
+  assert.equal(panel.length, 1, 'the message menu did not open — re-anchor');
+  return panel[0];
+}
+// public reply = the menu button carrying the "reply" icon; reply-privately = the button whose text says so.
+const hasPublicReply = (menu) => find(menu, n => n.type === 'button' && find(n, x => x.props && x.props['data-icon'] === 'reply').length).length > 0;
+const hasReplyPrivately = (menu) => find(menu, n => n.type === 'button' && texts(n).some(t => /privately/i.test(t))).length > 0;
+
+test('broadcast room, a NON-leader: the PUBLIC reply is gone, but "Reply privately" stays', () => {
+  const { render } = roomThread(asListed(CAST), { leader: false, msgs: [MSG_FROM_OTHER] });
+  const menu = openMsgMenu(render);
+  assert.equal(hasPublicReply(menu), false,
+    'a member who cannot post in a broadcast room is still offered a public "Reply". That reply is a post to ' +
+    'the room and the relay refuses it — the onReply gate at the Bubble mapping is not holding');
+  assert.equal(hasReplyPrivately(menu), true,
+    '"Reply privately" went too — the private line to the stewards (a DM to the church key) was removed along ' +
+    'with the public reply, which is the one thing this fix must NOT do');
+});
+
+test('broadcast room, a LEADER (who CAN post): the public reply is kept', () => {
+  const { render } = roomThread(asListed(CAST), { leader: true, msgs: [MSG_FROM_OTHER] });
+  const menu = openMsgMenu(render);
+  assert.equal(hasPublicReply(menu), true,
+    'a leader can post in a broadcast room and so keeps the public reply — the gate has over-reached and taken ' +
+    'it from them too');
+});
+
+test('an ordinary room: a non-leader keeps the public reply, so the gate does not over-reach', () => {
+  const { render } = roomThread(asListed(ROOM), { leader: false, msgs: [MSG_FROM_OTHER] });
+  const menu = openMsgMenu(render);
+  assert.equal(hasPublicReply(menu), true,
+    'the public reply vanished in an ORDINARY conversation where every member can post — the broadcast gate ' +
+    'is firing in the wrong room');
+});
+
 // ── measured red/green, 2026-09-01, this file against app/screens-chat.jsx ───────────────────────────────
 //
 // Each sabotage was applied inside a slice of the code that owns the thing under test — ChatScreen, ChatRoom

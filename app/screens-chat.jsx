@@ -971,6 +971,30 @@ function shareTextOf(m) {
   if (m.kind === 'poll' && m.poll) return '📊 ' + (m.poll.question || 'Poll');
   return '';
 }
+// Keep an open message-actions menu on the screen. The menu drops from the ⋯ button: top: 24 (just under it)
+// and its NEAR edge pinned to the button's side (the bubble's inner edge, via left:'100%' / right:'100%'),
+// growing INWARD toward the centre so that near edge can never leave the viewport. But a bubble that is
+// itself almost full width puts the inner edge close to the FAR gutter, and a 150–240px card can run its far
+// edge past the opposite screen edge; and a message low on the screen can run the card's bottom off the
+// viewport. There is no pure-CSS way to measure those offsets, so once the card has mounted we read its box
+// and, if it overflows, slide it back with a transform — horizontally (right overflow first, then guard the
+// left edge) and vertically (bottom overflow first, then guard the top edge). Used by both Row and DMSwipe.
+// The render-jsx-screen unit harness has no layout engine and never invokes element refs, so this is inert
+// there; it runs in a real browser and on device, which is where the clamp must be checked.
+function clampMenuIntoView(el) {
+  if (!el || typeof el.getBoundingClientRect !== 'function' || typeof window === 'undefined') return;
+  el.style.transform = '';                                                   // measure the un-nudged CSS position
+  var docEl = window.document && window.document.documentElement;
+  var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
+  var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
+  if (!vw || !vh) return;
+  var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
+  if (r.right > vw - pad) dx = (vw - pad) - r.right;                         // far edge past the right gutter → slide left
+  if (r.left + dx < pad) dx = pad - r.left;                                  // …but never past the left gutter
+  if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;                       // card runs off the bottom → slide up
+  if (r.top + dy < pad) dy = pad - r.top;                                    // …but never above the top edge
+  if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+}
 function Row({ me, m, children, ctx, mod }) {
   const d = (m.pubkey && window.Fellowship && window.Fellowship.displayFor) ? window.Fellowship.displayFor(m.pubkey) : { handle: m.handle, color: m.color };
   const canDM = !!(m.pubkey && ctx && ctx.openDM && (!ctx.canDMPeer || ctx.canDMPeer(m.pubkey)));   // safeguarding gate
@@ -1048,19 +1072,24 @@ function Row({ me, m, children, ctx, mod }) {
         {(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM) || M.onReply) ? (
           <React.Fragment>
             <button data-msg-menu="1" onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={!!M.menuOpen} {...(() => { const base = { position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }; const replyOnly = !(M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)); return replyOnly ? TrinityReplyKit.dotsProps(true, 30, base) : { style: base }; })()}><Icon name="dots" size={15} /></button>
-            {/* ⚠ THE MENU MUST NOT COVER THE MESSAGE IT ACTS ON. It used to open at `top: 18, left: 0` —
-                18px DOWN FROM THE TOP OF THE BUBBLE, i.e. across it — so a steward deciding whether to
-                reply, or to reply privately, could no longer read the words they were answering. Device
-                screenshot, Oppo at 411px: the message was completely hidden behind the menu card. This is
-                the same mistake as the Bible highlight card that covered the verse the reader had just
-                selected; once is enough.
-                `top: 100%` opens it BELOW the bubble (and below the reaction chips, which are inside this
-                column too), so the message stays readable and the menu overlaps only the message after it.
-                It is anchored to the bubble edge the dots sit on — right for my own messages, left for
-                everyone else's — which is also what keeps it on a narrow screen: a menu wider than its
-                bubble can then only grow INWARD, toward the middle of the screen, never off the edge. */}
+            {/* THE MENU DROPS FROM THE ⋯ BUTTON, like a phone context menu at the tap point. History, because
+                this corner has been wrong twice: it first opened at `top: 18` (across the bubble, hiding the
+                words being answered — Oppo screenshot, 411px). The fix for THAT was `top: 100%` (below the
+                whole bubble) — but on a TALL message (a long broadcast) the ⋯ is at the message's top while
+                `100%` is ~600px lower, so the card rendered down beside the FOLLOWING message, detached from
+                the one it acts on (Oppo, owner-reported). The owner's call: open it AT the button and let it
+                overlay the top of its own message — a context menu at the finger beats one that floats off.
+                So it hugs the ⋯ in BOTH axes. Vertically: `top: 24`, just under the button (the button is
+                `top: -7`, height 30, so its bottom is at 23). Horizontally: the NEAR edge is pinned to the
+                button's side — the bubble's INNER edge (`left:'100%'` for everyone else's message, whose dots
+                are at the bubble's right edge; `right:'100%'` for my own, whose dots are at the left edge) —
+                and it grows INWARD toward the centre, so that near edge can never leave the screen. A bubble
+                that is itself almost full width, or a message low on the screen, can still push the card's FAR
+                or BOTTOM edge off-viewport, so `clampMenuIntoView` (the ref) measures the mounted card and
+                slides it back in both axes. The unit harness has no layout engine and never runs that ref —
+                the clamp is a device/browser check. */}
             {M.menuOpen ? (
-              <div data-msg-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div data-msg-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: 24, [me ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
                     · not my own message (replying privately to yourself is nonsense), and
@@ -1139,6 +1168,10 @@ function evtToMsg(e) {
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). The folded "You're serving" / "requests
+  // waiting" line is the `rota` feature — gated here to MATCH the identical strip on Today (screens-today.jsx).
+  // The hub card itself stays: it is the member's entry to the Serving overlay, where Care also lives.
+  const rotaFeatOn = !(ctx.church && ctx.church.features && ctx.church.features.rota === false);
   // same per-slot dismiss as the Today strip (same localStorage key); a pending ask is never dismissable
   const [, setDismissTick] = React.useState(0);
   const servKey = next ? [next.id || '', next.date || '', next.teamName || '', next.role || ''].join('|') : '';
@@ -1158,7 +1191,7 @@ function ServingEntry({ ctx }) {
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
-        {(pending || (next && !dismissed)) ? (
+        {rotaFeatOn && (pending || (next && !dismissed)) ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderTop: '1px solid var(--line)', fontSize: 12.5, fontWeight: 700, minWidth: 0,
             background: pending ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 8%, var(--surface))', color: pending ? '#8a6717' : 'var(--sage)' }}>
             <Icon name={pending ? 'sparkle' : 'calCheck'} size={14} color="currentColor" />
@@ -1495,6 +1528,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   // other route (a shared link, sample data, an older cached list) so this can never quietly become false
   // for a room the relay will still refuse a post to.
   const isBroadcast = !!group && (group.broadcast === true || group.kind === 'Broadcast');   // one-to-many: members read, only church/leaders post
+  // The SAME predicate that gates the composer below (~:1966): in a broadcast room a non-leader cannot post,
+  // so they also get no PUBLIC reply (swipe + menu "Reply"). "Reply privately" is independent (gated on openDM)
+  // and stays. Named once so the composer and the per-message reply can never drift apart.
+  const canPostHere = !(isBroadcast && !isLeader);
   const id = useIdentity();
   const scRef = useCR();
   // { gid, ids } — the message ids already shown, kept ACROSS a reconnect so the relay's replay is deduped
@@ -1787,15 +1824,19 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     live={!!window.Fellowship}
     canModerate={canModerate} isPinned={!!(pin && pin.msgId === m.id)}
     menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
-    onReply={() => { setReplyTo(m); setMenuFor(null); }} replyParent={m.replyTo ? msgById[m.replyTo] : null}
+    onReply={canPostHere ? (() => { setReplyTo(m); setMenuFor(null); }) : null} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
     onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} />
   </React.Fragment>),
-    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, canPostHere, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles; `canPostHere` so a mid-session promotion to leader restores public reply
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
   const todayIso = todayISO();
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). When the steward hides `calendar`, the
+  // in-group events card AND the "EVENT" compose button go with it — a church that turned events off must not
+  // still see event cards or be offered the create-event form here. Unset means on (existing churches unchanged).
+  const calFeatOn = !(ctx.church && ctx.church.features && ctx.church.features.calendar === false);
   const groupEvents = (ctx.churchEvents || [])
     .filter(e => e.groupId && e.groupId === group.id && (e.date || '') >= todayIso)
     .sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 3);
@@ -1837,7 +1878,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           `position: fixed/absolute; inset: 0` — nesting GroupInfo there would clip the whole panel to the
           thin header strip. Kept a sibling so it fills the screen; the header's tap only flips `infoOpen`. */}
       <GroupInfo group={group} open={infoOpen} onClose={() => setInfoOpen(false)} ctx={ctx} />
-      {composeEvt ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
+      {composeEvt && calFeatOn ? <GroupEventComposer group={group} ctx={ctx} onClose={() => setComposeEvt(false)} /> : null}
 
       {/* WHO SPEAKS IN THIS ROOM, SAID ONCE, AT THE TOP. Hiding the composer is not an explanation: a
           member tapped in, found nowhere to type and was left to guess whether the room was broken, whether
@@ -1897,7 +1938,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             "Not encrypted" on its face. The EXPLANATION moved to Help ("Is my church chat private?"), where
             someone asking the question can find it, instead of being shouted at everyone who is not.
             no-overclaims.test.mjs follows it there. */}
-        {(groupEvents.length || canAddEvent) ? (
+        {calFeatOn && (groupEvents.length || canAddEvent) ? (
           <div style={{ borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 22%, var(--line))', padding: '12px 13px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, fontSize: 11, fontWeight: 800, letterSpacing: '.5px', color: 'var(--clay-ink)' }}>
               <Icon name="calendar" size={14} color="var(--clay)" /> <span style={{ flex: 1 }}>UPCOMING IN THIS GROUP</span>
@@ -1970,7 +2011,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center', lineHeight: 1.45 }}>
             <Icon name="shield" size={16} color="var(--ink-3)" style={{ flexShrink: 0 }} /> Waiting for a steward to approve you — you’ll be able to post once you’re in.
           </div>
-        ) : (isBroadcast && !isLeader) ? (
+        ) : !canPostHere ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 14px', color: 'var(--ink-3)', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
             <Icon name="send" size={16} color="var(--ink-3)" /> Your church posts here — you’ll see everything it sends.
           </div>
@@ -2012,7 +2053,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
                   <button key={f.id} onClick={() => { setFlag(on ? null : f); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: on ? 'color-mix(in oklab, ' + ac + ' 14%, var(--surface))' : 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name={f.icon} size={18} color={ac} fill={on} /> {f.label}{on ? ' · on' : ''}</button>
                 ); })}
                 <button onClick={() => { setPollOpen(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="sliders" size={18} color="var(--clay)" /> Poll</button>
-                {canAddEvent ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
+                {canAddEvent && calFeatOn ? <button onClick={() => { setComposeEvt(true); setActionsOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 11, border: 'none', background: 'none', cursor: 'pointer', padding: '10px 11px', borderRadius: 9, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="calPlus" size={18} color="var(--clay)" /> New event</button> : null}
               </div>
             ) : null}
           </div>
@@ -2259,9 +2300,13 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
           {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
             justifyContent: 'center', boxShadow: 'var(--shadow)' })}><Icon name="dots" size={15} /></button>
-        {/* below the bubble, anchored to the side the dots are on — see the long note in Row */}
+        {/* drops straight from the ⋯ — top: 24 (just under the button) and its NEAR edge pinned to the side
+            the dots actually sit on (the bubble's inner edge: left:'100%' for the other person, right:'100%'
+            for mine), growing inward and clamped back on-screen in both axes by clampMenuIntoView — see the
+            long note in Row. This used to read `top:'100%', […]:0`, which dropped the card to the bubble's
+            BOTTOM and OPPOSITE corner — detached on a tall message, the same defect Row carried. */}
         {menuOpen ? (
-          <div data-dm-menu="1" style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
+          <div data-dm-menu="1" ref={clampMenuIntoView} style={{ position: 'absolute', top: 24, [mine ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
             borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
               padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>

@@ -40,6 +40,20 @@ function notifServingItems(reqs, todayIso, churchName) {
   });
   return out;
 }
+// PER-CHURCH FEATURE VISIBILITY in the notifications bell. The church's reading plans, devotionals, sermon
+// and events are pushed into the member feed; when the steward hides a feature in the console those rows must
+// NOT appear here (the event row even carries an openEvent deep link). Lifted out of App()'s notifications
+// memo — which cannot be rendered in isolation (see a-notification-says-when-and-the-rota-is-one.test.mjs) —
+// so a point-of-use test can RUN it (CLAUDE.md rules 1 & 3). Default ON: `calOn`/`resOn` are `!== false`.
+//   · calendar → "New event" rows   · resources → devotional, reading-plan AND sermon rows (owner 2026-10-27)
+function notifFeatureRows({ churchDevos = [], pinnedSermon = null, churchPlans = [], churchEvents = [], churchName = '', eventVisible = () => true, calOn = true, resOn = true }) {
+  const out = [];
+  if (resOn) churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: churchName, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
+  if (resOn && pinnedSermon && pinnedSermon.sha256 && pinnedSermon.notify !== false) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: churchName, text: (String(pinnedSermon.mime || '').startsWith('video') ? 'New video · ' : 'New audio clip · ') + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
+  if (resOn) churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: churchName, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
+  if (calOn) churchEvents.filter(eventVisible).forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: churchName, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
+  return out;
+}
 
 function NotificationsScreen({ open, onClose, ctx }) {
   const [detail, setDetail] = useX(null);   // a notification opened for its full text

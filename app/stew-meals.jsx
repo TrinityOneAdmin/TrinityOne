@@ -435,7 +435,28 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const swipeSt = React.useRef(null);
   const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
-  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
+  // Keep an open ⋯ menu usable: first reveal it inside the chat's own scroller, then nudge it back inside
+  // the viewport in BOTH axes (a wide bubble pushes its far edge past the gutter; a message low in the sheet
+  // runs its bottom off-screen). Sibling of app/screens-chat.jsx clampMenuIntoView; inert in the hook-light
+  // unit rig (no layout engine — getBoundingClientRect / window absent — so the ref body no-ops there).
+  const menuIntoView = React.useCallback((el) => {
+    if (!el) return;
+    try { if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    try {
+      if (typeof window === 'undefined' || typeof el.getBoundingClientRect !== 'function') return;
+      el.style.transform = '';
+      var docEl = window.document && window.document.documentElement;
+      var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
+      var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
+      if (!vw || !vh) return;
+      var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
+      if (r.right > vw - pad) dx = (vw - pad) - r.right;
+      if (r.left + dx < pad) dx = pad - r.left;
+      if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;
+      if (r.top + dy < pad) dy = pad - r.top;
+      if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+    } catch (e) {}
+  }, []);
   const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
   const inputRef = React.useRef(null);
@@ -459,7 +480,6 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const swipe = (m) => isNative && canReply(m)
     ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
     : {};
-  const lastId = textMsgs.length ? textMsgs[textMsgs.length - 1].id : '';
   const msgById = {};
   textMsgs.forEach(m => { msgById[m.id] = m; });
   React.useEffect(() => {
@@ -487,9 +507,14 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
                 <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={dotsMsg === m.id}
                   {...TrinityReplyKit.dotsProps(isNative, 24, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={14} /></button>
               ) : null}
-              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before. */}
+              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before.
+                  It DROPS FROM THE ⋯ BUTTON (top: 20, just under the 24px button at top:-6), its near edge pinned to the dots'
+                  side (the bubble's INNER edge: left:'100%' for the other person, right:'100%' for mine) and grows inward. It
+                  used to open at `top: 100%` (the bubble's BOTTOM): on a tall message that is far below the dots, detached from
+                  its own message — the defect fixed in the member app (app/screens-chat.jsx). menuIntoView scrolls it into the
+                  sheet and clamps it back into the viewport in both axes. */}
               {dotsMsg === m.id ? (
-                <div data-reply-menu={m.id === lastId ? 'up' : 'down'} ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
+                <div data-reply-menu="down" ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 20, [m.mine ? 'right' : 'left']: '100%', zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
                   <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                 </div>
               ) : null}
@@ -1025,6 +1050,10 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
   for (const s of slots) { (slotsByDate[s.isoDate] = slotsByDate[s.isoDate] || []).push(s); }
   const directory = window.useStewardDirectory ? window.useStewardDirectory() : {};
   const nameOf = (pub) => (directory && directory[pub] && directory[pub].name) || (pub ? (pub.slice(0, 6) + '…' + pub.slice(-4)) : 'A member');
+  // Narrow (phone APK + narrow browser) stacks each meal as two lines; the desktop console keeps the one-row,
+  // four-column layout. Same shared hook, same guarded call as app/stew-schedule.jsx (the bundle concatenates
+  // these files, so `useStewNarrow` may not be in scope in every load order).
+  const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;
   // steward can mark a day "covered" (block it) for a recipient who isn't on the app — optimistic, then publish
   const [optSkip, setOptSkip] = React.useState({});
   const isSkipped = (iso) => (iso in optSkip) ? optSkip[iso] : !!skipByDate[iso];
@@ -1081,19 +1110,39 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
         ) : dates.map(iso => {
           const skipped = isSkipped(iso);
           const fills = slotsByDate[iso] || [];
-          return (
+          // The date head and the covered-day summary, shared by both layouts. The summary stays ONLY on a
+          // covered day: such a day renders "Covered ..." and NO per-meal rows, so it is the only place the
+          // covered meals are listed. On a normal day the per-meal rows below already carry each meal's name,
+          // so repeating it under the date was a duplicate (the owner's second complaint) and is dropped.
+          const dateHead = <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{mealsFmtDate(iso)}</div>;
+          const daySummary = need.type === 'meals' && skipped ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMealsOf(iso).map(m => MEAL_SHORT[m]).join(' · ')}</div> : null;
+          const skipBtn = fills.length === 0 ? <button onClick={() => doSkip(iso, !skipped)} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>{skipped ? 'Undo' : 'Skip'}</button> : null;
+          // The day's content: the per-meal rows (meals need), or the fills / "Open" / "Covered" lines. The
+          // per-meal row is where the responsive split bites: on NARROW it wraps so the helper name shares the
+          // first line (no rigid width:120 column) and the dish note drops onto its own full-width line; on WIDE
+          // it keeps the one-row four-column layout exactly as the desktop console has always had it.
+          const content = skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Covered{skipByDate[iso] && skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
+            : (need.type === 'meals' && dayMealsOf(iso).length) ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{dayMealsOf(iso).map(m => { const mf = fills.filter(f => (f.meal || '') === m || (f.meal || '') === ''); return <div key={m} style={{ display: 'flex', flexWrap: narrow ? 'wrap' : 'nowrap', gap: narrow ? '4px 10px' : 10, alignItems: 'baseline' }}><span style={{ fontWeight: 700, color: 'var(--ink)', width: 76, flexShrink: 0 }}>{MEAL_SHORT[m] || m}:</span><span style={{ width: 84, flexShrink: 0 }}>{mf.length ? <span style={{ color: 'var(--sage-ink)', fontWeight: 600 }}>Covered</span> : <span style={{ color: 'var(--ink-3)' }}>Open</span>}</span><span style={narrow ? { flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' } : { width: 120, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' }}>{mf.map(f => nameOf(f.pubkey)).join(', ')}</span>{(!narrow || mf.some(f => f.note)) ? <span style={narrow ? { flexBasis: '100%', minWidth: 0, color: 'var(--ink-2)' } : { flex: 1, minWidth: 0, color: 'var(--ink-2)' }}>{mf.map(f => f.note).filter(Boolean).join(', ')}</span> : null}</div>; })}</div>
+            : fills.length === 0 ? <span style={{ color: 'var(--ink-3)' }}>Open</span>
+            : fills.map((f, i) => <span key={i} style={{ marginRight: 10 }}><Icon name="check" size={12} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>);
+          // NARROW (phone APK + narrow browser): the day is a VERTICAL STACK — the date is its own header line
+          // (Skip/Undo pinned top-right, flex-start so it is not stretched into a full-width bar), the meal
+          // rows full-width beneath. The old side-by-side [date width:104 | meals] row squeezed the meals
+          // column below the 310px its non-shrinking children needed, so they spilled off the right edge and
+          // pushed the whole page sideways. WIDE (desktop console): the original side-by-side layout, unchanged.
+          return narrow ? (
+            <div key={iso} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 13px', borderRadius: 11, border: '1px solid var(--line)', background: skipped ? 'var(--surface-2)' : 'var(--surface)', opacity: skipped ? 0.55 : 1 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 11 }}>
+                <div style={{ minWidth: 0 }}>{dateHead}{daySummary}</div>
+                {skipBtn}
+              </div>
+              <div style={{ minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>{content}</div>
+            </div>
+          ) : (
             <div key={iso} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '12px 13px', borderRadius: 11, border: '1px solid var(--line)', background: skipped ? 'var(--surface-2)' : 'var(--surface)', opacity: skipped ? 0.55 : 1 }}>
-              <div style={{ width: 104, flexShrink: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', textDecoration: skipped ? 'line-through' : 'none' }}>{mealsFmtDate(iso)}</div>
-                {need.type === 'meals' ? <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600 }}>{dayMealsOf(iso).map(m => MEAL_SHORT[m]).join(' · ')}</div> : null}
-              </div>
-              <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>
-                {skipped ? <span><Icon name="x" size={12} color="var(--ink-3)" /> Covered{skipByDate[iso] && skipByDate[iso].reason ? ' — ' + skipByDate[iso].reason : ''}</span>
-                  : (need.type === 'meals' && dayMealsOf(iso).length) ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{dayMealsOf(iso).map(m => { const mf = fills.filter(f => (f.meal || '') === m || (f.meal || '') === ''); return <div key={m} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}><span style={{ fontWeight: 700, color: 'var(--ink)', width: 76, flexShrink: 0 }}>{MEAL_SHORT[m] || m}:</span><span style={{ width: 84, flexShrink: 0 }}>{mf.length ? <span style={{ color: 'var(--sage-ink)', fontWeight: 600 }}>Covered</span> : <span style={{ color: 'var(--ink-3)' }}>Open</span>}</span><span style={{ width: 120, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' }}>{mf.map(f => nameOf(f.pubkey)).join(', ')}</span><span style={{ flex: 1, minWidth: 0, color: 'var(--ink-2)' }}>{mf.map(f => f.note).filter(Boolean).join(', ')}</span></div>; })}</div>
-                  : fills.length === 0 ? <span style={{ color: 'var(--ink-3)' }}>Open</span>
-                  : fills.map((f, i) => <span key={i} style={{ marginRight: 10 }}><Icon name="check" size={12} color="var(--sage)" /> {nameOf(f.pubkey)}{f.note ? ' (' + f.note + ')' : ''}</span>)}
-              </div>
-              {fills.length === 0 ? <button onClick={() => doSkip(iso, !skipped)} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}>{skipped ? 'Undo' : 'Skip'}</button> : null}
+              <div style={{ width: 104, flexShrink: 0 }}>{dateHead}{daySummary}</div>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--ink-2)' }}>{content}</div>
+              {skipBtn}
             </div>
           );
         })}

@@ -152,6 +152,42 @@ const NAV = [
   // { key: 'giving', label: 'Giving', ic: 'gift' },   // parked for the pilot (chat first)
 ];
 
+// PER-FEATURE VISIBILITY (church.features, same mechanism as read / community / library). A steward hides a
+// whole section from the console — and, where it has one, from the member app — by turning it off in
+// Settings → Congregation features. DEFAULT ON WHEN UNSET (`features[k] !== false`), so every church that
+// predates these toggles is unchanged. These two helpers are PURE on purpose: app/*.jsx ships UNBUNDLED, so
+// CLAUDE.md rule 3 forbids proving the gate by matching text — a point-of-use test RUNS these instead, and a
+// deleted gate then fails (rules 1 & 3). stewNav is the whole church nav memo body, lifted out so the test
+// can build the real nav with features set and see a hidden section gone / a padlock still correct.
+//
+// ⚠ CHURCH VIEW ONLY. The network view builds its own nav elsewhere and must never reach here; the caller's
+// memo is what decides which one runs.
+function stewFinanceOn(church, opts) {
+  // The per-church Finance toggle folds INTO the existing gate (module loaded + capability held). So
+  // features.finance === false hides Finance EVEN with DashFinance present and the capability granted; unset
+  // keeps it on. This is the NEW gate, distinct from the pre-existing "module + capability" finOn.
+  const f = (church && church.features) || {};
+  return !!(opts && opts.financePresent) && opts.capState('finance').allowed && f.finance !== false;
+}
+function stewNav(NAV, church, opts) {
+  const f = (church && church.features) || {};
+  const featOn = (k) => f[k] !== false;   // default-on congregation features
+  const GATED = ['rota', 'calendar', 'rooms', 'resources'];   // base-NAV sections a church can hide
+  const copy = NAV.filter(n => GATED.indexOf(n.key) < 0 || featOn(n.key));
+  // Mark rather than hide for CAPABILITY — a missing tab reads as a broken console; a locked one that
+  // explains itself reads as a church that has scoped you. (Feature-hiding above is the church's own choice,
+  // which is a different thing from a delegate's scope.)
+  const capOf = { groups: 'content', rota: 'content', calendar: 'content', rooms: 'content',
+                  resources: 'content', members: 'members', meals: 'care', checkin: 'safeguarding' };
+  const mark = (n) => { const c = capOf[n.key]; if (!c) return n; const st = opts.capState(c); return st.allowed ? n : { ...n, locked: true, cap: c }; };
+  const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
+  if (opts.checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
+  if (opts.finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
+  if (opts.mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
+  if (opts.mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
+  return copy.map(mark);
+}
+
 // sidebar identity control: switch the WHOLE console between the church and any network it owns.
 // With no owned networks it's just the church name button (tap to rename).
 //
@@ -2137,32 +2173,33 @@ function StewDashboard({ initial = 'overview' }) {
   // write to it. A delegate who was NOT granted it still sees the padlock rather than a missing tab.
   // A stable string for "which capabilities do I hold" — the thing every padlock below is computed from.
   const _capsSig = JSON.stringify((window.Steward && window.Steward.myStewardCaps && window.Steward.myStewardCaps()) || null);
-  const finOn = !!window.DashFinance && stewCapState('finance').allowed;
+  // Per-church feature visibility (church.features; default-on). These booleans are read here, NOT only inside
+  // the memo, because they are DEPENDENCIES of it — a church toggling one must rebuild the nav (and the
+  // snap-back effect below needs them too). See the stale-padlock note at the deps array.
+  const _cf = church.features || {};
+  const rotaNavOn = _cf.rota !== false;
+  const calNavOn = _cf.calendar !== false;
+  const roomsNavOn = _cf.rooms !== false;
+  const resourcesNavOn = _cf.resources !== false;
+  const finOn = stewFinanceOn(church, { financePresent: !!window.DashFinance, capState: stewCapState });   // now folds the per-church Finance toggle into the module+capability gate
   const mannaOn = false;   // Manna LOCKED for the pilot — not ready to surface yet (was: window.useMannaSettings ? !!window.useMannaSettings().enabled : false)
   const mealsOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;   // optional meal-trains / care module
   const checkinOn = !!(church.features && church.features.checkin === true);   // opt-in kids check-in
-  const nav = React.useMemo(() => {
-    const copy = NAV.slice();
-    // Mark rather than hide. A missing tab reads as a broken console ("where is Members?"); a locked one
-    // that explains itself reads as a church that has scoped you, which is the truth.
-    const capOf = { groups: 'content', rota: 'content', calendar: 'content', rooms: 'content',
-                    resources: 'content', members: 'members', meals: 'care', checkin: 'safeguarding' };
-    const mark = (n) => { const c = capOf[n.key]; if (!c) return n; const st = stewCapState(c); return st.allowed ? n : { ...n, locked: true, cap: c }; };
-    const at = () => { const i = copy.findIndex(n => n.key === 'settings'); return i < 0 ? copy.length : i; };
-    if (checkinOn) copy.splice(at(), 0, { key: 'checkin', label: 'Check-in', ic: 'child' });
-    if (finOn) copy.splice(at(), 0, { key: 'finance', label: 'Finance', ic: 'gift' });
-    if (mannaOn) copy.splice(at(), 0, { key: 'manna', label: 'Manna', ic: 'hand' });
-    if (mealsOn) copy.splice(at(), 0, { key: 'meals', label: 'Care', ic: 'heart' });
-    return copy.map(mark);
-    // THE CAPABILITY LIST IS A DEPENDENCY. mark() calls stewCapState() for eight tabs, but the deps listed
-    // only the four module toggles — so when an owner granted or withdrew a capability, every padlock except
-    // Finance's (which happens to feed finOn) kept the state it had at mount. A delegate given Members went
-    // on seeing "your church hasn't given you Members" until they restarted the console, and — the direction
-    // that matters — a delegate whose capability was WITHDRAWN went on seeing the tab unlocked.
-    //
-    // The screens themselves re-check, so this was never the security boundary; it is what the person is
-    // told, and being told the wrong thing about your own permissions is its own defect.
-  }, [finOn, mannaOn, mealsOn, checkinOn, _capsSig]);
+  // THE MEMO BODY LIVES IN stewNav() (module scope) so a point-of-use test can run it (CLAUDE.md rules 1 & 3).
+  const nav = React.useMemo(() => stewNav(NAV, church, { finOn, mannaOn, mealsOn, checkinOn, capState: stewCapState }),
+    // THE CAPABILITY LIST AND EVERY FEATURE FLAG ARE DEPENDENCIES. mark() calls stewCapState() for eight tabs
+    // and stewNav() filters four sections by church.features; a dep left off here leaves the padlock or the
+    // section stale until the console restarts. A delegate given Members once went on seeing "your church
+    // hasn't given you Members"; the direction that matters is a withdrawn capability still reading unlocked.
+    // The screens re-check, so this was never the security boundary — it is what the person is TOLD.
+    [finOn, mannaOn, mealsOn, checkinOn, rotaNavOn, calNavOn, roomsNavOn, resourcesNavOn, _capsSig]);
+  // A church feature turned OFF while its page is open would leave a blank pane: the nav tab is gone but `tab`
+  // still points at it, and the body switch below still renders that section. Snap back to Overview. These
+  // keys are church-view only (the network nav has none of them), so this never fires in the network view.
+  React.useEffect(() => {
+    if ((tab === 'rota' && !rotaNavOn) || (tab === 'calendar' && !calNavOn) || (tab === 'rooms' && !roomsNavOn) ||
+        (tab === 'resources' && !resourcesNavOn) || (tab === 'finance' && !finOn)) setTab('overview');
+  }, [tab, rotaNavOn, calNavOn, roomsNavOn, resourcesNavOn, finOn]);
   // WHAT A DELEGATE IS TOLD WHEN THEY ARRIVE. Once per church, not a tour. Before this, the only way to
   // learn the shape of the job was to press things: two of the most serious bugs found on 2026-07-28 were in
   // delegated paths precisely because nobody goes there, and an agent in a simulation would report each
@@ -3442,6 +3479,13 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const [groupsOpen, setGroupsOpen] = React.useState(true);   // the Groups & rooms card's body, folded by its header chevron
   const [activityOpen, setActivityOpen] = React.useState(true);   // likewise the Recent activity card
   const [signupsOpen, setSignupsOpen] = React.useState(true);   // the "People have signed up to help" card's name lines; its chevron folds them away (one flag, all three layouts)
+  // Dismissing the sign-ups nudge (the X, separate from the fold chevron) is a per-device reading convenience,
+  // keyed by the acting church — NOT church state. It must never publish to the relay or affect another steward,
+  // so it lives in localStorage, mirroring the _briefKey idiom. What is stored is the acknowledged SIGNATURE of the
+  // current sign-ups, not a boolean "hidden": the card returns automatically on any NEW or CHANGED responder (see
+  // careSignupSig below), which is why a single tap can never hide it for ever (one-X-hides-whats-happening trap).
+  const _signupsAckKey = 'trinityone.overview.signups.ack.' + ((window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '');
+  const [signupsAck, setSignupsAck] = React.useState(() => { try { return window.localStorage.getItem(_signupsAckKey) || ''; } catch (e) { return ''; } });
   const [joinOpen, setJoinOpen] = React.useState(true);   // the Joining code card's body; the chevron in its header folds it away
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3505,18 +3549,34 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const careSignups = (careAllowed && window.careSignupSummary)
     ? window.careSignupSummary(_sgnNeeds, _sgnSlots, (pk) => (_sgnDir && _sgnDir[pk] && _sgnDir[pk].name) || (String(pk).slice(0, 6) + '…' + String(pk).slice(-4)), window.todayISO ? window.todayISO() : '').slice(0, 4)
     : [];
-  const careSignupBanner = careSignups.length ? (
+  // A STABLE SIGNATURE OF WHO HAS ANSWERED — built from the real slots behind the shown needs, deliberately NOT a
+  // count. A count (needId + names.length) misses the SWAP: one member cancels and another signs up to the same
+  // need, the count is unchanged, and a count-keyed dismiss would wrongly keep the card hidden. Keyed on
+  // (needId, responder pubkey) so ANY new or changed responder moves the signature and the card returns. (A need
+  // aging out of careSignupSummary also moves it, which reappears the card — known and acceptable.)
+  const _sgnIds = new Set(careSignups.map(g => g.needId));
+  const careSignupSig = Array.from(new Set((_sgnSlots || [])
+    .filter(sl => sl && sl.pubkey && _sgnIds.has(sl.needId))
+    .map(sl => sl.needId + '\u0000' + sl.pubkey))).sort().join('|');
+  // The X writes the CURRENT signature as acknowledged; the card is hidden iff the current signature equals it.
+  const dismissSignups = () => { try { window.localStorage.setItem(_signupsAckKey, careSignupSig); } catch (e) {} setSignupsAck(careSignupSig); };
+  const careSignupBanner = (careSignups.length && careSignupSig !== signupsAck) ? (
     <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 28%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--sage)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>People have signed up to help</div>
         {signupsOpen ? careSignups.map(g => <div key={g.needId} style={{ fontSize: 13, color: 'var(--ink-2)' }}>{g.names.join(', ')} — {g.title}</div>) : null}
       </div>
-      {/* a span, not a button: the whole card is already a button, and a button inside a button is invalid. stopPropagation so folding does not also open Care. */}
+      {/* spans, not buttons: the whole card is already a button, and a button inside a button is invalid. stopPropagation so folding/dismissing does not also open Care. */}
       <span role="button" tabIndex={0} aria-expanded={signupsOpen} aria-label={signupsOpen ? 'Collapse sign-ups' : 'Expand sign-ups'} title={signupsOpen ? 'Collapse' : 'Expand'}
         onClick={(e) => { e.stopPropagation(); setSignupsOpen(o => !o); }}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setSignupsOpen(o => !o); } }}
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 40, height: 40, margin: '-10px -10px -10px 0', borderRadius: 999, cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name={signupsOpen ? 'chevD' : 'chevU'} size={18} color="currentColor" /></span>
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 40, height: 40, margin: '-10px 0', borderRadius: 999, cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name={signupsOpen ? 'chevD' : 'chevU'} size={18} color="currentColor" /></span>
+      {/* Dismiss: acknowledges the current sign-up signature. It reappears on any new/changed responder (careSignupSig), so it can never hide the card for ever. */}
+      <span role="button" tabIndex={0} aria-label="Dismiss sign-ups" title="Dismiss"
+        onClick={(e) => { e.stopPropagation(); dismissSignups(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); dismissSignups(); } }}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 40, height: 40, margin: '-10px -10px -10px 0', borderRadius: 999, cursor: 'pointer', color: 'var(--ink-3)' }}><Icon name="x" size={16} color="currentColor" /></span>
     </button>
   ) : null;
   const careReqBanner = (openCareReqs || careNewMsgs) ? (
@@ -11642,6 +11702,21 @@ function DashFeaturesPanel({ church, show = null }) {
   const toggle = (k) => { window.Steward.publishProfile({ features: { ...f, [k]: !on(k) } }); };          // default-on features
   const toggleOpt = (k) => { window.Steward.publishProfile({ features: { ...f, [k]: !onOpt(k) } }); };     // opt-in extras
   const ITEMS = [['read', 'Bible', 'Scripture reading, plans & devotionals'], ['community', 'Community', 'Group chat, prayer & people'], ['library', 'Library', 'Books, commentaries & study tools']];
+  // The other sections a church can hide, each a default-on `church.features` key (toggle/on above, same
+  // mechanism as ITEMS). Rota / Calendar / Resources hide from the console AND the member app; Rooms and
+  // Finance have no member surface and hide only the console section (noted in the sub-text).
+  const MODULES = [
+    ['rota', 'Rota & serving', 'Serving teams and who serves when'],
+    ['calendar', 'Calendar & events', 'Church events and upcoming dates'],
+    ['rooms', 'Rooms & booking', 'Building rooms and bookings (console only)'],
+    ['resources', 'Reading plans & devotionals', 'Reading plans and devotionals'],
+    ['finance', 'Finance', 'Giving and expenses (console only)'],
+  ];
+  // OWNER-ONLY. publishProfile refuses a DELEGATED steward (src/steward.src.js — it would republish the other
+  // church's kind-0), returning null while dispatching a banner — a SILENT fail at the caller. A delegate must
+  // therefore never be shown a switch that cannot work, so these rows render only on the owner's own console.
+  // `!actingChurch` is exactly the condition publishProfile itself refuses on.
+  const featOwner = !(window.Steward && window.Steward.actingChurch);
   // opt-in extras (default OFF, switchable per church) — kids check-in
   const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code']];
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
@@ -11774,6 +11849,19 @@ function DashFeaturesPanel({ church, show = null }) {
             </button>
           </div>
         ))}
+        {/* OWNER ONLY — see featOwner above. A delegate cannot publish the profile these write to, so the row
+            would silently do nothing; it is not shown to them rather than failing under their hand. */}
+        {featOwner ? MODULES.map(([k, label, sub]) => (
+          <div key={k} onClick={() => toggle(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); toggle(k); }} aria-label={'Toggle ' + label} role="switch" aria-checked={on(k)} title={(on(k) ? 'Turn off ' : 'Turn on ') + label} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on(k) ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: on(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
+          </div>
+        )) : null}
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Today (home) and Giving are controlled separately. Members see changes on their next sync.</div>
 
@@ -13325,8 +13413,28 @@ function StewDmWindow({ peer, offset, onClose }) {
   const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
   const canReply = (m) => !m._pending && !m._failed;   // a waiting message has nothing on the relay to quote yet
   const byId = {}; shown.forEach(m => { byId[m.id] = m; });
-  const lastId = shown.length ? shown[shown.length - 1].id : '';
-  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
+  // Keep an open ⋯ menu usable: first reveal it inside the chat's own scroller, then nudge it back inside
+  // the viewport in BOTH axes (a wide bubble pushes its far edge past the gutter; a message low in the tile
+  // runs its bottom off-screen). Sibling of app/screens-chat.jsx clampMenuIntoView; inert in the hook-light
+  // unit rig (no layout engine — getBoundingClientRect / window absent — so the ref body no-ops there).
+  const menuIntoView = React.useCallback((el) => {
+    if (!el) return;
+    try { if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    try {
+      if (typeof window === 'undefined' || typeof el.getBoundingClientRect !== 'function') return;
+      el.style.transform = '';
+      var docEl = window.document && window.document.documentElement;
+      var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
+      var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
+      if (!vw || !vh) return;
+      var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
+      if (r.right > vw - pad) dx = (vw - pad) - r.right;
+      if (r.left + dx < pad) dx = pad - r.left;
+      if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;
+      if (r.top + dy < pad) dy = pad - r.top;
+      if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+    } catch (e) {}
+  }, []);
   // SWIPE TO REPLY (APK) — the shared TrinityReplyKit handlers (app/reply-kit.jsx): the row follows the finger, a
   // reply arrow fills in at 48px, letting go past it replies (a cancel past it too), a vertical drag abandons it.
   // One row is dragged at a time, so one ref + one {id, dx} state serves the whole list.
@@ -13364,14 +13472,15 @@ function StewDmWindow({ peer, offset, onClose }) {
                     {...TrinityReplyKit.dotsProps(isNative, 24, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={13} /></button>
                 ) : null}
                 {menuFor === m.id ? (
-                  // ⚠ THE MENU LIVES INSIDE THE `overflowY: auto` MESSAGE SCROLLER, which CLIPS it. Below the LAST
-                  // message there is nothing to scroll into, so `top: 100%` put Reply outside the visible tile and
-                  // the steward saw the ⋯ do nothing (owner, members page: "reply is not working"). The docked tile
-                  // is only 420px tall, so this bites hardest here. Two guards: the last message opens its menu
-                  // UPWARD (over the message before it, never over its own words), and any open menu scrolls itself
-                  // into view so a message near the bottom edge can't hide it either. NEEDS A DEVICE/BROWSER REPRO
-                  // to confirm this was the whole cause.
-                  <div ref={menuIntoView} data-dm-menu="1" data-reply-menu={m.id === lastId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
+                  // THE MENU DROPS FROM THE ⋯ BUTTON (top: 20, just under the 24px button at top:-6), its NEAR
+                  // edge pinned to the side the dots sit on — the bubble's INNER edge (left:'100%' for the other
+                  // person, whose dots are at the bubble's right; right:'100%' for mine) — so it hangs FROM the
+                  // dots and grows inward, never off to the opposite corner. It used to open at `top: 100%`
+                  // (the bubble's BOTTOM): on a tall message that is far below the dots, detached from the
+                  // message it acts on — the same defect fixed in the member app (app/screens-chat.jsx). The
+                  // menu lives inside the `overflowY: auto` scroller, so menuIntoView both scrolls it into the
+                  // tile and clamps it back into the viewport in both axes. Matches member Row/DMSwipe.
+                  <div ref={menuIntoView} data-dm-menu="1" data-reply-menu="down" style={{ position: 'absolute', top: 20, [m.mine ? 'right' : 'left']: '100%', zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
                     <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer', padding: '7px 9px', borderRadius: 7, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
                       <Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                   </div>

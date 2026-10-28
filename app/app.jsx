@@ -1794,19 +1794,25 @@ function App() {
   const _nowSec = Math.floor(Date.now() / 1000);
   const _childSafeGroupIds = React.useMemo(() => { const s = new Set(); churchGroups.forEach(g => { if (g && g.childsafe) s.add(g.id); }); return s; }, [churchGroups]);
   const _eventVisibleToMe = (e) => !iAmMinor || !e.groupId || _childSafeGroupIds.has(e.groupId);
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). A feature hidden in the console must not leak
+  // back through the notifications bell: calendar hides the "New event" rows (and their openEvent deep link),
+  // resources hides the reading-plan, devotional and sermon rows. Serving/broadcast/network rows are a
+  // different feature (rota has its own card; those are unaffected). Read off the active church, unset = on.
+  const _notifFeat = ((churches.find(c => c.id === activeChurch) || {}).features) || {};
+  const _notifCalOn = _notifFeat.calendar !== false;
+  const _notifResOn = _notifFeat.resources !== false;
   const notifications = React.useMemo(() => {   // P8: recompute only when a notification source changes, not every render
     const out = [];
     netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
     broadcastMsgs.forEach(m => out.push({ id: 'bc:' + m.id, kind: 'notice', group: _churchNameFor, text: m.text, ts: m.ts, groupObj: churchGroups.find(g => g.id === m.gid) || null }));
-    churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: _churchNameFor, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
-    if (pinnedSermon && pinnedSermon.sha256 && pinnedSermon.notify !== false) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: _churchNameFor, text: (String(pinnedSermon.mime || '').startsWith('video') ? 'New video · ' : 'New audio clip · ') + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
-    churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
-    churchEvents.filter(_eventVisibleToMe).forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
+    // the feature-gated church-resource rows (devotional / sermon / reading plan / event) — built by
+    // notifFeatureRows in screens-extras.jsx so the gate is point-of-use testable (App() cannot be rendered).
+    notifFeatureRows({ churchDevos, pinnedSermon, churchPlans, churchEvents, churchName: _churchNameFor, eventVisible: _eventVisibleToMe, calOn: _notifCalOn, resOn: _notifResOn }).forEach(x => out.push(x));
     // asked to serve / put on the rota (sim 2026-10-02 #49) - built by notifServingItems in screens-extras.jsx
     const _d0 = new Date(); const _todayIso = _d0.getFullYear() + '-' + String(_d0.getMonth() + 1).padStart(2, '0') + '-' + String(_d0.getDate()).padStart(2, '0');
     notifServingItems(servReqs, _todayIso, _churchNameFor).forEach(x => out.push(x));
     return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
-  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, assumeMinor, _churchNameFor, servReqs]);   // eslint-disable-line
+  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, assumeMinor, _churchNameFor, servReqs, _notifCalOn, _notifResOn]);   // eslint-disable-line
   // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
   const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
@@ -2717,7 +2723,7 @@ function App() {
     // wrapped in `Bible.loaded ? … : <EmptyState/>`, so a module download that failed or had not finished took
     // Today, Community, groups, Care and the emergency safety check with it. The empty state belongs here.
     read: !Bible.loaded ? <EmptyState loading={Bible.loading} error={Bible._error} onBrowse={() => setStore(true)} />
-      : readView === 'plans' ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
+      : (readView === 'plans' && !(ctx.church && ctx.church.features && ctx.church.features.resources === false)) ? <PlansScreen ctx={ctx} /> : <ReadScreen ctx={ctx} />,
     chat: <ChatScreen ctx={ctx} />,
     library: <LibraryScreen ctx={ctx} />,
   };

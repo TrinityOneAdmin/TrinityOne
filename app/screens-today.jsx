@@ -547,7 +547,28 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   // SWIPE TO REPLY — the shared TrinityReplyKit (app/reply-kit.jsx); one row is dragged at a time.
   const swipeSt = React.useRef(null);
   const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
-  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
+  // Keep an open ⋯ menu usable: first reveal it inside the chat's own scroller, then nudge it back inside
+  // the viewport in BOTH axes (a wide bubble pushes its far edge past the gutter; a message low in the sheet
+  // runs its bottom off-screen). Sibling of app/screens-chat.jsx clampMenuIntoView; inert in the hook-light
+  // unit rig (no layout engine — getBoundingClientRect / window absent — so the ref body no-ops there).
+  const menuIntoView = React.useCallback((el) => {
+    if (!el) return;
+    try { if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    try {
+      if (typeof window === 'undefined' || typeof el.getBoundingClientRect !== 'function') return;
+      el.style.transform = '';
+      var docEl = window.document && window.document.documentElement;
+      var vw = window.innerWidth || (docEl && docEl.clientWidth) || 0;
+      var vh = window.innerHeight || (docEl && docEl.clientHeight) || 0;
+      if (!vw || !vh) return;
+      var pad = 6, r = el.getBoundingClientRect(), dx = 0, dy = 0;
+      if (r.right > vw - pad) dx = (vw - pad) - r.right;
+      if (r.left + dx < pad) dx = pad - r.left;
+      if (r.bottom > vh - pad) dy = (vh - pad) - r.bottom;
+      if (r.top + dy < pad) dy = pad - r.top;
+      if (dx || dy) el.style.transform = 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+    } catch (e) {}
+  }, []);
   const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
   const inputRef = React.useRef(null);
@@ -584,7 +605,6 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   const swipe = (m) => canReply(m)
     ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
     : {};
-  const lastId = textMsgs.length ? textMsgs[textMsgs.length - 1].id : '';
   const msgById = {};
   textMsgs.forEach(m => { msgById[m.id] = m; });
   return (
@@ -612,9 +632,14 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
                 <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions" aria-haspopup="menu" aria-expanded={dotsMsg === m.id}
                   {...TrinityReplyKit.dotsProps(true, 30, { position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -36, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' })}><Icon name="dots" size={14} /></button>
               ) : null}
-              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before. */}
+              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before.
+                  It DROPS FROM THE ⋯ BUTTON (top: 26, just under the 30px button at top:-6), its near edge pinned to the dots'
+                  side (the bubble's INNER edge: left:'100%' for the other person, right:'100%' for mine) and grows inward. It
+                  used to open at `top: 100%` (the bubble's BOTTOM): on a tall message that is far below the dots, detached from
+                  its own message — the defect fixed in the member app (app/screens-chat.jsx). menuIntoView scrolls it into the
+                  sheet and clamps it back into the viewport in both axes. */}
               {dotsMsg === m.id ? (
-                <div data-reply-menu={m.id === lastId ? 'up' : 'down'} ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
+                <div data-reply-menu="down" ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 26, [m.mine ? 'right' : 'left']: '100%', zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
                   <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                 </div>
               ) : null}
@@ -2246,6 +2271,9 @@ function wereHereOffers(ctx) {
 }
 
 function servingNewCount(ctx, seenTs) {
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). The "something new" dot counts church events;
+  // if the steward hid `calendar`, there are no event surfaces to open, so nothing counts toward the badge.
+  if (ctx && ctx.church && ctx.church.features && ctx.church.features.calendar === false) return 0;
   const seen = Number(seenTs) || 0;
   if (!seen) return 0;   // no mark yet -> nothing is new. A member who joined a church with fifty events on
                          // its calendar this morning is not fifty things behind.
@@ -2461,6 +2489,14 @@ function TodayScreen({ ctx }) {
   const dismissCareBanner = (e) => { if (e) e.stopPropagation(); try { if (myCareNeed) localStorage.setItem('trinityone.care.bannerDismiss', JSON.stringify({ id: myCareNeed.id, ts: myCareNeed.ts })); } catch {} if (ctx.toast) ctx.toast('Okay — this comes back if anything about your care changes.'); setCareDismissTick(t => t + 1); };
   const pNext = plan ? (plan.days.find(d => !pDoneSet.has(d.d)) || plan.days[plan.days.length - 1]) : null;
 
+  // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). A steward can hide the serving strip (`rota`)
+  // and the reading-plan/devotional cards (`resources`) from the member app in Settings → Congregation
+  // features. Unset means on, so an existing church is unchanged. The "What's happening" hub card itself is
+  // left visible — it is the member's only entry to the Serving overlay, where Kids and Care (their own
+  // toggles) also live — and the serving overlay gates its own serving/events tabs.
+  const _tdFeat = (ctx.church && ctx.church.features) || {};
+  const rotaOn = _tdFeat.rota !== false;
+  const resourcesOn = _tdFeat.resources !== false;
   const churchDevo = (ctx.churchDevos || [])[0];   // latest real devotional the church shared (else hide the card)
   // serving: the member's next confirmed slot + any pending "can you serve?" asks
   const servNext = ctx.servNext;
@@ -2579,7 +2615,7 @@ function TodayScreen({ ctx }) {
             {/* SINGLE-LINE SERVING NOTICE (owner 2026-10-14): "You’re serving" / "Can you serve?" folded onto the
                 What’s happening card as ONE line under it, not a separate alternate card. Pending is prioritised
                 and gold; otherwise the next serving slot. nowrap + ellipsis keeps it to one line. */}
-            {(servPendingN || (servNext && !servStripDismissed)) ? (
+            {rotaOn && (servPendingN || (servNext && !servStripDismissed)) ? (
               <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", borderTop: "1px solid var(--line)",
                 background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 8%, var(--surface))",
                 color: servPendingN ? "#8a6717" : "var(--sage)", fontSize: 12.5, fontWeight: 700, minWidth: 0 }}>
@@ -2653,8 +2689,9 @@ function TodayScreen({ ctx }) {
           the "Care" link on the What's happening card above, which shows a count when there are open days to
           sign up for. The "Your church is caring for you" banner above points a recipient there. */}
 
-      {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages. */}
-      {ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {
+      {/* Featured sermon — a steward pinned it; tap to play. Dismissable (per id), and "New" softens once it ages.
+          Gated on `resources` (owner 2026-10-27: sermons are part of the resources feature). */}
+      {resourcesOn && ctx.pinnedSermon && ctx.pinnedSermon.sha256 && sermonSeen !== ctx.pinnedSermon.id ? (() => {
         const ps = ctx.pinnedSermon;
         const fresh = (Date.now() / 1000 - (ps.ts || ps.at || 0)) < 7 * 86400;
         const isVid = String(ps.mime || '').startsWith('video');
@@ -2678,15 +2715,17 @@ function TodayScreen({ ctx }) {
         );
       })() : null}
 
-      {/* Church verse prompt — steward-pushed verse for the whole congregation */}
-      {vpPage && vpVisible && churchReadingFolded ? (
+      {/* Church verse prompt — steward-pushed verse for the whole congregation. Gated on `resources` (owner
+          2026-10-27: the "Your church is reading" card is part of the resources feature). The built-in Verse
+          of the Day below is NOT gated — it is a reader feature that works with no church at all. */}
+      {resourcesOn && vpPage && vpVisible && churchReadingFolded ? (
         <button type="button" onClick={toggleChurchReading} aria-expanded={false} aria-label="Expand Your church is reading" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 16, cursor: 'pointer', background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)', color: '#fff', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
           <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Your church is reading · {vpPage.ref}</div>
           <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
         </button>
       ) : null}
-      {vpPage && vpVisible && !churchReadingFolded ? (
+      {resourcesOn && vpPage && vpVisible && !churchReadingFolded ? (
         <div
           onTouchStart={(e) => { vpTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
           onTouchEnd={(e) => {
@@ -2821,9 +2860,10 @@ function TodayScreen({ ctx }) {
         </div>
       ) : null}
 
-      {/* Plan + (real) devotional cards */}
-      {plan || churchDevo ? <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel> : null}
-      {plan || churchDevo ? <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
+      {/* Plan + (real) devotional cards — the `resources` feature (reading plans & devotionals). A steward can
+          hide these from the member app; unset means on. */}
+      {resourcesOn && (plan || churchDevo) ? <SectionLabel action="All plans" onAction={() => ctx.go('plans')}>Keep it going</SectionLabel> : null}
+      {resourcesOn && (plan || churchDevo) ? <div style={{ display: 'flex', gap: 12, marginBottom: 14, animation: 'trinityFade .5s ease .15s both' }}>
         {plan ? <div onClick={() => ctx.openPlan(plan)} style={{
           flex: 1, padding: 16, borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)',
           boxShadow: 'var(--shadow)', cursor: 'pointer',
