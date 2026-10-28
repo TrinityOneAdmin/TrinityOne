@@ -8763,7 +8763,7 @@ function DashMembers() {
                       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                     </div>
                   </div>
-                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, ...(joinNarrow ? null : { flexShrink: 0 }) }}>
+                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, ...(joinNarrow ? { flexWrap: 'wrap' } : { flexShrink: 0 }) }}>
                   {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
                       a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
                       compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
