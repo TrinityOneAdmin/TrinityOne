@@ -3478,7 +3478,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   const [groupsOpen, setGroupsOpen] = React.useState(true);   // the Groups & rooms card's body, folded by its header chevron
   const [activityOpen, setActivityOpen] = React.useState(true);   // likewise the Recent activity card
-  const [signupsOpen, setSignupsOpen] = React.useState(true);   // the "People have signed up to help" card's name lines; its chevron folds them away (one flag, all three layouts)
+  const [signupsOpen, setSignupsOpen] = React.useState(false);   // COLLAPSED by default on both phone and desktop (owner 2026-10-28); the "People have signed up to help" card's name lines, revealed by its chevron (one flag, all three layouts)
   // Dismissing the sign-ups nudge (the X, separate from the fold chevron) is a per-device reading convenience,
   // keyed by the acting church — NOT church state. It must never publish to the relay or affect another steward,
   // so it lives in localStorage, mirroring the _briefKey idiom. What is stored is the acknowledged SIGNATURE of the
