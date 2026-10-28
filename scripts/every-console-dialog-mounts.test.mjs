@@ -82,6 +82,7 @@ return {
   BulkUploadModal: { kind: 'devotionals', onClose },
   CkModal: { title: 'Title', children: null, onClose }, SchModal: { title: 'Title', children: null, onClose },
   StewBackupModal: { church, onClose }, WebAddressModal: { church, onClose },
+  RelayPanel: { url: '/relay-app/home.html', onClose },   // the in-Suite relay/control iframe panel; renders its dialog from url + onClose
   SermonEditModal: { sermon: { id: 's1', title: 'Sermon', desc: '' }, onSave: async () => {}, onClose, upload: null },
   NameEditModal: { current: '', isNetwork: false, onSave() {}, onClose },
   SeriesNameModal: { current: '', count: 0, onSave() {}, onClose },

@@ -149,8 +149,14 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // card can overlay the pinned sermon with its current title. Same find() shape as the subscribePinnedSermon
   // effect directly above it; with a stale id np is undefined, the list falls back to [] and the card keeps the
   // pin's own title — the safe direction — and the heal puts it right on the same pass as everything else.
-  assert.equal(sites.length, 46,
-    `the active-church resolution sites changed (${sites.length} vs 46) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 46 → 47 (f22e7881, 2026-10-27): _notifFeat — the notifications bell reads the active church's `features`
+  // to gate which church-resource rows it surfaces (a feature hidden in the console must not leak back through
+  // the bell). Same find() shape as _churchNameFor directly above it; with a stale id it resolves to {} and the
+  // features default to on (the safe direction — a row shows rather than silently hiding), and the heal puts it
+  // right on the same pass as everything else. Confirmed it is the ONLY canonical site f22e7881 added (git show
+  // f22e7881: +1, -0), not a differently-shaped bypass.
+  assert.equal(sites.length, 47,
+    `the active-church resolution sites changed (${sites.length} vs 47) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {
