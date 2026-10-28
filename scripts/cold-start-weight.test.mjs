@@ -63,7 +63,10 @@ test('the first-paint payload has not quietly grown', () => {
   // Raised 3.06 -> 3.1 MB (2026-10-16): the care-matching (availability dates + offer/accept), event attendance
   // card and RSVP toast/close features (all owner-approved this cycle) took first paint just over 3.06; owner
   // chose RAISE again. ~0.04 MB headroom; still a ratchet, not a budget.
-  const MB = 3.1;
+  // Raised 3.1 -> 3.2 MB (2026-10-28, owner): first paint had crept to 3.12 MB across the accumulated
+  // unpushed work since 2026-10-16 (the 3.1 headroom was already gone BEFORE this cycle's 5 UI fixes, which
+  // added only ~3.4 KB); owner chose RAISE, not trim. ~0.08 MB headroom; still a ratchet, not a budget.
+  const MB = 3.2;
   assert.ok(total <= MB * 1024 * 1024,
     'the first-paint shell is now ' + (total / 1048576).toFixed(2) + ' MB across ' + files + ' files, over the ' +
     MB + ' MB ratchet. At the 20 kB/s this product is built for, every extra megabyte is another ~50 seconds ' +
