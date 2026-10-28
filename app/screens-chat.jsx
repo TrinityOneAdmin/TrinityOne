@@ -1165,6 +1165,44 @@ function evtToMsg(e) {
   return { ...base, text: e.content };
 }
 
+// THE ONE-FRAME GAP WHERE A JUST-SENT MESSAGE BLINKS OUT. A message is published, the relay ACKs it, and the
+// engine drops it from the outbox ON THAT ACK (sendMessage / sendDM: `_outbox = _outbox.filter(...)` → _outboxSave
+// → onOutbox → the `queued`/`dmQueued` state loses it). But the authoritative copy only lands in `msgs` a beat
+// later, through the SEPARATE subscription echo (subscribeGroup kinds [1,5] / subscribeThread kind 4). For that
+// beat the message is in NEITHER `msgs` NOR `queued`, so a plain `[...msgs, ...queued.filter(not-have)]` drops
+// it — it vanishes and then reappears when the echo arrives. (The old "no flicker because the echo swaps the
+// same id" reasoning describes the id-dedup that stops a DUPLICATE in the overlap window; it never covered this
+// ACK-before-echo GAP, which is the real flicker.)
+//
+// Shared by ChatRoom and DMThread: keep a "delivered, awaiting echo" SHADOW of every still-pending item. While
+// the item is queued it is drawn from `queued` (as "Waiting to send"); the instant it leaves the queue
+// (delivered) but before its echo is in `msgs`, it is drawn from the shadow — as a NORMAL settled bubble, never
+// "Waiting to send". The shadow is released the moment its id turns up in `msgs`, and the same `!have.has(id)`
+// filter that already stops the queued/msgs overlap from double-drawing stops the shadow doubling too, so no
+// duplicate survives once the echo lands. `retainedPrev` is last render's shadow map and the caller threads
+// `retainedNext` back (via a ref). PURE and idempotent: run twice on the same (msgs, queued) it yields the same
+// retainedNext, so it is safe to call during render. Callers clear the ref on room/peer change and on resubscribe.
+function reconcileVisible(msgs, queued, retainedPrev) {
+  const have = new Set((msgs || []).map(m => m.id));
+  const qIds = new Set((queued || []).map(q => q.id));
+  const retainedNext = {};
+  // carry a prior shadow forward only until its echo lands (now in `msgs`) or it re-enters the queue
+  for (const id of Object.keys(retainedPrev || {})) {
+    if (!have.has(id) && !qIds.has(id)) retainedNext[id] = retainedPrev[id];
+  }
+  // remember every still-pending queued item, so if it is delivered (and leaves the queue) before its echo
+  // we still hold its words — stamped settled (_pending/_failed false), so it never draws as "Waiting to send"
+  for (const q of (queued || [])) {
+    if (q && q._pending && !have.has(q.id)) retainedNext[q.id] = { ...q, _pending: false, _failed: false, _retained: true };
+  }
+  const visible = [
+    ...(msgs || []),
+    ...(queued || []).filter(q => !have.has(q.id)),
+    ...Object.keys(retainedNext).filter(id => !have.has(id) && !qIds.has(id)).map(id => retainedNext[id]),
+  ];
+  return { visible, retainedNext };
+}
+
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
@@ -1758,10 +1796,15 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     refresh();
     return F.onOutbox(refresh);
   }, [group && group.id]);
+  // retain just-sent bubbles across the ACK→echo gap — see reconcileVisible. Cleared when the room changes or
+  // the subscription is re-issued (connTick), where the full history reloads into `msgs` and covers everything.
+  const retainRef = React.useRef({});
+  React.useEffect(() => { retainRef.current = {}; }, [group && group.id, ctx.connTick]);
   const visibleMsgs = React.useMemo(() => {
     const shown = msgs.filter(m => !hideSet.has(m.id));
-    const have = new Set(shown.map(m => m.id));
-    return [...shown, ...queued.filter(q => !have.has(q.id))];
+    const { visible, retainedNext } = reconcileVisible(shown, queued, retainRef.current);
+    retainRef.current = retainedNext;
+    return visible;
   }, [msgs, hidden, queued]);   // eslint-disable-line
   const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
   // perf #2: memoize the rendered bubbles so a composer keystroke (draft state) doesn't re-render the whole
@@ -2448,8 +2491,11 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   const FS = window.Fellowship;
   const DM_EMOJI = REACT_EMOJIS;   // shared with group rooms — see the note on REACT_EMOJIS
   const d = (FS && FS.displayFor && peer) ? FS.displayFor(peer) : { handle: 'Member', av: { kind: 'symbol', color: '#5E8C6A', symbol: 'halo' } };
+  // retain just-sent bubbles across the ACK→echo gap — see reconcileVisible. Reset here, so a peer switch or a
+  // reconnect (connTick) starts clean and the reloaded thread carries nothing stale from the last conversation.
+  const dmRetainRef = useCR({});
   useCE(() => {
-    setMsgs([]); setDraft('');
+    setMsgs([]); setDraft(''); dmRetainRef.current = {};
     if (!peer || !FS || !FS.subscribeThread) return;
     if (FS.requestProfiles) FS.requestProfiles([peer]);
     return FS.subscribeThread(peer, (m) => setMsgs(prev => {
@@ -2480,8 +2526,9 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
     return F.onOutbox(refresh);
   }, [peer]);
   const shownMsgs = React.useMemo(() => {
-    const have = new Set(msgs.map(m => m.id));
-    return [...msgs, ...dmQueued.filter(q => !have.has(q.id))];
+    const { visible, retainedNext } = reconcileVisible(msgs, dmQueued, dmRetainRef.current);
+    dmRetainRef.current = retainedNext;
+    return visible;
   }, [msgs, dmQueued]);   // eslint-disable-line
   useCE(() => { if (open && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, open]);
   if (!peer) return null;
