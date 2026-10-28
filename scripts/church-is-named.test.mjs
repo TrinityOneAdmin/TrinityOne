@@ -33,11 +33,12 @@ test('the row leads somewhere useful', () => {
     'what a member looking at their own church wants, and it is also where leaving lives');
 });
 
-test('following a new church is still reachable — via the Your-churches panel', () => {
-  // owner 2026-10-16: the old "Follow a church" row (which jumped into the follow flow) is now "Your churches",
-  // which opens the switcher list where "Follow another church" lives.
-  assert.match(section, /label="Your churches"/,
-    'the "Your churches" entry is gone — a member with no church needs a way in, and a member with one may be moving');
-  assert.match(section, /label="Your churches"[\s\S]*openChurchSwitcher\('list'\)/,
-    'the Your-churches entry no longer opens the switcher panel (where "Follow another church" lives)');
+test('following a new church is still reachable — the "Join a church" row opens the follow flow', () => {
+  // c4199e20 ("MY CHURCH is one row"): a member IN a church sees the church-name row (which opens the switcher
+  // list, where "Follow another church" lives — the test above). A member with NO church sees a dedicated
+  // "Join a church" row straight into the follow flow. Either way, following a church stays reachable.
+  assert.match(section, /label="Join a church"/,
+    'the "Join a church" entry is gone — a member with no church needs a way in');
+  assert.match(section, /label="Join a church"[\s\S]*openChurchSwitcher\('follow'\)/,
+    'the Join-a-church entry no longer opens the follow flow');
 });

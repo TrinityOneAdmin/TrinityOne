@@ -210,8 +210,12 @@ test('the reader watches for steward-authored entries too', () => {
 
 test('Finance is offered to a capable delegate, and padlocked for the rest', () => {
   const src = stripComments(DASH);
-  assert.match(src, /const finOn = !!window\.DashFinance && stewCapState\('finance'\)\.allowed;/,
-    'Finance is still hidden from every delegate regardless of what their church granted them');
+  // f1fb6166 ("per-feature show/hide toggles") folded the module+capability gate into stewFinanceOn (which
+  // also honours the per-church Finance toggle). The capability check is unchanged — it just moved inside.
+  assert.match(src, /const finOn = stewFinanceOn\(church, \{ financePresent: !!window\.DashFinance, capState: stewCapState \}\);/,
+    'Finance no longer runs through the module+capability gate (stewFinanceOn)');
+  assert.match(src, /function stewFinanceOn\(church, opts\)[\s\S]*?opts\.capState\('finance'\)\.allowed/,
+    'stewFinanceOn does not gate on the finance capability, so Finance would show regardless of what the church granted');
 });
 
 // ── AND TAKING FINANCE AWAY MUST TAKE THE BOOKS AWAY ──────────────────────────────────────────────────────
