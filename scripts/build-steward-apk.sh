@@ -106,7 +106,11 @@ npx cap copy android
 #   assembleDebug   → WEB_DEBUG=true  (dev builds, CDP diagnosis via USB)
 #   assembleRelease → WEB_DEBUG=false (pilot/go-live, CDP locked out)
 # MainActivity overrides setWebContentsDebuggingEnabled() at runtime. TRINITY_DEBUG=0 is no longer needed.
-( cd android && ./gradlew assembleDebug -q )
-cp android/app/build/outputs/apk/debug/app-debug.apk trinityone-steward.apk
-echo "→ trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))  [DEBUG-signed — pilot-deferred, see note above]"
+# GO-LIVE 2026-10-28 (owner's call: pilot users install the real signed build): release-signed with the stable
+# key + non-debuggable, so no adb run-as can read the church key and every later update installs over the last.
+[ -f android/app/keystore.properties ] || { echo "ERROR: keystore.properties missing — cannot release-sign" >&2; exit 1; }
+( cd android && ./gradlew assembleRelease -q )
+cp android/app/build/outputs/apk/release/app-release.apk trinityone-steward.apk
+"$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2" dump badging trinityone-steward.apk | grep -q application-debuggable && { echo "DEBUGGABLE — refusing to ship" >&2; exit 1; }
+echo "→ trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))  [RELEASE-signed, non-debuggable — go-live 2026-10-28]"
 # restore() runs on EXIT

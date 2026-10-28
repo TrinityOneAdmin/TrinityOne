@@ -90,8 +90,10 @@ if [[ $DO_APK == 1 ]]; then
   # later update installs cleanly over the last. Keep release.keystore + keystore.properties backed up.
   #     run "( cd android && ./gradlew assembleRelease -q )"
   #     run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"
-  run "( cd android && ./gradlew assembleDebug -q )"
-  run "cp android/app/build/outputs/apk/debug/app-debug.apk trinityone.apk"
+  # GO-LIVE 2026-10-28 (owner): release-signed + non-debuggable with the stable key, so pilot users install the
+  # real build and every later update installs cleanly over the last (debug->release can't update in place).
+  run "( cd android && ./gradlew assembleRelease -q )"
+  run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"
   # in-app update check: refresh the manifest the member app reads on open (apk-latest.json, served
   # at ASSET_BASE). Old installs compare their versionCode to this and show an "Update available" banner.
   if [[ $DRY == 0 ]]; then
