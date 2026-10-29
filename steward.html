@@ -268,6 +268,9 @@
 <script src="vendor/recovery.js"></script>
 <!-- double-entry ledger engine (FINANCE-MODULE.md); exposes window.FinanceLedger -->
 <script src="vendor/finance-ledger.js"></script>
+<!-- UK Gift Aid regional pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the core does NOT
+     import — exposes window.FinanceGiftAid, used by Finance only when church.features.giftAid === true -->
+<script src="vendor/finance-giftaid.js"></script>
 <!-- optional Manna module (money-out / disbursements; encrypted to the church key); exposes window.StewardManna -->
 <script src="vendor/steward-manna.js"></script>
 <!-- optional Meal trains / practical-care module (community-glue); exposes window.StewardMeals -->

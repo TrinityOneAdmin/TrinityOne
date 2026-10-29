@@ -68,6 +68,10 @@ function finItemToDoc(it) {
   // DashFinanceBook's subscribe handler collects them into SEPARATE console state (templates, reconciliations).
   if (id.startsWith('template:')) return { t: 'template', id: id.slice(9), name: it.name, account: it.account, fund: it.fund, dir: it.dir, amount: it.amount, dayOfMonth: it.dayOfMonth };
   if (id.startsWith('reconcile:')) return { t: 'reconcile', id: id.slice(10), label: it.label, lines: it.lines || [], reconciled: it.reconciled || [], closing: it.closing, asOf: it.asOf };
+  // DONOR RECORD (finance/donor:<id>, Phase 4b) — member-identifying giving data, NOT part of the double-entry
+  // book. Like template/reconcile it maps to its own `t`, which rebuildBook ignores, and DashFinanceBook
+  // collects it into SEPARATE console state (donors) for the giving-by-member + Gift Aid screens.
+  if (id.startsWith('donor:')) return { t: 'donor', id: id.slice(6), name: it.name || '', eligible: it.eligible === true, address: it.address || '', postcode: it.postcode || '', giftAidDeclaredAt: it.giftAidDeclaredAt || '', title: it.title || '', firstName: it.firstName || '', lastName: it.lastName || '', house: it.house || '' };
   return null;
 }
 // An opaque, random id for a REPLACEABLE finance doc (template / reconciliation). Human-facing names are a
@@ -208,9 +212,12 @@ function suggestCode(book, type) {
 // funds; the per-row amounts must add up EXACTLY to the total (integer minor units) or Save is disabled —
 // the bank leg is the single balancing posting, so a mismatch is exactly what the engine's balance check
 // refuses. ATTACHMENT: an optional receipt image, shrunk client-side and published as a side blob.
-function BooksRecord({ book, onRecord, onClose, initial }) {
+function BooksRecord({ book, onRecord, onClose, initial, donors }) {
   const init = initial || {};
   const [dir, setDir] = React.useState(init.dir === 'out' ? 'out' : 'in');
+  // Donor records (Phase 4b) to offer on a MONEY-IN entry. The picker writes the OPAQUE id, never the name.
+  const donorList = Array.isArray(donors) ? donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
+  const [donor, setDonor] = React.useState(init.donor || '');   // '' = unattributed
   // Archived accounts are hidden from the category picker (kept in the ledger/reports). The reserved
   // 'fund-transfer' account is equity, so the income/expense filter already excludes it here.
   const cats = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense') && !a.archived);
@@ -269,7 +276,8 @@ function BooksRecord({ book, onRecord, onClose, initial }) {
       if (!account) return setErr('Pick a category.');
       legs = [{ account, fund, amountMinor: tot }];
     }
-    try { onRecord({ dir, legs, totalMinor: tot, date, memo: memo.trim(), attachment }); onClose(); }
+    // Donor only on money-in; the OPAQUE id (BooksRecord never sends a name). record() applies it to the income legs.
+    try { onRecord({ dir, legs, totalMinor: tot, date, memo: memo.trim(), attachment, donor: dir === 'in' ? donor : '' }); onClose(); }
     catch (e) { setErr(e.message || 'Could not record that.'); }
   };
   // WHICH WAY THE MONEY GOES, CARRIED BY MORE THAN COLOUR.
@@ -328,6 +336,17 @@ function BooksRecord({ book, onRecord, onClose, initial }) {
         </div>
         <label style={bkLbl}>Note (optional)</label>
         <input value={memo} onChange={e => setMemo(e.target.value)} placeholder="e.g. Sunday offering" style={{ ...bkFld, marginBottom: 12 }} />
+        {/* DONOR — money-in only (a gift has a giver; a bill does not). Writes the OPAQUE id, never the name.
+            Feeds giving-by-member + the Gift Aid pack. "(unattributed)" leaves the gift off both, which is the
+            right default for plate cash nobody is named against. */}
+        {dir === 'in' ? (<>
+          <label style={bkLbl}>Donor (optional)</label>
+          <select value={donor} onChange={e => setDonor(e.target.value)} aria-label="Donor" style={{ ...bkFld, marginBottom: donorList.length ? 12 : 4 }}>
+            <option value="">(unattributed)</option>
+            {donorList.map(d => <option key={d.id} value={d.id}>{d.name || '(unnamed)'}</option>)}
+          </select>
+          {donorList.length === 0 ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 12 }}>Add donors under “Donors &amp; giving by member” to attribute gifts here.</div> : null}
+        </>) : null}
         <label style={bkLbl}>Receipt (optional)</label>
         {attachment
           ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, border: '1px solid var(--line)', borderRadius: 11, padding: 8 }}>
@@ -442,6 +461,113 @@ function BooksFundEdit({ book, initial, onSave, onClose }) {
           <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add fund'}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---- donor record (Phase 4b) ----------------------------------------------------------------------------
+// A donor's name + (for Gift Aid) address, postcode and declaration date. The single most member-identifying
+// finance doc: it is published finance-only and the relay keeps it off a network peer. Opaque id (onSave mints
+// one for a new donor). Marking a donor "eligible" + recording a declaration date is what lets the UK Gift Aid
+// pack build a claim line for them; it does nothing on its own and nothing at all unless the church turns the
+// Gift Aid feature on.
+function BooksDonor({ book, initial, onSave, onClose }) {
+  const ed = initial || {};
+  const editing = !!ed.id;
+  const [name, setName] = React.useState(ed.name || '');
+  const [eligible, setEligible] = React.useState(ed.eligible === true);
+  const [address, setAddress] = React.useState(ed.address || '');
+  const [postcode, setPostcode] = React.useState(ed.postcode || '');
+  const [giftAidDeclaredAt, setDeclaredAt] = React.useState(ed.giftAidDeclaredAt || '');
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm) return setErr('Give the donor a name.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onSave({ id: editing ? ed.id : undefined, name: nm, eligible, address: address.trim(), postcode: postcode.trim(), giftAidDeclaredAt });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t save — your church’s relay refused or did not answer. Try again.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not save that donor.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit donor' : 'Add donor'} tabIndex={-1} style={{ ...bkCard, width: 440, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{editing ? 'Edit donor' : 'Add donor'}</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>Kept private to your church — only the church key and a Finance steward can ever read it.</div>
+        <label style={bkLbl}>Name</label>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Jane Okafor" style={{ ...bkFld, marginBottom: 12 }} />
+        <label onClick={() => setEligible(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 12 }}>
+          <input type="checkbox" checked={eligible} onChange={e => setEligible(e.target.checked)} aria-label="Eligible for Gift Aid" style={{ width: 18, height: 18 }} />
+          <span style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>Has made a Gift Aid declaration (UK)</span>
+        </label>
+        <label style={bkLbl}>Address (for a Gift Aid claim)</label>
+        <input value={address} onChange={e => setAddress(e.target.value)} placeholder="House name/number & street" style={{ ...bkFld, marginBottom: 12 }} />
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Postcode</label><input value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="e.g. SW1A 1AA" style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Declaration date</label><input type="date" value={giftAidDeclaredAt} onChange={e => setDeclaredAt(e.target.value)} style={bkFld} /></div>
+        </div>
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add donor'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- giving by MEMBER (Phase 4b) — CONSOLE-ONLY, finance-gated, NAME-BEARING ------------------------------
+// This is the ONE finance report that carries member names + amounts. It renders inside the finance screen
+// (already behind the finance-key gate) and it DELIBERATELY has no Share / Post-to-members control: aggregate
+// statements are name-free and this one must never reach the broadcast path. If you ever add a share button
+// here, finance-giving-by-member.test.mjs turns red by design.
+function BooksGivingByMember({ book, F, donors }) {
+  const rows = F.givingByMember(book, { donors });
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ ...bkLbl, margin: '6px 0 4px' }}>Giving by member</div>
+      <div style={{ color: 'var(--ink-3)', fontSize: 12, marginBottom: 6 }}>Private to this console. Never shared or posted to members.</div>
+      {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '6px 0' }}>No giving has been attributed to a donor yet. Tag a gift with a donor when you record it.</div>}
+      {rows.map(r => (
+        <div key={r.donor || 'unattributed'} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
+          <span style={{ color: r.unattributed ? 'var(--ink-3)' : 'var(--ink)' }}>{r.name}{r.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}</span>
+          <span style={{ fontWeight: 700 }}>{booksFmt(r.amount, book)}</span>
+        </div>
+      ))}
+      {rows.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '5px 0 0', fontWeight: 800 }}><span>Total attributed</span><span>{booksFmt(total, book)}</span></div>}
+    </div>
+  );
+}
+
+// ---- UK Gift Aid pack panel (Phase 4b) — OFF BY DEFAULT, additive -----------------------------------------
+// Renders NOTHING unless the church turned Gift Aid on (church.features.giftAid === true, passed as giftAidOn).
+// The claim logic lives in the SEPARATE window.FinanceGiftAid bundle (vendor/finance-giftaid.js) which the core
+// never imports; this panel is the only caller, and it reaches for it only when the toggle is on. If the bundle
+// is not present the panel says so rather than crashing.
+function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport }) {
+  if (!giftAidOn) return null;
+  const pack = (typeof window !== 'undefined' && window.FinanceGiftAid) || null;
+  if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Gift Aid (UK)</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The Gift Aid pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
+  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
+  const claim = pack.giftAidClaim(book, { donors: donorList, givingByMember: F.givingByMember });
+  return (
+    <div style={{ ...bkCard, marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Gift Aid claim (UK)</div>
+        <button onClick={() => onExport && onExport(claim)} title="Download the Gift Aid claim schedule as a spreadsheet (CSV)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Download claim (CSV)</button>
+      </div>
+      <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>Eligible, declared donors only. Reclaims 25p per £1 given.</div>
+      {claim.rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '4px 0' }}>No eligible donors with a declaration and giving in this period yet.</div>}
+      {claim.rows.map(r => (
+        <div key={r.donor} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
+          <span>{r.name}{r.postcode ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {r.postcode}</span> : ''}</span>
+          <span style={{ fontWeight: 700 }}>{booksFmt(r.donated, book)} → {booksFmt(r.giftAid, book)}</span>
+        </div>
+      ))}
+      {claim.rows.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '5px 0 0', fontWeight: 800 }}><span>Total to reclaim</span><span>{booksFmt(claim.totalGiftAid, book)}</span></div>}
     </div>
   );
 }
@@ -1226,6 +1352,7 @@ function DashFinanceBook() {
       // Phase 3 side docs live in their OWN state, never in the book (rebuildBook ignores them).
       setTemplates(docs.filter(d => d.t === 'template'));
       setReconciles(docs.filter(d => d.t === 'reconcile'));
+      setDonors(docs.filter(d => d.t === 'donor'));   // Phase 4b — finance/donor:<id> docs, SEPARATE from the book
       // "Empty" means no BOOK docs (settings/account/fund/journal). Side docs (attachment/template/reconcile)
       // must NOT count, or a side-doc-only delivery would wrongly enter the seed path over a real book.
       if (!docs.some(d => d.t === 'settings' || d.t === 'account' || d.t === 'fund' || d.t === 'journal')) {
@@ -1269,6 +1396,9 @@ function DashFinanceBook() {
   const [tplEditing, setTplEditing] = React.useState(null);  // template modal: null closed · {} add · {id,…} edit
   const [templates, setTemplates] = React.useState([]);      // finance/template:<id> docs — SEPARATE from the book
   const [reconciles, setReconciles] = React.useState([]);    // finance/reconcile:<id> docs — SEPARATE from the book
+  const [donors, setDonors] = React.useState([]);            // finance/donor:<id> docs (Phase 4b) — SEPARATE from the book
+  const [donorsOpen, setDonorsOpen] = React.useState(false); // collapsible "Donors & giving by member" panel
+  const [donorEditing, setDonorEditing] = React.useState(null); // donor modal: null closed · {} add · {id,…} edit
   const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
   // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
   // console only; in localStorage mode these are absent and the modal simply omits the "Post to members" button.
@@ -1318,7 +1448,7 @@ function DashFinanceBook() {
   // which is the single balancing bank leg (BooksRecord disables Save unless they match, and F.post's balance
   // check is the backstop). `attachment` (optional) is published first; its id rides on the entry's
   // attachmentRefs, which pubEntry/bookToDocs/finItemToDoc/applyEntry all carry.
-  const record = async ({ dir, legs, totalMinor, date, memo, attachment }) => {
+  const record = async ({ dir, legs, totalMinor, date, memo, attachment, donor }) => {
     const b = bookRef.current;
     let attachmentRefs = [];
     if (attachment && attachment.data) {
@@ -1326,7 +1456,11 @@ function DashFinanceBook() {
       if (!ok) { bump(); return false; }   // the receipt did not land — post nothing that would cite it
       attachmentRefs = [attachment.id];
     }
-    const catLegs = legs.map(l => ({ account: l.account, fund: l.fund, dir: dir === 'in' ? 'cr' : 'dr', amount: l.amountMinor }));
+    // DONOR attribution (Phase 4b) rides ONLY the money-IN (income) legs, and ONLY as the OPAQUE donor id —
+    // never the name (the id is network-readable via the journal; the name stays in the finance/donor doc the
+    // relay keeps off network peers). Money-out has no donor. '' / falsy = unattributed, so _normalize drops it.
+    const donorTag = (dir === 'in' && donor) ? { donor: String(donor) } : {};
+    const catLegs = legs.map(l => ({ account: l.account, fund: l.fund, dir: dir === 'in' ? 'cr' : 'dr', amount: l.amountMinor, ...donorTag }));
     const bankLeg = { account: 'bank', dir: dir === 'in' ? 'dr' : 'cr', amount: totalMinor };
     const P = dir === 'in' ? [bankLeg, ...catLegs] : [...catLegs, bankLeg];
     // Awaited: pubEntry's answer is the only thing that distinguishes a recorded entry from a lost one.
@@ -1360,6 +1494,7 @@ function DashFinanceBook() {
       amount: (cat.amount / Math.pow(10, dec)).toFixed(dec),
       date: e.date || booksTodayISO(),
       memo: e.memo || '',
+      donor: cat.donor || '',   // keep the gift's donor attribution across a correction (money-in only; '' otherwise)
       correctingSeq: e.seq,
     };
     const ok = await undo(e.seq);
@@ -1524,6 +1659,24 @@ function DashFinanceBook() {
     bump();
     return !(ok === false || ok == null);
   };
+  // A DONOR RECORD (finance/donor:<id>, Phase 4b) — a REPLACEABLE finance doc holding member-identifying giving
+  // data. OPAQUE id (CONTEXT: two authorised writers must not collide on a shared slug). Written finance-only
+  // (the relay's generic finance/ write prefix); the relay keeps it off a network peer on READ (the explicit
+  // finance/donor read rule). NOTE a "forget this donor" removes this doc but CANNOT scrub the opaque donorId
+  // already embedded in the append-only journal — acceptable under HMRC retention, surfaced in the UI copy.
+  const saveDonor = async ({ id, name, eligible, address, postcode, giftAidDeclaredAt, title, firstName, lastName, house }) => {
+    const theId = id || opaqueId();
+    const body = { name: name || '', eligible: eligible === true, address: address || '', postcode: postcode || '', giftAidDeclaredAt: giftAidDeclaredAt || '', title: title || '', firstName: firstName || '', lastName: lastName || '', house: house || '' };
+    if (!useRelay) { setDonors(ds => [...ds.filter(d => d.id !== theId), { t: 'donor', id: theId, ...body }]); bump(); return true; }
+    const ok = await S.encPublish('finance/donor:' + theId, body);
+    bump();
+    return !(ok === false || ok == null);
+  };
+  // The donor NAME lookup the giving-by-member + Gift Aid screens resolve opaque donorIds through.
+  const donorMap = React.useMemo(() => new Map(donors.map(d => [d.id, d])), [donors]);
+  // Gift Aid is a UK regional PACK, OFF BY DEFAULT: strict === true (NOT the default-on `!== false` feature
+  // convention — DOMAIN nation-neutral), and the pack code only exists if its separate bundle loaded.
+  const giftAidOn = !!(church && church.features && church.features.giftAid === true);
 
   const funds = F.fundBalances(book);
   const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
@@ -1799,12 +1952,47 @@ function DashFinanceBook() {
         )}
       </div>
 
-      <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-        <Icon name="gift" size={17} color="var(--clay)" />
-        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, budgets, multi-currency, and regional giving-relief packs.</div>
+      <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={() => setDonorsOpen(r => !r)} title="Show or hide your donor records and giving by member" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{donorsOpen ? '▾' : '▸'} Donors &amp; giving by member</button>
+          {donorsOpen && <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add donor</button>}
+        </div>
+        {donorsOpen && (
+          <div style={{ marginTop: 12 }}>
+            {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member and (if your church uses it) Gift Aid.</div>}
+            {donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => (
+              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 600 }}>{d.name || '(unnamed)'}</span>
+                  {d.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}
+                  {d.postcode ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {d.postcode}</span> : null}
+                </div>
+                <button onClick={() => setDonorEditing({ id: d.id, name: d.name, eligible: d.eligible, address: d.address, postcode: d.postcode, giftAidDeclaredAt: d.giftAidDeclaredAt })} title="Edit this donor" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+              </div>
+            ))}
+            <BooksGivingByMember book={book} F={F} donors={donorMap} />
+          </div>
+        )}
       </div>
 
-      {recording && <BooksRecord book={book} onRecord={record} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
+      <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
+        // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
+        const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+        const sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
+        const div = Math.pow(10, book.decimals || 2);
+        const money = m => (m / div).toFixed(book.decimals || 2);
+        const rows = [['Title', 'First name', 'Last name', 'House', 'Postcode', 'Donated (' + sym + ')', 'Gift Aid (' + sym + ')'],
+          ...claim.rows.map(r => [r.title, r.firstName || r.name, r.lastName, r.house, r.postcode, money(r.donated), money(r.giftAid)]),
+          ['', '', '', '', 'TOTAL', money(claim.totalDonated), money(claim.totalGiftAid)]];
+        booksDownload('gift-aid-claim-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
+      }} />
+
+      <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+        <Icon name="gift" size={17} color="var(--clay)" />
+        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, budgets, multi-currency, and more regional giving-relief packs.</div>
+      </div>
+
+      {recording && <BooksRecord book={book} onRecord={record} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
       {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
       {viewingAtt ? <BooksReceiptView data={viewingAtt} onClose={() => setViewingAtt('')} /> : null}
       {accEditing && <BooksAccountEdit book={book} initial={accEditing} onSave={saveAccount} onClose={() => setAccEditing(null)} />}
@@ -1814,6 +2002,7 @@ function DashFinanceBook() {
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
+      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
     </div>
   );
 }

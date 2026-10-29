@@ -115,3 +115,40 @@ export function givingByFund(book, { from = '', to = END } = {}) {
     .filter(r => r.amount !== 0)
     .sort((a, b) => b.amount - a.amount);
 }
+
+// Giving by MEMBER (Phase 4b) — income grouped by the OPTIONAL `donor` id tagged on each giving posting, with
+// the donor's NAME resolved from a caller-supplied lookup (the finance/donor:<id> docs). This report carries
+// member-identifying data: it is CONSOLE-ONLY and finance-gated, and must NEVER reach the share/broadcast path
+// (aggregate statements are deliberately name-free — see finance-statement.mjs / givingByFund above). The
+// relay keeps donor NAMES off a network peer (the explicit finance/donor read rule), but the donorId on the
+// append-only journal is permanent and network-readable, which is exactly why it is an opaque id and not a name.
+//
+// `donors` is a Map or plain object id -> { name, eligible } (or an array of {id,name,eligible}); a gift whose
+// donor id has no record, or which carries no donor at all, is folded into a single `unattributed` row so the
+// totals still reconcile. Σ(all rows incl. unattributed) === incomeExpenditure(from,to).income to the penny.
+export function givingByMember(book, { from = '', to = END, donors = null } = {}) {
+  const lookup = new Map();
+  if (donors) {
+    const entries = Array.isArray(donors) ? donors.map(d => [d.id, d]) : (donors instanceof Map ? [...donors] : Object.entries(donors));
+    for (const [id, d] of entries) if (id != null && d) lookup.set(String(id), d);
+  }
+  const byDonor = new Map();   // donorId ('' = unattributed) -> amount (minor units)
+  for (const e of book.journal) {
+    if (e.date < (from || '') || e.date > to) continue;
+    for (const p of e.postings) {
+      const a = book.accounts.get(p.account);
+      if (!a || a.type !== 'income') continue;
+      const v = p.dir === 'cr' ? p.amount : -p.amount;       // income is credit-normal; a dr is a reversal
+      const key = p.donor ? String(p.donor) : '';
+      byDonor.set(key, (byDonor.get(key) || 0) + v);
+    }
+  }
+  const rows = [];
+  for (const [id, amount] of byDonor) {
+    if (!id) { rows.push({ donor: '', name: '(unattributed)', eligible: false, unattributed: true, amount }); continue; }
+    const d = lookup.get(id) || {};
+    rows.push({ donor: id, name: d.name || id, eligible: d.eligible === true, unattributed: false, amount });
+  }
+  return rows.filter(r => r.amount !== 0)
+    .sort((a, b) => (a.unattributed ? 1 : b.unattributed ? -1 : b.amount - a.amount));   // named first by amount, unattributed last
+}

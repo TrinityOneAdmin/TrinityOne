@@ -40,6 +40,7 @@ var FinanceLedger = (() => {
     fundBalances: () => fundBalances,
     fundMovements: () => fundMovements,
     givingByFund: () => givingByFund,
+    givingByMember: () => givingByMember,
     guessColumns: () => guessColumns,
     importedKeys: () => importedKeys,
     incomeExpenditure: () => incomeExpenditure,
@@ -122,7 +123,9 @@ var FinanceLedger = (() => {
       if (fund != null && !book.funds.has(fund)) throw new Error(`posting ${i}: unknown fund "${fund}"`);
       if (p.dir === "dr") dr += p.amount;
       else cr += p.amount;
-      return { account: p.account, fund, dir: p.dir, amount: p.amount };
+      const o = { account: p.account, fund, dir: p.dir, amount: p.amount };
+      if (p.donor != null && p.donor !== "") o.donor = String(p.donor);
+      return o;
     });
     if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} \u2260 credits ${cr}`);
     return norm2;
@@ -154,7 +157,7 @@ var FinanceLedger = (() => {
     if (!orig) throw new Error("no entry with seq " + seq);
     if (orig.reverses != null) throw new Error("cannot reverse a reversal");
     if (book.journal.some((e) => e.reverses === seq)) throw new Error("entry #" + seq + " is already reversed");
-    const postings = orig.postings.map((p) => ({ account: p.account, fund: p.fund, dir: p.dir === "dr" ? "cr" : "dr", amount: p.amount }));
+    const postings = orig.postings.map((p) => ({ account: p.account, fund: p.fund, dir: p.dir === "dr" ? "cr" : "dr", amount: p.amount, ...p.donor != null ? { donor: p.donor } : {} }));
     return post(book, { date: date || orig.date, by, reverses: seq, memo: memo || `Reversal of #${seq}${orig.memo ? ": " + orig.memo : ""}`, postings });
   }
   function importedKeys(book) {
@@ -499,6 +502,34 @@ var FinanceLedger = (() => {
       }
     }
     return [...book.funds.values()].map((f) => ({ fund: f.id, name: f.name, kind: f.kind, amount: byFund.get(f.id) || 0 })).filter((r) => r.amount !== 0).sort((a, b) => b.amount - a.amount);
+  }
+  function givingByMember(book, { from = "", to = END, donors = null } = {}) {
+    const lookup = /* @__PURE__ */ new Map();
+    if (donors) {
+      const entries = Array.isArray(donors) ? donors.map((d) => [d.id, d]) : donors instanceof Map ? [...donors] : Object.entries(donors);
+      for (const [id, d] of entries) if (id != null && d) lookup.set(String(id), d);
+    }
+    const byDonor = /* @__PURE__ */ new Map();
+    for (const e of book.journal) {
+      if (e.date < (from || "") || e.date > to) continue;
+      for (const p of e.postings) {
+        const a = book.accounts.get(p.account);
+        if (!a || a.type !== "income") continue;
+        const v = p.dir === "cr" ? p.amount : -p.amount;
+        const key = p.donor ? String(p.donor) : "";
+        byDonor.set(key, (byDonor.get(key) || 0) + v);
+      }
+    }
+    const rows = [];
+    for (const [id, amount] of byDonor) {
+      if (!id) {
+        rows.push({ donor: "", name: "(unattributed)", eligible: false, unattributed: true, amount });
+        continue;
+      }
+      const d = lookup.get(id) || {};
+      rows.push({ donor: id, name: d.name || id, eligible: d.eligible === true, unattributed: false, amount });
+    }
+    return rows.filter((r) => r.amount !== 0).sort((a, b) => a.unattributed ? 1 : b.unattributed ? -1 : b.amount - a.amount);
   }
 
   // src/finance-statement.mjs

@@ -11800,8 +11800,13 @@ function DashFeaturesPanel({ church, show = null }) {
   // therefore never be shown a switch that cannot work, so these rows render only on the owner's own console.
   // `!actingChurch` is exactly the condition publishProfile itself refuses on.
   const featOwner = !(window.Steward && window.Steward.actingChurch);
-  // opt-in extras (default OFF, switchable per church) — kids check-in
-  const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code']];
+  // opt-in extras (default OFF, switchable per church) — kids check-in, UK Gift Aid.
+  // ⚠ Gift Aid is a UK-only scheme and MUST default OFF (DOMAIN: nation-neutral). It rides the opt-in `onOpt`
+  // convention (`f[k] === true`), NOT the default-on `on`/`!== false` one — the same strict-=== gate the
+  // finance console reads as `church.features.giftAid === true`. Wiring it through the default-on convention
+  // would turn a UK tax scheme on for every church on earth.
+  const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code'],
+    ['giftAid', 'Gift Aid (UK)', 'Claim UK Gift Aid on eligible donations — adds donor and claim tools']];
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
   const allGroups = window.useStewardGroups ? window.useStewardGroups() : [];
   const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
