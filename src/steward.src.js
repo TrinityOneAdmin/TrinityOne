@@ -14086,7 +14086,8 @@ window.Steward = {
   // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
   // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
   // durable handle while the URL is not. Audit item 19, 2026-09-14.
-  // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+  // CALLERS (rule 2): app/stew-dashboard.jsx — the remove-relay confirmation, and the relay row LABEL
+  // (shows this name in place of the raw tunnel address, falling back to the address when none). No writer uses it.
   relayNameFor(url) {
     const u = normRelay(url); if (!u) return '';
     const hit = getNamedRelays().find(e => e && normRelay(e.url) === u);

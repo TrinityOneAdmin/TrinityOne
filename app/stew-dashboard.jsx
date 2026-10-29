@@ -5458,7 +5458,16 @@ function DashRelaysCard() {
             return (
               <div key={r.url} title={refusedWhy ? 'This relay refused our last change and said: ' + refusedWhy : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
-                <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
+                {/* SHOW THE CHOSEN HANDLE, NOT THE RAW TUNNEL ADDRESS. A self-hosted box reached BY NAME has a
+                    durable handle (relayNameFor, a pure local reverse-lookup) while its *.trycloudflare.com /
+                    *.ts.net address churns on each reboot — so the name is what a steward recognises. Display
+                    ONLY: every other use of r.url (key, admission, remove, provenRelayPub, boxKey) is unchanged.
+                    The raw address stays inspectable — on the title (hover) and as a muted sub-line — and a
+                    relay with no remembered name still shows its address as the primary label. */}
+                <div style={{ flex: 1, minWidth: 140, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div title={r.url} style={{ fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{relayName(r.url) || r.url}</div>
+                  {relayName(r.url) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{r.url}</div> : null}
+                </div>
                 {/* THE CHIPS WRAP. This strip was one unbreakable line — `flexShrink: 0`, no wrap — so on a
                     360px phone "Shared · Refused our last change · ● Answering · 118ms" ran to x 609 and the
                     health of the relay was off the right edge of the screen (audit 2026-09-19 §E,
