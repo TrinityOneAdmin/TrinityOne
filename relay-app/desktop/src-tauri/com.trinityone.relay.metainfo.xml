@@ -6,21 +6,15 @@
   <project_license>AGPL-3.0-or-later</project_license>
 
   <name>TrinityOne Suite</name>
-  <summary>Your church on your own computer — messaging, groups, Bible, care and safeguarding</summary>
+  <summary>Your churches Bible, resources, messaging, groups, care and more, all in one app</summary>
 
   <developer id="church.trinityone">
     <name>TrinityOne</name>
   </developer>
 
   <description>
-    <p>TrinityOne Suite is everything a church needs to stay connected, in one desktop app. It includes:</p>
-    <ul>
-      <li>a steward console for managing members, groups, rotas, events and a calendar</li>
-      <li>pastoral care with meal trains and help requests</li>
-      <li>a full Bible reader with reading plans and devotionals</li>
-      <li>a directory and children's register with safeguarding controls</li>
-      <li>giving records for your treasurer</li>
-    </ul>
+    <p>Read · Gather · Share</p>
+    <p>TrinityOne Suite is everything a church needs to stay connected, in one desktop app. It includes a steward console for managing members, groups, rotas, events and a calendar; pastoral care with meal trains and help requests; a full Bible reader with reading plans and devotionals; a directory and children's register with safeguarding controls; and giving records for your treasurer.</p>
     <p>It also runs your church's own relay — the small server that keeps your congregation's messages and data with the church, not a third party.</p>
     <p>Install it, set up your church in a few minutes, and share the address with your members.</p>
   </description>
