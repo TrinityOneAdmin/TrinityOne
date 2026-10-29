@@ -31,6 +31,7 @@ var FinanceLedger = (() => {
     applyEntry: () => applyEntry,
     balanceSheet: () => balanceSheet,
     bookToDocs: () => bookToDocs,
+    budgetVsActual: () => budgetVsActual,
     buildStatement: () => buildStatement,
     check: () => check,
     createBook: () => createBook,
@@ -44,6 +45,7 @@ var FinanceLedger = (() => {
     guessColumns: () => guessColumns,
     importedKeys: () => importedKeys,
     incomeExpenditure: () => incomeExpenditure,
+    incomeExpenditureByFund: () => incomeExpenditureByFund,
     journalCsvRows: () => journalCsvRows,
     lineKey: () => lineKey,
     match: () => match,
@@ -945,6 +947,40 @@ ${S.join("\n")}
   function templatePost(book, template, yyyymm, opts = {}) {
     if (importedKeys(book).has(templateImportKey(template.id, yyyymm))) return null;
     return templateEntry(template, yyyymm, opts);
+  }
+
+  // src/finance-budget.mjs
+  var SEP = "\0";
+  function incomeExpenditureByFund(book, { from = "", to = "\uFFFF" } = {}) {
+    const by = /* @__PURE__ */ new Map();
+    for (const e of book.journal) {
+      if (e.date < from || e.date > to) continue;
+      for (const p of e.postings) {
+        const a = book.accounts.get(p.account);
+        if (!a || a.type !== "income" && a.type !== "expense") continue;
+        const signed = a.type === "income" ? p.dir === "cr" ? p.amount : -p.amount : p.dir === "dr" ? p.amount : -p.amount;
+        const key = p.account + SEP + (p.fund || "");
+        by.set(key, (by.get(key) || 0) + signed);
+      }
+    }
+    return by;
+  }
+  function budgetVsActual(book, budget, { from = "", to = "\uFFFF", threshold = 0 } = {}) {
+    const lines = budget && Array.isArray(budget.lines) ? budget.lines : [];
+    const byFund = incomeExpenditureByFund(book, { from, to });
+    const ie = incomeExpenditure(book, { from, to });
+    const byAccount = new Map(ie.byAccount.map((r) => [r.account, r.amount]));
+    return lines.map((l) => {
+      const acct = book.accounts.get(l.account);
+      const type = acct ? acct.type : "";
+      const budgetAmt = Math.round(l.amount || 0);
+      const fund = l.fund || null;
+      const actual = fund ? byFund.get(l.account + SEP + fund) || 0 : byAccount.get(l.account) || 0;
+      const variance = actual - budgetAmt;
+      const overBy = type === "expense" ? Math.max(0, variance) : 0;
+      const over = overBy > threshold;
+      return { account: l.account, fund, type, budget: budgetAmt, actual, variance, overBy, over };
+    });
   }
   return __toCommonJS(finance_bundle_exports);
 })();

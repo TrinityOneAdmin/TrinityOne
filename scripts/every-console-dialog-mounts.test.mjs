@@ -95,6 +95,7 @@ return {
   BooksFundMove: { book, onTransfer() {}, onClose },
   BooksTemplateEdit: { book, initial: null, onSave() {}, onClose },
   BooksDonor: { book, initial: null, onSave() {}, onClose },
+  BooksBudgetEdit: { book, initial: null, onSave() {}, onClose },
   FinanceReconcile: { book, F, today: '2026-10-29', saved: null, onSaveReconcile() {}, onClose },
   FinanceImport: { book, F, onPost() {}, onClose },
   FinanceShareStatement: { book, F, churchName: 'St Test', accent: '', logo: '', canPost: false, onPostToMembers() {}, onClose },
