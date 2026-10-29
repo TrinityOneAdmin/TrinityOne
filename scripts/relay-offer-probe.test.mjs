@@ -19,6 +19,7 @@ import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
+import { fnBody } from './test-slice.mjs';
 
 const PORT = 8898;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -73,4 +74,54 @@ test('accepting either probe write disqualifies the relay', () => {
   assert.match(body, /minors:/, 'the probe must try the safeguarding write');
   assert.match(body, /stewards:/, 'the probe must try the steward-roster write');
   assert.match(body, /=== true.*finish\(false/s, 'an accepted write must FAIL the probe — that is the whole test');
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+// AUTO-FIND'S "FASTEST FIVE" DISPLAY LIST (owner decision 2026-10-29) MUST NOT WIDEN ADMISSION (rule 10).
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// Added with the autofind-top5 change. The card now shows discovered relays fastest-first with a "Show all"
+// control. The latency ranking is purely cosmetic and MUST sit strictly downstream of admission: a relay only
+// reaches the list after discoverRelayOffers() has run admitRemoteRelay() (C5) and, for a non-canonical box,
+// _probeRelayEnforces(). These three assertions read SOURCE (src/steward.src.js), not vendor/steward.js: this
+// branch does not rebuild vendor for tests (build:vendor lore), and the point-of-use lifts from source. They
+// are brace-matched slices (test-slice.fnBody), so they read the real function bodies, not a fixed window.
+//
+// NOTE FOR THE SERIAL RUNNER: this file spawns a real gateway on PORT 8898 in before(), so it must be run
+// SERIALLY (never inside a concurrent suite) — the three source checks below do not themselves need the port,
+// but the file as a whole binds one. The gateway IS used by the first test and by the ms round-trip below.
+const SRC = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
+
+test('discoverRelayOffers builds the offer — ms and all — only AFTER both admission gates have run', () => {
+  const body = fnBody(SRC, 'async function discoverRelayOffers(');
+  const admit = body.indexOf('await admitRemoteRelay(url)');
+  const probe = body.indexOf('await _probeRelayEnforces(url)');
+  const offer = body.indexOf('ms: Number.isFinite(t.ms)');   // the attach lives on the returned offer object
+  assert.ok(admit !== -1, 'discoverRelayOffers no longer calls admitRemoteRelay(url) — admission gate C5 is gone');
+  assert.ok(probe !== -1, 'discoverRelayOffers no longer calls _probeRelayEnforces(url) — the behavioural gate is gone');
+  assert.ok(offer !== -1, 'the offer object carries no ms — Auto-find cannot rank by latency');
+  assert.ok(offer > admit && offer > probe,
+    'the offer (with ms) is built BEFORE an admission gate — a relay could reach the display list unadmitted');
+});
+
+test('the display list (listRelayOffers) only re-orders already-admitted offers — it runs no gate of its own', () => {
+  const body = fnBody(SRC, 'async listRelayOffers(region) {');
+  assert.match(body, /discoverRelayOffers\(/, 'listRelayOffers no longer sources discoverRelayOffers — admission is bypassed');
+  assert.match(body, /rankOffersByLatency\(/, 'listRelayOffers no longer ranks by latency — the "fastest first" list is gone');
+  assert.doesNotMatch(body, /admitRemoteRelay\(/,
+    'listRelayOffers calls admitRemoteRelay itself — admission must stay in discoverRelayOffers, upstream, not be re-decided here');
+  assert.doesNotMatch(body, /_probeRelayEnforces\(/,
+    'listRelayOffers calls _probeRelayEnforces itself — the display path must not re-run or stand in for the gate');
+});
+
+test('the latency the card ranks on is a real measurement against a live relay', async () => {
+  // Prove the primitive _relayInfo relies on: a timed NIP-11 GET to the running gateway yields a finite,
+  // non-negative ms. This is why the file needs the port and must run serially.
+  const httpUrl = `http://127.0.0.1:${PORT}`;
+  const t0 = Date.now();
+  let reached = false;
+  try { const res = await fetch(httpUrl, { headers: { Accept: 'application/nostr+json' } }); reached = !!res; } catch { reached = false; }
+  const ms = Date.now() - t0;
+  assert.equal(reached, true, 'the live gateway did not answer a NIP-11 GET — cannot measure latency');
+  assert.ok(Number.isFinite(ms) && ms >= 0, 'the measured round-trip is not a finite, non-negative number of ms');
 });

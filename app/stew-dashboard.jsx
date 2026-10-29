@@ -5632,6 +5632,8 @@ function dropOutcome(r, url) {
   return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' + ((r && r.unknown) ? ' If a relay you added is gone for good, remove it first.' : '') };
 }
 const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
+// How many of the fastest public relays Auto-find shows before "Show all" (owner decision 2026-10-29).
+const RELAY_OFFERS_SHOWN = 5;
 // WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
 // the Add-a-relay card and the wizard so neither can say "Added" over a relay that was not signed (second audit,
 // finding 8: a skipped or unknown result used to read as success).
@@ -5774,25 +5776,36 @@ function DashAddRelayCard() {
   const [findMsg, setFindMsg] = React.useState('');
   // AUTO-FIND ASKS FIRST TOO, AND NAMES WHAT IT FOUND (owner decisions, 2026-10-21): it connects relays somebody
   // ELSE runs, which is exactly when the steward most needs to know where the church's data will go. So it finds
-  // first (adding nothing), shows the relays it found on the consent line, and connects and signs exactly those
+  // first (adding nothing), shows the relays it found, and connects and signs exactly those the steward ticks
   // on "Yes, connect".
+  // THE VISIBLE LIST (owner decision 2026-10-29): instead of two auto-picked relays, show the public relays a
+  // church could join FASTEST FIRST — window.Steward.listRelayOffers() carries a measured `ms` per relay and
+  // returns them already ranked and already admitted (same admitRemoteRelay/_probeRelayEnforces gates as
+  // before — this card only re-orders and slices their output). The card shows the fastest RELAY_OFFERS_SHOWN
+  // by default with a "Show all" toggle; the steward ticks which to connect. The automatic pick is unchanged.
   const [found, setFound] = React.useState(null);
+  const [showAll, setShowAll] = React.useState(false);
+  const [selected, setSelected] = React.useState(() => new Set());
   const autoFind = async (confirmed) => {
     if (confirmed !== true) {
-      setFinding(true); setFindMsg(''); setFound(null);
+      setFinding(true); setFindMsg(''); setFound(null); setShowAll(false); setSelected(new Set());
       try {
         // Ninth audit: never offer a spelling of a shared relay (the church already uses those).
-        const picks = (window.Steward.findRelays ? (await window.Steward.findRelays(2)) || [] : [])
+        const offers = (window.Steward.listRelayOffers ? (await window.Steward.listRelayOffers()) || [] : [])
           .filter(p => !(window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(p && p.url)))
           .filter(p => !(window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(p && p.url)));
-        if (picks && picks.length) { setFound(picks); setAsk('find'); }
-        else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
+        if (offers && offers.length) {
+          setFound(offers);
+          // Pre-tick the fastest two (primary + backup) so the common case stays one tap; the steward can
+          // tick more, untick these, or reveal the rest with "Show all".
+          setSelected(new Set(offers.slice(0, 2).map(o => o.url)));
+        } else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
       } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
       setFinding(false);
       return;
     }
-    const chosen = found || [];
-    setAsk(''); setFound(null);
+    const chosen = (found || []).filter(o => selected.has(o.url));
+    setAsk(''); setFound(null); setShowAll(false); setSelected(new Set());
     setFinding(true); setFindMsg('');
     try {
       const picks = (window.Steward.connectFoundRelays && chosen.length) ? await window.Steward.connectFoundRelays(chosen) : [];
@@ -5847,10 +5860,32 @@ function DashAddRelayCard() {
             </div>
           ) : null}
           <button onClick={() => autoFind()} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
-          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies.</div>
-          {ask === 'find' && found ? <RelayConsent onYes={() => autoFind(true)} onNo={() => { setAsk(''); setFound(null); }}
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies. Fastest first.</div>
+          {found && found.length ? (
+            <div style={{ marginTop: 10 }}>
+              {(showAll ? found : found.slice(0, RELAY_OFFERS_SHOWN)).map(o => {
+                const on = selected.has(o.url);
+                return (
+                  <label key={o.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', marginBottom: 6, borderRadius: 11, border: '1px solid var(--line)', background: on ? 'var(--surface-2)' : 'transparent', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={on} aria-label={'Connect ' + (o.name || o.url)}
+                      onChange={() => setSelected(prev => { const n = new Set(prev); if (n.has(o.url)) n.delete(o.url); else n.add(o.url); return n; })} />
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: 700, color: 'var(--ink)', fontSize: 13 }}>{o.name || o.url}</span>
+                      {o.name ? <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.url}</span> : null}
+                    </span>
+                    {Number.isFinite(o.ms) ? <span style={{ fontSize: 11, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{o.ms} ms</span> : null}
+                  </label>
+                );
+              })}
+              {found.length > RELAY_OFFERS_SHOWN && !showAll
+                ? <button onClick={() => setShowAll(true)} className="sk-btn sk-btn--ghost" style={{ fontSize: 12, padding: '6px 11px' }}>Show all ({found.length})</button>
+                : null}
+              <button onClick={() => { if (selected.size) setAsk('find'); }} disabled={!selected.size} className="sk-btn sk-btn--clay" style={{ marginTop: 8, marginLeft: found.length > RELAY_OFFERS_SHOWN && !showAll ? 8 : 0, fontSize: 13, opacity: selected.size ? 1 : 0.6 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Connect selected ({selected.size})</button>
+            </div>
+          ) : null}
+          {ask === 'find' && found ? <RelayConsent onYes={() => autoFind(true)} onNo={() => { setAsk(''); }}
             text={RELAY_CONSENT_FOUND} note="They are run by other people who offer to host churches."
-            detail={found.map(p => (p.name ? p.name + ' — ' : '') + p.url).join('\n')} /> : null}
+            detail={(found || []).filter(o => selected.has(o.url)).map(p => (p.name ? p.name + ' — ' : '') + p.url).join('\n')} /> : null}
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
           {/* connect to a relay by its memorable name (resolved via the directory) */}
           <div style={{ marginTop: 13 }}>
