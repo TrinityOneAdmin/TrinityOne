@@ -13840,6 +13840,11 @@ window.Steward = {
     setSelfPublicRelay(j.wss);
     return { url: j.url || '', wss: j.wss, name: j.name || '' };
   },
+  // THIS BOX'S CHOSEN HANDLE (MY_RELAY_NAME). Loopback + admin-token gated, so it answers only on the box
+  // that runs the relay and returns '' everywhere else — a screen must resolve it async and fall back to the
+  // address. CALLERS (rule 2): app/stew-dashboard.jsx — the go-public invite note (useGoPublicGate ~:3011
+  // and goPublic ~:3024), and the Relays card own-box row LABEL (resolved once into state, shown in place of
+  // the raw tunnel address with the address as fallback). No writer uses it.
   async ownRelayName() {
     if (!ownIsLoopback()) return '';
     const tok = await localAdminToken(); if (!tok) return '';
@@ -14102,7 +14107,8 @@ window.Steward = {
   // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
   // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
   // durable handle while the URL is not. Audit item 19, 2026-09-14.
-  // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+  // CALLERS (rule 2): app/stew-dashboard.jsx — the remove-relay confirmation, and the relay row LABEL
+  // (shows this name in place of the raw tunnel address, falling back to the address when none). No writer uses it.
   relayNameFor(url) {
     const u = normRelay(url); if (!u) return '';
     const hit = getNamedRelays().find(e => e && normRelay(e.url) === u);

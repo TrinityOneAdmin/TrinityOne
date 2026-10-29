@@ -158,7 +158,7 @@ const ROW_A = 'wss://box.example.ts.net/relay';
 const ROW_B = 'wss://second-box.example.ts.net/relay';
 const NAMES = { [ROW_A]: 'falgate-box', [ROW_B]: 'grace-city' };
 
-async function relayPanel({ names = NAMES } = {}) {
+async function relayPanel({ names = NAMES, own = '', ownName = '' } = {}) {
   const removed = [];
   const { React, reset, flush } = mini();
   // dropOutcome too: since owner decision B the card asks it what a Remove answered (whether the row may go).
@@ -179,6 +179,10 @@ async function relayPanel({ names = NAMES } = {}) {
     // still measures what it is about — the confirmation — and the row really is removed after it.
     unsignRelay: async () => ({ removed: true, entries: [] }),
     relayNameFor: (u) => names[u] || '',
+    // THE OWN-BOX HANDLE, injected the same way as relayNameFor. ownRelay() names which row is the console's
+    // own relay; ownRelayName() (async, loopback+token-gated in the ship, returns '' off-box) resolves its
+    // chosen handle. Default off ('' own) so every pre-existing test behaves exactly as before.
+    ownRelay: () => own, ownRelayName: async () => ownName,
     ownRelayUrl: () => '', selfHostedUrl: () => '', addRelay: () => {}, publishRelayList: async () => {},
   };
   globalThis[key] = {
@@ -227,13 +231,19 @@ test('…and the confirmation NAMES THE BINDING OF THE ROW SHE TAPPED, not just 
   // Two rows, two different names. Tapping the SECOND must not name the first's binding.
   const p = await relayPanel();
   trash(p.draw(), 1).props.onClick();
-  const after = texts(p.draw()).join(' | ');
+  // SCOPED TO THE CONFIRMATION, not the whole screen. The row LABELS now show each relay's remembered name
+  // (relayName(r.url) || r.url), so "falgate-box" legitimately appears on screen as ROW_A's own label — the
+  // thing this test must catch is the CONFIRMATION naming a different relay's binding, so it reads the
+  // role="alert" block alone. Without this scoping the row-label display turns a correct screen red.
+  const alert = find(p.draw(), n => n.props && n.props.role === 'alert')[0];
+  assert.ok(alert, 're-anchor: the confirmation (role="alert") did not render');
+  const after = texts(alert).join(' | ');
   assert.match(after, /grace-city/,
     'THE STEWARD IS NOT TOLD THE NAME IS GOING TOO. The name is the durable handle for a box behind a ' +
     'rotating tunnel address; the URL on screen may already be stale. Without it there is no way back.');
   assert.ok(!/falgate-box/.test(after),
     'THE CONFIRMATION NAMED A DIFFERENT RELAY’S BINDING. She writes down "falgate-box", removes the box that ' +
-    'was called "grace-city", and has no way back to either. Screen read: ' + after);
+    'was called "grace-city", and has no way back to either. Confirmation read: ' + after);
 });
 
 test('…and confirming removes THAT row, not another one', async () => {
@@ -277,4 +287,74 @@ test('confirming removes it; "Keep it" does not', async () => {
   await go.props.onClick();
   assert.deepEqual(q.removed, [ROW_A],
     'confirming did not actually remove the relay — the control is now decorative');
+});
+
+// ── THE OTHER POINT OF USE: the row LABEL shows the chosen NAME, not the raw tunnel address ─────────────
+// CLAUDE.md rule 1. A self-hosted box reached BY NAME has a durable handle while its *.ts.net /
+// *.trycloudflare.com address churns on each reboot (rule 10, root 3). The console used to print the raw
+// r.url; now the row label prefers relayName(r.url) and falls back to r.url when no name is remembered.
+// Rendered and read out of the tree (rule 3): nothing here matches text in a .jsx file. Deleting the
+// relayName() call OR the `|| r.url` fallback must turn one of these two red.
+//
+// The PRIMARY label is the one mono div with fontWeight 700 (the muted address sub-line, when shown, is
+// lighter and not 700), and only its direct text children are read — never the title=r.url prop, which
+// keeps the address inspectable on hover and would otherwise let a deleted relayName() pass unnoticed.
+const primaryLabels = (tree) => find(tree, n => n.type === 'div' && n.props && n.props.style
+  && n.props.style.fontWeight === 700 && n.props.style.fontFamily === 'var(--mono)');
+const labelText = (node) => (node.kids || []).filter(k => typeof k === 'string' || typeof k === 'number').map(String).join('');
+
+test('the relay row shows the remembered NAME in place of the raw tunnel address', async () => {
+  const p = await relayPanel();   // ROW_A named falgate-box, ROW_B named grace-city
+  const labels = primaryLabels(p.draw());
+  assert.equal(labels.length, 2, 're-anchor: expected one primary label per relay row, got ' + labels.length);
+  assert.equal(labelText(labels[0]), 'falgate-box',
+    'the row label printed the raw tunnel address, not the handle the steward chose — the address churns on ' +
+    'reboot and is not what she recognises. Label read: ' + labelText(labels[0]));
+  assert.equal(labelText(labels[1]), 'grace-city', 'the second row did not show its own remembered name');
+});
+
+test('a relay with NO remembered name falls back to its raw address in the row label', async () => {
+  const p = await relayPanel({ names: {} });   // neither row has a remembered name
+  const labels = primaryLabels(p.draw());
+  assert.equal(labels.length, 2, 're-anchor: expected one primary label per relay row, got ' + labels.length);
+  assert.equal(labelText(labels[0]), ROW_A,
+    'with no name remembered the label must fall back to the address — an empty label (the `|| r.url` ' +
+    'fallback deleted) leaves the steward with no idea which relay the row is. Label read: ' + labelText(labels[0]));
+});
+
+// ── THE OWN-BOX ROW: it shows the console's own chosen handle, resolved from ownRelayName() ─────────────
+// CLAUDE.md rule 1. The own box (r.url === ownRelay()) is a self-hosted relay behind a tunnel too, and its
+// handle (MY_RELAY_NAME) is the durable thing — but ownRelayName() is async + loopback/token-gated, so the
+// card resolves it ONCE into state (useEffect) and the row label reads it synchronously, falling back to the
+// raw address when it returns '' (off-box, or no name). Rendered and read out of the tree (rule 3). Deleting
+// the own-name branch of rowName() must turn (a) red. Injected via the Steward stub like relayNameFor.
+//
+// The ownRelayName() resolution is an awaited async effect, so one draw kicks it off and a macrotask tick
+// lets setOwnName land before the row label is read on the next draw — mirroring the real async gate.
+const settle = () => new Promise(r => setTimeout(r, 0));
+
+test('the own-box row shows the console’s own resolved handle, not its raw address', async () => {
+  // ROW_A is the console's own box, with no added-by-name binding, and ownRelayName() resolves its handle.
+  const p = await relayPanel({ names: {}, own: ROW_A, ownName: 'grace-chapel-box' });
+  p.draw();            // kicks the async ownRelayName() effect
+  await settle();      // let the await resolve and setOwnName land
+  const labels = primaryLabels(p.draw());
+  assert.equal(labels.length, 2, 're-anchor: expected one primary label per relay row, got ' + labels.length);
+  assert.equal(labelText(labels[0]), 'grace-chapel-box',
+    'the own-box row printed its raw tunnel address, not the handle ownRelayName() resolved — the address ' +
+    'churns on reboot and is not what the steward recognises. Label read: ' + labelText(labels[0]));
+  assert.equal(labelText(labels[1]), ROW_B,
+    'a row that is NOT the own box and has no name must still fall back to its address');
+});
+
+test('the own-box row falls back to its raw address when ownRelayName() returns ""', async () => {
+  // Off-box (or no name): ownRelayName() returns '' and the label must still name the relay by its address.
+  const p = await relayPanel({ names: {}, own: ROW_A, ownName: '' });
+  p.draw();
+  await settle();
+  const labels = primaryLabels(p.draw());
+  assert.equal(labels.length, 2, 're-anchor: expected one primary label per relay row, got ' + labels.length);
+  assert.equal(labelText(labels[0]), ROW_A,
+    'with no own-box handle resolved the label must fall back to the address — an empty label leaves the ' +
+    'steward with no idea which relay the row is. Label read: ' + labelText(labels[0]));
 });
