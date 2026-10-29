@@ -5443,10 +5443,14 @@ function DashRelaysCard() {
             // where "is this the box serving this console" is the right question. The LABEL no longer rides
             // on it — see relayKind.
             const self = host && r.url.includes(host);
-            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). isLoopbackOrigin
-            // is the origin root — this row is the console's own loopback-served box (desktop Suite) — URL-bound
-            // by construction, exactly as proveRelay's origin root is. canonical → Shared, own box → Self-hosted,
-            // otherwise Added. Display only; it does not touch admission.
+            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). classifyRelay
+            // still returns 'shared'/'self'/'neutral', but only ONE pill renders now (see :5470): canonical /
+            // official T1 relays (relayKind === 'shared', matched against the shipped SHARED_RELAY_KEYS) show
+            // the "Shared" pill, and self/added relays show NO pill. The "Self-hosted" and "Added" labels were
+            // removed because the church signs EVERY relay it adds, so classifyRelay cannot tell a box the
+            // church HOSTS from one it merely ADDED, and a plain added box was mislabelled "Self-hosted". Only
+            // 'shared' is a reliable identity, so only it is shown. isLoopbackOrigin and proven still feed
+            // classifyRelay (relayKind is read elsewhere). Display only; it does not touch admission.
             const proven = window.Steward.provenRelayPub ? window.Steward.provenRelayPub(r.url) : '';
             const isLoopbackOrigin = selfHostedConsole && !!own && r.url === own;
             const relayKind = window.Steward.classifyRelay
@@ -5467,7 +5471,7 @@ function DashRelaysCard() {
                     line and on a phone the status drops under the chips. `maxWidth: 100%` keeps it inside
                     the card's padding box rather than letting `flexShrink: 0` overrule the wrap. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
-                  {relayKind === 'self' ? <SkPill tint="clay">Self-hosted</SkPill> : relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : <SkPill tint="ink">Added</SkPill>}
+                  {relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : null}
                   {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
                       the other must not look fine. Under the closed network nothing is published to an
                       address until it has PROVED it holds a key this church's network contains, so a live
