@@ -1,9 +1,16 @@
-// THE RELAY PILL ON THE SCREEN READS THE PROVEN IDENTITY — not the page address. (CLAUDE.md rule 1.)
+// THE RELAY PILL ON THE SCREEN SHOWS ONLY "Shared", FOR CANONICAL RELAYS. (CLAUDE.md rule 1.)
 // Run: node --test scripts/the-relay-pill-reads-from-identity-on-screen.test.mjs
 //
 // scripts/a-relay-label-follows-proven-identity.test.mjs proves the ENGINE (classifyRelay) in isolation. It
 // cannot prove the SCREEN uses it: deleting the pill's wiring from DashRelaysCard leaves that engine test
 // green. This is the point-of-use half — it RENDERS DashRelaysCard and reads the pill text out of the tree.
+//
+// WHY THE OTHER LABELS ARE GONE. classifyRelay returns 'self' for ANY church-signed non-canonical relay, but
+// the church signs EVERY relay it adds, so a merely-ADDED box (not one the church hosts) was mislabelled
+// "Self-hosted" on screen. The data to tell "my box" from "an added box" is not reliably present. Only the
+// canonical/shared classification ('shared', from the shipped SHARED_RELAY_KEYS) is reliable, so the card now
+// renders the "Shared" pill ALONE and shows NOTHING for self/added rows. classifyRelay itself is UNCHANGED —
+// still used for relayKind, and provenRelayPub is still load-bearing for the online/boxes count.
 //
 // It renders the REAL DashRelaysCard (sliced from app/stew-dashboard.jsx, compiled with the same
 // --jsx=transform the build uses) and feeds it the REAL classifyRelay lifted out of the shipped
@@ -13,11 +20,11 @@
 // pre-resolve + classifyRelay -> relayKind -> the pill. Nothing here matches text in a .jsx file (rule 3:
 // app/*.jsx ships unbundled, so a text match passes even if the pill is deleted).
 //
-// THE FIXTURE IS CHOSEN SO THE OLD HOST-BASED LABEL IS WRONG ON EVERY ROW. The console is served FROM
-// app.trinityone.church (location.host), which is a canonical/shared relay. The old pill
-// (`r.url.includes(location.host)`) would call that row "Self-hosted" and both other rows "Shared". The
-// identity-based pill calls them Shared / Self-hosted / Added. So reverting the one pill line to the old
-// form flips all three — which is exactly what the instrument-validation note at the foot records.
+// INSTRUMENT VALIDATION (foot of file matters as much as the body): the fixture carries one canonical row,
+// one loopback self-host box, one CHURCH-SIGNED non-canonical ("added") box, and one proven-but-unknown box.
+// Only the canonical row may show a pill, and it must read "Shared". Deleting the Shared pill line drops the
+// count to zero and fails the first test; reverting to the old three-way pill (self -> "Self-hosted",
+// neutral -> "Added") puts pills back on the self/signed/unknown rows and fails the exactly-one-pill test.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -42,12 +49,14 @@ const classifyRelay = new Function(fnBody(SHIP, 'function classifyRelay(info) {'
 // SHARED_RELAY_KEYS[0] — the live canonical/shared relay's key.
 const CANON = '6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2';
 const OWN = 'a'.repeat(64);        // the loopback self-host box's proven key — not canonical, not signed
+const SIGNED = 'b'.repeat(64);     // a box this church SIGNED into its relay-net doc — merely ADDED, not hosted
 const UNKNOWN = 'c'.repeat(64);    // a proven box that is neither canonical, own, nor church-signed
 
 const ROW_SHARED = 'wss://app.trinityone.church/relay';   // canonical, AND the console's own serving address
 const ROW_SELF = 'ws://127.0.0.1:8000/relay';             // the desktop Suite's own loopback box
+const ROW_SIGNED = 'wss://added.example/relay';           // church-signed, non-canonical — the mislabel bug
 const ROW_UNKNOWN = 'wss://unknown.example/relay';
-const PROVEN = { [ROW_SHARED]: CANON, [ROW_SELF]: OWN, [ROW_UNKNOWN]: UNKNOWN };
+const PROVEN = { [ROW_SHARED]: CANON, [ROW_SELF]: OWN, [ROW_SIGNED]: SIGNED, [ROW_UNKNOWN]: UNKNOWN };
 
 // A miniature React that honours call-order state, memo/callback deps and effects — the pattern the console
 // screen tests use (scripts/removing-a-relay-asks-first.test.mjs). Enough to answer: what does the card put
@@ -89,6 +98,7 @@ const find = (n, p, out = []) => {
 const STATUS = [
   { url: ROW_SHARED, status: 'on', ms: 20, member: true },
   { url: ROW_SELF, status: 'on', ms: 10, member: true },
+  { url: ROW_SIGNED, status: 'on', ms: 15, member: true },
   { url: ROW_UNKNOWN, status: 'on', ms: 30, member: true },
 ];
 
@@ -103,13 +113,14 @@ async function relayPanel() {
   } finally { rmSync(tmp, { force: true }); }
   const key = '__rl_' + Math.random().toString(36).slice(2);
   // The REAL classifyRelay; provenRelayPub stands in for the verified-identity cache (per-URL), as the gate
-  // would answer it on the phone. relayNet() is the church's signed set (empty here — the own box is caught
-  // by the loopback-origin signal, which is the whole point of the audit's precedence).
+  // would answer it on the phone. relayNet() is the church's signed set — it carries the ADDED box, so that
+  // row classifies 'self' (the exact bug: every added relay is church-signed), and the card must still show
+  // NO pill for it. The own loopback box is caught by the loopback-origin signal.
   const Steward = {
     classifyRelay,
     provenRelayPub: (u) => PROVEN[u] || '',
     sharedRelayKeys: () => [CANON],
-    relayNet: async () => [],
+    relayNet: async () => [{ pubkey: SIGNED }],
     ownRelay: () => ROW_SELF,
     isSelfHosted: () => true,
     relayNameFor: () => '',
@@ -140,33 +151,41 @@ async function relayPanel() {
 // The pill row for a given address: the per-row <div key={r.url}>, whose SkPill child carries the label.
 const rowFor = (tree, url) => find(tree, n => n.type === 'div' && n.props && n.props.key === url)[0];
 const LABELS = ['Shared', 'Self-hosted', 'Added'];
-const labelOf = (tree, url) => {
+// The identity-pill text(s) on a row — 0 or 1 now that only canonical rows carry a pill.
+const labelsOf = (tree, url) => {
   const row = rowFor(tree, url);
   assert.ok(row, 're-anchor: no rendered row for ' + url + ' — the relay panel changed shape');
-  const found = texts(row).filter(t => LABELS.includes(t));
-  assert.equal(found.length, 1, 'expected exactly one identity pill on the row for ' + url + ', saw ' + JSON.stringify(found));
-  return found[0];
+  return texts(row).filter(t => LABELS.includes(t));
 };
 
-test('a canonical relay served FROM the console reads "Shared" — not "Self-hosted" as the old host test said', async () => {
+test('a canonical relay served FROM the console still shows the "Shared" pill', async () => {
   const p = await relayPanel();
-  assert.equal(labelOf(p.draw(), ROW_SHARED), 'Shared');
+  // This is the point of use: delete the `relayKind === "shared" ? <SkPill>Shared</SkPill> : null` line and
+  // this row shows nothing and this assertion fails.
+  assert.deepEqual(labelsOf(p.draw(), ROW_SHARED), ['Shared']);
 });
 
-test('the loopback self-host box reads "Self-hosted"', async () => {
+test('a church-signed NON-canonical (added) box shows NO "Self-hosted"/"Added" pill', async () => {
   const p = await relayPanel();
-  assert.equal(labelOf(p.draw(), ROW_SELF), 'Self-hosted');
+  // classifyRelay returns 'self' for this row (every added relay is church-signed), but the screen must not
+  // call it "Self-hosted" — nor "Added". No identity pill at all.
+  assert.deepEqual(labelsOf(p.draw(), ROW_SIGNED), []);
 });
 
-test('a proven but unknown box reads "Added" (neutral) — never guessed Shared or Self-hosted', async () => {
+test('the loopback self-host box shows NO pill (the "Self-hosted" label is gone)', async () => {
   const p = await relayPanel();
-  assert.equal(labelOf(p.draw(), ROW_UNKNOWN), 'Added');
+  assert.deepEqual(labelsOf(p.draw(), ROW_SELF), []);
 });
 
-test('all three labels are present exactly once — the pill is wired to relayKind, per row', async () => {
+test('a proven but unknown box shows NO pill (the "Added" label is gone)', async () => {
   const p = await relayPanel();
-  const tree = p.draw();
-  const all = texts(tree).filter(t => LABELS.includes(t)).sort();
-  assert.deepEqual(all, ['Added', 'Self-hosted', 'Shared'],
-    'the rendered pills do not read one of each — the card is not labelling from the proven identity: ' + JSON.stringify(all));
+  assert.deepEqual(labelsOf(p.draw(), ROW_UNKNOWN), []);
+});
+
+test('exactly one identity pill is rendered across the whole card, and it reads "Shared"', async () => {
+  const p = await relayPanel();
+  const all = texts(p.draw()).filter(t => LABELS.includes(t));
+  assert.deepEqual(all, ['Shared'],
+    'the card should render the Shared pill alone — if this is empty the Shared line was deleted; if it ' +
+    'carries Self-hosted/Added the old three-way pill is back: ' + JSON.stringify(all));
 });

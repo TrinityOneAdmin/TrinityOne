@@ -5467,7 +5467,7 @@ function DashRelaysCard() {
                     line and on a phone the status drops under the chips. `maxWidth: 100%` keeps it inside
                     the card's padding box rather than letting `flexShrink: 0` overrule the wrap. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
-                  {relayKind === 'self' ? <SkPill tint="clay">Self-hosted</SkPill> : relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : <SkPill tint="ink">Added</SkPill>}
+                  {relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : null}
                   {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
                       the other must not look fine. Under the closed network nothing is published to an
                       address until it has PROVED it holds a key this church's network contains, so a live
