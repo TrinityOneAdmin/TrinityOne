@@ -2121,7 +2121,7 @@ function DashFinanceBook() {
 
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
-        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, budgets, multi-currency, and more regional giving-relief packs.</div>
+        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, multi-currency, and more regional giving-relief packs.</div>
       </div>
 
       {recording && <BooksRecord book={book} onRecord={record} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
