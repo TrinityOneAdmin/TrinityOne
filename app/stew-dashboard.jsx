@@ -7349,7 +7349,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
         {scan ? (
           <StewQRScanner onResult={(t) => { setText(t); setScan(false); setErr(''); }} onCancel={() => setScan(false)} />
         ) : (
-          <button onClick={() => setScan(true)} className="sk-btn" style={{ width: '100%', padding: '9px 14px', marginBottom: 8 }}>Scan their code</button>
+          stewOnPhoneApp() ? <button onClick={() => setScan(true)} className="sk-btn" style={{ width: '100%', padding: '9px 14px', marginBottom: 8 }}>Scan their code</button> : null
         )}
         <input value={text} onChange={e => { setText(e.target.value); setErr(''); }} placeholder="…or paste their new code / npub"
           style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', marginBottom: 8 }} />
@@ -10869,7 +10869,7 @@ function DashBecomeStewardPanel() {
       {scanInvite
         ? <div><StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} /><button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 8 }}>Cancel scan</button></div>
         : <div>
-            <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button>
+            {stewOnPhoneApp() ? <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button> : null}
             <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '9px 0 6px' }}>No camera? Paste the invite the owner sent you:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={inviteText} onChange={e => { setInviteText(e.target.value); setReqMsg(''); }} aria-label="Church invite code" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
@@ -13250,7 +13250,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         <div style={{ marginBottom: 14 }}>
           {!scanning ? (
             <React.Fragment>
-              <button onClick={() => setScanning(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Scan a handoff QR</button>
+              {stewOnPhoneApp() ? <button onClick={() => setScanning(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Scan a handoff QR</button> : null}
               <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, marginTop: 7 }}>Point this device at another steward’s handoff QR to take over their church here. It replaces the church key on this device, so back yours up first.</div>
             </React.Fragment>
           ) : (
