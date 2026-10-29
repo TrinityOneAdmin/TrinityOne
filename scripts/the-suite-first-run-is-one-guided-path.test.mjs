@@ -22,10 +22,12 @@
 // resolve to a dead port in the browser and are refused inside every gateway; this dev box's real Tailscale
 // is kept out with TRINITY_TAILSCALE_BIN. Skips itself without chromium.
 //
-// NOT DRIVEN HERE, deliberately: claiming a relay NAME in the wizard — the gateway refuses a claim until the
-// relay is public ("your relay isn't reachable from the internet yet"), so on a fresh loopback box the name
-// step can only be skipped; the "named relay" signal is seeded on disk (relay-myname.json) instead, which is
-// the file the gateway reads at boot.
+// NOT DRIVEN HERE, deliberately: reserving a relay NAME in the wizard. Since fix/reserve-relay-name-before-public
+// the gateway no longer refuses a name before the relay is public — it RESERVES it locally (best-effort,
+// fail-open availability check) and publishes the signed directory claim at go-public. That reserve/claim path
+// is proven by scripts/a-relay-name-is-reserved-before-public.test.mjs and the wizard/dashboard point-of-use
+// rows in scripts/relay-name-reserved-in-the-wizard.test.mjs. Here the name step is simply SKIPPED and the
+// "named relay" signal is seeded on disk (relay-myname.json), the file the gateway reads at boot.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -249,8 +251,9 @@ const readRswDone = (c) => c.evalIn(`(() => { const on = ${ON}; const card = doc
   return JSON.stringify({ heading: (card.querySelector('.rsw-h') || {}).textContent || '', sub: (card.querySelector('.rsw-sub') || {}).textContent || '',
     foot: foot ? [...foot.querySelectorAll('a,button')].map(ctl) : [], steps: [...card.querySelectorAll('.rsw-step')].map(e => e.id) }); })()`).then(JSON.parse);
 
-// Walk the relay wizard the way a person on a fresh, not-yet-public box can: Get started → (a name cannot be
-// claimed before going public, so) Skip for now → Continue past the church card → Yes, it stays on → done.
+// Walk the relay wizard the way a person on a fresh, not-yet-public box can: Get started → (the name step is
+// SKIPPED here — reserving a name is proven elsewhere) Skip for now → Continue past the church card → Yes, it
+// stays on → done.
 async function walkRelayWizard(c) {
   await waitFor(c, `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`, 'the relay wizard to open', 20000);
   assert.equal(await clickId(c, 'rswGo'), 'ok', 'no "Get started"');

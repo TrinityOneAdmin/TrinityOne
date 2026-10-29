@@ -549,13 +549,21 @@
       if (r.status === 401) { body.innerHTML = '<div class="muted">Enter the admin token (Churches card below) to manage your relay’s name.</div>'; return; }
       const m = await r.json();
       const pet = petName(m.pub);
+      // A name CAN be reserved before the relay is public — public access is the last setup step, so hiding the
+      // input until then threw the typed name away. Pre-public a handle is RESERVED (held on this computer, goes
+      // live at go-public); once public it is the live directory name. The input renders in both states.
+      const isPublic = !!m.relayWss;
       let html = pet ? '<div style="margin-bottom:10px">Known as <b>' + esc(pet) + '</b> <span class="muted">— a name from this relay’s key, so people can recognise it.</span></div>' : '';
-      if (m.handle) html += '<div style="margin-bottom:8px">Public name: <b>' + esc(m.handle) + '</b> <span class="muted">— stewards connect their church by typing this in the console.</span></div>';
-      if (!m.relayWss) {
-        html += '<div class="muted">Turn on public access in <b>Reach members from anywhere</b> above, then a name others can type appears here.</div>';
-      } else {
-        html += '<div style="display:flex; gap:8px; margin-top:6px"><input id="relayNameIn" placeholder="' + (m.handle ? 'change name' : 'choose a name, e.g. grace-city') + '" autocomplete="off" aria-label="Relay name to claim" title="A short, memorable handle (letters, numbers, hyphens) that stewards type in Settings → Relays → Connect by name. It always points at this relay&#39;s current address, so it keeps working even after the tunnel URL changes on restart." /><button class="btn-clay" id="relayNameGo" style="white-space:nowrap" title="' + (m.handle ? 'Change the public name this relay is reachable by.' : 'Claim this name in the relay directory so stewards can connect to your church by name.') + '">' + (m.handle ? 'Update' : 'Claim') + '</button></div><div class="muted" id="relayNameMsg" style="margin-top:6px"></div>';
-      }
+      if (m.handle) html += isPublic
+        ? '<div style="margin-bottom:8px">Public name: <b>' + esc(m.handle) + '</b> <span class="muted">— stewards connect their church by typing this in the console.</span></div>'
+        : '<div style="margin-bottom:8px">Reserved: <b>' + esc(m.handle) + '</b> <span class="muted">— held on this computer; goes live when you turn on public access.</span></div>';
+      const ph = m.handle ? (isPublic ? 'change name' : 'change reserved name') : 'choose a name, e.g. grace-city';
+      const btn = m.handle ? (isPublic ? 'Update' : 'Update reservation') : (isPublic ? 'Claim' : 'Reserve');
+      const btnTitle = isPublic
+        ? (m.handle ? 'Change the public name this relay is reachable by.' : 'Claim this name in the relay directory so stewards can connect to your church by name.')
+        : 'Reserve this name now; it is held on this computer and registered in the relay directory the moment you turn on public access.';
+      html += '<div style="display:flex; gap:8px; margin-top:6px"><input id="relayNameIn" placeholder="' + ph + '" autocomplete="off" aria-label="Relay name to ' + (isPublic ? 'claim' : 'reserve') + '" title="A short, memorable handle (letters, numbers, hyphens) that stewards type in Settings → Relays → Connect by name. It always points at this relay&#39;s current address, so it keeps working even after the tunnel URL changes on restart." /><button class="btn-clay" id="relayNameGo" style="white-space:nowrap" title="' + btnTitle + '">' + btn + '</button></div><div class="muted" id="relayNameMsg" style="margin-top:6px"></div>';
+      if (!isPublic) html += '<div class="muted" style="margin-top:4px">It goes live — others can type it to connect — the moment you turn on public access above.</div>';
       body.innerHTML = html;
       const go = document.getElementById('relayNameGo'); if (go) go.onclick = claimRelayName;
       const inp = document.getElementById('relayNameIn'); if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') claimRelayName(); });
@@ -591,7 +599,33 @@
       if (msg) { msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ public!'; }
       cfHold = false;   // success — let the refresh render the public card
       setTimeout(() => { gpTick(); loadRelayName(); }, 900);
+      verifyReservationRegistered();   // a name reserved before now is published by reclaimRelayName at go-public; confirm it took before crying "taken"
     } catch (e) { if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; } if (btn) btn.disabled = false; }
+  }
+  // After go-public, confirm a RESERVED name actually registered before we tell the operator it was taken.
+  // reclaimRelayName() is fire-and-forget with up to an 8s per-peer timeout, so the ordinary ~900ms dashboard
+  // reload races AHEAD of propagation and would false-flag a name that is registering fine. So resolve the name
+  // a few times over ~12s. Only a directory that ANSWERS and still does NOT resolve the name to our pub after the
+  // whole window is a real conflict; a directory we cannot reach at all is inconclusive and stays silent (mirrors
+  // the server's fail-open reserve), so an offline box is never told its name was taken.
+  async function verifyReservationRegistered() {
+    let m; try { m = await (await adminFetch('/relay-names/mine')).json(); } catch (e) { return; }
+    if (!m || !m.handle || !m.relayWss || !m.directory || !m.pub) return;   // nothing reserved, or not public yet
+    const url = String(m.directory).replace(/\/+$/, '') + '/relay-names/resolve/' + encodeURIComponent(m.handle);
+    let answered = false, ours = false;
+    for (let i = 0; i < 6 && !ours; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const r = await fetch(url, { cache: 'no-store' });
+        if (r.status === 404) { answered = true; continue; }   // not propagated yet — keep waiting
+        if (r.ok) { answered = true; let rec = null; try { rec = await r.json(); } catch {} ours = !!(rec && rec.pub && rec.pub === m.pub); }
+      } catch (e) {}   // directory unreachable — inconclusive, try again
+    }
+    if (answered && !ours) {
+      const msg = document.getElementById('relayNameMsg'), inp = document.getElementById('relayNameIn');
+      if (inp && !inp.value) inp.value = m.handle;
+      if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ couldn’t register “' + m.handle + '” — it was taken. Choose another.'; }
+    }
   }
   function renderCfPublic(cf) {
     const body = document.getElementById('gpBody');
@@ -618,7 +652,7 @@
       const r = await fetch('/relay-names/mine', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ handle }) });
       const j = await r.json();
       if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (j.error || 'failed'); return; }
-      msg.style.color = 'var(--sage-ink)'; msg.textContent = '· ✓ claimed “' + j.handle + '”'; setTimeout(loadRelayName, 1200);
+      msg.style.color = 'var(--sage-ink)'; msg.textContent = j.reserved ? '· ✓ reserved “' + j.handle + '” — goes live when public' : '· ✓ claimed “' + j.handle + '”'; setTimeout(loadRelayName, 1200);
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
 
@@ -1421,7 +1455,12 @@
           const r = await fetch('/relay-names/mine', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ handle }) });
           const j = await r.json();
           if (!r.ok) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (j.error || 'that name didn’t work — try another'); return; }
-          rswHandle = j.handle || handle; rswStep = 2; renderRSW();
+          rswHandle = j.handle || handle;
+          // j.reserved: the box is not public yet, so the name is held on this computer and goes live when
+          // public access is turned on (the last step). A live claim (already public) has no `reserved` flag
+          // and advances straight away, as before. The 409 "already taken" lands on the !r.ok path above.
+          if (j.reserved) { msg.style.color = 'var(--sage-ink)'; msg.textContent = '✓ reserved — goes live when you turn on public access'; setTimeout(() => { rswStep = 2; renderRSW(); }, 1000); }
+          else { rswStep = 2; renderRSW(); }
         } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '✗ ' + (e.message || 'couldn’t reach the relay'); }
       };
       return;

@@ -6721,7 +6721,30 @@ function serveStatic(req, res) {
           const handle = String(bd.handle || '').toLowerCase().trim();
           if (!_handleRe.test(handle)) { res.writeHead(400, H); res.end('{"error":"name must be 3–32 chars: lowercase letters, numbers, hyphens"}'); return; }
           const myUrl = await ownUrl();
-          if (!myUrl) { res.writeHead(400, H); res.end('{"error":"your relay isn’t reachable from the internet yet — turn on public access first, then claim a name"}'); return; }
+          if (!myUrl) {
+            // Not public yet. Public access is deliberately the LAST setup step, so instead of rejecting we
+            // RESERVE the name locally now; reclaimRelayName() (already called from startCloudflared on
+            // go-public) publishes the signed directory claim when public access turns on. This changes only
+            // WHEN a name->address mapping is published, never WHICH relays a church admits (RELAY-ADMISSION
+            // rule 10): resolve is discovery only and proveRelay still gates every connection.
+            // Best-effort availability check, FAIL-OPEN: ask the directory peers (in order) whether the handle
+            // already resolves. A peer owned by a DIFFERENT pub blocks the reserve; a 404 (free), our own pub,
+            // or an unreachable/timed-out directory all proceed, so an offline/air-gapped first-run is never
+            // blocked. (A true directory hold only happens at go-public; a race there is surfaced by the
+            // dashboard's post-public retry in relay-app/control.js.)
+            let decided = null;   // 'free' | 'ours' | 'other' | null (no peer answered -> fail open)
+            for (const peer of DIRECTORY_PEERS) {
+              try {
+                const rr = await fetch(peer + '/relay-names/resolve/' + encodeURIComponent(handle), { signal: AbortSignal.timeout(6000) });
+                if (rr.status === 404) { decided = 'free'; break; }
+                if (rr.ok) { let rec = null; try { rec = await rr.json(); } catch {} decided = (rec && rec.pub && rec.pub !== RELAY_PUB) ? 'other' : 'ours'; break; }
+                // any other status is inconclusive — try the next peer
+              } catch {}   // unreachable/timeout — try the next peer, and fail open if none answer
+            }
+            if (decided === 'other') { res.writeHead(409, H); res.end('{"error":"that name is already taken — choose another"}'); return; }
+            MY_RELAY_NAME = handle; try { writeFileSync(MYNAME_FILE, JSON.stringify({ handle }) + '\n'); } catch {}
+            res.writeHead(200, H); res.end(JSON.stringify({ ok: true, handle, reserved: true })); return;
+          }
           try {
             const auth = relayNameClaim(handle, myUrl, offerMeta());   // post the signed claim to every directory peer
             const results = await Promise.allSettled(DIRECTORY_PEERS.map(peer => fetch(peer + '/relay-names/claim', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': auth }, body: JSON.stringify({ handle, url: myUrl }), signal: AbortSignal.timeout(8000) })));
