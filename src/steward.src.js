@@ -13824,6 +13824,11 @@ window.Steward = {
     setSelfPublicRelay(j.wss);
     return { url: j.url || '', wss: j.wss, name: j.name || '' };
   },
+  // THIS BOX'S CHOSEN HANDLE (MY_RELAY_NAME). Loopback + admin-token gated, so it answers only on the box
+  // that runs the relay and returns '' everywhere else — a screen must resolve it async and fall back to the
+  // address. CALLERS (rule 2): app/stew-dashboard.jsx — the go-public invite note (useGoPublicGate ~:3011
+  // and goPublic ~:3024), and the Relays card own-box row LABEL (resolved once into state, shown in place of
+  // the raw tunnel address with the address as fallback). No writer uses it.
   async ownRelayName() {
     if (!ownIsLoopback()) return '';
     const tok = await localAdminToken(); if (!tok) return '';

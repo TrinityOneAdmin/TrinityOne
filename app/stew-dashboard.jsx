@@ -5271,6 +5271,21 @@ function DashRelaysCard() {
   const allUp = online === boxes;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
   const selfHostedConsole = !!(window.Steward.isSelfHosted && window.Steward.isSelfHosted());
+  // THE OWN-BOX ROW'S HANDLE. A self-hosted console's own relay has a chosen name (MY_RELAY_NAME) just as an
+  // added-by-name relay does, and ownRelayName() returns it — but it is async and loopback+token-gated
+  // (returns '' off-box), so it is resolved ONCE into state here and read synchronously by the row label
+  // below, mirroring the go-public gate (useGoPublicGate ~:3011 / goPublic ~:3024). Display only: it names
+  // the own-box row, it does not admit or change any relay. Re-resolved if `own` changes (a tunnel address
+  // rotation leaves the name).
+  const [ownName, setOwnName] = React.useState('');
+  React.useEffect(() => {
+    let ok = true;
+    (async () => {
+      try { const nm = window.Steward.ownRelayName ? await window.Steward.ownRelayName() : ''; if (ok) setOwnName(nm || ''); }
+      catch (e) {}
+    })();
+    return () => { ok = false; };
+  }, [own]);
   // THE PILL IS LABELLED FROM THE PROVEN IDENTITY, NOT THE PAGE ADDRESS. The shipped shared-relay keys and
   // the church's own signed relay-net pubkeys are what decide Shared vs Self-hosted vs Added; the render is
   // synchronous, so the church's signed set (relayNet() is async) is pre-resolved into state here. Display
@@ -5381,6 +5396,10 @@ function DashRelaysCard() {
     }
   };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
+  // THE HANDLE TO SHOW FOR A ROW: an added-by-name binding first (consistent with the other rows), then the
+  // own box's resolved handle for the console's own relay (r.url === own), and the raw address as the final
+  // fallback is applied at the label itself. Display only.
+  const rowName = (r) => relayName(r.url) || (own && r.url === own ? ownName : '');
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
   // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
   // covers a refusal arriving as well as one clearing (see onRejected), and `status` is the repaint when the
@@ -5465,8 +5484,8 @@ function DashRelaysCard() {
                     The raw address stays inspectable — on the title (hover) and as a muted sub-line — and a
                     relay with no remembered name still shows its address as the primary label. */}
                 <div style={{ flex: 1, minWidth: 140, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <div title={r.url} style={{ fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{relayName(r.url) || r.url}</div>
-                  {relayName(r.url) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{r.url}</div> : null}
+                  <div title={r.url} style={{ fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{rowName(r) || r.url}</div>
+                  {rowName(r) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{r.url}</div> : null}
                 </div>
                 {/* THE CHIPS WRAP. This strip was one unbreakable line — `flexShrink: 0`, no wrap — so on a
                     360px phone "Shared · Refused our last change · ● Answering · 118ms" ran to x 609 and the
