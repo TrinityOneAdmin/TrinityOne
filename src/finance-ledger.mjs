@@ -74,7 +74,19 @@ function _normalize(book, postings) {
     let fund = p.fund != null ? p.fund : ((acc.type === 'income' || acc.type === 'expense') ? 'general' : null);
     if (fund != null && !book.funds.has(fund)) throw new Error(`posting ${i}: unknown fund "${fund}"`);
     if (p.dir === 'dr') dr += p.amount; else cr += p.amount;
-    return { account: p.account, fund, dir: p.dir, amount: p.amount };
+    // `donor` (Phase 4b): an OPTIONAL opaque donor id tagged on a giving posting — the link a giving-by-member
+    // report and the UK Gift Aid pack group on. It is NEVER a name (donor NAMES live in finance/donor:<id>
+    // docs); an opaque id keeps the journal name-free. A SIDE field: the double-entry engine never reads it
+    // (balance, trialBalance, fundBalances all ignore it), it is carried so the serializers preserve it — and
+    // on a POSTING, the live publish path (pubEntry) and bookToDocs both pass postings wholesale, so unlike an
+    // ENTRY field it only needs preserving HERE, where _normalize rebuilds each posting. ⚠ APPEND-ONLY: a
+    // donorId embedded in the journal is permanent and CANNOT be GDPR-erased (a "forget this donor" scrubs the
+    // finance/donor doc, never the ledger) — acceptable under UK charity/HMRC 6-year retention, documented so
+    // nobody is surprised. It is also network-readable via the journal's aggregate read, which is WHY it must
+    // stay an opaque id and never a name.
+    const o = { account: p.account, fund, dir: p.dir, amount: p.amount };
+    if (p.donor != null && p.donor !== '') o.donor = String(p.donor);
+    return o;
   });
   if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} ≠ credits ${cr}`);
   return norm;
@@ -126,7 +138,9 @@ export function reverse(book, seq, { date, by = '', memo } = {}) {
   if (!orig) throw new Error('no entry with seq ' + seq);
   if (orig.reverses != null) throw new Error('cannot reverse a reversal');
   if (book.journal.some(e => e.reverses === seq)) throw new Error('entry #' + seq + ' is already reversed');
-  const postings = orig.postings.map(p => ({ account: p.account, fund: p.fund, dir: p.dir === 'dr' ? 'cr' : 'dr', amount: p.amount }));
+  // Carry the donor id onto the mirror so a reversed gift nets OUT of that donor's giving-by-member / Gift Aid
+  // total (the reversal posts a dr on the income account for the same donor). _normalize drops it if absent.
+  const postings = orig.postings.map(p => ({ account: p.account, fund: p.fund, dir: p.dir === 'dr' ? 'cr' : 'dr', amount: p.amount, ...(p.donor != null ? { donor: p.donor } : {}) }));
   return post(book, { date: date || orig.date, by, reverses: seq, memo: memo || `Reversal of #${seq}${orig.memo ? ': ' + orig.memo : ''}`, postings });
 }
 

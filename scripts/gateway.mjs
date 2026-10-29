@@ -985,6 +985,12 @@ const GROUP_D = D.GROUP, FUND_D = D.FUND, MEMBER_D = D.MEMBER, PLAN_D = D.PLAN, 
 const CATEGORY_D = D.CATEGORY;   // steward-editable named container for groups (SECURITY-AUDIT-2026-06-24 M1)
 const ROSTER_D = D.ROSTER, SERVICE_D = D.SERVICE, EVENT_D = D.EVENT, REQUEST_D = D.REQUEST;
 const FIN_JOURNAL_D = D.FIN_JOURNAL;   // church-book double-entry journal entry — d=finance/journal:<seq>, ["church",<cp>], single-writer & append-only
+// DONOR RECORD — d=finance/donor:<id>, a REPLACEABLE finance/ doc holding a donor's NAME + address + postcode +
+// giving (Phase 4b). WRITE is covered by the generic finance/ write prefix below (church key or a finance
+// steward). READ, however, is NARROWER than the other finance/ docs: canRead() gives it an EXPLICIT branch
+// ABOVE the generic finance/ read so networkOf is DROPPED — donor PII must never reach a network-peer church,
+// only the church key or a finance steward. See the read branch for the full note.
+const FIN_DONOR_D = D.FIN_DONOR;
 // Receipt image attached to a journal entry — d=finance/attachment:<id>, a REPLACEABLE finance/ doc (same
 // church-OR-finance-steward gate as settings/account/fund). It carries an inline ENCRYPTED image, so unlike
 // the other finance/ docs it needs a size ceiling enforced HERE and not only in the client: a thin relay must
@@ -5435,6 +5441,20 @@ function canRead(e, authed) {
     // the same disclosure readable by another route. Note this is `finance/` with a slash, so
     // `trinityone/financekey:` — the per-recipient key ENVELOPE — is untouched and stays readable by members,
     // as every other key envelope is: a recipient can only ever unwrap their own slot.
+    // ══ A DONOR RECORD IS NOT THE CONGREGATION'S, AND IT IS NOT THE NETWORK'S EITHER ═════════════════════
+    //
+    // finance/donor:<id> (Phase 4b) holds a donor's NAME, address, postcode and — via the opaque donorId tagged
+    // on giving postings — who gave what. It is the single most sensitive finance doc in the app. The generic
+    // finance/ read below serves aggregate finance (journal/accounts/funds) to a NETWORK PEER church as well as
+    // to the church and its finance stewards: `authed === cp || networkOf(authed, cp) || stewardCan(...)`. For a
+    // chart of accounts that is a deliberate choice; for donor PII it is a disclosure the church never made. So
+    // this branch sits ABOVE the generic one and DROPS networkOf: a donor record is served to the CHURCH KEY or
+    // a FINANCE STEWARD, and to NOBODY ELSE — never a network peer, and (because this returns, like the finance
+    // branch, before the any-steward short-circuit far below) never a members/safeguarding/care steward either.
+    // It must RETURN; a branch that narrows a doc and falls through serves it to everyone anyway (the 2026-09-16
+    // finance defect). WRITE is unchanged — the generic finance/ write prefix (church key or a finance steward)
+    // already covers it, and members cannot write it. This is the ONLY relay rule Phase 4b changes.
+    if (d.startsWith(FIN_DONOR_D)) return authed === cp || stewardCan(authed, cp, 'finance');
     if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
     // ══ THE CHECK-IN DOCUMENTS DECIDE THEIR OWN READERS, AND THEY DECIDE THEM *FIRST* ═════════════════════
     //

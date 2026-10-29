@@ -38,6 +38,9 @@ var FinanceLedger = (() => {
     dropFrom: () => dropFrom,
     fmtMoney: () => fmtMoney,
     fundBalances: () => fundBalances,
+    fundMovements: () => fundMovements,
+    givingByFund: () => givingByFund,
+    givingByMember: () => givingByMember,
     guessColumns: () => guessColumns,
     importedKeys: () => importedKeys,
     incomeExpenditure: () => incomeExpenditure,
@@ -52,6 +55,8 @@ var FinanceLedger = (() => {
     quarterRange: () => quarterRange,
     rangeLabel: () => rangeLabel,
     rebuildBook: () => rebuildBook,
+    receiptsAndPayments: () => receiptsAndPayments,
+    reportCsvRows: () => reportCsvRows,
     reverse: () => reverse,
     statementBalanceCheck: () => statementBalanceCheck,
     statementHtml: () => statementHtml,
@@ -118,7 +123,9 @@ var FinanceLedger = (() => {
       if (fund != null && !book.funds.has(fund)) throw new Error(`posting ${i}: unknown fund "${fund}"`);
       if (p.dir === "dr") dr += p.amount;
       else cr += p.amount;
-      return { account: p.account, fund, dir: p.dir, amount: p.amount };
+      const o = { account: p.account, fund, dir: p.dir, amount: p.amount };
+      if (p.donor != null && p.donor !== "") o.donor = String(p.donor);
+      return o;
     });
     if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} \u2260 credits ${cr}`);
     return norm2;
@@ -150,7 +157,7 @@ var FinanceLedger = (() => {
     if (!orig) throw new Error("no entry with seq " + seq);
     if (orig.reverses != null) throw new Error("cannot reverse a reversal");
     if (book.journal.some((e) => e.reverses === seq)) throw new Error("entry #" + seq + " is already reversed");
-    const postings = orig.postings.map((p) => ({ account: p.account, fund: p.fund, dir: p.dir === "dr" ? "cr" : "dr", amount: p.amount }));
+    const postings = orig.postings.map((p) => ({ account: p.account, fund: p.fund, dir: p.dir === "dr" ? "cr" : "dr", amount: p.amount, ...p.donor != null ? { donor: p.donor } : {} }));
     return post(book, { date: date || orig.date, by, reverses: seq, memo: memo || `Reversal of #${seq}${orig.memo ? ": " + orig.memo : ""}`, postings });
   }
   function importedKeys(book) {
@@ -412,6 +419,119 @@ var FinanceLedger = (() => {
     return null;
   }
 
+  // src/finance-reports.mjs
+  var END = "\uFFFF";
+  function fundDelta(book, p) {
+    if (!p.fund) return 0;
+    if (p.account === FUND_TRANSFER_ACCT) return p.dir === "cr" ? p.amount : -p.amount;
+    const a = book.accounts.get(p.account);
+    if (!a) return 0;
+    if (a.type === "income") return p.dir === "cr" ? p.amount : -p.amount;
+    if (a.type === "expense") return p.dir === "dr" ? -p.amount : p.amount;
+    return 0;
+  }
+  function fundMovements(book, { from = "", to = END } = {}) {
+    const acc = /* @__PURE__ */ new Map();
+    const get = (id) => {
+      let o = acc.get(id);
+      if (!o) {
+        o = { opening: 0, in: 0, out: 0 };
+        acc.set(id, o);
+      }
+      return o;
+    };
+    for (const e of book.journal) {
+      if (e.date > to) continue;
+      const before = from && e.date < from;
+      for (const p of e.postings) {
+        const d = fundDelta(book, p);
+        if (d === 0) continue;
+        const o = get(p.fund);
+        if (before) o.opening += d;
+        else if (d > 0) o.in += d;
+        else o.out += -d;
+      }
+    }
+    return [...book.funds.values()].map((f) => {
+      const o = acc.get(f.id) || { opening: 0, in: 0, out: 0 };
+      return { fund: f.id, name: f.name, kind: f.kind, opening: o.opening, in: o.in, out: o.out, closing: o.opening + o.in - o.out };
+    }).sort((a, b) => a.fund === "general" ? -1 : b.fund === "general" ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  }
+  function receiptsAndPayments(book, { from = "", to = END, cashAccounts = null } = {}) {
+    const cash = cashAccounts ? new Set(cashAccounts) : new Set([...book.accounts.values()].filter((a) => a.type === "asset").map((a) => a.id));
+    const nameOf = (id) => (book.accounts.get(id) || {}).name || id;
+    const rec = /* @__PURE__ */ new Map(), pay = /* @__PURE__ */ new Map();
+    let openingCash = 0, periodCash = 0;
+    for (const e of book.journal) {
+      if (e.date > to) continue;
+      const cashDelta = e.postings.reduce((s, p) => cash.has(p.account) ? s + (p.dir === "dr" ? p.amount : -p.amount) : s, 0);
+      if (from && e.date < from) {
+        openingCash += cashDelta;
+        continue;
+      }
+      periodCash += cashDelta;
+      if (!e.postings.some((p) => cash.has(p.account))) continue;
+      for (const p of e.postings) {
+        const a = book.accounts.get(p.account);
+        if (!a) continue;
+        if (a.type === "income") {
+          const v = p.dir === "cr" ? p.amount : -p.amount;
+          if (v) rec.set(p.account, (rec.get(p.account) || 0) + v);
+        } else if (a.type === "expense") {
+          const v = p.dir === "dr" ? p.amount : -p.amount;
+          if (v) pay.set(p.account, (pay.get(p.account) || 0) + v);
+        }
+      }
+    }
+    const toRows = (m) => [...m].filter(([, v]) => v !== 0).map(([account, amount]) => ({ account, name: nameOf(account), amount })).sort((a, b) => b.amount - a.amount);
+    const receipts = toRows(rec), payments = toRows(pay);
+    const totalReceipts = receipts.reduce((s, r) => s + r.amount, 0);
+    const totalPayments = payments.reduce((s, r) => s + r.amount, 0);
+    return { receipts, payments, totalReceipts, totalPayments, net: totalReceipts - totalPayments, openingCash, closingCash: openingCash + periodCash };
+  }
+  function givingByFund(book, { from = "", to = END } = {}) {
+    const byFund = /* @__PURE__ */ new Map();
+    for (const e of book.journal) {
+      if (e.date < (from || "") || e.date > to) continue;
+      for (const p of e.postings) {
+        const a = book.accounts.get(p.account);
+        if (!a || a.type !== "income") continue;
+        const v = p.dir === "cr" ? p.amount : -p.amount;
+        const key = p.fund || "general";
+        byFund.set(key, (byFund.get(key) || 0) + v);
+      }
+    }
+    return [...book.funds.values()].map((f) => ({ fund: f.id, name: f.name, kind: f.kind, amount: byFund.get(f.id) || 0 })).filter((r) => r.amount !== 0).sort((a, b) => b.amount - a.amount);
+  }
+  function givingByMember(book, { from = "", to = END, donors = null } = {}) {
+    const lookup = /* @__PURE__ */ new Map();
+    if (donors) {
+      const entries = Array.isArray(donors) ? donors.map((d) => [d.id, d]) : donors instanceof Map ? [...donors] : Object.entries(donors);
+      for (const [id, d] of entries) if (id != null && d) lookup.set(String(id), d);
+    }
+    const byDonor = /* @__PURE__ */ new Map();
+    for (const e of book.journal) {
+      if (e.date < (from || "") || e.date > to) continue;
+      for (const p of e.postings) {
+        const a = book.accounts.get(p.account);
+        if (!a || a.type !== "income") continue;
+        const v = p.dir === "cr" ? p.amount : -p.amount;
+        const key = p.donor ? String(p.donor) : "";
+        byDonor.set(key, (byDonor.get(key) || 0) + v);
+      }
+    }
+    const rows = [];
+    for (const [id, amount] of byDonor) {
+      if (!id) {
+        rows.push({ donor: "", name: "(unattributed)", eligible: false, unattributed: true, amount });
+        continue;
+      }
+      const d = lookup.get(id) || {};
+      rows.push({ donor: id, name: d.name || id, eligible: d.eligible === true, unattributed: false, amount });
+    }
+    return rows.filter((r) => r.amount !== 0).sort((a, b) => a.unattributed ? 1 : b.unattributed ? -1 : b.amount - a.amount);
+  }
+
   // src/finance-statement.mjs
   var STATEMENT_SECTIONS = [
     { key: "summary", label: "Summary \u2014 income, spending, surplus", on: true },
@@ -527,6 +647,9 @@ var FinanceLedger = (() => {
     if (has("spending")) model.spending = spendRows;
     if (has("funds")) model.funds = closingFunds(book, to || "\uFFFF");
     if (has("balance")) model.balance = balanceSheet(book, { asOf: to || "\uFFFF" });
+    if (has("givingFund")) model.givingFund = givingByFund(book, { from: from || "", to: to || "\uFFFF" });
+    if (has("fundMovements")) model.fundMovements = fundMovements(book, { from: from || "", to: to || "\uFFFF" });
+    if (has("receipts")) model.receipts = receiptsAndPayments(book, { from: from || "", to: to || "\uFFFF" });
     if (has("note") && note && note.trim()) model.note = note.trim();
     return model;
   }
@@ -553,10 +676,32 @@ var FinanceLedger = (() => {
       L.push("SPENDING");
       for (const r of model.spending) L.push(`  ${r.name} \u2014 ${f(r.amount)}`);
     }
+    if (model.givingFund && model.givingFund.length) {
+      L.push("");
+      L.push("GIVING BY FUND");
+      for (const r of model.givingFund) L.push(`  ${r.name}${kindTag(r.kind)} \u2014 ${f(r.amount)}`);
+    }
     if (model.funds && model.funds.length) {
       L.push("");
       L.push("FUNDS (closing balance)");
       for (const r of model.funds) L.push(`  ${r.name}${kindTag(r.kind)} \u2014 ${f(r.balance)}`);
+    }
+    if (model.fundMovements && model.fundMovements.length) {
+      L.push("");
+      L.push("FUND MOVEMENTS (opening \xB7 in \xB7 out \xB7 closing)");
+      for (const r of model.fundMovements) L.push(`  ${r.name}${kindTag(r.kind)} \u2014 ${f(r.opening)} \xB7 +${f(r.in)} \xB7 -${f(r.out)} \xB7 ${f(r.closing)}`);
+    }
+    if (model.receipts) {
+      const rp = model.receipts;
+      L.push("");
+      L.push("RECEIPTS");
+      for (const r of rp.receipts) L.push(`  ${r.name} \u2014 ${f(r.amount)}`);
+      L.push(`  Total receipts \u2014 ${f(rp.totalReceipts)}`);
+      L.push("PAYMENTS");
+      for (const r of rp.payments) L.push(`  ${r.name} \u2014 ${f(r.amount)}`);
+      L.push(`  Total payments \u2014 ${f(rp.totalPayments)}`);
+      L.push(`  Net cash movement \u2014 ${f(rp.net)}`);
+      L.push(`  Cash: ${f(rp.openingCash)} \u2192 ${f(rp.closingCash)}`);
     }
     if (model.balance) {
       L.push("");
@@ -588,7 +733,24 @@ var FinanceLedger = (() => {
   </table></section>`);
     if (model.income && model.income.length) S.push(`<section><h2>Income by category</h2>${rowsTable(model.income, "amount")}</section>`);
     if (model.spending && model.spending.length) S.push(`<section><h2>Spending by category</h2>${rowsTable(model.spending, "amount")}</section>`);
+    if (model.givingFund && model.givingFund.length) S.push(`<section><h2>Giving by fund</h2>${rowsTable(model.givingFund, "amount", true)}</section>`);
     if (model.funds && model.funds.length) S.push(`<section><h2>Fund balances <span class="sub">(closing)</span></h2>${rowsTable(model.funds, "balance", true)}</section>`);
+    if (model.fundMovements && model.fundMovements.length) S.push(`<section><h2>Fund movements</h2><table class="t">
+    <tr><td></td><td class="n">Opening</td><td class="n">In</td><td class="n">Out</td><td class="n">Closing</td></tr>
+    ${model.fundMovements.map((r) => `<tr><td>${esc(r.name)}${esc(kindTag(r.kind))}</td><td class="n">${f(r.opening)}</td><td class="n">${f(r.in)}</td><td class="n">${f(r.out)}</td><td class="n">${f(r.closing)}</td></tr>`).join("")}
+  </table></section>`);
+    if (model.receipts) {
+      const rp = model.receipts;
+      S.push(`<section><h2>Receipts &amp; payments</h2><table class="t">
+    ${rp.receipts.map((r) => `<tr><td>${esc(r.name)}</td><td class="n">${f(r.amount)}</td></tr>`).join("")}
+    <tr class="tot"><td>Total receipts</td><td class="n">${f(rp.totalReceipts)}</td></tr>
+    ${rp.payments.map((r) => `<tr><td>${esc(r.name)}</td><td class="n">${f(r.amount)}</td></tr>`).join("")}
+    <tr class="tot"><td>Total payments</td><td class="n">${f(rp.totalPayments)}</td></tr>
+    <tr class="tot"><td>Net cash movement</td><td class="n">${f(rp.net)}</td></tr>
+    <tr><td>Cash at start</td><td class="n">${f(rp.openingCash)}</td></tr>
+    <tr><td>Cash at end</td><td class="n">${f(rp.closingCash)}</td></tr>
+  </table></section>`);
+    }
     if (model.balance) S.push(`<section><h2>Balance sheet</h2><table class="t">
     <tr><td>Assets</td><td class="n">${f(model.balance.assets)}</td></tr>
     <tr><td>Liabilities</td><td class="n">${f(model.balance.liabilities)}</td></tr>
@@ -621,6 +783,71 @@ var FinanceLedger = (() => {
 ${S.join("\n")}
 <footer>${model.generatedAt ? "Generated " + esc(model.generatedAt) + " \xB7 " : ""}Prepared with TrinityOne \u2014 aggregate figures only.</footer>
 </body></html>`;
+  }
+  function reportCsvRows(model) {
+    const dec = model.decimals != null ? model.decimals : 2;
+    const mm = (m) => minorToMajorText(m, dec);
+    const rows = [[model.title || "Report"], [model.periodLabel || ""], []];
+    if (model.summary) {
+      rows.push(["Summary"]);
+      rows.push(["Total income", mm(model.summary.income)]);
+      rows.push(["Total spending", mm(model.summary.expenditure)]);
+      rows.push([model.summary.surplus < 0 ? "Deficit" : "Surplus", mm(model.summary.surplus)]);
+      rows.push([]);
+    }
+    if (model.income && model.income.length) {
+      rows.push(["Income by category"]);
+      for (const r of model.income) rows.push([r.name, mm(r.amount)]);
+      rows.push([]);
+    }
+    if (model.spending && model.spending.length) {
+      rows.push(["Spending by category"]);
+      for (const r of model.spending) rows.push([r.name, mm(r.amount)]);
+      rows.push([]);
+    }
+    if (model.givingFund && model.givingFund.length) {
+      rows.push(["Giving by fund"]);
+      for (const r of model.givingFund) rows.push([r.name + kindTag(r.kind), mm(r.amount)]);
+      rows.push([]);
+    }
+    if (model.funds && model.funds.length) {
+      rows.push(["Fund balances (closing)"]);
+      for (const r of model.funds) rows.push([r.name + kindTag(r.kind), mm(r.balance)]);
+      rows.push([]);
+    }
+    if (model.fundMovements && model.fundMovements.length) {
+      rows.push(["Fund movements"]);
+      rows.push(["Fund", "Opening", "In", "Out", "Closing"]);
+      for (const r of model.fundMovements) rows.push([r.name + kindTag(r.kind), mm(r.opening), mm(r.in), mm(r.out), mm(r.closing)]);
+      rows.push([]);
+    }
+    if (model.receipts) {
+      const rp = model.receipts;
+      rows.push(["Receipts"]);
+      for (const r of rp.receipts) rows.push([r.name, mm(r.amount)]);
+      rows.push(["Total receipts", mm(rp.totalReceipts)]);
+      rows.push([]);
+      rows.push(["Payments"]);
+      for (const r of rp.payments) rows.push([r.name, mm(r.amount)]);
+      rows.push(["Total payments", mm(rp.totalPayments)]);
+      rows.push([]);
+      rows.push(["Net cash movement", mm(rp.net)]);
+      rows.push(["Cash at start", mm(rp.openingCash)]);
+      rows.push(["Cash at end", mm(rp.closingCash)]);
+      rows.push([]);
+    }
+    if (model.balance) {
+      rows.push(["Balance sheet"]);
+      rows.push(["Assets", mm(model.balance.assets)]);
+      rows.push(["Liabilities", mm(model.balance.liabilities)]);
+      rows.push(["Net funds", mm(model.balance.funds)]);
+      rows.push([]);
+    }
+    if (model.note) {
+      rows.push(["Note"]);
+      rows.push([model.note]);
+    }
+    return rows;
   }
 
   // src/finance-reconcile.mjs

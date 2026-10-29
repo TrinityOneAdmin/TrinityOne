@@ -283,6 +283,18 @@ export const DOC_TYPES = Object.freeze({
   'finance/attachment:':      { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'receipt image attached to a journal entry (entry.attachmentRefs). Same church-OR-finance-steward gate as the other finance/ docs; REPLACEABLE, no seq. Encrypted inline image, so the write rule ALSO caps the body at ~300KB (FIN_ATTACHMENT_MAX) — the only finance/ type with a size ceiling, because a thin relay must not become a blob store' },
   'finance/template:':        { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'recurring standing-order/DD TEMPLATE (Phase 3) - console-only side doc, NOT part of the double-entry book (rebuildBook ignores it). REPLACEABLE, opaque id. Church-OR-finance-steward via the generic finance/ accept()+canRead() rules' },
   'finance/reconcile:':       { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'bank-reconciliation match-state (Phase 3) - console-only side doc, NOT part of the book. REPLACEABLE. Church-OR-finance-steward via the generic finance/ rules' },
+  // DONOR RECORDS (Phase 4b) — the single most sensitive finance doc: a donor's NAME + address + postcode +
+  // giving. WRITE is finance-only, covered by the generic finance/ write prefix (accept() L~4573: church key or
+  // a finance steward), exactly like the other replaceable finance docs; REPLACEABLE, no seq, OPAQUE id.
+  // ⚠ READ IS NARROWER THAN THE OTHER finance/ docs, AND THAT IS THE POINT. The generic finance/ READ rule is
+  // `authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance')` — it serves aggregate finance
+  // (journal/accounts/funds) to a NETWORK PEER church. Donor PII must NOT reach a network peer, so canRead()
+  // gives finance/donor an EXPLICIT rule ABOVE the generic one (gateway.mjs L~5438) that DROPS networkOf:
+  // `authed === cp || stewardCan(authed, cp, 'finance')` — church key OR a finance steward ONLY. Never coupled
+  // to members/safeguarding/care. The coarse `read: 'church'` column means "the church's own data, not
+  // members'/public" — the same label the other finance docs carry; the PRECISE rule (which DROPS networkOf
+  // for donor) is pinned by `gatedBy`, verified against gateway.mjs. Donor-read test: finance-donor-read-rule.test.mjs.
+  'finance/donor:':           { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: 'd.startsWith(FIN_DONOR_D)', note: 'donor record {name, eligible, address?, postcode?, giftAidDeclaredAt?} for giving-by-member + the UK Gift Aid pack. Church-OR-finance-steward READ ONLY — the explicit canRead branch (d.startsWith(FIN_DONOR_D)) DROPS networkOf, unlike aggregate finance/. WRITE is the generic finance/ prefix. REPLACEABLE, opaque id. The donorId tagged on a giving journal posting is permanent + network-readable via the journal, so it is an opaque id and never a name' },
   // ── THE BENEVOLENCE MODULE, given a rule of its own on 2026-09-22 ────────────────────────────────────
   // A PREFIX, not one type: src/steward-manna.src.js builds seven d-tags from it (settings, fund:, request:,
   // vouch:, approval:, record:, testimony:) by concatenation, so none of them ever appears as a whole
@@ -436,6 +448,7 @@ export const D = Object.freeze({
   EVENT:          k('trinityone/event:'),
   REQUEST:        k('trinityone/request:'),
   FIN_JOURNAL:    k('finance/journal:'),
+  FIN_DONOR:      k('finance/donor:'),
   ROOM:           k('trinityone/room:'),
   BOOKING:        k('trinityone/booking:'),
   RUNSHEET:       k('trinityone/runsheet:'),

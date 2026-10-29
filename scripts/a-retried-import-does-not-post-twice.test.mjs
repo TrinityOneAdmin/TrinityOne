@@ -41,7 +41,7 @@ const liftImportStatement = () => lift('const importStatement = async (picks, ac
 // trap this codebase keeps falling into. Measured: with record()'s rollback deleted, the stubbed version of
 // this file stayed 8/0 green.
 const liftRecord = () => lift('const _dropIfRefused = (b, entry) =>', '_dropIfRefused')
-                       + lift('const record = async ({ dir, legs, totalMinor, date, memo, attachment }) => {', 'record');
+                       + lift('const record = async ({ dir, legs, totalMinor, date, memo, attachment, donor }) => {', 'record');
 
 // A relay that behaves like the real one: it stores a journal document only when the seq is exactly next.
 function makeRelay() {
