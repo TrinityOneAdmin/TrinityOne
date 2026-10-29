@@ -36,8 +36,15 @@
   .wrap { max-width: 1760px; margin: 0 auto; padding: 26px 24px 60px; }
   /* summary spans the full width; detail cards pack into the deck below it */
   .hero { max-width: 1760px; }
-  .deck { display:grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap:16px; align-items:start; }
+  /* auto-FIT (not auto-fill): with fewer cards than fit, the empty tracks collapse instead of leaving
+     phantom columns and dead space on the right — the cards stretch to fill the row. align-items:stretch
+     (default) lets a row's cards share a height so they don't go ragged. (WebKit/WKWebView — the Suite's
+     Tauri webview on Mac — honoured auto-fill's empty tracks literally, which is why it looked worst there.) */
+  .deck { display:grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap:16px; align-items:stretch; }
   .deck > .card { margin-bottom:0; }
+  /* cap at 3 columns on a very wide display so a handful of cards don't spread into one thin row;
+     .card--wide spans 2 of the 3, which this still allows */
+  @media (min-width: 1500px) { .deck { grid-template-columns: repeat(3, minmax(310px, 1fr)); } }
   /* the churches list carries npubs and per-row detail — give it room once there is room to give */
   @media (min-width: 1000px) { .card--wide { grid-column: span 2; } }
   /* the churches list is the tallest card by far — on a wide screen let it hold its own column pair
@@ -148,19 +155,19 @@
   /* ══ Settings ═══════════════════════════════════════════════════════════════════════════════════ */
   /* (.group/.group-head/.group-title/.group-hint/.span-wide/.row2 removed — Settings no longer has
      headed two-up sections; every card now lives in the .deck3 column flow below.) */
-  /* Settings is three columns of cards, laid out with CSS multi-column rather than grid.
-     Grid was the obvious choice and the wrong one. A grid row is as tall as its tallest card, so the
-     churches list — the tallest thing on the page — set the height of the whole first row and left the
-     two short cards beside it trailing ~550px of dead background before the second row could start.
-     Nothing about a settings page needs cards aligned in rows; they are independent panels. Columns let
-     each one start where the last one ended, which is what "packed" actually means, and it takes 120px
-     off the page at the same time. Order runs down each column in turn, not across.
-     Cards must not be split down the middle by a column break, hence break-inside. */
-  .deck3 { column-count:3; column-gap:16px; }
-  .deck3 > .card { break-inside:avoid; -webkit-column-break-inside:avoid; margin-bottom:16px; }
+  /* Settings is three columns of cards, laid out with a CSS grid.
+     The earlier worry about grid was that a grid row is as tall as its tallest card, so the churches
+     list — the tallest thing on the page — would set the height of the whole first row and leave the
+     short cards beside it trailing dead background. align-items:start answers that: cards align to the
+     top of the row and keep their own heights, so a tall card no longer stretches its neighbours.
+     Grid is used here instead of CSS multi-column because WebKit (the Suite's WKWebView on Mac)
+     mishandles break-inside:avoid — it split and mis-balanced cards — and multi-column flowed cards
+     top-to-bottom down each column, scrambling the reading order. Grid runs left-to-right in rows. */
+  .deck3 { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; align-items:start; }
+  .deck3 > .card { margin-bottom:0; }
   /* a third of a laptop screen is too narrow for an npub row; step down well before that bites */
-  @media (max-width:1500px) { .deck3 { column-count:2; } }
-  @media (max-width:1000px) { .deck3 { column-count:1; } }
+  @media (max-width:1500px) { .deck3 { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width:1000px) { .deck3 { grid-template-columns: 1fr; } }
   .card-head { display:flex; align-items:flex-start; gap:11px; margin-bottom:11px; }
   .hd-ic { width:34px; height:34px; border-radius:10px; background:var(--surface-2); color:var(--clay);
            display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -371,8 +378,8 @@
     <div class="stat" title="Data moved since you opened this page"><div class="n" id="s-traffic">—</div><div class="l">Traffic (session)</div></div>
   </div>
 
-  <!-- card deck: auto-fill grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
-       breakpoint per card. -->
+  <!-- card deck: auto-fit grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
+       breakpoint per card, capped at 3 columns on a very wide display. -->
   <div class="deck">
 
   <!-- THE NEXT STEP, while this relay hosts no church. A relay with no church refuses every write (gateway.mjs
