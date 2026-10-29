@@ -60,10 +60,22 @@ function finItemToDoc(it) {
   if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type, archived: !!it.archived };
   if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
   if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null, attachmentRefs: it.attachmentRefs ?? [] };
-  // A receipt image (finance/attachment:<id>). Carried as a SIDE BLOB — rebuildBook ignores t:'attachment', so
+  // A receipt image (finance/attachment:<id>). Carried as a SIDE BLOB - rebuildBook ignores t:'attachment', so
   // it never enters the ledger; DashFinanceBook pulls the data: URI out of the live delivery into its own map.
   if (id.startsWith('attachment:')) return { t: 'attachment', id: id.slice(11), data: it.data || '' };
+  // Phase 3 side docs - NOT part of the book. They map to their own `t`, which rebuildBook ignores (it replays
+  // only settings/account/fund/journal), so they can never disturb the journal replay or its gap/fork guard.
+  // DashFinanceBook's subscribe handler collects them into SEPARATE console state (templates, reconciliations).
+  if (id.startsWith('template:')) return { t: 'template', id: id.slice(9), name: it.name, account: it.account, fund: it.fund, dir: it.dir, amount: it.amount, dayOfMonth: it.dayOfMonth };
+  if (id.startsWith('reconcile:')) return { t: 'reconcile', id: id.slice(10), label: it.label, lines: it.lines || [], reconciled: it.reconciled || [], closing: it.closing, asOf: it.asOf };
   return null;
+}
+// An opaque, random id for a REPLACEABLE finance doc (template / reconciliation). Human-facing names are a
+// field, never the id — two authorised writers must not collide on a shared slug and silently overwrite each
+// other (CONTEXT: "replaceable finance docs need OPAQUE ids").
+function opaqueId() {
+  try { const a = new Uint8Array(8); (window.crypto || crypto).getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); } catch (e) {}
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 // Both file exports on this screen (this CSV and fsDownloadDoc's HTML below) used to build an `<a download>`
 // and click it, inside a try that swallowed everything. In the APK's WebView that writes no file and says
@@ -708,6 +720,200 @@ function FinanceImport({ book, F, onPost, onClose }) {
   );
 }
 
+// ---- a recurring payment (standing order / direct debit) — a REPLACEABLE finance/template doc ----
+function BooksTemplateEdit({ book, initial, onSave, onClose }) {
+  const ed = initial && initial.id ? initial : null;
+  const [name, setName] = React.useState((ed && ed.name) || '');
+  const [dir, setDir] = React.useState((ed && ed.dir) || 'out');
+  const cats = (d) => [...book.accounts.values()].filter(a => a.type === (d === 'in' ? 'income' : 'expense') && !a.archived);
+  const [account, setAccount] = React.useState((ed && ed.account) || (cats((ed && ed.dir) || 'out')[0] || {}).id || '');
+  const [fund, setFund] = React.useState((ed && ed.fund) || 'general');
+  const [amount, setAmount] = React.useState(ed && ed.amount ? String(ed.amount / Math.pow(10, book.decimals || 2)) : '');
+  const [dayOfMonth, setDayOfMonth] = React.useState(String((ed && ed.dayOfMonth) || 1));
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const funds = [...book.funds.values()];
+  React.useEffect(() => { const c = cats(dir); if (!c.some(a => a.id === account)) setAccount(c[0] ? c[0].id : ''); }, [dir]);
+  const submit = async () => {
+    const minor = booksParse(amount, book);
+    if (!minor) return setErr('Enter an amount greater than zero.');
+    if (!account) return setErr('Pick a category.');
+    const day = Math.max(1, Math.min(31, parseInt(dayOfMonth, 10) || 1));
+    setBusy(true);
+    const ok = await onSave({ id: ed ? ed.id : undefined, name: name.trim(), account, fund, dir, amount: minor, dayOfMonth: day });
+    setBusy(false);
+    if (ok) onClose(); else setErr('That did not save — your church’s relay refused or did not answer. Nothing was changed.');
+  };
+  const dlgRef = useStewDialog(onClose);
+  const seg = (v, label) => (
+    <button onClick={() => setDir(v)} aria-pressed={dir === v} aria-label={label + (dir === v ? ' (selected)' : '')} style={{ flex: 1, height: 42, border: dir === v ? '2px solid transparent' : '2px dashed var(--line)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14, background: dir === v ? (v === 'in' ? 'var(--sage, #6b9b7a)' : 'var(--clay)') : 'transparent', color: dir === v ? '#fff' : 'var(--ink-3)' }}>{(v === 'in' ? '+ ' : '− ') + label}</button>
+  );
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 63, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Recurring payment" tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{ed ? 'Edit recurring payment' : 'New recurring payment'}</h3>
+        <label style={bkLbl}>Name</label>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Rent, Insurance, Standing order" style={{ ...bkFld, marginBottom: 12 }} />
+        <div style={{ display: 'flex', gap: 6, background: 'var(--surface-2, #f2efe9)', borderRadius: 12, padding: 4, marginBottom: 12 }}>{seg('out', 'Money out')}{seg('in', 'Money in')}</div>
+        <label style={bkLbl}>Category</label>
+        <select value={account} onChange={e => setAccount(e.target.value)} style={{ ...bkFld, marginBottom: 12 }}>{cats(dir).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+        <label style={bkLbl}>Fund</label>
+        <select value={fund} onChange={e => setFund(e.target.value)} style={{ ...bkFld, marginBottom: 12 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}{f.kind === 'restricted' ? ' (restricted)' : ''}</option>)}</select>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Amount ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</label><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00" style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Day of month</label><input value={dayOfMonth} onChange={e => setDayOfMonth(e.target.value)} inputMode="numeric" placeholder="1" style={bkFld} /></div>
+        </div>
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{ed ? 'Save changes' : 'Add recurring payment'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- reconcile an imported bank statement against the ledger, and check the closing balance ----
+// Imported bank lines vs the ledger's BANK-SIDE postings. Auto-match (F.match) + manual tick/flag; the result
+// is kept as a REPLACEABLE finance/reconcile side doc (match state + statement), never money. The balance
+// check (F.statementBalanceCheck) computes its OWN date-bounded single-account balance — see finance-reconcile.
+function FinanceReconcile({ book, F, today, saved, onSaveReconcile, onClose }) {
+  const dec = book.decimals || 2;
+  const hasSaved = !!(saved && saved.lines && saved.lines.length);
+  const [step, setStep] = React.useState(hasSaved ? 'review' : 'upload');
+  const [fileName, setFileName] = React.useState((saved && saved.label) || '');
+  const [lines, setLines] = React.useState(hasSaved ? saved.lines : []);
+  const [monthFirst, setMonthFirst] = React.useState(false);
+  const [reconciled, setReconciled] = React.useState(() => new Set((saved && saved.reconciled) || []));
+  const [closing, setClosing] = React.useState(saved && saved.closing != null ? String(saved.closing / Math.pow(10, dec)) : '');
+  const [asOf, setAsOf] = React.useState((saved && saved.asOf) || today || '');
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const ingest = (ls) => {
+    setLines(ls);
+    const r = F.match(ls, book.journal, { windowDays: 3 });
+    setReconciled(new Set(r.matched.map(m => m.entry.seq)));   // auto-matched entries start ticked (cleared)
+    const dates = ls.map(l => l.date).filter(Boolean).sort();
+    if (dates.length) setAsOf(dates[dates.length - 1]);
+    setStep('review');
+  };
+  const onFile = (ev) => {
+    const file = ev.target.files && ev.target.files[0]; if (!file) return;
+    setFileName(file.name); setErr('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const p = F.parseCsv(String(reader.result || ''));
+        if (!p.rows.length) { setErr('That file has a header but no transaction rows.'); return; }
+        const g = F.guessColumns(p.header);
+        const ls = F.statementLines({ rows: p.rows, mapping: g, decimals: dec, monthFirst });
+        if (!ls.length) { setErr('No transactions found — check the statement columns.'); return; }
+        ingest(ls);
+      } catch (e) { setErr('Could not read that CSV.'); }
+    };
+    reader.onerror = () => setErr('Could not read that file.');
+    reader.readAsText(file);
+  };
+
+  const res = F.match(lines, book.journal, { windowDays: 3 });
+  const closingMinor = (() => { const s = String(closing).replace(/[^0-9.\-]/g, ''); if (!/[0-9]/.test(s)) return null; const n = parseFloat(s); return isFinite(n) ? Math.round(n * Math.pow(10, dec)) : null; })();
+  const bchk = closingMinor == null ? null : F.statementBalanceCheck(book, asOf, closingMinor);
+  const toggle = (seq) => setReconciled(s => { const n = new Set(s); if (n.has(seq)) n.delete(seq); else n.add(seq); return n; });
+  const save = async () => {
+    setBusy(true);
+    const ok = await onSaveReconcile({ id: saved && saved.id, label: fileName, lines, reconciled: [...reconciled], closing: closingMinor, asOf });
+    setBusy(false);
+    if (ok) onClose(); else setErr('That did not save — your church’s relay refused or did not answer. Nothing was changed.');
+  };
+  const dlgRef = useStewDialog(onClose);
+  const money = (dir, minor) => (dir === 'in' ? '+' : '−') + booksFmt(minor, book);
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 62, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Reconcile a bank statement" tabIndex={-1} style={{ ...bkCard, width: 640, maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Reconcile a bank statement</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>{step === 'upload' ? 'Upload the bank statement; we line it up against your ledger.' : 'Tick what matches, and check the closing balance agrees.'}</div>
+
+        {step === 'upload' && (
+          <div style={{ overflow: 'auto' }}>
+            <label style={bkLbl}>Statement file (CSV)</label>
+            <input type="file" accept=".csv,text/csv" onChange={onFile} style={{ ...bkFld, height: 'auto', padding: 9, marginBottom: 12, lineHeight: 1.4 }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, color: 'var(--ink)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={monthFirst} onChange={e => setMonthFirst(e.target.checked)} /> Dates are month-first (US: MM/DD/YYYY)
+            </label>
+            {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+              <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {step === 'review' && (
+          <div style={{ overflow: 'auto', flex: 1 }}>
+            {/* ── Statement balance check ── */}
+            <div style={{ ...bkCard, marginBottom: 14, background: 'var(--surface-2, #f7f5f0)' }}>
+              <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 14 }}>Closing balance check</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ flex: 1, minWidth: 130 }}><label style={bkLbl}>Statement closing balance ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</label><input value={closing} onChange={e => setClosing(e.target.value)} inputMode="decimal" placeholder="0.00" style={bkFld} /></div>
+                <div style={{ flex: 1, minWidth: 130 }}><label style={bkLbl}>As of (statement date)</label><input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} style={bkFld} /></div>
+              </div>
+              {bchk && <div role="status" style={{ marginTop: 10, fontSize: 13.5, fontWeight: 700, color: bchk.agrees ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)' }}>
+                {bchk.agrees
+                  ? 'Agrees — your ledger bank balance of ' + booksFmt(bchk.balance, book) + ' matches the statement.'
+                  : 'Does not agree — your ledger shows ' + booksFmt(bchk.balance, book) + ', off by ' + booksFmt(Math.abs(bchk.delta), book) + ' from the statement.'}
+              </div>}
+            </div>
+
+            {/* ── Matched ── */}
+            <div style={{ fontWeight: 800, fontSize: 14, margin: '4px 0 6px' }}>Matched ({res.matched.length})</div>
+            {res.matched.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '2px 0 8px' }}>Nothing matched automatically yet.</div>}
+            {res.matched.map((m, i) => (
+              <div key={'m' + i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
+                <input type="checkbox" checked={reconciled.has(m.entry.seq)} onChange={() => toggle(m.entry.seq)} title="Tick when this line is reconciled; untick to flag it" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.line.description || '(no description)'}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{m.line.date}{m.entry.memo ? ' · ledger: ' + m.entry.memo : ''}</div>
+                </div>
+                <div style={{ width: 90, textAlign: 'right', fontWeight: 800, fontSize: 13.5, color: m.line.dir === 'in' ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)' }}>{money(m.line.dir, m.line.amountMinor)}</div>
+              </div>
+            ))}
+
+            {/* ── Unmatched ── */}
+            <div style={{ fontWeight: 800, fontSize: 14, margin: '16px 0 6px' }}>Unmatched ({res.unmatchedLines.length + res.unmatchedEntries.length})</div>
+            {res.unmatchedLines.length === 0 && res.unmatchedEntries.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '2px 0' }}>Everything on the statement is accounted for.</div>}
+            {res.unmatchedLines.map((l, i) => (
+              <div key={'ul' + i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 11, color: 'var(--clay-deep, #b4462f)', width: 86, flexShrink: 0 }}>on statement</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.description || '(no description)'}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{l.date}{' · not in your books'}</div>
+                </div>
+                <div style={{ width: 90, textAlign: 'right', fontWeight: 800, fontSize: 13.5, color: l.dir === 'in' ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)' }}>{money(l.dir, l.amountMinor)}</div>
+              </div>
+            ))}
+            {res.unmatchedEntries.map((e, i) => { const v = booksEntryView(book, e); return (
+              <div key={'ue' + i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 11, color: 'var(--ink-3)', width: 86, flexShrink: 0 }}>in your books</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.category}{v.memo ? ' · ' + v.memo : ''}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{e.date}{' · not on the statement'}</div>
+                </div>
+                <div style={{ width: 90, textAlign: 'right', fontWeight: 800, fontSize: 13.5, color: 'var(--ink-3)' }}>{booksFmt(v.amount, book)}</div>
+              </div>
+            ); })}
+
+            {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '10px 0 0' }}>{err}</p>}
+            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+              <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Close</button>
+              <button onClick={save} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Save reconciliation</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- share a period statement (quarter / year / custom) ----
 // Builds an AGGREGATE statement (totals by category + fund — no member names) the treasurer reviews, then
 // shares: download a printable doc, copy a plain-text summary (paste into email/WhatsApp), or — deliberately —
@@ -992,7 +1198,12 @@ function DashFinanceBook() {
       // Receipt blobs ride the same subscription. Pull their data: URIs into the side map BEFORE rebuildBook,
       // which deliberately ignores t:'attachment' (a blob is not part of the double-entry book).
       for (const d of docs) if (d.t === 'attachment' && d.data) attByIdRef.current[d.id] = d.data;
-      if (!docs.some(d => d.t !== 'attachment')) {
+      // Phase 3 side docs live in their OWN state, never in the book (rebuildBook ignores them).
+      setTemplates(docs.filter(d => d.t === 'template'));
+      setReconciles(docs.filter(d => d.t === 'reconcile'));
+      // "Empty" means no BOOK docs (settings/account/fund/journal). Side docs (attachment/template/reconcile)
+      // must NOT count, or a side-doc-only delivery would wrongly enter the seed path over a real book.
+      if (!docs.some(d => d.t === 'settings' || d.t === 'account' || d.t === 'fund' || d.t === 'journal')) {
         // AUDIT-2026-07-24: "no docs came back" is NOT proof this church has no book. Finance docs are private,
         // so an unauthenticated or restarting relay returns exactly this empty result — and seeding republishes
         // finance/settings and finance/account:<id>, which are REPLACEABLE, so the church's real currency,
@@ -1025,6 +1236,11 @@ function DashFinanceBook() {
   const [accEditing, setAccEditing] = React.useState(null);  // account modal: null closed · {} add · {id,…} edit
   const [fundEditing, setFundEditing] = React.useState(null);// fund modal: null closed · {} add · {id,…} edit
   const [moving, setMoving] = React.useState(false);         // "Move between funds" (fund transfer) modal
+  const [reconciling, setReconciling] = React.useState(null);// reconcile modal: null closed · {} new · {id,…} reopen a saved reconciliation
+  const [recurringOpen, setRecurringOpen] = React.useState(false); // collapsible "Recurring payments" panel
+  const [tplEditing, setTplEditing] = React.useState(null);  // template modal: null closed · {} add · {id,…} edit
+  const [templates, setTemplates] = React.useState([]);      // finance/template:<id> docs — SEPARATE from the book
+  const [reconciles, setReconciles] = React.useState([]);    // finance/reconcile:<id> docs — SEPARATE from the book
   const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
   // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
   // console only; in localStorage mode these are absent and the modal simply omits the "Post to members" button.
@@ -1247,6 +1463,40 @@ function DashFinanceBook() {
     return pubEntry(b, entry).then((ok) => { if (!ok) _dropIfRefused(b, entry); bump(); return ok; });
   };
 
+  // ── recurring templates (standing orders / DDs) ──────────────────────────────────────────────────────────
+  // A template is a REPLACEABLE finance/template:<id> doc (opaque id), NOT part of the book. "Post this month"
+  // mints a balanced journal entry via the SAME awaited pubEntry + dropFrom-on-refusal path as record(), with
+  // a deterministic importKey so a double tap (or a second co-steward) cannot post it twice — F.templatePost
+  // returns null when the book already holds this template-month.
+  const thisMonth = booksTodayISO().slice(0, 7);   // LOCAL month (booksTodayISO is the local-day helper), injected into the pure module
+  const saveTemplate = async ({ id, name, account, fund, dir, amount, dayOfMonth }) => {
+    const theId = id || opaqueId();
+    const body = { name: name || '', account, fund: fund || 'general', dir, amount, dayOfMonth };
+    if (!useRelay) { setTemplates(ts => [...ts.filter(t => t.id !== theId), { t: 'template', id: theId, ...body }]); bump(); return true; }
+    const ok = await S.encPublish('finance/template:' + theId, body);
+    bump();
+    return !(ok === false || ok == null);
+  };
+  const postTemplate = (t) => {
+    const b = bookRef.current;
+    const plan = F.templatePost(b, { id: t.id, name: t.name, account: t.account, fund: t.fund, dir: t.dir, amount: t.amount, dayOfMonth: t.dayOfMonth }, thisMonth);
+    if (!plan) return Promise.resolve('already');   // already posted this month — idempotent, nothing to do
+    let entry = null;
+    try { entry = F.post(b, { date: plan.date, memo: plan.memo, importKey: plan.importKey, postings: plan.postings }); }
+    catch (e) { return Promise.resolve(false); }
+    return pubEntry(b, entry).then((ok) => { if (!ok) _dropIfRefused(b, entry); bump(); return ok; });
+  };
+  // A reconciliation is a REPLACEABLE finance/reconcile:<id> side doc (match state + statement identity), NOT
+  // money — the matcher is pure and read-only over the journal, so it structurally cannot double-count.
+  const saveReconcile = async ({ id, label, lines, reconciled, closing, asOf }) => {
+    const theId = id || opaqueId();
+    const body = { label: label || '', lines: lines || [], reconciled: reconciled || [], closing: closing == null ? null : closing, asOf: asOf || '' };
+    if (!useRelay) { setReconciles(rs => [...rs.filter(r => r.id !== theId), { t: 'reconcile', id: theId, ...body }]); bump(); return true; }
+    const ok = await S.encPublish('finance/reconcile:' + theId, body);
+    bump();
+    return !(ok === false || ok == null);
+  };
+
   const funds = F.fundBalances(book);
   const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
   const ie = F.incomeExpenditure(book, { from: fyStart });
@@ -1283,6 +1533,7 @@ function DashFinanceBook() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => setImporting(true)} title="Bring in transactions from a bank statement file" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => setReconciling({})} title="Reconcile a bank statement against your ledger and check the closing balance" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
           <button onClick={() => setRecording(true)} title="Record a gift or an expense by hand" disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
         </div>
       </div>
@@ -1405,9 +1656,35 @@ function DashFinanceBook() {
         )}
       </div>
 
+      <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={() => setRecurringOpen(r => !r)} title="Show or hide standing orders and other repeating payments" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{recurringOpen ? '▾' : '▸'} Recurring payments</button>
+          {recurringOpen && <button onClick={() => setTplEditing({})} title="Create a new recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add recurring</button>}
+        </div>
+        {recurringOpen && (
+          <div style={{ marginTop: 12 }}>
+            {templates.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No recurring payments yet. Add a standing order or direct debit, then post it each month in one tap.</div>}
+            {templates.map(t => {
+              const acct = book.accounts.get(t.account);
+              const postedThisMonth = F.importedKeys(book).has(F.templateImportKey(t.id, thisMonth));
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>{t.name || '(unnamed)'}<span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {(acct && acct.name) || t.account} · day {t.dayOfMonth || 1}</span></div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{t.dir === 'in' ? '+' : '−'}{booksFmt(t.amount, book)} each month</div>
+                  </div>
+                  <button onClick={() => setTplEditing({ id: t.id, name: t.name, account: t.account, fund: t.fund, dir: t.dir, amount: t.amount, dayOfMonth: t.dayOfMonth })} title="Edit this recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                  <button onClick={() => postTemplate(t)} disabled={postedThisMonth || bookErrors.length > 0} title={postedThisMonth ? 'Already posted this month' : 'Post this month’s entry to the ledger'} style={{ border: 'none', background: postedThisMonth ? 'var(--line)' : 'var(--clay)', color: postedThisMonth ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: postedThisMonth ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12 }}>{postedThisMonth ? 'Posted this month' : 'Post this month'}</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
-        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bank reconciliation, bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs.</div>
+        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs.</div>
       </div>
 
       {recording && <BooksRecord book={book} onRecord={record} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
@@ -1418,6 +1695,8 @@ function DashFinanceBook() {
       {moving && <BooksFundMove book={book} onTransfer={transferFunds} onClose={() => setMoving(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
+      {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
+      {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
     </div>
   );
 }

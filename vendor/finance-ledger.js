@@ -43,6 +43,7 @@ var FinanceLedger = (() => {
     incomeExpenditure: () => incomeExpenditure,
     journalCsvRows: () => journalCsvRows,
     lineKey: () => lineKey,
+    match: () => match,
     minorToMajorText: () => minorToMajorText,
     parseCsv: () => parseCsv,
     parseDate: () => parseDate,
@@ -52,10 +53,14 @@ var FinanceLedger = (() => {
     rangeLabel: () => rangeLabel,
     rebuildBook: () => rebuildBook,
     reverse: () => reverse,
+    statementBalanceCheck: () => statementBalanceCheck,
     statementHtml: () => statementHtml,
     statementLines: () => statementLines,
     statementText: () => statementText,
     suggestCategory: () => suggestCategory,
+    templateEntry: () => templateEntry,
+    templateImportKey: () => templateImportKey,
+    templatePost: () => templatePost,
     trialBalance: () => trialBalance,
     yearRange: () => yearRange
   });
@@ -616,6 +621,103 @@ var FinanceLedger = (() => {
 ${S.join("\n")}
 <footer>${model.generatedAt ? "Generated " + esc(model.generatedAt) + " \xB7 " : ""}Prepared with TrinityOne \u2014 aggregate figures only.</footer>
 </body></html>`;
+  }
+
+  // src/finance-reconcile.mjs
+  var BANK = "bank";
+  function dayNum(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso == null ? "" : iso));
+    if (!m) return null;
+    let y = +m[1];
+    const mo = +m[2], d = +m[3];
+    y -= mo <= 2 ? 1 : 0;
+    const era = Math.floor((y >= 0 ? y : y - 399) / 400);
+    const yoe = y - era * 400;
+    const doy = Math.floor((153 * (mo > 2 ? mo - 3 : mo + 9) + 2) / 5) + d - 1;
+    const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+    return era * 146097 + doe - 719468;
+  }
+  function bankSide(entry, account) {
+    for (const p of entry && entry.postings || []) {
+      if (p.account === account) return { dir: p.dir === "dr" ? "in" : "out", amount: p.amount };
+    }
+    return null;
+  }
+  function match(statementLines2, journalEntries, { windowDays = 3, account = BANK } = {}) {
+    const lines = (statementLines2 || []).map((l, i) => ({ l, i }));
+    const lineUsed = new Array(lines.length).fill(false);
+    const cands = [];
+    for (const e of journalEntries || []) {
+      const bs = bankSide(e, account);
+      if (bs) cands.push({ e, dir: bs.dir, amount: bs.amount, day: dayNum(e.date), importKey: e.importKey || null, used: false });
+    }
+    const matched = [];
+    for (const { l, i } of lines) {
+      if (!l || !l.key) continue;
+      const c = cands.find((c2) => !c2.used && c2.importKey && c2.importKey === l.key);
+      if (c) {
+        c.used = true;
+        lineUsed[i] = true;
+        matched.push({ line: l, entry: c.e, by: "key" });
+      }
+    }
+    for (const { l, i } of lines) {
+      if (lineUsed[i] || !l) continue;
+      const ld = dayNum(l.date);
+      let best = null, bestDist = Infinity;
+      for (const c of cands) {
+        if (c.used || c.dir !== l.dir || c.amount !== l.amountMinor) continue;
+        const known = ld != null && c.day != null;
+        const dist = known ? Math.abs(ld - c.day) : 0;
+        if ((!known || dist <= windowDays) && dist < bestDist) {
+          best = c;
+          bestDist = dist;
+        }
+      }
+      if (best) {
+        best.used = true;
+        lineUsed[i] = true;
+        matched.push({ line: l, entry: best.e, by: "amount" });
+      }
+    }
+    const unmatchedLines = [];
+    for (const { l, i } of lines) if (!lineUsed[i]) unmatchedLines.push(l);
+    const unmatchedEntries = cands.filter((c) => !c.used).map((c) => c.e);
+    return { matched, unmatchedLines, unmatchedEntries };
+  }
+  function statementBalanceCheck(book, asOfDate, closingMinor, account = BANK) {
+    let balance = 0;
+    for (const e of book && book.journal || []) {
+      if (asOfDate && e.date && e.date > asOfDate) continue;
+      for (const p of e.postings || []) if (p.account === account) balance += p.dir === "dr" ? p.amount : -p.amount;
+    }
+    const target = Math.round(Number(closingMinor) || 0);
+    const delta = balance - target;
+    return { agrees: delta === 0, delta, balance };
+  }
+  function templateImportKey(id, yyyymm) {
+    return "template:" + id + ":" + yyyymm;
+  }
+  var DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  function daysInMonth(y, m) {
+    return m === 2 && (y % 4 === 0 && y % 100 !== 0 || y % 400 === 0) ? 29 : DIM[m - 1];
+  }
+  function templateEntry(template, yyyymm, { account = BANK } = {}) {
+    const mm = /^(\d{4})-(\d{2})$/.exec(String(yyyymm == null ? "" : yyyymm));
+    if (!mm) throw new Error("templateEntry needs a YYYY-MM month");
+    const y = +mm[1], mo = +mm[2];
+    if (mo < 1 || mo > 12) throw new Error("templateEntry: bad month " + yyyymm);
+    const day = Math.max(1, Math.min(daysInMonth(y, mo), Math.round(Number(template.dayOfMonth) || 1)));
+    const date = yyyymm + "-" + String(day).padStart(2, "0");
+    const amount = template.amount;
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error("templateEntry: amount must be a positive integer (minor units)");
+    const fund = template.fund || "general";
+    const postings = template.dir === "in" ? [{ account, dir: "dr", amount }, { account: template.account, fund, dir: "cr", amount }] : [{ account: template.account, fund, dir: "dr", amount }, { account, dir: "cr", amount }];
+    return { date, memo: template.name || "", importKey: templateImportKey(template.id, yyyymm), postings };
+  }
+  function templatePost(book, template, yyyymm, opts = {}) {
+    if (importedKeys(book).has(templateImportKey(template.id, yyyymm))) return null;
+    return templateEntry(template, yyyymm, opts);
   }
   return __toCommonJS(finance_bundle_exports);
 })();
