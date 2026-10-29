@@ -21,6 +21,8 @@ var FinanceLedger = (() => {
   var finance_bundle_exports = {};
   __export(finance_bundle_exports, {
     ACCOUNT_TYPES: () => ACCOUNT_TYPES,
+    AR_ACCOUNT: () => AR_ACCOUNT,
+    AR_ACCT: () => AR_ACCT,
     FUND_KINDS: () => FUND_KINDS,
     FUND_TRANSFER_ACCT: () => FUND_TRANSFER_ACCT,
     STATEMENT_SECTIONS: () => STATEMENT_SECTIONS,
@@ -29,11 +31,13 @@ var FinanceLedger = (() => {
     addAccount: () => addAccount,
     addFund: () => addFund,
     applyEntry: () => applyEntry,
+    assertArAccount: () => assertArAccount,
     balanceSheet: () => balanceSheet,
     bookToDocs: () => bookToDocs,
     buildStatement: () => buildStatement,
     check: () => check,
     createBook: () => createBook,
+    creditNoteEntry: () => creditNoteEntry,
     docFor: () => docFor,
     dropFrom: () => dropFrom,
     fmtMoney: () => fmtMoney,
@@ -44,10 +48,18 @@ var FinanceLedger = (() => {
     guessColumns: () => guessColumns,
     importedKeys: () => importedKeys,
     incomeExpenditure: () => incomeExpenditure,
+    invoiceHtml: () => invoiceHtml,
+    invoiceIssueEntry: () => invoiceIssueEntry,
+    invoiceMoney: () => invoiceMoney,
+    invoiceOutstanding: () => invoiceOutstanding,
+    invoiceSettlementEntry: () => invoiceSettlementEntry,
+    invoiceStatus: () => invoiceStatus,
+    invoiceTotal: () => invoiceTotal,
     journalCsvRows: () => journalCsvRows,
     lineKey: () => lineKey,
     match: () => match,
     minorToMajorText: () => minorToMajorText,
+    openInvoices: () => openInvoices,
     parseCsv: () => parseCsv,
     parseDate: () => parseDate,
     parseMoney: () => parseMoney,
@@ -130,9 +142,9 @@ var FinanceLedger = (() => {
     if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} \u2260 credits ${cr}`);
     return norm2;
   }
-  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null, importKey = null, attachmentRefs = [] } = {}) {
+  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null, importKey = null, attachmentRefs = [], invoice = null } = {}) {
     const norm2 = _normalize(book, postings);
-    const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [] };
+    const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [], invoice: invoice ?? null };
     book.journal.push(entry);
     return entry;
   }
@@ -147,7 +159,7 @@ var FinanceLedger = (() => {
     if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error("entry needs an integer seq");
     if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
     const norm2 = _normalize(book, entry.postings);
-    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm2, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [] };
+    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm2, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [], invoice: entry.invoice ?? null };
     book.journal.push(e);
     book._seq = entry.seq;
     return e;
@@ -259,7 +271,7 @@ var FinanceLedger = (() => {
     const docs = [{ t: "settings", baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
     for (const a of book.accounts.values()) docs.push({ t: "account", id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived });
     for (const f of book.funds.values()) if (f.id !== "general") docs.push({ t: "fund", id: f.id, name: f.name, kind: f.kind });
-    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [] });
+    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null });
     return docs;
   }
   function docFor(entryOrObj, t) {
@@ -945,6 +957,128 @@ ${S.join("\n")}
   function templatePost(book, template, yyyymm, opts = {}) {
     if (importedKeys(book).has(templateImportKey(template.id, yyyymm))) return null;
     return templateEntry(template, yyyymm, opts);
+  }
+
+  // src/finance-invoice.mjs
+  var AR_ACCT = "accounts-receivable";
+  var AR_ACCOUNT = Object.freeze({ id: AR_ACCT, code: "1100", name: "Accounts receivable", type: "asset" });
+  function assertArAccount(book) {
+    const a = book && book.accounts && typeof book.accounts.get === "function" ? book.accounts.get(AR_ACCT) : null;
+    if (!a) return false;
+    if (a.type !== "asset") throw new Error("reserved account " + AR_ACCT + " must be an asset (found " + a.type + ")");
+    return true;
+  }
+  var posLines = (invoice) => (invoice && Array.isArray(invoice.lines) ? invoice.lines : []).filter((l) => l && Number.isSafeInteger(l.amount) && l.amount > 0);
+  function invoiceTotal(invoice) {
+    return posLines(invoice).reduce((s, l) => s + l.amount, 0);
+  }
+  var memoFor = (invoice, lead) => {
+    const n = invoice && invoice.number ? " " + invoice.number : "";
+    const who = invoice && invoice.contact ? " \u2014 " + invoice.contact : "";
+    return (lead + n + who).trim();
+  };
+  function invoiceIssueEntry(invoice, { date } = {}) {
+    const lines = posLines(invoice);
+    if (!lines.length) throw new Error("an invoice needs at least one line with a positive amount");
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+    const postings = [
+      { account: AR_ACCT, dir: "dr", amount: total },
+      ...lines.map((l) => ({ account: l.account, fund: l.fund || "general", dir: "cr", amount: l.amount }))
+    ];
+    return { date: date || invoice && invoice.issued || "", memo: memoFor(invoice, "Invoice"), invoice: invoice.id, postings };
+  }
+  function invoiceSettlementEntry(invoice, { date, amount, account = "bank" } = {}) {
+    const amt = Number.isSafeInteger(amount) && amount > 0 ? amount : invoiceTotal(invoice);
+    if (!(amt > 0)) throw new Error("a settlement needs a positive amount");
+    return {
+      date: date || "",
+      memo: memoFor(invoice, "Payment of invoice"),
+      invoice: invoice.id,
+      postings: [{ account, dir: "dr", amount: amt }, { account: AR_ACCT, dir: "cr", amount: amt }]
+    };
+  }
+  function creditNoteEntry(invoice, creditNote, { date } = {}) {
+    const lines = posLines(creditNote);
+    if (!lines.length) throw new Error("a credit note needs at least one line with a positive amount");
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+    const postings = [
+      ...lines.map((l) => ({ account: l.account, fund: l.fund || "general", dir: "dr", amount: l.amount })),
+      { account: AR_ACCT, dir: "cr", amount: total }
+    ];
+    return { date: date || "", memo: memoFor(invoice, "Credit note for invoice"), invoice: invoice.id, postings };
+  }
+  function invoiceOutstanding(invoiceId, journalEntries) {
+    let bal = 0;
+    for (const e of journalEntries || []) {
+      if (!e || e.invoice !== invoiceId) continue;
+      for (const p of e.postings || []) if (p.account === AR_ACCT) bal += p.dir === "dr" ? p.amount : -p.amount;
+    }
+    return bal;
+  }
+  function invoiceStatus(invoice, todayLocalISO, journalEntries) {
+    let drAR = 0, crAR = 0;
+    const id = invoice && invoice.id;
+    for (const e of journalEntries || []) {
+      if (!e || e.invoice !== id) continue;
+      for (const p of e.postings || []) if (p.account === AR_ACCT) {
+        if (p.dir === "dr") drAR += p.amount;
+        else crAR += p.amount;
+      }
+    }
+    const issued = drAR > 0;
+    if (issued && drAR - crAR <= 0) return "paid";
+    const due = invoice && invoice.due;
+    if (due && todayLocalISO && String(due) < String(todayLocalISO)) return "overdue";
+    return "unpaid";
+  }
+  function openInvoices(invoices, journalEntries, todayLocalISO) {
+    return (invoices || []).filter((inv) => inv && !inv.credit).map((inv) => ({ invoice: inv, status: invoiceStatus(inv, todayLocalISO, journalEntries), outstanding: invoiceOutstanding(inv.id, journalEntries), total: invoiceTotal(inv) })).filter((x) => x.status !== "paid");
+  }
+  var esc2 = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  var SYM2 = { GBP: "\xA3", USD: "$", EUR: "\u20AC", sats: "\u26A1" };
+  function invoiceMoney(minor, currency = "GBP", decimals = 2) {
+    const sym = SYM2[currency] || "";
+    const s = (Number(minor) / Math.pow(10, decimals)).toLocaleString("en-GB", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    return currency === "sats" ? s + " " + sym : sym + s;
+  }
+  function invoiceHtml(invoice, { churchName = "", currency = "GBP", decimals = 2, status = "", generatedAt = "", credit = false } = {}) {
+    const f = (m) => invoiceMoney(m, currency, decimals);
+    const lines = posLines(invoice);
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+    const title = credit || invoice.credit ? "Credit note" : "Invoice";
+    const rows = lines.map((l) => `<tr><td>${esc2(l.desc || "")}</td><td class="n">${f(l.amount)}</td></tr>`).join("");
+    const statusLine = status ? `<div class="status status-${esc2(status)}">${esc2(status.toUpperCase())}</div>` : "";
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc2(title)}${invoice.number ? " " + esc2(invoice.number) : ""}</title>
+<style>
+  :root { --ink:#2b2723; --ink3:#8a8078; --line:#e7e0d5; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:var(--ink); max-width:640px; margin:0 auto; padding:40px 28px; line-height:1.5; }
+  header { border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+  h1 { font-size:26px; margin:0 0 2px; }
+  .from { color:var(--ink3); font-size:15px; font-weight:600; }
+  .meta { text-align:right; font-size:13px; color:var(--ink3); }
+  .meta b { color:var(--ink); }
+  .status { display:inline-block; margin-top:6px; font-size:12px; font-weight:800; letter-spacing:.6px; padding:3px 9px; border-radius:7px; border:1px solid var(--line); }
+  .status-paid { color:#2f7a44; } .status-overdue { color:#b4462f; } .status-unpaid { color:var(--ink3); }
+  section { margin-top:26px; }
+  .bill { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--ink3); margin-bottom:4px; }
+  table.t { width:100%; border-collapse:collapse; font-size:15px; margin-top:6px; }
+  table.t td { padding:7px 0; border-bottom:1px solid var(--line); }
+  table.t td.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr.tot td { font-weight:800; border-bottom:none; border-top:2px solid var(--ink); padding-top:9px; }
+  footer { margin-top:34px; padding-top:12px; border-top:1px solid var(--line); color:var(--ink3); font-size:12px; }
+  @media print { body { padding:0; } @page { margin:18mm; } }
+</style></head><body>
+<header>
+  <div><h1>${esc2(title)}</h1><div class="from">${esc2(churchName)}</div>${statusLine}</div>
+  <div class="meta">${invoice.number ? "<div><b>No.</b> " + esc2(invoice.number) + "</div>" : ""}${invoice.issued ? "<div><b>Issued</b> " + esc2(invoice.issued) + "</div>" : ""}${invoice.due ? "<div><b>Due</b> " + esc2(invoice.due) + "</div>" : ""}</div>
+</header>
+${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoice.contact)}</div></section>` : ""}
+<section><table class="t">${rows}<tr class="tot"><td>Total</td><td class="n">${f(total)}</td></tr></table></section>
+<footer>${generatedAt ? "Generated " + esc2(generatedAt) + " \xB7 " : ""}Prepared with TrinityOne.</footer>
+</body></html>`;
   }
   return __toCommonJS(finance_bundle_exports);
 })();

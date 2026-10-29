@@ -283,6 +283,18 @@ export const DOC_TYPES = Object.freeze({
   'finance/attachment:':      { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'receipt image attached to a journal entry (entry.attachmentRefs). Same church-OR-finance-steward gate as the other finance/ docs; REPLACEABLE, no seq. Encrypted inline image, so the write rule ALSO caps the body at ~300KB (FIN_ATTACHMENT_MAX) — the only finance/ type with a size ceiling, because a thin relay must not become a blob store' },
   'finance/template:':        { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'recurring standing-order/DD TEMPLATE (Phase 3) - console-only side doc, NOT part of the double-entry book (rebuildBook ignores it). REPLACEABLE, opaque id. Church-OR-finance-steward via the generic finance/ accept()+canRead() rules' },
   'finance/reconcile:':       { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'bank-reconciliation match-state (Phase 3) - console-only side doc, NOT part of the book. REPLACEABLE. Church-OR-finance-steward via the generic finance/ rules' },
+  // INVOICING / ACCOUNTS RECEIVABLE (Phase 5). Both are REPLACEABLE finance/ side docs (opaque id), metadata
+  // only — the MONEY rides the append-only finance/journal (dr AR / cr income at issue; dr bank / cr AR at
+  // settlement; a credit note is its own reversing entry), so a same-id overwrite mislabels/loses metadata but
+  // CANNOT corrupt the ledger. WRITE is the GENERIC finance/ write prefix (church key OR a finance steward) for
+  // BOTH; NO capability widening (CONTEXT constraint 2). The invoice's human number is a FIELD; the doc id is
+  // opaque/random. finance/invoice: rides the generic finance/ READ (church / network / finance-steward) — it is
+  // metadata, not PII. finance/contact: is DIFFERENT: it holds customer PII (hall-hirer names/addresses), so by
+  // the owner's decision (2026-10-30) its READ is NARROWED exactly like finance/donor — an EXPLICIT canRead
+  // branch ABOVE the generic finance/ read that DROPS networkOf (church key OR finance steward ONLY, never a
+  // network peer). WRITE is UNCHANGED (the generic finance/ write prefix already covers it).
+  'finance/invoice:':         { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'invoice / credit-note METADATA (Phase 5) - {number, contact, lines, issued, due, credit?, ref?}. Console-only side doc, NOT part of the double-entry book (rebuildBook ignores it); the money rides finance/journal. REPLACEABLE, opaque id. Status (paid/overdue/unpaid) is DERIVED from the journal + due date, never trusted from here. Church-OR-finance-steward via the generic finance/ rules' },
+  'finance/contact:':         { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: 'd.startsWith(FIN_CONTACT_D)', note: 'customer / invoice contact (Phase 5) - {name, email?, address?}, customer PII. Console-only side doc, NOT part of the book. REPLACEABLE, opaque id. READ is NARROWED like finance/donor (owner 2026-10-30): the explicit canRead branch (d.startsWith(FIN_CONTACT_D)) DROPS networkOf — church key OR a finance steward ONLY, never a network peer. WRITE is the generic finance/ prefix. Encrypted, so the relay sees only ciphertext. Read test: finance-contact-read-rule.test.mjs' },
   // DONOR RECORDS (Phase 4b) — the single most sensitive finance doc: a donor's NAME + address + postcode +
   // giving. WRITE is finance-only, covered by the generic finance/ write prefix (accept() L~4573: church key or
   // a finance steward), exactly like the other replaceable finance docs; REPLACEABLE, no seq, OPAQUE id.
@@ -449,6 +461,7 @@ export const D = Object.freeze({
   REQUEST:        k('trinityone/request:'),
   FIN_JOURNAL:    k('finance/journal:'),
   FIN_DONOR:      k('finance/donor:'),
+  FIN_CONTACT:    k('finance/contact:'),
   ROOM:           k('trinityone/room:'),
   BOOKING:        k('trinityone/booking:'),
   RUNSHEET:       k('trinityone/runsheet:'),

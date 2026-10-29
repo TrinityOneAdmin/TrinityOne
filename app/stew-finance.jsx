@@ -59,7 +59,7 @@ function finItemToDoc(it) {
   if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart };
   if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type, archived: !!it.archived };
   if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
-  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null, attachmentRefs: it.attachmentRefs ?? [] };
+  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null, attachmentRefs: it.attachmentRefs ?? [], invoice: it.invoice ?? null };
   // A receipt image (finance/attachment:<id>). Carried as a SIDE BLOB - rebuildBook ignores t:'attachment', so
   // it never enters the ledger; DashFinanceBook pulls the data: URI out of the live delivery into its own map.
   if (id.startsWith('attachment:')) return { t: 'attachment', id: id.slice(11), data: it.data || '' };
@@ -72,6 +72,12 @@ function finItemToDoc(it) {
   // book. Like template/reconcile it maps to its own `t`, which rebuildBook ignores, and DashFinanceBook
   // collects it into SEPARATE console state (donors) for the giving-by-member + Gift Aid screens.
   if (id.startsWith('donor:')) return { t: 'donor', id: id.slice(6), name: it.name || '', eligible: it.eligible === true, address: it.address || '', postcode: it.postcode || '', giftAidDeclaredAt: it.giftAidDeclaredAt || '', title: it.title || '', firstName: it.firstName || '', lastName: it.lastName || '', house: it.house || '' };
+  // INVOICE + CONTACT side docs (Phase 5) — metadata, NOT part of the double-entry book (the money rides the
+  // journal). Like template/reconcile/donor they map to their own `t`, which rebuildBook ignores, and
+  // DashFinanceBook collects them into SEPARATE console state. The invoice's `status` is a DISPLAY CACHE only:
+  // the real status is DERIVED from the journal + the due date (F.invoiceStatus), never read from here.
+  if (id.startsWith('invoice:')) return { t: 'invoice', id: id.slice(8), number: it.number || '', contact: it.contact || '', lines: Array.isArray(it.lines) ? it.lines : [], issued: it.issued || '', due: it.due || '', credit: it.credit === true, ref: it.ref || '', issueSeq: it.issueSeq ?? null };
+  if (id.startsWith('contact:')) return { t: 'contact', id: id.slice(8), name: it.name || '', email: it.email || '', address: it.address || '' };
   return null;
 }
 // An opaque, random id for a REPLACEABLE finance doc (template / reconciliation). Human-facing names are a
@@ -459,6 +465,122 @@ function BooksFundEdit({ book, initial, onSave, onClose }) {
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
           <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add fund'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- customer / contact (Phase 5) -----------------------------------------------------------------------
+// A customer the church invoices (facility hire is the big UK-church case). Published as a REPLACEABLE
+// finance/contact:<id> doc with an OPAQUE id (onSave mints one for a new contact). PII, kept private to the
+// church like the rest of finance/. The invoice stores the contact NAME as a plain field, so an invoice reads
+// correctly even if the contact record is later edited or removed.
+function BooksContact({ initial, onSave, onClose }) {
+  const ed = initial || {};
+  const editing = !!ed.id;
+  const [name, setName] = React.useState(ed.name || '');
+  const [email, setEmail] = React.useState(ed.email || '');
+  const [address, setAddress] = React.useState(ed.address || '');
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm) return setErr('Give the contact a name.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onSave({ id: editing ? ed.id : undefined, name: nm, email: email.trim(), address: address.trim() });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t save — your church’s relay refused or did not answer. Try again.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not save that contact.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit contact' : 'Add contact'} tabIndex={-1} style={{ ...bkCard, width: 440, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{editing ? 'Edit contact' : 'Add contact'}</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>A customer you invoice — kept private to your church.</div>
+        <label style={bkLbl}>Name</label>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Scout group / Jane Okafor" style={{ ...bkFld, marginBottom: 12 }} />
+        <label style={bkLbl}>Email (optional)</label>
+        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.org" style={{ ...bkFld, marginBottom: 12 }} />
+        <label style={bkLbl}>Address (optional)</label>
+        <input value={address} onChange={e => setAddress(e.target.value)} placeholder="Street & postcode" style={{ ...bkFld, marginBottom: 12 }} />
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add contact'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- invoice editor (Phase 5) ---------------------------------------------------------------------------
+// Create and ISSUE an invoice: one or more line items (each an income category + fund + amount), a contact, a
+// number, an issue date and a due date. Issuing posts the accrual journal entry (dr Accounts-Receivable / cr
+// income) and publishes the metadata doc — the parent's onIssue does both and mints the opaque id. Amounts are
+// typed in major units and parsed to integer minor units (booksParse), the same as every other finance form.
+function BooksInvoiceEdit({ book, contacts, onIssue, onClose }) {
+  const income = [...book.accounts.values()].filter(a => a.type === 'income' && !a.archived);
+  const funds = [...book.funds.values()];
+  const contactList = Array.isArray(contacts) ? contacts.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
+  const [number, setNumber] = React.useState('');
+  const [contact, setContact] = React.useState('');
+  const [issued, setIssued] = React.useState(booksTodayISO());
+  const [due, setDue] = React.useState('');
+  const [rows, setRows] = React.useState([{ desc: '', account: income[0] ? income[0].id : '', fund: 'general', amount: '' }]);
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const setRowAt = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const addRow = () => setRows(rs => [...rs, { desc: '', account: income[0] ? income[0].id : '', fund: 'general', amount: '' }]);
+  const removeRow = (i) => setRows(rs => rs.length > 1 ? rs.filter((_, j) => j !== i) : rs);
+  const total = rows.reduce((s, r) => s + booksParse(r.amount, book), 0);
+  const canIssue = !busy && income.length > 0 && rows.some(r => r.account && booksParse(r.amount, book) > 0) && rows.every(r => !r.amount || booksParse(r.amount, book) >= 0);
+  const submit = async () => {
+    const lines = rows.map(r => ({ desc: r.desc.trim(), account: r.account, fund: r.fund, amount: booksParse(r.amount, book) })).filter(l => l.account && l.amount > 0);
+    if (!lines.length) return setErr('Add at least one line with a category and an amount greater than zero.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onIssue({ number: number.trim(), contact: contact.trim(), lines, issued, due });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t issue — your church’s relay refused or did not answer. Nothing was recorded.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not issue that invoice.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create an invoice" tabIndex={-1} style={{ ...bkCard, width: 520, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>New invoice</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>Issuing records the income now (accrual) and tracks what is still owed. The payment is recorded separately when it arrives.</div>
+        {income.length === 0 && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '0 0 10px' }}>Add an income category first (Accounts &amp; funds) — an invoice needs one to credit.</p>}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Invoice number</label><input value={number} onChange={e => setNumber(e.target.value)} placeholder="e.g. 2026-014" style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Billed to</label><input list="fin-contact-list" value={contact} onChange={e => setContact(e.target.value)} placeholder="Customer name" style={bkFld} />
+            <datalist id="fin-contact-list">{contactList.map(c => <option key={c.id} value={c.name} />)}</datalist>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Issued</label><input type="date" value={issued} onChange={e => setIssued(e.target.value)} style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Due</label><input type="date" value={due} onChange={e => setDue(e.target.value)} style={bkFld} /></div>
+        </div>
+        <label style={bkLbl}>Lines</label>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+            <input value={r.desc} onChange={e => setRowAt(i, { desc: e.target.value })} placeholder="Description" style={{ ...bkFld, flex: 2 }} />
+            <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} style={{ ...bkFld, flex: 1, padding: '0 8px' }}>{income.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+            <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} style={{ ...bkFld, width: 110, padding: '0 8px' }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+            <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" style={{ ...bkFld, width: 92 }} />
+            {rows.length > 1 && <button onClick={() => removeRow(i)} aria-label="Remove line" title="Remove this line" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, padding: 4 }}>×</button>}
+          </div>
+        ))}
+        <button onClick={addRow} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add line</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <span style={{ fontSize: 13, color: 'var(--ink-3)', fontWeight: 700 }}>Total</span>
+          <span style={{ fontSize: 17, fontWeight: 800 }}>{booksFmt(total, book)}</span>
+        </div>
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={!canIssue} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: canIssue ? 'pointer' : 'default', opacity: canIssue ? 1 : 0.5, fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Issue invoice</button>
         </div>
       </div>
     </div>
@@ -1318,7 +1440,7 @@ function DashFinanceBook() {
       // attachmentRefs IS LOAD-BEARING HERE. This is the LIVE publish path and it hardcodes its own field list
       // (it does NOT call bookToDocs). Drop attachmentRefs from this object and the receipt link is lost on
       // publish — the entry rebuilds from the relay with no attachments, a control reporting work it did not do.
-      const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [] });
+      const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null });
       // NULL IS NOT SUCCESS. encPublish returns null — never false — when it declines before reaching the
       // relay: no signing key, or no books key to seal with. `ok === false` alone let that through as a
       // success, so a console without the finance ring showed the entry saved, wrote nothing anywhere, and
@@ -1353,6 +1475,8 @@ function DashFinanceBook() {
       setTemplates(docs.filter(d => d.t === 'template'));
       setReconciles(docs.filter(d => d.t === 'reconcile'));
       setDonors(docs.filter(d => d.t === 'donor'));   // Phase 4b — finance/donor:<id> docs, SEPARATE from the book
+      setInvoices(docs.filter(d => d.t === 'invoice')); // Phase 5 — finance/invoice:<id> docs, SEPARATE from the book
+      setContacts(docs.filter(d => d.t === 'contact')); // Phase 5 — finance/contact:<id> docs, SEPARATE from the book
       // "Empty" means no BOOK docs (settings/account/fund/journal). Side docs (attachment/template/reconcile)
       // must NOT count, or a side-doc-only delivery would wrongly enter the seed path over a real book.
       if (!docs.some(d => d.t === 'settings' || d.t === 'account' || d.t === 'fund' || d.t === 'journal')) {
@@ -1399,6 +1523,12 @@ function DashFinanceBook() {
   const [donors, setDonors] = React.useState([]);            // finance/donor:<id> docs (Phase 4b) — SEPARATE from the book
   const [donorsOpen, setDonorsOpen] = React.useState(false); // collapsible "Donors & giving by member" panel
   const [donorEditing, setDonorEditing] = React.useState(null); // donor modal: null closed · {} add · {id,…} edit
+  const [invoices, setInvoices] = React.useState([]);        // finance/invoice:<id> docs (Phase 5) — SEPARATE from the book
+  const [contacts, setContacts] = React.useState([]);        // finance/contact:<id> docs (Phase 5) — SEPARATE from the book
+  const [invoicesOpen, setInvoicesOpen] = React.useState(false); // collapsible "Invoices" panel
+  const [invEditing, setInvEditing] = React.useState(null);  // invoice editor: null closed · {} new · {id,…} view
+  const [contactEditing, setContactEditing] = React.useState(null); // contact editor: null closed · {} add · {id,…} edit
+  const [invFlash, setInvFlash] = React.useState('');        // what an invoice action reported (saved / paid / exported / why not)
   const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
   // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
   // console only; in localStorage mode these are absent and the modal simply omits the "Post to members" button.
@@ -1672,6 +1802,99 @@ function DashFinanceBook() {
     bump();
     return !(ok === false || ok == null);
   };
+  // ── invoicing / accounts receivable (Phase 5) ──────────────────────────────────────────────────────────
+  // A CONTACT is a REPLACEABLE finance/contact:<id> side doc (opaque id), customer PII the money never carries.
+  const saveContact = async ({ id, name, email, address }) => {
+    const theId = id || opaqueId();
+    const body = { name: name || '', email: email || '', address: address || '' };
+    if (!useRelay) { setContacts(cs => [...cs.filter(c => c.id !== theId), { t: 'contact', id: theId, ...body }]); bump(); return true; }
+    const ok = await S.encPublish('finance/contact:' + theId, body);
+    bump();
+    return !(ok === false || ok == null);
+  };
+  // Publish-if-absent the reserved Accounts-Receivable account (the fund-transfer pattern), so an un-upgraded
+  // console can still rebuild a book that posts to it. assertArAccount THROWS if a hand-made account collided on
+  // the slug with the wrong type — caught by the issue path, which refuses rather than post a dr to non-asset.
+  const ensureAr = async () => {
+    const b = bookRef.current;
+    if (F.assertArAccount(b)) return true;   // present + asset
+    const a = F.AR_ACCOUNT;
+    if (useRelay) {
+      const ok = await S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type, archived: false });
+      if (ok === false || ok == null) {
+        try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'invoice', message: 'Could not set up the receivables account — your church\'s relay refused or did not answer. Nothing was raised.' } })); } catch (e2) {}
+        return false;
+      }
+    }
+    try { F.addAccount(b, { id: a.id, code: a.code, name: a.name, type: a.type, archived: false }); } catch (e) {}
+    return true;
+  };
+  // ISSUE an invoice: dr AR / cr income (accrual) on the append-only journal — the SAME awaited pubEntry +
+  // dropFrom-on-refusal path as record() — then publish the REPLACEABLE finance/invoice:<id> metadata doc. The
+  // id is opaque (booksRandId); the human invoice number is a FIELD. The journal entry carries the invoice id so
+  // status can be derived from it. If the journal is refused, nothing is published and nothing is left behind.
+  const issueInvoice = async ({ number, contact, lines, issued, due }) => {
+    const b = bookRef.current;
+    const clean = (lines || []).filter(l => l && l.account && Number.isSafeInteger(l.amount) && l.amount > 0);
+    if (!clean.length) return false;
+    let okAr;
+    try { okAr = await ensureAr(); }
+    catch (e) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'invoice', message: (e && e.message) || 'The receivables account is the wrong type.' } })); } catch (e2) {} return false; }
+    if (!okAr) return false;
+    const id = booksRandId();
+    const invoice = { id, number: number || '', contact: contact || '', lines: clean, issued: issued || booksTodayISO(), due: due || '' };
+    let entry = null;
+    try { entry = F.post(b, F.invoiceIssueEntry(invoice)); }
+    catch (e) { bump(); return false; }
+    const ok = await pubEntry(b, entry);
+    if (!ok) { _dropIfRefused(b, entry); bump(); return false; }
+    const body = { number: invoice.number, contact: invoice.contact, lines: clean, issued: invoice.issued, due: invoice.due, issueSeq: entry.seq };
+    if (!useRelay) { setInvoices(xs => [...xs.filter(x => x.id !== id), { t: 'invoice', id, ...body }]); bump(); return true; }
+    const okDoc = await S.encPublish('finance/invoice:' + id, body);
+    bump();
+    return !(okDoc === false || okDoc == null);
+  };
+  // MARK PAID — manual settlement: dr bank / cr AR, tagged with the invoice id. Works STANDALONE (no Phase 3);
+  // auto-match of a bank line to an open invoice is the only part that would ride reconcile. `amount` optional
+  // (defaults to the whole invoice) for a part payment.
+  const settleInvoice = async (inv, amount) => {
+    const b = bookRef.current;
+    let entry = null;
+    try { if (!F.assertArAccount(b)) return false; entry = F.post(b, F.invoiceSettlementEntry(inv, { date: booksTodayISO(), amount })); }
+    catch (e) { bump(); return false; }
+    const ok = await pubEntry(b, entry);
+    if (!ok) _dropIfRefused(b, entry);
+    bump();
+    return ok;
+  };
+  // CREDIT NOTE — its OWN doc + its OWN balanced reversing entry (dr income/fund, cr AR), tagged with the
+  // ORIGINAL invoice id so the receivable nets out; the original invoice is never edited (append-only). This is
+  // a FULL credit of every line (a hand-built entry, since ledger.reverse() is full-only and carries no invoice tag).
+  const creditInvoice = async (inv) => {
+    const b = bookRef.current;
+    const cnId = booksRandId();
+    let entry = null;
+    try { entry = F.post(b, F.creditNoteEntry(inv, { id: cnId, lines: inv.lines || [] }, { date: booksTodayISO() })); }
+    catch (e) { bump(); return false; }
+    const ok = await pubEntry(b, entry);
+    if (!ok) { _dropIfRefused(b, entry); bump(); return false; }
+    const body = { number: inv.number ? inv.number + '-CN' : '', contact: inv.contact || '', lines: inv.lines || [], issued: booksTodayISO(), due: '', credit: true, ref: inv.id, issueSeq: entry.seq };
+    if (!useRelay) { setInvoices(xs => [...xs, { t: 'invoice', id: cnId, ...body }]); bump(); return true; }
+    const okDoc = await S.encPublish('finance/invoice:' + cnId, body);
+    bump();
+    return !(okDoc === false || okDoc == null);
+  };
+  // Printable invoice/credit-note — the SAME saveConsoleFile path the statement HTML export uses. The status
+  // stamped on it is DERIVED (F.invoiceStatus), never the stored cache.
+  const exportInvoicePdf = async (inv) => {
+    const status = F.invoiceStatus(inv, booksTodayISO(), book.journal);
+    try {
+      const html = F.invoiceHtml(inv, { churchName: church.name || '', currency: book.baseCurrency, decimals: book.decimals, status, generatedAt: booksTodayISO(), credit: inv.credit });
+      const base = fsSlug((inv.credit ? 'credit-note-' : 'invoice-') + (inv.number || inv.id));
+      const msg = await fsDownloadDoc(base + '.html', html, 'text/html;charset=utf-8');
+      setInvFlash(msg || 'Downloaded — open it to print or save as PDF.');
+    } catch (e) { setInvFlash((e && e.message) || 'Could not save the invoice on this device.'); }
+  };
   // The donor NAME lookup the giving-by-member + Gift Aid screens resolve opaque donorIds through.
   const donorMap = React.useMemo(() => new Map(donors.map(d => [d.id, d])), [donors]);
   // Gift Aid is a UK regional PACK, OFF BY DEFAULT: strict === true (NOT the default-on `!== false` feature
@@ -1897,13 +2120,13 @@ function DashFinanceBook() {
               </div>
             ))}
 
-            {/* ── Accounts, grouped by type (the reserved fund-transfer account is exempt and hidden) ── */}
+            {/* ── Accounts, grouped by type (the reserved fund-transfer + accounts-receivable accounts are exempt and hidden) ── */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0 8px' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Accounts</div>
               <button onClick={() => setAccEditing({})} title="Create a new account (category)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add account</button>
             </div>
             {ACCT_TYPES_ORDER.map(type => {
-              const list = [...book.accounts.values()].filter(a => a.type === type && a.id !== 'fund-transfer');
+              const list = [...book.accounts.values()].filter(a => a.type === type && a.id !== 'fund-transfer' && a.id !== 'accounts-receivable');
               if (!list.length) return null;
               return (
                 <div key={type} style={{ marginBottom: 6 }}>
@@ -1975,6 +2198,54 @@ function DashFinanceBook() {
         )}
       </div>
 
+      <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={() => setInvoicesOpen(r => !r)} title="Show or hide invoices and customers" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{invoicesOpen ? '▾' : '▸'} Invoices</button>
+          {invoicesOpen && <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setContactEditing({})} title="Add a customer / contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add contact</button>
+            <button onClick={() => setInvEditing({})} disabled={bookErrors.length > 0} title="Create and issue an invoice" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>+ New invoice</button>
+          </div>}
+        </div>
+        {invoicesOpen && (() => {
+          const today = booksTodayISO();
+          const badge = (status) => {
+            const tone = status === 'paid' ? 'var(--sage, #4f7a5e)' : status === 'overdue' ? 'var(--clay-deep, #b4462f)' : 'var(--ink-3)';
+            return <span data-invoice-status={status} style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: tone, border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 8 }}>{status}</span>;
+          };
+          const rows = invoices.slice().sort((a, b) => (a.issued < b.issued ? 1 : a.issued > b.issued ? -1 : 0));
+          return (
+          <div style={{ marginTop: 12 }}>
+            {invFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>{invFlash}</div> : null}
+            {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No invoices yet. Raise one for facility hire or any amount owed to the church — the double-entry and the receivable are kept for you.</div>}
+            {rows.map(inv => {
+              const status = inv.credit ? 'credit' : F.invoiceStatus(inv, today, book.journal);
+              const total = F.invoiceTotal(inv);
+              return (
+                <div key={inv.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>{inv.credit ? 'Credit note' : 'Invoice'}{inv.number ? ' ' + inv.number : ''}{inv.contact ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {inv.contact}</span> : null}{!inv.credit ? badge(status) : null}</div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{booksFmt(total, book)}{inv.issued ? ' · issued ' + inv.issued : ''}{inv.due && !inv.credit ? ' · due ' + inv.due : ''}</div>
+                  </div>
+                  <button onClick={() => exportInvoicePdf(inv)} title="Download this as a printable PDF" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>PDF</button>
+                  {!inv.credit && status !== 'paid' && <button onClick={() => { settleInvoice(inv).then(ok => setInvFlash(ok ? 'Marked paid.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Record payment in full (dr bank / cr receivables)" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: bookErrors.length ? 0.5 : 1 }}>Mark paid</button>}
+                  {!inv.credit && <button onClick={() => { creditInvoice(inv).then(ok => setInvFlash(ok ? 'Credit note raised.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Raise a credit note that reverses this invoice (its own entry; the original is untouched)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Credit note</button>}
+                </div>
+              );
+            })}
+            {contacts.length > 0 && <div style={{ marginTop: 14 }}>
+              <div style={{ ...bkLbl, margin: '6px 0 2px' }}>Contacts</div>
+              {contacts.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(c => (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>{c.name || '(unnamed)'}</span>{c.email ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {c.email}</span> : null}</div>
+                  <button onClick={() => setContactEditing({ id: c.id, name: c.name, email: c.email, address: c.address })} title="Edit this contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                </div>
+              ))}
+            </div>}
+          </div>
+          );
+        })()}
+      </div>
+
       <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
         // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
@@ -2003,6 +2274,8 @@ function DashFinanceBook() {
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
       {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
+      {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
+      {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
     </div>
   );
 }

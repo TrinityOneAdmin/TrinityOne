@@ -991,6 +991,12 @@ const FIN_JOURNAL_D = D.FIN_JOURNAL;   // church-book double-entry journal entry
 // ABOVE the generic finance/ read so networkOf is DROPPED — donor PII must never reach a network-peer church,
 // only the church key or a finance steward. See the read branch for the full note.
 const FIN_DONOR_D = D.FIN_DONOR;
+// CONTACT RECORD — d=finance/contact:<id>, a REPLACEABLE finance/ doc holding CUSTOMER PII (a hall-hirer's name
+// + email + address). WRITE is the generic finance/ write prefix (church key or a finance steward). READ, by
+// the owner's decision (2026-10-30), is NARROWED exactly like finance/donor: canRead() gives it an EXPLICIT
+// branch ABOVE the generic finance/ read that DROPS networkOf — contact PII must never reach a network-peer
+// church, only the church key or a finance steward. See the read branch for the full note.
+const FIN_CONTACT_D = D.FIN_CONTACT;
 // Receipt image attached to a journal entry — d=finance/attachment:<id>, a REPLACEABLE finance/ doc (same
 // church-OR-finance-steward gate as settings/account/fund). It carries an inline ENCRYPTED image, so unlike
 // the other finance/ docs it needs a size ceiling enforced HERE and not only in the client: a thin relay must
@@ -5455,6 +5461,12 @@ function canRead(e, authed) {
     // finance defect). WRITE is unchanged — the generic finance/ write prefix (church key or a finance steward)
     // already covers it, and members cannot write it. This is the ONLY relay rule Phase 4b changes.
     if (d.startsWith(FIN_DONOR_D)) return authed === cp || stewardCan(authed, cp, 'finance');
+    // finance/contact:<id> (Phase 5) holds CUSTOMER PII (a hall-hirer's name + address). By the owner's decision
+    // (2026-10-30) it is narrowed EXACTLY like finance/donor: this branch sits ABOVE the generic finance/ read
+    // and DROPS networkOf, so a network-peer church served aggregate finance is NOT served a contact. It MUST
+    // return (a branch that narrows then falls through serves it to everyone — the 2026-09-16 finance defect).
+    // WRITE is unchanged (the generic finance/ write prefix already covers it).
+    if (d.startsWith(FIN_CONTACT_D)) return authed === cp || stewardCan(authed, cp, 'finance');
     if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
     // ══ THE CHECK-IN DOCUMENTS DECIDE THEIR OWN READERS, AND THEY DECIDE THEM *FIRST* ═════════════════════
     //

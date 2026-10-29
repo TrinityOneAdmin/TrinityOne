@@ -6,3 +6,4 @@ export * from './finance-import.mjs';
 export * from './finance-statement.mjs';
 export * from './finance-reconcile.mjs';
 export * from './finance-reports.mjs';
+export * from './finance-invoice.mjs';
