@@ -30,12 +30,19 @@ function booksDonateGave() { try { localStorage.setItem(DONATE_LS, String(Date.n
 function booksFresh() {
   const F = window.FinanceLedger;
   const b = F.createBook({ baseCurrency: 'GBP', decimals: 2 });
+  // NATION-NEUTRAL, silent-£ (DOMAIN 2026-10-29): a tight generic chart, NO tax/relief accounts (no Gift Aid,
+  // no GASDS — those are off-by-default regional packs, never the core seed). A pilot church that already has
+  // a book never re-seeds (the seed runs only on an authenticated EMPTY read), so this list reaches only a
+  // brand-new book; a treasurer edits it from the Accounts & funds panel.
   [['bank', '1000', 'Bank / cash', 'asset'],
    ['giving', '4000', 'Giving & offerings', 'income'],
+   ['facility-hire', '4100', 'Facility hire', 'income'],
    ['other-income', '4900', 'Other income', 'income'],
    ['utilities', '5000', 'Utilities', 'expense'],
    ['outreach', '5100', 'Outreach & mission', 'expense'],
    ['building', '5200', 'Building & upkeep', 'expense'],
+   ['staff-costs', '5300', 'Staff & stipends', 'expense'],
+   ['missions', '5400', 'Missions & giving out', 'expense'],
    ['other-expense', '5900', 'Other costs', 'expense']].forEach(([id, code, name, type]) => F.addAccount(b, { id, code, name, type }));
   return b;
 }
@@ -50,7 +57,7 @@ function booksSave(book) { try { localStorage.setItem(BOOKS_LS, JSON.stringify(w
 function finItemToDoc(it) {
   const id = (it && it.id) || '';
   if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart };
-  if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type };
+  if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type, archived: !!it.archived };
   if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
   if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null };
   return null;
@@ -83,6 +90,21 @@ function booksParse(str, book) {
   return (!isFinite(n) || n <= 0) ? 0 : Math.round(n * Math.pow(10, dec));
 }
 function booksEntryView(book, e) {
+  // A FUND TRANSFER IS NOT AN OUTFLOW. Both legs post to the reserved 'fund-transfer' account; without this the
+  // fallback below picks postings[0] (the dr leg) and renders a transfer as a plain £X payment OUT of fund A,
+  // labelled with the reserved account's name — money shown as spent that never left the church. Detect the two
+  // legs and present it as "Transfer: <from> → <to>", with no +/− inflow styling (inflow:null). dr reduces a
+  // fund (the source), cr increases it (the destination).
+  if (e.postings.length === 2 && e.postings.every(p => p.account === 'fund-transfer')) {
+    const drLeg = e.postings.find(p => p.dir === 'dr') || e.postings[0];
+    const crLeg = e.postings.find(p => p.dir === 'cr') || e.postings[1];
+    const fundName = id => ((book.funds.get(id) || {}).name) || id;
+    const isReversal = e.reverses != null;
+    const wasReversed = !isReversal && book.journal.some(j => j.reverses === e.seq);
+    return { date: e.date, memo: e.memo, isTransfer: true, fundFrom: drLeg.fund, fundTo: crLeg.fund,
+      category: 'Transfer: ' + fundName(drLeg.fund) + ' → ' + fundName(crLeg.fund),
+      fund: null, amount: crLeg.amount, inflow: null, isReversal, wasReversed };
+  }
   const other = e.postings.find(p => { const a = book.accounts.get(p.account); return a && (a.type === 'income' || a.type === 'expense'); }) || e.postings[0];
   const a = book.accounts.get(other.account);
   const isReversal = e.reverses != null;
@@ -98,11 +120,27 @@ function booksEntryView(book, e) {
 const bkFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
 const bkLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 6px', display: 'block', textTransform: 'uppercase' };
 const bkCard = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 18 };
+const ACCT_TYPE_LABEL = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
+const ACCT_TYPES_ORDER = ['asset', 'liability', 'equity', 'income', 'expense'];
+const FUND_KIND_LABEL = { general: 'General', designated: 'Designated', restricted: 'Restricted' };
+// Conventional code range per type (income 4xxx, expense 5xxx, asset 1xxx, liability 2xxx, equity 3xxx):
+// used to auto-suggest a code when the treasurer leaves it blank. Advisory only — ids are what the ledger keys on.
+const ACCT_CODE_BASE = { asset: 1000, liability: 2000, equity: 3000, income: 4000, expense: 5000 };
+function booksSlug(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40); }
+function suggestCode(book, type) {
+  const base = ACCT_CODE_BASE[type] || 1000;
+  let n = base;
+  const used = new Set([...book.accounts.values()].map(a => a.code));
+  while (used.has(String(n))) n += 10;
+  return String(n);
+}
 
 // ---- record a transaction (guided double-entry — the treasurer never sees "debit/credit") ----
 function BooksRecord({ book, onRecord, onClose }) {
   const [dir, setDir] = React.useState('in');
-  const cats = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense'));
+  // Archived accounts are hidden from the category picker (kept in the ledger/reports). The reserved
+  // 'fund-transfer' account is equity, so the income/expense filter already excludes it here.
+  const cats = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense') && !a.archived);
   const funds = [...book.funds.values()];
   const [account, setAccount] = React.useState(cats[0] ? cats[0].id : '');
   const [fund, setFund] = React.useState('general');
@@ -110,7 +148,7 @@ function BooksRecord({ book, onRecord, onClose }) {
   const [date, setDate] = React.useState(booksTodayISO());
   const [memo, setMemo] = React.useState('');
   const [err, setErr] = React.useState('');
-  React.useEffect(() => { const c = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense')); setAccount(c[0] ? c[0].id : ''); }, [dir]);
+  React.useEffect(() => { const c = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense') && !a.archived); setAccount(c[0] ? c[0].id : ''); }, [dir]);
   const submit = () => {
     const minor = booksParse(amount, book);
     if (!minor) return setErr('Enter an amount greater than zero.');
@@ -168,6 +206,150 @@ function BooksRecord({ book, onRecord, onClose }) {
   );
 }
 
+// ---- create / edit an account (a category in the chart of accounts) ----
+// finance/account:<id> is REPLACEABLE, so editing is a re-publish of the same id. TYPE is locked once the
+// account has postings (initial.posted) — changing it would silently re-sign every projection. `archived` is
+// carried through unchanged here (the Archive button in the list owns that flag).
+function BooksAccountEdit({ book, initial, onSave, onClose }) {
+  const ed = initial || {};
+  const editing = !!ed.id;
+  const [name, setName] = React.useState(ed.name || '');
+  const [type, setType] = React.useState(ed.type || 'income');
+  const [code, setCode] = React.useState(ed.code || '');
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm) return setErr('Give the account a name.');
+    const id = editing ? ed.id : (booksSlug(nm) || booksSlug(code) || code);
+    if (!id) return setErr('Give the account a name or a code.');
+    const cd = (code || '').trim() || suggestCode(book, type);
+    if (!editing && book.accounts.has(id)) return setErr('There is already an account called that — pick another name.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onSave({ id, code: cd, name: nm, type, archived: !!ed.archived });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t save — your church’s relay refused or did not answer. Try again.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not save that account.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit account' : 'Add account'} tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{editing ? 'Edit account' : 'Add account'}</h3>
+        <label style={bkLbl}>Name</label>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Youth work" style={{ ...bkFld, marginBottom: 12 }} />
+        <label style={bkLbl}>Type</label>
+        <select value={type} disabled={editing && !!ed.posted} onChange={e => setType(e.target.value)} style={{ ...bkFld, marginBottom: ed.posted ? 4 : 12, opacity: (editing && ed.posted) ? 0.6 : 1 }}>
+          {ACCT_TYPES_ORDER.map(t => <option key={t} value={t}>{ACCT_TYPE_LABEL[t] || t}</option>)}
+        </select>
+        {editing && ed.posted ? <p style={{ color: 'var(--ink-3)', fontSize: 12, margin: '0 0 12px' }}>The type can’t change once an account has transactions — it would re-sign every report.</p> : null}
+        <label style={bkLbl}>Code (optional)</label>
+        <input value={code} onChange={e => setCode(e.target.value)} placeholder={suggestCode(book, type)} inputMode="numeric" style={{ ...bkFld, marginBottom: 8 }} />
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add account'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- create / edit a fund ----
+// finance/fund:<id> is REPLACEABLE (edit = re-publish same id). The implicit 'general' fund is never offered
+// here (the list shows no Edit for it, and the console's saveFund refuses id 'general').
+function BooksFundEdit({ book, initial, onSave, onClose }) {
+  const ed = initial || {};
+  const editing = !!ed.id;
+  const [name, setName] = React.useState(ed.name || '');
+  const [kind, setKind] = React.useState(ed.kind || 'designated');
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const submit = async () => {
+    const nm = name.trim();
+    if (!nm) return setErr('Give the fund a name.');
+    const id = editing ? ed.id : booksSlug(nm);
+    if (!id || id === 'general') return setErr('Pick another name for the fund.');
+    if (!editing && book.funds.has(id)) return setErr('There is already a fund called that — pick another name.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onSave({ id, name: nm, kind });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t save — your church’s relay refused or did not answer. Try again.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not save that fund.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit fund' : 'Add fund'} tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{editing ? 'Edit fund' : 'Add fund'}</h3>
+        <label style={bkLbl}>Name</label>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Building fund" style={{ ...bkFld, marginBottom: 12 }} />
+        <label style={bkLbl}>Kind</label>
+        <select value={kind} onChange={e => setKind(e.target.value)} style={{ ...bkFld, marginBottom: 8 }}>
+          <option value="designated">Designated</option>
+          <option value="restricted">Restricted</option>
+          <option value="general">General (unrestricted)</option>
+        </select>
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add fund'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- move money between funds (a balanced, income/expenditure-neutral journal entry) ----
+function BooksFundMove({ book, onTransfer, onClose }) {
+  const fundList = [...book.funds.values()];
+  const [fromFund, setFromFund] = React.useState(fundList[0] ? fundList[0].id : 'general');
+  const [toFund, setToFund] = React.useState(fundList[1] ? fundList[1].id : (fundList[0] ? fundList[0].id : 'general'));
+  const [amount, setAmount] = React.useState('');
+  const [date, setDate] = React.useState(booksTodayISO());
+  const [memo, setMemo] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const submit = async () => {
+    const minor = booksParse(amount, book);
+    if (!minor) return setErr('Enter an amount greater than zero.');
+    if (fromFund === toFund) return setErr('Pick two different funds.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onTransfer({ fromFund, toFund, amountMinor: minor, date, memo: memo.trim() });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t move — your church’s relay refused or did not answer. Nothing was moved.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not move that.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Move between funds" tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Move between funds</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>Moves money from one fund to another. It is neither income nor spending — your totals don’t change.</div>
+        {fundList.length < 2
+          ? <p style={{ color: 'var(--ink-3)', fontSize: 13, margin: '4px 0 0' }}>You need at least two funds to move money between them — add a fund first.</p>
+          : (<>
+              <label style={bkLbl}>From fund</label>
+              <select value={fromFund} onChange={e => setFromFund(e.target.value)} style={{ ...bkFld, marginBottom: 12 }}>{fundList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+              <label style={bkLbl}>To fund</label>
+              <select value={toFund} onChange={e => setToFund(e.target.value)} style={{ ...bkFld, marginBottom: 12 }}>{fundList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}><label style={bkLbl}>Amount ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</label><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00" style={bkFld} /></div>
+                <div style={{ flex: 1 }}><label style={bkLbl}>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={bkFld} /></div>
+              </div>
+              <label style={bkLbl}>Note (optional)</label>
+              <input value={memo} onChange={e => setMemo(e.target.value)} placeholder="e.g. Toward the building fund" style={{ ...bkFld, marginBottom: 8 }} />
+            </>)}
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy || fundList.length < 2} style={{ flex: 2, height: 44, border: 'none', background: fundList.length < 2 ? 'var(--line)' : 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: fundList.length < 2 ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Move money</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---- the "support TrinityOne" donation nudge (shown on open; no paywall) ----
 function BooksDonate({ onGave, onClose }) {
   const [copied, setCopied] = React.useState(false);
@@ -196,8 +378,8 @@ function BooksDonate({ onGave, onClose }) {
 // already-imported lines flagged via the importKey de-dup fingerprint), then post the selected ones as
 // balanced double-entry journal entries. All parsing is client-side (window.FinanceLedger import engine).
 function FinanceImport({ book, F, onPost, onClose }) {
-  const incomeAccts = [...book.accounts.values()].filter(a => a.type === 'income');
-  const expenseAccts = [...book.accounts.values()].filter(a => a.type === 'expense');
+  const incomeAccts = [...book.accounts.values()].filter(a => a.type === 'income' && !a.archived);
+  const expenseAccts = [...book.accounts.values()].filter(a => a.type === 'expense' && !a.archived);
   const funds = [...book.funds.values()];
   const dec = book.decimals || 2;
   const defAccount = (dir) => {
@@ -673,7 +855,7 @@ function DashFinanceBook() {
         seeded = true;
         const b = booksFresh(); bookRef.current = b; bump();
         S.encPublish('finance/settings', { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart });
-        for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type });
+        for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type, archived: !!a.archived });
         for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
         return;
       }
@@ -689,6 +871,10 @@ function DashFinanceBook() {
   const [reports, setReports] = React.useState(false);
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
+  const [managing, setManaging] = React.useState(false);     // collapsible "Accounts & funds" panel (same pattern as Reports)
+  const [accEditing, setAccEditing] = React.useState(null);  // account modal: null closed · {} add · {id,…} edit
+  const [fundEditing, setFundEditing] = React.useState(null);// fund modal: null closed · {} add · {id,…} edit
+  const [moving, setMoving] = React.useState(false);         // "Move between funds" (fund transfer) modal
   const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
   // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
   // console only; in localStorage mode these are absent and the modal simply omits the "Post to members" button.
@@ -806,6 +992,60 @@ function DashFinanceBook() {
     bump();
     return { posted, failed, skipped };
   };
+  // ── chart of accounts + funds management ──────────────────────────────────────────────────────────────
+  // Accounts and funds are first-class, editable objects. Both publish as REPLACEABLE finance docs (no seq —
+  // the same encPublish the seed uses), so an edit is a re-publish of the SAME id. The local book is updated
+  // optimistically and then self-corrects on the next encSubscribe delivery (rebuildBook replaces it).
+  const saveAccount = async ({ id, code, name, type, archived }) => {
+    const b = bookRef.current;
+    const existing = b.accounts.get(id);
+    // TYPE NEVER CHANGES on an existing account — it would silently re-sign every projection that branches on
+    // account.type. The modal disables the selector on a posted account; this keeps the stored type regardless.
+    const t = existing ? existing.type : type;
+    const doc = { code: code || id, name: name || id, type: t, archived: !!archived };
+    if (existing) b.accounts.set(id, { id, ...doc });
+    else F.addAccount(b, { id, ...doc });
+    if (!useRelay) { booksSave(b); bump(); return true; }
+    const ok = await S.encPublish('finance/account:' + id, doc);
+    bump();
+    return !(ok === false || ok == null);
+  };
+  const setAccountArchived = (id, archived) => {
+    const b = bookRef.current; const a = b.accounts.get(id); if (!a) return Promise.resolve(false);
+    return saveAccount({ id: a.id, code: a.code, name: a.name, type: a.type, archived });
+  };
+  const saveFund = async ({ id, name, kind }) => {
+    const b = bookRef.current;
+    if (id === 'general') return false;   // the implicit general fund is never renamed or removed
+    if (b.funds.has(id)) b.funds.set(id, { id, name: name || id, kind });
+    else F.addFund(b, { id, name, kind });
+    if (!useRelay) { booksSave(b); bump(); return true; }
+    const ok = await S.encPublish('finance/fund:' + id, { name: name || id, kind });
+    bump();
+    return !(ok === false || ok == null);
+  };
+  // Move £X from one fund to another as a balanced, income/expenditure-NEUTRAL journal entry (see
+  // FUND_TRANSFER_ACCT in finance-ledger.mjs). Publish-if-absent the reserved account FIRST, as a normal
+  // replaceable doc, so every console — old and new — can rebuild a book that contains the transfer.
+  const transferFunds = async ({ fromFund, toFund, amountMinor, date, memo }) => {
+    const b = bookRef.current;
+    if (!amountMinor || fromFund === toFund || !b.funds.has(fromFund) || !b.funds.has(toFund)) return false;
+    if (!b.accounts.get('fund-transfer')) {
+      if (useRelay) {
+        const ok = await S.encPublish('finance/account:fund-transfer', { code: '3900', name: 'Fund transfer', type: 'equity', archived: false });
+        if (ok === false || ok == null) {
+          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'fund transfer', message: 'Could not set up fund transfers — your church\'s relay refused or did not answer. Nothing was moved.' } })); } catch (e2) {}
+          return false;
+        }
+      }
+      try { F.addAccount(b, { id: 'fund-transfer', code: '3900', name: 'Fund transfer', type: 'equity', archived: false }); } catch (e) {}
+    }
+    const P = [{ account: 'fund-transfer', fund: fromFund, dir: 'dr', amount: amountMinor },
+               { account: 'fund-transfer', fund: toFund, dir: 'cr', amount: amountMinor }];
+    const entry = F.post(b, { date, memo, postings: P });
+    return pubEntry(b, entry).then((ok) => { if (!ok) _dropIfRefused(b, entry); bump(); return ok; });
+  };
+
   const funds = F.fundBalances(book);
   const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
   const ie = F.incomeExpenditure(book, { from: fyStart });
@@ -886,7 +1126,7 @@ function DashFinanceBook() {
               <div style={{ fontWeight: 700, fontSize: 14, textDecoration: v.wasReversed ? 'line-through' : 'none', opacity: v.wasReversed ? .6 : 1 }}>{v.category}{v.memo ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {v.memo}</span> : ''}{v.wasReversed ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>reversed</span> : ''}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{v.date}{v.fund && v.fund !== 'general' ? ' · ' + ((book.funds.get(v.fund) || {}).name || v.fund) : ''}</div>
             </div>
-            <div style={{ fontWeight: 800, fontSize: 14.5, color: v.inflow ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)', whiteSpace: 'nowrap' }}>{v.inflow ? '+' : '−'}{booksFmt(v.amount, book)}</div>
+            <div style={{ fontWeight: 800, fontSize: 14.5, color: v.isTransfer ? 'var(--ink-3)' : (v.inflow ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)'), whiteSpace: 'nowrap' }}>{v.isTransfer ? '' : (v.inflow ? '+' : '−')}{booksFmt(v.amount, book)}</div>
             {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" onClick={() => undo(e.seq)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
           </div>
         ); })}
@@ -909,6 +1149,56 @@ function DashFinanceBook() {
         )}
       </div>
 
+      <div style={{ ...bkCard, marginBottom: 16 }}>
+        <button onClick={() => setManaging(r => !r)} title="Show or hide your chart of accounts and funds" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{managing ? '▾' : '▸'} Accounts &amp; funds</button>
+        {managing && (
+          <div style={{ marginTop: 14 }}>
+            {/* ── Funds ── */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '2px 0 8px' }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Funds</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setMoving(true)} disabled={bookErrors.length > 0} title="Move money from one fund to another" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Move between funds</button>
+                <button onClick={() => setFundEditing({})} title="Create a new fund" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add fund</button>
+              </div>
+            </div>
+            {[...book.funds.values()].map(f => (
+              <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>{f.name}</span>{f.kind !== 'general' ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {FUND_KIND_LABEL[f.kind] || f.kind}</span> : null}</div>
+                {f.id === 'general'
+                  ? <span style={{ color: 'var(--ink-3)', fontSize: 11.5 }}>default</span>
+                  : <button onClick={() => setFundEditing({ id: f.id, name: f.name, kind: f.kind })} title="Rename this fund or change its kind" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>}
+              </div>
+            ))}
+
+            {/* ── Accounts, grouped by type (the reserved fund-transfer account is exempt and hidden) ── */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0 8px' }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Accounts</div>
+              <button onClick={() => setAccEditing({})} title="Create a new account (category)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add account</button>
+            </div>
+            {ACCT_TYPES_ORDER.map(type => {
+              const list = [...book.accounts.values()].filter(a => a.type === type && a.id !== 'fund-transfer');
+              if (!list.length) return null;
+              return (
+                <div key={type} style={{ marginBottom: 6 }}>
+                  <div style={{ ...bkLbl, margin: '10px 0 2px' }}>{ACCT_TYPE_LABEL[type] || type}</div>
+                  {list.map(a => (
+                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)', opacity: a.archived ? 0.55 : 1 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 13.5, fontWeight: 600 }}>{a.name}</span>
+                        <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {a.code}</span>
+                        {a.archived ? <span style={{ color: 'var(--ink-3)', fontSize: 11.5, fontWeight: 400 }}> · archived</span> : null}
+                      </div>
+                      <button onClick={() => setAccEditing({ id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived, posted: F.accountHasPostings(book, a.id) })} title="Rename this account or change its code" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                      <button onClick={() => setAccountArchived(a.id, !a.archived)} title={a.archived ? 'Show this account in the pickers again' : 'Hide this account from the pickers (kept in the ledger and reports)'} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>{a.archived ? 'Unarchive' : 'Archive'}</button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
         <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bank reconciliation, bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs.</div>
@@ -916,6 +1206,9 @@ function DashFinanceBook() {
 
       {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
       {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
+      {accEditing && <BooksAccountEdit book={book} initial={accEditing} onSave={saveAccount} onClose={() => setAccEditing(null)} />}
+      {fundEditing && <BooksFundEdit book={book} initial={fundEditing} onSave={saveFund} onClose={() => setFundEditing(null)} />}
+      {moving && <BooksFundMove book={book} onTransfer={transferFunds} onClose={() => setMoving(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
     </div>

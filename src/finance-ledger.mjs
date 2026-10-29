@@ -26,14 +26,29 @@ export function createBook({ baseCurrency = 'USD', decimals = 2, fiscalYearStart
   return book;
 }
 
-export function addAccount(book, { id, code, name, type }) {
+export function addAccount(book, { id, code, name, type, archived = false }) {
   if (!ACCOUNT_TYPES.includes(type)) throw new Error('bad account type: ' + type);
   id = id || code;
   if (!id) throw new Error('account needs an id or code');
   if (book.accounts.has(id)) throw new Error('duplicate account: ' + id);
-  const acc = { id, code: code || id, name: name || id, type };
+  // `archived` hides an account from the category pickers while KEEPING it in the ledger and reports (an account
+  // with postings can never be deleted — check() requires every posting's account to exist). Absent → false, so
+  // an older console that publishes an account doc without the field, and a book rebuilt from such a doc, both
+  // read as not-archived. The flag travels on the account doc (finance-store bookToDocs/rebuildBook) and the
+  // replaceable finance/account:<id> relay doc (stew-finance finItemToDoc + the seed/UI publish).
+  const acc = { id, code: code || id, name: name || id, type, archived: !!archived };
   book.accounts.set(id, acc);
   return acc;
+}
+
+// Does the journal reference this account anywhere? The chart-management UI forbids a TYPE change on a posted
+// account — changing account.type silently re-signs every projection that branches on it (trialBalance,
+// incomeExpenditure, fundBalances, balanceSheet), a whole-book corruption with no error. Pure so the console
+// and a node test share one definition (CLAUDE.md rule 1's point-of-use test asserts the disabled control;
+// this is the engine half).
+export function accountHasPostings(book, id) {
+  for (const e of book.journal) for (const p of e.postings) if (p.account === id) return true;
+  return false;
 }
 
 export function addFund(book, { id, name, kind = 'general' }) {
@@ -145,14 +160,25 @@ export function trialBalance(book) {
   return { rows, totalDebit, totalCredit, balanced: totalDebit === totalCredit };
 }
 
-// Fund balance = accumulated surplus attributable to the fund (income credited − expenditure charged).
+// The reserved account id that carries a fund TRANSFER. A transfer is one balanced journal entry with two
+// postings on this account — {fund:A,dir:'dr'} + {fund:B,dir:'cr'}, equal amounts — so it is income/
+// expenditure-neutral (the account is equity, which incomeExpenditure/surplus ignore) yet moves two fund
+// balances by ±X, net zero. fundBalances/closingFunds recognise it by THIS ID, never by type==='equity': a
+// real equity account (e.g. opening balances) carrying a fund would otherwise be miscounted and break
+// check() invariant 3 (fundSum===surplus). It is published as an ordinary replaceable finance/account doc,
+// never auto-created in createBook, so an un-upgraded console can still rebuild a book that contains a transfer.
+export const FUND_TRANSFER_ACCT = 'fund-transfer';
+
+// Fund balance = accumulated surplus attributable to the fund (income credited − expenditure charged), plus
+// fund transfers (a dr on the reserved account reduces its fund, a cr increases it).
 export function fundBalances(book) {
   const bal = new Map();
   for (const e of book.journal) for (const p of e.postings) {
     if (!p.fund) continue;
     const a = book.accounts.get(p.account);
-    if (a.type === 'income') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'cr' ? p.amount : -p.amount));
-    else if (a.type === 'expense') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'dr' ? -p.amount : p.amount));
+    if (p.account === FUND_TRANSFER_ACCT) bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'cr' ? p.amount : -p.amount));
+    else if (a && a.type === 'income') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'cr' ? p.amount : -p.amount));
+    else if (a && a.type === 'expense') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'dr' ? -p.amount : p.amount));
   }
   return [...book.funds.values()].map(f => ({ fund: f.id, name: f.name, kind: f.kind, balance: bal.get(f.id) || 0 }))
     .sort((a, b) => (a.fund === 'general') - (b.fund === 'general') === 0 ? (a.fund < b.fund ? -1 : a.fund > b.fund ? 1 : 0) : (a.fund === 'general' ? -1 : 1));   // general first, then by id — deterministic

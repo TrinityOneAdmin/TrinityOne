@@ -66,7 +66,10 @@ function closingFunds(book, to = '￿') {
     for (const p of e.postings) {
       if (!p.fund) continue;
       const a = book.accounts.get(p.account); if (!a) continue;
-      if (a.type === 'income') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'cr' ? p.amount : -p.amount));
+      // A fund transfer (reserved account 'fund-transfer') moves its fund: dr reduces, cr increases. Keyed on the
+      // ID, never type==='equity' — the SAME rule as finance-ledger.fundBalances, kept identical in both copies.
+      if (p.account === 'fund-transfer') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'cr' ? p.amount : -p.amount));
+      else if (a.type === 'income') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'cr' ? p.amount : -p.amount));
       else if (a.type === 'expense') bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === 'dr' ? -p.amount : p.amount));
     }
   }

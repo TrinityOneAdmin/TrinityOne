@@ -22,8 +22,10 @@ var FinanceLedger = (() => {
   __export(finance_bundle_exports, {
     ACCOUNT_TYPES: () => ACCOUNT_TYPES,
     FUND_KINDS: () => FUND_KINDS,
+    FUND_TRANSFER_ACCT: () => FUND_TRANSFER_ACCT,
     STATEMENT_SECTIONS: () => STATEMENT_SECTIONS,
     accentInk: () => accentInk,
+    accountHasPostings: () => accountHasPostings,
     addAccount: () => addAccount,
     addFund: () => addFund,
     applyEntry: () => applyEntry,
@@ -77,14 +79,18 @@ var FinanceLedger = (() => {
     addFund(book, { id: "general", name: "General fund", kind: "general" });
     return book;
   }
-  function addAccount(book, { id, code, name, type }) {
+  function addAccount(book, { id, code, name, type, archived = false }) {
     if (!ACCOUNT_TYPES.includes(type)) throw new Error("bad account type: " + type);
     id = id || code;
     if (!id) throw new Error("account needs an id or code");
     if (book.accounts.has(id)) throw new Error("duplicate account: " + id);
-    const acc = { id, code: code || id, name: name || id, type };
+    const acc = { id, code: code || id, name: name || id, type, archived: !!archived };
     book.accounts.set(id, acc);
     return acc;
+  }
+  function accountHasPostings(book, id) {
+    for (const e of book.journal) for (const p of e.postings) if (p.account === id) return true;
+    return false;
   }
   function addFund(book, { id, name, kind = "general" }) {
     if (!FUND_KINDS.includes(kind)) throw new Error("bad fund kind: " + kind);
@@ -168,13 +174,15 @@ var FinanceLedger = (() => {
     const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
     return { rows, totalDebit, totalCredit, balanced: totalDebit === totalCredit };
   }
+  var FUND_TRANSFER_ACCT = "fund-transfer";
   function fundBalances(book) {
     const bal = /* @__PURE__ */ new Map();
     for (const e of book.journal) for (const p of e.postings) {
       if (!p.fund) continue;
       const a = book.accounts.get(p.account);
-      if (a.type === "income") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "cr" ? p.amount : -p.amount));
-      else if (a.type === "expense") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "dr" ? -p.amount : p.amount));
+      if (p.account === FUND_TRANSFER_ACCT) bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "cr" ? p.amount : -p.amount));
+      else if (a && a.type === "income") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "cr" ? p.amount : -p.amount));
+      else if (a && a.type === "expense") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "dr" ? -p.amount : p.amount));
     }
     return [...book.funds.values()].map((f) => ({ fund: f.id, name: f.name, kind: f.kind, balance: bal.get(f.id) || 0 })).sort((a, b) => (a.fund === "general") - (b.fund === "general") === 0 ? a.fund < b.fund ? -1 : a.fund > b.fund ? 1 : 0 : a.fund === "general" ? -1 : 1);
   }
@@ -237,7 +245,7 @@ var FinanceLedger = (() => {
   // src/finance-store.mjs
   function bookToDocs(book) {
     const docs = [{ t: "settings", baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
-    for (const a of book.accounts.values()) docs.push({ t: "account", id: a.id, code: a.code, name: a.name, type: a.type });
+    for (const a of book.accounts.values()) docs.push({ t: "account", id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived });
     for (const f of book.funds.values()) if (f.id !== "general") docs.push({ t: "fund", id: f.id, name: f.name, kind: f.kind });
     for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
     return docs;
@@ -454,7 +462,8 @@ var FinanceLedger = (() => {
         if (!p.fund) continue;
         const a = book.accounts.get(p.account);
         if (!a) continue;
-        if (a.type === "income") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "cr" ? p.amount : -p.amount));
+        if (p.account === "fund-transfer") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "cr" ? p.amount : -p.amount));
+        else if (a.type === "income") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "cr" ? p.amount : -p.amount));
         else if (a.type === "expense") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "dr" ? -p.amount : p.amount));
       }
     }
