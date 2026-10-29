@@ -28,6 +28,33 @@
 
   <url type="homepage">https://trinityone.church</url>
 
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/TrinityOneAdmin/TrinityOne/relay-v0.9.0/relay-app/desktop/screenshots/suite-relay-dashboard.png</image>
+      <caption>Your church's own relay, running on your computer</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/TrinityOneAdmin/TrinityOne/relay-v0.9.0/relay-app/desktop/screenshots/suite-home.png</image>
+      <caption>Run your church and manage your relay in one app</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/TrinityOneAdmin/TrinityOne/relay-v0.9.0/relay-app/desktop/screenshots/suite-relay-settings.png</image>
+      <caption>Go public with one click — no router setup</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/TrinityOneAdmin/TrinityOne/relay-v0.9.0/relay-app/desktop/screenshots/console-members.png</image>
+      <caption>Members, with safeguarding built in</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/TrinityOneAdmin/TrinityOne/relay-v0.9.0/relay-app/desktop/screenshots/console-calendar.png</image>
+      <caption>Services, events and a shared calendar</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/TrinityOneAdmin/TrinityOne/relay-v0.9.0/relay-app/desktop/screenshots/console-church-settings.png</image>
+      <caption>Your church identity and settings</caption>
+    </screenshot>
+  </screenshots>
+
   <content_rating type="oars-1.1" />
 
   <releases>
