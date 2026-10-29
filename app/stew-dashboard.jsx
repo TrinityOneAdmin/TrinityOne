@@ -5443,10 +5443,14 @@ function DashRelaysCard() {
             // where "is this the box serving this console" is the right question. The LABEL no longer rides
             // on it — see relayKind.
             const self = host && r.url.includes(host);
-            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). isLoopbackOrigin
-            // is the origin root — this row is the console's own loopback-served box (desktop Suite) — URL-bound
-            // by construction, exactly as proveRelay's origin root is. canonical → Shared, own box → Self-hosted,
-            // otherwise Added. Display only; it does not touch admission.
+            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). classifyRelay
+            // still returns 'shared'/'self'/'neutral', but only ONE pill renders now (see :5470): canonical /
+            // official T1 relays (relayKind === 'shared', matched against the shipped SHARED_RELAY_KEYS) show
+            // the "Shared" pill, and self/added relays show NO pill. The "Self-hosted" and "Added" labels were
+            // removed because the church signs EVERY relay it adds, so classifyRelay cannot tell a box the
+            // church HOSTS from one it merely ADDED, and a plain added box was mislabelled "Self-hosted". Only
+            // 'shared' is a reliable identity, so only it is shown. isLoopbackOrigin and proven still feed
+            // classifyRelay (relayKind is read elsewhere). Display only; it does not touch admission.
             const proven = window.Steward.provenRelayPub ? window.Steward.provenRelayPub(r.url) : '';
             const isLoopbackOrigin = selfHostedConsole && !!own && r.url === own;
             const relayKind = window.Steward.classifyRelay
