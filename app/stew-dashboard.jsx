@@ -5271,6 +5271,21 @@ function DashRelaysCard() {
   const allUp = online === boxes;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
   const selfHostedConsole = !!(window.Steward.isSelfHosted && window.Steward.isSelfHosted());
+  // THE OWN-BOX ROW'S HANDLE. A self-hosted console's own relay has a chosen name (MY_RELAY_NAME) just as an
+  // added-by-name relay does, and ownRelayName() returns it — but it is async and loopback+token-gated
+  // (returns '' off-box), so it is resolved ONCE into state here and read synchronously by the row label
+  // below, mirroring the go-public gate (useGoPublicGate ~:3011 / goPublic ~:3024). Display only: it names
+  // the own-box row, it does not admit or change any relay. Re-resolved if `own` changes (a tunnel address
+  // rotation leaves the name).
+  const [ownName, setOwnName] = React.useState('');
+  React.useEffect(() => {
+    let ok = true;
+    (async () => {
+      try { const nm = window.Steward.ownRelayName ? await window.Steward.ownRelayName() : ''; if (ok) setOwnName(nm || ''); }
+      catch (e) {}
+    })();
+    return () => { ok = false; };
+  }, [own]);
   // THE PILL IS LABELLED FROM THE PROVEN IDENTITY, NOT THE PAGE ADDRESS. The shipped shared-relay keys and
   // the church's own signed relay-net pubkeys are what decide Shared vs Self-hosted vs Added; the render is
   // synchronous, so the church's signed set (relayNet() is async) is pre-resolved into state here. Display
@@ -5381,6 +5396,10 @@ function DashRelaysCard() {
     }
   };
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
+  // THE HANDLE TO SHOW FOR A ROW: an added-by-name binding first (consistent with the other rows), then the
+  // own box's resolved handle for the console's own relay (r.url === own), and the raw address as the final
+  // fallback is applied at the label itself. Display only.
+  const rowName = (r) => relayName(r.url) || (own && r.url === own ? ownName : '');
   // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
   // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
   // covers a refusal arriving as well as one clearing (see onRejected), and `status` is the repaint when the
@@ -5443,10 +5462,14 @@ function DashRelaysCard() {
             // where "is this the box serving this console" is the right question. The LABEL no longer rides
             // on it — see relayKind.
             const self = host && r.url.includes(host);
-            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). isLoopbackOrigin
-            // is the origin root — this row is the console's own loopback-served box (desktop Suite) — URL-bound
-            // by construction, exactly as proveRelay's origin root is. canonical → Shared, own box → Self-hosted,
-            // otherwise Added. Display only; it does not touch admission.
+            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). classifyRelay
+            // still returns 'shared'/'self'/'neutral', but only ONE pill renders now (see :5470): canonical /
+            // official T1 relays (relayKind === 'shared', matched against the shipped SHARED_RELAY_KEYS) show
+            // the "Shared" pill, and self/added relays show NO pill. The "Self-hosted" and "Added" labels were
+            // removed because the church signs EVERY relay it adds, so classifyRelay cannot tell a box the
+            // church HOSTS from one it merely ADDED, and a plain added box was mislabelled "Self-hosted". Only
+            // 'shared' is a reliable identity, so only it is shown. isLoopbackOrigin and proven still feed
+            // classifyRelay (relayKind is read elsewhere). Display only; it does not touch admission.
             const proven = window.Steward.provenRelayPub ? window.Steward.provenRelayPub(r.url) : '';
             const isLoopbackOrigin = selfHostedConsole && !!own && r.url === own;
             const relayKind = window.Steward.classifyRelay
@@ -5458,7 +5481,16 @@ function DashRelaysCard() {
             return (
               <div key={r.url} title={refusedWhy ? 'This relay refused our last change and said: ' + refusedWhy : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
-                <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
+                {/* SHOW THE CHOSEN HANDLE, NOT THE RAW TUNNEL ADDRESS. A self-hosted box reached BY NAME has a
+                    durable handle (relayNameFor, a pure local reverse-lookup) while its *.trycloudflare.com /
+                    *.ts.net address churns on each reboot — so the name is what a steward recognises. Display
+                    ONLY: every other use of r.url (key, admission, remove, provenRelayPub, boxKey) is unchanged.
+                    The raw address stays inspectable — on the title (hover) and as a muted sub-line — and a
+                    relay with no remembered name still shows its address as the primary label. */}
+                <div style={{ flex: 1, minWidth: 140, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div title={r.url} style={{ fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{rowName(r) || r.url}</div>
+                  {rowName(r) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{r.url}</div> : null}
+                </div>
                 {/* THE CHIPS WRAP. This strip was one unbreakable line — `flexShrink: 0`, no wrap — so on a
                     360px phone "Shared · Refused our last change · ● Answering · 118ms" ran to x 609 and the
                     health of the relay was off the right edge of the screen (audit 2026-09-19 §E,
@@ -5467,7 +5499,7 @@ function DashRelaysCard() {
                     line and on a phone the status drops under the chips. `maxWidth: 100%` keeps it inside
                     the card's padding box rather than letting `flexShrink: 0` overrule the wrap. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
-                  {relayKind === 'self' ? <SkPill tint="clay">Self-hosted</SkPill> : relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : <SkPill tint="ink">Added</SkPill>}
+                  {relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : null}
                   {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
                       the other must not look fine. Under the closed network nothing is published to an
                       address until it has PROVED it holds a key this church's network contains, so a live
@@ -5632,6 +5664,8 @@ function dropOutcome(r, url) {
   return { drop: false, note: 'Your church’s relay list could not be updated right now, so ' + url + ' is still connected. Remove it again once your relays are answering.' + ((r && r.unknown) ? ' If a relay you added is gone for good, remove it first.' : '') };
 }
 const RELAY_CONSENT_FOUND = 'Connecting these relays lets your whole church’s data go to them.';
+// How many of the fastest public relays Auto-find shows before "Show all" (owner decision 2026-10-29).
+const RELAY_OFFERS_SHOWN = 5;
 // WHAT A SIGNING ANSWERED, in a steward's words — '' when the relay is now in the church's signed list. Shared by
 // the Add-a-relay card and the wizard so neither can say "Added" over a relay that was not signed (second audit,
 // finding 8: a skipped or unknown result used to read as success).
@@ -5774,25 +5808,36 @@ function DashAddRelayCard() {
   const [findMsg, setFindMsg] = React.useState('');
   // AUTO-FIND ASKS FIRST TOO, AND NAMES WHAT IT FOUND (owner decisions, 2026-10-21): it connects relays somebody
   // ELSE runs, which is exactly when the steward most needs to know where the church's data will go. So it finds
-  // first (adding nothing), shows the relays it found on the consent line, and connects and signs exactly those
+  // first (adding nothing), shows the relays it found, and connects and signs exactly those the steward ticks
   // on "Yes, connect".
+  // THE VISIBLE LIST (owner decision 2026-10-29): instead of two auto-picked relays, show the public relays a
+  // church could join FASTEST FIRST — window.Steward.listRelayOffers() carries a measured `ms` per relay and
+  // returns them already ranked and already admitted (same admitRemoteRelay/_probeRelayEnforces gates as
+  // before — this card only re-orders and slices their output). The card shows the fastest RELAY_OFFERS_SHOWN
+  // by default with a "Show all" toggle; the steward ticks which to connect. The automatic pick is unchanged.
   const [found, setFound] = React.useState(null);
+  const [showAll, setShowAll] = React.useState(false);
+  const [selected, setSelected] = React.useState(() => new Set());
   const autoFind = async (confirmed) => {
     if (confirmed !== true) {
-      setFinding(true); setFindMsg(''); setFound(null);
+      setFinding(true); setFindMsg(''); setFound(null); setShowAll(false); setSelected(new Set());
       try {
         // Ninth audit: never offer a spelling of a shared relay (the church already uses those).
-        const picks = (window.Steward.findRelays ? (await window.Steward.findRelays(2)) || [] : [])
+        const offers = (window.Steward.listRelayOffers ? (await window.Steward.listRelayOffers()) || [] : [])
           .filter(p => !(window.Steward.isSharedRelaySpelling && window.Steward.isSharedRelaySpelling(p && p.url)))
           .filter(p => !(window.Steward.isOwnRelaySpelling && window.Steward.isOwnRelaySpelling(p && p.url)));
-        if (picks && picks.length) { setFound(picks); setAsk('find'); }
-        else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
+        if (offers && offers.length) {
+          setFound(offers);
+          // Pre-tick the fastest two (primary + backup) so the common case stays one tap; the steward can
+          // tick more, untick these, or reveal the rest with "Show all".
+          setSelected(new Set(offers.slice(0, 2).map(o => o.url)));
+        } else setFindMsg('No open relays available to join right now — your church stays on its current relays.');
       } catch (e) { setFindMsg('✗ ' + (e.message || 'Couldn’t search for relays.')); }
       setFinding(false);
       return;
     }
-    const chosen = found || [];
-    setAsk(''); setFound(null);
+    const chosen = (found || []).filter(o => selected.has(o.url));
+    setAsk(''); setFound(null); setShowAll(false); setSelected(new Set());
     setFinding(true); setFindMsg('');
     try {
       const picks = (window.Steward.connectFoundRelays && chosen.length) ? await window.Steward.connectFoundRelays(chosen) : [];
@@ -5847,10 +5892,32 @@ function DashAddRelayCard() {
             </div>
           ) : null}
           <button onClick={() => autoFind()} disabled={finding} title="Only lists relays that publicly offer to host churches and that enforce TrinityOne’s membership + safeguarding rules" className="sk-btn sk-btn--ghost" style={{ marginTop: 9, fontSize: 13, opacity: finding ? 0.6 : 1 }}><Icon name="globe" size={15} color="currentColor" /> {finding ? 'Searching…' : 'Auto-find relays for me'}</button>
-          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies.</div>
-          {ask === 'find' && found ? <RelayConsent onYes={() => autoFind(true)} onNo={() => { setAsk(''); setFound(null); }}
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Only relays that offer to host churches and enforce TrinityOne’s rules, so your safeguarding policy still applies. Fastest first.</div>
+          {found && found.length ? (
+            <div style={{ marginTop: 10 }}>
+              {(showAll ? found : found.slice(0, RELAY_OFFERS_SHOWN)).map(o => {
+                const on = selected.has(o.url);
+                return (
+                  <label key={o.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', marginBottom: 6, borderRadius: 11, border: '1px solid var(--line)', background: on ? 'var(--surface-2)' : 'transparent', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={on} aria-label={'Connect ' + (o.name || o.url)}
+                      onChange={() => setSelected(prev => { const n = new Set(prev); if (n.has(o.url)) n.delete(o.url); else n.add(o.url); return n; })} />
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: 700, color: 'var(--ink)', fontSize: 13 }}>{o.name || o.url}</span>
+                      {o.name ? <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.url}</span> : null}
+                    </span>
+                    {Number.isFinite(o.ms) ? <span style={{ fontSize: 11, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{o.ms} ms</span> : null}
+                  </label>
+                );
+              })}
+              {found.length > RELAY_OFFERS_SHOWN && !showAll
+                ? <button onClick={() => setShowAll(true)} className="sk-btn sk-btn--ghost" style={{ fontSize: 12, padding: '6px 11px' }}>Show all ({found.length})</button>
+                : null}
+              <button onClick={() => { if (selected.size) setAsk('find'); }} disabled={!selected.size} className="sk-btn sk-btn--clay" style={{ marginTop: 8, marginLeft: found.length > RELAY_OFFERS_SHOWN && !showAll ? 8 : 0, fontSize: 13, opacity: selected.size ? 1 : 0.6 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Connect selected ({selected.size})</button>
+            </div>
+          ) : null}
+          {ask === 'find' && found ? <RelayConsent onYes={() => autoFind(true)} onNo={() => { setAsk(''); }}
             text={RELAY_CONSENT_FOUND} note="They are run by other people who offer to host churches."
-            detail={found.map(p => (p.name ? p.name + ' — ' : '') + p.url).join('\n')} /> : null}
+            detail={(found || []).filter(o => selected.has(o.url)).map(p => (p.name ? p.name + ' — ' : '') + p.url).join('\n')} /> : null}
           {findMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 7, lineHeight: 1.45 }}>{findMsg}</div> : null}
           {/* connect to a relay by its memorable name (resolved via the directory) */}
           <div style={{ marginTop: 13 }}>
@@ -7349,7 +7416,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
         {scan ? (
           <StewQRScanner onResult={(t) => { setText(t); setScan(false); setErr(''); }} onCancel={() => setScan(false)} />
         ) : (
-          <button onClick={() => setScan(true)} className="sk-btn" style={{ width: '100%', padding: '9px 14px', marginBottom: 8 }}>Scan their code</button>
+          stewOnPhoneApp() ? <button onClick={() => setScan(true)} className="sk-btn" style={{ width: '100%', padding: '9px 14px', marginBottom: 8 }}>Scan their code</button> : null
         )}
         <input value={text} onChange={e => { setText(e.target.value); setErr(''); }} placeholder="…or paste their new code / npub"
           style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', marginBottom: 8 }} />
@@ -10869,7 +10936,7 @@ function DashBecomeStewardPanel() {
       {scanInvite
         ? <div><StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} /><button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 8 }}>Cancel scan</button></div>
         : <div>
-            <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button>
+            {stewOnPhoneApp() ? <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button> : null}
             <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '9px 0 6px' }}>No camera? Paste the invite the owner sent you:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={inviteText} onChange={e => { setInviteText(e.target.value); setReqMsg(''); }} aria-label="Church invite code" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
@@ -13250,7 +13317,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         <div style={{ marginBottom: 14 }}>
           {!scanning ? (
             <React.Fragment>
-              <button onClick={() => setScanning(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Scan a handoff QR</button>
+              {stewOnPhoneApp() ? <button onClick={() => setScanning(true)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> Scan a handoff QR</button> : null}
               <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5, marginTop: 7 }}>Point this device at another steward’s handoff QR to take over their church here. It replaces the church key on this device, so back yours up first.</div>
             </React.Fragment>
           ) : (

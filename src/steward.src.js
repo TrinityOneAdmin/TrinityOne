@@ -2091,6 +2091,10 @@ const _relayInfoCache = new Map();
 function _relayInfo(wssUrl) {
   if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
   const p = (async () => {
+    // Time the NIP-11 round-trip so Auto-find can rank DISPLAY candidates fastest-first. Additive and
+    // display-only: `ms` rides along on the returned object, every existing consumer ignores it, and it is
+    // never consulted for admission (see listRelayOffers / rankOffersByLatency below, and RELAY-ADMISSION.md).
+    const t0 = Date.now();
     try {
       const httpUrl = String(wssUrl).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/+$/, '');
       // Hard timeout via Promise.race — CapacitorHttp (native iOS/Android) patches fetch and may IGNORE the
@@ -2101,7 +2105,8 @@ function _relayInfo(wssUrl) {
         new Promise((_, rej) => setTimeout(() => rej(new Error('relay-info timeout')), 6500)),
       ]);
       clearTimeout(to);
-      return (info && info.trinityone) ? { ...info.trinityone, name: info.name || '' } : null;
+      const ms = Date.now() - t0;   // how long THIS relay took to answer its NIP-11 doc
+      return (info && info.trinityone) ? { ...info.trinityone, name: info.name || '', ms } : null;
     } catch { return null; }
   })();
   _relayInfoCache.set(wssUrl, p);
@@ -2208,7 +2213,7 @@ async function discoverRelayOffers(seedExtra, region) {
     // once already and must not be again.)
     const canonical = (CANONICAL_RELAYS || []).includes(url);
     if (!canonical) { const v = await _probeRelayEnforces(url); if (!v.ok) { try { console.warn('[relay-offers] rejected', url, '—', v.why); } catch (e) {} return null; } }
-    return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '' };
+    return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '', ms: Number.isFinite(t.ms) ? t.ms : null };
   }));
   const offers = probed.filter(Boolean);
   offers.sort((a, b) => { if (region) { const ra = a.region === region ? 0 : 1, rb = b.region === region ? 0 : 1; if (ra !== rb) return ra - rb; } return (a.churches || 0) - (b.churches || 0); });
@@ -2220,6 +2225,17 @@ function pickRelays(offers, n) {
   for (const o of (offers || [])) { if (picked.length >= n) break; if (o.operator && ops.has(o.operator)) continue; picked.push(o); if (o.operator) ops.add(o.operator); }
   if (picked.length < n) for (const o of (offers || [])) { if (picked.length >= n) break; if (!picked.includes(o)) picked.push(o); }
   return picked;
+}
+// DISPLAY-ONLY ranking for Auto-find's VISIBLE list (owner decision 2026-10-29): show the public relays a
+// church could join FASTEST FIRST, by the NIP-11 round-trip `ms` measured in _relayInfo. Pure, so the
+// point-of-use test can lift and run it with no relay. A relay with no timing sinks to the bottom, never to
+// the top. This is STRICTLY DOWNSTREAM of admission: its only caller (listRelayOffers) feeds it the output
+// of discoverRelayOffers, every item of which has already passed admitRemoteRelay() (C5) and, for a
+// non-canonical box, _probeRelayEnforces(). Re-ordering an already-admitted list cannot admit anything, so
+// "Show all" can never reveal a relay that was not already admitted (RELAY-ADMISSION.md; CLAUDE.md rule 10).
+function rankOffersByLatency(offers) {
+  const score = (o) => (o && Number.isFinite(o.ms)) ? o.ms : Infinity;
+  return (offers || []).slice().sort((a, b) => score(a) - score(b));
 }
 
 const pool = new SimplePool();
@@ -13824,6 +13840,11 @@ window.Steward = {
     setSelfPublicRelay(j.wss);
     return { url: j.url || '', wss: j.wss, name: j.name || '' };
   },
+  // THIS BOX'S CHOSEN HANDLE (MY_RELAY_NAME). Loopback + admin-token gated, so it answers only on the box
+  // that runs the relay and returns '' everywhere else — a screen must resolve it async and fall back to the
+  // address. CALLERS (rule 2): app/stew-dashboard.jsx — the go-public invite note (useGoPublicGate ~:3011
+  // and goPublic ~:3024), and the Relays card own-box row LABEL (resolved once into state, shown in place of
+  // the raw tunnel address with the address as fallback). No writer uses it.
   async ownRelayName() {
     if (!ownIsLoopback()) return '';
     const tok = await localAdminToken(); if (!tok) return '';
@@ -14086,7 +14107,8 @@ window.Steward = {
   // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
   // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
   // durable handle while the URL is not. Audit item 19, 2026-09-14.
-  // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+  // CALLERS (rule 2): app/stew-dashboard.jsx — the remove-relay confirmation, and the relay row LABEL
+  // (shows this name in place of the raw tunnel address, falling back to the address when none). No writer uses it.
   relayNameFor(url) {
     const u = normRelay(url); if (!u) return '';
     const hit = getNamedRelays().find(e => e && normRelay(e.url) === u);
@@ -14100,6 +14122,18 @@ window.Steward = {
   },
   // FEDERATION Phase 3c — list relays that have OFFERED to host new churches (enforcing + open + live).
   discoverRelayOffers(region) { return discoverRelayOffers(null, region); },
+  // The DISPLAY list for Auto-find (owner decision 2026-10-29): the same candidates and the SAME admission
+  // gates as discoverRelayOffers/findRelays — admitRemoteRelay() (C5) then, for a non-canonical box,
+  // _probeRelayEnforces() — because it IS discoverRelayOffers' output. It only drops relays this church
+  // already has, then re-orders what is left FASTEST FIRST (rankOffersByLatency). It does NOT collapse to a
+  // primary+backup pick the way findRelays does (no pickRelays), because the card shows the whole ranked
+  // list and the steward chooses. Auto-pick is untouched: findRelays/autoPickRelays still sort
+  // region-then-churches and still pick 2. CALLER (rule 2): app/stew-dashboard.jsx DashAddRelayCard.autoFind.
+  async listRelayOffers(region) {
+    const offers = await discoverRelayOffers(null, region || null);
+    const have = new Set(relays());
+    return rankOffersByLatency(offers.filter(o => !have.has(o.url)));
+  },
   // set/extend the bootstrap discovery seed (discovery-only relays to probe for offers).
   setDiscoverySeed(urls) { _discoverySeed = [...new Set((urls || []).map(u => normRelay(u)).filter(Boolean))]; return _discoverySeed; },
   // Auto-find + adopt up to n open relays (default 2 = primary + backup, different operators), then re-publish

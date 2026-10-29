@@ -16636,6 +16636,7 @@ zoo`.split("\n");
   function _relayInfo(wssUrl) {
     if (_relayInfoCache.has(wssUrl)) return _relayInfoCache.get(wssUrl);
     const p = (async () => {
+      const t0 = Date.now();
       try {
         const httpUrl = String(wssUrl).replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/+$/, "");
         const ctrl = new AbortController();
@@ -16653,7 +16654,8 @@ zoo`.split("\n");
           new Promise((_, rej) => setTimeout(() => rej(new Error("relay-info timeout")), 6500))
         ]);
         clearTimeout(to);
-        return info && info.trinityone ? { ...info.trinityone, name: info.name || "" } : null;
+        const ms = Date.now() - t0;
+        return info && info.trinityone ? { ...info.trinityone, name: info.name || "", ms } : null;
       } catch {
         return null;
       }
@@ -16757,7 +16759,7 @@ zoo`.split("\n");
           return null;
         }
       }
-      return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "" };
+      return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "", ms: Number.isFinite(t.ms) ? t.ms : null };
     }));
     const offers = probed.filter(Boolean);
     offers.sort((a, b) => {
@@ -16783,6 +16785,10 @@ zoo`.split("\n");
       if (!picked.includes(o)) picked.push(o);
     }
     return picked;
+  }
+  function rankOffersByLatency(offers) {
+    const score = (o) => o && Number.isFinite(o.ms) ? o.ms : Infinity;
+    return (offers || []).slice().sort((a, b) => score(a) - score(b));
   }
   var pool = new SimplePool();
   function _taggedForAnotherChurch(e, cp) {
@@ -27309,6 +27315,11 @@ zoo`.split("\n");
       setSelfPublicRelay(j.wss);
       return { url: j.url || "", wss: j.wss, name: j.name || "" };
     },
+    // THIS BOX'S CHOSEN HANDLE (MY_RELAY_NAME). Loopback + admin-token gated, so it answers only on the box
+    // that runs the relay and returns '' everywhere else — a screen must resolve it async and fall back to the
+    // address. CALLERS (rule 2): app/stew-dashboard.jsx — the go-public invite note (useGoPublicGate ~:3011
+    // and goPublic ~:3024), and the Relays card own-box row LABEL (resolved once into state, shown in place of
+    // the raw tunnel address with the address as fallback). No writer uses it.
     async ownRelayName() {
       if (!ownIsLoopback()) return "";
       const tok = await localAdminToken();
@@ -27544,7 +27555,8 @@ zoo`.split("\n");
     // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
     // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
     // durable handle while the URL is not. Audit item 19, 2026-09-14.
-    // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+    // CALLERS (rule 2): app/stew-dashboard.jsx — the remove-relay confirmation, and the relay row LABEL
+    // (shows this name in place of the raw tunnel address, falling back to the address when none). No writer uses it.
     relayNameFor(url) {
       const u = normRelay(url);
       if (!u) return "";
@@ -27561,6 +27573,18 @@ zoo`.split("\n");
     // FEDERATION Phase 3c — list relays that have OFFERED to host new churches (enforcing + open + live).
     discoverRelayOffers(region) {
       return discoverRelayOffers(null, region);
+    },
+    // The DISPLAY list for Auto-find (owner decision 2026-10-29): the same candidates and the SAME admission
+    // gates as discoverRelayOffers/findRelays — admitRemoteRelay() (C5) then, for a non-canonical box,
+    // _probeRelayEnforces() — because it IS discoverRelayOffers' output. It only drops relays this church
+    // already has, then re-orders what is left FASTEST FIRST (rankOffersByLatency). It does NOT collapse to a
+    // primary+backup pick the way findRelays does (no pickRelays), because the card shows the whole ranked
+    // list and the steward chooses. Auto-pick is untouched: findRelays/autoPickRelays still sort
+    // region-then-churches and still pick 2. CALLER (rule 2): app/stew-dashboard.jsx DashAddRelayCard.autoFind.
+    async listRelayOffers(region) {
+      const offers = await discoverRelayOffers(null, region || null);
+      const have = new Set(relays());
+      return rankOffersByLatency(offers.filter((o) => !have.has(o.url)));
     },
     // set/extend the bootstrap discovery seed (discovery-only relays to probe for offers).
     setDiscoverySeed(urls) {

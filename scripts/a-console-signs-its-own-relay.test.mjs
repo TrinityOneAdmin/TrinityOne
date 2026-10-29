@@ -121,6 +121,8 @@ function recorder(extra = {}) {
       rememberRelayName: rec('rememberRelayName'),
       knownRelay: rec('knownRelay', () => ''),
       findRelays: rec('findRelays', async () => [{ url: 'wss://open-a.example/relay', name: 'open-a' }, { url: 'wss://open-b.example/relay', name: 'open-b' }]),
+      // Auto-find's visible list (owner decision 2, 2026-10-29) reads from listRelayOffers (ranked, `ms` each).
+      listRelayOffers: rec('listRelayOffers', async () => [{ url: 'wss://open-a.example/relay', name: 'open-a', ms: 20 }, { url: 'wss://open-b.example/relay', name: 'open-b', ms: 40 }]),
       connectFoundRelays: rec('connectFoundRelays', async (picks) => picks),
       unsignRelay: rec('unsignRelay', async () => ({ removed: true })),
       ...extra,
@@ -261,6 +263,10 @@ test('the setup wizard does not say "Added" for a relay that could not be signed
 
 test('Auto-find finds first, NAMES the relays on the consent line, and connects and signs exactly those on "Yes, connect"', async () => {
   // Owner decision A, 2026-10-21: agree to boxes, not to a description — and these are other people's boxes.
+  // Re-anchored 2026-10-29 (owner decision 2, the visible list): Auto-find now reads listRelayOffers and shows a
+  // ranked, pre-ticked list; the steward taps "Connect selected" to reach the consent line, then "Yes, connect".
+  // The properties under test are unchanged: it searches first and adds/signs NOTHING until consent, then
+  // connects and signs EXACTLY the relays named on the consent line, and never searches again after consent.
   const r = recorder();
   const card = addCard(r.steward);
   card.draw(); await settle();
@@ -268,17 +274,27 @@ test('Auto-find finds first, NAMES the relays on the consent line, and connects 
   assert.equal(go.length, 1, 're-anchor: the Auto-find button is gone');
   go[0].props.onClick();
   await settle(); await settle();
-  const tree = card.draw();
+  // The list names what it found (fastest first) and the search alone has run — nothing added, connected or signed.
+  let tree = card.draw();
+  assert.match(said(tree), /open-a\.example/, 'the found list does not name the relays Auto-find found');
+  assert.match(said(tree), /open-b\.example/, 'the found list does not name every relay Auto-find found');
+  assert.deepEqual(r.log.map(x => x[0]), ['listRelayOffers'], 'Auto-find added, connected or signed before the list was even shown: ' + JSON.stringify(r.log.map(x => x[0])));
+  // The two fastest are pre-ticked; "Connect selected" opens the consent line, which still adds/signs nothing.
+  const connect = button(tree, 'Connect selected');
+  assert.equal(connect.length, 1, 're-anchor: the "Connect selected" button is gone');
+  connect[0].props.onClick();
+  await settle();
+  tree = card.draw();
   assert.match(said(tree), /Connecting these relays lets your whole church’s data go to them\./, 'Auto-find showed no consent line');
-  assert.match(said(tree), /open-a\.example/, 'the consent line does not name the relays Auto-find found');
-  assert.match(said(tree), /open-b\.example/, 'the consent line does not name every relay Auto-find found');
+  assert.match(said(tree), /open-a\.example/, 'the consent line does not name the relays it will connect');
+  assert.match(said(tree), /open-b\.example/, 'the consent line does not name every relay it will connect');
   assert.match(said(tree), /run by other people/, 'the consent line does not say these relays are run by other people');
-  assert.deepEqual(r.log.map(x => x[0]), ['findRelays'], 'Auto-find added, connected or signed before consent: ' + JSON.stringify(r.log.map(x => x[0])));
+  assert.deepEqual(r.log.map(x => x[0]), ['listRelayOffers'], 'Auto-find connected or signed before the steward consented: ' + JSON.stringify(r.log.map(x => x[0])));
   await consentYes(tree)[0].props.onClick();
   await settle(); await settle();
   assert.deepEqual(r.log.filter(x => x[0] === 'connectFoundRelays').map(x => x[1].map(p => p.url)),
     [['wss://open-a.example/relay', 'wss://open-b.example/relay']], 'Auto-find did not connect exactly the relays it named');
-  assert.equal(r.count('findRelays'), 1, 'Auto-find searched again after consent — what was agreed to may not be what is connected');
+  assert.equal(r.count('listRelayOffers'), 1, 'Auto-find searched again after consent — what was agreed to may not be what is connected');
   assert.deepEqual(r.log.filter(x => x[0] === 'signRelay').map(x => x[1]), ['wss://open-a.example/relay', 'wss://open-b.example/relay'],
     'the relays Auto-find connected after consent were not signed');
 });
@@ -973,7 +989,9 @@ test('Connect by name and Auto-find add no spelling of a TrinityOne relay (ninth
   const s = shippedAdd();
   const r = recorder({ isSharedRelaySpelling: s.api.isSharedRelaySpelling, addRelay: (x) => s.api.addRelay(x),
     resolveRelayName: async () => ({ url: 'wss://APP.trinityone.church:443/relay' }),
-    findRelays: async () => [{ url: 'wss://app.trinityone.church//relay', name: 'shared-again' }] });
+    // Auto-find reads listRelayOffers now; put a shared-relay spelling in its output so the card's
+    // isSharedRelaySpelling filter is the thing being tested, not an empty directory (re-anchored 2026-10-29).
+    listRelayOffers: async () => [{ url: 'wss://app.trinityone.church//relay', name: 'shared-again', ms: 10 }] });
   const card = addCard(r.steward);
   card.draw(); await settle();
   const nameIn = find(card.draw(), n => n.type === 'input' && n.props['aria-label'] === 'Relay name to connect to');
@@ -985,7 +1003,10 @@ test('Connect by name and Auto-find add no spelling of a TrinityOne relay (ninth
   assert.equal(consentYes(card.draw()).length, 0, 'Connect by name offered consent for a shared relay');
   button(card.draw(), 'Auto-find relays for me')[0].props.onClick();
   await settle(); await settle();
-  assert.equal(consentYes(card.draw()).length, 0, 'AUTO-FIND OFFERED A SPELLING OF A TRINITYONE RELAY');
+  // The shared spelling is the only offer, and it is filtered out — so no offer row, no "Connect selected",
+  // and no consent line ever appears for it.
+  assert.equal(button(card.draw(), 'Connect selected').length, 0, 'AUTO-FIND OFFERED A SPELLING OF A TRINITYONE RELAY');
+  assert.equal(consentYes(card.draw()).length, 0, 'Auto-find reached consent for a shared relay');
   assert.deepEqual(s.stored, [], 'a spelling of a shared relay was stored');
   assert.equal(r.count('signRelay') + r.count('registerAtRelay'), 0, 'something was signed or registered');
 });
@@ -998,6 +1019,10 @@ test('Auto-find reports each relay\'s own result, never "✓ Added" over one tha
   card.draw(); await settle();
   button(card.draw(), 'Auto-find relays for me')[0].props.onClick();
   await settle(); await settle();
+  // Re-anchored 2026-10-29: the pre-ticked list → "Connect selected" opens the consent line (the fastest two
+  // are open-a and open-b, both ticked by default), then "Yes, connect" connects and signs them.
+  button(card.draw(), 'Connect selected')[0].props.onClick();
+  await settle();
   await consentYes(card.draw())[0].props.onClick();
   await settle(); await settle(); await settle();
   const all = said(card.draw());
@@ -1014,6 +1039,8 @@ test('Auto-find reports each relay\'s own result, never "✓ Added" over one tha
   card2.draw(); await settle();
   button(card2.draw(), 'Auto-find relays for me')[0].props.onClick();
   await settle(); await settle();
+  button(card2.draw(), 'Connect selected')[0].props.onClick();
+  await settle();
   await consentYes(card2.draw())[0].props.onClick();
   await settle(); await settle(); await settle();
   const all2 = said(card2.draw());
