@@ -7,6 +7,7 @@
 // Everything is derived from the journal; money stays INTEGER minor units until the final format.
 
 import { incomeExpenditure, balanceSheet } from './finance-ledger.mjs';
+import { fundMovements, receiptsAndPayments, givingByFund } from './finance-reports.mjs';
 
 // The sections a church can tick on/off. `on` is the sensible default for a small church's report.
 export const STATEMENT_SECTIONS = [
@@ -123,6 +124,12 @@ export function buildStatement(book, { from = '', to = '￿', title = '', note =
   if (has('spending')) model.spending = spendRows;
   if (has('funds'))    model.funds    = closingFunds(book, to || '￿');
   if (has('balance'))  model.balance  = balanceSheet(book, { asOf: to || '￿' });
+  // Phase 4a aggregate report sections. They fire ONLY when a Reports-panel preset enables the key — the share-
+  // to-members statement never does, so the name-free share path is unchanged. All three are nation-neutral,
+  // carry no names, and reconcile to the journal to the penny (finance-reports.mjs / finance-reports.test.mjs).
+  if (has('givingFund'))    model.givingFund    = givingByFund(book, { from: from || '', to: to || '￿' });
+  if (has('fundMovements')) model.fundMovements = fundMovements(book, { from: from || '', to: to || '￿' });
+  if (has('receipts'))      model.receipts      = receiptsAndPayments(book, { from: from || '', to: to || '￿' });
   if (has('note') && note && note.trim()) model.note = note.trim();
   return model;
 }
@@ -150,9 +157,28 @@ export function statementText(model) {
     L.push(''); L.push('SPENDING');
     for (const r of model.spending) L.push(`  ${r.name} — ${f(r.amount)}`);
   }
+  if (model.givingFund && model.givingFund.length) {
+    L.push(''); L.push('GIVING BY FUND');
+    for (const r of model.givingFund) L.push(`  ${r.name}${kindTag(r.kind)} — ${f(r.amount)}`);
+  }
   if (model.funds && model.funds.length) {
     L.push(''); L.push('FUNDS (closing balance)');
     for (const r of model.funds) L.push(`  ${r.name}${kindTag(r.kind)} — ${f(r.balance)}`);
+  }
+  if (model.fundMovements && model.fundMovements.length) {
+    L.push(''); L.push('FUND MOVEMENTS (opening · in · out · closing)');
+    for (const r of model.fundMovements) L.push(`  ${r.name}${kindTag(r.kind)} — ${f(r.opening)} · +${f(r.in)} · -${f(r.out)} · ${f(r.closing)}`);
+  }
+  if (model.receipts) {
+    const rp = model.receipts;
+    L.push(''); L.push('RECEIPTS');
+    for (const r of rp.receipts) L.push(`  ${r.name} — ${f(r.amount)}`);
+    L.push(`  Total receipts — ${f(rp.totalReceipts)}`);
+    L.push('PAYMENTS');
+    for (const r of rp.payments) L.push(`  ${r.name} — ${f(r.amount)}`);
+    L.push(`  Total payments — ${f(rp.totalPayments)}`);
+    L.push(`  Net cash movement — ${f(rp.net)}`);
+    L.push(`  Cash: ${f(rp.openingCash)} → ${f(rp.closingCash)}`);
   }
   if (model.balance) {
     L.push(''); L.push('BALANCE SHEET');
@@ -180,7 +206,21 @@ export function statementHtml(model) {
   </table></section>`);
   if (model.income && model.income.length)   S.push(`<section><h2>Income by category</h2>${rowsTable(model.income, 'amount')}</section>`);
   if (model.spending && model.spending.length) S.push(`<section><h2>Spending by category</h2>${rowsTable(model.spending, 'amount')}</section>`);
+  if (model.givingFund && model.givingFund.length) S.push(`<section><h2>Giving by fund</h2>${rowsTable(model.givingFund, 'amount', true)}</section>`);
   if (model.funds && model.funds.length)     S.push(`<section><h2>Fund balances <span class="sub">(closing)</span></h2>${rowsTable(model.funds, 'balance', true)}</section>`);
+  if (model.fundMovements && model.fundMovements.length) S.push(`<section><h2>Fund movements</h2><table class="t">
+    <tr><td></td><td class="n">Opening</td><td class="n">In</td><td class="n">Out</td><td class="n">Closing</td></tr>
+    ${model.fundMovements.map(r => `<tr><td>${esc(r.name)}${esc(kindTag(r.kind))}</td><td class="n">${f(r.opening)}</td><td class="n">${f(r.in)}</td><td class="n">${f(r.out)}</td><td class="n">${f(r.closing)}</td></tr>`).join('')}
+  </table></section>`);
+  if (model.receipts) { const rp = model.receipts; S.push(`<section><h2>Receipts &amp; payments</h2><table class="t">
+    ${rp.receipts.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${f(r.amount)}</td></tr>`).join('')}
+    <tr class="tot"><td>Total receipts</td><td class="n">${f(rp.totalReceipts)}</td></tr>
+    ${rp.payments.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${f(r.amount)}</td></tr>`).join('')}
+    <tr class="tot"><td>Total payments</td><td class="n">${f(rp.totalPayments)}</td></tr>
+    <tr class="tot"><td>Net cash movement</td><td class="n">${f(rp.net)}</td></tr>
+    <tr><td>Cash at start</td><td class="n">${f(rp.openingCash)}</td></tr>
+    <tr><td>Cash at end</td><td class="n">${f(rp.closingCash)}</td></tr>
+  </table></section>`); }
   if (model.balance) S.push(`<section><h2>Balance sheet</h2><table class="t">
     <tr><td>Assets</td><td class="n">${f(model.balance.assets)}</td></tr>
     <tr><td>Liabilities</td><td class="n">${f(model.balance.liabilities)}</td></tr>
@@ -213,4 +253,28 @@ export function statementHtml(model) {
 ${S.join('\n')}
 <footer>${model.generatedAt ? 'Generated ' + esc(model.generatedAt) + ' · ' : ''}Prepared with TrinityOne — aggregate figures only.</footer>
 </body></html>`;
+}
+
+// ── report CSV (the Reports panel "Export CSV", any preset) ──
+// Flatten a statement/report MODEL into rows: one section at a time, money in MAJOR units (pounds, not pence —
+// the same conversion journalCsvRows makes). Cells are returned RAW; quoting and the =+-@ formula-injection
+// guard are the caller's job (exportReportCsv in stew-finance.jsx, as the main-screen Export CSV already does).
+// Callers: reportCsv in app/stew-finance.jsx + finance-reports.test.mjs. (journalCsvRows stays the all-journal CSV.)
+export function reportCsvRows(model) {
+  const dec = model.decimals != null ? model.decimals : 2;
+  const mm = m => minorToMajorText(m, dec);
+  const rows = [[model.title || 'Report'], [model.periodLabel || ''], []];
+  if (model.summary)  { rows.push(['Summary']); rows.push(['Total income', mm(model.summary.income)]); rows.push(['Total spending', mm(model.summary.expenditure)]); rows.push([model.summary.surplus < 0 ? 'Deficit' : 'Surplus', mm(model.summary.surplus)]); rows.push([]); }
+  if (model.income && model.income.length)     { rows.push(['Income by category']); for (const r of model.income) rows.push([r.name, mm(r.amount)]); rows.push([]); }
+  if (model.spending && model.spending.length) { rows.push(['Spending by category']); for (const r of model.spending) rows.push([r.name, mm(r.amount)]); rows.push([]); }
+  if (model.givingFund && model.givingFund.length) { rows.push(['Giving by fund']); for (const r of model.givingFund) rows.push([r.name + kindTag(r.kind), mm(r.amount)]); rows.push([]); }
+  if (model.funds && model.funds.length)       { rows.push(['Fund balances (closing)']); for (const r of model.funds) rows.push([r.name + kindTag(r.kind), mm(r.balance)]); rows.push([]); }
+  if (model.fundMovements && model.fundMovements.length) { rows.push(['Fund movements']); rows.push(['Fund', 'Opening', 'In', 'Out', 'Closing']); for (const r of model.fundMovements) rows.push([r.name + kindTag(r.kind), mm(r.opening), mm(r.in), mm(r.out), mm(r.closing)]); rows.push([]); }
+  if (model.receipts) { const rp = model.receipts;
+    rows.push(['Receipts']); for (const r of rp.receipts) rows.push([r.name, mm(r.amount)]); rows.push(['Total receipts', mm(rp.totalReceipts)]); rows.push([]);
+    rows.push(['Payments']); for (const r of rp.payments) rows.push([r.name, mm(r.amount)]); rows.push(['Total payments', mm(rp.totalPayments)]); rows.push([]);
+    rows.push(['Net cash movement', mm(rp.net)]); rows.push(['Cash at start', mm(rp.openingCash)]); rows.push(['Cash at end', mm(rp.closingCash)]); rows.push([]); }
+  if (model.balance)  { rows.push(['Balance sheet']); rows.push(['Assets', mm(model.balance.assets)]); rows.push(['Liabilities', mm(model.balance.liabilities)]); rows.push(['Net funds', mm(model.balance.funds)]); rows.push([]); }
+  if (model.note)     { rows.push(['Note']); rows.push([model.note]); }
+  return rows;
 }

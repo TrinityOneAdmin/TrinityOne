@@ -179,6 +179,17 @@ const bkCard = { background: 'var(--surface)', border: '1px solid var(--line)', 
 const ACCT_TYPE_LABEL = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
 const ACCT_TYPES_ORDER = ['asset', 'liability', 'equity', 'income', 'expense'];
 const FUND_KIND_LABEL = { general: 'General', designated: 'Designated', restricted: 'Restricted' };
+// Phase 4a aggregate report presets for the Reports panel. Each maps to a set of buildStatement section keys
+// (the new keys — givingFund/fundMovements/receipts — are rendered by statementText/Html/fsBuildStatementPdf).
+// All are nation-neutral and name-free; there is NO giving-by-MEMBER preset here (held as Phase 4b).
+const FIN_REPORT_PRESETS = [
+  { key: 'pl',       label: 'Income & expenditure', sections: ['summary', 'income', 'spending'] },
+  { key: 'balance',  label: 'Balance sheet',        sections: ['summary', 'balance'] },
+  { key: 'funds',    label: 'Fund summary',         sections: ['funds'] },
+  { key: 'giving',   label: 'Giving by fund',       sections: ['givingFund'] },
+  { key: 'rp',       label: 'Receipts & payments',  sections: ['receipts', 'funds'] },
+  { key: 'trustees', label: "Trustees' report",     sections: ['summary', 'fundMovements'] },
+];
 // Conventional code range per type (income 4xxx, expense 5xxx, asset 1xxx, liability 2xxx, equity 3xxx):
 // used to auto-suggest a code when the treasurer leaves it blank. Advisory only — ids are what the ledger keys on.
 const ACCT_CODE_BASE = { asset: 1000, liability: 2000, equity: 3000, income: 4000, expense: 5000 };
@@ -949,7 +960,21 @@ function fsBuildStatementPdf(model, F) {
   if (model.summary) { heading('Summary'); row('Total income', model.summary.income, false, true); row('Total spending', model.summary.expenditure, false, true); row(model.summary.surplus < 0 ? 'Deficit' : 'Surplus', model.summary.surplus, true, false); y += 8; }
   if (model.income && model.income.length) { heading('Income by category'); model.income.forEach(r => row(r.name, r.amount, false, true)); y += 8; }
   if (model.spending && model.spending.length) { heading('Spending by category'); model.spending.forEach(r => row(r.name, r.amount, false, true)); y += 8; }
+  if (model.givingFund && model.givingFund.length) { heading('Giving by fund'); model.givingFund.forEach(r => row(r.name + (r.kind !== 'general' ? ' (' + r.kind + ')' : ''), r.amount, false, true)); y += 8; }
   if (model.funds && model.funds.length) { heading('Fund balances (closing)'); model.funds.forEach(r => row(r.name + (r.kind !== 'general' ? ' (' + r.kind + ')' : ''), r.balance, false, true)); y += 8; }
+  // Fund movements — a 4-money-column table (opening · in · out · closing) for the trustees' report.
+  if (model.fundMovements && model.fundMovements.length) { heading('Fund movements');
+    const cx = [W - M, W - M - 96, W - M - 192, W - M - 288];   // right-aligned x for closing, out, in, opening
+    need(16); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(138, 128, 120);
+    doc.text('Opening', cx[3], y, { align: 'right' }); doc.text('In', cx[2], y, { align: 'right' }); doc.text('Out', cx[1], y, { align: 'right' }); doc.text('Closing', cx[0], y, { align: 'right' }); y += 13;
+    model.fundMovements.forEach(r => { need(20); doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(43, 39, 35);
+      doc.text(String(r.name + (r.kind !== 'general' ? ' (' + r.kind + ')' : '')).slice(0, 22), M, y);
+      doc.text(money(r.opening), cx[3], y, { align: 'right' }); doc.text(money(r.in), cx[2], y, { align: 'right' }); doc.text(money(r.out), cx[1], y, { align: 'right' }); doc.text(money(r.closing), cx[0], y, { align: 'right' });
+      y += 7; doc.setDrawColor(231, 224, 213); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); y += 9; }); y += 8; }
+  if (model.receipts) { const rp = model.receipts; heading('Receipts & payments');
+    rp.receipts.forEach(r => row(r.name, r.amount, false, true)); row('Total receipts', rp.totalReceipts, true, false); y += 4;
+    rp.payments.forEach(r => row(r.name, r.amount, false, true)); row('Total payments', rp.totalPayments, true, false); y += 4;
+    row('Net cash movement', rp.net, true, true); row('Cash at start', rp.openingCash, false, true); row('Cash at end', rp.closingCash, false, false); y += 8; }
   if (model.balance) { heading('Balance sheet'); row('Assets', model.balance.assets, false, true); row('Liabilities', model.balance.liabilities, false, true); row('Net funds', model.balance.funds, true, false); y += 8; }
   if (model.note) { heading('Note'); doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(43, 39, 35); const lines = doc.splitTextToSize(model.note, W - 2 * M); need(lines.length * 14 + 6); doc.text(lines, M, y); y += lines.length * 14; }
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(138, 128, 120);
@@ -1230,6 +1255,9 @@ function DashFinanceBook() {
   const [importing, setImporting] = React.useState(false);
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
   const [reports, setReports] = React.useState(false);
+  const [rptPreset, setRptPreset] = React.useState('pl');    // which aggregate report the Reports panel shows
+  const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y
+  const [rptFlash, setRptFlash] = React.useState('');         // what an Export reported, or why it did not
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
   const [managing, setManaging] = React.useState(false);     // collapsible "Accounts & funds" panel (same pattern as Reports)
@@ -1517,6 +1545,39 @@ function DashFinanceBook() {
     } catch (e) { setExported((e && e.message) || 'Could not save the export on this device.'); }
   };
 
+  // ── aggregate Reports panel: a report PRESET + a PERIOD, rendered on screen and exported to PDF/CSV/HTML via
+  // the same statement render + saveConsoleFile path the Share modal uses. All presets are name-free (no PII).
+  const rptNow = new Date();
+  const rptY = rptNow.getFullYear(), rptQ = Math.floor(rptNow.getMonth() / 3) + 1;
+  const rptRange = rptPeriod === 'this-q' ? F.quarterRange(rptY, rptQ)
+    : rptPeriod === 'last-y' ? F.yearRange(rptY - 1)
+    : { ...F.yearRange(rptY), to: booksTodayISO(), label: 'Year to date ' + rptY };
+  const rptDef = FIN_REPORT_PRESETS.find(p => p.key === rptPreset) || FIN_REPORT_PRESETS[0];
+  const rptModel = F.buildStatement(book, {
+    from: rptRange.from, to: rptRange.to, periodLabel: rptRange.label,
+    title: (church.name || 'Financial statement') + ' — ' + rptDef.label,
+    sections: rptDef.sections, generatedAt: booksTodayISO(), accent: (church.accent || ''),
+  });
+  const rptBase = () => fsSlug((church.name || 'report') + '-' + rptDef.label) + '-' + fsSlug(rptRange.label);
+  const exportReportPdf = async () => {
+    try {
+      const doc = fsBuildStatementPdf(rptModel, F);
+      if (doc) { const msg = await fsSavePdf(doc, rptBase() + '.pdf'); setRptFlash(msg || 'Downloaded — ready to print or share.'); return; }
+      const msg = await fsDownloadDoc(rptBase() + '.html', F.statementHtml(rptModel), 'text/html;charset=utf-8');   // no jsPDF → HTML
+      setRptFlash(msg || 'Downloaded — open it to print or save as PDF.');
+    } catch (e) { setRptFlash((e && e.message) || 'Could not save the report on this device.'); }
+  };
+  const exportReportHtml = async () => {
+    try { const msg = await fsDownloadDoc(rptBase() + '.html', F.statementHtml(rptModel), 'text/html;charset=utf-8'); setRptFlash(msg || 'Downloaded — open it to print or save as PDF.'); }
+    catch (e) { setRptFlash((e && e.message) || 'Could not save the report on this device.'); }
+  };
+  const exportReportCsv = async () => {
+    // Same formula-injection guard as exportCsv — a report cell can carry an imported, attacker-controllable memo.
+    const csvCell = c => { let s = String(c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+    try { const rows = F.reportCsvRows(rptModel); const msg = await booksDownload(rptBase() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')); setRptFlash(msg); }
+    catch (e) { setRptFlash((e && e.message) || 'Could not save the report on this device.'); }
+  };
+
   const stat = (label, val, tone) => (
     <div style={{ ...bkCard, flex: 1, minWidth: 150 }}>
       <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>{label}</div>
@@ -1591,19 +1652,75 @@ function DashFinanceBook() {
 
       <div style={{ ...bkCard, marginBottom: 16 }}>
         <button onClick={() => setReports(r => !r)} title="Show or hide the income and expense reports" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{reports ? '▾' : '▸'} Reports</button>
-        {reports && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontWeight: 700, margin: '4px 0 6px' }}>Income &amp; Expenditure this year</div>
-            {ie.byAccount.map(r => (
-              <div key={r.account} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0' }}>
-                <span>{(book.accounts.get(r.account) || {}).name || r.account}</span><span style={{ fontWeight: 700 }}>{booksFmt(Math.abs(r.amount), book)}</span>
-              </div>
-            ))}
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '8px 0 0', marginTop: 6, borderTop: '1px solid var(--line)', fontWeight: 800 }}>
-              <span>Surplus</span><span>{booksFmt(ie.surplus, book)}</span>
+        {reports && (() => {
+          const m = rptModel;
+          const chip = (active, onClick, label, key) => (
+            <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5,
+              border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
+          );
+          const line = (label, val, bold) => (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', fontWeight: bold ? 800 : 400 }}>
+              <span>{label}</span><span style={{ fontWeight: bold ? 800 : 700 }}>{booksFmt(val, book)}</span>
             </div>
+          );
+          const kindOf = r => r.kind === 'restricted' ? ' · restricted' : r.kind === 'designated' ? ' · designated' : '';
+          return (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 9 }}>
+              {FIN_REPORT_PRESETS.map(p => chip(rptPreset === p.key, () => setRptPreset(p.key), p.label, p.key))}
+            </div>
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
+              {chip(rptPeriod === 'this-q', () => setRptPeriod('this-q'), 'This quarter', 'q')}
+              {chip(rptPeriod === 'this-y', () => setRptPeriod('this-y'), 'Year to date', 'y')}
+              {chip(rptPeriod === 'last-y', () => setRptPeriod('last-y'), 'Last year', 'ly')}
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 14, margin: '2px 0 2px', fontFamily: 'var(--font-display, var(--font-ui))' }}>{rptDef.label}</div>
+            <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>{rptRange.label}</div>
+
+            {m.summary && (<div style={{ marginBottom: 8 }}>
+              {line('Total income', m.summary.income)}{line('Total spending', m.summary.expenditure)}{line(m.summary.surplus < 0 ? 'Deficit' : 'Surplus', m.summary.surplus, true)}
+            </div>)}
+            {m.income && m.income.length ? <div style={{ marginBottom: 8 }}><div style={{ ...bkLbl, margin: '6px 0 2px' }}>Income by category</div>{m.income.map(r => <div key={r.account}>{line(r.name, r.amount)}</div>)}</div> : null}
+            {m.spending && m.spending.length ? <div style={{ marginBottom: 8 }}><div style={{ ...bkLbl, margin: '6px 0 2px' }}>Spending by category</div>{m.spending.map(r => <div key={r.account}>{line(r.name, r.amount)}</div>)}</div> : null}
+            {m.givingFund && m.givingFund.length ? <div style={{ marginBottom: 8 }}><div style={{ ...bkLbl, margin: '6px 0 2px' }}>Giving by fund</div>{m.givingFund.map(r => <div key={r.fund}>{line(r.name + kindOf(r), r.amount)}</div>)}</div> : null}
+            {m.funds && m.funds.length ? <div style={{ marginBottom: 8 }}><div style={{ ...bkLbl, margin: '6px 0 2px' }}>Fund balances (closing)</div>{m.funds.map(r => <div key={r.fund}>{line(r.name + kindOf(r), r.balance)}</div>)}</div> : null}
+            {m.fundMovements && m.fundMovements.length ? (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ ...bkLbl, margin: '6px 0 4px' }}>Fund movements</div>
+                <div style={{ display: 'flex', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, padding: '0 0 3px' }}><span style={{ flex: 1 }} /><span style={{ width: 86, textAlign: 'right' }}>Opening</span><span style={{ width: 70, textAlign: 'right' }}>In</span><span style={{ width: 70, textAlign: 'right' }}>Out</span><span style={{ width: 86, textAlign: 'right' }}>Closing</span></div>
+                {m.fundMovements.map(r => (
+                  <div key={r.fund} style={{ display: 'flex', fontSize: 13, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>{r.name}{kindOf(r)}</span>
+                    <span style={{ width: 86, textAlign: 'right' }}>{booksFmt(r.opening, book)}</span>
+                    <span style={{ width: 70, textAlign: 'right', color: 'var(--sage, #4f7a5e)' }}>{booksFmt(r.in, book)}</span>
+                    <span style={{ width: 70, textAlign: 'right', color: 'var(--clay-deep, #b4462f)' }}>{booksFmt(r.out, book)}</span>
+                    <span style={{ width: 86, textAlign: 'right', fontWeight: 700 }}>{booksFmt(r.closing, book)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {m.receipts ? (() => { const rp = m.receipts; return (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ ...bkLbl, margin: '6px 0 2px' }}>Receipts</div>
+                {rp.receipts.map(r => <div key={r.account}>{line(r.name, r.amount)}</div>)}
+                {line('Total receipts', rp.totalReceipts, true)}
+                <div style={{ ...bkLbl, margin: '10px 0 2px' }}>Payments</div>
+                {rp.payments.map(r => <div key={r.account}>{line(r.name, r.amount)}</div>)}
+                {line('Total payments', rp.totalPayments, true)}
+                <div style={{ borderTop: '1px solid var(--line)', marginTop: 6, paddingTop: 4 }}>{line('Net cash movement', rp.net, true)}{line('Cash at start', rp.openingCash)}{line('Cash at end', rp.closingCash)}</div>
+              </div>
+            ); })() : null}
+            {m.balance ? <div style={{ marginBottom: 8 }}><div style={{ ...bkLbl, margin: '6px 0 2px' }}>Balance sheet</div>{line('Assets', m.balance.assets)}{line('Liabilities', m.balance.liabilities)}{line('Net funds', m.balance.funds, true)}</div> : null}
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+              <button onClick={exportReportPdf} title="Download this report as a PDF to print or share" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export PDF</button>
+              <button onClick={exportReportCsv} title="Download this report as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
+              <button onClick={exportReportHtml} title="Download this report as a printable web page" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export HTML</button>
+            </div>
+            {rptFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', marginTop: 8 }}>{rptFlash}</div> : null}
           </div>
-        )}
+          );
+        })()}
       </div>
 
       <div style={{ ...bkCard, marginBottom: 16 }}>
@@ -1684,7 +1801,7 @@ function DashFinanceBook() {
 
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
-        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs.</div>
+        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, budgets, multi-currency, and regional giving-relief packs.</div>
       </div>
 
       {recording && <BooksRecord book={book} onRecord={record} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
