@@ -41,7 +41,7 @@ const liftImportStatement = () => lift('const importStatement = async (picks, ac
 // trap this codebase keeps falling into. Measured: with record()'s rollback deleted, the stubbed version of
 // this file stayed 8/0 green.
 const liftRecord = () => lift('const _dropIfRefused = (b, entry) =>', '_dropIfRefused')
-                       + lift('const record = ({ dir, account, fund, amountMinor, date, memo }) => {', 'record');
+                       + lift('const record = async ({ dir, legs, totalMinor, date, memo, attachment }) => {', 'record');
 
 // A relay that behaves like the real one: it stores a journal document only when the seq is exactly next.
 function makeRelay() {
@@ -186,7 +186,7 @@ test('a manual entry the relay refused does not wedge the next import', async ()
   // Injecting my own _dropIfRefused would prove dropFrom works and say nothing about whether record() CALLS
   // it, which is the whole claim; measured — with record()'s rollback deleted, that version stayed green.
   const h = harness({ refuseFrom: 1 });
-  const ok = await h.record({ dir: 'in', account: 'giving', fund: 'general', amountMinor: 500, date: '2026-09-01', memo: 'Cash in hand' });
+  const ok = await h.record({ dir: 'in', legs: [{ account: 'giving', fund: 'general', amountMinor: 500 }], totalMinor: 500, date: '2026-09-01', memo: 'Cash in hand' });
   assert.equal(ok, false, 'the harness did not produce the refusal this test is about');
   assert.equal(h.book._seq, 0,
     'record() left the refused entry in the local book, so every later seq is past a gap the relay refuses');
@@ -199,7 +199,7 @@ test('a manual entry the relay refused does not wedge the next import', async ()
 
 test('CONTROL: an entry the relay DID take stays in the books', async () => {
   const h = harness({ refuseFrom: null });
-  const ok = await h.record({ dir: 'in', account: 'giving', fund: 'general', amountMinor: 500, date: '2026-09-01', memo: 'Cash in hand' });
+  const ok = await h.record({ dir: 'in', legs: [{ account: 'giving', fund: 'general', amountMinor: 500 }], totalMinor: 500, date: '2026-09-01', memo: 'Cash in hand' });
   assert.equal(ok, true);
   assert.equal(h.book.journal.length, 1, 'record() discarded an entry the relay accepted');
   assert.equal(h.book._seq, 1);

@@ -89,6 +89,7 @@ return {
   SeriesScheduleModal: { label: 'devotional', count: 0, onApply() {}, onClear() {}, onClose },
   PinModal: { action: 'set', onClose },
   BooksRecord: { book, onRecord() {}, onClose }, BooksDonate: { onGave() {}, onClose },
+  BooksReceiptView: { data: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==', onClose },
   BooksAccountEdit: { book, initial: null, onSave() {}, onClose },
   BooksFundEdit: { book, initial: null, onSave() {}, onClose },
   BooksFundMove: { book, onTransfer() {}, onClose },

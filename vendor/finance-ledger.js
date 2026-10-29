@@ -118,9 +118,9 @@ var FinanceLedger = (() => {
     if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} \u2260 credits ${cr}`);
     return norm2;
   }
-  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null, importKey = null } = {}) {
+  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null, importKey = null, attachmentRefs = [] } = {}) {
     const norm2 = _normalize(book, postings);
-    const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey };
+    const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [] };
     book.journal.push(entry);
     return entry;
   }
@@ -135,7 +135,7 @@ var FinanceLedger = (() => {
     if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error("entry needs an integer seq");
     if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
     const norm2 = _normalize(book, entry.postings);
-    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm2, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null };
+    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm2, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [] };
     book.journal.push(e);
     book._seq = entry.seq;
     return e;
@@ -247,7 +247,7 @@ var FinanceLedger = (() => {
     const docs = [{ t: "settings", baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
     for (const a of book.accounts.values()) docs.push({ t: "account", id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived });
     for (const f of book.funds.values()) if (f.id !== "general") docs.push({ t: "fund", id: f.id, name: f.name, kind: f.kind });
-    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
+    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [] });
     return docs;
   }
   function docFor(entryOrObj, t) {

@@ -280,6 +280,7 @@ export const DOC_TYPES = Object.freeze({
   'finance/account:':         { write: 'steward',   read: 'church',  scope: 'author', gatedBy: "d.startsWith('finance/')", note: 'chart of accounts; church-encrypted, relay sees ciphertext' },
   'finance/fund:':            { write: 'steward',   read: 'church',  scope: 'author', gatedBy: "d.startsWith('finance/')", note: 'fund accounting bucket — NOT trinityone/fund:, which is a giving destination and owner-only' },
   'finance/settings':         { write: 'steward',   read: 'church',  scope: 'author', gatedBy: "d.startsWith('finance/')", note: 'finance module settings' },
+  'finance/attachment:':      { write: 'steward',   read: 'church',  scope: 'suffix', gatedBy: "d.startsWith('finance/')", note: 'receipt image attached to a journal entry (entry.attachmentRefs). Same church-OR-finance-steward gate as the other finance/ docs; REPLACEABLE, no seq. Encrypted inline image, so the write rule ALSO caps the body at ~300KB (FIN_ATTACHMENT_MAX) — the only finance/ type with a size ceiling, because a thin relay must not become a blob store' },
   // ── THE BENEVOLENCE MODULE, given a rule of its own on 2026-09-22 ────────────────────────────────────
   // A PREFIX, not one type: src/steward-manna.src.js builds seven d-tags from it (settings, fund:, request:,
   // vouch:, approval:, record:, testimony:) by concatenation, so none of them ever appears as a whole

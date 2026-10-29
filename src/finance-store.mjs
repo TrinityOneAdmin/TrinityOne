@@ -5,6 +5,10 @@
 // so the serialize↔rebuild round-trip and the fork/gap detection can be proven in node.
 //
 // A doc is a plain JSON object with a `t` (type): 'settings' | 'account' | 'fund' | 'journal'.
+// Receipt attachments (finance/attachment:<id>) are SIDE BLOBS, not part of the book model: bookToDocs never
+// emits them and rebuildBook ignores every `t` it does not recognise, so an attachment doc arriving in the
+// stream leaves the ledger untouched. A journal entry only carries attachmentRefs (the ids); the image bytes
+// are fetched lazily by the UI (app/stew-finance.jsx), never folded into the replayed book.
 // On the relay each becomes an addressable event, e.g. d = `finance/journal:<seq>` with an encrypted body;
 // the seq lives in the (unencrypted) d-tag so the relay can order/guard it without reading the entry.
 
@@ -14,7 +18,7 @@ export function bookToDocs(book) {
   const docs = [{ t: 'settings', baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
   for (const a of book.accounts.values()) docs.push({ t: 'account', id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived });
   for (const f of book.funds.values()) if (f.id !== 'general') docs.push({ t: 'fund', id: f.id, name: f.name, kind: f.kind });   // 'general' is implicit (createBook adds it)
-  for (const e of book.journal) docs.push({ t: 'journal', seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
+  for (const e of book.journal) docs.push({ t: 'journal', seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [] });
   return docs;
 }
 

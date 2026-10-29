@@ -80,9 +80,12 @@ function _normalize(book, postings) {
   return norm;
 }
 
-export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null, importKey = null } = {}) {
+export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null, importKey = null, attachmentRefs = [] } = {}) {
   const norm = _normalize(book, postings);
-  const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses, importKey };
+  // attachmentRefs: ids of finance/attachment:<id> blobs (receipt images) tied to this entry. A SIDE field —
+  // the ledger never reads it; it is carried so the serializers (pubEntry/bookToDocs) and the deserializers
+  // (finItemToDoc/applyEntry) preserve the link. Absent → [] so an older console's entry round-trips unchanged.
+  const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [] };
   book.journal.push(entry);
   return entry;
 }
@@ -112,7 +115,7 @@ export function applyEntry(book, entry) {
   if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error('entry needs an integer seq');
   if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
   const norm = _normalize(book, entry.postings);
-  const e = { seq: entry.seq, date: entry.date || '', memo: entry.memo || '', postings: norm, by: entry.by || '', ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null };
+  const e = { seq: entry.seq, date: entry.date || '', memo: entry.memo || '', postings: norm, by: entry.by || '', ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [] };
   book.journal.push(e); book._seq = entry.seq;
   return e;
 }

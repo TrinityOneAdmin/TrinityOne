@@ -59,7 +59,10 @@ function finItemToDoc(it) {
   if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart };
   if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type, archived: !!it.archived };
   if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
-  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null };
+  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null, attachmentRefs: it.attachmentRefs ?? [] };
+  // A receipt image (finance/attachment:<id>). Carried as a SIDE BLOB — rebuildBook ignores t:'attachment', so
+  // it never enters the ledger; DashFinanceBook pulls the data: URI out of the live delivery into its own map.
+  if (id.startsWith('attachment:')) return { t: 'attachment', id: id.slice(11), data: it.data || '' };
   return null;
 }
 // Both file exports on this screen (this CSV and fsDownloadDoc's HTML below) used to build an `<a download>`
@@ -71,6 +74,47 @@ function booksDownload(name, text) {
   return saveConsoleFile(name, text, { mime: 'text/csv;charset=utf-8', title: 'Finance export', blurb: 'Open it in a spreadsheet.' });
 }
 function booksTodayISO() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+// Shrink a chosen receipt image to a small JPEG data: URI BEFORE it is published — the relay is not a blob
+// store (the journal is a thin pipe), so a photo straight off a phone camera must not go up at full size. Same
+// canvas → toDataURL('image/jpeg') path the church logo/avatar already use (identity-avatar.jsx,
+// stew-schedule.jsx). Caps the longest edge and steps the quality down until the data: URI is under ~200KB;
+// if it still will not fit, it REJECTS rather than publish something the relay's own cap would bounce. A hard
+// client cap alone is bypassable — the gateway enforces its own ceiling on finance/attachment: content.
+const ATTACH_MAX_BYTES = 200 * 1024;   // ~200KB client ceiling on the encoded data: URI
+function booksShrinkImage(file, { maxDim = 1400, cap = ATTACH_MAX_BYTES } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type || '')) { reject(new Error('Choose an image file (a photo of the receipt).')); return; }
+    const r = new FileReader();
+    r.onerror = () => reject(new Error('Could not read that file.'));
+    r.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('That file is not an image this device can read.'));
+      img.onload = () => {
+        try {
+          let w = img.width || 1, h = img.height || 1;
+          const scale = Math.min(1, maxDim / Math.max(w, h));
+          w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
+          const c = document.createElement('canvas'); c.width = w; c.height = h;
+          c.getContext('2d').drawImage(img, 0, 0, w, h);
+          let q = 0.72, uri = c.toDataURL('image/jpeg', q);
+          while (uri.length > cap && q > 0.3) { q -= 0.12; uri = c.toDataURL('image/jpeg', q); }
+          if (!uri || uri.length < 30) { reject(new Error('Could not process that image on this device.')); return; }
+          if (uri.length > cap) { reject(new Error('That image is too large even after shrinking — try a smaller or clearer photo.')); return; }
+          resolve(uri);
+        } catch (e) { reject(new Error('Could not process that image on this device.')); }
+      };
+      img.src = r.result;
+    };
+    r.readAsDataURL(file);
+  });
+}
+// An opaque, collision-resistant id for a replaceable finance doc (CONTEXT: replaceable docs need OPAQUE ids —
+// two writers must never derive the same one and silently overwrite). Human-facing numbers are a FIELD, never
+// the id.
+function booksRandId() {
+  try { if (crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, ''); } catch (e) {}
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+}
 function booksFmt(minor, book) {
   const dec = book.decimals || 2, sym = CCY_SYM[book.baseCurrency] || '';
   const s = (minor / Math.pow(10, dec)).toLocaleString('en-GB', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -136,24 +180,73 @@ function suggestCode(book, type) {
 }
 
 // ---- record a transaction (guided double-entry — the treasurer never sees "debit/credit") ----
-function BooksRecord({ book, onRecord, onClose }) {
-  const [dir, setDir] = React.useState('in');
+// `initial` (optional) pre-fills the form — the "Correct this entry" flow passes the reversed entry's values
+// so the treasurer re-enters a fixed copy. SPLIT: one transaction can be divided across several categories/
+// funds; the per-row amounts must add up EXACTLY to the total (integer minor units) or Save is disabled —
+// the bank leg is the single balancing posting, so a mismatch is exactly what the engine's balance check
+// refuses. ATTACHMENT: an optional receipt image, shrunk client-side and published as a side blob.
+function BooksRecord({ book, onRecord, onClose, initial }) {
+  const init = initial || {};
+  const [dir, setDir] = React.useState(init.dir === 'out' ? 'out' : 'in');
   // Archived accounts are hidden from the category picker (kept in the ledger/reports). The reserved
   // 'fund-transfer' account is equity, so the income/expense filter already excludes it here.
   const cats = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense') && !a.archived);
   const funds = [...book.funds.values()];
-  const [account, setAccount] = React.useState(cats[0] ? cats[0].id : '');
-  const [fund, setFund] = React.useState('general');
-  const [amount, setAmount] = React.useState('');
-  const [date, setDate] = React.useState(booksTodayISO());
-  const [memo, setMemo] = React.useState('');
+  const [account, setAccount] = React.useState(init.account || (cats[0] ? cats[0].id : ''));
+  const [fund, setFund] = React.useState(init.fund || 'general');
+  const [amount, setAmount] = React.useState(init.amount || '');
+  const [date, setDate] = React.useState(init.date || booksTodayISO());
+  const [memo, setMemo] = React.useState(init.memo || '');
   const [err, setErr] = React.useState('');
-  React.useEffect(() => { const c = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense') && !a.archived); setAccount(c[0] ? c[0].id : ''); }, [dir]);
+  const [split, setSplit] = React.useState(false);
+  const [rows, setRows] = React.useState([]);   // split legs: [{ account, fund, amount(major string) }]
+  const [attachment, setAttachment] = React.useState(null);   // { id, data:(data:URI), name } or null
+  const [attBusy, setAttBusy] = React.useState(false);
+  // Reset the category when the DIRECTION changes (income ⇄ expense lists are different), but NOT on mount —
+  // doing it on mount would clobber a pre-filled `initial.account`.
+  const firstDir = React.useRef(true);
+  React.useEffect(() => {
+    if (firstDir.current) { firstDir.current = false; return; }
+    const c = [...book.accounts.values()].filter(a => a.type === (dir === 'in' ? 'income' : 'expense') && !a.archived);
+    setAccount(c[0] ? c[0].id : '');
+    setRows(rs => rs.map(r => ({ ...r, account: c[0] ? c[0].id : '' })));
+  }, [dir]);
+  const total = booksParse(amount, book);
+  const splitSum = rows.reduce((s, r) => s + booksParse(r.amount, book), 0);
+  const splitOk = rows.length >= 1 && rows.every(r => r.account && booksParse(r.amount, book) > 0) && total > 0 && splitSum === total;
+  const canSave = !attBusy && (split ? splitOk : (total > 0 && !!account));
+  const addRow = () => setRows(rs => [...rs, { account: cats[0] ? cats[0].id : '', fund: 'general', amount: '' }]);
+  const setRowAt = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const removeRow = (i) => setRows(rs => rs.filter((_, j) => j !== i));
+  const toggleSplit = () => {
+    if (split) { setSplit(false); return; }
+    // open split with two rows seeded from the current single-category selection, so the common "half here,
+    // half there" case is one edit away and the sum already equals the total.
+    setRows([{ account, fund, amount }, { account: cats[0] ? cats[0].id : account, fund: 'general', amount: '' }]);
+    setSplit(true);
+  };
+  const onPickAttachment = async (ev) => {
+    const file = ev.target.files && ev.target.files[0]; if (ev.target) ev.target.value = '';
+    if (!file) return;
+    setErr(''); setAttBusy(true);
+    try { const data = await booksShrinkImage(file); setAttachment({ id: booksRandId(), data, name: file.name || 'receipt' }); }
+    catch (e) { setAttachment(null); setErr((e && e.message) || 'Could not attach that image.'); }
+    setAttBusy(false);
+  };
   const submit = () => {
-    const minor = booksParse(amount, book);
-    if (!minor) return setErr('Enter an amount greater than zero.');
-    if (!account) return setErr('Pick a category.');
-    try { onRecord({ dir, account, fund, amountMinor: minor, date, memo: memo.trim() }); onClose(); }
+    const tot = booksParse(amount, book);
+    if (!tot) return setErr('Enter an amount greater than zero.');
+    let legs;
+    if (split) {
+      legs = rows.map(r => ({ account: r.account, fund: r.fund, amountMinor: booksParse(r.amount, book) }));
+      if (legs.some(l => !l.account)) return setErr('Pick a category for every split row.');
+      if (legs.some(l => !(l.amountMinor > 0))) return setErr('Enter an amount greater than zero for every split row.');
+      if (legs.reduce((s, l) => s + l.amountMinor, 0) !== tot) return setErr('The split rows must add up to the total (' + booksFmt(tot, book) + ').');
+    } else {
+      if (!account) return setErr('Pick a category.');
+      legs = [{ account, fund, amountMinor: tot }];
+    }
+    try { onRecord({ dir, legs, totalMinor: tot, date, memo: memo.trim(), attachment }); onClose(); }
     catch (e) { setErr(e.message || 'Could not record that.'); }
   };
   // WHICH WAY THE MONEY GOES, CARRIED BY MORE THAN COLOUR.
@@ -179,26 +272,56 @@ function BooksRecord({ book, onRecord, onClose }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }} onClick={onClose}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Record a transaction" tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Record a transaction</h3>
+        <h3 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{init.correctingSeq ? 'Correct a transaction' : 'Record a transaction'}</h3>
+        {init.correctingSeq ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '-8px 0 12px', lineHeight: 1.45 }}>The original entry has been reversed. Enter the corrected version below — both stay in the ledger.</div> : null}
         <div style={{ display: 'flex', gap: 6, background: 'var(--surface-2, #f2efe9)', borderRadius: 12, padding: 4, marginBottom: 14 }}>{seg('in', 'Money in')}{seg('out', 'Money out')}</div>
-        <label style={bkLbl}>Category</label>
-        <select value={account} onChange={e => setAccount(e.target.value)} style={{ ...bkFld, marginBottom: 12 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-        <label style={bkLbl}>Fund</label>
-        <select value={fund} onChange={e => setFund(e.target.value)} style={{ ...bkFld, marginBottom: 12 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}{f.kind === 'restricted' ? ' (restricted)' : ''}</option>)}</select>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <label style={{ ...bkLbl, margin: 0 }}>{split ? 'Categories' : 'Category'}</label>
+          <button onClick={toggleSplit} title={split ? 'Put this transaction under a single category' : 'Divide this transaction across more than one category or fund'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--clay)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, padding: 0 }}>{split ? 'Use a single category' : 'Split across categories'}</button>
+        </div>
+        {!split ? (<>
+          <select value={account} onChange={e => setAccount(e.target.value)} aria-label="Category" style={{ ...bkFld, marginBottom: 12 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+          <label style={bkLbl}>Fund</label>
+          <select value={fund} onChange={e => setFund(e.target.value)} aria-label="Fund" style={{ ...bkFld, marginBottom: 12 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}{f.kind === 'restricted' ? ' (restricted)' : ''}</option>)}</select>
+        </>) : (<>
+          <div style={{ border: '1px solid var(--line)', borderRadius: 11, padding: 8, marginBottom: 8 }}>
+            {rows.map((r, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} aria-label={'Split category ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', flex: 1 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} aria-label={'Split fund ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', width: 112 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+                <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" aria-label={'Split amount ' + (i + 1)} style={{ ...bkFld, height: 36, fontSize: 13, padding: '0 8px', width: 84 }} />
+                <button onClick={() => removeRow(i)} title="Remove this split row" aria-label={'Remove split row ' + (i + 1)} disabled={rows.length <= 1} style={{ border: 'none', background: 'transparent', cursor: rows.length <= 1 ? 'default' : 'pointer', color: 'var(--ink-3)', fontSize: 16, padding: 2, opacity: rows.length <= 1 ? 0.4 : 1 }}>×</button>
+              </div>
+            ))}
+            <button onClick={addRow} style={{ border: '1px dashed var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add category</button>
+          </div>
+          <div style={{ fontSize: 12.5, marginBottom: 12, color: splitSum === total && total > 0 ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)', fontWeight: 600 }}>
+            Split {booksFmt(splitSum, book)} of {booksFmt(total, book)}{total > 0 && splitSum !== total ? ' · ' + (splitSum < total ? booksFmt(total - splitSum, book) + ' left to assign' : booksFmt(splitSum - total, book) + ' over') : ''}
+          </div>
+        </>)}
         <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-          <div style={{ flex: 1 }}><label style={bkLbl}>Amount ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</label><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00" style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>{split ? 'Total' : 'Amount'} ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</label><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00" aria-label="Amount" style={bkFld} /></div>
           <div style={{ flex: 1 }}><label style={bkLbl}>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={bkFld} /></div>
         </div>
         <label style={bkLbl}>Note (optional)</label>
-        <input value={memo} onChange={e => setMemo(e.target.value)} placeholder="e.g. Sunday offering" style={{ ...bkFld, marginBottom: 8 }} />
+        <input value={memo} onChange={e => setMemo(e.target.value)} placeholder="e.g. Sunday offering" style={{ ...bkFld, marginBottom: 12 }} />
+        <label style={bkLbl}>Receipt (optional)</label>
+        {attachment
+          ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, border: '1px solid var(--line)', borderRadius: 11, padding: 8 }}>
+              <img src={attachment.data} alt="Receipt preview" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachment.name}</div>
+              <button onClick={() => setAttachment(null)} title="Remove this receipt" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Remove</button>
+            </div>
+          : <input type="file" accept="image/*" onChange={onPickAttachment} aria-label="Attach a receipt image" disabled={attBusy} style={{ ...bkFld, height: 'auto', padding: 9, marginBottom: 8, lineHeight: 1.4 }} />}
+        {attBusy ? <p style={{ color: 'var(--ink-3)', fontSize: 12.5, margin: '0 0 4px' }}>Preparing the image…</p> : null}
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
           {/* THE LAST THING YOU TOUCH NAMES THE DIRECTION. If the toggle above did not take, this is where a
               person sees it — "Record money IN" under a hall-hire note reads wrong at a glance, which a bare
               "Record" never could. */}
-          <button onClick={submit} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>
-            {'Record money ' + (dir === 'in' ? 'IN' : 'OUT') + (amount && Number(amount) > 0 ? ' · ' + (dir === 'in' ? '+' : '−') + (CCY_SYM[book.baseCurrency] || '') + Number(amount).toFixed(2) : '')}
+          <button onClick={submit} disabled={!canSave} style={{ flex: 2, height: 44, border: 'none', background: canSave ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: canSave ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>
+            {'Record money ' + (dir === 'in' ? 'IN' : 'OUT') + (total > 0 ? ' · ' + (dir === 'in' ? '+' : '−') + booksFmt(total, book) : '')}
           </button>
         </div>
       </div>
@@ -345,6 +468,23 @@ function BooksFundMove({ book, onTransfer, onClose }) {
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
           <button onClick={submit} disabled={busy || fundList.length < 2} style={{ flex: 2, height: 44, border: 'none', background: fundList.length < 2 ? 'var(--line)' : 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: fundList.length < 2 ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Move money</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- view a receipt image attached to a journal entry ----
+// `data` is the decrypted image data: URI, or the sentinel 'pending' when the blob has not arrived from the
+// relay yet (the entry references it but the subscription has not delivered the finance/attachment: doc).
+function BooksReceiptView({ data, onClose }) {
+  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 68, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Receipt" tabIndex={-1} style={{ ...bkCard, maxWidth: '96%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        {data === 'pending'
+          ? <div style={{ padding: 20, color: 'var(--ink-3)', fontSize: 13.5 }}>The receipt is still arriving from your church’s relay. Give it a moment and try again.</div>
+          : <img src={data} alt="Receipt" style={{ display: 'block', maxWidth: '100%', maxHeight: '82vh', borderRadius: 8 }} />}
+        <div style={{ textAlign: 'right', marginTop: 10 }}><button onClick={onClose} style={{ height: 40, padding: '0 16px', border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Close</button></div>
       </div>
     </div>
   );
@@ -806,6 +946,9 @@ function DashFinanceBook() {
   const bookRef = React.useRef(null);
   if (!bookRef.current) bookRef.current = useRelay ? F.createBook({ baseCurrency: 'GBP', decimals: 2 }) : booksLoad();
   const book = bookRef.current;
+  // Receipt images, kept OUT of the ledger (they are side blobs): id → data: URI. Filled from every finance/
+  // delivery (encSubscribe) and optimistically on upload, read by the feed's receipt viewer.
+  const attByIdRef = React.useRef({});
   const [, setTick] = React.useState(0);
   const bump = () => setTick(t => t + 1);
   // A journal entry is the church's money record — it must not be published fire-and-forget. This wasn't
@@ -815,7 +958,10 @@ function DashFinanceBook() {
   const pubEntry = async (b, e) => {
     if (!useRelay) { booksSave(b); return true; }
     try {
-      const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null });
+      // attachmentRefs IS LOAD-BEARING HERE. This is the LIVE publish path and it hardcodes its own field list
+      // (it does NOT call bookToDocs). Drop attachmentRefs from this object and the receipt link is lost on
+      // publish — the entry rebuilds from the relay with no attachments, a control reporting work it did not do.
+      const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [] });
       // NULL IS NOT SUCCESS. encPublish returns null — never false — when it declines before reaching the
       // relay: no signing key, or no books key to seal with. `ok === false` alone let that through as a
       // success, so a console without the finance ring showed the entry saved, wrote nothing anywhere, and
@@ -843,7 +989,10 @@ function DashFinanceBook() {
     let seeded = false;
     const unsub = S.encSubscribe('finance/', items => {
       const docs = items.map(finItemToDoc).filter(Boolean);
-      if (!docs.length) {
+      // Receipt blobs ride the same subscription. Pull their data: URIs into the side map BEFORE rebuildBook,
+      // which deliberately ignores t:'attachment' (a blob is not part of the double-entry book).
+      for (const d of docs) if (d.t === 'attachment' && d.data) attByIdRef.current[d.id] = d.data;
+      if (!docs.some(d => d.t !== 'attachment')) {
         // AUDIT-2026-07-24: "no docs came back" is NOT proof this church has no book. Finance docs are private,
         // so an unauthenticated or restarting relay returns exactly this empty result — and seeding republishes
         // finance/settings and finance/account:<id>, which are REPLACEABLE, so the church's real currency,
@@ -866,8 +1015,9 @@ function DashFinanceBook() {
     // [], so it never followed a church switch and never re-issued its REQ after a relay reconnect.
   }, [_bIdv, _bConn]);
   const [bookErrors, setBookErrors] = React.useState([]);
-  const [recording, setRecording] = React.useState(false);
+  const [recording, setRecording] = React.useState(false);   // null|true for a fresh entry, or a {initial} prefill for a correction
   const [importing, setImporting] = React.useState(false);
+  const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
   const [reports, setReports] = React.useState(false);
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
@@ -904,22 +1054,73 @@ function DashFinanceBook() {
   // reappears on the next delivery, which rebuilds the book from what the relay actually holds. Re-entering
   // it by hand inside that window is the way to double it, so the wording never invites that.
   const _dropIfRefused = (b, entry) => { if (entry && F.dropFrom) { try { F.dropFrom(b, entry.seq); } catch (x) {} } };
-  const record = ({ dir, account, fund, amountMinor, date, memo }) => {
+  // Publish a receipt image as its own REPLACEABLE finance/attachment:<id> doc, BEFORE the journal entry that
+  // references it goes up — so a delivery that rebuilds the book always finds the blob the ref points at. The
+  // id is opaque (booksRandId). A relay refusal here aborts the whole record: a journal entry must never cite
+  // an attachment the relay rejected. Optimistically cached so the feed can show it before the round-trip.
+  const pubAttachment = async (id, dataUri) => {
+    attByIdRef.current[id] = dataUri;
+    if (!useRelay) { booksSave(bookRef.current); return true; }
+    try {
+      const ok = await S.encPublish('finance/attachment:' + id, { data: dataUri });
+      if (ok === false || ok == null) throw new Error('the receipt was not published');
+      return true;
+    } catch (x) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'receipt', message: 'The receipt was NOT saved — your church\'s relay refused or did not answer. Nothing was recorded; try again.' } })); } catch (e2) {}
+      return false;
+    }
+  };
+  // Record a transaction. `legs` is one OR MORE category postings (a split); their amounts sum to `totalMinor`,
+  // which is the single balancing bank leg (BooksRecord disables Save unless they match, and F.post's balance
+  // check is the backstop). `attachment` (optional) is published first; its id rides on the entry's
+  // attachmentRefs, which pubEntry/bookToDocs/finItemToDoc/applyEntry all carry.
+  const record = async ({ dir, legs, totalMinor, date, memo, attachment }) => {
     const b = bookRef.current;
-    const P = dir === 'in'
-      ? [{ account: 'bank', dir: 'dr', amount: amountMinor }, { account, fund, dir: 'cr', amount: amountMinor }]
-      : [{ account, fund, dir: 'dr', amount: amountMinor }, { account: 'bank', dir: 'cr', amount: amountMinor }];
-    // Awaited: pubEntry's answer is the only thing that distinguishes a recorded entry from a lost one, and
-    // all three call sites used to drop it, so the row rendered as recorded either way.
-    // ROLL BACK A REFUSED ENTRY HERE TOO. Audit 2026-09-04, second pass: `dropFrom` was applied only inside
-    // the import, so ONE refused manual entry still advanced the local book past a seq the relay never took —
-    // and every later entry, and every later import, was then numbered past a gap the relay refuses. Measured:
-    // after one failed manual entry, a three-line import posted 0 of 3, and "Try again" posted 0 again. The
-    // treasurer is told to try again and cannot succeed until a relay delivery rebuilds the book.
-    const entry = F.post(b, { date, memo, postings: P });
-    return pubEntry(b, entry).then((ok) => { if (!ok) _dropIfRefused(b, entry); bump(); return ok; });
+    let attachmentRefs = [];
+    if (attachment && attachment.data) {
+      const ok = await pubAttachment(attachment.id, attachment.data);
+      if (!ok) { bump(); return false; }   // the receipt did not land — post nothing that would cite it
+      attachmentRefs = [attachment.id];
+    }
+    const catLegs = legs.map(l => ({ account: l.account, fund: l.fund, dir: dir === 'in' ? 'cr' : 'dr', amount: l.amountMinor }));
+    const bankLeg = { account: 'bank', dir: dir === 'in' ? 'dr' : 'cr', amount: totalMinor };
+    const P = dir === 'in' ? [bankLeg, ...catLegs] : [...catLegs, bankLeg];
+    // Awaited: pubEntry's answer is the only thing that distinguishes a recorded entry from a lost one.
+    // ROLL BACK A REFUSED ENTRY (dropFrom): one refused entry otherwise advances the local book past a seq the
+    // relay never took, and every later entry/import is numbered past a gap the relay refuses (audit 2026-09-04).
+    let entry = null;
+    try { entry = F.post(b, { date, memo, postings: P, attachmentRefs }); }
+    catch (e) { bump(); throw e; }   // e.g. a split that does not balance — surfaced to BooksRecord's catch
+    const ok = await pubEntry(b, entry);
+    if (!ok) _dropIfRefused(b, entry);
+    bump();
+    return ok;
   };
   const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { if (!ok) _dropIfRefused(b, rev); bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
+  // "Correct this entry": reverse the original (append-only), then open BooksRecord pre-filled from it so the
+  // treasurer re-enters the fixed version through the ordinary record() path. TWO appended entries, in order —
+  // the reversal must be published and confirmed BEFORE the replacement is posted (post() advances _seq and the
+  // relay demands exactly the next seq), so we await undo() and only pre-fill on success. A refused reversal
+  // surfaces its own write-blocked toast (via pubEntry) and we do NOT open the form — nothing to correct.
+  // The reversal does NOT copy attachmentRefs (reverse() posts a bare mirror); the replacement carries its own
+  // receipt. Transfers and already-reversed/reversal rows never reach here (the row gate below hides Correct).
+  const correctEntry = async (e) => {
+    const cat = e.postings.find(p => { const a = book.accounts.get(p.account); return a && (a.type === 'income' || a.type === 'expense'); });
+    if (!cat) return;   // not an income/expense entry (e.g. a transfer) — no BooksRecord shape to pre-fill
+    const a = book.accounts.get(cat.account);
+    const dec = book.decimals || 2;
+    const prefill = {
+      dir: a.type === 'income' ? 'in' : 'out',
+      account: cat.account,
+      fund: cat.fund || 'general',
+      amount: (cat.amount / Math.pow(10, dec)).toFixed(dec),
+      date: e.date || booksTodayISO(),
+      memo: e.memo || '',
+      correctingSeq: e.seq,
+    };
+    const ok = await undo(e.seq);
+    if (ok) setRecording({ initial: prefill });
+  };
   // Post the lines the treasurer selected in the import modal. Each carries its statement lineKey as importKey
   // so a future re-import of the same statement is flagged as already-imported (see FinanceImport de-dup).
   // AN IMPORT THAT POSTED NOTHING MUST NOT CLOSE AS THOUGH IT HAD. Audit 2026-09-02 #17.
@@ -1126,8 +1327,13 @@ function DashFinanceBook() {
               <div style={{ fontWeight: 700, fontSize: 14, textDecoration: v.wasReversed ? 'line-through' : 'none', opacity: v.wasReversed ? .6 : 1 }}>{v.category}{v.memo ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {v.memo}</span> : ''}{v.wasReversed ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>reversed</span> : ''}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{v.date}{v.fund && v.fund !== 'general' ? ' · ' + ((book.funds.get(v.fund) || {}).name || v.fund) : ''}</div>
             </div>
+            {e.attachmentRefs && e.attachmentRefs.length ? <button title="View the receipt attached to this entry" aria-label="View receipt" onClick={() => setViewingAtt(attByIdRef.current[e.attachmentRefs[0]] || 'pending')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 14, padding: 4 }}>📎</button> : null}
             <div style={{ fontWeight: 800, fontSize: 14.5, color: v.isTransfer ? 'var(--ink-3)' : (v.inflow ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)'), whiteSpace: 'nowrap' }}>{v.isTransfer ? '' : (v.inflow ? '+' : '−')}{booksFmt(v.amount, book)}</div>
-            {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" onClick={() => undo(e.seq)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
+            {/* Correct and Reverse share the gate: both are hidden on a reversal row and on an already-reversed
+                row (reuse booksEntryView's isReversal/wasReversed). Correct additionally skips a fund transfer,
+                which has no BooksRecord (income/expense) shape to pre-fill. */}
+            {!v.isReversal && !v.wasReversed && !v.isTransfer && <button title="Reverse this entry and enter a corrected copy" onClick={() => correctEntry(e)} disabled={bookErrors.length > 0} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '3px 9px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Correct</button>}
+            {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" aria-label="Reverse this entry" onClick={() => undo(e.seq)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
           </div>
         ); })}
       </div>
@@ -1204,8 +1410,9 @@ function DashFinanceBook() {
         <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bank reconciliation, bills &amp; approvals, invoicing, budgets, multi-currency, a balance sheet + trustees' report, and regional giving-relief packs.</div>
       </div>
 
-      {recording && <BooksRecord book={book} onRecord={record} onClose={() => setRecording(false)} />}
+      {recording && <BooksRecord book={book} onRecord={record} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
       {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
+      {viewingAtt ? <BooksReceiptView data={viewingAtt} onClose={() => setViewingAtt('')} /> : null}
       {accEditing && <BooksAccountEdit book={book} initial={accEditing} onSave={saveAccount} onClose={() => setAccEditing(null)} />}
       {fundEditing && <BooksFundEdit book={book} initial={fundEditing} onSave={saveFund} onClose={() => setFundEditing(null)} />}
       {moving && <BooksFundMove book={book} onTransfer={transferFunds} onClose={() => setMoving(false)} />}

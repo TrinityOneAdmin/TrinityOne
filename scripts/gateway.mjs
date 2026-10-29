@@ -985,6 +985,13 @@ const GROUP_D = D.GROUP, FUND_D = D.FUND, MEMBER_D = D.MEMBER, PLAN_D = D.PLAN, 
 const CATEGORY_D = D.CATEGORY;   // steward-editable named container for groups (SECURITY-AUDIT-2026-06-24 M1)
 const ROSTER_D = D.ROSTER, SERVICE_D = D.SERVICE, EVENT_D = D.EVENT, REQUEST_D = D.REQUEST;
 const FIN_JOURNAL_D = D.FIN_JOURNAL;   // church-book double-entry journal entry — d=finance/journal:<seq>, ["church",<cp>], single-writer & append-only
+// Receipt image attached to a journal entry — d=finance/attachment:<id>, a REPLACEABLE finance/ doc (same
+// church-OR-finance-steward gate as settings/account/fund). It carries an inline ENCRYPTED image, so unlike
+// the other finance/ docs it needs a size ceiling enforced HERE and not only in the client: a thin relay must
+// not be a blob store. The client shrinks to ~200KB; this caps the encrypted body (base64 ≈ its char length)
+// with headroom, well under the generic 1 MB WS frame limit that is the only other backstop.
+const FIN_ATTACHMENT_D = 'finance/attachment:';
+const FIN_ATTACHMENT_MAX = parseInt(process.env.RELAY_FIN_ATTACHMENT_MAX, 10) || 300 * 1024;   // ~300KB encrypted body cap
 const ROOM_D = D.ROOM, BOOKING_D = D.BOOKING;   // shared room calendar (church-only writes)
 const RUNSHEET_D = D.RUNSHEET;   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
 const RELAYS_D = D.RELAYS;   // the church's trusted-relays list (resync): d=trinityone/relays, church-signed, content=[{pubkey,url}]
@@ -4094,8 +4101,10 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
 const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
 let _lastRefusalDocCap = false;
+let _lastRefusalTooBig = false;   // set when accept() refused a finance/attachment: body over FIN_ATTACHMENT_MAX
 function accept(e) {
   _lastRefusalDocCap = false;
+  _lastRefusalTooBig = false;
   // AN UNCONFIGURED BOX HOLDS NOBODY'S DATA, SO IT ACCEPTS NOBODY'S.
   //
   // This used to `return true` — a relay with no churches took every write from anyone. Defensible while a
@@ -4561,9 +4570,13 @@ function accept(e) {
       const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
       return Number.isInteger(seq) && seq === (FINANCE_SEQ.get(cp) || 0) + 1;   // exactly the next seq → rejects gaps, forks AND edits
     }
-    if (d.startsWith('finance/')) {   // other finance docs (settings / accounts / funds) — role-gated, no seq
+    if (d.startsWith('finance/')) {   // other finance docs (settings / accounts / funds / attachments) — role-gated, no seq
       const cp = finCp(e);
-      return !!cp && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance'));
+      if (!cp || !(e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance'))) return false;
+      // A receipt attachment carries an inline encrypted image — cap it where the data lands, not only in the
+      // client (a modified/old client can ignore the ~200KB client cap). Authority is unchanged by this.
+      if (d.startsWith(FIN_ATTACHMENT_D) && (e.content || '').length > FIN_ATTACHMENT_MAX) { _lastRefusalTooBig = true; return false; }
+      return true;
     }
     // SECURITY-AUDIT-2026-07-06 M4: a giving fund carries the church's PAYMENT DESTINATION (lnaddr) — where
     // donations go. That is OWNER-ONLY: a delegated steward must not be able to create/replace a fund with
@@ -8788,13 +8801,16 @@ wss.on('connection', (ws, req) => {
         const _undeclared = evt.kind === 30078 && MEMBERS.has(evt.pubkey) && !memberDocTypeOk(_rd) && !relayGatesType(_rd)
           && !(CHURCH_PUBS.has(evt.pubkey) || _rIsNetwork);
         const _docCap = _lastRefusalDocCap;
+        const _tooBig = _lastRefusalTooBig;
         rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids'
           : _undeclared ? 'undeclared document type ' + _rd.slice(0, 40) + ' from a member'
+          : _tooBig ? 'finance attachment over the ' + Math.round(FIN_ATTACHMENT_MAX / 1024) + 'KB cap'
           : _docCap ? 'document limit reached for ' + (evt.pubkey || '').slice(0, 12)
           : 'not a member or not permitted for this group');
         ws.send(JSON.stringify(['OK', evt.id, false, _stale
           ? 'blocked: please update the app to ask for help — this version cannot send a request'
           : _undeclared ? 'blocked: undeclared document type — this relay has no rule for it, and a member may not write one'
+          : _tooBig ? 'blocked: that receipt image is too large — please attach a smaller photo'
           : _docCap ? 'rate-limited: document limit reached — please contact a steward'
           : 'blocked: not a member or not permitted for this group']));
         return;
