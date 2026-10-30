@@ -1543,6 +1543,14 @@ function financeCardEnvelope(model, { branded = true, churchName = '' } = {}) {
   if (model.income && model.income.length) sections.push({ kind: 'rows', label: 'Income by category', rows: model.income.map(r => ({ name: r.name, amount: r.amount })) });
   if (model.spending && model.spending.length) sections.push({ kind: 'rows', label: 'Spending by category', rows: model.spending.map(r => ({ name: r.name, amount: r.amount })) });
   if (model.funds && model.funds.length) sections.push({ kind: 'rows', label: 'Fund balances (closing)', tag: true, rows: model.funds.map(r => ({ name: r.name, kind: r.kind, balance: r.balance })) });
+  // Balance sheet (when the 'balance' section is ticked) — rides as a plain rows section so BOTH card renderers
+  // (ConsoleFinanceCard + the member FinanceCard) draw it with their existing 'rows' handling, no renderer change.
+  // Aggregate + name-free: three totals only (assets, liabilities, net funds).
+  if (model.balance) sections.push({ kind: 'rows', label: 'Balance sheet', rows: [
+    { name: 'Assets', amount: model.balance.assets },
+    { name: 'Liabilities', amount: model.balance.liabilities },
+    { name: 'Net funds', amount: model.balance.funds },
+  ] });
   // The treasurer's NOTE (the 'note' section, when ticked and filled) rides as its own card section.
   if (model.note && model.note.trim()) sections.push({ kind: 'note', text: model.note.trim() });
   return {
