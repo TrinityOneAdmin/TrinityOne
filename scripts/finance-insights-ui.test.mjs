@@ -70,30 +70,32 @@ test('the Insights tab is on the strip', () => {
   assert.ok(h.button('Insights'), 'the Insights tab is not on the Finance tab strip');
 });
 
-test('selecting Insights reveals the projection chart with the computed projection, and hides Transactions', () => {
+test('selecting Insights renders ALL FOUR charts at once on the one card, each under its heading', () => {
   const h = setup();
   h.draw();
   h.feedItems(seedItems());
   h.click('Insights');
-  const chart = h.comp('BooksProjectionChart');
-  assert.ok(chart, 'the Insights tab did not reveal the projection chart');
-  // The data must actually be COMPUTED and handed down — delete the F.yearEndProjection call and this fails.
-  assert.ok(chart.props && chart.props.proj && chart.props.proj.projected, 'DashFinanceBook did not pass a computed projection to the chart');
-  assert.ok(!nodes(h.tree).some(n => n.type === 'div' && texts(n).join(' ').includes('Recent transactions')) , 'the Transactions panel is still showing on the Insights tab');
+  // All four chart components are present TOGETHER — delete any one from the grid and its line here fails.
+  const proj = h.comp('BooksProjectionChart'), trend = h.comp('BooksMonthlyTrendChart'), budg = h.comp('BooksBudgetChart'), funds = h.comp('BooksFundBalanceChart');
+  assert.ok(proj, 'the year-end projection chart is missing from the Insights grid');
+  assert.ok(trend, 'the monthly trend chart is missing from the Insights grid');
+  assert.ok(budg, 'the budget-vs-actual chart is missing from the Insights grid');
+  assert.ok(funds, 'the fund-balances chart is missing from the Insights grid');
+  // The data must actually be COMPUTED and handed down — delete F.yearEndProjection and this fails.
+  assert.ok(proj.props && proj.props.proj && proj.props.proj.projected, 'DashFinanceBook did not pass a computed projection to the chart');
+  // Each chart carries its heading so the four read as distinct.
+  const screen = texts(h.tree).join(' ');
+  for (const hd of ['Year-end projection', 'Monthly trend', 'Budget vs actual', 'Fund balances']) assert.ok(screen.includes(hd), 'missing the "' + hd + '" chart heading');
+  assert.ok(!nodes(h.tree).some(n => n.type === 'div' && texts(n).join(' ').includes('Recent transactions')), 'the Transactions panel is still showing on the Insights tab');
 });
 
-test('the Insights sub-view switcher swaps the four charts', () => {
+test('the sub-view switcher is GONE — the four headings are not clickable buttons', () => {
   const h = setup();
   h.draw();
   h.feedItems(seedItems());
   h.click('Insights');
-  assert.ok(h.comp('BooksProjectionChart') && !h.comp('BooksMonthlyTrendChart'), 'projection is not the default sub-view');
-  h.click('Monthly trend');
-  assert.ok(h.comp('BooksMonthlyTrendChart') && !h.comp('BooksProjectionChart'), 'the Monthly trend sub-view did not swap in the trend chart');
-  h.click('Budget vs actual');
-  assert.ok(h.comp('BooksBudgetChart') && !h.comp('BooksMonthlyTrendChart'), 'the Budget vs actual sub-view did not swap in the budget chart');
-  h.click('Fund balances');
-  assert.ok(h.comp('BooksFundBalanceChart') && !h.comp('BooksBudgetChart'), 'the Fund balances sub-view did not swap in the fund chart');
+  // Before the grid reflow these were <button> pills; now they are plain headings. No switcher button remains.
+  for (const label of ['Monthly trend', 'Budget vs actual', 'Fund balances']) assert.ok(!h.button(label), 'a "' + label + '" switcher button is still on the Insights tab — the switcher was not removed');
 });
 
 // ── half 2: each chart component renders a real <svg> with the expected series ──
