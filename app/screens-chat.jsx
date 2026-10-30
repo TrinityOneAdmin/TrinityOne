@@ -937,11 +937,11 @@ function FinanceCard({ card, church }) {
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy }) {
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
-  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy };
+  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash };
   const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
@@ -1153,9 +1153,12 @@ function Row({ me, m, children, ctx, mod }) {
     // its message (top:100%) and each row is its own stacking context (the trinityFade entrance), so the menu's own
     // zIndex:5 only ranks it inside the row and the NEXT message painted over it. Gated on the menu ONLY: the reaction
     // picker opens upward and needs no lift.
-    <div {...sw.handlers} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
       style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
-        position: 'relative', zIndex: M.menuOpen ? 30 : undefined, ...sw.style }}>
+        position: 'relative', zIndex: M.menuOpen ? 30 : undefined,
+        // brief gold flash when the pinned banner scrolls here (M.flash, self-clearing in the chat room)
+        ...(M.flash ? { outline: '2px solid var(--gold)', outlineOffset: 2, borderRadius: 14, background: 'color-mix(in oklab, var(--gold) 12%, transparent)', transition: 'outline-color .3s, background .3s' } : {}),
+        ...sw.style }}>
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
       {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
@@ -1670,6 +1673,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [evOpen, setEvOpenState] = useC(() => { try { return lsGet(evOpenKey, true) !== false; } catch (e) { return true; } });
   const setEvOpen = (v) => { setEvOpenState(v); try { lsSet(evOpenKey, v); } catch (e) {} };
   const [pin, setPin] = useC(null);              // the group's pinned message { msgId, text, by, ts } or null
+  const [flashMsgId, setFlashMsgId] = useC(null);   // a message briefly highlighted after the pinned banner scrolls to it
+  const flashTimer = useCR();
   const [hidden, setHidden] = useC(null);        // Set of removed message ids (null until first load)
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
   const [infoOpen, setInfoOpen] = useC(false);   // the Group info + members overlay (opened by tapping the header)
@@ -1702,6 +1707,18 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const canPostHere = !(isBroadcast && !isLeader);
   const id = useIdentity();
   const scRef = useCR();
+  // TAP THE PINNED BANNER → SCROLL TO THE FULL MESSAGE. The pinned one is in the DOM when loaded (the list is
+  // not virtualised). Query the SCROLL CONTAINER only (not document) so a second open room can't match, and
+  // CSS.escape the id. If it isn't loaded (old/trimmed), do nothing. A brief gold flash marks it, self-clearing.
+  const scrollToPinned = () => {
+    const id = pin && pin.msgId; if (!id || !scRef.current) return;
+    let el = null; try { el = scRef.current.querySelector('[data-msg-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]'); } catch (e) {}
+    if (!el) return;
+    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    setFlashMsgId(id);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashMsgId(null), 1600);
+  };
   // { gid, ids } — the message ids already shown, kept ACROSS a reconnect so the relay's replay is deduped
   // rather than appended a second time. Reset only when the room changes. See the effect below.
   const seenRef = useCR(null);
@@ -1999,9 +2016,9 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
     onReply={canPostHere ? (() => { setReplyTo(m); setMenuFor(null); }) : null} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
-    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} />
+    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} flash={flashMsgId === m.id} />
   </React.Fragment>),
-    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, canPostHere, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles; `canPostHere` so a mid-session promotion to leader restores public reply
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, canPostHere, flags, modBusy, flashMsgId]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles; `canPostHere` so a mid-session promotion to leader restores public reply
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
@@ -2079,11 +2096,12 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       {pin && pin.msgId ? (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
           <Icon name="pin" size={15} color="var(--gold)" style={{ marginTop: 2, flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
+          {/* tapping the banner body scrolls the chat to the full pinned message; the Unpin X stops propagation */}
+          <div role="button" tabIndex={0} onClick={scrollToPinned} title="Go to the pinned message" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
             <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', marginBottom: 1 }}>PINNED</div>
             <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{pin.text || '(message)'}</div>
           </div>
-          {canModerate ? <button onClick={doUnpin} disabled={!!modBusy} title="Unpin" style={{ border: 'none', background: 'none', cursor: modBusy ? 'default' : 'pointer', opacity: modBusy ? .45 : 1, color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
+          {canModerate ? <button onClick={(e) => { if (e) e.stopPropagation(); doUnpin(); }} disabled={!!modBusy} title="Unpin" style={{ border: 'none', background: 'none', cursor: modBusy ? 'default' : 'pointer', opacity: modBusy ? .45 : 1, color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
         </div>
       ) : null}
 
