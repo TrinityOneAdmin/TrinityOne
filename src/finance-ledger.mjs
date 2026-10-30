@@ -92,7 +92,7 @@ function _normalize(book, postings) {
   return norm;
 }
 
-export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null, importKey = null, attachmentRefs = [], invoice = null } = {}) {
+export function post(book, { date = '', memo = '', postings, by = '', ts = 0, reverses = null, importKey = null, attachmentRefs = [], invoice = null, bill = null } = {}) {
   const norm = _normalize(book, postings);
   // attachmentRefs: ids of finance/attachment:<id> blobs (receipt images) tied to this entry. A SIDE field —
   // the ledger never reads it; it is carried so the serializers (pubEntry/bookToDocs) and the deserializers
@@ -101,7 +101,10 @@ export function post(book, { date = '', memo = '', postings, by = '', ts = 0, re
   // credit-note entries so "is THIS invoice paid?" can be netted from the AR postings tagged with it. Another
   // SIDE field (the double-entry engine never reads it: balance, trialBalance, fundBalances all ignore it),
   // carried so the SAME four serializers preserve it. Absent → null, so a pre-Phase-5 entry round-trips unchanged.
-  const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [], invoice: invoice ?? null };
+  // bill (Phase 6): the payable mirror of `invoice` — the opaque finance/bill:<id> this entry belongs to (set on
+  // the receive and payment entries), netted over the AP postings to answer "is THIS bill paid?". Same SIDE-field
+  // treatment through the same four serializers; absent → null, so a pre-Phase-6 entry round-trips unchanged.
+  const entry = { seq: ++book._seq, date, memo, postings: norm, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [], invoice: invoice ?? null, bill: bill ?? null };
   book.journal.push(entry);
   return entry;
 }
@@ -131,7 +134,7 @@ export function applyEntry(book, entry) {
   if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error('entry needs an integer seq');
   if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
   const norm = _normalize(book, entry.postings);
-  const e = { seq: entry.seq, date: entry.date || '', memo: entry.memo || '', postings: norm, by: entry.by || '', ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [], invoice: entry.invoice ?? null };
+  const e = { seq: entry.seq, date: entry.date || '', memo: entry.memo || '', postings: norm, by: entry.by || '', ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [], invoice: entry.invoice ?? null, bill: entry.bill ?? null };
   book.journal.push(e); book._seq = entry.seq;
   return e;
 }

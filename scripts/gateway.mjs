@@ -997,6 +997,19 @@ const FIN_DONOR_D = D.FIN_DONOR;
 // branch ABOVE the generic finance/ read that DROPS networkOf — contact PII must never reach a network-peer
 // church, only the church key or a finance steward. See the read branch for the full note.
 const FIN_CONTACT_D = D.FIN_CONTACT;
+// INVOICE (Phase 5) + BILL (Phase 6) METADATA. Both embed a PARTY NAME (a hall-hirer / a supplier), so by the
+// owner's decision (2026-10-30) their READ is narrowed EXACTLY like finance/donor + finance/contact: an explicit
+// canRead branch ABOVE the generic finance/ read that DROPS networkOf (church key OR a finance steward only,
+// never a network peer). WRITE is UNCHANGED — the generic finance/ write prefix already covers both.
+const FIN_INVOICE_D = D.FIN_INVOICE;
+const FIN_BILL_D = D.FIN_BILL;
+// DUAL-CONTROL BILL APPROVAL — d=finance/billapproval:<billId>:<approverhex> (Phase 6). The APPROVER's pubkey is
+// embedded in the address and the write rule binds it to the event SIGNER (refuses e.pubkey != that hex), so a
+// finance steward cannot forge an approval attributed to another — the check-in-arrival house pattern
+// (arrivalIdOk), applied to the payables approval. REPLACEABLE, no seq. The authority to approve is UNCHANGED
+// from every other finance/ doc (church key OR a finance steward); this branch ADDS the signer==approver bind
+// and widens NOTHING. READ falls to the generic finance/ rule (it is an attestation, not PII).
+const FIN_BILLAPPROVAL_D = D.FIN_BILLAPPROVAL;
 // Receipt image attached to a journal entry — d=finance/attachment:<id>, a REPLACEABLE finance/ doc (same
 // church-OR-finance-steward gate as settings/account/fund). It carries an inline ENCRYPTED image, so unlike
 // the other finance/ docs it needs a size ceiling enforced HERE and not only in the client: a thin relay must
@@ -2784,6 +2797,21 @@ function owningChurch(e, d) {
 // finance docs are authored EITHER by the church key itself (encPublish — self-encrypted, no ['church'] tag)
 // OR by a steward naming the church in a ['church'] tag. Resolve the owning church for the finance gates from both.
 const finCp = (e) => namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
+// Split a dual-control bill-approval address finance/billapproval:<billId>:<approverhex> into its two halves,
+// the SAME way arrivalAddrOf splits a check-in arrival: the author pubkey is a FIXED 64 hex at the END, so the
+// colon's position is arithmetic (no leading-`.+` scan, which is the megabyte-d-tag DoS arrivalAddrOf guards
+// against). Returns { bill, who } or null. The accept() branch then requires e.pubkey === who, binding the
+// approver named in the address to the signer. Cap mirrors ARRIVAL_ADDR_MAX; an opaque bill id is short.
+const BILLAPPROVAL_ADDR_MAX = 200;
+function billApprovalAddrOf(d) {
+  const rest = String(d || '').slice(FIN_BILLAPPROVAL_D.length);
+  if (!rest || rest.length > BILLAPPROVAL_ADDR_MAX) return null;
+  const cut = rest.length - 65;                          // ':' + 64 hex, at the end and nowhere else
+  if (cut <= 0 || rest[cut] !== ':') return null;        // cut <= 0 also refuses an address with an EMPTY bill id
+  const who = rest.slice(cut + 1);
+  if (!/^[0-9a-f]{64}$/.test(who)) return null;          // one spelling, lower-case, as every other pubkey rule
+  return { bill: rest.slice(0, cut), who };
+}
 const BLOCKED_BY = new Map();    // churchpub -> Set(blocked member pubkeys); BLOCKED is the union for fast checks
 // ⚠ THERE IS NO RELAY-WIDE `BLOCKED` SET ANY MORE, AND THAT IS THE FIX. It existed as the union of every
 // church's list, and eleven gates consulted it, so one church's ban silenced its subject across every
@@ -4582,6 +4610,20 @@ function accept(e) {
       const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
       return Number.isInteger(seq) && seq === (FINANCE_SEQ.get(cp) || 0) + 1;   // exactly the next seq → rejects gaps, forks AND edits
     }
+    // DUAL-CONTROL BILL APPROVAL — d=finance/billapproval:<billId>:<approverhex>. MUST sit ABOVE the generic
+    // finance/ branch (it is a finance/ prefix too, so the generic branch would otherwise catch it first and
+    // never bind the signer). Same principal set as every finance/ write (church key OR a finance steward —
+    // NO widening), PLUS the bind: the approver named in the address must be the event signer. A finance
+    // steward X therefore cannot publish an approval attributed to steward Y — the relay refuses it, because
+    // Y's address demands Y's signature. This is the ONLY new relay rule Phase 6 adds. (It RETURNS either way,
+    // so it never falls through to the generic finance/ branch, which would re-admit the very write it refused.)
+    if (d.startsWith(FIN_BILLAPPROVAL_D)) {
+      const cp = finCp(e);
+      if (!cp || !(e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance'))) return false;   // church key, or a finance steward
+      const a = billApprovalAddrOf(d);
+      if (!a) return false;                                  // the address names no approver (or an empty bill id)
+      return String(e.pubkey || '').toLowerCase() === a.who; // the address names the approver, so only they may sign it
+    }
     if (d.startsWith('finance/')) {   // other finance docs (settings / accounts / funds / attachments) — role-gated, no seq
       const cp = finCp(e);
       if (!cp || !(e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance'))) return false;
@@ -5467,6 +5509,16 @@ function canRead(e, authed) {
     // return (a branch that narrows then falls through serves it to everyone — the 2026-09-16 finance defect).
     // WRITE is unchanged (the generic finance/ write prefix already covers it).
     if (d.startsWith(FIN_CONTACT_D)) return authed === cp || stewardCan(authed, cp, 'finance');
+    // finance/invoice:<id> (Phase 5) and finance/bill:<id> (Phase 6) embed a PARTY NAME — a hall-hirer on the
+    // invoice, a supplier on the bill. By the owner's decision (2026-10-30) they are narrowed EXACTLY like
+    // finance/donor + finance/contact: these branches sit ABOVE the generic finance/ read and DROP networkOf, so
+    // a network-peer church served aggregate finance (journal/account/fund) is NOT served an invoice or a bill.
+    // Each MUST return (a branch that narrows then falls through serves it to everyone — the 2026-09-16 finance
+    // defect). WRITE is unchanged (the generic finance/ write prefix already covers both). finance/billapproval:
+    // is deliberately NOT narrowed — it is an approval attestation {bill, ts}, not PII, so it stays on the
+    // generic finance/ read below.
+    if (d.startsWith(FIN_INVOICE_D)) return authed === cp || stewardCan(authed, cp, 'finance');
+    if (d.startsWith(FIN_BILL_D)) return authed === cp || stewardCan(authed, cp, 'finance');
     if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
     // ══ THE CHECK-IN DOCUMENTS DECIDE THEIR OWN READERS, AND THEY DECIDE THEM *FIRST* ═════════════════════
     //

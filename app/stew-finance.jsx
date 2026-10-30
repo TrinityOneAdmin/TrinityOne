@@ -59,7 +59,7 @@ function finItemToDoc(it) {
   if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart };
   if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type, archived: !!it.archived };
   if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
-  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null, attachmentRefs: it.attachmentRefs ?? [], invoice: it.invoice ?? null };
+  if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null, attachmentRefs: it.attachmentRefs ?? [], invoice: it.invoice ?? null, bill: it.bill ?? null };
   // A receipt image (finance/attachment:<id>). Carried as a SIDE BLOB - rebuildBook ignores t:'attachment', so
   // it never enters the ledger; DashFinanceBook pulls the data: URI out of the live delivery into its own map.
   if (id.startsWith('attachment:')) return { t: 'attachment', id: id.slice(11), data: it.data || '' };
@@ -83,6 +83,20 @@ function finItemToDoc(it) {
   // replays only settings/account/fund/journal), so a budget can never post to the journal or disturb the
   // replay; DashFinanceBook collects it into SEPARATE console state (budgets) for the budget-vs-actual view.
   if (id.startsWith('budget:')) return { t: 'budget', id: id.slice(7), year: it.year || '', lines: Array.isArray(it.lines) ? it.lines : [] };
+  // BILL + BILL-APPROVAL side docs (Phase 6 — Accounts Payable) — metadata, NOT part of the double-entry book
+  // (the money rides the journal, accrued through the reserved AP account). Like invoice/contact they map to
+  // their own `t`, which rebuildBook ignores, and DashFinanceBook collects them into SEPARATE console state. The
+  // bill's `approved` is the LIGHT-mode flag; status is DERIVED (F.billStatus), never read from here.
+  if (id.startsWith('bill:')) return { t: 'bill', id: id.slice(5), number: it.number || '', supplier: it.supplier || '', lines: Array.isArray(it.lines) ? it.lines : [], received: it.received || '', due: it.due || '', by: it.by || '', approved: it.approved || null, receiveSeq: it.receiveSeq ?? null };
+  // A DUAL-CONTROL approval (finance/billapproval:<billId>:<approverhex>). The APPROVER is read from the d-tag,
+  // which the relay BINDS to the event signer (it refuses a write whose signer != the hex in the address — the
+  // check-in-arrival house pattern), so it cannot be forged by another writer. `id` here is the d-tag suffix
+  // after 'finance/' = 'billapproval:<billId>:<approverhex>'; split off the trailing ':'+64hex to recover both.
+  if (id.startsWith('billapproval:')) {
+    const rest = id.slice('billapproval:'.length);
+    const cut = rest.lastIndexOf(':');
+    return { t: 'billapproval', id: rest, bill: cut > 0 ? rest.slice(0, cut) : rest, approver: cut > 0 ? rest.slice(cut + 1) : '', ts: it.ts ?? null };
+  }
   return null;
 }
 // An opaque, random id for a REPLACEABLE finance doc (template / reconciliation). Human-facing names are a
@@ -586,6 +600,80 @@ function BooksInvoiceEdit({ book, contacts, onIssue, onClose }) {
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
           <button onClick={submit} disabled={!canIssue} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: canIssue ? 'pointer' : 'default', opacity: canIssue ? 1 : 0.5, fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Issue invoice</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- bill editor (Phase 6 — Accounts Payable) -----------------------------------------------------------
+// Record a bill the church has RECEIVED: one or more line items (each an EXPENSE category + fund + amount), a
+// supplier, a reference number, a received date and a due date. Recording posts the accrual journal entry (dr
+// expense / cr Accounts-Payable) and publishes the metadata doc — the parent's onSave does both and mints the
+// opaque id. It does NOT approve: approval + payment are separate steps on the Bills list. Amounts are typed in
+// major units and parsed to integer minor units (booksParse), the same as every other finance form. The
+// supplier field reuses the finance/contact: list (suppliers and customers share that record kind).
+function BooksBillEdit({ book, contacts, onSave, onClose }) {
+  const expense = [...book.accounts.values()].filter(a => a.type === 'expense' && !a.archived);
+  const funds = [...book.funds.values()];
+  const supplierList = Array.isArray(contacts) ? contacts.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
+  const [number, setNumber] = React.useState('');
+  const [supplier, setSupplier] = React.useState('');
+  const [received, setReceived] = React.useState(booksTodayISO());
+  const [due, setDue] = React.useState('');
+  const [rows, setRows] = React.useState([{ desc: '', account: expense[0] ? expense[0].id : '', fund: 'general', amount: '' }]);
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const setRowAt = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const addRow = () => setRows(rs => [...rs, { desc: '', account: expense[0] ? expense[0].id : '', fund: 'general', amount: '' }]);
+  const removeRow = (i) => setRows(rs => rs.length > 1 ? rs.filter((_, j) => j !== i) : rs);
+  const total = rows.reduce((s, r) => s + booksParse(r.amount, book), 0);
+  const canSave = !busy && expense.length > 0 && rows.some(r => r.account && booksParse(r.amount, book) > 0) && rows.every(r => !r.amount || booksParse(r.amount, book) >= 0);
+  const submit = async () => {
+    const lines = rows.map(r => ({ desc: r.desc.trim(), account: r.account, fund: r.fund, amount: booksParse(r.amount, book) })).filter(l => l.account && l.amount > 0);
+    if (!lines.length) return setErr('Add at least one line with a category and an amount greater than zero.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onSave({ number: number.trim(), supplier: supplier.trim(), lines, received, due });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t record — your church’s relay refused or did not answer. Nothing was recorded.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not record that bill.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Record a bill" tabIndex={-1} style={{ ...bkCard, width: 520, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>New bill</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>Recording books the expense now (accrual) and tracks what you owe. It must be approved before you can mark it paid.</div>
+        {expense.length === 0 && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '0 0 10px' }}>Add an expense category first (Accounts &amp; funds) — a bill needs one to charge.</p>}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Reference</label><input value={number} onChange={e => setNumber(e.target.value)} placeholder="e.g. INV-4471" style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Supplier</label><input list="fin-supplier-list" value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="Supplier name" style={bkFld} />
+            <datalist id="fin-supplier-list">{supplierList.map(c => <option key={c.id} value={c.name} />)}</datalist>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Received</label><input type="date" value={received} onChange={e => setReceived(e.target.value)} style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Due</label><input type="date" value={due} onChange={e => setDue(e.target.value)} style={bkFld} /></div>
+        </div>
+        <label style={bkLbl}>Lines</label>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+            <input value={r.desc} onChange={e => setRowAt(i, { desc: e.target.value })} placeholder="Description" style={{ ...bkFld, flex: 2 }} />
+            <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} style={{ ...bkFld, flex: 1, padding: '0 8px' }}>{expense.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+            <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} style={{ ...bkFld, width: 110, padding: '0 8px' }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+            <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" style={{ ...bkFld, width: 92 }} />
+            {rows.length > 1 && <button onClick={() => removeRow(i)} aria-label="Remove line" title="Remove this line" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, padding: 4 }}>×</button>}
+          </div>
+        ))}
+        <button onClick={addRow} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add line</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <span style={{ fontSize: 13, color: 'var(--ink-3)', fontWeight: 700 }}>Total</span>
+          <span style={{ fontSize: 17, fontWeight: 800 }}>{booksFmt(total, book)}</span>
+        </div>
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={!canSave} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: canSave ? 'pointer' : 'default', opacity: canSave ? 1 : 0.5, fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Record bill</button>
         </div>
       </div>
     </div>
@@ -1539,7 +1627,7 @@ function DashFinanceBook() {
       // attachmentRefs IS LOAD-BEARING HERE. This is the LIVE publish path and it hardcodes its own field list
       // (it does NOT call bookToDocs). Drop attachmentRefs from this object and the receipt link is lost on
       // publish — the entry rebuilds from the relay with no attachments, a control reporting work it did not do.
-      const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null });
+      const ok = await S.encPublish('finance/journal:' + e.seq, { seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null, bill: e.bill ?? null });
       // NULL IS NOT SUCCESS. encPublish returns null — never false — when it declines before reaching the
       // relay: no signing key, or no books key to seal with. `ok === false` alone let that through as a
       // success, so a console without the finance ring showed the entry saved, wrote nothing anywhere, and
@@ -1577,6 +1665,8 @@ function DashFinanceBook() {
       setInvoices(docs.filter(d => d.t === 'invoice')); // Phase 5 — finance/invoice:<id> docs, SEPARATE from the book
       setContacts(docs.filter(d => d.t === 'contact')); // Phase 5 — finance/contact:<id> docs, SEPARATE from the book
       setBudgets(docs.filter(d => d.t === 'budget'));  // Phase 7 — finance/budget:<id> docs, SEPARATE from the book (a READ overlay, never a ledger input)
+      setBills(docs.filter(d => d.t === 'bill'));       // Phase 6 — finance/bill:<id> docs, SEPARATE from the book (the money rides the journal)
+      setBillApprovals(docs.filter(d => d.t === 'billapproval')); // Phase 6 — dual-control approvals, approver bound to the signer by the d-tag
       // "Empty" means no BOOK docs (settings/account/fund/journal). Side docs (attachment/template/reconcile)
       // must NOT count, or a side-doc-only delivery would wrongly enter the seed path over a real book.
       if (!docs.some(d => d.t === 'settings' || d.t === 'account' || d.t === 'fund' || d.t === 'journal')) {
@@ -1630,6 +1720,11 @@ function DashFinanceBook() {
   const [contactEditing, setContactEditing] = React.useState(null); // contact editor: null closed · {} add · {id,…} edit
   const [invFlash, setInvFlash] = React.useState('');        // what an invoice action reported (saved / paid / exported / why not)
   const [budgets, setBudgets] = React.useState([]);          // finance/budget:<id> docs (Phase 7) — SEPARATE from the book (a READ overlay)
+  const [bills, setBills] = React.useState([]);              // finance/bill:<id> docs (Phase 6) — SEPARATE from the book (the money rides the journal)
+  const [billApprovals, setBillApprovals] = React.useState([]); // finance/billapproval:<billId>:<approverhex> docs (Phase 6, dual-control) — approver bound to the signer
+  const [billsOpen, setBillsOpen] = React.useState(false);   // collapsible "Bills" panel
+  const [billEditing, setBillEditing] = React.useState(null);// bill editor: null closed · {} new
+  const [billFlash, setBillFlash] = React.useState('');      // what a bill action reported (recorded / approved / paid / why not)
   const [budgetOpen, setBudgetOpen] = React.useState(false); // collapsible "Budget" panel
   const [budgetEditing, setBudgetEditing] = React.useState(null); // budget modal: null closed · {year, lines} the budget being edited
   const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
@@ -1998,6 +2093,97 @@ function DashFinanceBook() {
       setInvFlash(msg || 'Downloaded — open it to print or save as PDF.');
     } catch (e) { setInvFlash((e && e.message) || 'Could not save the invoice on this device.'); }
   };
+  // ── bills / accounts payable (Phase 6) ─────────────────────────────────────────────────────────────────
+  // Publish-if-absent the reserved Accounts-Payable account (the AR / fund-transfer pattern), so an un-upgraded
+  // console can still rebuild a book that posts to it. assertApAccount THROWS if a hand-made account collided on
+  // the slug with the wrong type — caught by the record path, which refuses rather than cr a non-liability.
+  const ensureAp = async () => {
+    const b = bookRef.current;
+    if (F.assertApAccount(b)) return true;   // present + liability
+    const a = F.AP_ACCOUNT;
+    if (useRelay) {
+      const ok = await S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type, archived: false });
+      if (ok === false || ok == null) {
+        try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'bill', message: 'Could not set up the payables account — your church\'s relay refused or did not answer. Nothing was recorded.' } })); } catch (e2) {}
+        return false;
+      }
+    }
+    try { F.addAccount(b, { id: a.id, code: a.code, name: a.name, type: a.type, archived: false }); } catch (e) {}
+    return true;
+  };
+  // RECORD a bill: dr expense/fund / cr AP (accrual) on the append-only journal — the SAME awaited pubEntry +
+  // dropFrom-on-refusal path as issueInvoice — then publish the REPLACEABLE finance/bill:<id> metadata doc. The
+  // id is opaque (booksRandId); the supplier's invoice number is a FIELD. Recording does NOT approve: the bill
+  // is unpaid until it is approved AND paid.
+  const recordBill = async ({ number, supplier, lines, received, due }) => {
+    const b = bookRef.current;
+    const clean = (lines || []).filter(l => l && l.account && Number.isSafeInteger(l.amount) && l.amount > 0);
+    if (!clean.length) return false;
+    let okAp;
+    try { okAp = await ensureAp(); }
+    catch (e) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'bill', message: (e && e.message) || 'The payables account is the wrong type.' } })); } catch (e2) {} return false; }
+    if (!okAp) return false;
+    const id = booksRandId();
+    // WHO RECORDED IT — the separation-of-duties anchor for dual mode. window.Steward.pubkey is this console's
+    // signing pubkey (the key the relay sees as e.pubkey): the church key on an owner console, the steward's own
+    // key on a delegated one. Stored on the bill doc so a DIFFERENT finance steward must be the one who approves.
+    const me = ((S && S.pubkey) || '').toLowerCase();
+    const bill = { id, number: number || '', supplier: supplier || '', lines: clean, received: received || booksTodayISO(), due: due || '' };
+    let entry = null;
+    try { entry = F.post(b, F.billReceiveEntry(bill)); }
+    catch (e) { bump(); return false; }
+    const ok = await pubEntry(b, entry);
+    if (!ok) { _dropIfRefused(b, entry); bump(); return false; }
+    const body = { number: bill.number, supplier: bill.supplier, lines: clean, received: bill.received, due: bill.due, by: me, receiveSeq: entry.seq };
+    if (!useRelay) { setBills(xs => [...xs.filter(x => x.id !== id), { t: 'bill', id, ...body }]); bump(); return true; }
+    const okDoc = await S.encPublish('finance/bill:' + id, body);
+    bump();
+    return !(okDoc === false || okDoc == null);
+  };
+  // APPROVE a bill. BOTH owner-chosen modes (OWNER DECISION 2026-10-30):
+  //  · LIGHT (default): set an `approved` field on the REPLACEABLE finance/bill:<id> doc — any finance steward
+  //    may; convenient, not tamper-evident. Re-publishes the whole bill doc with approved={by,ts} added.
+  //  · DUAL (features.billApproval===true): publish a SEPARATE approver-SIGNED finance/billapproval:<billId>:
+  //    <approverhex> doc. The relay refuses any write whose signer != the hex in the address (the check-in-
+  //    arrival pattern), so the approver is BOUND to the signer and cannot be forged. We sign as ourselves, so
+  //    the hex is our own signing pubkey (window.Steward.pubkey — the key the relay sees as e.pubkey).
+  const approveBill = async (bill) => {
+    const me = ((S && S.pubkey) || '').toLowerCase();
+    if (billApprovalMode === 'dual') {
+      if (!/^[0-9a-f]{64}$/.test(me)) { setBillFlash('Could not read your signing key, so nothing was approved.'); return false; }
+      // SEPARATION OF DUTIES: you cannot approve a bill you recorded. The engine (isBillApproved) ignores a
+      // self-approval anyway, so this is honest UX, not the only guard — but it stops a pointless write that
+      // would never count. A church with one finance steward simply cannot reach approved in dual mode (intended).
+      if (me === (bill.by || '').toLowerCase()) { setBillFlash('You recorded this bill, so another finance steward must approve it — that is what dual control means.'); return false; }
+      if (!useRelay) { setBillApprovals(xs => [...xs.filter(x => x.id !== bill.id + ':' + me), { t: 'billapproval', id: bill.id + ':' + me, bill: bill.id, approver: me, ts: Math.floor(Date.now() / 1000) }]); bump(); return true; }
+      const ok = await S.encPublish('finance/billapproval:' + bill.id + ':' + me, { bill: bill.id, ts: Math.floor(Date.now() / 1000) });
+      bump();
+      return !(ok === false || ok == null);
+    }
+    // LIGHT: re-publish the bill doc with the approval field set. PRESERVE `by` (the recorder) — a replaceable
+    // doc is overwritten wholesale, so dropping it here would wipe who recorded the bill.
+    const body = { number: bill.number || '', supplier: bill.supplier || '', lines: bill.lines || [], received: bill.received || '', due: bill.due || '', by: bill.by || '', receiveSeq: bill.receiveSeq ?? null, approved: { by: me, ts: Math.floor(Date.now() / 1000) } };
+    if (!useRelay) { setBills(xs => xs.map(x => x.id === bill.id ? { ...x, approved: body.approved } : x)); bump(); return true; }
+    const ok = await S.encPublish('finance/bill:' + bill.id, body);
+    bump();
+    return !(ok === false || ok == null);
+  };
+  // MARK PAID — manual settlement: dr AP / cr bank, tagged with the bill id. Works STANDALONE (no Phase 3); an
+  // auto-match of a bank line to an open bill is the only part that would ride reconcile, and it MUST call this
+  // same path so the guard still applies. THE APPROVAL GUARD is in F.billPaymentEntry (it throws unless the bill
+  // is approved), so this cannot pay an unapproved bill even if the disabled Mark-paid control were bypassed —
+  // the screen control AND the engine guard both have to be deleted for an unapproved bill to be paid.
+  const payBill = async (bill, amount) => {
+    const b = bookRef.current;
+    const approved = F.isBillApproved(bill, { mode: billApprovalMode, approvals: billApprovals, recordedBy: bill.by || '' });
+    let entry = null;
+    try { if (!F.assertApAccount(b)) return false; entry = F.post(b, F.billPaymentEntry(bill, { date: booksTodayISO(), amount, approved })); }
+    catch (e) { setBillFlash((e && e.message) || 'That bill cannot be paid yet.'); bump(); return false; }
+    const ok = await pubEntry(b, entry);
+    if (!ok) _dropIfRefused(b, entry);
+    bump();
+    return ok;
+  };
   // AN ANNUAL BUDGET (finance/budget:<id>, Phase 7) — a REPLACEABLE finance doc that is a pure READ OVERLAY:
   // it carries {year, lines:[{account, fund, amount}]} and is NEVER posted to the journal (no encPublish of a
   // finance/journal: doc here; rebuildBook ignores t:'budget'). OPAQUE id (CONTEXT: two authorised writers must
@@ -2017,6 +2203,11 @@ function DashFinanceBook() {
   // Gift Aid is a UK regional PACK, OFF BY DEFAULT: strict === true (NOT the default-on `!== false` feature
   // convention — DOMAIN nation-neutral), and the pack code only exists if its separate bundle loaded.
   const giftAidOn = !!(church && church.features && church.features.giftAid === true);
+  // Bill approval mode — DUAL control is an OPT-IN a church turns on, OFF BY DEFAULT: strict === true (NOT the
+  // default-on `!== false` convention — DOMAIN nation-neutral/silent, like giftAid). Default is the LIGHT flow
+  // (approval is a field on the replaceable bill doc). In BOTH modes the Mark-paid control and the engine guard
+  // refuse payment before approval; dual adds the tamper-evident, approver-signed approval doc.
+  const billApprovalMode = (church && church.features && church.features.billApproval === true) ? 'dual' : 'light';
 
   const funds = F.fundBalances(book);
   const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
@@ -2367,6 +2558,47 @@ function DashFinanceBook() {
 
       <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={() => setBillsOpen(r => !r)} title="Show or hide bills you owe (accounts payable)" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{billsOpen ? '▾' : '▸'} Bills</button>
+          {billsOpen && <button onClick={() => setBillEditing({})} disabled={bookErrors.length > 0} title="Record a bill you have received (accounts payable)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>+ New bill</button>}
+        </div>
+        {billsOpen && (() => {
+          const today = booksTodayISO();
+          const me = ((S && S.pubkey) || '').toLowerCase();   // this console's signing pubkey — who "I" am, for the self-approval block
+          const badge = (status) => {
+            const tone = status === 'paid' ? 'var(--sage, #4f7a5e)' : status === 'overdue' ? 'var(--clay-deep, #b4462f)' : 'var(--ink-3)';
+            return <span data-bill-status={status} style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: tone, border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 8 }}>{status}</span>;
+          };
+          const rows = bills.slice().sort((a, b) => (a.received < b.received ? 1 : a.received > b.received ? -1 : 0));
+          return (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>Recording a bill books the expense now (accrual) and tracks what is owed. A bill must be <b>approved</b> before it can be paid{billApprovalMode === 'dual' ? ' — dual control is on, so a DIFFERENT finance steward than the one who recorded it must approve it (you cannot approve your own bill).' : '.'}</div>
+            {billFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>{billFlash}</div> : null}
+            {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No bills yet. Record one you have received — the double-entry and what you owe are kept for you, and it must be approved before it is paid.</div>}
+            {rows.map(bill => {
+              const status = F.billStatus(bill, today, book.journal);
+              const approved = F.isBillApproved(bill, { mode: billApprovalMode, approvals: billApprovals, recordedBy: bill.by || '' });
+              // In dual mode the recorder may not approve their OWN bill (separation of duties). The engine
+              // ignores a self-approval regardless; this disables the control so the steward is not misled.
+              const iRecorded = billApprovalMode === 'dual' && me && me === (bill.by || '').toLowerCase();
+              const total = F.billTotal(bill);
+              return (
+                <div key={bill.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>Bill{bill.number ? ' ' + bill.number : ''}{bill.supplier ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {bill.supplier}</span> : null}{badge(status)}{approved ? <span data-bill-approved="1" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--sage, #4f7a5e)', border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 6 }}>approved</span> : null}</div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{booksFmt(total, book)}{bill.received ? ' · received ' + bill.received : ''}{bill.due ? ' · due ' + bill.due : ''}</div>
+                  </div>
+                  {!approved && status !== 'paid' && <button onClick={() => { approveBill(bill).then(ok => setBillFlash(ok ? 'Approved.' : 'That didn’t approve — your church’s relay refused or did not answer.')); }} disabled={bookErrors.length > 0 || iRecorded} title={iRecorded ? 'You recorded this bill — another finance steward must approve it (dual control)' : 'Approve this bill so it can be paid (finance stewards only)'} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: (bookErrors.length || iRecorded) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: (bookErrors.length || iRecorded) ? 0.5 : 1 }}>Approve</button>}
+                  {status !== 'paid' && <button onClick={() => { payBill(bill).then(ok => setBillFlash(ok ? 'Marked paid.' : 'That didn’t post — the bill must be approved first, or the relay refused.')); }} disabled={!approved || bookErrors.length > 0} title={approved ? 'Record payment in full (dr payables / cr bank)' : 'Approve the bill first — an unapproved bill cannot be paid'} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: (!approved || bookErrors.length) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: (!approved || bookErrors.length) ? 0.5 : 1 }}>Mark paid</button>}
+                </div>
+              );
+            })}
+          </div>
+          );
+        })()}
+      </div>
+
+      <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button onClick={() => setBudgetOpen(r => !r)} title="Show or hide your annual budget and how spending compares to it" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{budgetOpen ? '▾' : '▸'} Budget</button>
           {budgetOpen && <button onClick={() => setBudgetEditing({ id: budgetForFy && budgetForFy.id, year: fyYear, lines: (budgetForFy && budgetForFy.lines) || [] })} title="Set or change this year's budget" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit budget</button>}
         </div>
@@ -2408,6 +2640,7 @@ function DashFinanceBook() {
       {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
+      {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}
       {budgetEditing && <BooksBudgetEdit book={book} initial={budgetEditing} onSave={saveBudget} onClose={() => setBudgetEditing(null)} />}
     </div>
   );

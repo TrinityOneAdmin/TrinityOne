@@ -8,3 +8,4 @@ export * from './finance-reconcile.mjs';
 export * from './finance-reports.mjs';
 export * from './finance-invoice.mjs';
 export * from './finance-budget.mjs';
+export * from './finance-bill.mjs';
