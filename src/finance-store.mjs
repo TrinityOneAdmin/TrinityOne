@@ -15,7 +15,11 @@
 import { createBook, addAccount, addFund, applyEntry, check } from './finance-ledger.mjs';
 
 export function bookToDocs(book) {
-  const docs = [{ t: 'settings', baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
+  // `multiCurrency` (Phase 8) is OMITTED when false/absent so a silent-£ settings doc is BYTE-IDENTICAL to a
+  // pre-Phase-8 one (the "existing suite unchanged" gate). rebuildBook feeds this doc straight to createBook,
+  // which reads the flag back. The journal docs already carry any posting currency/origAmount/rate verbatim
+  // (postings: e.postings), so no other doc shape changes.
+  const docs = [{ t: 'settings', baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart, ...(book.multiCurrency ? { multiCurrency: true } : {}) }];
   for (const a of book.accounts.values()) docs.push({ t: 'account', id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived });
   for (const f of book.funds.values()) if (f.id !== 'general') docs.push({ t: 'fund', id: f.id, name: f.name, kind: f.kind });   // 'general' is implicit (createBook adds it)
   for (const e of book.journal) docs.push({ t: 'journal', seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null, bill: e.bill ?? null });

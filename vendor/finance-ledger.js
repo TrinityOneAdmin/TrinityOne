@@ -27,6 +27,8 @@ var FinanceLedger = (() => {
     AR_ACCT: () => AR_ACCT,
     FUND_KINDS: () => FUND_KINDS,
     FUND_TRANSFER_ACCT: () => FUND_TRANSFER_ACCT,
+    FX_ACCOUNT: () => FX_ACCOUNT,
+    FX_ACCT: () => FX_ACCT,
     STATEMENT_SECTIONS: () => STATEMENT_SECTIONS,
     accentInk: () => accentInk,
     accountHasPostings: () => accountHasPostings,
@@ -35,7 +37,10 @@ var FinanceLedger = (() => {
     applyEntry: () => applyEntry,
     assertApAccount: () => assertApAccount,
     assertArAccount: () => assertArAccount,
+    assertForeignCashAccount: () => assertForeignCashAccount,
+    assertFxAccount: () => assertFxAccount,
     balanceSheet: () => balanceSheet,
+    baseAmount: () => baseAmount,
     billApprovers: () => billApprovers,
     billOutstanding: () => billOutstanding,
     billPaymentEntry: () => billPaymentEntry,
@@ -51,6 +56,8 @@ var FinanceLedger = (() => {
     docFor: () => docFor,
     dropFrom: () => dropFrom,
     fmtMoney: () => fmtMoney,
+    foreignBalances: () => foreignBalances,
+    foreignCashAccount: () => foreignCashAccount,
     fundBalances: () => fundBalances,
     fundMovements: () => fundMovements,
     givingByFund: () => givingByFund,
@@ -82,6 +89,7 @@ var FinanceLedger = (() => {
     rebuildBook: () => rebuildBook,
     receiptsAndPayments: () => receiptsAndPayments,
     reportCsvRows: () => reportCsvRows,
+    revalueEntry: () => revalueEntry,
     reverse: () => reverse,
     statementBalanceCheck: () => statementBalanceCheck,
     statementHtml: () => statementHtml,
@@ -98,11 +106,12 @@ var FinanceLedger = (() => {
   // src/finance-ledger.mjs
   var ACCOUNT_TYPES = ["asset", "liability", "equity", "income", "expense"];
   var FUND_KINDS = ["general", "designated", "restricted"];
-  function createBook({ baseCurrency = "USD", decimals = 2, fiscalYearStart = "01-01" } = {}) {
+  function createBook({ baseCurrency = "USD", decimals = 2, fiscalYearStart = "01-01", multiCurrency = false } = {}) {
     const book = {
       baseCurrency,
       decimals,
       fiscalYearStart,
+      multiCurrency: !!multiCurrency,
       accounts: /* @__PURE__ */ new Map(),
       // id -> { id, code, name, type }
       funds: /* @__PURE__ */ new Map(),
@@ -136,6 +145,11 @@ var FinanceLedger = (() => {
     book.funds.set(id, f);
     return f;
   }
+  function baseAmount(origAmount, rate) {
+    if (!Number.isSafeInteger(origAmount) || origAmount <= 0) throw new Error("origAmount must be a positive integer (minor units)");
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) throw new Error("rate must be a positive finite number");
+    return Math.round(origAmount * rate);
+  }
   function _normalize(book, postings) {
     if (!Array.isArray(postings) || postings.length < 2) throw new Error("a journal entry needs at least two postings");
     let dr = 0, cr = 0;
@@ -149,6 +163,15 @@ var FinanceLedger = (() => {
       if (p.dir === "dr") dr += p.amount;
       else cr += p.amount;
       const o = { account: p.account, fund, dir: p.dir, amount: p.amount };
+      const hasCur = p.currency != null || p.origAmount != null || p.rate != null;
+      if (hasCur) {
+        if (typeof p.currency !== "string" || !p.currency) throw new Error(`posting ${i}: currency must be a non-empty string when a foreign amount is given`);
+        const base = baseAmount(p.origAmount, p.rate);
+        if (p.amount !== base) throw new Error(`posting ${i}: base amount ${p.amount} \u2260 round(origAmount\xD7rate)=${base}`);
+        o.currency = p.currency;
+        o.origAmount = p.origAmount;
+        o.rate = p.rate;
+      }
       if (p.donor != null && p.donor !== "") o.donor = String(p.donor);
       return o;
     });
@@ -182,7 +205,7 @@ var FinanceLedger = (() => {
     if (!orig) throw new Error("no entry with seq " + seq);
     if (orig.reverses != null) throw new Error("cannot reverse a reversal");
     if (book.journal.some((e) => e.reverses === seq)) throw new Error("entry #" + seq + " is already reversed");
-    const postings = orig.postings.map((p) => ({ account: p.account, fund: p.fund, dir: p.dir === "dr" ? "cr" : "dr", amount: p.amount, ...p.donor != null ? { donor: p.donor } : {} }));
+    const postings = orig.postings.map((p) => ({ account: p.account, fund: p.fund, dir: p.dir === "dr" ? "cr" : "dr", amount: p.amount, ...p.currency != null ? { currency: p.currency, origAmount: p.origAmount, rate: p.rate } : {}, ...p.donor != null ? { donor: p.donor } : {} }));
     return post(book, { date: date || orig.date, by, reverses: seq, memo: memo || `Reversal of #${seq}${orig.memo ? ": " + orig.memo : ""}`, postings });
   }
   function importedKeys(book) {
@@ -222,6 +245,66 @@ var FinanceLedger = (() => {
       else if (a && a.type === "expense") bal.set(p.fund, (bal.get(p.fund) || 0) + (p.dir === "dr" ? -p.amount : p.amount));
     }
     return [...book.funds.values()].map((f) => ({ fund: f.id, name: f.name, kind: f.kind, balance: bal.get(f.id) || 0 })).sort((a, b) => (a.fund === "general") - (b.fund === "general") === 0 ? a.fund < b.fund ? -1 : a.fund > b.fund ? 1 : 0 : a.fund === "general" ? -1 : 1);
+  }
+  var FX_ACCT = "fx-gains";
+  var FX_ACCOUNT = Object.freeze({ id: FX_ACCT, code: "4990", name: "Unrealised FX gains/(losses)", type: "income" });
+  function assertFxAccount(book) {
+    const a = book && book.accounts && typeof book.accounts.get === "function" ? book.accounts.get(FX_ACCT) : null;
+    if (!a) return false;
+    if (a.type !== "income") throw new Error("reserved account " + FX_ACCT + " must be income (found " + a.type + ")");
+    return true;
+  }
+  function foreignCashAccount(currency) {
+    const c = String(currency || "").trim().toUpperCase();
+    if (!c) throw new Error("a foreign cash account needs a currency");
+    return Object.freeze({ id: "cash-" + c.toLowerCase(), code: c, name: c + " cash", type: "asset", currency: c });
+  }
+  function assertForeignCashAccount(book, currency) {
+    const { id } = foreignCashAccount(currency);
+    const a = book && book.accounts && typeof book.accounts.get === "function" ? book.accounts.get(id) : null;
+    if (!a) return false;
+    if (a.type !== "asset") throw new Error("reserved account " + id + " must be an asset (found " + a.type + ")");
+    return true;
+  }
+  function foreignBalances(book) {
+    const orig = /* @__PURE__ */ new Map();
+    const annBase = /* @__PURE__ */ new Map();
+    const acctBase = /* @__PURE__ */ new Map();
+    const ccys = /* @__PURE__ */ new Map();
+    for (const e of book.journal) for (const p of e.postings) {
+      const s = p.dir === "dr" ? 1 : -1;
+      acctBase.set(p.account, (acctBase.get(p.account) || 0) + s * p.amount);
+      if (p.currency == null) continue;
+      const key = p.account + "\0" + p.currency;
+      orig.set(key, (orig.get(key) || 0) + s * p.origAmount);
+      annBase.set(key, (annBase.get(key) || 0) + s * p.amount);
+      if (!ccys.has(p.account)) ccys.set(p.account, /* @__PURE__ */ new Set());
+      ccys.get(p.account).add(p.currency);
+    }
+    const rows = [];
+    for (const [key, o] of orig) {
+      if (o === 0) continue;
+      const [account, currency] = key.split("\0");
+      const single = ccys.get(account).size === 1;
+      rows.push({ account, currency, origAmount: o, base: single ? acctBase.get(account) : annBase.get(key) });
+    }
+    return rows.sort((a, b) => a.account < b.account ? -1 : a.account > b.account ? 1 : a.currency < b.currency ? -1 : a.currency > b.currency ? 1 : 0);
+  }
+  function revalueEntry(book, { account, currency, newRate, date = "", by = "", memo = "" } = {}) {
+    if (typeof newRate !== "number" || !Number.isFinite(newRate) || newRate <= 0) throw new Error("newRate must be a positive finite number");
+    if (!assertFxAccount(book)) throw new Error("reserved account " + FX_ACCT + " is absent \u2014 publish it before revaluing");
+    const row = foreignBalances(book).find((r) => r.account === account && r.currency === currency);
+    if (!row) throw new Error("no foreign balance to revalue for " + account + " / " + currency);
+    const target = baseAmount(row.origAmount > 0 ? row.origAmount : -row.origAmount, newRate) * (row.origAmount > 0 ? 1 : -1);
+    const delta = target - row.base;
+    if (delta === 0) throw new Error("revaluation at that rate would not change the base carrying value");
+    const amt = Math.abs(delta);
+    return { date, by, memo: memo || "FX revaluation \u2014 " + currency + " @ " + newRate, postings: [
+      { account, dir: delta > 0 ? "dr" : "cr", amount: amt },
+      // the foreign cash account's base value moves
+      { account: FX_ACCT, dir: delta > 0 ? "cr" : "dr", amount: amt }
+      // a gain credits income; a loss debits it
+    ] };
   }
   function incomeExpenditure(book, { from = "", to = "\uFFFF" } = {}) {
     let income = 0, expenditure = 0;
@@ -281,7 +364,7 @@ var FinanceLedger = (() => {
 
   // src/finance-store.mjs
   function bookToDocs(book) {
-    const docs = [{ t: "settings", baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
+    const docs = [{ t: "settings", baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart, ...book.multiCurrency ? { multiCurrency: true } : {} }];
     for (const a of book.accounts.values()) docs.push({ t: "account", id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived });
     for (const f of book.funds.values()) if (f.id !== "general") docs.push({ t: "fund", id: f.id, name: f.name, kind: f.kind });
     for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null, bill: e.bill ?? null });
@@ -576,11 +659,13 @@ var FinanceLedger = (() => {
     const d = Number.isInteger(decimals) && decimals >= 0 ? decimals : 2;
     return (Number(minor) / Math.pow(10, d)).toFixed(d);
   }
-  function journalCsvRows(book) {
+  function journalCsvRows(book, { foreign = false } = {}) {
     const dec = book.decimals != null ? book.decimals : 2;
-    const rows = [["seq", "date", "memo", "account", "fund", "debit", "credit"]];
+    const head = ["seq", "date", "memo", "account", "fund", "debit", "credit"];
+    if (foreign) head.push("currency", "original amount");
+    const rows = [head];
     for (const e of book.journal) for (const p of e.postings) {
-      rows.push([
+      const row = [
         e.seq,
         e.date,
         e.memo,
@@ -588,7 +673,9 @@ var FinanceLedger = (() => {
         p.fund || "",
         p.dir === "dr" ? minorToMajorText(p.amount, dec) : "",
         p.dir === "cr" ? minorToMajorText(p.amount, dec) : ""
-      ]);
+      ];
+      if (foreign) row.push(p.currency || "", p.currency ? minorToMajorText(p.origAmount, dec) : "");
+      rows.push(row);
     }
     return rows;
   }
