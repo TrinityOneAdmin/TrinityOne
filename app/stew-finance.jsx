@@ -56,7 +56,7 @@ function booksSave(book) { try { localStorage.setItem(BOOKS_LS, JSON.stringify(w
 // map an encSubscribe item ({ id: the d-suffix after 'finance/', ...decrypted }) back to a finance-store doc
 function finItemToDoc(it) {
   const id = (it && it.id) || '';
-  if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart };
+  if (id === 'settings') return { t: 'settings', baseCurrency: it.baseCurrency, decimals: it.decimals, fiscalYearStart: it.fiscalYearStart, ...(it.multiCurrency === true ? { multiCurrency: true } : {}) };
   if (id.startsWith('account:')) return { t: 'account', id: id.slice(8), code: it.code, name: it.name, type: it.type, archived: !!it.archived };
   if (id.startsWith('fund:')) return { t: 'fund', id: id.slice(5), name: it.name, kind: it.kind };
   if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null, attachmentRefs: it.attachmentRefs ?? [], invoice: it.invoice ?? null, bill: it.bill ?? null };
@@ -254,6 +254,12 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
   const [memo, setMemo] = React.useState(init.memo || '');
   const [err, setErr] = React.useState('');
   const [split, setSplit] = React.useState(false);
+  // MULTI-CURRENCY (Phase 8) — OPT-IN, off by default. The currency + rate controls render ONLY when the church
+  // has turned multiCurrency on (the finance/settings flag), and only on a single-category entry (a foreign
+  // split is not offered — the 2-posting path is the rounding-safe one). Blank currency = a base-currency entry.
+  const mc = !!book.multiCurrency;
+  const [ccy, setCcy] = React.useState(init.currency || '');     // '' → base currency (a plain entry)
+  const [rate, setRate] = React.useState(init.rate ? String(init.rate) : '');
   const [rows, setRows] = React.useState([]);   // split legs: [{ account, fund, amount(major string) }]
   const [attachment, setAttachment] = React.useState(null);   // { id, data:(data:URI), name } or null
   const [attBusy, setAttBusy] = React.useState(false);
@@ -269,7 +275,18 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
   const total = booksParse(amount, book);
   const splitSum = rows.reduce((s, r) => s + booksParse(r.amount, book), 0);
   const splitOk = rows.length >= 1 && rows.every(r => r.account && booksParse(r.amount, book) > 0) && total > 0 && splitSum === total;
-  const canSave = !attBusy && (split ? splitOk : (total > 0 && !!account));
+  // When a foreign currency is chosen, the Amount field is in THAT currency; the ledger figure is base =
+  // round(origAmount × rate), computed by the engine's ONE rounding rule so it matches what _normalize re-checks.
+  const rateNum = parseFloat(rate);
+  // A foreign entry needs a currency that is NOT the base (typing the base currency is just a base entry) — and
+  // its cash leg goes to the RESERVED per-currency account `cash-<ccy>` (recordEntry auto-creates it), NEVER the
+  // base `bank`. There is deliberately no cash-account picker: the account is DERIVED from the currency, so a
+  // foreign entry can never be directed at the base cash account (the revaluation-corruption bug, AUDIT-P8 #1).
+  const baseCcy = (book.baseCurrency || '').toUpperCase();
+  const foreign = mc && !split && !!ccy.trim() && ccy.trim().toUpperCase() !== baseCcy;
+  const rateOk = Number.isFinite(rateNum) && rateNum > 0;
+  const baseTotal = foreign ? (rateOk && total > 0 ? window.FinanceLedger.baseAmount(total, rateNum) : 0) : total;
+  const canSave = !attBusy && (split ? splitOk : (total > 0 && !!account && (!foreign || (rateOk && baseTotal > 0))));
   const addRow = () => setRows(rs => [...rs, { account: cats[0] ? cats[0].id : '', fund: 'general', amount: '' }]);
   const setRowAt = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
   const removeRow = (i) => setRows(rs => rs.filter((_, j) => j !== i));
@@ -289,20 +306,35 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
     setAttBusy(false);
   };
   const submit = () => {
-    const tot = booksParse(amount, book);
+    const tot = booksParse(amount, book);   // the amount AS TYPED — foreign units when `foreign`, else base
     if (!tot) return setErr('Enter an amount greater than zero.');
-    let legs;
+    let legs, totalMinor, fx = null;
     if (split) {
       legs = rows.map(r => ({ account: r.account, fund: r.fund, amountMinor: booksParse(r.amount, book) }));
       if (legs.some(l => !l.account)) return setErr('Pick a category for every split row.');
       if (legs.some(l => !(l.amountMinor > 0))) return setErr('Enter an amount greater than zero for every split row.');
       if (legs.reduce((s, l) => s + l.amountMinor, 0) !== tot) return setErr('The split rows must add up to the total (' + booksFmt(tot, book) + ').');
+      totalMinor = tot;
+    } else if (foreign) {
+      // A foreign single-category entry: base = round(origAmount × rate) via the engine's rule, MIRRORED onto
+      // both legs (the category leg is plain base; the cash leg carries the annotation), so Σdr==Σcr by
+      // construction and _normalize's per-leg amount===baseAmount(origAmount,rate) check passes.
+      if (!account) return setErr('Pick a category.');
+      if (!rateOk) return setErr('Enter an exchange rate greater than zero.');
+      const base = window.FinanceLedger.baseAmount(tot, rateNum);
+      if (!(base > 0)) return setErr('That amount and rate come to nothing in ' + book.baseCurrency + '.');
+      legs = [{ account, fund, amountMinor: base }];
+      totalMinor = base;
+      // No cashAccount: recordEntry DERIVES the reserved per-currency account from the currency and never uses bank.
+      fx = { currency: ccy.trim().toUpperCase(), origAmount: tot, rate: rateNum };
     } else {
       if (!account) return setErr('Pick a category.');
       legs = [{ account, fund, amountMinor: tot }];
+      totalMinor = tot;
     }
     // Donor only on money-in; the OPAQUE id (BooksRecord never sends a name). record() applies it to the income legs.
-    try { onRecord({ dir, legs, totalMinor: tot, date, memo: memo.trim(), attachment, donor: dir === 'in' ? donor : '' }); onClose(); }
+    // `fx` (null unless a foreign entry) tells record() which cash account to use and what annotation to carry.
+    try { onRecord({ dir, legs, totalMinor, date, memo: memo.trim(), attachment, donor: dir === 'in' ? donor : '', fx }); onClose(); }
     catch (e) { setErr(e.message || 'Could not record that.'); }
   };
   // WHICH WAY THE MONEY GOES, CARRIED BY MORE THAN COLOUR.
@@ -356,9 +388,27 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
           </div>
         </>)}
         <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-          <div style={{ flex: 1 }}><label style={bkLbl}>{split ? 'Total' : 'Amount'} ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</label><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00" aria-label="Amount" style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>{split ? 'Total' : 'Amount'} ({foreign ? (CCY_SYM[ccy.trim()] || ccy.trim()) : (CCY_SYM[book.baseCurrency] || book.baseCurrency)})</label><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00" aria-label="Amount" style={bkFld} /></div>
           <div style={{ flex: 1 }}><label style={bkLbl}>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={bkFld} /></div>
         </div>
+        {/* MULTI-CURRENCY (Phase 8) — renders ONLY when the church turned multiCurrency on AND this is a single-
+            category entry. Blank currency = an ordinary base-currency entry. Deleting this block, or the flag
+            that gates it, removes the feature from the screen — the point-of-use test (finance-multicurrency-ui)
+            asserts the Exchange-rate field is here when on and ABSENT by default. */}
+        {mc && !split ? (
+          <div data-mc-fields style={{ border: '1px solid var(--line)', borderRadius: 11, padding: 10, marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ flex: 1 }}><label style={bkLbl}>Currency</label><input value={ccy} onChange={e => setCcy(e.target.value.toUpperCase())} placeholder={book.baseCurrency} aria-label="Currency" maxLength={8} style={bkFld} /></div>
+              <div style={{ flex: 1 }}><label style={bkLbl}>Rate → {book.baseCurrency}</label><input value={rate} onChange={e => setRate(e.target.value)} inputMode="decimal" placeholder="1.00" aria-label="Exchange rate" disabled={!foreign && !ccy.trim()} style={{ ...bkFld, opacity: ccy.trim() ? 1 : 0.5 }} /></div>
+            </div>
+            {/* The cash side is held in its OWN per-currency account ("USD cash"), created automatically — never
+                the base bank account — so a foreign holding can never be mixed into base cash. */}
+            {foreign ? (rateOk && total > 0
+              ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 8 }}>{booksFmt(baseTotal, book)} at {rateNum} {book.baseCurrency}/{ccy.trim()} · held in {ccy.trim()} cash</div>
+              : <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 8 }}>Enter the exchange rate to {book.baseCurrency}.</div>)
+              : <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Leave the currency blank for a {book.baseCurrency} entry.</div>}
+          </div>
+        ) : null}
         <label style={bkLbl}>Note (optional)</label>
         <input value={memo} onChange={e => setMemo(e.target.value)} placeholder="e.g. Sunday offering" style={{ ...bkFld, marginBottom: 12 }} />
         {/* DONOR — money-in only (a gift has a giver; a bill does not). Writes the OPAQUE id, never the name.
@@ -388,10 +438,35 @@ function BooksRecord({ book, onRecord, onClose, initial, donors }) {
               person sees it — "Record money IN" under a hall-hire note reads wrong at a glance, which a bare
               "Record" never could. */}
           <button onClick={submit} disabled={!canSave} style={{ flex: 2, height: 44, border: 'none', background: canSave ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 11, cursor: canSave ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>
-            {'Record money ' + (dir === 'in' ? 'IN' : 'OUT') + (total > 0 ? ' · ' + (dir === 'in' ? '+' : '−') + booksFmt(total, book) : '')}
+            {'Record money ' + (dir === 'in' ? 'IN' : 'OUT') + (baseTotal > 0 ? ' · ' + (dir === 'in' ? '+' : '−') + booksFmt(baseTotal, book) : '')}
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// One row of the "Foreign balances" list (Phase 8, multi-currency). Shows the holding in its own currency and
+// its base carrying value, with a rate field + Revalue button that posts an APPEND-ONLY revaluation entry (dr/cr
+// the foreign cash account against the reserved FX income account). NOT a dialog (no role="dialog"), so it needs
+// no every-console-dialog-mounts entry. Reachable only when multiCurrency is on AND a foreign balance exists.
+function BooksRevalRow({ row, book, onRevalue }) {
+  const [rate, setRate] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const r = parseFloat(rate);
+  const ok = Number.isFinite(r) && r > 0;
+  const dec = book.decimals || 2;
+  const origMajor = (row.origAmount / Math.pow(10, dec)).toLocaleString('en-GB', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  const acctName = (book.accounts.get(row.account) || {}).name || row.account;
+  const go = async () => { if (!ok || busy) return; setBusy(true); try { await onRevalue({ account: row.account, currency: row.currency, newRate: r }); } catch (e) {} setBusy(false); setRate(''); };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600 }}>{acctName}<span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {origMajor} {row.currency}</span></div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>carried at {booksFmt(row.base, book)}</div>
+      </div>
+      <input value={rate} onChange={e => setRate(e.target.value)} inputMode="decimal" placeholder="rate" aria-label={'New rate for ' + row.currency} style={{ ...bkFld, height: 34, width: 78, fontSize: 13, padding: '0 8px' }} />
+      <button onClick={go} disabled={!ok || busy} title="Revalue this balance at the rate entered (posts a gain/loss)" style={{ border: 'none', background: ok && !busy ? 'var(--clay)' : 'var(--line)', color: 'var(--on-clay)', borderRadius: 8, padding: '6px 12px', cursor: ok && !busy ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12 }}>Revalue</button>
     </div>
   );
 }
@@ -1802,6 +1877,56 @@ function DashFinanceBook() {
     bump();
     return ok;
   };
+  // Publish-if-absent the reserved per-currency foreign CASH account `cash-<ccy>` (the AR/AP/FX pattern), so an
+  // un-upgraded console can rebuild a book that posts to it. assertForeignCashAccount THROWS if a hand-made
+  // account collided on the slug with a non-asset type — caught by recordEntry, which refuses rather than post.
+  const ensureForeignCash = async (currency) => {
+    const b = bookRef.current;
+    const a = F.foreignCashAccount(currency);   // { id:'cash-<ccy>', code, name, type:'asset', currency }
+    if (F.assertForeignCashAccount(b, currency)) return a.id;   // present + asset
+    if (useRelay) {
+      const ok = await S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type, archived: false });
+      if (ok === false || ok == null) {
+        try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'foreign entry', message: 'Could not set up the ' + a.currency + ' cash account — your church\'s relay refused or did not answer. Nothing was recorded.' } })); } catch (e2) {}
+        return null;
+      }
+    }
+    try { F.addAccount(b, { id: a.id, code: a.code, name: a.name, type: a.type, archived: false }); } catch (e) {}
+    return a.id;
+  };
+  // MULTI-CURRENCY entry (Phase 8). This is what BooksRecord's onRecord points at. For an ordinary base-currency
+  // entry (`fx` null — every silent-£ church, always) it delegates UNCHANGED to record() above, which keeps its
+  // exact signature and its hardcoded 'bank' leg (and its point-of-use/donor tests untouched). For a FOREIGN
+  // entry the cash side is DERIVED from the currency — a dedicated `cash-<ccy>` account, auto-created and NEVER
+  // the base `bank` (the AUDIT-P8 #1 corruption: a foreign leg on bank made foreignBalances read the whole bank
+  // balance as the holding, and revaluing knocked the fake delta off real base cash). `totalMinor` is already the
+  // base figure BooksRecord computed with F.baseAmount, mirrored onto the plain category legs, so Σdr==Σcr and
+  // _normalize's per-leg amount===baseAmount(origAmount,rate) check both hold. Same awaited pubEntry + drop path.
+  const recordEntry = async ({ dir, legs, totalMinor, date, memo, attachment, donor, fx }) => {
+    if (!fx || !fx.currency) return record({ dir, legs, totalMinor, date, memo, attachment, donor });
+    const b = bookRef.current;
+    let cashAccount;
+    try { cashAccount = await ensureForeignCash(fx.currency); }
+    catch (e) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'foreign entry', message: (e && e.message) || 'The ' + fx.currency + ' cash account is the wrong type.' } })); } catch (e2) {} return false; }
+    if (!cashAccount) return false;
+    let attachmentRefs = [];
+    if (attachment && attachment.data) {
+      const ok = await pubAttachment(attachment.id, attachment.data);
+      if (!ok) { bump(); return false; }
+      attachmentRefs = [attachment.id];
+    }
+    const donorTag = (dir === 'in' && donor) ? { donor: String(donor) } : {};
+    const catLegs = legs.map(l => ({ account: l.account, fund: l.fund, dir: dir === 'in' ? 'cr' : 'dr', amount: l.amountMinor, ...donorTag }));
+    const cashLeg = { account: cashAccount, dir: dir === 'in' ? 'dr' : 'cr', amount: totalMinor, currency: fx.currency, origAmount: fx.origAmount, rate: fx.rate };
+    const P = dir === 'in' ? [cashLeg, ...catLegs] : [...catLegs, cashLeg];
+    let entry = null;
+    try { entry = F.post(b, { date, memo, postings: P, attachmentRefs }); }
+    catch (e) { bump(); throw e; }
+    const ok = await pubEntry(b, entry);
+    if (!ok) _dropIfRefused(b, entry);
+    bump();
+    return ok;
+  };
   const undo = seq => { const b = bookRef.current; try { const rev = F.reverse(b, seq); return pubEntry(b, rev).then((ok) => { if (!ok) _dropIfRefused(b, rev); bump(); return ok; }); } catch (e) { return Promise.resolve(false); } };
   // "Correct this entry": reverse the original (append-only), then open BooksRecord pre-filled from it so the
   // treasurer re-enters the fixed version through the ordinary record() path. TWO appended entries, in order —
@@ -1931,6 +2056,54 @@ function DashFinanceBook() {
     const ok = await S.encPublish('finance/fund:' + id, { name: name || id, kind });
     bump();
     return !(ok === false || ok == null);
+  };
+  // MULTI-CURRENCY opt-in (Phase 8). A single boolean on the existing REPLACEABLE finance/settings doc —
+  // absent/false by default (silent-£, DOMAIN: no pilot currency prompt). No new relay doc kind, no scope
+  // widening. Republishes the WHOLE settings doc (the flag omitted when off, so turning it off restores the
+  // byte-identical pre-Phase-8 settings body). The local book updates optimistically and self-corrects on the
+  // next encSubscribe delivery (rebuildBook → createBook reads the flag back).
+  const setMultiCurrencyOn = async (on) => {
+    const b = bookRef.current;
+    b.multiCurrency = !!on;
+    if (!useRelay) { booksSave(b); bump(); return true; }
+    const body = { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart, ...(b.multiCurrency ? { multiCurrency: true } : {}) };
+    const ok = await S.encPublish('finance/settings', body);
+    bump();
+    return !(ok === false || ok == null);
+  };
+  // Publish-if-absent the reserved FX gains/losses account (the AR/AP pattern), so an un-upgraded console can
+  // still rebuild a book that posts a revaluation to it. assertFxAccount THROWS if a hand-made account collided
+  // on the slug with the wrong type — caught by the revalue path, which refuses rather than post to a non-income.
+  const ensureFx = async () => {
+    const b = bookRef.current;
+    if (F.assertFxAccount(b)) return true;   // present + income
+    const a = F.FX_ACCOUNT;
+    if (useRelay) {
+      const ok = await S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type, archived: false });
+      if (ok === false || ok == null) {
+        try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'revaluation', message: 'Could not set up the FX gains/losses account — your church\'s relay refused or did not answer. Nothing was revalued.' } })); } catch (e2) {}
+        return false;
+      }
+    }
+    try { F.addAccount(b, { id: a.id, code: a.code, name: a.name, type: a.type, archived: false }); } catch (e) {}
+    return true;
+  };
+  // REVALUE a foreign balance at a new rate: an APPEND-ONLY journal entry (dr/cr the foreign cash account against
+  // the FX income account) via the SAME awaited pubEntry + dropFrom-on-refusal path as record(). The gain/loss is
+  // round(origAmount × newRate) − current base carrying value (F.revalueEntry, which reads F.foreignBalances).
+  const revalue = async ({ account, currency, newRate }) => {
+    const b = bookRef.current;
+    let okFx;
+    try { okFx = await ensureFx(); }
+    catch (e) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'revaluation', message: (e && e.message) || 'The FX account is the wrong type.' } })); } catch (e2) {} return false; }
+    if (!okFx) return false;
+    let entry = null;
+    try { entry = F.post(b, F.revalueEntry(b, { account, currency, newRate, date: booksTodayISO() })); }
+    catch (e) { bump(); return false; }
+    const ok = await pubEntry(b, entry);
+    if (!ok) _dropIfRefused(b, entry);
+    bump();
+    return ok;
   };
   // Move £X from one fund to another as a balanced, income/expenditure-NEUTRAL journal entry (see
   // FUND_TRANSFER_ACCT in finance-ledger.mjs). Publish-if-absent the reserved account FIRST, as a normal
@@ -2219,7 +2392,9 @@ function DashFinanceBook() {
   const recent = book.journal.slice().reverse().slice(0, 16);
   const exportCsv = async () => {
     // MAJOR UNITS (pounds), not the ledger's integer pence — F.journalCsvRows does the conversion (sim 2026-10-02 #62).
-    const rows = F.journalCsvRows(book);
+    // The base debit/credit columns are ALWAYS pounds; a multi-currency church also gets the original-currency
+    // annotation columns (OFF for a silent-£ book, so the "export is in pounds" output is byte-identical).
+    const rows = F.journalCsvRows(book, { foreign: !!book.multiCurrency });
     // SECURITY-AUDIT-2026-07-06 H6: CSV formula-injection guard. `memo` carries bank-statement descriptions
     // imported verbatim (attacker-controllable via a payment reference). RFC-4180 quoting does NOT stop a cell
     // that STARTS with = + - @ (or tab/CR) from being run as a formula when the treasurer opens the file in
@@ -2455,6 +2630,27 @@ function DashFinanceBook() {
                 </div>
               );
             })}
+
+            {/* ── Currencies (Phase 8, multi-currency) — OPT-IN, OFF by default (silent-£). Turning it on reveals
+                the currency + rate fields on the Record form and the Foreign balances / Revalue list below. ── */}
+            <div style={{ margin: '18px 0 8px', fontWeight: 700, fontSize: 14 }}>Currencies</div>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', borderTop: '1px solid var(--line)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!book.multiCurrency} onChange={e => setMultiCurrencyOn(e.target.checked)} aria-label="Record transactions in other currencies" style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
+              <span style={{ fontSize: 13.5, color: 'var(--ink)' }}>Record transactions in other currencies
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', fontWeight: 400, marginTop: 2 }}>Your books stay in {CCY_SYM[book.baseCurrency] || book.baseCurrency}. A foreign entry is converted at the rate you enter; the original amount is kept alongside it.</span>
+              </span>
+            </label>
+            {book.multiCurrency ? (() => {
+              const fb = F.foreignBalances(book);
+              return (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ ...bkLbl, margin: '2px 0 2px' }}>Foreign balances</div>
+                  {fb.length === 0
+                    ? <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '4px 0' }}>No foreign-currency balances yet. Record a transaction in another currency and it appears here to revalue.</div>
+                    : fb.map(row => <BooksRevalRow key={row.account + '/' + row.currency} row={row} book={book} onRevalue={revalue} />)}
+                </div>
+              );
+            })() : null}
           </div>
         )}
       </div>
@@ -2627,7 +2823,7 @@ function DashFinanceBook() {
         <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, multi-currency, and more regional giving-relief packs.</div>
       </div>
 
-      {recording && <BooksRecord book={book} onRecord={record} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
+      {recording && <BooksRecord book={book} onRecord={recordEntry} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
       {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
       {viewingAtt ? <BooksReceiptView data={viewingAtt} onClose={() => setViewingAtt('')} /> : null}
       {accEditing && <BooksAccountEdit book={book} initial={accEditing} onSave={saveAccount} onClose={() => setAccEditing(null)} />}

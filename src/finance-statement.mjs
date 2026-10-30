@@ -37,12 +37,20 @@ export function minorToMajorText(minor, decimals = 2) {
 // pence — sim round 2 found the file carried raw minor units, so a £45.00 payment read as 4500 in the
 // treasurer's spreadsheet). Header first. Cells are returned raw; quoting is the caller's job.
 // Callers: exportCsv in app/stew-finance.jsx (the only one).
-export function journalCsvRows(book) {
+// `foreign` (Phase 8) is OFF by default: the debit/credit columns are ALWAYS base currency (pounds), which the
+// "export is in pounds" test asserts. When ON (a multi-currency church opts in), two annotation columns are
+// APPENDED — the posting's original currency and amount — leaving the base figures and every existing column
+// exactly where they were, so the default call is byte-identical to the pre-Phase-8 output.
+export function journalCsvRows(book, { foreign = false } = {}) {
   const dec = book.decimals != null ? book.decimals : 2;
-  const rows = [['seq', 'date', 'memo', 'account', 'fund', 'debit', 'credit']];
+  const head = ['seq', 'date', 'memo', 'account', 'fund', 'debit', 'credit'];
+  if (foreign) head.push('currency', 'original amount');
+  const rows = [head];
   for (const e of book.journal) for (const p of e.postings) {
-    rows.push([e.seq, e.date, e.memo, (book.accounts.get(p.account) || {}).name || p.account, p.fund || '',
-      p.dir === 'dr' ? minorToMajorText(p.amount, dec) : '', p.dir === 'cr' ? minorToMajorText(p.amount, dec) : '']);
+    const row = [e.seq, e.date, e.memo, (book.accounts.get(p.account) || {}).name || p.account, p.fund || '',
+      p.dir === 'dr' ? minorToMajorText(p.amount, dec) : '', p.dir === 'cr' ? minorToMajorText(p.amount, dec) : ''];
+    if (foreign) row.push(p.currency || '', p.currency ? minorToMajorText(p.origAmount, dec) : '');
+    rows.push(row);
   }
   return rows;
 }
