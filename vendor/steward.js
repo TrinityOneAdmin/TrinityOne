@@ -22026,7 +22026,7 @@ zoo`.split("\n");
       const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
         if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", replyTo: "", quote: null, reactions: [], myReaction: "" };
         const q = m.replyTo ? byId.get(m.replyTo) : null;
-        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind } : null;
+        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
         const r = rx.get(m.id);
         return { ...m, quote, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
       });
@@ -22089,7 +22089,16 @@ zoo`.split("\n");
             }
             if (!ok) return;
           }
-          byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "", replyTo: (e.tags.find((t) => t[0] === "e" && t[3] === "reply") || [])[1] || "" });
+          let card = null;
+          try {
+            const ct = e.tags.find((t) => t[0] === "card");
+            if (ct && ct[2]) {
+              const parsed = JSON.parse(ct[2]);
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) card = parsed;
+            }
+          } catch (x) {
+          }
+          byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, card, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "", replyTo: (e.tags.find((t) => t[0] === "e" && t[3] === "reply") || [])[1] || "" });
           resolveName(e.pubkey);
           emit();
         },

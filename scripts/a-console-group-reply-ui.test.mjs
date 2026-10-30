@@ -39,6 +39,9 @@ async function chat({ native = false, publish } = {}) {
     document: { addEventListener() {}, removeEventListener() {} },   // the merged ⋯-menu close-on-tap-off effect listens on document
     get TrinityReplyKit() { return globalThis.TrinityReplyKit; },
     Icon: Stub('Icon'), SkBadge: Stub('SkBadge'), useStewDialog: () => ({}),
+    // GroupChatModal now draws a renderable card (app/stew-cards.jsx) in place of the text when cardRenderable
+    // is true; these reply fixtures carry no card, so a no-op cardRenderable keeps the plain-text path.
+    cardRenderable: () => false, ConsoleCard: Stub('ConsoleCard'),
   });
   const props = { group: { id: 'g1', name: 'Whole Church', kind: 'group' }, onClose() {} };
   const paint = () => draw(mod.GroupChatModal, props);
