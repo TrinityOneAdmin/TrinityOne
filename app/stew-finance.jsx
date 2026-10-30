@@ -75,7 +75,7 @@ function finItemToDoc(it) {
   // DONOR RECORD (finance/donor:<id>, Phase 4b) — member-identifying giving data, NOT part of the double-entry
   // book. Like template/reconcile it maps to its own `t`, which rebuildBook ignores, and DashFinanceBook
   // collects it into SEPARATE console state (donors) for the giving-by-member + Gift Aid screens.
-  if (id.startsWith('donor:')) return { t: 'donor', id: id.slice(6), name: it.name || '', eligible: it.eligible === true, address: it.address || '', postcode: it.postcode || '', giftAidDeclaredAt: it.giftAidDeclaredAt || '', title: it.title || '', firstName: it.firstName || '', lastName: it.lastName || '', house: it.house || '', certType: it.certType || '', certDeclaredAt: it.certDeclaredAt || '' };
+  if (id.startsWith('donor:')) return { t: 'donor', id: id.slice(6), name: it.name || '', eligible: it.eligible === true, address: it.address || '', postcode: it.postcode || '', giftAidDeclaredAt: it.giftAidDeclaredAt || '', title: it.title || '', firstName: it.firstName || '', lastName: it.lastName || '', house: it.house || '', certType: it.certType || '', certDeclaredAt: it.certDeclaredAt || '', natureOfPerson: it.natureOfPerson || '', idType: it.idType || '', idNumber: it.idNumber || '', taxRef: it.taxRef || '', contactNumber: it.contactNumber || '', email: it.email || '', tradingName: it.tradingName || '' };
   // INVOICE + CONTACT side docs (Phase 5) — metadata, NOT part of the double-entry book (the money rides the
   // journal). Like template/reconcile/donor they map to their own `t`, which rebuildBook ignores, and
   // DashFinanceBook collects them into SEPARATE console state. The invoice's `status` is a DISPLAY CACHE only:
@@ -770,7 +770,7 @@ function BooksBillEdit({ book, contacts, onSave, onClose }) {
 // one for a new donor). Marking a donor "eligible" + recording a declaration date is what lets the UK Gift Aid
 // pack build a claim line for them; it does nothing on its own and nothing at all unless the church turns the
 // Gift Aid feature on.
-function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, addressLabel, cdsOn }) {
+function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, addressLabel, cdsOn, extraFields }) {
   const ed = initial || {};
   const editing = !!ed.id;
   const [name, setName] = React.useState(ed.name || '');
@@ -780,6 +780,10 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, ad
   const [giftAidDeclaredAt, setDeclaredAt] = React.useState(ed.giftAidDeclaredAt || '');
   const [certType, setCertType] = React.useState(ed.certType || 'CHY3');   // Ireland: CHY3 (enduring) | CHY4 (annual)
   const [certDeclaredAt, setCertDeclaredAt] = React.useState(ed.certDeclaredAt || '');
+  // Scheme-specific EXTRA donor fields (e.g. South Africa s18A: nature of person, ID number, tax ref, …), driven
+  // by the registry (extraFields = [{key,label}]). Kept in ONE state object so adding a region's fields needs no
+  // new hook; the loaded values are preserved on save even when the block isn't shown (region switch safety).
+  const [extra, setExtra] = React.useState(() => { const o = {}; (extraFields || []).forEach(f => { o[f.key] = ed[f.key] || ''; }); return o; });
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const dlgRef = useStewDialog(onClose);
@@ -788,7 +792,7 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, ad
     if (!nm) return setErr('Give the donor a name.');
     setBusy(true); setErr('');
     try {
-      const ok = await onSave({ id: editing ? ed.id : undefined, name: nm, eligible, address: address.trim(), postcode: postcode.trim(), giftAidDeclaredAt, certType, certDeclaredAt });
+      const ok = await onSave({ id: editing ? ed.id : undefined, name: nm, eligible, address: address.trim(), postcode: postcode.trim(), giftAidDeclaredAt, certType, certDeclaredAt, ...extra });
       if (ok) onClose(); else { setBusy(false); setErr('That didn’t save — your church’s relay refused or did not answer. Try again.'); }
     } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not save that donor.'); }
   };
@@ -825,6 +829,15 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, ad
         <label style={bkLbl}>{addressLabel || 'Mailing address'}</label>
         <input value={address} onChange={e => setAddress(e.target.value)} placeholder="Street, city, postcode" style={{ ...bkFld, marginBottom: 12 }} />
         </>)}
+        {/* Scheme-specific donor fields the RECEIPT legally needs (e.g. South Africa s18A: nature of person, ID
+            number, income-tax reference, contact …). Registry-driven (extraFields), so a new region needs no form
+            surgery. Shown with the statement tool on (not Gift Aid / not the IE reclaim, which have their own). */}
+        {statementOn && !giftAidOn && (extraFields || []).map(fld => (
+          <div key={fld.key} style={{ marginBottom: 12 }}>
+            <label style={bkLbl}>{fld.label}</label>
+            <input value={extra[fld.key] || ''} onChange={e => setExtra(x => ({ ...x, [fld.key]: e.target.value }))} aria-label={fld.label} style={bkFld} />
+          </div>
+        ))}
         {/* IRELAND Charitable Donation Scheme (cdsOn): the reclaim needs a valid CHY3/CHY4 certificate from the
             donor + their address, mirroring Gift Aid's declaration. The `eligible`/`address` states + submit
             payload are shared with the other schemes, so switching region never drops a stored value. */}
@@ -2574,9 +2587,9 @@ function DashFinanceBook() {
   // (the relay's generic finance/ write prefix); the relay keeps it off a network peer on READ (the explicit
   // finance/donor read rule). NOTE a "forget this donor" removes this doc but CANNOT scrub the opaque donorId
   // already embedded in the append-only journal — acceptable under HMRC retention, surfaced in the UI copy.
-  const saveDonor = async ({ id, name, eligible, address, postcode, giftAidDeclaredAt, title, firstName, lastName, house, certType, certDeclaredAt }) => {
+  const saveDonor = async ({ id, name, eligible, address, postcode, giftAidDeclaredAt, title, firstName, lastName, house, certType, certDeclaredAt, natureOfPerson, idType, idNumber, taxRef, contactNumber, email, tradingName }) => {
     const theId = id || opaqueId();
-    const body = { name: name || '', eligible: eligible === true, address: address || '', postcode: postcode || '', giftAidDeclaredAt: giftAidDeclaredAt || '', title: title || '', firstName: firstName || '', lastName: lastName || '', house: house || '', certType: certType || '', certDeclaredAt: certDeclaredAt || '' };
+    const body = { name: name || '', eligible: eligible === true, address: address || '', postcode: postcode || '', giftAidDeclaredAt: giftAidDeclaredAt || '', title: title || '', firstName: firstName || '', lastName: lastName || '', house: house || '', certType: certType || '', certDeclaredAt: certDeclaredAt || '', natureOfPerson: natureOfPerson || '', idType: idType || '', idNumber: idNumber || '', taxRef: taxRef || '', contactNumber: contactNumber || '', email: email || '', tradingName: tradingName || '' };
     if (!useRelay) { setDonors(ds => [...ds.filter(d => d.id !== theId), { t: 'donor', id: theId, ...body }]); bump(); return true; }
     const ok = await S.encPublish('finance/donor:' + theId, body);
     bump();
@@ -2798,6 +2811,12 @@ function DashFinanceBook() {
   const statementOn = (F && F.taxToolFor) ? F.taxToolFor(jxId) === 'contributionStatement' : false;
   const cdsOn = (F && F.taxToolFor) ? F.taxToolFor(jxId) === 'charitableDonationScheme' : false;   // Ireland reclaim
   const jxLabels = (F && F.donorLabels) ? (F.donorLabels(jxId) || {}) : {};
+  // Scheme-specific EXTRA donor fields the receipt needs (everything the region's donor set declares beyond
+  // name/address — e.g. South Africa s18A: nature of person, ID number, tax ref, …). Registry-driven, so a new
+  // region needs no donor-form surgery. Empty for US/NZ/CA (name+address only).
+  const jxExtraFields = statementOn && F && F.donorFields
+    ? (F.donorFields(jxId) || []).filter(k => k !== 'name' && k !== 'address').map(k => ({ key: k, label: (jxLabels[k] || k) }))
+    : [];
   // Church REGISTRATION data a receipt legally needs (e.g. Canada's CRA charity number + authorised signatory),
   // captured OWNER-ONLY on church.features (via the Tax tools subcard) and threaded into the generated receipt.
   const taxRegLabel = (F && F.taxRegLabel) ? F.taxRegLabel(jxId) : '';          // '' unless the region needs one (CA)
@@ -3399,7 +3418,7 @@ function DashFinanceBook() {
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} banner={church.banner || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
-      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} statementOn={statementOn} addressLabel={jxLabels.address} cdsOn={cdsOn} />}
+      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} statementOn={statementOn} addressLabel={jxLabels.address} cdsOn={cdsOn} extraFields={jxExtraFields} />}
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
       {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}

@@ -160,6 +160,43 @@ test('CA receipt shows a VISIBLE placeholder when the registration number is mis
   assert.ok(/\[REQUIRED/.test(html), 'a missing registration number was not surfaced as a visible placeholder');
 });
 
+// ── SOUTH AFRICA: a section 18A receipt with the SARS-prescribed FURTHER donor fields (Notice 6762 of 2025) ──
+test('ZA STATEMENT_RULES carries the s18A metadata (per-donor, PBO reg, certification, the FURTHER donor fields)', () => {
+  const r = STATEMENT_RULES.ZA;
+  assert.ok(r, 'South Africa is not in STATEMENT_RULES');
+  assert.equal(r.perDonorReceipt, true, 'ZA must emit a per-donor receipt');
+  assert.equal(r.needsReg, true, 'ZA must flag that it needs an s18A/PBO reference number');
+  assert.ok(/section 18A/.test(r.certification), 'the s18A certification wording is missing');
+  assert.ok(/South African Revenue Service/.test(r.authorityName), 'the SARS authority name is missing');
+  const keys = (r.receiptDonorFields || []).map(f => f.key);
+  for (const k of ['natureOfPerson', 'idType', 'idNumber', 'taxRef', 'contactNumber', 'email']) assert.ok(keys.includes(k), 'ZA receiptDonorFields is missing ' + k);
+});
+
+test('ZA generates a per-donor s18A receipt with the donor PII, PBO number, unique receipt no, certification + disclaimer', () => {
+  const b = book('ZAR');
+  gift(b, 500000, 'd1', '2026-04-01');   // R5,000 — Thandi
+  const donors = [{ id: 'd1', name: 'Thandi', address: '5 Kerk St', natureOfPerson: 'Natural person', idType: 'SA ID / ZA', idNumber: '8001015009087', taxRef: '1234567890', contactNumber: '+27 11 555 0100', email: 't@example.co.za' }];
+  const s = contributionStatement(b, { donors, from: '2026-03-01', to: '2027-02-28', givingByMember, jurisdiction: 'ZA' });
+  // the FURTHER donor fields rode onto the row
+  assert.equal(s.rows[0].extra.idNumber, '8001015009087', 'the donor ID number did not ride onto the statement row');
+  const html = contributionStatementDoc(s, { orgName: 'Grace Church', orgAddress: '10 Faith Rd', regNumber: 'PBO 930001234', dateIssued: '2027-02-28', disclaimer: TAX_DISCLAIMER, money: (m) => 'R' + (m / 100).toFixed(2) });
+  assert.ok(html.includes('Section 18A donation receipt'), 'the s18A receipt heading is missing');
+  assert.ok(html.includes('section 18A(2)(a)'), 'the s18A certification wording is missing');
+  assert.ok(html.includes('PBO 930001234') && html.includes('SARS s18A / PBO reference number'), 'the PBO reference number + label are missing');
+  assert.ok(html.includes('8001015009087') && html.includes('1234567890') && html.includes('Natural person'), 'the prescribed donor PII (ID, tax ref, nature) is missing');
+  assert.ok(html.includes('2026-d1'), 'the unique receipt number (YEAR-donorId) is missing');
+  assert.ok(html.includes('Amount of donation') && !html.includes('Eligible amount'), 'ZA should show amount+nature, not the CA eligible-amount line');
+  assert.ok(!html.includes('Authorised signature'), 'ZA must not render a signature line (unlike CRA)');
+  assert.ok(html.includes(TAX_DISCLAIMER), 'the shared tax disclaimer is not on the s18A receipt');
+});
+
+test('ZA receipt surfaces a VISIBLE [required] placeholder for a missing prescribed donor field', () => {
+  const b = book('ZAR'); gift(b, 100000, 'd1');
+  const s = contributionStatement(b, { donors: [{ id: 'd1', name: 'Thandi' }], givingByMember, jurisdiction: 'ZA' });   // no idNumber/taxRef
+  const html = contributionStatementDoc(s, { orgName: 'Grace Church', regNumber: 'PBO 930001234', disclaimer: TAX_DISCLAIMER });
+  assert.ok(/\[required\]/.test(html), 'a missing prescribed donor field was not surfaced as a visible placeholder');
+});
+
 // ── STRUCTURAL: the pack stays OUT of the core bundle and the registry, and INSIDE its own bundle ─────────
 function importGraph(entry) {
   const dir = mkdtempSync(join(tmpdir(), 'cs-meta-'));

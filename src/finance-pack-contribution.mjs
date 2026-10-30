@@ -20,14 +20,15 @@
 //
 // CORRECTNESS (CLAUDE.md rule 4 / project safety): a country appears in STATEMENT_RULES ONLY where its receipt
 // requirement is confirmed against an official source and the statement a church can actually produce IS a valid
-// record for the donor. SHIPPED: US (Pub 1771), New Zealand (IRD), and Canada (CRA s.3501 — the full official-
-// receipt field list, verified 2026-10-30; it needs the church's CRA registration number + an authorised
-// signatory, captured owner-only on church.features and threaded in by the caller, plus a unique serial). STILL
-// HELD and DELIBERATELY ABSENT until their prescribed wording/template is verified: Germany (§50 EStDV official
-// Muster), France (Cerfa 11580), South Africa (s18A — the mandatory field set changed in 2023/2026 and could not
-// be confirmed against a current SARS source this round), Netherlands (the deductible instrument is a periodic-
-// gift AGREEMENT, not a church receipt), Australia (an ordinary church is NOT a DGR, so a deductible receipt is
-// wrong unless it runs a registered DGR fund). Ireland's RECLAIM scheme lives in its OWN pack (finance-pack-ie).
+// record for the donor. SHIPPED: US (Pub 1771), New Zealand (IRD), Canada (CRA s.3501, per-donor official
+// receipt + registration + serial), and South Africa (s18A — the FURTHER donor fields verified from SARS Notice
+// 6762 of 2025, in force 1 March 2026; needs the church's s18A/PBO reference number + a unique receipt number).
+// STILL HELD and DELIBERATELY ABSENT until their prescribed wording/template is pinned to a current official
+// source: Germany (≈18 binding BMF Muster — the exact current template text could not be retrieved), France
+// (Cerfa 11580 — the version is in flux *04/*05 and the official model text could not be rendered this round),
+// Netherlands (the deductible instrument is a 5-year periodic-gift AGREEMENT, not a per-donation receipt — it
+// needs its own agreement tool), Australia (an ordinary church is NOT a DGR). Ireland's RECLAIM scheme lives in
+// its OWN pack (finance-pack-ie).
 //
 // PURE. No DOM, no relay, no I/O — and NO `Date` of its own (a pure module that calls new Date() reintroduces the
 // UTC off-by-one). Period bounds are injected by the caller as ISO 'YYYY-MM-DD' strings. Money stays INTEGER
@@ -68,8 +69,43 @@ export const STATEMENT_RULES = {
     officialReceiptLine: 'Official receipt for income tax purposes',
     authorityName: 'Canada Revenue Agency',
     authorityUrl: 'canada.ca/charities-giving',
-    statement: '',           // CA's required wording is the officialReceiptLine on each receipt, not a summary line
+    amountMode: 'caEligible',   // gift · value of advantage · eligible amount (CRA)
+    signature: true,            // CRA requires an authorised signature
+    certification: '',          // CA's required wording is the officialReceiptLine heading, not a separate paragraph
+    receiptDonorFields: [],     // CA needs no extra per-donor fields beyond name/address
+    statement: '',              // CA's required wording is the officialReceiptLine on each receipt, not a summary line
     source: 'Canada Revenue Agency — What information must be on an official donation receipt (Income Tax Regulations s.3501), canada.ca',
+  },
+  // SOUTH AFRICA — a SECTION 18A donation receipt. Per-donor, with a UNIQUE receipt number, the PBO's s18A
+  // reference number, a certification under s.18A(2)(a), AND the FURTHER donor information prescribed by SARS
+  // Notice 6762 of 2025 (GG 53589) under s.18A(2)(a)(vii) — IN FORCE from 1 March 2026 (verified from the
+  // gazette, 2026-10-30): the donor's nature of person, identification type + country, ID/registration number,
+  // income-tax reference number, contact number, email, and trading name (if different). The DONOR claims a
+  // deduction (up to 10% of taxable income); the church reclaims nothing. Only an s18A-approved PBO may issue it.
+  ZA: {
+    label: 'South Africa',
+    requiredFields: ['officialReceiptLine', 'serial', 'orgName', 'orgAddress', 'regNumber', 'dateIssued', 'name', 'donorAddress', 'amount', 'natureOfPerson', 'idType', 'idNumber', 'taxRef', 'contactNumber', 'email', 'certification'],
+    perDonorReceipt: true,
+    needsReg: true,
+    regLabel: 'SARS s18A / PBO reference number',
+    officialReceiptLine: 'Section 18A donation receipt',
+    authorityName: 'South African Revenue Service',
+    authorityUrl: 'sars.gov.za',
+    amountMode: 'nature',       // amount of donation + nature (cash), not CA's advantage/eligible split
+    signature: false,           // s18A does not prescribe a signature line (unlike CRA)
+    certification: 'This receipt is issued in terms of section 18A(2)(a) of the Income Tax Act, 1962. The donation received will be used exclusively in carrying on public benefit activities in terms of section 18A.',
+    // The FURTHER donor fields (SARS Notice 6762 of 2025, Schedule 2.1 + 2.3) — rendered per donor on the receipt.
+    receiptDonorFields: [
+      { key: 'natureOfPerson', label: 'Nature of person' },
+      { key: 'idType', label: 'Identification type & country of issue' },
+      { key: 'idNumber', label: 'Identification / registration number' },
+      { key: 'taxRef', label: 'Income tax reference number' },
+      { key: 'contactNumber', label: 'Contact number' },
+      { key: 'email', label: 'Email address' },
+      { key: 'tradingName', label: 'Trading name (if different)' },
+    ],
+    statement: '',
+    source: 'SARS Notice 6762 of 2025 (GG 53589) under s.18A(2)(a)(vii), in force 1 March 2026; s.18A(2)(a) Income Tax Act 1962 (sars.gov.za)',
   },
 };
 
@@ -88,15 +124,18 @@ export function contributionStatement(book, { donors = [], from = '', to = '￿'
   const given = new Map();   // donorId -> amount given in period (minor units)
   for (const r of givingByMember(book, { from, to, donors: list })) if (r.donor) given.set(r.donor, r.amount);
 
+  const rule = STATEMENT_RULES[jurisdiction] || {};
+  const extraKeys = (rule.receiptDonorFields || []).map(f => f.key);   // per-donor receipt fields a scheme requires (e.g. SA s18A)
   const rows = [];
   for (const [id, d] of byId) {
     const total = given.get(id) || 0;
     if (total <= 0) continue;                                 // nothing given this period → no statement line
-    rows.push({ donor: id, name: d.name || id, address: d.address || '', total });
+    const extra = {};
+    for (const k of extraKeys) extra[k] = d[k] || '';         // copy the scheme's required donor fields onto the row (receipt uses them)
+    rows.push({ donor: id, name: d.name || id, address: d.address || '', total, extra });
   }
   rows.sort((a, b) => b.total - a.total);
   const totalDonated = rows.reduce((s, r) => s + r.total, 0);
-  const rule = STATEMENT_RULES[jurisdiction] || {};
   return {
     rows, totalDonated, from, to, jurisdiction,
     statement: rule.statement || '',        // the fixed legal line the receipt must carry (DATA, sourced)
@@ -134,6 +173,14 @@ export function contributionStatementDoc(stmt, opts = {}) {
       : `${esc(rule.regLabel || 'Registration number')}: [REQUIRED — enter it in Tax tools]`;
     const receipts = (s.rows || []).map(r => {
       const serial = (year ? year + '-' : '') + String(r.donor);
+      // Amount line: CA shows gift · advantage · eligible amount; others (e.g. SA) show amount + nature.
+      const amountLine = rule.amountMode === 'caEligible'
+        ? `Amount of gift: ${esc(money(r.total))} · Value of advantage: ${esc(money(0))} · Eligible amount: ${esc(money(r.total))}`
+        : `Amount of donation: ${esc(money(r.total))} · Nature: cash donation`;
+      // The scheme's required per-donor fields (e.g. SA s18A: ID number, tax ref, contact …). A missing
+      // mandatory field renders a VISIBLE placeholder, never silently absent.
+      const extraLines = (rule.receiptDonorFields || []).map(f =>
+        `<p>${esc(f.label)}: ${esc((r.extra && r.extra[f.key]) || '[required]')}</p>`).join('');
       return '<section class="receipt" style="page-break-after:always;border:1px solid #ccc;padding:12px;margin:0 0 12px">'
         + `<h2>${esc(rule.officialReceiptLine || 'Official receipt')}</h2>`
         + `<p>Receipt no.: ${esc(serial)}</p>`
@@ -141,9 +188,11 @@ export function contributionStatementDoc(stmt, opts = {}) {
         + `<p>${regLine}</p>`
         + `<p>Issued: ${esc(dateIssued || period)}${placeOfIssue ? ' · ' + esc(placeOfIssue) : ''}</p>`
         + `<p>Donor: ${esc(r.name)}${r.address ? ', ' + esc(r.address) : ''}</p>`
+        + extraLines
         + `<p>Gift received in: ${esc(period || year)}</p>`
-        + `<p>Amount of gift: ${esc(money(r.total))} · Value of advantage: ${esc(money(0))} · Eligible amount: ${esc(money(r.total))}</p>`
-        + `<p>Authorised signature: ${esc(authorizedBy)} _______________________</p>`
+        + `<p>${amountLine}</p>`
+        + (rule.certification ? `<p>${esc(rule.certification)}</p>` : '')
+        + (rule.signature ? `<p>Authorised signature: ${esc(authorizedBy)} _______________________</p>` : '')
         + `<p><small>${esc(rule.authorityName || '')}${rule.authorityUrl ? ' — ' + esc(rule.authorityUrl) : ''}</small></p>`
         + discP
         + '</section>';

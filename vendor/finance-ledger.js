@@ -1545,19 +1545,48 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
         }
       },
       taxTool: "charitableDonationScheme"
+    },
+    // ── ZA — SHIPPED (EU/ZA receipts wave, 2026-10-30). SOUTH AFRICA section 18A donation receipt via the SHARED
+    //    contribution-statement engine (perDonorReceipt mode). The FURTHER donor fields are VERIFIED from SARS
+    //    Notice 6762 of 2025 (GG 53589) under s.18A(2)(a)(vii), in force 1 March 2026. Needs the church's s18A/PBO
+    //    reference number (captured owner-only; see taxRegLabel) + a unique receipt number (YEAR-donorId). Only an
+    //    s18A-approved PBO may issue it — opt-in like Gift Aid. The donor fields below carry the prescribed PII.
+    ZA: {
+      id: "ZA",
+      label: "South Africa",
+      currency: { base: "ZAR", decimals: 2, fiscalYearStart: "03-01" },
+      // SA tax year 1 Mar–end Feb; SUGGESTED default only
+      donor: {
+        fields: ["name", "address", "natureOfPerson", "idType", "idNumber", "taxRef", "contactNumber", "email", "tradingName"],
+        labels: {
+          name: "Name",
+          address: "Address",
+          natureOfPerson: "Nature of person (natural person / company / trust \u2026)",
+          idType: "ID type & country of issue",
+          idNumber: "ID / registration number",
+          taxRef: "Income-tax reference number",
+          contactNumber: "Contact number",
+          email: "Email address",
+          tradingName: "Trading name (if different)"
+        }
+      },
+      taxTool: "contributionStatement"
     }
-    // ── STILL DESIGNED + HELD — NOT live (CLAUDE.md rule 4: never ship guessed mandatory wording). Each has a real
-    //    scheme (see PLAN-JURISDICTION-EXPANSION-2026-10-30.md) but a blocker that is NOT yet traced to a current
-    //    official source, so it is not a region (currency for these churches is the free Book-settings picker):
-    //      · Germany (DE, EUR)  — Zuwendungsbestätigung on the OFFICIAL template (§50 EStDV / BMF 07.11.2013); the
-    //        deduction depends on matching that prescribed Muster, which we cannot faithfully reproduce yet.
-    //      · France (FR, EUR)   — reçu fiscal on the Cerfa 11580 model + a post-2021 annual declaration; the exact
-    //        mandatory mentions were not readable from an official source this round.
-    //      · Netherlands (NL, EUR) — ANBI; the deductible instrument is a 5-year PERIODIC-GIFT AGREEMENT, not a
-    //        church receipt, so a giving summary is not the instrument.
-    //      · South Africa (ZA, ZAR, FY 03-01) — s18A receipt; the MANDATORY field set changed (2023/2026: unique
-    //        receipt number, donor ID/contact, IT3(d) filing) and could not be confirmed against a current SARS
-    //        source this round, so the exact wording stays HELD.
+    // ── STILL DESIGNED + HELD — NOT live (CLAUDE.md rule 4: never ship an outdated/unverified prescribed form —
+    //    a wrong form is a receipt the tax office REJECTS). Each blocker below is the reason it is not yet a region
+    //    (currency for these churches is the free Book-settings picker):
+    //      · Germany (DE, EUR)  — Zuwendungsbestätigung: ≈18 BINDING BMF "Muster" whose text must be reproduced
+    //        VERBATIM per donation type. The CURRENT templates (BMF Formularcenter) could not be retrieved/rendered
+    //        this round, so we cannot reproduce them faithfully. HELD. (A simplified proof exists for gifts ≤ €300
+    //        — NOT the receipt.)
+    //      · France (FR, EUR)   — reçu fiscal: the Cerfa 11580 version is in flux (*04 vs *05) and the official
+    //        model text (impots.gouv.fr / arrêté 26 June 2008 / BOFiP BOI-IR-RICI-250-40) could not be rendered via
+    //        available tools this round. The mentions are known from secondary sources but NOT pinned to a current
+    //        official source, and the version matters — HELD until the current *NN model is confirmed.
+    //      · Netherlands (NL, EUR) — the deduction instrument is a 5-year PERIODIC-GIFT AGREEMENT (periodieke gift),
+    //        NOT a per-donation receipt. It needs its OWN tool (a distinct taxTool that generates the Belastingdienst
+    //        agreement document: donor + ANBI RSIN/transaction number + fixed annual amount + duration ≥5yr +
+    //        signatures), not the receipt engine. HELD as a scoped follow-up — do not force it into the receipt shape.
     //      · Australia (AU, AUD, FY 07-01) — an ordinary church is NOT a DGR, so donations are not deductible and a
     //        receipt would be wrong; correct default is currency-only (no region). A DGR-gated receipt is a future
     //        option ONLY for a church that confirms it operates a registered DGR fund (ABN) — we do not invent it.
@@ -1592,7 +1621,7 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
   function taxToolFor(id) {
     return getJurisdiction(id).taxTool;
   }
-  var TAX_REG_LABELS = { CA: "CRA charity registration number" };
+  var TAX_REG_LABELS = { CA: "CRA charity registration number", ZA: "SARS s18A / PBO reference number" };
   function taxRegLabel(id) {
     return TAX_REG_LABELS[id] || "";
   }
