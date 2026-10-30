@@ -27,9 +27,13 @@ let _booksDonateShown = false;           // once per app session
 function booksDonateHiddenUntil() { try { return parseInt(localStorage.getItem(DONATE_LS) || '0', 10) || 0; } catch (e) { return 0; } }
 function booksDonateGave() { try { localStorage.setItem(DONATE_LS, String(Date.now() + DONATE.hideDays * 864e5)); } catch (e) {} }
 
-function booksFresh() {
+// `ccy` is the jurisdiction's currency DEFAULT ({ base, decimals, fiscalYearStart }), passed by the empty-book
+// seed (wave 3) from F.currencyDefaults(resolveJurisdiction(church.features)). Absent (local/no-church path,
+// or the neutral default) it falls back to the silent-£ pilot default (DOMAIN) — identical to before wave 3.
+function booksFresh(ccy) {
   const F = window.FinanceLedger;
-  const b = F.createBook({ baseCurrency: 'GBP', decimals: 2 });
+  const c = ccy || {};
+  const b = F.createBook({ baseCurrency: c.base || 'GBP', decimals: c.decimals != null ? c.decimals : 2, ...(c.fiscalYearStart ? { fiscalYearStart: c.fiscalYearStart } : {}) });
   // NATION-NEUTRAL, silent-£ (DOMAIN 2026-10-29): a tight generic chart, NO tax/relief accounts (no Gift Aid,
   // no GASDS — those are off-by-default regional packs, never the core seed). A pilot church that already has
   // a book never re-seeds (the seed runs only on an authenticated EMPTY read), so this list reaches only a
@@ -157,7 +161,9 @@ function booksRandId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
 }
 function booksFmt(minor, book) {
-  const dec = book.decimals || 2, sym = CCY_SYM[book.baseCurrency] || '';
+  // Unknown base currency → show its CODE (mirrors fmtMoney in src/finance-statement.mjs). `|| ''` used to
+  // drop the prefix, so a currency outside CCY_SYM printed as a bare number with no symbol or code.
+  const dec = book.decimals || 2, sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
   const s = (minor / Math.pow(10, dec)).toLocaleString('en-GB', { minimumFractionDigits: dec, maximumFractionDigits: dec });
   return book.baseCurrency === 'sats' ? (s + ' ' + sym) : (sym + s);
 }
@@ -207,6 +213,9 @@ const bkLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSp
 const bkCard = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 18 };
 const ACCT_TYPE_LABEL = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
 const ACCT_TYPES_ORDER = ['asset', 'liability', 'equity', 'income', 'expense'];
+// Month names for the financial-year-start picker. The stored value stays 'MM-DD' (day pinned to 01), as
+// createBook (src/finance-ledger.mjs) and the reports period code (fyStart / fiscalYearRange) read it.
+const FY_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const FUND_KIND_LABEL = { general: 'General', designated: 'Designated', restricted: 'Restricted' };
 // Phase 4a aggregate report presets for the Reports panel. Each maps to a set of buildStatement section keys
 // (the new keys — givingFund/fundMovements/receipts — are rendered by statementText/Html/fsBuildStatementPdf).
@@ -761,7 +770,7 @@ function BooksBillEdit({ book, contacts, onSave, onClose }) {
 // one for a new donor). Marking a donor "eligible" + recording a declaration date is what lets the UK Gift Aid
 // pack build a claim line for them; it does nothing on its own and nothing at all unless the church turns the
 // Gift Aid feature on.
-function BooksDonor({ book, initial, onSave, onClose }) {
+function BooksDonor({ book, initial, onSave, onClose, giftAidOn }) {
   const ed = initial || {};
   const editing = !!ed.id;
   const [name, setName] = React.useState(ed.name || '');
@@ -788,6 +797,12 @@ function BooksDonor({ book, initial, onSave, onClose }) {
         <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>Kept private to your church — only the church key and a Finance steward can ever read it.</div>
         <label style={bkLbl}>Name</label>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Jane Okafor" style={{ ...bkFld, marginBottom: 12 }} />
+        {/* UK Gift Aid fields — shown ONLY when the church turned the UK pack on (giftAidOn). The state hooks
+            (eligible/address/postcode/giftAidDeclaredAt) and the submit() payload are DELIBERATELY left intact
+            above: hiding the INPUTS must not drop the values, so a save with the pack off re-sends whatever was
+            loaded and saveDonor preserves it. giftAidOn is a single boolean threaded from DashFinanceBook —
+            wave #3's jurisdiction registry swaps only its SOURCE, not this form. */}
+        {giftAidOn && (<>
         <label onClick={() => setEligible(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 12 }}>
           <input type="checkbox" checked={eligible} onChange={e => setEligible(e.target.checked)} aria-label="Eligible for Gift Aid" style={{ width: 18, height: 18 }} />
           <span style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>Has made a Gift Aid declaration (UK)</span>
@@ -798,6 +813,7 @@ function BooksDonor({ book, initial, onSave, onClose }) {
           <div style={{ flex: 1 }}><label style={bkLbl}>Postcode</label><input value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="e.g. SW1A 1AA" style={bkFld} /></div>
           <div style={{ flex: 1 }}><label style={bkLbl}>Declaration date</label><input type="date" value={giftAidDeclaredAt} onChange={e => setDeclaredAt(e.target.value)} style={bkFld} /></div>
         </div>
+        </>)}
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
@@ -907,7 +923,7 @@ function BooksBudgetEdit({ book, initial, onSave, onClose }) {
 // (already behind the finance-key gate) and it DELIBERATELY has no Share / Post-to-members control: aggregate
 // statements are name-free and this one must never reach the broadcast path. If you ever add a share button
 // here, finance-giving-by-member.test.mjs turns red by design.
-function BooksGivingByMember({ book, F, donors }) {
+function BooksGivingByMember({ book, F, donors, giftAidOn }) {
   const rows = F.givingByMember(book, { donors });
   const total = rows.reduce((s, r) => s + r.amount, 0);
   return (
@@ -917,7 +933,7 @@ function BooksGivingByMember({ book, F, donors }) {
       {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '6px 0' }}>No giving has been attributed to a donor yet. Tag a gift with a donor when you record it.</div>}
       {rows.map(r => (
         <div key={r.donor || 'unattributed'} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
-          <span style={{ color: r.unattributed ? 'var(--ink-3)' : 'var(--ink)' }}>{r.name}{r.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}</span>
+          <span style={{ color: r.unattributed ? 'var(--ink-3)' : 'var(--ink)' }}>{r.name}{giftAidOn && r.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}</span>
           <span style={{ fontWeight: 700 }}>{booksFmt(r.amount, book)}</span>
         </div>
       ))}
@@ -1973,7 +1989,16 @@ function DashFinanceBook() {
         if (seeded) return;
         if (window.Steward && window.Steward.relayAuthed && !window.Steward.relayAuthed()) return;
         seeded = true;
-        const b = booksFresh(); bookRef.current = b; bump();
+        // WAVE 3 — OWNER-ONLY jurisdiction drives a STEWARD-WRITABLE currency default. The owner sets
+        // church.features.jurisdiction (owner-only, publishProfile); here, on the EMPTY book only (this seed
+        // branch runs exactly when there are NO book docs, i.e. journal.length === 0), we apply that
+        // jurisdiction's currency default through the SAME finance/settings write a steward owns. So: a
+        // delegate can never change jurisdiction, but the default it yields lands in the steward-writable doc
+        // and the steward still manages currency afterwards in the wave-1 Book-settings picker. It NEVER forces
+        // currency on a book with entries — a seeded/real book never re-enters this branch (the empty-read
+        // guard above + `seeded`). None resolves to the silent-£ default, so a neutral church is unchanged.
+        const _ccyDef = (F.currencyDefaults && F.resolveJurisdiction) ? F.currencyDefaults(F.resolveJurisdiction({ features: church && church.features })) : null;
+        const b = booksFresh(_ccyDef); bookRef.current = b; bump();
         S.encPublish('finance/settings', { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart });
         for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type, archived: !!a.archived });
         for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
@@ -1998,6 +2023,8 @@ function DashFinanceBook() {
   const [rptFlash, setRptFlash] = React.useState('');         // what an Export reported, or why it did not
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
+  const [ccyAdding, setCcyAdding] = React.useState(false);   // Book settings: "Add another currency…" revealed the custom-code input
+  const [ccyCode, setCcyCode] = React.useState('');          // the custom currency code being typed (code-only, no symbol)
   const [accEditing, setAccEditing] = React.useState(null);  // account modal: null closed · {} add · {id,…} edit
   const [fundEditing, setFundEditing] = React.useState(null);// fund modal: null closed · {} add · {id,…} edit
   const [moving, setMoving] = React.useState(false);         // "Move between funds" (fund transfer) modal
@@ -2328,6 +2355,29 @@ function DashFinanceBook() {
     bump();
     return !(ok === false || ok == null);
   };
+  // BOOK SETTINGS — base currency · decimals · financial-year start. ONE helper (not three siblings), modelled
+  // on setMultiCurrencyOn above: it republishes the WHOLE REPLACEABLE finance/settings doc with the identical
+  // field list + the same multiCurrency omit-when-off rule, so NO new relay doc kind and no scope change. Wave
+  // #3 (jurisdiction registry) sets a default by calling this on an EMPTY book — it must not touch the doc body
+  // itself. baseCurrency + decimals are LOCKED once the book has a journal entry: amounts are INTEGER minor
+  // units of the base currency, so changing either silently reinterprets every stored figure (changing the
+  // currency re-labels £100→$100; changing decimals re-scales £100.00↔£10,000). The lock is keyed on
+  // book.journal.length — NOT _seq, which advances even on a publish the relay refused. fiscalYearStart only
+  // moves report boundaries, never reinterprets a stored amount, so it is always allowed. The belt-and-braces
+  // guard here backs up the disabled controls in the Book-settings card; a null publish is NOT success.
+  const saveBookSettings = async (patch) => {   // patch: { baseCurrency?, decimals?, fiscalYearStart? }
+    const b = bookRef.current;
+    const p = { ...patch };
+    if (b.journal.length > 0) { delete p.baseCurrency; delete p.decimals; }
+    if (p.baseCurrency != null) b.baseCurrency = p.baseCurrency;
+    if (p.decimals != null) b.decimals = p.decimals;
+    if (p.fiscalYearStart != null) b.fiscalYearStart = p.fiscalYearStart;
+    if (!useRelay) { booksSave(b); bump(); return true; }
+    const body = { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart, ...(b.multiCurrency ? { multiCurrency: true } : {}) };
+    const ok = await S.encPublish('finance/settings', body);
+    bump();
+    return !(ok === false || ok == null);
+  };
   // Publish-if-absent the reserved FX gains/losses account (the AR/AP pattern), so an un-upgraded console can
   // still rebuild a book that posts a revaluation to it. assertFxAccount THROWS if a hand-made account collided
   // on the slug with the wrong type — caught by the revalue path, which refuses rather than post to a non-income.
@@ -2630,9 +2680,15 @@ function DashFinanceBook() {
   };
   // The donor NAME lookup the giving-by-member + Gift Aid screens resolve opaque donorIds through.
   const donorMap = React.useMemo(() => new Map(donors.map(d => [d.id, d])), [donors]);
-  // Gift Aid is a UK regional PACK, OFF BY DEFAULT: strict === true (NOT the default-on `!== false` feature
-  // convention — DOMAIN nation-neutral), and the pack code only exists if its separate bundle loaded.
-  const giftAidOn = !!(church && church.features && church.features.giftAid === true);
+  // Gift Aid is a UK regional PACK, OFF BY DEFAULT (DOMAIN nation-neutral), and the pack code only exists if
+  // its separate bundle loaded. WAVE 3: the gate's SOURCE is now the jurisdiction REGISTRY, not the raw
+  // boolean — giftAidOn is on iff the resolved jurisdiction's active tax tool IS Gift Aid. The resolver keeps
+  // full back-compat: an existing church with features.giftAid === true (and no explicit jurisdiction) still
+  // resolves to 'UK', so Gift Aid keeps working with no action; an explicit church.features.jurisdiction wins
+  // over the legacy boolean. Falls back to the strict boolean only if an OLD core bundle lacks the registry.
+  const giftAidOn = (F && F.resolveJurisdiction && F.taxToolFor)
+    ? F.taxToolFor(F.resolveJurisdiction({ features: church && church.features })) === 'giftAid'
+    : !!(church && church.features && church.features.giftAid === true);
   // Bill approval mode — DUAL control is an OPT-IN a church turns on, OFF BY DEFAULT: strict === true (NOT the
   // default-on `!== false` convention — DOMAIN nation-neutral/silent, like giftAid). Default is the LIGHT flow
   // (approval is a field on the replaceable bill doc). In BOTH modes the Mark-paid control and the engine guard
@@ -2907,6 +2963,55 @@ function DashFinanceBook() {
       {/* ── ACCOUNTS & FUNDS tab ── */}
       {tab === 'accounts' && <div style={{ ...bkCard, marginBottom: 16 }}>
           <div style={{ marginTop: 14 }}>
+            {/* ── Book settings (currency · decimals · financial-year start) ──────────────────────────────
+                OPTIONAL and post-pilot: a church sees this only by opening Accounts & funds. The pilot default
+                (silent-£ GBP, DOMAIN) is untouched and nothing prompts at first open. Currency + decimal places
+                LOCK once the book has a journal entry — see saveBookSettings for why. The financial-year start
+                never reinterprets a stored amount, so it stays editable. Writes finance/settings via
+                saveBookSettings — the SAME replaceable doc + path as the Currencies toggle below, no new kind. ── */}
+            <div style={{ fontWeight: 700, fontSize: 14, margin: '2px 0 8px' }}>Book settings</div>
+            {(() => {
+              const locked = book.journal.length > 0;
+              const builtin = ['GBP', 'USD', 'EUR', 'sats'];
+              const known = builtin.includes(book.baseCurrency) ? builtin : [...builtin, book.baseCurrency];
+              return (
+                <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <label style={bkLbl}>Currency</label>
+                      <select aria-label="Base currency" disabled={locked} value={ccyAdding ? '__add__' : book.baseCurrency}
+                        onChange={e => { const v = e.target.value; if (v === '__add__') { setCcyAdding(true); } else { setCcyAdding(false); saveBookSettings({ baseCurrency: v }); } }}
+                        style={{ ...bkFld, opacity: locked ? 0.5 : 1 }}>
+                        {known.map(c => <option key={c} value={c}>{(CCY_SYM[c] ? CCY_SYM[c] + ' ' : '') + c}</option>)}
+                        <option value="__add__">Add another currency…</option>
+                      </select>
+                      {ccyAdding && !locked ? (
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <input aria-label="New currency code" value={ccyCode} onChange={e => setCcyCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 8))} placeholder="e.g. NGN" maxLength={8} style={{ ...bkFld, flex: 1 }} />
+                          <button onClick={() => { const c = ccyCode.trim(); if (c.length >= 3) { saveBookSettings({ baseCurrency: c }); setCcyAdding(false); setCcyCode(''); } }} disabled={ccyCode.trim().length < 3} title="Use this currency code" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 14px', cursor: ccyCode.trim().length < 3 ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, color: 'var(--ink)', opacity: ccyCode.trim().length < 3 ? 0.5 : 1 }}>Set</button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div style={{ width: 120 }}>
+                      <label style={bkLbl}>Decimal places</label>
+                      <select aria-label="Decimal places" disabled={locked} value={book.decimals ?? 2} onChange={e => saveBookSettings({ decimals: parseInt(e.target.value, 10) })} style={{ ...bkFld, opacity: locked ? 0.5 : 1 }}>
+                        {[0, 2, 3].map(d => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <label style={bkLbl}>Financial year starts</label>
+                      <select aria-label="Financial year start month" value={(book.fiscalYearStart || '01-01').slice(0, 2)} onChange={e => saveBookSettings({ fiscalYearStart: e.target.value + '-01' })} style={bkFld}>
+                        {FY_MONTHS.map((m, i) => <option key={m} value={String(i + 1).padStart(2, '0')}>{m}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  {locked
+                    ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>🔒 Currency and decimal places are locked because this book already has transactions — changing them would reinterpret every figure already recorded. To use a different currency, start a fresh book. You can still change when the financial year starts.</div>
+                    : <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>Set these before you record anything. Once the book has transactions, the currency and decimal places lock — they would reinterpret every stored figure. The financial-year start stays changeable.</div>}
+                </div>
+              );
+            })()}
+
             {/* ── Funds ── */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '2px 0 8px' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Funds</div>
@@ -2983,20 +3088,20 @@ function DashFinanceBook() {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
           <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add donor</button>
           </div>
-            {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member and (if your church uses it) Gift Aid.</div>}
+            {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member{giftAidOn ? ' and (if your church uses it) Gift Aid' : ''}.</div>}
             {donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ fontSize: 13.5, fontWeight: 600 }}>{d.name || '(unnamed)'}</span>
-                  {d.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}
-                  {d.postcode ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {d.postcode}</span> : null}
+                  {giftAidOn && d.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}
+                  {giftAidOn && d.postcode ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {d.postcode}</span> : null}
                 </div>
                 <button onClick={() => setDonorEditing({ id: d.id, name: d.name, eligible: d.eligible, address: d.address, postcode: d.postcode, giftAidDeclaredAt: d.giftAidDeclaredAt })} title="Edit this donor" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
               </div>
             ))}
         </div>}
         {donorTab === 'giving' && <div style={{ marginTop: 4 }}>
-            <BooksGivingByMember book={book} F={F} donors={donorMap} />
+            <BooksGivingByMember book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} />
       <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
         // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
@@ -3147,7 +3252,7 @@ function DashFinanceBook() {
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} banner={church.banner || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
-      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
+      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} />}
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
       {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}

@@ -11803,13 +11803,23 @@ function DashFeaturesPanel({ church, show = null }) {
   // therefore never be shown a switch that cannot work, so these rows render only on the owner's own console.
   // `!actingChurch` is exactly the condition publishProfile itself refuses on.
   const featOwner = !(window.Steward && window.Steward.actingChurch);
-  // opt-in extras (default OFF, switchable per church) — kids check-in, UK Gift Aid.
-  // ⚠ Gift Aid is a UK-only scheme and MUST default OFF (DOMAIN: nation-neutral). It rides the opt-in `onOpt`
-  // convention (`f[k] === true`), NOT the default-on `on`/`!== false` one — the same strict-=== gate the
-  // finance console reads as `church.features.giftAid === true`. Wiring it through the default-on convention
-  // would turn a UK tax scheme on for every church on earth.
-  const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code'],
-    ['giftAid', 'Gift Aid (UK)', 'Claim UK Gift Aid on eligible donations — adds donor and claim tools']];
+  // opt-in extras (default OFF, switchable per church) — kids check-in.
+  const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code']];
+  // WAVE 3 — JURISDICTION picker. SUPERSEDES the standalone "Gift Aid (UK)" toggle that used to sit in EXTRAS:
+  // one owner-only selector now chooses the region, and the region decides which tax tools the treasurer sees
+  // (UK → Gift Aid; None → nation-neutral) plus the default book currency. It is OWNER-ONLY — rendered under
+  // `featOwner` below — because publishProfile refuses a delegated steward (the same reason MODULES are owner-
+  // only); and the OWNER decided jurisdiction must be owner-gated, NOT finance-steward-writable.
+  // The picker reads/writes church.features.jurisdiction. It also keeps the LEGACY church.features.giftAid
+  // boolean IN SYNC (true iff UK) so an un-upgraded second console — which still reads the raw boolean — agrees
+  // with this one; the finance console's resolver prefers `jurisdiction` regardless, so the two can never
+  // disagree here. An existing UK church (giftAid:true, no jurisdiction) reads back as 'UK' via the resolver.
+  const _FL = window.FinanceLedger;
+  const JX_OPTS = (_FL && _FL.listJurisdictions) ? _FL.listJurisdictions()
+    : [{ id: 'None', label: 'None (neutral)' }, { id: 'UK', label: 'United Kingdom' }];
+  const jxValue = (_FL && _FL.resolveJurisdiction) ? _FL.resolveJurisdiction({ features: f })
+    : (f.giftAid === true ? 'UK' : 'None');
+  const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, jurisdiction: id, giftAid: id === 'UK' } }); };
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
   const allGroups = window.useStewardGroups ? window.useStewardGroups() : [];
   const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -11976,6 +11986,21 @@ function DashFeaturesPanel({ church, show = null }) {
             </button>
           </div>
         ))}
+        {/* JURISDICTION (wave 3) — OWNER ONLY (featOwner), the single selector that replaced the Gift Aid
+            toggle. A delegate cannot publish the profile this writes to, so like MODULES it is not shown to
+            them rather than failing silently under their hand. The region drives the treasurer's tax tools
+            and the default book currency. */}
+        {featOwner ? (
+          <div className="set-row" style={{ display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Region (tax tools)</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>Sets the default currency for a new book and which tax tools your treasurer sees. United Kingdom turns on Gift Aid; None keeps the book nation-neutral.</div>
+            </div>
+            <select aria-label="Region / jurisdiction" value={jxValue} onChange={(e) => setJurisdiction(e.target.value)} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
+              {JX_OPTS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </div>
+        ) : null}
         {/* PRACTICAL CARE AND GIVING ARE ROWS HERE, not cards of their own. Both were a Panel wrapping a
             single switch, and the Features tab read as five boxes of equal weight when two of them were one
             toggle each. Practical care first: it is a live control a church turns on and uses. Giving last,
