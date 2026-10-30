@@ -119,3 +119,26 @@ test('with nothing ticked the preview keeps the "Tick at least one section" empt
   assert.ok(!d.cardNode(), 'with no sections ticked the card must not render');
   assert.ok(texts(d.m).join(' ').includes('Tick at least one section'), 'the empty-state message is missing');
 });
+
+test('ticking Balance sheet adds a Balance-sheet section the preview card draws (owner 2026-10-30)', () => {
+  const d = mountModal({ book: seedBook(), F: FL, churchName: 'Grace', accent: '', logo: '', banner: '',
+    canPost: true, groups: GROUPS, onPostToMembers: async () => true, onClose() {} });
+  d.click('This year');
+  // "Balance sheet" is OFF by default — tick it
+  const balCb = d.checkboxIn(d.label('Balance sheet')[0] || {});
+  assert.ok(balCb, 're-anchor: no "Balance sheet" checkbox in the Include list');
+  if (!balCb.props.checked) { balCb.props.onChange({ target: { checked: true } }); d.drawM(); }
+
+  // the envelope gains a Balance-sheet rows section (Assets / Liabilities / Net funds) — drop the push → red
+  const node = d.cardNode();
+  assert.ok(node, 'the preview card did not render');
+  const bal = node.props.card.sections.find(s => s.kind === 'rows' && s.label === 'Balance sheet');
+  assert.ok(bal, 'ticking Balance sheet did not add a Balance-sheet section to the card envelope');
+  // field-wise / string compare — bal.rows is a vm-realm array, so deepStrictEqual trips on its prototype
+  assert.equal(bal.rows.map(r => r.name).join(','), 'Assets,Liabilities,Net funds', 'the balance rows are wrong');
+
+  // and the shipped ConsoleFinanceCard actually draws it
+  const t = texts(d.renderCard()).join(' ');
+  assert.ok(/Balance sheet/i.test(t), 'the card did not draw the Balance sheet heading');
+  assert.ok(/Assets/.test(t) && /Net funds/.test(t), 'the card did not draw the balance rows');
+});
