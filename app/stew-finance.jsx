@@ -78,6 +78,11 @@ function finItemToDoc(it) {
   // the real status is DERIVED from the journal + the due date (F.invoiceStatus), never read from here.
   if (id.startsWith('invoice:')) return { t: 'invoice', id: id.slice(8), number: it.number || '', contact: it.contact || '', lines: Array.isArray(it.lines) ? it.lines : [], issued: it.issued || '', due: it.due || '', credit: it.credit === true, ref: it.ref || '', issueSeq: it.issueSeq ?? null };
   if (id.startsWith('contact:')) return { t: 'contact', id: id.slice(8), name: it.name || '', email: it.email || '', address: it.address || '' };
+  // ANNUAL BUDGET (finance/budget:<id>, Phase 7) — a REPLACEABLE console-only READ OVERLAY, NOT part of the
+  // double-entry book. Like template/reconcile/donor it maps to its OWN `t`, which rebuildBook ignores (it
+  // replays only settings/account/fund/journal), so a budget can never post to the journal or disturb the
+  // replay; DashFinanceBook collects it into SEPARATE console state (budgets) for the budget-vs-actual view.
+  if (id.startsWith('budget:')) return { t: 'budget', id: id.slice(7), year: it.year || '', lines: Array.isArray(it.lines) ? it.lines : [] };
   return null;
 }
 // An opaque, random id for a REPLACEABLE finance doc (template / reconciliation). Human-facing names are a
@@ -634,6 +639,100 @@ function BooksDonor({ book, initial, onSave, onClose }) {
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
           <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add donor'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- BUDGET (Phase 7) — CONSOLE-ONLY READ OVERLAY, finance-gated -----------------------------------------
+// BUDGET VS ACTUAL. Compares a saved annual budget to the period's actuals via the PURE F.budgetVsActual
+// engine and flags each OVER-BUDGET expense line with a badge. The variance warning is a computed flag on
+// THIS screen only: there is NO member notification and NO relay doc for it (a budget never posts to the
+// journal). Lives inside the finance screen, already behind the finance-key gate. Empty budget → the engine
+// returns no rows → no badge, no false alert (the "No budget set" line shows instead).
+function BooksBudgetReport({ book, F, budget, from, to }) {
+  const rows = (F && F.budgetVsActual ? F.budgetVsActual(book, budget, { from, to }) : []).map(r => ({
+    ...r,
+    name: (book.accounts.get(r.account) || {}).name || r.account,
+    fundName: r.fund ? ((book.funds.get(r.fund) || {}).name || r.fund) : '',
+  }));
+  if (!rows.length) return (
+    <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '6px 0' }}>No budget set for this period yet — tap “Edit budget” to plan income and spending by category.</div>
+  );
+  return (
+    <div>
+      <div style={{ display: 'flex', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, padding: '0 0 3px' }}>
+        <span style={{ flex: 1 }}>Category</span>
+        <span style={{ width: 90, textAlign: 'right' }}>Budget</span>
+        <span style={{ width: 90, textAlign: 'right' }}>Actual</span>
+        <span style={{ width: 90, textAlign: 'right' }}>Variance</span>
+      </div>
+      {rows.map((r, i) => (
+        <div key={r.account + ':' + (r.fund || '') + ':' + i} style={{ display: 'flex', alignItems: 'center', fontSize: 13, padding: '5px 0', borderTop: '1px solid var(--line)' }}>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            {r.name}{r.fundName ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {r.fundName}</span> : null}
+            {r.over ? <span data-budget-badge="over" title="Spending is over the budgeted amount" style={{ marginLeft: 8, display: 'inline-flex', alignItems: 'center', gap: 4, background: 'color-mix(in oklab, var(--clay) 16%, var(--surface))', color: 'var(--clay-deep, #b4462f)', border: '1px solid color-mix(in oklab, var(--clay) 34%, var(--line))', borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 800 }}>Over by {booksFmt(r.overBy, book)}</span> : null}
+          </span>
+          <span style={{ width: 90, textAlign: 'right' }}>{booksFmt(r.budget, book)}</span>
+          <span style={{ width: 90, textAlign: 'right' }}>{booksFmt(r.actual, book)}</span>
+          <span style={{ width: 90, textAlign: 'right', color: r.over ? 'var(--clay-deep, #b4462f)' : 'var(--ink-2)', fontWeight: r.over ? 800 : 400 }}>{booksFmt(r.variance, book)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// THE BUDGET EDITOR. One row per budget line: a category (income/expense account), an optional fund (— All
+// funds — for an account-wide line, or a specific fund for a per-fund line), and an amount. Saves a
+// finance/budget:<id> doc (REPLACEABLE, opaque id) — NEVER a finance/journal: doc. Amounts are entered in
+// major units and stored as integer minor units.
+function BooksBudgetEdit({ book, initial, onSave, onClose }) {
+  const ed = initial || {};
+  const div = Math.pow(10, book.decimals || 2);
+  const cats = [...book.accounts.values()].filter(a => (a.type === 'income' || a.type === 'expense') && a.id !== 'fund-transfer');
+  const funds = [...book.funds.values()];
+  const seed = (Array.isArray(ed.lines) ? ed.lines : []).map(l => ({ account: l.account, fund: l.fund || '', amount: l.amount ? String(l.amount / div) : '' }));
+  const [rows, setRows] = React.useState(seed.length ? seed : [{ account: cats[0] ? cats[0].id : '', fund: '', amount: '' }]);
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const setRowAt = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const addRow = () => setRows(rs => [...rs, { account: cats[0] ? cats[0].id : '', fund: '', amount: '' }]);
+  const removeRow = (i) => setRows(rs => rs.filter((_, j) => j !== i));
+  const submit = async () => {
+    const lines = rows.filter(r => r.account && booksParse(r.amount, book) > 0).map(r => ({ account: r.account, fund: r.fund || '', amount: booksParse(r.amount, book) }));
+    if (!lines.length) return setErr('Add at least one category with an amount greater than zero.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onSave({ id: ed.id, year: ed.year || '', lines });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t save — your church’s relay refused or did not answer. Try again.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not save that budget.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 64, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Edit budget" tabIndex={-1} style={{ ...bkCard, width: 560, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{ed.year ? 'Budget ' + ed.year : 'Budget'}</h3>
+        <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>A plan, not a posting — this never moves money or changes your ledger. It only shows how spending compares to plan.</div>
+        <div style={{ display: 'flex', fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 700, padding: '0 0 4px' }}>
+          <span style={{ flex: 1 }}>Category</span>
+          <span style={{ width: 150 }}>Fund</span>
+          <span style={{ width: 110, textAlign: 'right' }}>Amount ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</span>
+          <span style={{ width: 34 }} />
+        </div>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: '1px solid var(--line)' }}>
+            <select value={r.account} onChange={e => setRowAt(i, { account: e.target.value })} style={{ ...bkFld, flex: 1, minWidth: 0 }}>{cats.map(a => <option key={a.id} value={a.id}>{a.name}{a.type === 'income' ? ' (in)' : ' (out)'}</option>)}</select>
+            <select value={r.fund} onChange={e => setRowAt(i, { fund: e.target.value })} style={{ ...bkFld, width: 150 }}><option value="">— All funds —</option>{funds.map(f => <option key={f.id} value={f.id}>{f.name}{f.kind === 'restricted' ? ' (restricted)' : f.kind === 'designated' ? ' (designated)' : ''}</option>)}</select>
+            <input value={r.amount} onChange={e => setRowAt(i, { amount: e.target.value })} inputMode="decimal" placeholder="0.00" style={{ ...bkFld, width: 110, textAlign: 'right' }} />
+            <button onClick={() => removeRow(i)} aria-label="Remove this budget line" title="Remove this line" style={{ width: 34, height: 34, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16 }}>×</button>
+          </div>
+        ))}
+        <button onClick={addRow} style={{ marginTop: 10, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>+ Add a category</button>
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '10px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Save budget</button>
         </div>
       </div>
     </div>
@@ -1477,6 +1576,7 @@ function DashFinanceBook() {
       setDonors(docs.filter(d => d.t === 'donor'));   // Phase 4b — finance/donor:<id> docs, SEPARATE from the book
       setInvoices(docs.filter(d => d.t === 'invoice')); // Phase 5 — finance/invoice:<id> docs, SEPARATE from the book
       setContacts(docs.filter(d => d.t === 'contact')); // Phase 5 — finance/contact:<id> docs, SEPARATE from the book
+      setBudgets(docs.filter(d => d.t === 'budget'));  // Phase 7 — finance/budget:<id> docs, SEPARATE from the book (a READ overlay, never a ledger input)
       // "Empty" means no BOOK docs (settings/account/fund/journal). Side docs (attachment/template/reconcile)
       // must NOT count, or a side-doc-only delivery would wrongly enter the seed path over a real book.
       if (!docs.some(d => d.t === 'settings' || d.t === 'account' || d.t === 'fund' || d.t === 'journal')) {
@@ -1529,6 +1629,9 @@ function DashFinanceBook() {
   const [invEditing, setInvEditing] = React.useState(null);  // invoice editor: null closed · {} new · {id,…} view
   const [contactEditing, setContactEditing] = React.useState(null); // contact editor: null closed · {} add · {id,…} edit
   const [invFlash, setInvFlash] = React.useState('');        // what an invoice action reported (saved / paid / exported / why not)
+  const [budgets, setBudgets] = React.useState([]);          // finance/budget:<id> docs (Phase 7) — SEPARATE from the book (a READ overlay)
+  const [budgetOpen, setBudgetOpen] = React.useState(false); // collapsible "Budget" panel
+  const [budgetEditing, setBudgetEditing] = React.useState(null); // budget modal: null closed · {year, lines} the budget being edited
   const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
   // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
   // console only; in localStorage mode these are absent and the modal simply omits the "Post to members" button.
@@ -1895,6 +1998,20 @@ function DashFinanceBook() {
       setInvFlash(msg || 'Downloaded — open it to print or save as PDF.');
     } catch (e) { setInvFlash((e && e.message) || 'Could not save the invoice on this device.'); }
   };
+  // AN ANNUAL BUDGET (finance/budget:<id>, Phase 7) — a REPLACEABLE finance doc that is a pure READ OVERLAY:
+  // it carries {year, lines:[{account, fund, amount}]} and is NEVER posted to the journal (no encPublish of a
+  // finance/journal: doc here; rebuildBook ignores t:'budget'). OPAQUE id (CONTEXT: two authorised writers must
+  // not collide on a shared slug and silently overwrite). Written finance-only via the relay's generic finance/
+  // write prefix — no new gateway rule, no widening. `amount` is integer minor units; `fund` is '' for an
+  // account-across-all-funds line or a fund id for a per-fund line.
+  const saveBudget = async ({ id, year, lines }) => {
+    const theId = id || opaqueId();
+    const body = { year: year || '', lines: (Array.isArray(lines) ? lines : []).map(l => ({ account: l.account, fund: l.fund || '', amount: Math.round(l.amount || 0) })) };
+    if (!useRelay) { setBudgets(bs => [...bs.filter(b => b.id !== theId), { t: 'budget', id: theId, ...body }]); bump(); return true; }
+    const ok = await S.encPublish('finance/budget:' + theId, body);
+    bump();
+    return !(ok === false || ok == null);
+  };
   // The donor NAME lookup the giving-by-member + Gift Aid screens resolve opaque donorIds through.
   const donorMap = React.useMemo(() => new Map(donors.map(d => [d.id, d])), [donors]);
   // Gift Aid is a UK regional PACK, OFF BY DEFAULT: strict === true (NOT the default-on `!== false` feature
@@ -1903,6 +2020,8 @@ function DashFinanceBook() {
 
   const funds = F.fundBalances(book);
   const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
+  const fyYear = fyStart.slice(0, 4);   // the fiscal year the Budget panel plans/compares against
+  const budgetForFy = budgets.find(b => b.year === fyYear) || budgets[0] || null;   // one budget per year; fall back to any saved budget
   const ie = F.incomeExpenditure(book, { from: fyStart });
   const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
@@ -2246,6 +2365,19 @@ function DashFinanceBook() {
         })()}
       </div>
 
+      <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={() => setBudgetOpen(r => !r)} title="Show or hide your annual budget and how spending compares to it" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{budgetOpen ? '▾' : '▸'} Budget</button>
+          {budgetOpen && <button onClick={() => setBudgetEditing({ id: budgetForFy && budgetForFy.id, year: fyYear, lines: (budgetForFy && budgetForFy.lines) || [] })} title="Set or change this year's budget" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit budget</button>}
+        </div>
+        {budgetOpen && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>Year to date {fyYear} — a plan for information only; it never posts to your ledger.</div>
+            <BooksBudgetReport book={book} F={F} budget={budgetForFy} from={fyStart} to={booksTodayISO()} />
+          </div>
+        )}
+      </div>
+
       <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
         // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
@@ -2260,7 +2392,7 @@ function DashFinanceBook() {
 
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
-        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, budgets, multi-currency, and more regional giving-relief packs.</div>
+        <div><b style={{ color: 'var(--ink)' }}>Coming soon — all free &amp; open:</b> bills &amp; approvals, invoicing, multi-currency, and more regional giving-relief packs.</div>
       </div>
 
       {recording && <BooksRecord book={book} onRecord={record} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
@@ -2276,6 +2408,7 @@ function DashFinanceBook() {
       {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
+      {budgetEditing && <BooksBudgetEdit book={book} initial={budgetEditing} onSave={saveBudget} onClose={() => setBudgetEditing(null)} />}
     </div>
   );
 }
