@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
 import { miniReact, find, texts } from './render-jsx-screen.mjs';
-import { listJurisdictions, listTaxRegions, resolveJurisdiction, taxToolFor, donorLabels, TAX_DISCLAIMER } from '../src/finance-jurisdictions.mjs';
+import { listJurisdictions, listTaxRegions, resolveJurisdiction, taxToolFor, taxRegLabel, donorLabels, TAX_DISCLAIMER } from '../src/finance-jurisdictions.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
@@ -146,7 +146,7 @@ async function featuresPanel(church, { actingChurch = null } = {}) {
       useStewardGroups: () => [], useStewardMembers: () => [{ pubkey: 'm1' }], useStewardAdmitted: () => [],
       useStewardJoinPolicy: () => false,
       useStewDialog: () => ({ current: null }),                    // scripture modal registers its Escape/back here
-      FinanceLedger: { listJurisdictions, listTaxRegions, resolveJurisdiction, taxToolFor, TAX_DISCLAIMER },   // the real registry drives the picker + gate + disclaimer
+      FinanceLedger: { listJurisdictions, listTaxRegions, resolveJurisdiction, taxToolFor, taxRegLabel, TAX_DISCLAIMER },   // the real registry drives the picker + gate + disclaimer + reg capture
       Steward: { actingChurch, publishProfile: (p) => published.push(p), setJoinPolicy() {}, setAdmitted() {} },
     },
     ...furniture(React),
@@ -281,14 +281,14 @@ test('TaxScriptureModal renders 1 Samuel 8:10–18 (WEB), a role="dialog", and a
 });
 
 // ── EXPANSION WAVE: the Region picker lists the new verified schemes; the subcard shows the tax disclaimer ──
-test('the Region picker lists the new scheme regions (US, NZ) alongside UK — real schemes only, no None/held', async () => {
+test('the Region picker lists the live scheme regions (UK, US, NZ, Canada, Ireland) — real schemes only, no None/held', async () => {
   const s = await featuresPanel({ features: { taxTools: true } });
   const sel = regionSelect(s.draw());
   assert.ok(sel, 're-anchor: the Region picker is not shown with Tax tools ON');
   const optVals = find(sel, n => n.type === 'option').map(o => o.props.value).sort();
-  assert.deepEqual(optVals, ['NZ', 'UK', 'US'], 'the Region picker options are not exactly the three real schemes: ' + JSON.stringify(optVals));
-  // held / currency-only countries must never appear as selectable regions
-  for (const held of ['None', 'CA', 'DE', 'FR', 'NL', 'ZA', 'AU', 'IE']) assert.ok(!optVals.includes(held), held + ' leaked into the Region picker — it is not a live scheme');
+  assert.deepEqual(optVals, ['CA', 'IE', 'NZ', 'UK', 'US'], 'the Region picker options are not exactly the five real schemes: ' + JSON.stringify(optVals));
+  // None + still-held countries must never appear as selectable regions
+  for (const held of ['None', 'DE', 'FR', 'NL', 'ZA', 'AU']) assert.ok(!optVals.includes(held), held + ' leaked into the Region picker — it is not a live scheme');
 });
 
 test('the Tax tools subcard renders the shared tax disclaimer when ON (a tax surface must carry the caveat)', async () => {
@@ -337,4 +337,47 @@ test('BooksStatementPanel renders the donor summary and the shared tax disclaime
   assert.ok(/Ada/.test(all), 'the statement panel did not render the donor row');
   assert.ok(find(tree, n => n.props && n.props['data-tax-disclaimer'])[0], 'the statement panel did not render the shared tax disclaimer footnote');
   assert.ok(/not tax advice/i.test(all), 'the statement panel disclaimer text is not on the rendered tree');
+});
+
+// ── RECEIPTS/RECLAIM WAVE: Ireland donor cert fields, the CDS panel, and Canada's registration capture ─────
+test('with cdsOn (Ireland) the donor editor shows the CHY3/CHY4 certificate fields, not Gift Aid wording', async () => {
+  const { draw, BooksDonor } = await loadBooksDonor();
+  const tree = draw(BooksDonor, { book: { baseCurrency: 'EUR', decimals: 2 }, initial: null, giftAidOn: false, cdsOn: true, onSave: () => true, onClose() {} });
+  const all = texts(tree).join(' ');
+  assert.ok(/CHY3\/CHY4 certificate \(Ireland\)/.test(all), 'the Ireland certificate wording is not on the donor form');
+  assert.ok(!/Gift Aid/.test(all), 'Ireland leaked Gift Aid wording onto the donor form');
+  // the cert-type select carries CHY3 + CHY4; a date picker is present
+  const opts = find(tree, n => n.type === 'option').map(o => o.props.value);
+  assert.ok(opts.includes('CHY3') && opts.includes('CHY4'), 'the CHY3/CHY4 certificate-type options are missing');
+  assert.ok(find(tree, n => n.type === 'input' && n.props && n.props.type === 'date').length >= 1, 'the certificate-date picker is missing');
+});
+
+test('BooksCdsPanel renders the per-donor reclaim and the shared tax disclaimer; nothing when cdsOn=false', async () => {
+  const { React, draw } = miniReact();
+  const claimResult = { rows: [{ donor: 'd1', name: 'Jo', certType: 'CHY3', donated: 100000, refund: 44928 }], needsReview: [], totalDonated: 100000, totalRefund: 44928, from: '', to: '' };
+  const Panel = await loadComponent('app/stew-finance.jsx', 'BooksCdsPanel', 'function BooksCdsPanel(', {
+    React, bkCard: {}, booksFmt: (m) => '€' + (m / 100).toFixed(2),
+    window: { FinanceIrishCDS: { charitableDonationClaim: () => claimResult } },
+  });
+  const F = { givingByMember: () => [], TAX_DISCLAIMER };
+  assert.ok(!find(draw(Panel, { book: {}, F, donors: new Map(), cdsOn: false }), n => n.props && n.props['data-tax-disclaimer'])[0], 'the CDS panel rendered with cdsOn=false');
+  const tree = draw(Panel, { book: {}, F, donors: new Map([['d1', { id: 'd1' }]]), cdsOn: true });
+  const all = texts(tree).join(' ');
+  assert.ok(/Jo/.test(all) && /CHY3/.test(all), 'the CDS panel did not render the certified donor row');
+  assert.ok(find(tree, n => n.props && n.props['data-tax-disclaimer'])[0], 'the CDS panel did not render the shared tax disclaimer');
+});
+
+test('the Tax tools subcard captures the CRA registration number + signatory ONLY for a region that needs it (Canada)', async () => {
+  // Canada selected → the reg-number field (labelled by taxRegLabel) and the signatory field appear.
+  const ca = await featuresPanel({ features: { taxTools: true, jurisdiction: 'CA' } });
+  const caTree = ca.draw();
+  const regInput = find(caTree, n => n.type === 'input' && n.props && /CRA charity registration number/.test(n.props['aria-label'] || ''))[0];
+  assert.ok(regInput, 'Canada did not show the CRA registration-number capture field');
+  assert.ok(find(caTree, n => n.type === 'input' && n.props && /Authorised signatory/.test(n.props['aria-label'] || ''))[0], 'Canada did not show the authorised-signatory field');
+  // typing publishes it onto church.features (owner-only path)
+  regInput.props.onChange({ target: { value: '123456789RR0001' } });
+  assert.equal(ca.published[0].features.taxRegNumber, '123456789RR0001', 'editing the registration number did not publish features.taxRegNumber');
+  // a region that needs no registration (US) shows no such field
+  const us = await featuresPanel({ features: { taxTools: true, jurisdiction: 'US' } });
+  assert.ok(!find(us.draw(), n => n.type === 'input' && n.props && /registration number/i.test(n.props['aria-label'] || ''))[0], 'US wrongly showed a registration-number field');
 });

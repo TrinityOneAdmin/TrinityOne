@@ -83,28 +83,56 @@ export const JURISDICTIONS = {
     donor: { fields: ['name', 'address'], labels: { name: 'Name', address: 'Postal address' } },
     taxTool: 'contributionStatement',
   },
-  // ── DESIGNED, HELD — NOT shipped this wave (CLAUDE.md rule 4 / owner: never ship guessed mandatory wording).
-  //    Each of these has a real charitable-giving scheme (see PLAN-JURISDICTION-EXPANSION-2026-10-30.md), but its
-  //    VALID receipt needs a prescribed official template or church-registration data we do not yet collect, so it
-  //    is NOT a live region (the Region picker lists ACTUAL schemes only; currency for these churches is handled by
-  //    the free Book-settings currency picker, no region needed). Flip each on in a focused wave once its receipt
-  //    wording is verified and the per-church registration gate is built:
-  //      · Canada (CA, CAD)  — official receipt is PRESCRIBED by Income Tax Reg. s.3501 (unique serial number,
-  //        BN/registration number, CRA web address, authorised signature, split-receipting). HELD: those fields
-  //        are church-registration data we don't collect; a summary without them is not a valid CRA receipt.
-  //      · Australia (AU, AUD, FY 07-01) — deductible only via a DGR; a church is NOT a DGR in its own right.
-  //        HELD: needs an explicit "this church operates a DGR fund (ABN …)" gate before any deductible receipt.
-  //      · Germany (DE, EUR)  — Zuwendungsbestätigung on the OFFICIAL template (§50 EStDV / BMF 07.11.2013).
-  //        HELD: the deduction depends on matching that prescribed template.
-  //      · France (FR, EUR)   — reçu fiscal on the Cerfa 11580 model + a post-2021 annual declaration. HELD: form.
+  // ── CA — SHIPPED (receipts/reclaim wave, 2026-10-30). CANADA official donation receipt via the SHARED
+  //    contribution-statement engine (window.FinanceContribution, perDonorReceipt mode). Full field list VERIFIED
+  //    against CRA "What information must be on an official donation receipt" (Income Tax Reg. s.3501). It needs
+  //    the church's CRA registration number + an authorised signatory — captured OWNER-ONLY on church.features
+  //    (see taxRegLabel) and threaded into the receipt — plus a unique serial (YEAR-donorId). The DONOR claims a
+  //    non-refundable credit; the church reclaims nothing.
+  CA: {
+    id: 'CA',
+    label: 'Canada',
+    currency: { base: 'CAD', decimals: 2, fiscalYearStart: '01-01' },   // SUGGESTED default only — currency is a free Book setting
+    donor: { fields: ['name', 'address'], labels: { name: 'Name', address: 'Address (for the receipt)' } },
+    taxTool: 'contributionStatement',
+  },
+  // ── IE — SHIPPED (receipts/reclaim wave). IRELAND Charitable Donation Scheme — a RECLAIM tool (the CHARITY
+  //    claims, like Gift Aid), in its OWN pack src/finance-pack-ie.mjs (window.FinanceIrishCDS). Math VERIFIED
+  //    against Revenue TDM 36-00-17: specified rate 31% grossed up ×100/(100−31) (refund ≈44.93% of the gift),
+  //    €250/yr minimum, €1,000,000/yr maximum, 10%-of-income restriction for an associated donor. Per-church gate:
+  //    the owner-only Tax tools switch is the "approved body" confirmation; each donor needs a CHY3 (enduring) or
+  //    CHY4 (annual) certificate (certType + certDeclaredAt + eligible), mirroring Gift Aid's declaration.
+  IE: {
+    id: 'IE',
+    label: 'Ireland',
+    currency: { base: 'EUR', decimals: 2, fiscalYearStart: '01-01' },   // SUGGESTED default only
+    donor: {
+      fields: ['name', 'address', 'eligible', 'certType', 'certDeclaredAt'],
+      labels: {
+        name: 'Name',
+        eligible: 'Has given a CHY3/CHY4 certificate (Ireland)',
+        address: 'Address',
+        certType: 'Certificate type (CHY3 enduring / CHY4 annual)',
+        certDeclaredAt: 'Certificate date',
+      },
+    },
+    taxTool: 'charitableDonationScheme',
+  },
+  // ── STILL DESIGNED + HELD — NOT live (CLAUDE.md rule 4: never ship guessed mandatory wording). Each has a real
+  //    scheme (see PLAN-JURISDICTION-EXPANSION-2026-10-30.md) but a blocker that is NOT yet traced to a current
+  //    official source, so it is not a region (currency for these churches is the free Book-settings picker):
+  //      · Germany (DE, EUR)  — Zuwendungsbestätigung on the OFFICIAL template (§50 EStDV / BMF 07.11.2013); the
+  //        deduction depends on matching that prescribed Muster, which we cannot faithfully reproduce yet.
+  //      · France (FR, EUR)   — reçu fiscal on the Cerfa 11580 model + a post-2021 annual declaration; the exact
+  //        mandatory mentions were not readable from an official source this round.
   //      · Netherlands (NL, EUR) — ANBI; the deductible instrument is a 5-year PERIODIC-GIFT AGREEMENT, not a
-  //        receipt. HELD: a plain summary is not the instrument.
-  //      · South Africa (ZA, ZAR, FY 03-01) — s18A receipt (prescribed content) PLUS an IT3(d) filing duty the
-  //        church inherits. HELD: receipt wording + the filing obligation need verification + a gate.
-  //      · Ireland (IE, EUR)  — the one new RECLAIM scheme (church claims money back, like Gift Aid): a blended
-  //        31% GROSSED-UP refund (= donation × 0.31/0.69 ≈ 44.93%), €250/yr minimum, CHY3/CHY4 certificates, caps.
-  //        HELD by explicit owner instruction: reclaim math ships only after Revenue's current rate/caps are
-  //        re-confirmed and legal signs off. Its engine (src/finance-pack-ie.mjs) is deliberately ABSENT for now.
+  //        church receipt, so a giving summary is not the instrument.
+  //      · South Africa (ZA, ZAR, FY 03-01) — s18A receipt; the MANDATORY field set changed (2023/2026: unique
+  //        receipt number, donor ID/contact, IT3(d) filing) and could not be confirmed against a current SARS
+  //        source this round, so the exact wording stays HELD.
+  //      · Australia (AU, AUD, FY 07-01) — an ordinary church is NOT a DGR, so donations are not deductible and a
+  //        receipt would be wrong; correct default is currency-only (no region). A DGR-gated receipt is a future
+  //        option ONLY for a church that confirms it operates a registered DGR fund (ABN) — we do not invent it.
 };
 
 export const DEFAULT_JURISDICTION = 'None';
@@ -150,4 +178,11 @@ export function resolveJurisdiction({ features } = {}) {
 export function currencyDefaults(id) { return getJurisdiction(id).currency; }       // drives the empty-book currency default
 export function donorFields(id)      { return getJurisdiction(id).donor.fields; }   // donor field set (extensibility; form still gates binary this round)
 export function donorLabels(id)      { return getJurisdiction(id).donor.labels; }   // donor labels
-export function taxToolFor(id)       { return getJurisdiction(id).taxTool; }        // 'giftAid' | 'contributionStatement' | null
+export function taxToolFor(id)       { return getJurisdiction(id).taxTool; }        // 'giftAid' | 'contributionStatement' | 'charitableDonationScheme' | null
+
+// Does this jurisdiction's receipt need the church to supply its own REGISTRATION number (captured owner-only on
+// church.features.taxRegNumber, threaded into the generated receipt)? Returns the label for that field, or '' if
+// the jurisdiction needs none. DATA, no tax math — the owner-only Tax tools subcard shows the capture field iff
+// this is truthy, and the finance console passes the captured number + signatory into the receipt document.
+const TAX_REG_LABELS = { CA: 'CRA charity registration number' };   // Canada's official receipt requires it (s.3501)
+export function taxRegLabel(id) { return TAX_REG_LABELS[id] || ''; }

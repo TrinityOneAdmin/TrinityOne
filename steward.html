@@ -275,6 +275,10 @@
      core does NOT import — exposes window.FinanceContribution, used by Finance only when the active tax tool is
      'contributionStatement' (US, New Zealand, …) -->
 <script src="vendor/finance-contribution.js"></script>
+<!-- Ireland Charitable Donation Scheme RECLAIM pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the
+     core does NOT import — exposes window.FinanceIrishCDS, used by Finance only when the active tax tool is
+     'charitableDonationScheme' (Ireland) -->
+<script src="vendor/finance-ie.js"></script>
 <!-- optional Manna module (money-out / disbursements; encrypted to the church key); exposes window.StewardManna -->
 <script src="vendor/steward-manna.js"></script>
 <!-- optional Meal trains / practical-care module (community-glue); exposes window.StewardMeals -->

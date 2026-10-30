@@ -13,3 +13,8 @@ echo "built vendor/finance-giftaid.js ($(du -h vendor/finance-giftaid.js | cut -
 # 'contributionStatement' (US, New Zealand, …).
 npx esbuild src/finance-contribution-bundle.mjs --bundle --format=iife --global-name=FinanceContribution --target=es2020 --legal-comments=none --outfile=vendor/finance-contribution.js
 echo "built vendor/finance-contribution.js ($(du -h vendor/finance-contribution.js | cut -f1))"
+# Ireland Charitable Donation Scheme RECLAIM pack — a SEPARATE bundle (window.FinanceIrishCDS), NOT folded into
+# the core above. Same nation-neutral seam as Gift Aid; the console loads this only when the active tax tool is
+# 'charitableDonationScheme' (Ireland).
+npx esbuild src/finance-ie-bundle.mjs --bundle --format=iife --global-name=FinanceIrishCDS --target=es2020 --legal-comments=none --outfile=vendor/finance-ie.js
+echo "built vendor/finance-ie.js ($(du -h vendor/finance-ie.js | cut -f1))"
