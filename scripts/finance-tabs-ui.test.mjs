@@ -26,7 +26,9 @@ const _store = await import('../src/finance-store.mjs');
 const _statement = await import('../src/finance-statement.mjs');
 const _import = await import('../src/finance-import.mjs');
 const _reports = await import('../src/finance-reports.mjs');
-const FL = { ..._ledger, ..._store, ..._statement, ..._import, ..._reports };
+const _budget = await import('../src/finance-budget.mjs');
+const _charts = await import('../src/finance-charts.mjs');
+const FL = { ..._ledger, ..._store, ..._statement, ..._import, ..._reports, ..._budget, ..._charts };
 
 function setup(opts = {}) {
   const fr = fakeReact();
@@ -71,9 +73,9 @@ function seedItems() {
   ];
 }
 
-const TAB_LABELS = ['Transactions', 'Reports', 'Accounts & funds', 'Invoices', 'Bills', 'Budget', 'Donors'];
+const TAB_LABELS = ['Transactions', 'Reports', 'Accounts & funds', 'Invoices', 'Bills', 'Budget', 'Donors', 'Insights'];
 
-test('the tab strip renders all seven tabs', () => {
+test('the tab strip renders all eight tabs', () => {
   const h = setup();
   h.draw();
   for (const label of TAB_LABELS) {
@@ -89,6 +91,7 @@ test('the DEFAULT tab is Transactions (the recent-transactions list), not any ot
   assert.ok(!h.button('Export PDF'), 'the Reports panel is showing by default — only its tab should reveal it');
   assert.ok(!h.button('Add account'), 'the Accounts & funds panel is showing by default — only its tab should reveal it');
   assert.ok(!h.button('New bill'), 'the Bills panel is showing by default — only its tab should reveal it');
+  assert.ok(!/At this pace/.test(h.screen()), 'the Insights panel is showing by default — only its tab should reveal it');
 });
 
 test('selecting a tab shows THAT panel and hides the others', () => {
