@@ -22,34 +22,42 @@ test('the shipped registry is UK + None only (US is designed, not a live entry)'
 });
 
 // ── resolve precedence (the migration rule) ─────────────────────────────────────────────────────────────
-test('BACK-COMPAT: a legacy church with features.giftAid === true resolves to UK (no action needed)', () => {
+test('BACK-COMPAT: a legacy church with features.giftAid === true (no taxTools) reads as switch-ON + UK', () => {
   assert.equal(resolveJurisdiction({ features: { giftAid: true } }), 'UK',
-    'an existing UK church (giftAid boolean, no explicit jurisdiction) did not resolve to UK — it would lose Gift Aid');
+    'an existing UK church (legacy giftAid boolean, no taxTools) did not resolve to UK — it would lose Gift Aid');
   assert.equal(taxToolFor(resolveJurisdiction({ features: { giftAid: true } })), 'giftAid',
     'the legacy giftAid church did not get the Gift Aid tax tool');
 });
 
-test('NATION-NEUTRAL DEFAULT: an empty/absent profile resolves to None with no tax tool', () => {
+test('NATION-NEUTRAL DEFAULT: the Tax tools switch OFF (or absent) resolves to None with no tax tool', () => {
   assert.equal(resolveJurisdiction({}), 'None');
   assert.equal(resolveJurisdiction({ features: {} }), 'None');
   assert.equal(resolveJurisdiction(), 'None', 'resolveJurisdiction() with no argument must not throw and must be None');
+  assert.equal(resolveJurisdiction({ features: { taxTools: false } }), 'None', 'an explicit taxTools:false did not resolve to None');
   assert.equal(taxToolFor(resolveJurisdiction({ features: {} })), null, 'a neutral church must have NO tax tool');
 });
 
-test('an EXPLICIT jurisdiction wins over the legacy boolean (both directions)', () => {
-  // explicit None overrides a stale giftAid:true (the owner picked None after Gift Aid had been on)
-  assert.equal(resolveJurisdiction({ features: { jurisdiction: 'None', giftAid: true } }), 'None',
-    'an explicit None did not override the legacy giftAid boolean');
-  assert.equal(taxToolFor(resolveJurisdiction({ features: { jurisdiction: 'None', giftAid: true } })), null,
-    'explicit None still left the Gift Aid tax tool active');
-  // explicit UK resolves to UK regardless of the boolean
-  assert.equal(resolveJurisdiction({ features: { jurisdiction: 'UK', giftAid: false } }), 'UK',
-    'an explicit UK did not win');
+test('the Tax tools SWITCH gates everything: taxTools:true with nothing else set defaults to the sole region UK', () => {
+  assert.equal(resolveJurisdiction({ features: { taxTools: true } }), 'UK', 'switch on with nothing set did not default to UK');
+  assert.equal(taxToolFor(resolveJurisdiction({ features: { taxTools: true } })), 'giftAid', 'switch-on default did not enable Gift Aid');
 });
 
-test('an UNKNOWN explicit jurisdiction falls through (never a hard id), honouring the boolean then None', () => {
-  assert.equal(resolveJurisdiction({ features: { jurisdiction: 'ZZ', giftAid: true } }), 'UK', 'an unknown id did not fall back to the legacy boolean');
-  assert.equal(resolveJurisdiction({ features: { jurisdiction: 'ZZ' } }), 'None', 'an unknown id with no boolean did not fall back to None');
+test('the SWITCH overrides the legacy boolean: taxTools:false + giftAid:true ⇒ None (off wins)', () => {
+  assert.equal(resolveJurisdiction({ features: { taxTools: false, giftAid: true } }), 'None',
+    'turning the switch off did not override a stale legacy giftAid boolean');
+  assert.equal(taxToolFor(resolveJurisdiction({ features: { taxTools: false, giftAid: true } })), null,
+    'the switch off still left the Gift Aid tax tool active');
+});
+
+test('with the switch ON, a KNOWN non-None jurisdiction wins', () => {
+  assert.equal(resolveJurisdiction({ features: { taxTools: true, jurisdiction: 'UK' } }), 'UK', 'an explicit UK with the switch on did not win');
+});
+
+test('an UNKNOWN jurisdiction (switch on) falls through to the legacy boolean then the UK default', () => {
+  assert.equal(resolveJurisdiction({ features: { taxTools: true, jurisdiction: 'ZZ', giftAid: true } }), 'UK', 'an unknown id did not fall back to the legacy boolean');
+  assert.equal(resolveJurisdiction({ features: { taxTools: true, jurisdiction: 'ZZ' } }), 'UK', 'an unknown id (switch on) did not fall back to the UK default');
+  // and with the switch OFF an explicit jurisdiction is inert
+  assert.equal(resolveJurisdiction({ features: { jurisdiction: 'UK' } }), 'None', 'a jurisdiction with the switch off (no taxTools, no giftAid) must be inert → None');
 });
 
 // ── what each pack drives ───────────────────────────────────────────────────────────────────────────────

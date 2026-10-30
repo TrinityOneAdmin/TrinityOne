@@ -74,15 +74,22 @@ export function getJurisdiction(id) {
 }
 
 // Resolve the active jurisdiction id from the church profile. Computed on READ — no stored document changes
-// until a church actively picks one. Precedence (owner decision 2026-10-30):
-//   1. an EXPLICIT church.features.jurisdiction that is a KNOWN id  -> it wins;
-//   2. else the LEGACY boolean church.features.giftAid === true     -> 'UK' (existing UK churches, no action);
-//   3. else                                                         -> 'None' (nation-neutral default).
+// until a church actively picks one. The owner-only "Tax tools" SWITCH (church.features.taxTools) gates
+// everything, and 'None' is its OFF state (owner decision 2026-10-30):
+//   taxOn = taxTools === true  OR  (taxTools === undefined AND the legacy giftAid boolean is true)   // MIGRATION
+//   · !taxOn                                        -> 'None';
+//   · taxOn + a KNOWN non-None features.jurisdiction -> it wins;
+//   · taxOn + legacy giftAid === true                -> 'UK';
+//   · taxOn, nothing set                             -> 'UK' (the sole tax region; the switch being on implies one).
+// BACK-COMPAT: an existing UK church (giftAid:true, no taxTools) reads as switch-ON + UK — Gift Aid keeps
+// working untouched, and the panel shows the switch ON.
 export function resolveJurisdiction({ features } = {}) {
   const f = features || {};
-  if (f.jurisdiction && JURISDICTIONS[f.jurisdiction]) return f.jurisdiction;
+  const taxOn = f.taxTools === true || (f.taxTools === undefined && f.giftAid === true);
+  if (!taxOn) return 'None';
+  if (f.jurisdiction && f.jurisdiction !== 'None' && JURISDICTIONS[f.jurisdiction]) return f.jurisdiction;
   if (f.giftAid === true) return 'UK';
-  return DEFAULT_JURISDICTION;
+  return 'UK';
 }
 
 // The three things a pack drives. Each takes an id (as returned by resolveJurisdiction) and reads DATA only.

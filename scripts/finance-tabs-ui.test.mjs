@@ -235,9 +235,10 @@ test('W3-1b — with the NEUTRAL default (no features) the seed is still the sil
   assert.equal(settings[1].baseCurrency, 'GBP', 'a neutral church no longer seeds a silent-£ book');
 });
 
-// W3-2 — THE TAX-TOOL GATE is driven by the resolver, not the raw boolean. BooksGiftAidPanel is handed
-// giftAidOn computed from resolveJurisdiction/taxToolFor. Covers: explicit UK on; back-compat legacy boolean
-// ⇒ UK on; explicit None overrides a stale giftAid:true ⇒ off; neutral default ⇒ off.
+// W3-2 — THE TAX-TOOL GATE is driven by the resolver (the Tax tools SWITCH), not the raw boolean.
+// BooksGiftAidPanel is handed giftAidOn = taxToolFor(resolveJurisdiction(...)) === 'giftAid'. Covers: the
+// switch on + UK region on; back-compat legacy boolean (no taxTools) ⇒ on; the switch off overrides a stale
+// giftAid:true ⇒ off; neutral default ⇒ off; switch on with nothing set ⇒ UK default on.
 function gaPanelFor(features) {
   const h = setup({ features });
   h.draw();
@@ -248,24 +249,27 @@ function gaPanelFor(features) {
   assert.ok(ga, 're-anchor: the Gift Aid panel is not under the Giving-record sub-tab');
   return ga.props.giftAidOn;
 }
-test('W3-2 — an explicit jurisdiction=UK turns the Gift Aid tool on (no legacy boolean needed)', () => {
-  assert.equal(gaPanelFor({ jurisdiction: 'UK' }), true, 'jurisdiction=UK did not activate the Gift Aid tax tool');
+test('W3-2 — Tax tools on + region UK turns the Gift Aid tool on', () => {
+  assert.equal(gaPanelFor({ taxTools: true, jurisdiction: 'UK' }), true, 'taxTools on + UK did not activate the Gift Aid tax tool');
 });
-test('W3-2 — BACK-COMPAT: a legacy features.giftAid=true (no jurisdiction) still turns Gift Aid on', () => {
-  assert.equal(gaPanelFor({ giftAid: true }), true, 'a legacy UK church lost its Gift Aid tool after the gate was rewired to the resolver');
+test('W3-2 — Tax tools on with nothing else set defaults to UK and turns Gift Aid on', () => {
+  assert.equal(gaPanelFor({ taxTools: true }), true, 'the switch on with no region did not default to UK + Gift Aid');
 });
-test('W3-2 — an explicit jurisdiction=None OVERRIDES a stale giftAid:true (tool off)', () => {
-  assert.equal(gaPanelFor({ jurisdiction: 'None', giftAid: true }), false, 'explicit None did not override the legacy boolean on the screen');
+test('W3-2 — BACK-COMPAT: a legacy features.giftAid=true (no taxTools) still turns Gift Aid on', () => {
+  assert.equal(gaPanelFor({ giftAid: true }), true, 'a legacy UK church lost its Gift Aid tool after the gate was rewired to the switch');
+});
+test('W3-2 — the SWITCH OFF (taxTools:false) OVERRIDES a stale giftAid:true (tool off)', () => {
+  assert.equal(gaPanelFor({ taxTools: false, giftAid: true }), false, 'turning the switch off did not override the legacy boolean on the screen');
 });
 test('W3-2 — the NATION-NEUTRAL default (no features) leaves the Gift Aid tool off', () => {
   assert.equal(gaPanelFor({}), false, 'a neutral church shows the Gift Aid tool');
 });
 
-// W3-3 — THE DONOR LABELS (wave 2 gated on giftAidOn) now follow the jurisdiction too, since giftAidOn's
-// SOURCE changed. With jurisdiction=UK the donor-records list shows the UK wording; with None it does not.
+// W3-3 — THE DONOR LABELS (wave 2 gated on giftAidOn) follow the switch too, since giftAidOn's SOURCE is the
+// resolver. With the switch on (+UK) the donor-records list shows the UK wording; off it does not.
 // (The records-list badge/postcode live in DashFinanceBook's own body, so console-screens renders them.)
-test('W3-3 — donor labels follow the jurisdiction: UK shows the Gift Aid badge + postcode, None hides them', () => {
-  const uk = setup({ features: { jurisdiction: 'UK' } });
+test('W3-3 — donor labels follow the switch: on+UK shows the Gift Aid badge + postcode, off hides them', () => {
+  const uk = setup({ features: { taxTools: true, jurisdiction: 'UK' } });
   uk.draw(); uk.feedItems(seedItems()); uk.click('Donors');
   assert.ok(/Gift Aid/.test(uk.screen()), 'jurisdiction=UK did not show the Gift Aid wording in the donor list');
   assert.ok(/AB1 2CD/.test(uk.screen()), 'jurisdiction=UK did not show the donor postcode');

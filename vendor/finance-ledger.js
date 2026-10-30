@@ -1497,9 +1497,11 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
   }
   function resolveJurisdiction({ features } = {}) {
     const f = features || {};
-    if (f.jurisdiction && JURISDICTIONS[f.jurisdiction]) return f.jurisdiction;
+    const taxOn = f.taxTools === true || f.taxTools === void 0 && f.giftAid === true;
+    if (!taxOn) return "None";
+    if (f.jurisdiction && f.jurisdiction !== "None" && JURISDICTIONS[f.jurisdiction]) return f.jurisdiction;
     if (f.giftAid === true) return "UK";
-    return DEFAULT_JURISDICTION;
+    return "UK";
   }
   function currencyDefaults(id) {
     return getJurisdiction(id).currency;
