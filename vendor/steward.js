@@ -24677,7 +24677,9 @@ zoo`.split("\n");
     // carries the pinned message snapshot so both apps render the banner without re-fetching the message.
     pinPost(groupId, msg) {
       if (!sk || !groupId || !msg || !msg.id) return Promise.resolve(null);
-      const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.by || "", ts: msg.ts || now() });
+      const _pc = msg.card;
+      const pinText = _pc && _pc.type === "finance" ? [typeof _pc.title === "string" ? _pc.title.trim() : "", "Financial statement", typeof _pc.periodLabel === "string" ? _pc.periodLabel.trim() : ""].filter(Boolean).join(" \xB7 ") : msg.text || "";
+      const content = JSON.stringify({ msgId: msg.id, text: pinText, by: msg.by || "", ts: msg.ts || now() });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PIN_D + groupId], ["t", NET], ["t", groupId], ["p", pub]], content }));
     },
     unpin(groupId) {

@@ -11544,7 +11544,15 @@ window.Steward = {
   // carries the pinned message snapshot so both apps render the banner without re-fetching the message.
   pinPost(groupId, msg) {
     if (!sk || !groupId || !msg || !msg.id) return Promise.resolve(null);
-    const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.by || '', ts: msg.ts || now() });
+    // A FINANCE CARD pins as a SHORT summary, not its full plain-text statement body — the banner showed the
+    // whole "…Total income…BALANCE SHEET…" dump otherwise. Only a well-formed finance card is summarised; any
+    // other message (or a garbage/absent card) keeps its text exactly as before. Fixes newly-pinned cards only
+    // (re-pin an old one to fix it); stored pins are not migrated.
+    const _pc = msg.card;
+    const pinText = (_pc && _pc.type === 'finance')
+      ? [typeof _pc.title === 'string' ? _pc.title.trim() : '', 'Financial statement', typeof _pc.periodLabel === 'string' ? _pc.periodLabel.trim() : ''].filter(Boolean).join(' · ')
+      : (msg.text || '');
+    const content = JSON.stringify({ msgId: msg.id, text: pinText, by: msg.by || '', ts: msg.ts || now() });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PIN_D + groupId], ['t', NET], ['t', groupId], ['p', pub]], content }));
   },
   unpin(groupId) {   // clear the group's pin (tombstone the addressable doc)

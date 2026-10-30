@@ -12683,7 +12683,9 @@
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !groupId || !msg || !msg.id) return { ok: false, reason: "not-sent" };
-      const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
+      const _pc = msg.card;
+      const pinText = _pc && _pc.type === "finance" ? [typeof _pc.title === "string" ? _pc.title.trim() : "", "Financial statement", typeof _pc.periodLabel === "string" ? _pc.periodLabel.trim() : ""].filter(Boolean).join(" \xB7 ") : msg.text || "";
+      const content = JSON.stringify({ msgId: msg.id, text: pinText, by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }), sk);
       try {
         await _publishBounded(publishSetFor(cp), evt);
