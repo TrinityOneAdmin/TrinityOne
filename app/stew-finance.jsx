@@ -3092,7 +3092,7 @@ function DashFinanceBook() {
         const cell = (heading, chart) => <div style={{ minWidth: 0 }}><div style={cellHd}>{heading}</div>{chart}</div>;
         return (
           <div style={{ ...bkCard, marginBottom: 16 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 600px), 1fr))', gap: 20 }}>
               {cell('Year-end projection', <BooksProjectionChart book={book} proj={proj} height={210} />)}
               {cell('Monthly trend', <BooksMonthlyTrendChart book={book} series={monthly} height={190} />)}
               {cell('Budget vs actual', <BooksBudgetChart book={book} rows={budgetRows} rowHeight={28} />)}
