@@ -302,14 +302,14 @@ test('TaxScriptureModal renders 1 Samuel 8:17–18 (WEB), a role="dialog", and a
 });
 
 // ── EXPANSION WAVE: the Region picker lists the new verified schemes; the subcard shows the tax disclaimer ──
-test('the Region picker lists the live scheme regions (UK, US, NZ, Canada, Ireland) — real schemes only, no None/held', async () => {
+test('the Region picker lists the live scheme regions (UK, US, NZ, Canada, Ireland, South Africa) — real schemes only, no None/held', async () => {
   const s = await featuresPanel({ features: { taxTools: true } });
   const sel = regionSelect(s.draw());
   assert.ok(sel, 're-anchor: the Region picker is not shown with Tax tools ON');
   const optVals = find(sel, n => n.type === 'option').map(o => o.props.value).sort();
-  assert.deepEqual(optVals, ['CA', 'IE', 'NZ', 'UK', 'US'], 'the Region picker options are not exactly the five real schemes: ' + JSON.stringify(optVals));
+  assert.deepEqual(optVals, ['CA', 'IE', 'NZ', 'UK', 'US', 'ZA'], 'the Region picker options are not exactly the six real schemes: ' + JSON.stringify(optVals));
   // None + still-held countries must never appear as selectable regions
-  for (const held of ['None', 'DE', 'FR', 'NL', 'ZA', 'AU']) assert.ok(!optVals.includes(held), held + ' leaked into the Region picker — it is not a live scheme');
+  for (const held of ['None', 'DE', 'FR', 'NL', 'AU']) assert.ok(!optVals.includes(held), held + ' leaked into the Region picker — it is not a live scheme');
 });
 
 test('the Tax tools subcard renders the shared tax disclaimer when ON (a tax surface must carry the caveat)', async () => {
@@ -401,4 +401,30 @@ test('the Tax tools subcard captures the CRA registration number + signatory ONL
   // a region that needs no registration (US) shows no such field
   const us = await featuresPanel({ features: { taxTools: true, jurisdiction: 'US' } });
   assert.ok(!find(us.draw(), n => n.type === 'input' && n.props && /registration number/i.test(n.props['aria-label'] || ''))[0], 'US wrongly showed a registration-number field');
+});
+
+// ── South Africa: the donor editor renders the SARS-prescribed EXTRA fields (registry-driven extraFields) ──
+test('with South Africa active the donor editor shows the prescribed s18A donor fields (ID number, tax ref, …)', async () => {
+  const { draw, BooksDonor } = await loadBooksDonor();
+  // extraFields is what DashFinanceBook derives from the registry for ZA (everything beyond name/address).
+  const extraFields = [
+    { key: 'natureOfPerson', label: 'Nature of person (natural person / company / trust …)' },
+    { key: 'idNumber', label: 'ID / registration number' },
+    { key: 'taxRef', label: 'Income-tax reference number' },
+    { key: 'contactNumber', label: 'Contact number' },
+  ];
+  let saved = null;
+  // A donor LOADED with s18A values: the form must render the fields AND re-send the values on save (so the
+  // prescribed PII actually feeds saveDonor → the receipt). Mirrors the Gift-Aid "preserve on save" pattern.
+  const initial = { id: 'd1', name: 'Thandi', natureOfPerson: 'Natural person', idNumber: '8001015009087', taxRef: '1234567890', contactNumber: '+27 11 555 0100' };
+  const tree = draw(BooksDonor, { book: { baseCurrency: 'ZAR', decimals: 2 }, initial, giftAidOn: false, statementOn: true, addressLabel: 'Address', extraFields, onSave: (d) => { saved = d; return true; }, onClose() {} });
+  const all = texts(tree).join(' ');
+  for (const f of extraFields) assert.ok(all.includes(f.label), 'the s18A field "' + f.label + '" is not on the donor form');
+  // the loaded ID number is in an input, and saving carries it in the payload (the field feeds saveDonor)
+  const idInput = find(tree, n => n.type === 'input' && n.props && /ID \/ registration number/.test(n.props['aria-label'] || ''))[0];
+  assert.ok(idInput && idInput.props.value === '8001015009087', 're-anchor: the ID-number input did not load its value');
+  const saveBtn = find(tree, n => n.type === 'button' && /save|add donor/i.test(texts(n).join(' ')))[0];
+  await saveBtn.props.onClick({ stopPropagation() {}, preventDefault() {} });
+  assert.equal(saved.idNumber, '8001015009087', 'the s18A ID number did not reach the save payload');
+  assert.equal(saved.taxRef, '1234567890', 'the s18A income-tax reference did not reach the save payload');
 });
