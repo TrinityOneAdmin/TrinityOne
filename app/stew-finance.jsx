@@ -1474,6 +1474,7 @@ function fsBuildStatementPdf(model, F) {
   let y = 64;
   const need = h => { if (y + h > H - M) { doc.addPage(); y = M; } };
   const [ar, ag, ab] = fsHexRgb(model.accent, [43, 39, 35]);   // church brand accent (or ink) for the title + rule
+  if (model.banner) { try { const fmt = /^data:image\/jpe?g/i.test(model.banner) ? 'JPEG' : 'PNG'; const bw = W - 2 * M, bh = Math.min(120, bw / 3); doc.addImage(model.banner, fmt, M, y - 4, bw, bh); y += bh + 8; } catch (e) {} }   // church banner — full-width letterhead above the logo
   if (model.logo) { try { const fmt = /^data:image\/jpe?g/i.test(model.logo) ? 'JPEG' : 'PNG'; doc.addImage(model.logo, fmt, M, y - 4, 42, 42); y += 50; } catch (e) {} }   // church dp/logo letterhead
   doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.setTextColor(ar, ag, ab); doc.text(model.title, M, y); y += 22;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(12); doc.setTextColor(138, 128, 120); doc.text(model.periodLabel, M, y); y += 12;
@@ -1511,11 +1512,15 @@ async function fsSavePdf(doc, fname) {
   return saveConsoleFile(fname, b64, { mime: 'application/pdf', base64: true, title: 'Financial statement', blurb: 'Open it to print or share.' });
 }
 
-function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, groups, onPostToMembers, onClose }) {
+function FinanceShareStatement({ book, F, churchName, accent, logo, banner, canPost, groups, onPostToMembers, onClose }) {
   // resolve the church dp/logo to a self-contained data: URI (invImgDataUrl lives in stew-dashboard.jsx; shared
   // steward bundle). Kept in state so the live preview, the HTML download and the PDF all embed the same image.
   const [logoData, setLogoData] = React.useState('');
   React.useEffect(() => { let ok = true; if (typeof churchMarkDataUrl === 'function') { churchMarkDataUrl({ picture: logo, name: churchName, accent }).then(d => { if (ok) setLogoData(d || ''); }); } else setLogoData(''); return () => { ok = false; }; }, [logo, churchName, accent]);
+  // the church banner for the download letterhead. NO initials fallback (unlike the logo) — accept it ONLY if it
+  // is already a data: image (anti-beacon: a remote URL is never embedded); anything else resolves to ''.
+  const [bannerData, setBannerData] = React.useState('');
+  React.useEffect(() => { setBannerData(/^data:image\//i.test(String(banner || '').trim()) ? String(banner).trim() : ''); }, [banner]);
   const now = new Date();
   const curY = now.getFullYear(), curQ = Math.floor(now.getMonth() / 3) + 1;
   const [title, setTitle] = React.useState(churchName || 'Financial statement');
@@ -1553,8 +1558,10 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, gro
   // NOT title/note, so typing in those fields doesn't re-scan the ledger on every keystroke.
   const baseModel = React.useMemo(() => F.buildStatement(book, {
     from: period.from, to: period.to, periodLabel: period.label, title: '', note: '',
-    sections: enabledKeys, generatedAt: booksTodayISO(), accent, logo: logoData,
-  }), [book, period, accent, logoData, JSON.stringify(secs)]);   // eslint-disable-line react-hooks/exhaustive-deps
+    sections: enabledKeys, generatedAt: booksTodayISO(), accent,
+    // branding gates BOTH the logo and the banner on the download (PDF/HTML), consistent with the posted card.
+    logo: branded ? logoData : '', banner: branded ? bannerData : '',
+  }), [book, period, accent, branded, logoData, bannerData, JSON.stringify(secs)]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Cheap: fold in the presentation-only title/note (respecting whether the 'note' section is enabled).
   const model = React.useMemo(() => {
     const m = { ...baseModel, title: title || 'Financial statement' };
@@ -1574,7 +1581,9 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, gro
     } catch (e) { setFlash((e && e.message) || 'Could not save the statement on this device.'); }
   };
   const doPost = async () => {
-    try { await onPostToMembers(model, F.statementText(model), target, { branded }); setPosting('done'); setFlash('Shared with members.'); }
+    // on success, switch to the 'done' state — the success panel (below) carries the confirmation, so no stray
+    // green flash line and no still-clickable "Post to members" button (which was a double-post risk).
+    try { await onPostToMembers(model, F.statementText(model), target, { branded }); setFlash(''); setPosting('done'); }
     catch (e) { setFlash(e && e.message ? e.message : 'Could not post to members.'); setPosting(false); }
   };
 
@@ -1621,17 +1630,18 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, gro
           </div>
           {secs.note && <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="A short note for members / trustees (optional)…" rows={3} style={{ ...bkFld, height: 'auto', padding: 10, marginTop: 8, resize: 'vertical', lineHeight: 1.4 }} />}
 
-          {/* Branding — only affects the card members receive (the copy/download are unbranded text/PDF). The
-              banner & logo are NOT sent; this flag tells the member app whether to show the ones it already holds. */}
-          {canPost && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, color: 'var(--ink)', cursor: 'pointer', marginTop: 12 }}>
-              <input type="checkbox" checked={branded} onChange={e => setBranded(e.target.checked)} /> Show church banner &amp; logo on the card
-            </label>
-          )}
+          {/* Branding — affects BOTH the download (the PDF/HTML carry the banner + logo as a data: letterhead)
+              AND the posted member card. For the card the banner/logo are NOT sent: this flag tells the member
+              app whether to show the ones it already holds. Always shown — the download honours it even when a
+              church cannot post. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, color: 'var(--ink)', cursor: 'pointer', marginTop: 12 }}>
+            <input type="checkbox" checked={branded} onChange={e => setBranded(e.target.checked)} /> Show church banner &amp; logo
+          </label>
 
-          {/* live preview of exactly what will be shared */}
+          {/* live preview of exactly what will be shared — honours the branding toggle (banner + logo when on, neither when off) */}
           <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 14, marginTop: 14, background: 'var(--surface-2, #f7f3ec)' }}>
-            {logoData ? <img src={logoData} alt="" style={{ height: 34, maxWidth: 130, objectFit: 'contain', display: 'block', marginBottom: 8 }} /> : null}
+            {branded && bannerData ? <img src={bannerData} alt="" style={{ width: '100%', maxHeight: 90, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 8 }} /> : null}
+            {branded && logoData ? <img src={logoData} alt="" style={{ height: 34, maxWidth: 130, objectFit: 'contain', display: 'block', marginBottom: 8 }} /> : null}
             <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display, var(--font-ui))', color: accent || undefined, borderTop: '3px solid ' + (accent || 'var(--ink)'), paddingTop: 8 }}>{title || 'Financial statement'}</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 8 }}>{period.label}</div>
             {model.summary && <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
@@ -1651,7 +1661,14 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, gro
 
         {flash && <p style={{ color: 'var(--sage, #4f7a5e)', fontSize: 12.5, margin: '10px 0 0', fontWeight: 600 }}>{flash}</p>}
 
-        {posting === 'confirm' ? (
+        {posting === 'done' ? (
+          <div style={{ marginTop: 14, border: '1px solid var(--sage, #4f7a5e)', borderRadius: 12, padding: 16, textAlign: 'center' }}>
+            <Icon name="check" size={34} color="var(--sage, #4f7a5e)" />
+            <div style={{ fontWeight: 800, fontSize: 16, marginTop: 6 }}>Shared with members</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 4, marginBottom: 14 }}>They’ll see it in {targetLabel}.</div>
+            <button onClick={onClose} style={{ height: 44, padding: '0 28px', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Done</button>
+          </div>
+        ) : posting === 'confirm' ? (
           <div style={{ marginTop: 14, border: '1px solid var(--clay)', borderRadius: 12, padding: 14 }}>
             <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>Post this statement to {targetLabel}?</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12 }}>They will see it in {targetLabel}. It contains totals only — no names.</div>
@@ -3127,7 +3144,7 @@ function DashFinanceBook() {
       {fundEditing && <BooksFundEdit book={book} initial={fundEditing} onSave={saveFund} onClose={() => setFundEditing(null)} />}
       {moving && <BooksFundMove book={book} onTransfer={transferFunds} onClose={() => setMoving(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
-      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
+      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} banner={church.banner || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
       {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
