@@ -25,10 +25,12 @@ var FinanceLedger = (() => {
     AP_ACCT: () => AP_ACCT,
     AR_ACCOUNT: () => AR_ACCOUNT,
     AR_ACCT: () => AR_ACCT,
+    DEFAULT_JURISDICTION: () => DEFAULT_JURISDICTION,
     FUND_KINDS: () => FUND_KINDS,
     FUND_TRANSFER_ACCT: () => FUND_TRANSFER_ACCT,
     FX_ACCOUNT: () => FX_ACCOUNT,
     FX_ACCT: () => FX_ACCT,
+    JURISDICTIONS: () => JURISDICTIONS,
     STATEMENT_SECTIONS: () => STATEMENT_SECTIONS,
     accentInk: () => accentInk,
     accountHasPostings: () => accountHasPostings,
@@ -53,7 +55,10 @@ var FinanceLedger = (() => {
     check: () => check,
     createBook: () => createBook,
     creditNoteEntry: () => creditNoteEntry,
+    currencyDefaults: () => currencyDefaults,
     docFor: () => docFor,
+    donorFields: () => donorFields,
+    donorLabels: () => donorLabels,
     dropFrom: () => dropFrom,
     fiscalYearRange: () => fiscalYearRange,
     fmtMoney: () => fmtMoney,
@@ -61,6 +66,7 @@ var FinanceLedger = (() => {
     foreignCashAccount: () => foreignCashAccount,
     fundBalances: () => fundBalances,
     fundMovements: () => fundMovements,
+    getJurisdiction: () => getJurisdiction,
     givingByFund: () => givingByFund,
     givingByMember: () => givingByMember,
     guessColumns: () => guessColumns,
@@ -77,6 +83,7 @@ var FinanceLedger = (() => {
     isBillApproved: () => isBillApproved,
     journalCsvRows: () => journalCsvRows,
     lineKey: () => lineKey,
+    listJurisdictions: () => listJurisdictions,
     match: () => match,
     minorToMajorText: () => minorToMajorText,
     monthlyFundBalances: () => monthlyFundBalances,
@@ -92,6 +99,7 @@ var FinanceLedger = (() => {
     rebuildBook: () => rebuildBook,
     receiptsAndPayments: () => receiptsAndPayments,
     reportCsvRows: () => reportCsvRows,
+    resolveJurisdiction: () => resolveJurisdiction,
     revalueEntry: () => revalueEntry,
     reverse: () => reverse,
     statementBalanceCheck: () => statementBalanceCheck,
@@ -99,6 +107,7 @@ var FinanceLedger = (() => {
     statementLines: () => statementLines,
     statementText: () => statementText,
     suggestCategory: () => suggestCategory,
+    taxToolFor: () => taxToolFor,
     templateEntry: () => templateEntry,
     templateImportKey: () => templateImportKey,
     templatePost: () => templatePost,
@@ -1438,6 +1447,68 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
       months,
       funds: funds.map((f) => ({ fund: f.id, name: f.name, kind: f.kind, balances: series.get(f.id) })).sort((a, b) => a.fund === "general" ? -1 : b.fund === "general" ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     };
+  }
+
+  // src/finance-jurisdictions.mjs
+  var JURISDICTIONS = {
+    None: {
+      id: "None",
+      label: "None (neutral)",
+      currency: { base: "GBP", decimals: 2, fiscalYearStart: "01-01" },
+      // silent-£, the pilot default
+      donor: { fields: ["name"], labels: { name: "Name" } },
+      taxTool: null
+    },
+    UK: {
+      id: "UK",
+      label: "United Kingdom",
+      currency: { base: "GBP", decimals: 2, fiscalYearStart: "01-01" },
+      // see UK fiscal-year note above
+      donor: {
+        fields: ["title", "firstName", "lastName", "name", "house", "address", "postcode", "eligible", "giftAidDeclaredAt"],
+        labels: {
+          name: "Name",
+          eligible: "Has made a Gift Aid declaration (UK)",
+          address: "Address (for a Gift Aid claim)",
+          postcode: "Postcode",
+          giftAidDeclaredAt: "Declaration date"
+        }
+      },
+      taxTool: "giftAid"
+    }
+    // ── US — DESIGNED, NOT BUILT this round (owner: one pack at a time). Kept as a comment, not a live entry,
+    //    so the SHIPPED registry is UK + None only. The US tax tool is a year-end per-donor CONTRIBUTION
+    //    STATEMENT (an annual giving summary the DONOR uses for their own deduction — NO church rebate, unlike
+    //    Gift Aid). Adding it later is exactly one entry here plus a separate src/finance-pack-us.mjs engine:
+    //    US: { id:'US', label:'United States',
+    //          currency:{ base:'USD', decimals:2, fiscalYearStart:'01-01' },
+    //          donor:{ fields:['name','address'], labels:{ address:'Mailing address' } },
+    //          taxTool:'contributionStatement' },
+  };
+  var DEFAULT_JURISDICTION = "None";
+  function listJurisdictions() {
+    return Object.values(JURISDICTIONS).map((j) => ({ id: j.id, label: j.label }));
+  }
+  function getJurisdiction(id) {
+    return JURISDICTIONS[id] || JURISDICTIONS[DEFAULT_JURISDICTION];
+  }
+  function resolveJurisdiction({ features } = {}) {
+    const f = features || {};
+    if (f.jurisdiction && JURISDICTIONS[f.jurisdiction]) return f.jurisdiction;
+    if (f.giftAid === true) return "UK";
+    return DEFAULT_JURISDICTION;
+  }
+  function currencyDefaults(id) {
+    return getJurisdiction(id).currency;
+  }
+  function donorFields(id) {
+    return getJurisdiction(id).donor.fields;
+  }
+  function donorLabels(id) {
+    return getJurisdiction(id).donor.labels;
+  }
+  function taxToolFor(id) {
+    return getJurisdiction(id).taxTool;
   }
   return __toCommonJS(finance_bundle_exports);
 })();

@@ -27,9 +27,13 @@ let _booksDonateShown = false;           // once per app session
 function booksDonateHiddenUntil() { try { return parseInt(localStorage.getItem(DONATE_LS) || '0', 10) || 0; } catch (e) { return 0; } }
 function booksDonateGave() { try { localStorage.setItem(DONATE_LS, String(Date.now() + DONATE.hideDays * 864e5)); } catch (e) {} }
 
-function booksFresh() {
+// `ccy` is the jurisdiction's currency DEFAULT ({ base, decimals, fiscalYearStart }), passed by the empty-book
+// seed (wave 3) from F.currencyDefaults(resolveJurisdiction(church.features)). Absent (local/no-church path,
+// or the neutral default) it falls back to the silent-£ pilot default (DOMAIN) — identical to before wave 3.
+function booksFresh(ccy) {
   const F = window.FinanceLedger;
-  const b = F.createBook({ baseCurrency: 'GBP', decimals: 2 });
+  const c = ccy || {};
+  const b = F.createBook({ baseCurrency: c.base || 'GBP', decimals: c.decimals != null ? c.decimals : 2, ...(c.fiscalYearStart ? { fiscalYearStart: c.fiscalYearStart } : {}) });
   // NATION-NEUTRAL, silent-£ (DOMAIN 2026-10-29): a tight generic chart, NO tax/relief accounts (no Gift Aid,
   // no GASDS — those are off-by-default regional packs, never the core seed). A pilot church that already has
   // a book never re-seeds (the seed runs only on an authenticated EMPTY read), so this list reaches only a
@@ -1968,7 +1972,16 @@ function DashFinanceBook() {
         if (seeded) return;
         if (window.Steward && window.Steward.relayAuthed && !window.Steward.relayAuthed()) return;
         seeded = true;
-        const b = booksFresh(); bookRef.current = b; bump();
+        // WAVE 3 — OWNER-ONLY jurisdiction drives a STEWARD-WRITABLE currency default. The owner sets
+        // church.features.jurisdiction (owner-only, publishProfile); here, on the EMPTY book only (this seed
+        // branch runs exactly when there are NO book docs, i.e. journal.length === 0), we apply that
+        // jurisdiction's currency default through the SAME finance/settings write a steward owns. So: a
+        // delegate can never change jurisdiction, but the default it yields lands in the steward-writable doc
+        // and the steward still manages currency afterwards in the wave-1 Book-settings picker. It NEVER forces
+        // currency on a book with entries — a seeded/real book never re-enters this branch (the empty-read
+        // guard above + `seeded`). None resolves to the silent-£ default, so a neutral church is unchanged.
+        const _ccyDef = (F.currencyDefaults && F.resolveJurisdiction) ? F.currencyDefaults(F.resolveJurisdiction({ features: church && church.features })) : null;
+        const b = booksFresh(_ccyDef); bookRef.current = b; bump();
         S.encPublish('finance/settings', { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart });
         for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type, archived: !!a.archived });
         for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
@@ -2650,9 +2663,15 @@ function DashFinanceBook() {
   };
   // The donor NAME lookup the giving-by-member + Gift Aid screens resolve opaque donorIds through.
   const donorMap = React.useMemo(() => new Map(donors.map(d => [d.id, d])), [donors]);
-  // Gift Aid is a UK regional PACK, OFF BY DEFAULT: strict === true (NOT the default-on `!== false` feature
-  // convention — DOMAIN nation-neutral), and the pack code only exists if its separate bundle loaded.
-  const giftAidOn = !!(church && church.features && church.features.giftAid === true);
+  // Gift Aid is a UK regional PACK, OFF BY DEFAULT (DOMAIN nation-neutral), and the pack code only exists if
+  // its separate bundle loaded. WAVE 3: the gate's SOURCE is now the jurisdiction REGISTRY, not the raw
+  // boolean — giftAidOn is on iff the resolved jurisdiction's active tax tool IS Gift Aid. The resolver keeps
+  // full back-compat: an existing church with features.giftAid === true (and no explicit jurisdiction) still
+  // resolves to 'UK', so Gift Aid keeps working with no action; an explicit church.features.jurisdiction wins
+  // over the legacy boolean. Falls back to the strict boolean only if an OLD core bundle lacks the registry.
+  const giftAidOn = (F && F.resolveJurisdiction && F.taxToolFor)
+    ? F.taxToolFor(F.resolveJurisdiction({ features: church && church.features })) === 'giftAid'
+    : !!(church && church.features && church.features.giftAid === true);
   // Bill approval mode — DUAL control is an OPT-IN a church turns on, OFF BY DEFAULT: strict === true (NOT the
   // default-on `!== false` convention — DOMAIN nation-neutral/silent, like giftAid). Default is the LIGHT flow
   // (approval is a field on the replaceable bill doc). In BOTH modes the Mark-paid control and the engine guard

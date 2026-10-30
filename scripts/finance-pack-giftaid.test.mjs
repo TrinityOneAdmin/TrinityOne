@@ -126,3 +126,17 @@ test('the Gift Aid bundle DOES import the pack (re-anchor: the separate bundle i
   const inputs = importGraph('src/finance-giftaid-bundle.mjs');
   assert.ok(inputs.some(p => p.endsWith('finance-pack-giftaid.mjs')), 'the Gift Aid bundle does not import the pack — the pack ships nowhere');
 });
+
+// ── STRUCTURAL (wave 3): the jurisdiction REGISTRY does NOT import the pack either ───────────────────────
+// The registry (src/finance-jurisdictions.mjs) ships in the CORE bundle, so it is the new way UK tax logic
+// could leak into a neutral church: if it ever `import`ed the pack to call it, the core test above would still
+// pass (the registry is in the core graph, so is the pack — but transitively through the registry). This
+// anchors the registry's own graph directly: it is NEUTRAL METADATA and names the tax tool only by STRING.
+test('src/finance-jurisdictions.mjs (the registry) does NOT import the Gift Aid pack', () => {
+  const inputs = importGraph('src/finance-jurisdictions.mjs');
+  assert.ok(inputs.some(p => p.endsWith('finance-jurisdictions.mjs')), 're-anchor: the registry graph does not include the registry itself');
+  const leaked = inputs.filter(p => /finance-pack-giftaid\.mjs$|finance-giftaid-bundle\.mjs$/.test(p));
+  assert.deepEqual(leaked, [],
+    'the jurisdiction registry imports the UK Gift Aid pack — it must hold NO tax math and name the tax tool ' +
+    'by STRING only, or a church on None ships UK tax logic through the core bundle: ' + leaked.join(', '));
+});

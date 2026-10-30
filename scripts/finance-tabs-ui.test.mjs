@@ -28,27 +28,31 @@ const _import = await import('../src/finance-import.mjs');
 const _reports = await import('../src/finance-reports.mjs');
 const _budget = await import('../src/finance-budget.mjs');
 const _charts = await import('../src/finance-charts.mjs');
-const FL = { ..._ledger, ..._store, ..._statement, ..._import, ..._reports, ..._budget, ..._charts };
+const _juris = await import('../src/finance-jurisdictions.mjs');   // wave 3 — the registry ships in the core bundle
+const FL = { ..._ledger, ..._store, ..._statement, ..._import, ..._reports, ..._budget, ..._charts, ..._juris };
 
 function setup(opts = {}) {
   const fr = fakeReact();
   let encSubCb = null;
+  const pubs = [];   // [d-tag, body] captured from every encPublish (wave 3: proves the empty-book currency seed)
   const Steward = fakeSteward({
     actingChurch: '',
     pubkey: 'ab'.repeat(32),
     encSubscribe: (_p, cb) => { encSubCb = cb; return () => {}; },
-    encPublish: async () => true,
+    encPublish: async (d, body) => { pubs.push([d, body]); return true; },
     relayAuthed: () => true,
   });
   const { window } = fakeBrowser({ Steward });
-  window.FinanceLedger = FL;
+  window.FinanceLedger = opts.FL || FL;   // opts.FL: a custom registry (wave 3) to drive the empty-book currency default
   const mods = loadConsole({ React: fr.React, window, expr: '{ DashFinanceBook }' });
   // Injected AFTER loadConsole (the console scripts define their own window.useStewardChurch and would clobber
-  // an earlier value). giftAid is a strict opt-in (features.giftAid === true), off by default.
-  window.useStewardChurch = () => ({ name: 'St Test', features: opts.giftAid ? { giftAid: true } : {} });
-  // The Gift Aid claim logic lives in a separate bundle the panel reaches for only when the toggle is on; stub
-  // it so the panel does not report "module hasn't loaded" if a future test expands children.
-  if (opts.giftAid) window.FinanceGiftAid = { giftAidClaim: () => ({ rows: [], totalDonated: 0, totalGiftAid: 0 }) };
+  // an earlier value). opts.features is the whole features object (wave 3 jurisdiction tests); opts.giftAid is
+  // the wave-2 shorthand for the legacy strict opt-in (features.giftAid === true), off by default.
+  const features = opts.features || (opts.giftAid ? { giftAid: true } : {});
+  window.useStewardChurch = () => ({ name: 'St Test', features });
+  // The Gift Aid claim logic lives in a separate bundle the panel reaches for only when the gate is on; stub it
+  // so the panel does not report "module hasn't loaded" if a future test expands children.
+  if (opts.giftAid || features.giftAid === true || features.jurisdiction === 'UK') window.FinanceGiftAid = { giftAidClaim: () => ({ rows: [], totalDonated: 0, totalGiftAid: 0 }) };
   let tree = null;
   const draw = () => { fr.reset(); tree = mods.DashFinanceBook(); fr.flush(); return tree; };
   const all = () => nodes(tree);
@@ -57,7 +61,7 @@ function setup(opts = {}) {
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
   const feedItems = (items) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(items); draw(); };
   const screen = () => texts(tree).join(' ');
-  return { fr, draw, all, button, comp, click, feedItems, screen, get tree() { return tree; } };
+  return { fr, draw, all, button, comp, click, feedItems, screen, pubs, get tree() { return tree; } };
 }
 
 // A minimal relay delivery: settings + two accounts + one donor-tagged gift, so the screen is NOT in the seed
@@ -198,4 +202,77 @@ test('T5 — the donor-records list gates the Gift Aid badge and the postcode on
   on.click('Donors');
   assert.ok(/Gift Aid/.test(on.screen()), 'the "Gift Aid" badge is missing from the donor list with the UK pack on');
   assert.ok(/AB1 2CD/.test(on.screen()), 'the donor postcode is missing from the list with the UK pack on');
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════
+// WAVE 3 — the jurisdiction REGISTRY drives the finance screen. Point-of-use, on the REAL DashFinanceBook.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// W3-1 — THE EMPTY-BOOK CURRENCY DEFAULT comes from the registry (the owner-only → steward-writable seam).
+// An EMPTY relay delivery drives the seed branch, which must seed + publish finance/settings with the
+// currency the registry yields for the resolved jurisdiction — NOT a hardcoded 'GBP'. We inject a registry
+// whose currencyDefaults returns a SENTINEL so a reverted/hardcoded seed cannot pass: delete the wiring and
+// the seed publishes GBP, which is not the sentinel, and this fails.
+test('W3-1 — the empty-book seed takes its currency default from the jurisdiction registry', () => {
+  const sentinel = { base: 'ZZZ', decimals: 3, fiscalYearStart: '07-01' };
+  const customFL = { ...FL, resolveJurisdiction: () => 'TESTX', currencyDefaults: (id) => (id === 'TESTX' ? sentinel : FL.currencyDefaults(id)) };
+  const h = setup({ FL: customFL, features: { jurisdiction: 'US' } });
+  h.draw();
+  h.feedItems([]);                     // empty delivery → the seed branch
+  const settings = h.pubs.find(([d]) => d === 'finance/settings');
+  assert.ok(settings, 'the empty-book seed did not publish finance/settings at all');
+  assert.equal(settings[1].baseCurrency, 'ZZZ', 'the seed did not apply the jurisdiction currency default (it is hardcoded, not read from the registry)');
+  assert.equal(settings[1].decimals, 3, 'the seed did not apply the jurisdiction decimals default');
+  assert.equal(settings[1].fiscalYearStart, '07-01', 'the seed did not apply the jurisdiction fiscal-year default');
+});
+
+test('W3-1b — with the NEUTRAL default (no features) the seed is still the silent-£ book (unchanged)', () => {
+  const h = setup({ features: {} });   // None → GBP/2/01-01, the real registry
+  h.draw();
+  h.feedItems([]);
+  const settings = h.pubs.find(([d]) => d === 'finance/settings');
+  assert.ok(settings, 're-anchor: no finance/settings seed on an empty neutral book');
+  assert.equal(settings[1].baseCurrency, 'GBP', 'a neutral church no longer seeds a silent-£ book');
+});
+
+// W3-2 — THE TAX-TOOL GATE is driven by the resolver, not the raw boolean. BooksGiftAidPanel is handed
+// giftAidOn computed from resolveJurisdiction/taxToolFor. Covers: explicit UK on; back-compat legacy boolean
+// ⇒ UK on; explicit None overrides a stale giftAid:true ⇒ off; neutral default ⇒ off.
+function gaPanelFor(features) {
+  const h = setup({ features });
+  h.draw();
+  h.feedItems(seedItems());
+  h.click('Donors');
+  h.click('Giving record');
+  const ga = h.comp('BooksGiftAidPanel');
+  assert.ok(ga, 're-anchor: the Gift Aid panel is not under the Giving-record sub-tab');
+  return ga.props.giftAidOn;
+}
+test('W3-2 — an explicit jurisdiction=UK turns the Gift Aid tool on (no legacy boolean needed)', () => {
+  assert.equal(gaPanelFor({ jurisdiction: 'UK' }), true, 'jurisdiction=UK did not activate the Gift Aid tax tool');
+});
+test('W3-2 — BACK-COMPAT: a legacy features.giftAid=true (no jurisdiction) still turns Gift Aid on', () => {
+  assert.equal(gaPanelFor({ giftAid: true }), true, 'a legacy UK church lost its Gift Aid tool after the gate was rewired to the resolver');
+});
+test('W3-2 — an explicit jurisdiction=None OVERRIDES a stale giftAid:true (tool off)', () => {
+  assert.equal(gaPanelFor({ jurisdiction: 'None', giftAid: true }), false, 'explicit None did not override the legacy boolean on the screen');
+});
+test('W3-2 — the NATION-NEUTRAL default (no features) leaves the Gift Aid tool off', () => {
+  assert.equal(gaPanelFor({}), false, 'a neutral church shows the Gift Aid tool');
+});
+
+// W3-3 — THE DONOR LABELS (wave 2 gated on giftAidOn) now follow the jurisdiction too, since giftAidOn's
+// SOURCE changed. With jurisdiction=UK the donor-records list shows the UK wording; with None it does not.
+// (The records-list badge/postcode live in DashFinanceBook's own body, so console-screens renders them.)
+test('W3-3 — donor labels follow the jurisdiction: UK shows the Gift Aid badge + postcode, None hides them', () => {
+  const uk = setup({ features: { jurisdiction: 'UK' } });
+  uk.draw(); uk.feedItems(seedItems()); uk.click('Donors');
+  assert.ok(/Gift Aid/.test(uk.screen()), 'jurisdiction=UK did not show the Gift Aid wording in the donor list');
+  assert.ok(/AB1 2CD/.test(uk.screen()), 'jurisdiction=UK did not show the donor postcode');
+
+  const none = setup({ features: {} });
+  none.draw(); none.feedItems(seedItems()); none.click('Donors');
+  assert.match(none.screen(), /Ada Lovelace/, 're-anchor: the seeded donor is not in the list');
+  assert.ok(!/Gift Aid/.test(none.screen()), 'the neutral default still shows Gift Aid wording in the donor list');
+  assert.ok(!/AB1 2CD/.test(none.screen()), 'the neutral default still shows the donor postcode');
 });

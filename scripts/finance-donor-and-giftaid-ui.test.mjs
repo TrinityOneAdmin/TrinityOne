@@ -1,13 +1,16 @@
-// THE DONOR FORM IS ON THE SCREEN, AND THE GIFT AID TOGGLE DEFAULTS OFF.
+// THE DONOR FORM IS ON THE SCREEN, AND THE REGION (JURISDICTION) SELECTOR DEFAULTS TO NONE.
 //   Run: node --test scripts/finance-donor-and-giftaid-ui.test.mjs
 //
-// Phase 4b, point-of-use (CLAUDE.md rules 1 & 3 — assert on the RENDERED tree, never on text in app/*.jsx):
+// Phase 4b + wave 3, point-of-use (CLAUDE.md rules 1 & 3 — assert on the RENDERED tree, never on text in
+// app/*.jsx):
 //   · BooksDonor (the add/edit-donor dialog) renders its name field, its Gift Aid-declaration toggle and a
 //     Save control — delete them from the screen and this fails.
-//   · The UK Gift Aid congregation-feature toggle (DashFeaturesPanel) renders and DEFAULTS OFF — the whole of
-//     DOMAIN nation-neutrality turns on this. It rides the opt-in `=== true` convention, so with no features
-//     set the switch reads OFF, and tapping it publishes features.giftAid = true (NOT the default-on `!==
-//     false` convention, which would turn a UK scheme on for every church).
+//   · The owner-only Region (jurisdiction) selector (DashFeaturesPanel) renders and DEFAULTS to None — the
+//     whole of DOMAIN nation-neutrality turns on this. Wave 3 REPLACED the standalone "Gift Aid (UK)" toggle
+//     with this one selector: it reads/writes church.features.jurisdiction, defaults to None with no features
+//     set, selecting United Kingdom publishes features.jurisdiction = 'UK' (keeping the legacy giftAid boolean
+//     in sync), and a legacy giftAid:true church reads back as UK. (The four Gift-Aid-toggle cases these
+//     replaced are gone BY DESIGN — the control changed; count below is net-neutral, documented in the commit.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -16,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
 import { miniReact, find, texts } from './render-jsx-screen.mjs';
+import { listJurisdictions, resolveJurisdiction } from '../src/finance-jurisdictions.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
@@ -114,7 +118,11 @@ test('T3 — saving with the UK fields hidden PRESERVES the donor’s prior elig
   assert.equal(saved.giftAidDeclaredAt, '2026-01-01', 'the declaration date was dropped on save when the UK fields were hidden');
 });
 
-// ── DashFeaturesPanel: the Gift Aid toggle, and that it DEFAULTS OFF ─────────────────────────────────────
+// ── DashFeaturesPanel: the owner-only Region (jurisdiction) selector, and that it DEFAULTS to None ───────
+// Wave 3 replaced the standalone "Gift Aid (UK)" opt-in toggle with ONE selector. These four cases replace the
+// four Gift-Aid-toggle cases 1:1 (the control changed by owner decision; net test count is unchanged). The
+// selector reads the registry via window.FinanceLedger — provided here from the real src module so the
+// resolve/list logic under test is the shipped one. featOwner is true because Steward.actingChurch is null.
 const furniture = (React) => ({
   Panel: function Panel({ title, children }) { return React.createElement('section', { 'data-panel': title }, children); },
   SkConfirm: function SkConfirm(props) { return React.createElement('div', { 'data-confirm': props.title }); },
@@ -124,7 +132,7 @@ const furniture = (React) => ({
   stewCapState: () => ({ allowed: true, owner: true, why: '' }),
   useStewKeyRecipients: () => ({ approved: () => [] }),
 });
-async function featuresPanel(church) {
+async function featuresPanel(church, { actingChurch = null } = {}) {
   const { React, draw } = miniReact();
   const published = [];
   const Comp = await loadComponent('app/stew-dashboard.jsx', 'DashFeaturesPanel', 'function DashFeaturesPanel(', {
@@ -132,40 +140,57 @@ async function featuresPanel(church) {
     window: {
       useStewardGroups: () => [], useStewardMembers: () => [{ pubkey: 'm1' }], useStewardAdmitted: () => [],
       useStewardJoinPolicy: () => false,
-      Steward: { actingChurch: null, publishProfile: (p) => published.push(p), setJoinPolicy() {}, setAdmitted() {} },
+      FinanceLedger: { listJurisdictions, resolveJurisdiction },   // the real registry drives the picker
+      Steward: { actingChurch, publishProfile: (p) => published.push(p), setJoinPolicy() {}, setAdmitted() {} },
     },
     ...furniture(React),
   });
   return { draw: () => draw(Comp, { church, show: 'features' }), published };
 }
-const rowFor = (tree, label) => find(tree, n => n.type === 'div' && typeof n.props.onClick === 'function' && texts(n).join(' | ').includes(label));
-// the switch inside a row: an element with role="switch" and an aria-checked prop
-const switchIn = (row) => find(row, n => n.props && n.props.role === 'switch')[0];
+// the Region selector: the one <select> on the panel (aria-label "Region / jurisdiction")
+const regionSelect = (tree) => find(tree, n => n.type === 'select' && (n.props && /Region/.test(n.props['aria-label'] || '')))[0];
 
-test('the Gift Aid (UK) toggle is on the Congregation features page', async () => {
+test('the Region (jurisdiction) selector is on the Congregation features page', async () => {
   const s = await featuresPanel({ features: {} });
-  assert.equal(rowFor(s.draw(), 'Gift Aid (UK)').length, 1, 'the Gift Aid (UK) toggle is not a row on Congregation features');
+  const sel = regionSelect(s.draw());
+  assert.ok(sel, 'the Region (jurisdiction) selector is not on Congregation features');
+  // its options come from the registry (None + UK), so a new jurisdiction is DATA, not markup
+  const optVals = find(sel, n => n.type === 'option').map(o => o.props.value).sort();
+  assert.deepEqual(optVals, ['None', 'UK'], 'the Region selector options are not the registry list (None + UK)');
 });
 
-test('Gift Aid DEFAULTS OFF — with no features set, its switch reads OFF', async () => {
+test('the Region selector DEFAULTS to None — with no features set it reads nation-neutral', async () => {
   const s = await featuresPanel({ features: {} });                 // a brand-new church
-  const row = rowFor(s.draw(), 'Gift Aid (UK)')[0];
-  const sw = switchIn(row);
-  assert.ok(sw, 're-anchor: the Gift Aid row has no switch');
-  assert.equal(sw.props['aria-checked'], false,
-    'Gift Aid is ON by default — a UK-only scheme would be enabled for every church, violating DOMAIN ' +
-    'nation-neutrality. It must ride the opt-in (=== true) convention, not the default-on one.');
+  const sel = regionSelect(s.draw());
+  assert.ok(sel, 're-anchor: no Region selector');
+  assert.equal(sel.props.value, 'None',
+    'the Region selector is not None by default — a UK-only scheme would be the default, violating DOMAIN ' +
+    'nation-neutrality.');
 });
 
-test('tapping Gift Aid publishes features.giftAid = true (strict opt-in, not !== false)', async () => {
+test('selecting United Kingdom publishes features.jurisdiction = UK and syncs the legacy giftAid boolean', async () => {
   const s = await featuresPanel({ features: {} });
-  rowFor(s.draw(), 'Gift Aid (UK)')[0].props.onClick({ stopPropagation() {} });
-  assert.equal(s.published.length, 1, 'tapping Gift Aid published nothing');
+  regionSelect(s.draw()).props.onChange({ target: { value: 'UK' } });
+  assert.equal(s.published.length, 1, 'choosing a region published nothing');
+  assert.equal(s.published[0].features.jurisdiction, 'UK',
+    'choosing United Kingdom did not write features.jurisdiction = UK — it wrote ' + JSON.stringify(s.published[0].features));
   assert.equal(s.published[0].features.giftAid, true,
-    'tapping Gift Aid (off) did not write features.giftAid = true — it wrote ' + JSON.stringify(s.published[0].features));
+    'choosing UK did not keep the legacy features.giftAid boolean in sync (an un-upgraded console reads the boolean)');
 });
 
-test('an existing church with Gift Aid ON reads the switch ON (the toggle reflects state)', async () => {
+test('selecting None publishes jurisdiction = None and clears the legacy giftAid boolean (override)', async () => {
+  const s = await featuresPanel({ features: { giftAid: true } });  // a legacy UK church
+  regionSelect(s.draw()).props.onChange({ target: { value: 'None' } });
+  assert.equal(s.published[0].features.jurisdiction, 'None', 'choosing None did not write features.jurisdiction = None');
+  assert.equal(s.published[0].features.giftAid, false, 'choosing None did not turn the legacy giftAid boolean off');
+});
+
+test('a legacy church with giftAid:true (no jurisdiction) reads the selector as UK (back-compat)', async () => {
   const s = await featuresPanel({ features: { giftAid: true } });
-  assert.equal(switchIn(rowFor(s.draw(), 'Gift Aid (UK)')[0]).props['aria-checked'], true, 'features.giftAid === true did not read ON');
+  assert.equal(regionSelect(s.draw()).props.value, 'UK', 'a legacy giftAid:true church did not read back as UK on the selector');
+});
+
+test('the Region selector is OWNER-ONLY — a delegated steward (actingChurch set) does not see it', async () => {
+  const s = await featuresPanel({ features: {} }, { actingChurch: 'cd'.repeat(32) });
+  assert.ok(!regionSelect(s.draw()), 'the Region selector showed to a delegate — publishProfile would silently fail under their hand');
 });
