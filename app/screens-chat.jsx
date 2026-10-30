@@ -869,7 +869,12 @@ function cardInk(accent) {
 function FinanceCard({ card, church }) {
   const ch = church || {};
   const ink = cardInk(ch.accent);
-  const logo = safeImgUrl(ch.picture);   // data: URI only (anti-beacon) — never a remote logo URL
+  // Branding — the church BANNER + logo ride from the profile the app already holds (ctx.church), NEVER the
+  // post (thin-pipe / anti-beacon), and the treasurer can switch it off per-post (card.branded === false) to
+  // send a plain card. safeImgUrl keeps each to a data: URI so no image beacon rides the wire.
+  const branded = card.branded !== false;
+  const banner = branded ? safeImgUrl(ch.banner) : '';
+  const logo = branded ? safeImgUrl(ch.picture) : '';   // data: URI only (anti-beacon) — never a remote logo URL
   const f = m => cardMoney(m, card.currency, card.decimals);
   const sections = Array.isArray(card.sections) ? card.sections : [];
   const line = (label, value, strong, key) => (
@@ -880,6 +885,7 @@ function FinanceCard({ card, church }) {
   );
   return (
     <div style={{ maxWidth: 300, borderRadius: 16, overflow: 'hidden', background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+      {banner ? <img src={banner} alt="" style={{ display: 'block', width: '100%', height: 72, objectFit: 'cover' }} /> : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px 11px', borderBottom: '2px solid ' + ink }}>
         {logo
           ? <img src={logo} alt="" width={34} height={34} style={{ width: 34, height: 34, borderRadius: 9, objectFit: 'cover', flexShrink: 0 }} />
@@ -908,6 +914,16 @@ function FinanceCard({ card, church }) {
               <div key={i} style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: ink, textTransform: 'uppercase', margin: '4px 0 3px' }}>{s.label || ''}</div>
                 {rows.map((r, j) => line((r && r.name) || '—', f(r && (r.amount != null ? r.amount : r.balance)), false, j))}
+              </div>
+            );
+          }
+          if (s.kind === 'note') {
+            const txt = typeof s.text === 'string' ? s.text.trim() : '';
+            if (!txt) return null;
+            return (
+              <div key={i} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: ink, textTransform: 'uppercase', margin: '4px 0 3px' }}>Treasurer’s note</div>
+                <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--ink-2)', whiteSpace: 'pre-wrap', textWrap: 'pretty' }}>{txt}</div>
               </div>
             );
           }

@@ -45,11 +45,13 @@ const ENVELOPE = {
   currency: 'GBP', decimals: 2, generatedAt: '2026-10-30',
 };
 
-// 1x1 png data URI — the church's logo exactly as the profile holds it (data: only; a remote URL is rejected).
+// 1x1 png data URIs — the church's logo + banner exactly as the profile holds them (data: only; a remote URL
+// is rejected). Distinct bytes so a test can tell the banner from the logo on the rendered tree.
 const LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const BANNER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwAEhQGA7bYgBwAAAABJRU5ErkJggg==';
 // The church profile the member app already holds (same fields ChurchBadge reads). Accent is a PALE hex, so
-// the card's accentInk darkening is exercised.
-const CHURCH_PROFILE = { id: CHURCH, npub: CHURCH, name: 'Grace Community Church', initials: 'GC', accent: '#8bd3c7', picture: LOGO };
+// the card's accentInk darkening is exercised. It carries BOTH a banner and a display picture (logo).
+const CHURCH_PROFILE = { id: CHURCH, npub: CHURCH, name: 'Grace Community Church', initials: 'GC', accent: '#8bd3c7', picture: LOGO, banner: BANNER };
 
 // The body a card post also carries (what an OLD app shows). Here it deliberately contains NEITHER the figures
 // NOR the branding, so finding those on the tree proves the CARD rendered them — the point-of-use signal.
@@ -116,6 +118,37 @@ test('a ["card","1",{type:"finance"}] event renders a branded finance card with 
 
   // branding: the church's OWN logo (the data: URI from the profile, never from the post) is on the card
   assert.ok(imgs(tree).some(i => i.props.src === LOGO), 'the church logo from the profile is not rendered on the card');
+});
+
+// ── (1b) the church BANNER + the treasurer's NOTE render (2026-10-30 owner device-test feedback) ─────────────
+test("the church banner and the treasurer's note render on the card", () => {
+  const { React, draw } = miniReact();
+  const mod = load(React);
+  const env = JSON.parse(JSON.stringify(ENVELOPE));
+  env.sections.push({ kind: 'note', text: 'Thank you for your faithful giving this quarter.' });
+  const tree = renderBubble(mod, React, draw, mod.evtToMsg(cardEvent(env)));
+  const seen = texts(tree).join(' | ');
+
+  // the treasurer's note (heading + text) — only the new note section renders these
+  assert.match(seen, /Treasurer/, 'the treasurer-note heading is not on the card');
+  assert.match(seen, /faithful giving this quarter/, 'the treasurer-note text is not on the card');
+
+  // the church BANNER from the profile (never from the post) renders alongside the logo
+  assert.ok(imgs(tree).some(i => i.props.src === BANNER), 'the church banner from the profile is not rendered on the card');
+  assert.ok(imgs(tree).some(i => i.props.src === LOGO), 'the church logo is not rendered alongside the banner');
+});
+
+// ── (1c) branded:false → a plain card (no banner, no logo) that still carries the figures ────────────────────
+test('branded:false renders a plain card — no banner, no logo — but keeps the figures', () => {
+  const { React, draw } = miniReact();
+  const mod = load(React);
+  const env = JSON.parse(JSON.stringify(ENVELOPE));
+  env.branded = false;
+  const tree = renderBubble(mod, React, draw, mod.evtToMsg(cardEvent(env)));
+  const seen = texts(tree).join(' | ');
+  assert.equal(imgs(tree).length, 0, 'branded:false must suppress BOTH the banner and the logo');
+  assert.match(seen, /GC/, 'the initials fallback must show when branding is off');
+  assert.match(seen, /£12,345\.00/, 'the figures must still render on an unbranded card');
 });
 
 test('the finance card leaks NO member or donor name even if the envelope smuggles one in', () => {
