@@ -1524,6 +1524,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, gro
   const [cTo, setCTo] = React.useState(booksTodayISO());
   const [secs, setSecs] = React.useState(() => { const o = {}; (F.STATEMENT_SECTIONS || []).forEach(s => { o[s.key] = s.on; }); return o; });
   const [note, setNote] = React.useState('');
+  const [branded, setBranded] = React.useState(true);   // show the church banner + logo on the posted member card
   const [posting, setPosting] = React.useState(false);   // false | 'confirm' | 'done'
   const [flash, setFlash] = React.useState('');
   // WHERE the statement is posted. The whole-church broadcast group is first and is the default; the treasurer
@@ -1573,7 +1574,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, gro
     } catch (e) { setFlash((e && e.message) || 'Could not save the statement on this device.'); }
   };
   const doPost = async () => {
-    try { await onPostToMembers(model, F.statementText(model), target); setPosting('done'); setFlash('Shared with members.'); }
+    try { await onPostToMembers(model, F.statementText(model), target, { branded }); setPosting('done'); setFlash('Shared with members.'); }
     catch (e) { setFlash(e && e.message ? e.message : 'Could not post to members.'); setPosting(false); }
   };
 
@@ -1619,6 +1620,14 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, gro
             ))}
           </div>
           {secs.note && <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="A short note for members / trustees (optional)…" rows={3} style={{ ...bkFld, height: 'auto', padding: 10, marginTop: 8, resize: 'vertical', lineHeight: 1.4 }} />}
+
+          {/* Branding — only affects the card members receive (the copy/download are unbranded text/PDF). The
+              banner & logo are NOT sent; this flag tells the member app whether to show the ones it already holds. */}
+          {canPost && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, color: 'var(--ink)', cursor: 'pointer', marginTop: 12 }}>
+              <input type="checkbox" checked={branded} onChange={e => setBranded(e.target.checked)} /> Show church banner &amp; logo on the card
+            </label>
+          )}
 
           {/* live preview of exactly what will be shared */}
           <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 14, marginTop: 14, background: 'var(--surface-2, #f7f3ec)' }}>
@@ -2000,7 +2009,7 @@ function DashFinanceBook() {
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const broadcastGroup = groups.find(g => g.kind === 'broadcast');
   const canPost = !!(useRelay && S && S.publishPost && broadcastGroup);
-  const postStatementToMembers = async (model, text, targetId) => {
+  const postStatementToMembers = async (model, text, targetId, opts) => {
     // TARGET (2026-10-30): the treasurer chooses where the statement goes — whole-church announcements (the
     // default) OR a particular group — via the "Send to" picker in FinanceShareStatement. `targetId` is that
     // group's id; it falls back to the broadcast group so an un-chosen post still reaches the announcements.
@@ -2021,11 +2030,19 @@ function DashFinanceBook() {
     if (model.income && model.income.length) cardSections.push({ kind: 'rows', label: 'Income by category', rows: model.income.map(r => ({ name: r.name, amount: r.amount })) });
     if (model.spending && model.spending.length) cardSections.push({ kind: 'rows', label: 'Spending by category', rows: model.spending.map(r => ({ name: r.name, amount: r.amount })) });
     if (model.funds && model.funds.length) cardSections.push({ kind: 'rows', label: 'Fund balances (closing)', tag: true, rows: model.funds.map(r => ({ name: r.name, kind: r.kind, balance: r.balance })) });
+    // The treasurer's NOTE (the 'note' section, when ticked and filled) rides as its own card section so the
+    // member card shows it under the figures — the same aggregate, name-free note the PDF carries.
+    if (model.note && model.note.trim()) cardSections.push({ kind: 'note', text: model.note.trim() });
+    // BRANDED (2026-10-30): whether the member card shows the church banner + logo. Default on; the "Show church
+    // banner & logo" toggle in FinanceShareStatement can switch it off for a plain card. The branding itself is
+    // NOT inlined — only this flag — so the member app still pulls banner/logo from the profile it holds.
+    const branded = !opts || opts.branded !== false;
     const cardEnvelope = {
       type: 'finance',
       title: church.name || model.title || 'Financial statement',
       periodLabel: model.periodLabel || '',
       sections: cardSections,
+      branded: branded,
       currency: model.currency,
       decimals: model.decimals,
       generatedAt: model.generatedAt || '',

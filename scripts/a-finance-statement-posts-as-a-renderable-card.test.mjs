@@ -148,6 +148,7 @@ test('posting a statement keeps the plain-text body AND attaches a contract-exac
   assert.equal(env.currency, 'GBP');
   assert.equal(env.decimals, 2);
   assert.equal(env.generatedAt, today);
+  assert.equal(env.branded, true, 'a posted card defaults to branded (the member app shows the church banner + logo)');
   assert.ok(Array.isArray(env.sections));
 
   // summary — figures in MINOR units (pence)
@@ -174,11 +175,57 @@ test('posting a statement keeps the plain-text body AND attaches a contract-exac
   // ── name-free: the WHOLE envelope leaks no donor name, and carries only fields the renderer reads ──
   assert.ok(!JSON.stringify(env).includes(DONOR_NAME), 'a donor name leaked into the card envelope — aggregate privacy broken');
   for (const s of env.sections) {
-    const allowed = s.kind === 'summary' ? ['kind', 'income', 'expenditure', 'surplus'] : ['kind', 'label', 'tag', 'rows'];
+    const allowed = s.kind === 'summary' ? ['kind', 'income', 'expenditure', 'surplus']
+      : s.kind === 'note' ? ['kind', 'text']
+      : ['kind', 'label', 'tag', 'rows'];
     for (const k of Object.keys(s)) assert.ok(allowed.includes(k), 'unexpected field smuggled onto a card section: ' + k);
     if (s.kind === 'rows') for (const r of s.rows) {
       const okFields = ['name', 'amount', 'kind', 'balance'];
       for (const k of Object.keys(r)) assert.ok(okFields.includes(k), 'unexpected field on a card row: ' + k);
     }
   }
+});
+
+// ── the treasurer's note + the branding toggle are POINT-OF-USE: driven on the real modal, read off the post ──
+// Tick "Treasurer's note" + type one, untick "Show church banner & logo", post — then read the captured
+// publishPost envelope. Delete the note-section push or the `branded` wiring and these turn red.
+const labelsWith = (root, s) => nodes(root).filter(n => n.type === 'label' && texts(n).join(' ').includes(s));
+const checkboxIn = (labelNode) => nodes(labelNode).find(n => n.type === 'input' && n.props && n.props.type === 'checkbox');
+
+test("the treasurer's note rides as a note section and the branding toggle sets env.branded", async () => {
+  const h = setup();
+  const d = openRealModal(h);
+  d.clickM('This year');
+
+  // tick "Treasurer's note" → the textarea appears → type a note
+  const noteCb = checkboxIn(labelsWith(d.m, 'Treasurer')[0] || {});
+  assert.ok(noteCb, 're-anchor: no "Treasurer\'s note" checkbox in the modal');
+  noteCb.props.onChange({ target: { checked: true } }); d.drawM();
+  const ta = nodes(d.m).find(n => n.type === 'textarea');
+  assert.ok(ta, 'ticking the note did not reveal the note textarea');
+  ta.props.onChange({ target: { value: 'Thank you for your faithful giving this quarter.' } }); d.drawM();
+
+  // untick "Show church banner & logo on the card"
+  const brandCb = checkboxIn(labelsWith(d.m, 'Show church banner')[0] || {});
+  assert.ok(brandCb, 're-anchor: no "Show church banner & logo" checkbox in the modal');
+  assert.equal(brandCb.props.checked, true, 'the branding toggle must default to ON');
+  brandCb.props.onChange({ target: { checked: false } }); d.drawM();
+
+  await d.post();
+
+  assert.equal(h.published.length, 1, 'expected exactly one publishPost call');
+  const env = JSON.parse(h.published[0].extraTags.find(t => Array.isArray(t) && t[0] === 'card')[2]);
+
+  // branding flag flipped off by the toggle
+  assert.equal(env.branded, false, 'unticking "Show church banner & logo" must set env.branded === false');
+
+  // the note rides as its OWN section, name-free, with only {kind,text}
+  const note = env.sections.find(s => s.kind === 'note');
+  assert.ok(note, 'the ticked treasurer note did not ride as a {kind:"note"} section');
+  assert.equal(note.text, 'Thank you for your faithful giving this quarter.');
+  assert.deepEqual(Object.keys(note).sort(), ['kind', 'text'], 'a note section must carry only {kind,text}');
+  assert.ok(!JSON.stringify(env).includes(DONOR_NAME), 'INVARIANT: a donor name reached the card envelope via the note path');
+
+  // the note is ALSO in the plain-text fallback body (statementText renders the note section)
+  assert.match(h.published[0].content, /faithful giving/, 'the note is missing from the plain-text fallback body');
 });
