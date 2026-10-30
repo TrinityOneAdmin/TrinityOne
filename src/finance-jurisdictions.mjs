@@ -23,9 +23,10 @@
 // steward still manages currency afterwards without ever being able to change the jurisdiction.
 
 // NOTE (UK fiscal-year start): the UK personal tax year starts 6 April, but a charity may keep any year end,
-// and changing fiscalYearStart only moves report boundaries (it never reinterprets a stored amount). Whether a
-// fresh UK book should default to '04-06' is an OPEN owner decision (see the wave-3 plan); until it is taken we
-// keep '01-01' so the two SHIPPED jurisdictions (None, UK) seed a byte-identical book to today's silent-£.
+// and changing fiscalYearStart only moves report boundaries (it never reinterprets a stored amount). The owner
+// DECIDED (2026-10-30) a fresh UK book defaults to '04-06' (the UK tax-year start), so None and UK now seed
+// DIFFERENT fiscal-year starts ('01-01' vs '04-06') — the GBP base + 2 decimals stay identical. A steward can
+// still change the year end afterwards; only the empty-book default moved.
 
 export const JURISDICTIONS = {
   None: {
@@ -38,7 +39,7 @@ export const JURISDICTIONS = {
   UK: {
     id: 'UK',
     label: 'United Kingdom',
-    currency: { base: 'GBP', decimals: 2, fiscalYearStart: '01-01' },   // see UK fiscal-year note above
+    currency: { base: 'GBP', decimals: 2, fiscalYearStart: '04-06' },   // UK tax-year start (owner decision 2026-10-30); see note above
     donor: {
       fields: ['title', 'firstName', 'lastName', 'name', 'house', 'address', 'postcode', 'eligible', 'giftAidDeclaredAt'],
       labels: {
