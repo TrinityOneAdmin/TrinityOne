@@ -155,6 +155,8 @@ async function featuresPanel(church, { actingChurch = null } = {}) {
 }
 // the Tax tools on/off switch (role=switch, aria-label "Toggle Tax tools")
 const taxSwitch = (tree) => find(tree, n => n.props && n.props.role === 'switch' && /Toggle Tax tools/.test(n.props['aria-label'] || ''))[0];
+// the Finance module row switch (aria-label "Toggle Finance") — the Tax tools subcard nests under it
+const financeSwitch = (tree) => find(tree, n => n.props && n.props.role === 'switch' && /^Toggle Finance$/.test(n.props['aria-label'] || ''))[0];
 // the Region selector inside the subcard (aria-label "Region / jurisdiction")
 const regionSelect = (tree) => find(tree, n => n.type === 'select' && (n.props && /Region/.test(n.props['aria-label'] || '')))[0];
 // the scripture moment — now its OWN component (extracted so the panel carries no role="dialog"); the panel
@@ -167,6 +169,19 @@ test('the Tax tools switch is on the Congregation features page (owner, Finance 
   const tree = s.draw();
   assert.ok(taxSwitch(tree), 'the Tax tools switch is not on Congregation features');
   assert.ok(!regionSelect(tree), 'the Region picker shows with Tax tools OFF — it must be gated behind the switch');
+});
+
+// Owner feedback: the subcard must read as a CHILD of Finance — rendered directly beneath the Finance module
+// row, not as a sibling of the Extras section. Proof: in document order the Tax tools switch is the very next
+// role="switch" after the Finance row's switch (nothing — e.g. Kids check-in — sits between them).
+test('the Tax tools subcard is NESTED directly under the Finance row', async () => {
+  const s = await featuresPanel({ features: {} });
+  const tree = s.draw();
+  const switches = find(tree, n => n.props && n.props.role === 'switch').map(n => n.props['aria-label']);
+  const fi = switches.indexOf('Toggle Finance');
+  assert.ok(fi >= 0, 're-anchor: no Finance module row switch');
+  assert.equal(switches[fi + 1], 'Toggle Tax tools',
+    'the Tax tools switch does not immediately follow the Finance row — it is not nested under Finance: ' + JSON.stringify(switches));
 });
 
 test('Tax tools DEFAULTS OFF — with no features set the switch reads OFF and the book stays neutral', async () => {

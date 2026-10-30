@@ -11845,7 +11845,8 @@ function DashFeaturesPanel({ church, show = null }) {
   // UK) so an un-upgraded console that still reads the raw boolean agrees; the finance console's resolver is
   // the source of truth. An existing UK church (giftAid:true, no taxTools) reads switch-ON + UK — back-compat.
   const _FL = window.FinanceLedger;
-  const financeOn = f.finance !== false;   // the Finance feature (default-on); the subcard lives under it
+  // The Tax tools subcard is NESTED under the Finance MODULES row — rendered when `on('finance')`, so there is
+  // no separate financeOn flag; the Finance-on check lives at the nested render below.
   // taxOn mirrors resolveJurisdiction's gate so the switch reads ON for a legacy giftAid church too.
   const taxOn = f.taxTools === true || (f.taxTools === undefined && f.giftAid === true);
   const JX_REGIONS = ((_FL && _FL.listJurisdictions) ? _FL.listJurisdictions()
@@ -11996,7 +11997,8 @@ function DashFeaturesPanel({ church, show = null }) {
         {/* OWNER ONLY — see featOwner above. A delegate cannot publish the profile these write to, so the row
             would silently do nothing; it is not shown to them rather than failing under their hand. */}
         {featOwner ? MODULES.map(([k, label, sub]) => (
-          <div key={k} onClick={() => toggle(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <React.Fragment key={k}>
+          <div onClick={() => toggle(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
@@ -12005,6 +12007,36 @@ function DashFeaturesPanel({ church, show = null }) {
               <span style={{ position: 'absolute', top: 3, left: on(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
+          {/* TAX TOOLS subcard — NESTED under the Finance row (owner feedback): it appears indented right
+              beneath Finance when Finance is ON, and is hidden when Finance is off. featOwner is already
+              guaranteed by this branch. Its own switch (church.features.taxTools) gates the Region picker
+              (OFF → book stays neutral; ON → Region <select>, real regions only). Flipping OFF→ON pops the
+              1 Samuel 8 moment via toggleTaxTools (TaxScriptureModal, rendered below). */}
+          {k === 'finance' && on('finance') ? (
+            <div style={{ marginLeft: 18, borderRadius: 11, border: '1px solid var(--line)', borderLeft: '3px solid var(--sage)', background: 'var(--surface-2)', padding: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>Tax tools</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{taxOn ? 'On — your treasurer has the tools for your region.' : 'Off — the book stays nation-neutral.'}</div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); toggleTaxTools(); }} aria-label="Toggle Tax tools" role="switch" aria-checked={taxOn} title={(taxOn ? 'Turn off ' : 'Turn on ') + 'tax tools'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: taxOn ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+                  <span style={{ position: 'absolute', top: 3, left: taxOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+                </button>
+              </div>
+              {taxOn ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 11, paddingTop: 11, borderTop: '1px solid var(--line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>Region</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>Sets the default currency for a new book and which tax tools your treasurer sees.</div>
+                  </div>
+                  <select aria-label="Region / jurisdiction" value={jxValue} onChange={(e) => setJurisdiction(e.target.value)} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
+                    {JX_REGIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          </React.Fragment>
         )) : null}
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Today (home) and Giving are controlled separately. Members see changes on their next sync.</div>
@@ -12029,37 +12061,9 @@ function DashFeaturesPanel({ church, show = null }) {
             </button>
           </div>
         ))}
-        {/* TAX TOOLS subcard — OWNER ONLY (featOwner) and only when Finance is on (financeOn). Its own switch
-            (church.features.taxTools) gates the Region picker: OFF shows just the switch + helper line and the
-            book stays neutral; ON reveals the Region <select> (real regions only). Flipping it OFF→ON pops the
-            1 Samuel 8:10–18 scripture moment below — a deliberate, knowing moment about engaging the state. */}
-        {featOwner && financeOn ? (
-          <div style={{ borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14.5 }}>Tax tools</div>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{taxOn ? 'On — your treasurer has the tools for your region.' : 'Off — the book stays nation-neutral.'}</div>
-              </div>
-              <button onClick={(e) => { e.stopPropagation(); toggleTaxTools(); }} aria-label="Toggle Tax tools" role="switch" aria-checked={taxOn} title={(taxOn ? 'Turn off ' : 'Turn on ') + 'tax tools'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: taxOn ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
-                <span style={{ position: 'absolute', top: 3, left: taxOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
-              </button>
-            </div>
-            {taxOn ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 11, paddingTop: 11, borderTop: '1px solid var(--line)' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>Region</div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>Sets the default currency for a new book and which tax tools your treasurer sees.</div>
-                </div>
-                <select aria-label="Region / jurisdiction" value={jxValue} onChange={(e) => setJurisdiction(e.target.value)} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
-                  {JX_REGIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-                </select>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         {/* SCRIPTURE MOMENT — its OWN top-level dialog component (TaxScriptureModal), so this panel carries no
-            role="dialog" of its own and the whole-console dialog-mount gate stays satisfied. Fires only via
-            toggleTaxTools on the OFF→ON flip. */}
+            role="dialog" of its own and the whole-console dialog-mount gate stays satisfied. Triggered by the
+            nested Tax tools switch (above, under the Finance row) on its OFF→ON flip via toggleTaxTools. */}
         {taxScripture ? <TaxScriptureModal onClose={() => setTaxScripture(false)} /> : null}
         {/* PRACTICAL CARE AND GIVING ARE ROWS HERE, not cards of their own. Both were a Panel wrapping a
             single switch, and the Features tab read as five boxes of equal weight when two of them were one
