@@ -6408,7 +6408,15 @@ window.Fellowship = {
   async pinPost(churchNpub, groupId, msg) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId || !msg || !msg.id) return { ok: false, reason: 'not-sent' };
-    const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.pubkey || msg.by || '', ts: msg._ts || msg.ts || Math.floor(Date.now() / 1000) });
+    // A FINANCE CARD pins as a SHORT summary, not its full plain-text statement body (the banner showed the
+    // whole "…Total income…BALANCE SHEET…" dump). Only a well-formed finance card is summarised; any other
+    // message (or a garbage/absent card) keeps its text exactly as before. Newly-pinned cards only — re-pin an
+    // old one to fix it; stored pins are not migrated.
+    const _pc = msg.card;
+    const pinText = (_pc && _pc.type === 'finance')
+      ? [typeof _pc.title === 'string' ? _pc.title.trim() : '', 'Financial statement', typeof _pc.periodLabel === 'string' ? _pc.periodLabel.trim() : ''].filter(Boolean).join(' · ')
+      : (msg.text || '');
+    const content = JSON.stringify({ msgId: msg.id, text: pinText, by: msg.pubkey || msg.by || '', ts: msg._ts || msg.ts || Math.floor(Date.now() / 1000) });
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }), sk);
     try { await _publishBounded(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] pinPost failed', e); return { ok: false, reason: _pubReason(e) }; }
