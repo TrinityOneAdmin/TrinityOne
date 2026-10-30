@@ -11861,6 +11861,14 @@ function DashFeaturesPanel({ church, show = null }) {
   const jxValue = (_FL && _FL.resolveJurisdiction) ? _FL.resolveJurisdiction({ features: f })
     : (taxOn ? 'UK' : 'None');
   const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, taxTools: true, jurisdiction: id, giftAid: id === 'UK' } }); };
+  // FLICKER FIX. The Region <select> is controlled by jxValue = resolveJurisdiction(church.features), but a
+  // change only reaches church.features after a relay round-trip (publishProfile echoes the kind-0 back), so
+  // the select would snap back to the OLD region and then jump to the new one — a visible flicker/lag. Hold an
+  // OPTIMISTIC draft of the chosen region and show it until the published value catches up, then reconcile
+  // (clear the draft once jxValue === jxDraft). The draft is ignored unless it is still a valid region.
+  const [jxDraft, setJxDraft] = React.useState(null);
+  const jxShown = (jxDraft != null && JX_REGIONS.some(o => o.id === jxDraft)) ? jxDraft : jxValue;
+  React.useEffect(() => { if (jxDraft != null && jxValue === jxDraft) setJxDraft(null); }, [jxValue, jxDraft]);
   // Some regions' receipts legally need the church's own REGISTRATION number (e.g. Canada's CRA charity number)
   // + an authorised signatory. taxRegLabel() returns the label iff the ACTIVE region needs one, else '' (so no
   // field shows for US/NZ/UK/IE). Captured OWNER-ONLY here (publishProfile, like the switch) and read by the
@@ -12042,7 +12050,7 @@ function DashFeaturesPanel({ church, show = null }) {
                     <div style={{ fontWeight: 700, fontSize: 13.5 }}>Region</div>
                     <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>Sets the default currency for a new book and which tax tools your treasurer sees.</div>
                   </div>
-                  <select aria-label="Region / jurisdiction" value={jxValue} onChange={(e) => setJurisdiction(e.target.value)} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
+                  <select aria-label="Region / jurisdiction" value={jxShown} onChange={(e) => { setJxDraft(e.target.value); setJurisdiction(e.target.value); }} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
                     {JX_REGIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                   </select>
                 </div>
