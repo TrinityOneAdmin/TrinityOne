@@ -469,6 +469,7 @@ export const D = Object.freeze({
   EVENT:          k('trinityone/event:'),
   REQUEST:        k('trinityone/request:'),
   FIN_JOURNAL:    k('finance/journal:'),
+  FIN_ATTACHMENT: k('finance/attachment:'),
   FIN_DONOR:      k('finance/donor:'),
   FIN_CONTACT:    k('finance/contact:'),
   FIN_INVOICE:    k('finance/invoice:'),

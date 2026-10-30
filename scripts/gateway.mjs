@@ -1015,7 +1015,7 @@ const FIN_BILLAPPROVAL_D = D.FIN_BILLAPPROVAL;
 // the other finance/ docs it needs a size ceiling enforced HERE and not only in the client: a thin relay must
 // not be a blob store. The client shrinks to ~200KB; this caps the encrypted body (base64 ≈ its char length)
 // with headroom, well under the generic 1 MB WS frame limit that is the only other backstop.
-const FIN_ATTACHMENT_D = 'finance/attachment:';
+const FIN_ATTACHMENT_D = D.FIN_ATTACHMENT;
 const FIN_ATTACHMENT_MAX = parseInt(process.env.RELAY_FIN_ATTACHMENT_MAX, 10) || 300 * 1024;   // ~300KB encrypted body cap
 const ROOM_D = D.ROOM, BOOKING_D = D.BOOKING;   // shared room calendar (church-only writes)
 const RUNSHEET_D = D.RUNSHEET;   // a service's order-of-service + song setlist — d=runsheet:<serviceId> (church/steward)
