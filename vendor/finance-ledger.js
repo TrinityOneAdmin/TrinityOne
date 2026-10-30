@@ -21,6 +21,8 @@ var FinanceLedger = (() => {
   var finance_bundle_exports = {};
   __export(finance_bundle_exports, {
     ACCOUNT_TYPES: () => ACCOUNT_TYPES,
+    AP_ACCOUNT: () => AP_ACCOUNT,
+    AP_ACCT: () => AP_ACCT,
     AR_ACCOUNT: () => AR_ACCOUNT,
     AR_ACCT: () => AR_ACCT,
     FUND_KINDS: () => FUND_KINDS,
@@ -31,8 +33,15 @@ var FinanceLedger = (() => {
     addAccount: () => addAccount,
     addFund: () => addFund,
     applyEntry: () => applyEntry,
+    assertApAccount: () => assertApAccount,
     assertArAccount: () => assertArAccount,
     balanceSheet: () => balanceSheet,
+    billApprovers: () => billApprovers,
+    billOutstanding: () => billOutstanding,
+    billPaymentEntry: () => billPaymentEntry,
+    billReceiveEntry: () => billReceiveEntry,
+    billStatus: () => billStatus,
+    billTotal: () => billTotal,
     bookToDocs: () => bookToDocs,
     budgetVsActual: () => budgetVsActual,
     buildStatement: () => buildStatement,
@@ -57,10 +66,12 @@ var FinanceLedger = (() => {
     invoiceSettlementEntry: () => invoiceSettlementEntry,
     invoiceStatus: () => invoiceStatus,
     invoiceTotal: () => invoiceTotal,
+    isBillApproved: () => isBillApproved,
     journalCsvRows: () => journalCsvRows,
     lineKey: () => lineKey,
     match: () => match,
     minorToMajorText: () => minorToMajorText,
+    openBills: () => openBills,
     openInvoices: () => openInvoices,
     parseCsv: () => parseCsv,
     parseDate: () => parseDate,
@@ -144,9 +155,9 @@ var FinanceLedger = (() => {
     if (dr !== cr) throw new Error(`entry does not balance: debits ${dr} \u2260 credits ${cr}`);
     return norm2;
   }
-  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null, importKey = null, attachmentRefs = [], invoice = null } = {}) {
+  function post(book, { date = "", memo = "", postings, by = "", ts = 0, reverses = null, importKey = null, attachmentRefs = [], invoice = null, bill = null } = {}) {
     const norm2 = _normalize(book, postings);
-    const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [], invoice: invoice ?? null };
+    const entry = { seq: ++book._seq, date, memo, postings: norm2, by, ts, reverses, importKey, attachmentRefs: Array.isArray(attachmentRefs) ? attachmentRefs : [], invoice: invoice ?? null, bill: bill ?? null };
     book.journal.push(entry);
     return entry;
   }
@@ -161,7 +172,7 @@ var FinanceLedger = (() => {
     if (!entry || !Number.isSafeInteger(entry.seq)) throw new Error("entry needs an integer seq");
     if (entry.seq !== book._seq + 1) throw new Error(`sequence gap/fork: expected ${book._seq + 1}, got ${entry.seq}`);
     const norm2 = _normalize(book, entry.postings);
-    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm2, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [], invoice: entry.invoice ?? null };
+    const e = { seq: entry.seq, date: entry.date || "", memo: entry.memo || "", postings: norm2, by: entry.by || "", ts: entry.ts || 0, reverses: entry.reverses ?? null, importKey: entry.importKey ?? null, attachmentRefs: Array.isArray(entry.attachmentRefs) ? entry.attachmentRefs : [], invoice: entry.invoice ?? null, bill: entry.bill ?? null };
     book.journal.push(e);
     book._seq = entry.seq;
     return e;
@@ -273,7 +284,7 @@ var FinanceLedger = (() => {
     const docs = [{ t: "settings", baseCurrency: book.baseCurrency, decimals: book.decimals, fiscalYearStart: book.fiscalYearStart }];
     for (const a of book.accounts.values()) docs.push({ t: "account", id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived });
     for (const f of book.funds.values()) if (f.id !== "general") docs.push({ t: "fund", id: f.id, name: f.name, kind: f.kind });
-    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null });
+    for (const e of book.journal) docs.push({ t: "journal", seq: e.seq, date: e.date, memo: e.memo, postings: e.postings, by: e.by, ts: e.ts, reverses: e.reverses, importKey: e.importKey ?? null, attachmentRefs: e.attachmentRefs ?? [], invoice: e.invoice ?? null, bill: e.bill ?? null });
     return docs;
   }
   function docFor(entryOrObj, t) {
@@ -1115,6 +1126,89 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
       const over = overBy > threshold;
       return { account: l.account, fund, type, budget: budgetAmt, actual, variance, overBy, over };
     });
+  }
+
+  // src/finance-bill.mjs
+  var AP_ACCT = "accounts-payable";
+  var AP_ACCOUNT = Object.freeze({ id: AP_ACCT, code: "2100", name: "Accounts payable", type: "liability" });
+  function assertApAccount(book) {
+    const a = book && book.accounts && typeof book.accounts.get === "function" ? book.accounts.get(AP_ACCT) : null;
+    if (!a) return false;
+    if (a.type !== "liability") throw new Error("reserved account " + AP_ACCT + " must be a liability (found " + a.type + ")");
+    return true;
+  }
+  var posLines2 = (bill) => (bill && Array.isArray(bill.lines) ? bill.lines : []).filter((l) => l && Number.isSafeInteger(l.amount) && l.amount > 0);
+  function billTotal(bill) {
+    return posLines2(bill).reduce((s, l) => s + l.amount, 0);
+  }
+  var memoFor2 = (bill, lead) => {
+    const n = bill && bill.number ? " " + bill.number : "";
+    const who = bill && bill.supplier ? " \u2014 " + bill.supplier : "";
+    return (lead + n + who).trim();
+  };
+  function billReceiveEntry(bill, { date } = {}) {
+    const lines = posLines2(bill);
+    if (!lines.length) throw new Error("a bill needs at least one line with a positive amount");
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+    const postings = [
+      ...lines.map((l) => ({ account: l.account, fund: l.fund || "general", dir: "dr", amount: l.amount })),
+      { account: AP_ACCT, dir: "cr", amount: total }
+    ];
+    return { date: date || bill && bill.received || "", memo: memoFor2(bill, "Bill"), bill: bill.id, postings };
+  }
+  function billPaymentEntry(bill, { date, amount, account = "bank", approved } = {}) {
+    if (approved !== true) throw new Error("a bill cannot be paid before it is approved");
+    const amt = Number.isSafeInteger(amount) && amount > 0 ? amount : billTotal(bill);
+    if (!(amt > 0)) throw new Error("a payment needs a positive amount");
+    return {
+      date: date || "",
+      memo: memoFor2(bill, "Payment of bill"),
+      bill: bill.id,
+      postings: [{ account: AP_ACCT, dir: "dr", amount: amt }, { account, dir: "cr", amount: amt }]
+    };
+  }
+  function billOutstanding(billId, journalEntries) {
+    let bal = 0;
+    for (const e of journalEntries || []) {
+      if (!e || e.bill !== billId) continue;
+      for (const p of e.postings || []) if (p.account === AP_ACCT) bal += p.dir === "cr" ? p.amount : -p.amount;
+    }
+    return bal;
+  }
+  function billStatus(bill, todayLocalISO, journalEntries) {
+    let crAP = 0, drAP = 0;
+    const id = bill && bill.id;
+    for (const e of journalEntries || []) {
+      if (!e || e.bill !== id) continue;
+      for (const p of e.postings || []) if (p.account === AP_ACCT) {
+        if (p.dir === "cr") crAP += p.amount;
+        else drAP += p.amount;
+      }
+    }
+    const recorded = crAP > 0;
+    if (recorded && crAP - drAP <= 0) return "paid";
+    const due = bill && bill.due;
+    if (due && todayLocalISO && String(due) < String(todayLocalISO)) return "overdue";
+    return "unpaid";
+  }
+  var _lc = (s) => String(s || "").toLowerCase();
+  function isBillApproved(bill, { mode = "light", approvals = [], recordedBy } = {}) {
+    if (!bill) return false;
+    if (mode === "dual") {
+      const rec = _lc(recordedBy != null ? recordedBy : bill.by);
+      return (approvals || []).some((a) => a && a.bill === bill.id && a.approver && _lc(a.approver) !== rec);
+    }
+    return !!bill.approved;
+  }
+  function billApprovers(bill, { mode = "light", approvals = [], recordedBy } = {}) {
+    if (mode === "dual") {
+      const rec = _lc(recordedBy != null ? recordedBy : bill && bill.by);
+      return (approvals || []).filter((a) => a && a.bill === (bill && bill.id) && a.approver && _lc(a.approver) !== rec).map((a) => a.approver);
+    }
+    return bill && bill.approved && bill.approved.by ? [bill.approved.by] : [];
+  }
+  function openBills(bills, journalEntries, todayLocalISO) {
+    return (bills || []).map((b) => ({ bill: b, status: billStatus(b, todayLocalISO, journalEntries), outstanding: billOutstanding(b.id, journalEntries), total: billTotal(b) })).filter((x) => x.status !== "paid");
   }
   return __toCommonJS(finance_bundle_exports);
 })();
