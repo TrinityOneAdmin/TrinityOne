@@ -100,7 +100,7 @@ return {
   BooksBillEdit: { book, contacts: [], onSave() {}, onClose },
   BooksBudgetEdit: { book, initial: null, onSave() {}, onClose },
   FinanceReconcile: { book, F, today: '2026-10-29', saved: null, onSaveReconcile() {}, onClose },
-  FinanceImport: { book, F, onPost() {}, onClose },
+  FinanceImport: { book, F, donors: [], onPost() {}, onClose },
   FinanceShareStatement: { book, F, churchName: 'St Test', accent: '', logo: '', canPost: false, onPostToMembers() {}, onClose },
   StewardHelp: { onClose, initialId: 'console' },
   AnnounceCareModal: { onClose },
