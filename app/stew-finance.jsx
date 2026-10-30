@@ -770,7 +770,7 @@ function BooksBillEdit({ book, contacts, onSave, onClose }) {
 // one for a new donor). Marking a donor "eligible" + recording a declaration date is what lets the UK Gift Aid
 // pack build a claim line for them; it does nothing on its own and nothing at all unless the church turns the
 // Gift Aid feature on.
-function BooksDonor({ book, initial, onSave, onClose, giftAidOn }) {
+function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, addressLabel }) {
   const ed = initial || {};
   const editing = !!ed.id;
   const [name, setName] = React.useState(ed.name || '');
@@ -813,6 +813,15 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn }) {
           <div style={{ flex: 1 }}><label style={bkLbl}>Postcode</label><input value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="e.g. SW1A 1AA" style={bkFld} /></div>
           <div style={{ flex: 1 }}><label style={bkLbl}>Declaration date</label><input type="date" value={giftAidDeclaredAt} onChange={e => setDeclaredAt(e.target.value)} style={bkFld} /></div>
         </div>
+        </>)}
+        {/* CONTRIBUTION-STATEMENT regions (US, NZ, …): the statement/receipt needs the donor's postal address. The
+            label comes from the jurisdiction registry (addressLabel) so it reads "Mailing address" / "Postal
+            address" per region. Shown only when the statement tool is on and Gift Aid is NOT (Gift Aid has its own
+            address field above). The `address` state + submit payload are the SAME ones Gift Aid uses, so a region
+            switch never drops a stored address. */}
+        {statementOn && !giftAidOn && (<>
+        <label style={bkLbl}>{addressLabel || 'Mailing address'}</label>
+        <input value={address} onChange={e => setAddress(e.target.value)} placeholder="Street, city, postcode" style={{ ...bkFld, marginBottom: 12 }} />
         </>)}
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
@@ -968,6 +977,43 @@ function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport }) {
         </div>
       ))}
       {claim.rows.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '5px 0 0', fontWeight: 800 }}><span>Total to reclaim</span><span>{booksFmt(claim.totalGiftAid, book)}</span></div>}
+      {/* A tax tool must never present figures as authoritative — the ONE shared disclaimer (F.TAX_DISCLAIMER). */}
+      {F && F.TAX_DISCLAIMER ? <div data-tax-disclaimer style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.4 }}>{F.TAX_DISCLAIMER}</div> : null}
+    </div>
+  );
+}
+
+// ---- Shared CONTRIBUTION-STATEMENT pack panel (expansion wave) — OFF BY DEFAULT, additive ------------------
+// Renders NOTHING unless the resolved jurisdiction's active tax tool is 'contributionStatement' (passed as
+// statementOn). The summary logic lives in the SEPARATE window.FinanceContribution bundle the core never imports;
+// this panel is the only caller and reaches for it only when the tool is on. If the bundle is not present the
+// panel says so rather than crashing. A contribution statement is the DONOR's record for their own deduction —
+// NO church rebate, NO church filing (unlike Gift Aid). The Download hands out an HTML statement document that
+// CARRIES the sourced wording AND the shared tax disclaimer (built by the pure pack helper).
+function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExport }) {
+  if (!statementOn) return null;
+  const pack = (typeof window !== 'undefined' && window.FinanceContribution) || null;
+  if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Giving statements</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The giving-statement pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
+  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
+  const stmt = pack.contributionStatement(book, { donors: donorList, givingByMember: F.givingByMember, jurisdiction });
+  return (
+    <div style={{ ...bkCard, marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Annual giving statements</div>
+        <button onClick={() => onExport && onExport(stmt)} title="Download each donor’s year-end giving statement (HTML) to hand out" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Download statements</button>
+      </div>
+      <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>A per-donor summary each donor uses for their own return. Your church reclaims nothing and files nothing.</div>
+      {stmt.rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '4px 0' }}>No attributed giving in this period yet.</div>}
+      {stmt.rows.map(r => (
+        <div key={r.donor} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
+          <span>{r.name}</span>
+          <span style={{ fontWeight: 700 }}>{booksFmt(r.total, book)}</span>
+        </div>
+      ))}
+      {stmt.rows.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '5px 0 0', fontWeight: 800 }}><span>Total</span><span>{booksFmt(stmt.totalDonated, book)}</span></div>}
+      {stmt.statement ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 8, lineHeight: 1.4 }}>{stmt.statement}</div> : null}
+      {/* A tax tool must never present figures as authoritative — the ONE shared disclaimer (F.TAX_DISCLAIMER). */}
+      {F && F.TAX_DISCLAIMER ? <div data-tax-disclaimer style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.4 }}>{F.TAX_DISCLAIMER}</div> : null}
     </div>
   );
 }
@@ -2693,6 +2739,12 @@ function DashFinanceBook() {
   const giftAidOn = (F && F.resolveJurisdiction && F.taxToolFor)
     ? F.taxToolFor(F.resolveJurisdiction({ features: church && church.features })) === 'giftAid'
     : !!(church && church.features && church.features.giftAid === true);
+  // The resolved jurisdiction id and its active-tax-tool flags. statementOn mirrors giftAidOn but for the SHARED
+  // contribution-statement tool (US, New Zealand, …). jxLabels drives the donor-form labels from the registry so
+  // "Mailing address" (US) / "Postal address" (NZ) follow the region rather than being hardcoded.
+  const jxId = (F && F.resolveJurisdiction) ? F.resolveJurisdiction({ features: church && church.features }) : 'None';
+  const statementOn = (F && F.taxToolFor) ? F.taxToolFor(jxId) === 'contributionStatement' : false;
+  const jxLabels = (F && F.donorLabels) ? (F.donorLabels(jxId) || {}) : {};
   // Bill approval mode — DUAL control is an OPT-IN a church turns on, OFF BY DEFAULT: strict === true (NOT the
   // default-on `!== false` convention — DOMAIN nation-neutral/silent, like giftAid). Default is the LIGHT flow
   // (approval is a field on the replaceable bill doc). In BOTH modes the Mark-paid control and the engine guard
@@ -3115,7 +3167,17 @@ function DashFinanceBook() {
         const rows = [['Title', 'First name', 'Last name', 'House', 'Postcode', 'Donated (' + sym + ')', 'Gift Aid (' + sym + ')'],
           ...claim.rows.map(r => [r.title, r.firstName || r.name, r.lastName, r.house, r.postcode, money(r.donated), money(r.giftAid)]),
           ['', '', '', '', 'TOTAL', money(claim.totalDonated), money(claim.totalGiftAid)]];
+        // The figures that LEAVE the app carry the caveat — the ONE shared disclaimer, embedded on the claim CSV.
+        if (F && F.TAX_DISCLAIMER) rows.push([], [F.TAX_DISCLAIMER]);
         booksDownload('gift-aid-claim-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
+      }} />
+      <BooksStatementPanel book={book} F={F} donors={donorMap} statementOn={statementOn} jurisdiction={jxId} onExport={(stmt) => {
+        // The generated giving statement is an HTML document built by the PURE pack helper — it embeds the sourced
+        // statement wording AND the ONE shared tax disclaimer (F.TAX_DISCLAIMER), so a figure never leaves without it.
+        const pack = (typeof window !== 'undefined' && window.FinanceContribution) || null;
+        if (!pack || !pack.contributionStatementDoc) { setRptFlash('The giving-statement module hasn’t loaded.'); return; }
+        const html = pack.contributionStatementDoc(stmt, { orgName: (church && church.name) || '', disclaimer: (F && F.TAX_DISCLAIMER) || '', money: (m) => booksFmt(m, book) });
+        booksDownload('giving-statements-' + booksTodayISO() + '.html', html).then(m => setRptFlash(m)).catch(() => {});
       }} />
         </div>}
       </div>}
@@ -3256,7 +3318,7 @@ function DashFinanceBook() {
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} banner={church.banner || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
-      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} />}
+      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} statementOn={statementOn} addressLabel={jxLabels.address} />}
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
       {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}

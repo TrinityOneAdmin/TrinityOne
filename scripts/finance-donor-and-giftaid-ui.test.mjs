@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
 import { miniReact, find, texts } from './render-jsx-screen.mjs';
-import { listJurisdictions, resolveJurisdiction } from '../src/finance-jurisdictions.mjs';
+import { listJurisdictions, listTaxRegions, resolveJurisdiction, taxToolFor, donorLabels, TAX_DISCLAIMER } from '../src/finance-jurisdictions.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
@@ -146,7 +146,7 @@ async function featuresPanel(church, { actingChurch = null } = {}) {
       useStewardGroups: () => [], useStewardMembers: () => [{ pubkey: 'm1' }], useStewardAdmitted: () => [],
       useStewardJoinPolicy: () => false,
       useStewDialog: () => ({ current: null }),                    // scripture modal registers its Escape/back here
-      FinanceLedger: { listJurisdictions, resolveJurisdiction },   // the real registry drives the picker + gate
+      FinanceLedger: { listJurisdictions, listTaxRegions, resolveJurisdiction, taxToolFor, TAX_DISCLAIMER },   // the real registry drives the picker + gate + disclaimer
       Steward: { actingChurch, publishProfile: (p) => published.push(p), setJoinPolicy() {}, setAdmitted() {} },
     },
     ...furniture(React),
@@ -278,4 +278,63 @@ test('TaxScriptureModal renders 1 Samuel 8:10–18 (WEB), a role="dialog", and a
   assert.ok(amen, 'the modal has no "Amen" dismiss');
   amen.props.onClick({ stopPropagation() {} });
   assert.equal(closed, 1, 'the Amen dismiss did not call onClose');
+});
+
+// ── EXPANSION WAVE: the Region picker lists the new verified schemes; the subcard shows the tax disclaimer ──
+test('the Region picker lists the new scheme regions (US, NZ) alongside UK — real schemes only, no None/held', async () => {
+  const s = await featuresPanel({ features: { taxTools: true } });
+  const sel = regionSelect(s.draw());
+  assert.ok(sel, 're-anchor: the Region picker is not shown with Tax tools ON');
+  const optVals = find(sel, n => n.type === 'option').map(o => o.props.value).sort();
+  assert.deepEqual(optVals, ['NZ', 'UK', 'US'], 'the Region picker options are not exactly the three real schemes: ' + JSON.stringify(optVals));
+  // held / currency-only countries must never appear as selectable regions
+  for (const held of ['None', 'CA', 'DE', 'FR', 'NL', 'ZA', 'AU', 'IE']) assert.ok(!optVals.includes(held), held + ' leaked into the Region picker — it is not a live scheme');
+});
+
+test('the Tax tools subcard renders the shared tax disclaimer when ON (a tax surface must carry the caveat)', async () => {
+  const s = await featuresPanel({ features: { taxTools: true } });
+  const tree = s.draw();
+  // rendered-tree, not source text: the node carries data-tax-disclaimer AND the real constant's words
+  const node = find(tree, n => n.props && n.props['data-tax-disclaimer'])[0];
+  assert.ok(node, 'the Tax tools subcard did not render the disclaimer footnote');
+  assert.ok(/not tax advice/i.test(texts(tree).join(' ')), 'the subcard disclaimer text is not on the rendered tree');
+});
+
+test('with Tax tools OFF the subcard shows no disclaimer (it is a tax surface only when on)', async () => {
+  const s = await featuresPanel({ features: {} });
+  assert.ok(!find(s.draw(), n => n.props && n.props['data-tax-disclaimer'])[0], 'the disclaimer rendered with Tax tools off');
+});
+
+// ── BooksDonor: a contribution-statement region shows the registry address label (point-of-use, rendered tree) ──
+test('with statementOn (Gift Aid off) the donor editor shows the registry address label and an address input', async () => {
+  const { draw, BooksDonor } = await loadBooksDonor();
+  const tree = draw(BooksDonor, { book: { baseCurrency: 'USD', decimals: 2 }, initial: null, giftAidOn: false, statementOn: true, addressLabel: donorLabels('US').address, onSave: () => true, onClose() {} });
+  const all = texts(tree).join(' ');
+  assert.ok(/Mailing address/.test(all), 'the US "Mailing address" registry label is not on the statement donor form');
+  assert.ok(!/Gift Aid/.test(all), 'a contribution-statement region leaked Gift Aid wording onto the donor form');
+  const inputs = find(tree, n => n.type === 'input');
+  assert.ok(inputs.some(i => /street, city, postcode/i.test((i.props && i.props.placeholder) || '')), 'no address input rendered for the statement region');
+  // and no UK-only inputs (checkbox / date) since Gift Aid is off
+  assert.ok(!inputs.some(i => i.props && (i.props.type === 'checkbox' || i.props.type === 'date')), 'a UK-only Gift Aid input rendered in a contribution-statement region');
+});
+
+// ── BooksStatementPanel: renders the per-donor summary AND the shared tax disclaimer (rendered tree) ────────
+test('BooksStatementPanel renders the donor summary and the shared tax disclaimer; nothing when statementOn=false', async () => {
+  const { React, draw } = miniReact();
+  const stmtResult = { rows: [{ donor: 'd1', name: 'Ada', total: 120000 }], totalDonated: 120000, statement: 'No goods or services …', from: '', to: '' };
+  const Panel = await loadComponent('app/stew-finance.jsx', 'BooksStatementPanel', 'function BooksStatementPanel(', {
+    React, bkCard: {}, booksFmt: (m) => '$' + (m / 100).toFixed(2),
+    window: { FinanceContribution: { contributionStatement: () => stmtResult } },
+  });
+  const F = { givingByMember: () => [], TAX_DISCLAIMER };
+  // statementOn=false → inert: no disclaimer, no rows on the rendered tree
+  const off = draw(Panel, { book: {}, F, donors: new Map([['d1', { id: 'd1', name: 'Ada' }]]), statementOn: false, jurisdiction: 'US' });
+  assert.ok(!find(off, n => n.props && n.props['data-tax-disclaimer'])[0], 'the panel rendered a disclaimer with statementOn=false');
+  assert.ok(!/Ada/.test(texts(off).join(' ')), 'the panel rendered donor rows with statementOn=false');
+  // statementOn=true → the donor row + the disclaimer are on the rendered tree
+  const tree = draw(Panel, { book: {}, F, donors: new Map([['d1', { id: 'd1', name: 'Ada' }]]), statementOn: true, jurisdiction: 'US' });
+  const all = texts(tree).join(' ');
+  assert.ok(/Ada/.test(all), 'the statement panel did not render the donor row');
+  assert.ok(find(tree, n => n.props && n.props['data-tax-disclaimer'])[0], 'the statement panel did not render the shared tax disclaimer footnote');
+  assert.ok(/not tax advice/i.test(all), 'the statement panel disclaimer text is not on the rendered tree');
 });

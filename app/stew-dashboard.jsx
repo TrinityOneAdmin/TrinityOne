@@ -11849,8 +11849,15 @@ function DashFeaturesPanel({ church, show = null }) {
   // no separate financeOn flag; the Finance-on check lives at the nested render below.
   // taxOn mirrors resolveJurisdiction's gate so the switch reads ON for a legacy giftAid church too.
   const taxOn = f.taxTools === true || (f.taxTools === undefined && f.giftAid === true);
-  const JX_REGIONS = ((_FL && _FL.listJurisdictions) ? _FL.listJurisdictions()
-    : [{ id: 'None', label: 'None (neutral)' }, { id: 'UK', label: 'United Kingdom' }]).filter(o => o.id !== 'None');
+  // REAL schemes only — listTaxRegions already drops 'None' and any designed-but-held (taxTool null) entry, so a
+  // currency-only place never appears here (owner model: currency is a free Book setting, not a region). Fall back
+  // to the old filter only if an OLD core bundle predates listTaxRegions.
+  const JX_REGIONS = (_FL && _FL.listTaxRegions) ? _FL.listTaxRegions()
+    : ((_FL && _FL.listJurisdictions) ? _FL.listJurisdictions().filter(o => o.id !== 'None')
+    : [{ id: 'UK', label: 'United Kingdom' }]);
+  // The ONE shared tax disclaimer (window.FinanceLedger.TAX_DISCLAIMER). A tax tool must never present figures as
+  // authoritative; this renders on the subcard and every tax panel/export pulls the same constant.
+  const TAX_DISCLAIMER = (_FL && _FL.TAX_DISCLAIMER) || '';
   const jxValue = (_FL && _FL.resolveJurisdiction) ? _FL.resolveJurisdiction({ features: f })
     : (taxOn ? 'UK' : 'None');
   const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, taxTools: true, jurisdiction: id, giftAid: id === 'UK' } }); };
@@ -12033,6 +12040,11 @@ function DashFeaturesPanel({ church, show = null }) {
                     {JX_REGIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                   </select>
                 </div>
+              ) : null}
+              {/* A tax tool must never present figures as authoritative — the ONE shared disclaimer (every panel
+                  and export pulls the same constant; see window.FinanceLedger.TAX_DISCLAIMER). */}
+              {taxOn && TAX_DISCLAIMER ? (
+                <div data-tax-disclaimer style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.4 }}>{TAX_DISCLAIMER}</div>
               ) : null}
             </div>
           ) : null}
