@@ -45,7 +45,8 @@ window.HelpData = {
       star: true,
       blocks: [
         { type: 'p', text: 'When you set up, TrinityOne shows you 12 little words — your “recovery phrase”.' },
-        { type: 'callout', tone: 'clay', text: 'As long as you have these 12 words, you can always get back into your account — even on a new phone. If you lose your phone and don’t have them written down, no one can get the account back for you. There’s no “forgot password”, because there’s no password and no company holding a copy.' },
+        { type: 'callout', tone: 'clay', text: 'As long as you have these 12 words, you can always get back into your account — even on a new phone. There’s no “forgot password”, because there’s no password and no company holding a copy.' },
+        { type: 'note', text: 'If someone loses their words and their phone, a steward can reconnect them: Members → find them → Reconnect. This moves their name and place in the church onto the key on their new phone, on the steward’s word that they are the same person. Their old private messages and any sealed care records stay unreadable — nothing can bring those back. The words on paper are still the real backup.' },
         { type: 'steps', label: 'What to do — once', items: [
           'When the app shows your 12 words, write them on paper, in order, by hand.',
           'Keep the paper somewhere safe at home — with important documents, or a safe.',
