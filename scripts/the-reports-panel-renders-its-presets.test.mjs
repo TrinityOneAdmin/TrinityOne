@@ -78,8 +78,13 @@ test('the Reports panel offers every Phase-4a preset + an export control', () =>
   for (const label of ['Export PDF', 'Export CSV', 'Export HTML']) {
     assert.ok(h.button(label), 'NO "' + label + '" control on the Reports panel');
   }
-  // period controls
-  assert.ok(h.button('This quarter') && h.button('Year to date') && h.button('Last year'), 'the period controls are not on the panel');
+  // period control is now a dropdown (UX-D): the <select> offers all three presets + Custom range AS OPTIONS
+  const periodSel = h.all().find(n => n.type === 'select' && n.props && n.props['aria-label'] === 'Report period');
+  assert.ok(periodSel, 'the period dropdown is not on the panel');
+  const optText = h.all().filter(n => n.type === 'option').flatMap(o => texts(o));
+  for (const label of ['This quarter', 'Year to date', 'Last year', 'Custom range']) {
+    assert.ok(optText.some(t => t.includes(label)), 'the period dropdown has no "' + label + '" option');
+  }
   // (Phase 4a originally asserted no giving-by-member existed. Phase 4b has since added it as its OWN
   // finance-gated "Donors & giving by member" panel — NOT a Reports preset; the aggregate presets are the
   // ones enumerated above. The member-facing SHARE/broadcast path staying name-free is guarded in
@@ -121,4 +126,40 @@ test('the Receipts & payments (SORP) report renders its totals', () => {
   assert.ok(joined.includes('Total receipts'), 'the receipts total did not render');
   assert.ok(joined.includes('Total payments'), 'the payments total did not render');
   assert.ok(joined.includes('Net cash movement'), 'the net cash movement did not render');
+});
+
+// UX-D: the period dropdown offers a Custom range that reveals From/To date inputs and renders a report
+// for arbitrary dates. Point-of-use (rules 1 & 3): drives the SHIPPED tree, not the .jsx text. Fails if the
+// <select>, the 'custom' option/reveal, or the rptRange 'custom' branch are deleted.
+test('the Reports period dropdown offers a Custom range that renders a report for arbitrary dates', () => {
+  const h = setup();
+  h.draw();
+  h.feedItems(toItems(FL.bookToDocs(seedBook())));
+  h.click('Reports');
+  const Y = new Date().getFullYear();
+
+  const sel = h.all().find(n => n.type === 'select' && n.props && n.props['aria-label'] === 'Report period');
+  assert.ok(sel, 're-anchor: no "Report period" dropdown on the panel');
+  assert.ok(h.all().some(n => n.type === 'option' && texts(n).join('').includes('Custom range')), 'no "Custom range" option');
+
+  // selecting Custom range reveals From / To date inputs
+  sel.props.onChange({ target: { value: 'custom' }, stopPropagation() {}, preventDefault() {} });
+  h.draw();
+  const from = h.all().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Custom range from');
+  const to = h.all().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Custom range to');
+  assert.ok(from && to, 'Custom range did not reveal From/To date inputs');
+
+  // A custom range that ENDS on Jan 10 includes ONLY the Jan-05 £250 offering; it EXCLUDES the Jan-12 £600
+  // offering and the Jan-20 spending. The default preset is Income & expenditure, whose summary shows the
+  // report's own "Total income" line (distinct from the always-on "Income this year" overview card). So over
+  // this bound the report reads "Total income £250.00"; if the custom `to` were ignored the Jan-12 £600 would
+  // fold in and it would read "Total income £850.00". Asserting the £250 total present AND the £850 total
+  // absent pins the report's figures to the custom dates — not just its caption.
+  from.props.onChange({ target: { value: Y + '-01-01' } }); h.draw();
+  const to2 = h.all().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Custom range to');
+  to2.props.onChange({ target: { value: Y + '-01-10' } }); h.draw();
+  const joined = texts(h.tree).join(' ');
+  assert.ok(joined.includes(Y + '-01-01 to ' + Y + '-01-10'), 'the custom range label (rangeLabel) is not on the screen');
+  assert.ok(joined.includes('Total income £250.00'), 'the report did not render "Total income £250.00" for the Jan 1–10 custom range');
+  assert.ok(!joined.includes('Total income £850.00'), 'the report shows the full-range "Total income £850.00" — the custom range end date is not being applied to the figures');
 });

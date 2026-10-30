@@ -1818,7 +1818,9 @@ function DashFinanceBook() {
   const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors (default Transactions)
   const [donorTab, setDonorTab] = React.useState('donors'); // Donors tab sub-tab: 'donors' (records) | 'giving' (giving-by-member + Gift Aid)
   const [rptPreset, setRptPreset] = React.useState('pl');    // which aggregate report the Reports panel shows
-  const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y
+  const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y | custom
+  const [rptCFrom, setRptCFrom] = React.useState(() => new Date().getFullYear() + '-01-01'); // Custom range start (ISO); calendar-year default, user edits it
+  const [rptCTo, setRptCTo] = React.useState(() => booksTodayISO());                          // Custom range end (ISO); local today
   const [rptFlash, setRptFlash] = React.useState('');         // what an Export reported, or why it did not
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
@@ -2463,6 +2465,8 @@ function DashFinanceBook() {
   const rptY = rptNow.getFullYear(), rptQ = Math.floor(rptNow.getMonth() / 3) + 1;
   const rptRange = rptPeriod === 'this-q' ? F.quarterRange(rptY, rptQ)
     : rptPeriod === 'last-y' ? F.yearRange(rptY - 1)
+    : rptPeriod === 'custom'
+      ? (() => { const f = rptCFrom || (rptY + '-01-01'); const t = rptCTo || booksTodayISO(); return { from: f, to: t, label: F.rangeLabel(f, t) }; })()
     : { ...F.yearRange(rptY), to: booksTodayISO(), label: 'Year to date ' + rptY };
   const rptDef = FIN_REPORT_PRESETS.find(p => p.key === rptPreset) || FIN_REPORT_PRESETS[0];
   const rptModel = F.buildStatement(book, {
@@ -2623,11 +2627,30 @@ function DashFinanceBook() {
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 9 }}>
               {FIN_REPORT_PRESETS.map(p => chip(rptPreset === p.key, () => setRptPreset(p.key), p.label, p.key))}
             </div>
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
-              {chip(rptPeriod === 'this-q', () => setRptPeriod('this-q'), 'This quarter', 'q')}
-              {chip(rptPeriod === 'this-y', () => setRptPeriod('this-y'), 'Year to date', 'y')}
-              {chip(rptPeriod === 'last-y', () => setRptPeriod('last-y'), 'Last year', 'ly')}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
+              <div style={{ flex: '0 0 auto' }}>
+                <label style={bkLbl}>Period</label>
+                <select value={rptPeriod} onChange={e => setRptPeriod(e.target.value)} aria-label="Report period" style={{ ...bkFld, width: 'auto', minWidth: 170 }}>
+                  <option value="this-q">This quarter</option>
+                  <option value="this-y">Year to date</option>
+                  <option value="last-y">Last year</option>
+                  <option value="custom">Custom range</option>
+                </select>
+              </div>
+              {rptPeriod === 'custom' && (<>
+                <div style={{ flex: '0 0 auto' }}>
+                  <label style={bkLbl}>From</label>
+                  <input type="date" value={rptCFrom} onChange={e => setRptCFrom(e.target.value)} aria-label="Custom range from" style={{ ...bkFld, width: 'auto' }} />
+                </div>
+                <div style={{ flex: '0 0 auto' }}>
+                  <label style={bkLbl}>To</label>
+                  <input type="date" value={rptCTo} onChange={e => setRptCTo(e.target.value)} aria-label="Custom range to" style={{ ...bkFld, width: 'auto' }} />
+                </div>
+              </>)}
             </div>
+            {rptPeriod === 'custom' && rptCFrom && rptCTo && rptCFrom > rptCTo && (
+              <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>Choose a start date on or before the end date.</div>
+            )}
             <div style={{ fontWeight: 800, fontSize: 14, margin: '2px 0 2px', fontFamily: 'var(--font-display, var(--font-ui))' }}>{rptDef.label}</div>
             <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>{rptRange.label}</div>
 
