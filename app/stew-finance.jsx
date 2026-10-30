@@ -1511,7 +1511,7 @@ async function fsSavePdf(doc, fname) {
   return saveConsoleFile(fname, b64, { mime: 'application/pdf', base64: true, title: 'Financial statement', blurb: 'Open it to print or share.' });
 }
 
-function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onPostToMembers, onClose }) {
+function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, groups, onPostToMembers, onClose }) {
   // resolve the church dp/logo to a self-contained data: URI (invImgDataUrl lives in stew-dashboard.jsx; shared
   // steward bundle). Kept in state so the live preview, the HTML download and the PDF all embed the same image.
   const [logoData, setLogoData] = React.useState('');
@@ -1526,6 +1526,18 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
   const [note, setNote] = React.useState('');
   const [posting, setPosting] = React.useState(false);   // false | 'confirm' | 'done'
   const [flash, setFlash] = React.useState('');
+  // WHERE the statement is posted. The whole-church broadcast group is first and is the default; the treasurer
+  // may instead pick a particular group/chat. The CONTENT does not change with the target — it is the aggregate,
+  // name-free summary (F.statementText over F.buildStatement) whatever the destination.
+  const targets = React.useMemo(() => {
+    const b = (groups || []).find(g => g.kind === 'broadcast');
+    return [
+      ...(b ? [{ id: b.id, label: 'Whole church · ' + (b.name || 'Announcements') }] : []),
+      ...(groups || []).filter(g => g.kind !== 'broadcast').map(g => ({ id: g.id, label: g.name || g.id })),
+    ];
+  }, [groups]);
+  const [target, setTarget] = React.useState(() => { const b = (groups || []).find(g => g.kind === 'broadcast'); return b ? b.id : ''; });
+  const targetLabel = (targets.find(t => t.id === target) || targets[0] || { label: 'your church' }).label;
 
   const period = React.useMemo(() => {
     if (preset === 'this-q') return F.quarterRange(curY, curQ);
@@ -1561,7 +1573,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
     } catch (e) { setFlash((e && e.message) || 'Could not save the statement on this device.'); }
   };
   const doPost = async () => {
-    try { await onPostToMembers(model, F.statementText(model)); setPosting('done'); setFlash('Shared with members.'); }
+    try { await onPostToMembers(model, F.statementText(model), target); setPosting('done'); setFlash('Shared with members.'); }
     catch (e) { setFlash(e && e.message ? e.message : 'Could not post to members.'); setPosting(false); }
   };
 
@@ -1632,20 +1644,30 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
 
         {posting === 'confirm' ? (
           <div style={{ marginTop: 14, border: '1px solid var(--clay)', borderRadius: 12, padding: 14 }}>
-            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>Post this statement to every member?</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12 }}>Members will see it in the church’s announcements. It contains totals only — no names.</div>
+            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>Post this statement to {targetLabel}?</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 12 }}>They will see it in {targetLabel}. It contains totals only — no names.</div>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setPosting(false)} style={{ flex: 1, height: 42, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
               <button onClick={doPost} title="Send this to all members now" style={{ flex: 2, height: 42, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Yes, post to members</button>
             </div>
           </div>
         ) : (
+          <React.Fragment>
+            {canPost && (
+              <div style={{ marginTop: 14 }}>
+                <label style={bkLbl} htmlFor="fin-share-target">Send to</label>
+                <select id="fin-share-target" aria-label="Where to send the statement" value={target} onChange={e => setTarget(e.target.value)} style={bkFld}>
+                  {targets.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+              </div>
+            )}
           <div style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
             <button onClick={onClose} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Close</button>
             <button onClick={doCopy} title="Copy the summary text to paste elsewhere" disabled={!enabledKeys.length} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Copy summary</button>
             <button onClick={doDownload} title="Save the summary as a file" disabled={!enabledKeys.length} style={{ height: 44, padding: '0 16px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Download</button>
             {canPost && <button onClick={() => setPosting('confirm')} title="Post this summary to your members" disabled={!enabledKeys.length} style={{ flex: 1, minWidth: 150, height: 44, padding: '0 16px', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: enabledKeys.length ? 'pointer' : 'default', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>Post to members</button>}
           </div>
+          </React.Fragment>
         )}
       </div>
     </div>
@@ -1828,15 +1850,21 @@ function DashFinanceBook() {
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const broadcastGroup = groups.find(g => g.kind === 'broadcast');
   const canPost = !!(useRelay && S && S.publishPost && broadcastGroup);
-  const postStatementToMembers = async (model, text) => {
-    if (!broadcastGroup) throw new Error('No announcements channel to post to. Create a broadcast group first.');
+  const postStatementToMembers = async (model, text, targetId) => {
+    // TARGET (2026-10-30): the treasurer chooses where the statement goes — whole-church announcements (the
+    // default) OR a particular group — via the "Send to" picker in FinanceShareStatement. `targetId` is that
+    // group's id; it falls back to the broadcast group so an un-chosen post still reaches the announcements.
+    // The CONTENT is unchanged by the target — it stays the aggregate, name-free summary.
+    const groupId = targetId || (broadcastGroup && broadcastGroup.id);
+    if (!groupId) throw new Error('No channel to post to. Create a broadcast group first.');
     const lead = (model.title || 'Financial statement') + ' — ' + (model.periodLabel || '') + '\n\n';
     // THE FOURTH CALLER OF publishPost, and it had the same hole as the two in stew-dashboard.jsx:
     // publishPost RESOLVES `false` when the publish set was empty or every relay refused — it never throws —
     // so awaiting it alone let doPost() in FinanceShareStatement print "Shared with members." over a
     // statement no member received. Nothing typed is lost here (the text is rebuilt from the book), but the
     // claim was still false. Throw, so the existing catch in doPost shows the reason and keeps the dialog open.
-    const ok = await S.publishPost(lead + text, broadcastGroup.id);
+    // A sealed group with no key makes publishPost resolve `null` → the throw fires honestly, same as a refusal.
+    const ok = await S.publishPost(lead + text, groupId);
     if (!ok) throw new Error('That didn’t post — nothing reached your church. Check your connection and try again.');
   };
   React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving
@@ -2487,6 +2515,9 @@ function DashFinanceBook() {
           <button onClick={() => setImporting(true)} title="Bring in transactions from a bank statement file" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
           <button onClick={() => setReconciling({})} title="Reconcile a bank statement against your ledger and check the closing balance" disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="check" size={16} color="var(--ink)" /> Reconcile</button>
           <button onClick={() => setRecording(true)} title="Record a gift or an expense by hand" disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
+          {/* Share statement lives HERE (header), not in the Transactions tab's card — it is a whole-screen
+              action, reachable from any tab. Not disabled on bookErrors: it only reads + posts a summary. */}
+          <button onClick={() => setSharing(true)} title="Choose what to share and send a statement to members" className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
         </div>
       </div>
 
@@ -2524,7 +2555,7 @@ function DashFinanceBook() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Recent transactions</div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setSharing(true)} title="Choose what to share and send a statement to members" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="share" size={14} color="var(--ink)" /> Share statement</button>
+            {/* Share statement moved to the Finance header (reachable from any tab); only Export CSV stays here. */}
             <button onClick={exportCsv} title="Download all transactions as a spreadsheet (CSV) file" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
           </div>
         </div>
@@ -2863,7 +2894,7 @@ function DashFinanceBook() {
       {fundEditing && <BooksFundEdit book={book} initial={fundEditing} onSave={saveFund} onClose={() => setFundEditing(null)} />}
       {moving && <BooksFundMove book={book} onTransfer={transferFunds} onClose={() => setMoving(false)} />}
       {donate && <BooksDonate onGave={() => { booksDonateGave(); setDonate(false); }} onClose={() => setDonate(false)} />}
-      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
+      {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
       {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
