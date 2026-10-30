@@ -1050,10 +1050,13 @@ function BooksDonate({ onGave, onClose }) {
 // Upload a CSV the bank exported, confirm which columns are which, review each line (pre-categorised, with
 // already-imported lines flagged via the importKey de-dup fingerprint), then post the selected ones as
 // balanced double-entry journal entries. All parsing is client-side (window.FinanceLedger import engine).
-function FinanceImport({ book, F, onPost, onClose }) {
+function FinanceImport({ book, F, donors, onPost, onClose }) {
   const incomeAccts = [...book.accounts.values()].filter(a => a.type === 'income' && !a.archived);
   const expenseAccts = [...book.accounts.values()].filter(a => a.type === 'expense' && !a.archived);
   const funds = [...book.funds.values()];
+  // DONOR records (Phase 4b) to offer on a MONEY-IN import line — same shape as BooksRecord's manual picker:
+  // the option VALUE is the OPAQUE donor id (what reaches the network-readable journal), the label the name.
+  const donorList = Array.isArray(donors) ? donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
   const dec = book.decimals || 2;
   const defAccount = (dir) => {
     const list = dir === 'in' ? incomeAccts : expenseAccts;
@@ -1106,7 +1109,7 @@ function FinanceImport({ book, F, onPost, onClose }) {
       const n = l.key ? (held.get(l.key) || 0) : 0;
       const dup = n > 0;
       if (dup) held.set(l.key, n - 1);
-      return { account, fund, selected: !dup, dup };
+      return { account, fund, donor: '', selected: !dup, dup };   // donor '' = (unattributed), money-in only
     });
     setLines(ls); setRowState(rs); setErr(''); setStep('review');
   };
@@ -1124,7 +1127,7 @@ function FinanceImport({ book, F, onPost, onClose }) {
   const [posting, setPosting] = React.useState(false);
   const doPost = async () => {
     const picks = [];
-    lines.forEach((l, i) => { const r = rowState[i]; if (r.selected && !r.dup) picks.push({ line: l, account: r.account, fund: r.fund }); });
+    lines.forEach((l, i) => { const r = rowState[i]; if (r.selected && !r.dup) picks.push({ line: l, account: r.account, fund: r.fund, donor: r.donor }); });
     if (!picks.length) { setErr('Select at least one transaction to import.'); return; }
     setErr(''); setPosting(true);
     let res = null;
@@ -1223,6 +1226,16 @@ function FinanceImport({ book, F, onPost, onClose }) {
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                       <select value={r.account} disabled={r.dup} onChange={e => setRow(i, { account: e.target.value })} style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', flex: 1 }}>{accts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
                       <select value={r.fund} disabled={r.dup} onChange={e => setRow(i, { fund: e.target.value })} style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', width: 130 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+                      {/* DONOR — money-IN lines only (an imported bank credit has a giver; a debit does not). Writes
+                          the OPAQUE id, never the name; "(unattributed)" default leaves the gift off giving-by-member
+                          + Gift Aid. importStatement applies it to the income (cr) leg alone. Deleting this select
+                          removes imported-gift attribution from the screen (point-of-use test: finance-import-tags-donor). */}
+                      {l.dir === 'in' ? (
+                        <select value={r.donor} disabled={r.dup} onChange={e => setRow(i, { donor: e.target.value })} aria-label="Donor" style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', width: 130 }}>
+                          <option value="">(unattributed)</option>
+                          {donorList.map(d => <option key={d.id} value={d.id}>{d.name || '(unnamed)'}</option>)}
+                        </select>
+                      ) : null}
                     </div>
                   </div>
                   <div style={{ width: 84, textAlign: 'right', flexShrink: 0, fontWeight: 800, fontSize: 13.5, color: l.dir === 'in' ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)' }}>{l.dir === 'in' ? '+' : '−'}{booksFmt(l.amountMinor, book)}</div>
@@ -2000,12 +2013,16 @@ function DashFinanceBook() {
     const failed = [], skipped = [];
     let posted = 0;
     for (let i = 0; i < picks.length; i++) {
-      const { line, account, fund } = picks[i];
+      const { line, account, fund, donor } = picks[i];
       const n = line.key ? (held.get(line.key) || 0) : 0;
       if (n > 0) { held.set(line.key, n - 1); skipped.push(line); continue; }
       const amount = line.amountMinor;
+      // DONOR attribution (Phase 4b) rides ONLY the money-IN income (cr) leg, and ONLY as the OPAQUE id — never
+      // the name, never the bank (cash) leg, never a money-out line. Same tagging as record() (dir==='in' && donor).
+      // '' / falsy = unattributed, so _normalize drops it. The de-dup/retry logic below is unchanged.
+      const donorTag = (line.dir === 'in' && donor) ? { donor: String(donor) } : {};
       const P = line.dir === 'in'
-        ? [{ account: 'bank', dir: 'dr', amount }, { account, fund, dir: 'cr', amount }]
+        ? [{ account: 'bank', dir: 'dr', amount }, { account, fund, dir: 'cr', amount, ...donorTag }]
         : [{ account, fund, dir: 'dr', amount }, { account: 'bank', dir: 'cr', amount }];
       let entry = null, ok = false;
       try {
@@ -2824,7 +2841,7 @@ function DashFinanceBook() {
       </div>
 
       {recording && <BooksRecord book={book} onRecord={recordEntry} donors={donors} initial={recording && recording.initial} onClose={() => setRecording(false)} />}
-      {importing && <FinanceImport book={book} F={F} onPost={importStatement} onClose={() => setImporting(false)} />}
+      {importing && <FinanceImport book={book} F={F} donors={donors} onPost={importStatement} onClose={() => setImporting(false)} />}
       {viewingAtt ? <BooksReceiptView data={viewingAtt} onClose={() => setViewingAtt('')} /> : null}
       {accEditing && <BooksAccountEdit book={book} initial={accEditing} onSave={saveAccount} onClose={() => setAccEditing(null)} />}
       {fundEditing && <BooksFundEdit book={book} initial={fundEditing} onSave={saveFund} onClose={() => setFundEditing(null)} />}
