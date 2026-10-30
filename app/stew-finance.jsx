@@ -1659,6 +1659,16 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
 //
 // A conditional return is only safe above every hook in the component, or in a wrapper like this one. Do not
 // move the gate back inside DashFinanceBook.
+const FIN_TABS = [
+  { key: 'transactions', label: 'Transactions' },
+  { key: 'reports', label: 'Reports' },
+  { key: 'accounts', label: 'Accounts & funds' },
+  { key: 'invoices', label: 'Invoices' },
+  { key: 'bills', label: 'Bills' },
+  { key: 'budget', label: 'Budget' },
+  { key: 'donors', label: 'Donors' },
+];
+
 function DashFinance() {
   const F = window.FinanceLedger;
   const S = window.Steward;
@@ -1770,13 +1780,13 @@ function DashFinanceBook() {
   const [recording, setRecording] = React.useState(false);   // null|true for a fresh entry, or a {initial} prefill for a correction
   const [importing, setImporting] = React.useState(false);
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
-  const [reports, setReports] = React.useState(false);
+  const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors (default Transactions)
+  const [donorTab, setDonorTab] = React.useState('donors'); // Donors tab sub-tab: 'donors' (records) | 'giving' (giving-by-member + Gift Aid)
   const [rptPreset, setRptPreset] = React.useState('pl');    // which aggregate report the Reports panel shows
   const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y
   const [rptFlash, setRptFlash] = React.useState('');         // what an Export reported, or why it did not
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
-  const [managing, setManaging] = React.useState(false);     // collapsible "Accounts & funds" panel (same pattern as Reports)
   const [accEditing, setAccEditing] = React.useState(null);  // account modal: null closed · {} add · {id,…} edit
   const [fundEditing, setFundEditing] = React.useState(null);// fund modal: null closed · {} add · {id,…} edit
   const [moving, setMoving] = React.useState(false);         // "Move between funds" (fund transfer) modal
@@ -1786,21 +1796,17 @@ function DashFinanceBook() {
   const [templates, setTemplates] = React.useState([]);      // finance/template:<id> docs — SEPARATE from the book
   const [reconciles, setReconciles] = React.useState([]);    // finance/reconcile:<id> docs — SEPARATE from the book
   const [donors, setDonors] = React.useState([]);            // finance/donor:<id> docs (Phase 4b) — SEPARATE from the book
-  const [donorsOpen, setDonorsOpen] = React.useState(false); // collapsible "Donors & giving by member" panel
   const [donorEditing, setDonorEditing] = React.useState(null); // donor modal: null closed · {} add · {id,…} edit
   const [invoices, setInvoices] = React.useState([]);        // finance/invoice:<id> docs (Phase 5) — SEPARATE from the book
   const [contacts, setContacts] = React.useState([]);        // finance/contact:<id> docs (Phase 5) — SEPARATE from the book
-  const [invoicesOpen, setInvoicesOpen] = React.useState(false); // collapsible "Invoices" panel
   const [invEditing, setInvEditing] = React.useState(null);  // invoice editor: null closed · {} new · {id,…} view
   const [contactEditing, setContactEditing] = React.useState(null); // contact editor: null closed · {} add · {id,…} edit
   const [invFlash, setInvFlash] = React.useState('');        // what an invoice action reported (saved / paid / exported / why not)
   const [budgets, setBudgets] = React.useState([]);          // finance/budget:<id> docs (Phase 7) — SEPARATE from the book (a READ overlay)
   const [bills, setBills] = React.useState([]);              // finance/bill:<id> docs (Phase 6) — SEPARATE from the book (the money rides the journal)
   const [billApprovals, setBillApprovals] = React.useState([]); // finance/billapproval:<billId>:<approverhex> docs (Phase 6, dual-control) — approver bound to the signer
-  const [billsOpen, setBillsOpen] = React.useState(false);   // collapsible "Bills" panel
   const [billEditing, setBillEditing] = React.useState(null);// bill editor: null closed · {} new
   const [billFlash, setBillFlash] = React.useState('');      // what a bill action reported (recorded / approved / paid / why not)
-  const [budgetOpen, setBudgetOpen] = React.useState(false); // collapsible "Budget" panel
   const [budgetEditing, setBudgetEditing] = React.useState(null); // budget modal: null closed · {year, lines} the budget being edited
   const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
   // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
@@ -2446,6 +2452,13 @@ function DashFinanceBook() {
     </div>
   );
 
+  // One pill in the tab strip (and in the Donors sub-tab strip). The label is a single string child, so the
+  // point-of-use tests' button() helper (which matches a button's string kids) can select a tab by its label.
+  const tabBtn = (active, onClick, label, key) => (
+    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13,
+      border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
+  );
+
   return (
     <div style={{ padding: '4px 2px 40px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
@@ -2484,7 +2497,13 @@ function DashFinanceBook() {
         </div>
       </div>
 
-      <div style={{ ...bkCard, marginBottom: 16 }}>
+      {/* ── TAB STRIP (under the Funds card): the content area below swaps to ONE panel at a time; default Transactions ── */}
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+        {FIN_TABS.map(t => tabBtn(tab === t.key, () => setTab(t.key), t.label, t.key))}
+      </div>
+
+      {/* ── TRANSACTIONS tab (default): recent transactions, then the Recurring-payments collapsible ── */}
+      {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Recent transactions</div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -2509,11 +2528,37 @@ function DashFinanceBook() {
             {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" aria-label="Reverse this entry" onClick={() => undo(e.seq)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
           </div>
         ); })}
-      </div>
+      </div>}
 
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <button onClick={() => setReports(r => !r)} title="Show or hide the income and expense reports" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{reports ? '▾' : '▸'} Reports</button>
-        {reports && (() => {
+      {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={() => setRecurringOpen(r => !r)} title="Show or hide standing orders and other repeating payments" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{recurringOpen ? '▾' : '▸'} Recurring payments</button>
+          {recurringOpen && <button onClick={() => setTplEditing({})} title="Create a new recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add recurring</button>}
+        </div>
+        {recurringOpen && (
+          <div style={{ marginTop: 12 }}>
+            {templates.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No recurring payments yet. Add a standing order or direct debit, then post it each month in one tap.</div>}
+            {templates.map(t => {
+              const acct = book.accounts.get(t.account);
+              const postedThisMonth = F.importedKeys(book).has(F.templateImportKey(t.id, thisMonth));
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>{t.name || '(unnamed)'}<span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {(acct && acct.name) || t.account} · day {t.dayOfMonth || 1}</span></div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{t.dir === 'in' ? '+' : '−'}{booksFmt(t.amount, book)} each month</div>
+                  </div>
+                  <button onClick={() => setTplEditing({ id: t.id, name: t.name, account: t.account, fund: t.fund, dir: t.dir, amount: t.amount, dayOfMonth: t.dayOfMonth })} title="Edit this recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                  <button onClick={() => postTemplate(t)} disabled={postedThisMonth || bookErrors.length > 0} title={postedThisMonth ? 'Already posted this month' : 'Post this month’s entry to the ledger'} style={{ border: 'none', background: postedThisMonth ? 'var(--line)' : 'var(--clay)', color: postedThisMonth ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: postedThisMonth ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12 }}>{postedThisMonth ? 'Posted this month' : 'Post this month'}</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>}
+
+      {/* ── REPORTS tab ── */}
+      {tab === 'reports' && <div style={{ ...bkCard, marginBottom: 16 }}>
+        {(() => {
           const m = rptModel;
           const chip = (active, onClick, label, key) => (
             <button key={key} onClick={onClick} style={{ padding: '6px 11px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5,
@@ -2582,11 +2627,10 @@ function DashFinanceBook() {
           </div>
           );
         })()}
-      </div>
+      </div>}
 
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <button onClick={() => setManaging(r => !r)} title="Show or hide your chart of accounts and funds" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{managing ? '▾' : '▸'} Accounts &amp; funds</button>
-        {managing && (
+      {/* ── ACCOUNTS & FUNDS tab ── */}
+      {tab === 'accounts' && <div style={{ ...bkCard, marginBottom: 16 }}>
           <div style={{ marginTop: 14 }}>
             {/* ── Funds ── */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '2px 0 8px' }}>
@@ -2652,42 +2696,18 @@ function DashFinanceBook() {
               );
             })() : null}
           </div>
-        )}
-      </div>
+      </div>}
 
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setRecurringOpen(r => !r)} title="Show or hide standing orders and other repeating payments" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{recurringOpen ? '▾' : '▸'} Recurring payments</button>
-          {recurringOpen && <button onClick={() => setTplEditing({})} title="Create a new recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add recurring</button>}
+      {/* ── DONORS tab: two sub-tabs — Donors (records) · Giving record (giving-by-member + Gift Aid) ── */}
+      {tab === 'donors' && <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
+          {tabBtn(donorTab === 'donors', () => setDonorTab('donors'), 'Donors', 'd')}
+          {tabBtn(donorTab === 'giving', () => setDonorTab('giving'), 'Giving record', 'g')}
         </div>
-        {recurringOpen && (
-          <div style={{ marginTop: 12 }}>
-            {templates.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No recurring payments yet. Add a standing order or direct debit, then post it each month in one tap.</div>}
-            {templates.map(t => {
-              const acct = book.accounts.get(t.account);
-              const postedThisMonth = F.importedKeys(book).has(F.templateImportKey(t.id, thisMonth));
-              return (
-                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>{t.name || '(unnamed)'}<span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {(acct && acct.name) || t.account} · day {t.dayOfMonth || 1}</span></div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{t.dir === 'in' ? '+' : '−'}{booksFmt(t.amount, book)} each month</div>
-                  </div>
-                  <button onClick={() => setTplEditing({ id: t.id, name: t.name, account: t.account, fund: t.fund, dir: t.dir, amount: t.amount, dayOfMonth: t.dayOfMonth })} title="Edit this recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
-                  <button onClick={() => postTemplate(t)} disabled={postedThisMonth || bookErrors.length > 0} title={postedThisMonth ? 'Already posted this month' : 'Post this month’s entry to the ledger'} style={{ border: 'none', background: postedThisMonth ? 'var(--line)' : 'var(--clay)', color: postedThisMonth ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: postedThisMonth ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12 }}>{postedThisMonth ? 'Posted this month' : 'Post this month'}</button>
-                </div>
-              );
-            })}
+        {donorTab === 'donors' && <div style={{ marginTop: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add donor</button>
           </div>
-        )}
-      </div>
-
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setDonorsOpen(r => !r)} title="Show or hide your donor records and giving by member" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{donorsOpen ? '▾' : '▸'} Donors &amp; giving by member</button>
-          {donorsOpen && <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add donor</button>}
-        </div>
-        {donorsOpen && (
-          <div style={{ marginTop: 12 }}>
             {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member and (if your church uses it) Gift Aid.</div>}
             {donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
@@ -2699,20 +2719,30 @@ function DashFinanceBook() {
                 <button onClick={() => setDonorEditing({ id: d.id, name: d.name, eligible: d.eligible, address: d.address, postcode: d.postcode, giftAidDeclaredAt: d.giftAidDeclaredAt })} title="Edit this donor" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
               </div>
             ))}
+        </div>}
+        {donorTab === 'giving' && <div style={{ marginTop: 4 }}>
             <BooksGivingByMember book={book} F={F} donors={donorMap} />
-          </div>
-        )}
-      </div>
+      <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
+        // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
+        const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+        const sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
+        const div = Math.pow(10, book.decimals || 2);
+        const money = m => (m / div).toFixed(book.decimals || 2);
+        const rows = [['Title', 'First name', 'Last name', 'House', 'Postcode', 'Donated (' + sym + ')', 'Gift Aid (' + sym + ')'],
+          ...claim.rows.map(r => [r.title, r.firstName || r.name, r.lastName, r.house, r.postcode, money(r.donated), money(r.giftAid)]),
+          ['', '', '', '', 'TOTAL', money(claim.totalDonated), money(claim.totalGiftAid)]];
+        booksDownload('gift-aid-claim-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
+      }} />
+        </div>}
+      </div>}
 
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setInvoicesOpen(r => !r)} title="Show or hide invoices and customers" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{invoicesOpen ? '▾' : '▸'} Invoices</button>
-          {invoicesOpen && <div style={{ display: 'flex', gap: 8 }}>
+      {/* ── INVOICES tab ── */}
+      {tab === 'invoices' && <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginBottom: 12 }}>
             <button onClick={() => setContactEditing({})} title="Add a customer / contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add contact</button>
             <button onClick={() => setInvEditing({})} disabled={bookErrors.length > 0} title="Create and issue an invoice" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>+ New invoice</button>
-          </div>}
         </div>
-        {invoicesOpen && (() => {
+        {(() => {
           const today = booksTodayISO();
           const badge = (status) => {
             const tone = status === 'paid' ? 'var(--sage, #4f7a5e)' : status === 'overdue' ? 'var(--clay-deep, #b4462f)' : 'var(--ink-3)';
@@ -2750,14 +2780,14 @@ function DashFinanceBook() {
           </div>
           );
         })()}
-      </div>
+      </div>}
 
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setBillsOpen(r => !r)} title="Show or hide bills you owe (accounts payable)" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{billsOpen ? '▾' : '▸'} Bills</button>
-          {billsOpen && <button onClick={() => setBillEditing({})} disabled={bookErrors.length > 0} title="Record a bill you have received (accounts payable)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>+ New bill</button>}
+      {/* ── BILLS tab ── */}
+      {tab === 'bills' && <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <button onClick={() => setBillEditing({})} disabled={bookErrors.length > 0} title="Record a bill you have received (accounts payable)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>+ New bill</button>
         </div>
-        {billsOpen && (() => {
+        {(() => {
           const today = booksTodayISO();
           const me = ((S && S.pubkey) || '').toLowerCase();   // this console's signing pubkey — who "I" am, for the self-approval block
           const badge = (status) => {
@@ -2791,32 +2821,18 @@ function DashFinanceBook() {
           </div>
           );
         })()}
-      </div>
+      </div>}
 
-      <div style={{ ...bkCard, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => setBudgetOpen(r => !r)} title="Show or hide your annual budget and how spending compares to it" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{budgetOpen ? '▾' : '▸'} Budget</button>
-          {budgetOpen && <button onClick={() => setBudgetEditing({ id: budgetForFy && budgetForFy.id, year: fyYear, lines: (budgetForFy && budgetForFy.lines) || [] })} title="Set or change this year's budget" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit budget</button>}
+      {/* ── BUDGET tab ── */}
+      {tab === 'budget' && <div style={{ ...bkCard, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <button onClick={() => setBudgetEditing({ id: budgetForFy && budgetForFy.id, year: fyYear, lines: (budgetForFy && budgetForFy.lines) || [] })} title="Set or change this year's budget" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit budget</button>
         </div>
-        {budgetOpen && (
           <div style={{ marginTop: 12 }}>
             <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>Year to date {fyYear} — a plan for information only; it never posts to your ledger.</div>
             <BooksBudgetReport book={book} F={F} budget={budgetForFy} from={fyStart} to={booksTodayISO()} />
           </div>
-        )}
-      </div>
-
-      <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
-        // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
-        const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
-        const sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
-        const div = Math.pow(10, book.decimals || 2);
-        const money = m => (m / div).toFixed(book.decimals || 2);
-        const rows = [['Title', 'First name', 'Last name', 'House', 'Postcode', 'Donated (' + sym + ')', 'Gift Aid (' + sym + ')'],
-          ...claim.rows.map(r => [r.title, r.firstName || r.name, r.lastName, r.house, r.postcode, money(r.donated), money(r.giftAid)]),
-          ['', '', '', '', 'TOTAL', money(claim.totalDonated), money(claim.totalGiftAid)]];
-        booksDownload('gift-aid-claim-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
-      }} />
+      </div>}
 
       <div style={{ border: '1px dashed var(--line)', borderRadius: 14, padding: 16, color: 'var(--ink-3)', fontSize: 13.5, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <Icon name="gift" size={17} color="var(--clay)" />
