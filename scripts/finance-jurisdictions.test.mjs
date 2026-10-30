@@ -53,9 +53,12 @@ test('an UNKNOWN explicit jurisdiction falls through (never a hard id), honourin
 });
 
 // ── what each pack drives ───────────────────────────────────────────────────────────────────────────────
-test('currencyDefaults: UK and None both seed GBP/2 (the shipped packs; US→USD is designed only)', () => {
+test('currencyDefaults: UK and None both seed GBP/2, but UK starts the fiscal year on 6 April (owner decision)', () => {
   assert.deepEqual(currencyDefaults('None'), { base: 'GBP', decimals: 2, fiscalYearStart: '01-01' }, 'None is not the silent-£ default');
-  assert.deepEqual(currencyDefaults('UK'), { base: 'GBP', decimals: 2, fiscalYearStart: '01-01' }, 'UK currency default drifted from the pilot book');
+  // UK: same GBP/2 as None, but the fiscal year now defaults to the UK tax-year start (6 April), not 1 January.
+  assert.deepEqual(currencyDefaults('UK'), { base: 'GBP', decimals: 2, fiscalYearStart: '04-06' }, 'UK currency default is not the 6-April UK tax year');
+  assert.equal(currencyDefaults('UK').fiscalYearStart, '04-06', 'UK fiscalYearStart must be 04-06 (MM-DD)');
+  assert.notEqual(currencyDefaults('UK').fiscalYearStart, currencyDefaults('None').fiscalYearStart, 'UK and None must now seed DIFFERENT fiscal-year starts');
   // an unknown id degrades to the neutral default, never throws
   assert.deepEqual(currencyDefaults('ZZ'), currencyDefaults('None'), 'an unknown id did not degrade to the neutral currency default');
 });

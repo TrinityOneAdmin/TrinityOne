@@ -1465,8 +1465,8 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
     UK: {
       id: "UK",
       label: "United Kingdom",
-      currency: { base: "GBP", decimals: 2, fiscalYearStart: "01-01" },
-      // see UK fiscal-year note above
+      currency: { base: "GBP", decimals: 2, fiscalYearStart: "04-06" },
+      // UK tax-year start (owner decision 2026-10-30); see note above
       donor: {
         fields: ["title", "firstName", "lastName", "name", "house", "address", "postcode", "eligible", "giftAidDeclaredAt"],
         labels: {
