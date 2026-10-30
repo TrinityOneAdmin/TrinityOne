@@ -1716,7 +1716,7 @@ const chartEmpty = msg => <div style={{ color: 'var(--ink-3)', fontSize: 13.5, p
 
 // VIEW 1 — year-end projection from the YTD run rate. YTD vs projected grouped bars for income / spending /
 // surplus, with an honest caption (and a low-confidence caveat early in the year).
-function BooksProjectionChart({ book, proj }) {
+function BooksProjectionChart({ book, proj, height = 300 }) {
   if (!proj) return chartEmpty('No projection yet.');
   const groups = [
     { key: 'income', label: 'Income', ytd: proj.ytd.income, proj: proj.projected.income, color: SERIES_IN },
@@ -1725,7 +1725,7 @@ function BooksProjectionChart({ book, proj }) {
   ];
   const vals = groups.flatMap(g => [g.ytd, g.proj]);
   const hi = Math.max(0, ...vals), lo = Math.min(0, ...vals);
-  const W = 640, H = 300, L = 8, R = 12, T = 34, B = 42, bot = H - B, zero = chartYToPx(0, lo, hi, T, bot);
+  const W = 640, H = height, L = 8, R = 12, T = 34, B = 42, bot = H - B, zero = chartYToPx(0, lo, hi, T, bot);
   const gw = (W - L - R) / groups.length, bw = Math.min(46, gw / 3);
   return (
     <div>
@@ -1761,11 +1761,11 @@ function BooksProjectionChart({ book, proj }) {
 
 // VIEW 2 — monthly income/spending trend. Two polylines (income solid sage, spending dashed clay) over the
 // full fiscal frame (empty future months show the shape of the year).
-function BooksMonthlyTrendChart({ book, series }) {
+function BooksMonthlyTrendChart({ book, series, height = 300 }) {
   if (!series || !series.length) return chartEmpty('No activity to chart yet.');
   const vals = series.flatMap(r => [r.income, r.expenditure]);
   const hi = Math.max(0, ...vals), lo = Math.min(0, ...vals);
-  const W = 640, H = 300, L = 48, R = 14, T = 16, B = 34, bot = H - B;
+  const W = 640, H = height, L = 48, R = 14, T = 16, B = 34, bot = H - B;
   const n = series.length, x = i => L + (n === 1 ? (W - L - R) / 2 : i * (W - L - R) / (n - 1));
   const line = key => series.map((r, i) => `${x(i)},${chartYToPx(r[key], lo, hi, T, bot)}`).join(' ');
   const ticks = tickIdx(n);
@@ -1788,11 +1788,11 @@ function BooksMonthlyTrendChart({ book, series }) {
 
 // VIEW 3 — budget vs actual (reuses the Phase-7 budgetVsActual rows). Horizontal paired bars per category;
 // an over-budget expense row is drawn in clay-deep with an "over by" label (mirrors the Budget-tab badge).
-function BooksBudgetChart({ book, rows }) {
+function BooksBudgetChart({ book, rows, rowHeight = 34 }) {
   const data = (rows || []).map(r => ({ ...r, name: (book.accounts.get(r.account) || {}).name || r.account, fundName: r.fund ? ((book.funds.get(r.fund) || {}).name || r.fund) : '' }));
   if (!data.length) return chartEmpty('No budget set for this period yet — set one on the Budget tab to compare.');
   const max = Math.max(1, ...data.flatMap(r => [r.budget, r.actual]));
-  const W = 640, rowH = 34, H = data.length * rowH + 20, L = 150, R = 70, barMax = W - L - R;
+  const W = 640, rowH = rowHeight, H = data.length * rowH + 20, L = 150, R = 70, barMax = W - L - R;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Budget versus actual by category">
       {data.map((r, i) => {
@@ -1814,11 +1814,11 @@ function BooksBudgetChart({ book, rows }) {
 
 // VIEW 4 — fund balances over time. One polyline per fund across the month-end series; each fund is named in
 // the legend AND labelled at its right-hand end, so more funds than palette colours is never ambiguous.
-function BooksFundBalanceChart({ book, data }) {
+function BooksFundBalanceChart({ book, data, height = 300 }) {
   if (!data || !data.months.length || !data.funds.length) return chartEmpty('No fund history to chart yet.');
   const all = data.funds.flatMap(f => f.balances);
   const hi = Math.max(0, ...all), lo = Math.min(0, ...all);
-  const W = 640, H = 300, L = 54, R = 70, T = 16, B = 34, bot = H - B;
+  const W = 640, H = height, L = 54, R = 70, T = 16, B = 34, bot = H - B;
   const n = data.months.length, x = i => L + (n === 1 ? (W - L - R) / 2 : i * (W - L - R) / (n - 1));
   const ticks = tickIdx(n);
   const grid = [hi, (hi + lo) / 2, lo];
@@ -1965,7 +1965,6 @@ function DashFinanceBook() {
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
   const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors|insights (default Transactions)
   const [donorTab, setDonorTab] = React.useState('donors'); // Donors tab sub-tab: 'donors' (records) | 'giving' (giving-by-member + Gift Aid)
-  const [insightView, setInsightView] = React.useState('projection'); // Insights tab sub-view: projection|trend|budget|funds
   const [rptPreset, setRptPreset] = React.useState('pl');    // which aggregate report the Reports panel shows
   const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y | custom
   const [rptCFrom, setRptCFrom] = React.useState(() => new Date().getFullYear() + '-01-01'); // Custom range start (ISO); calendar-year default, user edits it
@@ -3054,10 +3053,12 @@ function DashFinanceBook() {
           </div>
       </div>}
 
-      {/* ── INSIGHTS tab: hand-built inline-SVG charts + a year-end projection, one sub-view at a time. The pure
-          projections (F.yearEndProjection / monthlyTotals / monthlyFundBalances) all take the INJECTED local day
-          and the fiscal frame, so nothing here reads a raw clock. Trend + fund charts use the FULL fiscal year
-          (fyr.from → fyr.to) so empty future months show the shape of the year. ── */}
+      {/* ── INSIGHTS tab: all four hand-built inline-SVG charts together on ONE card, in a responsive 2×2 grid
+          (two columns on a wide screen, a single stacked column at phone width — pure CSS auto-fit/minmax, no
+          JS and no deps). Each chart is COMPACT (a shorter SVG) with a small heading above it so the four read
+          as distinct. The pure projections (F.yearEndProjection / monthlyTotals / monthlyFundBalances) all take
+          the INJECTED local day and the FULL fiscal frame (fyr.from → fyr.to), so nothing here reads a raw
+          clock and empty future months still show the shape of the year. ── */}
       {tab === 'insights' && (() => {
         const today = booksTodayISO();
         const fyr = F.fiscalYearRange(today, book.fiscalYearStart || '01-01');
@@ -3065,18 +3066,16 @@ function DashFinanceBook() {
         const monthly = F.monthlyTotals(book, { from: fyr.from, to: fyr.to });
         const fundSeries = F.monthlyFundBalances(book, { from: fyr.from, to: fyr.to });
         const budgetRows = F.budgetVsActual(book, budgetForFy, { from: fyStart, to: today });
+        const cellHd = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 };
+        const cell = (heading, chart) => <div style={{ minWidth: 0 }}><div style={cellHd}>{heading}</div>{chart}</div>;
         return (
           <div style={{ ...bkCard, marginBottom: 16 }}>
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
-              {tabBtn(insightView === 'projection', () => setInsightView('projection'), 'Year-end projection', 'ip')}
-              {tabBtn(insightView === 'trend', () => setInsightView('trend'), 'Monthly trend', 'it')}
-              {tabBtn(insightView === 'budget', () => setInsightView('budget'), 'Budget vs actual', 'ib')}
-              {tabBtn(insightView === 'funds', () => setInsightView('funds'), 'Fund balances', 'if')}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
+              {cell('Year-end projection', <BooksProjectionChart book={book} proj={proj} height={210} />)}
+              {cell('Monthly trend', <BooksMonthlyTrendChart book={book} series={monthly} height={190} />)}
+              {cell('Budget vs actual', <BooksBudgetChart book={book} rows={budgetRows} rowHeight={28} />)}
+              {cell('Fund balances', <BooksFundBalanceChart book={book} data={fundSeries} height={190} />)}
             </div>
-            {insightView === 'projection' && <BooksProjectionChart book={book} proj={proj} />}
-            {insightView === 'trend' && <BooksMonthlyTrendChart book={book} series={monthly} />}
-            {insightView === 'budget' && <BooksBudgetChart book={book} rows={budgetRows} />}
-            {insightView === 'funds' && <BooksFundBalanceChart book={book} data={fundSeries} />}
           </div>
         );
       })()}
