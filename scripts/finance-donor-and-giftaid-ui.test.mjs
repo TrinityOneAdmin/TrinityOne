@@ -201,6 +201,27 @@ test('turning Tax tools ON reveals the Region picker — REAL regions only (UK, 
   assert.ok(optVals.includes('UK'), 'the Region picker does not offer the UK region');
 });
 
+// FLICKER FIX — the Region select must show the new choice IMMEDIATELY (optimistic draft), before
+// publishProfile round-trips back into church.features. With the old controlled-only select (value={jxValue})
+// the value snaps back to the published region until the profile echoes — the flicker the owner reported.
+// Here the church prop does NOT change after onChange (publishProfile not echoed), so a passing value proves
+// the draft, not the prop.
+test('FLICKER FIX — the Region select reflects the new choice on the next render, before the profile echoes', async () => {
+  const regions = listTaxRegions().map(o => o.id);
+  const other = regions.find((id) => id !== 'UK');
+  assert.ok(other, 're-anchor: need at least two tax regions to test switching between them');
+  const s = await featuresPanel({ features: { taxTools: true, jurisdiction: 'UK' } });
+  const before = regionSelect(s.draw());
+  assert.equal(before.props.value, 'UK', 're-anchor: the select did not start on UK');
+  before.props.onChange({ target: { value: other } });   // church prop (features) stays UK — no round-trip yet
+  const after = regionSelect(s.draw());
+  assert.equal(after.props.value, other,
+    'the Region select snapped back to the published region instead of showing the new choice — the flicker: ' +
+    'the optimistic draft (jxShown) must win until the profile catches up. Shown ' + after.props.value + ', chose ' + other);
+  // and the choice was still published (optimism does not replace the write)
+  assert.equal(s.published[0] && s.published[0].features.jurisdiction, other, 'choosing a region optimistically did not also publish it');
+});
+
 test('selecting a region writes jurisdiction + taxTools:true + the synced giftAid boolean', async () => {
   const s = await featuresPanel({ features: { taxTools: true } });
   regionSelect(s.draw()).props.onChange({ target: { value: 'UK' } });
