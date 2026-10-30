@@ -655,7 +655,7 @@ var FinanceLedger = (() => {
   ];
   var SYM = { GBP: "\xA3", USD: "$", EUR: "\u20AC", sats: "\u26A1" };
   function fmtMoney(minor, currency = "GBP", decimals = 2) {
-    const sym = SYM[currency] || "";
+    const sym = SYM[currency] || currency;
     const s = (minor / Math.pow(10, decimals)).toLocaleString("en-GB", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     return currency === "sats" ? s + " " + sym : sym + s;
   }

@@ -157,7 +157,9 @@ function booksRandId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
 }
 function booksFmt(minor, book) {
-  const dec = book.decimals || 2, sym = CCY_SYM[book.baseCurrency] || '';
+  // Unknown base currency → show its CODE (mirrors fmtMoney in src/finance-statement.mjs). `|| ''` used to
+  // drop the prefix, so a currency outside CCY_SYM printed as a bare number with no symbol or code.
+  const dec = book.decimals || 2, sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
   const s = (minor / Math.pow(10, dec)).toLocaleString('en-GB', { minimumFractionDigits: dec, maximumFractionDigits: dec });
   return book.baseCurrency === 'sats' ? (s + ' ' + sym) : (sym + s);
 }
@@ -207,6 +209,9 @@ const bkLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSp
 const bkCard = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 18 };
 const ACCT_TYPE_LABEL = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
 const ACCT_TYPES_ORDER = ['asset', 'liability', 'equity', 'income', 'expense'];
+// Month names for the financial-year-start picker. The stored value stays 'MM-DD' (day pinned to 01), as
+// createBook (src/finance-ledger.mjs) and the reports period code (fyStart / fiscalYearRange) read it.
+const FY_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const FUND_KIND_LABEL = { general: 'General', designated: 'Designated', restricted: 'Restricted' };
 // Phase 4a aggregate report presets for the Reports panel. Each maps to a set of buildStatement section keys
 // (the new keys — givingFund/fundMovements/receipts — are rendered by statementText/Html/fsBuildStatementPdf).
@@ -1981,6 +1986,8 @@ function DashFinanceBook() {
   const [rptFlash, setRptFlash] = React.useState('');         // what an Export reported, or why it did not
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
+  const [ccyAdding, setCcyAdding] = React.useState(false);   // Book settings: "Add another currency…" revealed the custom-code input
+  const [ccyCode, setCcyCode] = React.useState('');          // the custom currency code being typed (code-only, no symbol)
   const [accEditing, setAccEditing] = React.useState(null);  // account modal: null closed · {} add · {id,…} edit
   const [fundEditing, setFundEditing] = React.useState(null);// fund modal: null closed · {} add · {id,…} edit
   const [moving, setMoving] = React.useState(false);         // "Move between funds" (fund transfer) modal
@@ -2305,6 +2312,29 @@ function DashFinanceBook() {
   const setMultiCurrencyOn = async (on) => {
     const b = bookRef.current;
     b.multiCurrency = !!on;
+    if (!useRelay) { booksSave(b); bump(); return true; }
+    const body = { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart, ...(b.multiCurrency ? { multiCurrency: true } : {}) };
+    const ok = await S.encPublish('finance/settings', body);
+    bump();
+    return !(ok === false || ok == null);
+  };
+  // BOOK SETTINGS — base currency · decimals · financial-year start. ONE helper (not three siblings), modelled
+  // on setMultiCurrencyOn above: it republishes the WHOLE REPLACEABLE finance/settings doc with the identical
+  // field list + the same multiCurrency omit-when-off rule, so NO new relay doc kind and no scope change. Wave
+  // #3 (jurisdiction registry) sets a default by calling this on an EMPTY book — it must not touch the doc body
+  // itself. baseCurrency + decimals are LOCKED once the book has a journal entry: amounts are INTEGER minor
+  // units of the base currency, so changing either silently reinterprets every stored figure (changing the
+  // currency re-labels £100→$100; changing decimals re-scales £100.00↔£10,000). The lock is keyed on
+  // book.journal.length — NOT _seq, which advances even on a publish the relay refused. fiscalYearStart only
+  // moves report boundaries, never reinterprets a stored amount, so it is always allowed. The belt-and-braces
+  // guard here backs up the disabled controls in the Book-settings card; a null publish is NOT success.
+  const saveBookSettings = async (patch) => {   // patch: { baseCurrency?, decimals?, fiscalYearStart? }
+    const b = bookRef.current;
+    const p = { ...patch };
+    if (b.journal.length > 0) { delete p.baseCurrency; delete p.decimals; }
+    if (p.baseCurrency != null) b.baseCurrency = p.baseCurrency;
+    if (p.decimals != null) b.decimals = p.decimals;
+    if (p.fiscalYearStart != null) b.fiscalYearStart = p.fiscalYearStart;
     if (!useRelay) { booksSave(b); bump(); return true; }
     const body = { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart, ...(b.multiCurrency ? { multiCurrency: true } : {}) };
     const ok = await S.encPublish('finance/settings', body);
@@ -2890,6 +2920,55 @@ function DashFinanceBook() {
       {/* ── ACCOUNTS & FUNDS tab ── */}
       {tab === 'accounts' && <div style={{ ...bkCard, marginBottom: 16 }}>
           <div style={{ marginTop: 14 }}>
+            {/* ── Book settings (currency · decimals · financial-year start) ──────────────────────────────
+                OPTIONAL and post-pilot: a church sees this only by opening Accounts & funds. The pilot default
+                (silent-£ GBP, DOMAIN) is untouched and nothing prompts at first open. Currency + decimal places
+                LOCK once the book has a journal entry — see saveBookSettings for why. The financial-year start
+                never reinterprets a stored amount, so it stays editable. Writes finance/settings via
+                saveBookSettings — the SAME replaceable doc + path as the Currencies toggle below, no new kind. ── */}
+            <div style={{ fontWeight: 700, fontSize: 14, margin: '2px 0 8px' }}>Book settings</div>
+            {(() => {
+              const locked = book.journal.length > 0;
+              const builtin = ['GBP', 'USD', 'EUR', 'sats'];
+              const known = builtin.includes(book.baseCurrency) ? builtin : [...builtin, book.baseCurrency];
+              return (
+                <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <label style={bkLbl}>Currency</label>
+                      <select aria-label="Base currency" disabled={locked} value={ccyAdding ? '__add__' : book.baseCurrency}
+                        onChange={e => { const v = e.target.value; if (v === '__add__') { setCcyAdding(true); } else { setCcyAdding(false); saveBookSettings({ baseCurrency: v }); } }}
+                        style={{ ...bkFld, opacity: locked ? 0.5 : 1 }}>
+                        {known.map(c => <option key={c} value={c}>{(CCY_SYM[c] ? CCY_SYM[c] + ' ' : '') + c}</option>)}
+                        <option value="__add__">Add another currency…</option>
+                      </select>
+                      {ccyAdding && !locked ? (
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <input aria-label="New currency code" value={ccyCode} onChange={e => setCcyCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 8))} placeholder="e.g. NGN" maxLength={8} style={{ ...bkFld, flex: 1 }} />
+                          <button onClick={() => { const c = ccyCode.trim(); if (c.length >= 3) { saveBookSettings({ baseCurrency: c }); setCcyAdding(false); setCcyCode(''); } }} disabled={ccyCode.trim().length < 3} title="Use this currency code" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 14px', cursor: ccyCode.trim().length < 3 ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, color: 'var(--ink)', opacity: ccyCode.trim().length < 3 ? 0.5 : 1 }}>Set</button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div style={{ width: 120 }}>
+                      <label style={bkLbl}>Decimal places</label>
+                      <select aria-label="Decimal places" disabled={locked} value={book.decimals ?? 2} onChange={e => saveBookSettings({ decimals: parseInt(e.target.value, 10) })} style={{ ...bkFld, opacity: locked ? 0.5 : 1 }}>
+                        {[0, 2, 3].map(d => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <label style={bkLbl}>Financial year starts</label>
+                      <select aria-label="Financial year start month" value={(book.fiscalYearStart || '01-01').slice(0, 2)} onChange={e => saveBookSettings({ fiscalYearStart: e.target.value + '-01' })} style={bkFld}>
+                        {FY_MONTHS.map((m, i) => <option key={m} value={String(i + 1).padStart(2, '0')}>{m}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  {locked
+                    ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>🔒 Currency and decimal places are locked because this book already has transactions — changing them would reinterpret every figure already recorded. To use a different currency, start a fresh book. You can still change when the financial year starts.</div>
+                    : <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>Set these before you record anything. Once the book has transactions, the currency and decimal places lock — they would reinterpret every stored figure. The financial-year start stays changeable.</div>}
+                </div>
+              );
+            })()}
+
             {/* ── Funds ── */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '2px 0 8px' }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Funds</div>

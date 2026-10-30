@@ -21,7 +21,10 @@ export const STATEMENT_SECTIONS = [
 
 const SYM = { GBP: '£', USD: '$', EUR: '€', sats: '⚡' };
 export function fmtMoney(minor, currency = 'GBP', decimals = 2) {
-  const sym = SYM[currency] || '';
+  // Unknown currency → show its CODE, never a bare number. A church may set a base currency outside the
+  // built-in four in SYM above; `|| ''` used to drop the prefix entirely, so e.g. 1000.00 printed with no
+  // symbol and no code — unreadable and ambiguous. Fall back to the code (code-only; no custom symbol).
+  const sym = SYM[currency] || currency;
   const s = (minor / Math.pow(10, decimals)).toLocaleString('en-GB', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   return currency === 'sats' ? (s + ' ' + sym) : (sym + s);
 }
