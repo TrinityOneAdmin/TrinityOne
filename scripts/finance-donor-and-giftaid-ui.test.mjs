@@ -118,17 +118,22 @@ test('T3 — saving with the UK fields hidden PRESERVES the donor’s prior elig
   assert.equal(saved.giftAidDeclaredAt, '2026-01-01', 'the declaration date was dropped on save when the UK fields were hidden');
 });
 
-// ── DashFeaturesPanel: the owner-only Region (jurisdiction) selector, and that it DEFAULTS to None ───────
-// Wave 3 replaced the standalone "Gift Aid (UK)" opt-in toggle with ONE selector. These four cases replace the
-// four Gift-Aid-toggle cases 1:1 (the control changed by owner decision; net test count is unchanged). The
-// selector reads the registry via window.FinanceLedger — provided here from the real src module so the
-// resolve/list logic under test is the shipped one. featOwner is true because Steward.actingChurch is null.
+// ── DashFeaturesPanel: the owner-only Tax tools SUBCARD — its switch, the nested Region picker, the scripture
+// moment, and nation-neutral-by-default ─────────────────────────────────────────────────────────────────
+// Owner change (2026-10-30): the standalone Region selector is now nested under Finance, behind its own
+// owner-only "Tax tools" switch (church.features.taxTools). Switch OFF → no Region picker; ON → the Region
+// <select> (real regions only, no None). Flipping OFF→ON pops a 1 Samuel 8:10–18 scripture moment. The panel
+// reads the registry via window.FinanceLedger (real src module) and uses window.useStewDialog (stubbed).
 const furniture = (React) => ({
   Panel: function Panel({ title, children }) { return React.createElement('section', { 'data-panel': title }, children); },
   SkConfirm: function SkConfirm(props) { return React.createElement('div', { 'data-confirm': props.title }); },
   Icon: function Icon() { return null; },
   DashMealsPanel: function DashMealsPanel() { return null; },
   DashGivingPanel: function DashGivingPanel() { return null; },
+  // The scripture moment is its OWN top-level component (extracted so the panel carries no role="dialog"). The
+  // DashFeaturesPanel slice references it by name, so supply a marker stub; its PRESENCE is what the OFF→ON
+  // test asserts. The modal's CONTENT (the 1 Samuel 8 text) is proven by lifting TaxScriptureModal itself below.
+  TaxScriptureModal: function TaxScriptureModal(props) { return React.createElement('div', { 'data-tax-scripture': true }); },
   stewCapState: () => ({ allowed: true, owner: true, why: '' }),
   useStewKeyRecipients: () => ({ approved: () => [] }),
 });
@@ -140,57 +145,122 @@ async function featuresPanel(church, { actingChurch = null } = {}) {
     window: {
       useStewardGroups: () => [], useStewardMembers: () => [{ pubkey: 'm1' }], useStewardAdmitted: () => [],
       useStewardJoinPolicy: () => false,
-      FinanceLedger: { listJurisdictions, resolveJurisdiction },   // the real registry drives the picker
+      useStewDialog: () => ({ current: null }),                    // scripture modal registers its Escape/back here
+      FinanceLedger: { listJurisdictions, resolveJurisdiction },   // the real registry drives the picker + gate
       Steward: { actingChurch, publishProfile: (p) => published.push(p), setJoinPolicy() {}, setAdmitted() {} },
     },
     ...furniture(React),
   });
-  return { draw: () => draw(Comp, { church, show: 'features' }), published };
+  return { React, draw: () => draw(Comp, { church, show: 'features' }), published };
 }
-// the Region selector: the one <select> on the panel (aria-label "Region / jurisdiction")
+// the Tax tools on/off switch (role=switch, aria-label "Toggle Tax tools")
+const taxSwitch = (tree) => find(tree, n => n.props && n.props.role === 'switch' && /Toggle Tax tools/.test(n.props['aria-label'] || ''))[0];
+// the Region selector inside the subcard (aria-label "Region / jurisdiction")
 const regionSelect = (tree) => find(tree, n => n.type === 'select' && (n.props && /Region/.test(n.props['aria-label'] || '')))[0];
+// the scripture moment — now its OWN component (extracted so the panel carries no role="dialog"); the panel
+// renders it as a <TaxScriptureModal> node, which the furniture stub above marks. Assert PRESENCE here; the
+// modal's text is proven by the direct-lift test at the end of the file.
+const scriptureDialog = (tree) => find(tree, n => typeof n.type === 'function' && n.type.name === 'TaxScriptureModal')[0];
 
-test('the Region (jurisdiction) selector is on the Congregation features page', async () => {
+test('the Tax tools switch is on the Congregation features page (owner, Finance on), region picker hidden by default', async () => {
   const s = await featuresPanel({ features: {} });
-  const sel = regionSelect(s.draw());
-  assert.ok(sel, 'the Region (jurisdiction) selector is not on Congregation features');
-  // its options come from the registry (None + UK), so a new jurisdiction is DATA, not markup
-  const optVals = find(sel, n => n.type === 'option').map(o => o.props.value).sort();
-  assert.deepEqual(optVals, ['None', 'UK'], 'the Region selector options are not the registry list (None + UK)');
+  const tree = s.draw();
+  assert.ok(taxSwitch(tree), 'the Tax tools switch is not on Congregation features');
+  assert.ok(!regionSelect(tree), 'the Region picker shows with Tax tools OFF — it must be gated behind the switch');
 });
 
-test('the Region selector DEFAULTS to None — with no features set it reads nation-neutral', async () => {
+test('Tax tools DEFAULTS OFF — with no features set the switch reads OFF and the book stays neutral', async () => {
   const s = await featuresPanel({ features: {} });                 // a brand-new church
-  const sel = regionSelect(s.draw());
-  assert.ok(sel, 're-anchor: no Region selector');
-  assert.equal(sel.props.value, 'None',
-    'the Region selector is not None by default — a UK-only scheme would be the default, violating DOMAIN ' +
-    'nation-neutrality.');
+  assert.equal(taxSwitch(s.draw()).props['aria-checked'], false,
+    'Tax tools is ON by default — a church would get tax tooling unasked, violating DOMAIN nation-neutrality.');
 });
 
-test('selecting United Kingdom publishes features.jurisdiction = UK and syncs the legacy giftAid boolean', async () => {
-  const s = await featuresPanel({ features: {} });
+test('turning Tax tools ON reveals the Region picker — REAL regions only (UK, not None)', async () => {
+  const s = await featuresPanel({ features: { taxTools: true } });  // the switch-on state
+  const tree = s.draw();
+  assert.equal(taxSwitch(tree).props['aria-checked'], true, 're-anchor: the switch does not read ON with taxTools:true');
+  const sel = regionSelect(tree);
+  assert.ok(sel, 'the Region picker is not shown with Tax tools ON');
+  const optVals = find(sel, n => n.type === 'option').map(o => o.props.value);
+  assert.ok(!optVals.includes('None'), 'the Region picker offers "None" — None is the switch being off, not a region');
+  assert.ok(optVals.includes('UK'), 'the Region picker does not offer the UK region');
+});
+
+test('selecting a region writes jurisdiction + taxTools:true + the synced giftAid boolean', async () => {
+  const s = await featuresPanel({ features: { taxTools: true } });
   regionSelect(s.draw()).props.onChange({ target: { value: 'UK' } });
   assert.equal(s.published.length, 1, 'choosing a region published nothing');
-  assert.equal(s.published[0].features.jurisdiction, 'UK',
-    'choosing United Kingdom did not write features.jurisdiction = UK — it wrote ' + JSON.stringify(s.published[0].features));
-  assert.equal(s.published[0].features.giftAid, true,
-    'choosing UK did not keep the legacy features.giftAid boolean in sync (an un-upgraded console reads the boolean)');
+  assert.equal(s.published[0].features.jurisdiction, 'UK', 'choosing UK did not write features.jurisdiction = UK — it wrote ' + JSON.stringify(s.published[0].features));
+  assert.equal(s.published[0].features.taxTools, true, 'choosing a region did not keep taxTools on');
+  assert.equal(s.published[0].features.giftAid, true, 'choosing UK did not sync the legacy giftAid boolean (an un-upgraded console reads it)');
 });
 
-test('selecting None publishes jurisdiction = None and clears the legacy giftAid boolean (override)', async () => {
-  const s = await featuresPanel({ features: { giftAid: true } });  // a legacy UK church
-  regionSelect(s.draw()).props.onChange({ target: { value: 'None' } });
-  assert.equal(s.published[0].features.jurisdiction, 'None', 'choosing None did not write features.jurisdiction = None');
-  assert.equal(s.published[0].features.giftAid, false, 'choosing None did not turn the legacy giftAid boolean off');
-});
-
-test('a legacy church with giftAid:true (no jurisdiction) reads the selector as UK (back-compat)', async () => {
+test('BACK-COMPAT: a legacy giftAid:true church (no taxTools) reads the switch ON and the region UK', async () => {
   const s = await featuresPanel({ features: { giftAid: true } });
-  assert.equal(regionSelect(s.draw()).props.value, 'UK', 'a legacy giftAid:true church did not read back as UK on the selector');
+  const tree = s.draw();
+  assert.equal(taxSwitch(tree).props['aria-checked'], true, 'a legacy giftAid:true church did not read the Tax tools switch ON');
+  const sel = regionSelect(tree);
+  assert.ok(sel, 'a legacy giftAid:true church shows no Region picker (the switch should read ON)');
+  assert.equal(sel.props.value, 'UK', 'a legacy giftAid:true church did not read the region as UK');
 });
 
-test('the Region selector is OWNER-ONLY — a delegated steward (actingChurch set) does not see it', async () => {
+test('the Tax tools subcard is OWNER-ONLY — a delegated steward (actingChurch set) does not see it', async () => {
   const s = await featuresPanel({ features: {} }, { actingChurch: 'cd'.repeat(32) });
-  assert.ok(!regionSelect(s.draw()), 'the Region selector showed to a delegate — publishProfile would silently fail under their hand');
+  const tree = s.draw();
+  assert.ok(!taxSwitch(tree), 'the Tax tools switch showed to a delegate — publishProfile would silently fail under their hand');
+  assert.ok(!regionSelect(tree), 'the Region picker showed to a delegate');
+});
+
+test('the Tax tools subcard is hidden when the Finance feature is off (features.finance === false)', async () => {
+  const s = await featuresPanel({ features: { finance: false } });
+  assert.ok(!taxSwitch(s.draw()), 'the Tax tools switch showed with Finance turned off — it must nest under Finance');
+});
+
+// ── CHANGE C: the 1 Samuel 8 scripture moment on the OFF→ON flip ────────────────────────────────────────
+// The panel pops it ONLY on OFF→ON. The modal is its own component (TaxScriptureModal); here we assert the
+// panel renders that node at the right moment. Its TEXT is proven by lifting TaxScriptureModal directly below.
+test('flipping Tax tools OFF→ON pops the scripture moment (the TaxScriptureModal component)', async () => {
+  const s = await featuresPanel({ features: {} });   // OFF
+  const tree0 = s.draw();
+  assert.ok(!scriptureDialog(tree0), 're-anchor: the scripture modal is up before the toggle');
+  taxSwitch(tree0).props.onClick({ stopPropagation() {} });   // OFF → ON
+  const tree1 = s.draw();                                      // re-render reads the new local state
+  assert.ok(scriptureDialog(tree1), 'flipping Tax tools on did not pop the TaxScriptureModal scripture moment');
+  // and the publish turned the switch on
+  assert.equal(s.published.length, 1, 'flipping the switch published nothing');
+  assert.equal(s.published[0].features.taxTools, true, 'flipping the switch on did not write features.taxTools = true');
+});
+
+test('the scripture moment does NOT appear on initial render with Tax tools already ON', async () => {
+  const s = await featuresPanel({ features: { taxTools: true } });   // already on at load
+  assert.ok(!scriptureDialog(s.draw()), 'the scripture moment fired on load, not only on the OFF→ON flip');
+});
+
+test('turning Tax tools OFF does NOT pop the scripture moment', async () => {
+  const s = await featuresPanel({ features: { taxTools: true } });   // ON
+  taxSwitch(s.draw()).props.onClick({ stopPropagation() {} });       // ON → OFF
+  assert.ok(!scriptureDialog(s.draw()), 'the scripture moment fired when turning Tax tools OFF');
+  assert.equal(s.published[0].features.taxTools, false, 'turning the switch off did not write features.taxTools = false');
+});
+
+// TaxScriptureModal ITSELF — lifted and rendered directly, so we prove the passage text, the reference label,
+// a role="dialog", and that the single "Amen" dismiss calls onClose. (Extracted from DashFeaturesPanel so the
+// panel carries no dialog; registered in every-console-dialog-mounts.test.mjs.)
+test('TaxScriptureModal renders 1 Samuel 8:10–18 (WEB), a role="dialog", and an Amen dismiss that closes', async () => {
+  const { React, draw } = miniReact();
+  let closed = 0;
+  const Modal = await loadComponent('app/stew-dashboard.jsx', 'TaxScriptureModal', 'function TaxScriptureModal(', {
+    React, window: { useStewDialog: () => ({ current: null }) },
+  });
+  const tree = draw(Modal, { onClose: () => { closed++; } });
+  const dlg = find(tree, n => n.props && n.props.role === 'dialog' && /1 Samuel 8/.test(n.props['aria-label'] || ''))[0];
+  assert.ok(dlg, 'TaxScriptureModal did not render a role="dialog" labelled 1 Samuel 8:10–18');
+  const words = texts(tree).join(' ');
+  assert.ok(/1 Samuel 8:10/.test(words), 'the modal does not carry the 1 Samuel 8:10–18 reference');
+  assert.ok(/will take your sons/.test(words), 'the modal does not carry a line of the WEB passage (1 Sam 8:11)');
+  assert.ok(/a tenth of your flocks/.test(words), 'the modal does not carry the later passage text (1 Sam 8:17)');
+  const amen = find(tree, n => n.type === 'button' && /Amen/.test(texts(n).join(' ')))[0];
+  assert.ok(amen, 'the modal has no "Amen" dismiss');
+  amen.props.onClick({ stopPropagation() {} });
+  assert.equal(closed, 1, 'the Amen dismiss did not call onClose');
 });

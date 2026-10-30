@@ -11781,6 +11781,37 @@ window.DashChatTagsPanel = DashChatTagsPanel;
 // Congregation features — the steward chooses which parts of the app members see. Published on the
 // kind-0 profile as `features:{read,community,library}`; the member app hides the disabled tabs.
 // Unset = on (so existing churches are unaffected). Today (home) + Giving are controlled separately.
+// TAX TOOLS SCRIPTURE MOMENT — a stand-alone console dialog (its own role="dialog" + useStewDialog), popped by
+// DashFeaturesPanel on the OFF→ON flip of the Tax tools switch. 1 Samuel 8:10–18 — Samuel's warning about what
+// the king/state will take — a deliberate, knowing moment about engaging the tax system. The passage is the
+// WORLD ENGLISH BIBLE (PUBLIC DOMAIN), EMBEDDED for robustness (the steward may have no Bible installed, so we
+// do not depend on window.Bible). Registered in scripts/every-console-dialog-mounts.test.mjs ({ onClose }).
+function TaxScriptureModal({ onClose }) {
+  const dlgRef = window.useStewDialog ? window.useStewDialog(onClose) : { current: null };
+  const SAMUEL_8_WEB = [
+    '10 Samuel told all Yahweh’s words to the people who asked him for a king.',
+    '11 He said, “This will be the way of the king who shall reign over you: he will take your sons, and appoint them as his servants, for his chariots and to be his horsemen; and they will run before his chariots.',
+    '12 He will appoint them to him for captains of thousands, and captains of fifties; and he will assign some to plow his ground, and to reap his harvest, and to make his instruments of war, and the instruments of his chariots.',
+    '13 He will take your daughters to be perfumers, to be cooks, and to be bakers.',
+    '14 He will take your fields, your vineyards, and your olive groves, even their best, and give them to his servants.',
+    '15 He will take a tenth of your seed, and of your vineyards, and give it to his officers, and to his servants.',
+    '16 He will take your male servants, your female servants, your best young men, and your donkeys, and assign them to his own work.',
+    '17 He will take a tenth of your flocks; and you will be his servants.',
+    '18 You will cry out in that day because of your king whom you will have chosen for yourselves; and Yahweh will not answer you in that day.”',
+  ].join('\n');
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="1 Samuel 8:10–18" tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', maxHeight: '88vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)', padding: '22px 22px 18px', outline: 'none', boxShadow: '0 12px 40px rgba(0,0,0,.3)' }}>
+        <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 13, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--clay, #b4462f)', marginBottom: 10 }}>1 Samuel 8:10–18</div>
+        <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 15.5, lineHeight: 1.62, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{SAMUEL_8_WEB}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onClose} style={{ height: 44, padding: '0 26px', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14 }}>Amen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashFeaturesPanel({ church, show = null }) {
   const f = church.features || {};
   const on = (k) => f[k] !== false;   // default enabled
@@ -11805,21 +11836,33 @@ function DashFeaturesPanel({ church, show = null }) {
   const featOwner = !(window.Steward && window.Steward.actingChurch);
   // opt-in extras (default OFF, switchable per church) — kids check-in.
   const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code']];
-  // WAVE 3 — JURISDICTION picker. SUPERSEDES the standalone "Gift Aid (UK)" toggle that used to sit in EXTRAS:
-  // one owner-only selector now chooses the region, and the region decides which tax tools the treasurer sees
-  // (UK → Gift Aid; None → nation-neutral) plus the default book currency. It is OWNER-ONLY — rendered under
-  // `featOwner` below — because publishProfile refuses a delegated steward (the same reason MODULES are owner-
-  // only); and the OWNER decided jurisdiction must be owner-gated, NOT finance-steward-writable.
-  // The picker reads/writes church.features.jurisdiction. It also keeps the LEGACY church.features.giftAid
-  // boolean IN SYNC (true iff UK) so an un-upgraded second console — which still reads the raw boolean — agrees
-  // with this one; the finance console's resolver prefers `jurisdiction` regardless, so the two can never
-  // disagree here. An existing UK church (giftAid:true, no jurisdiction) reads back as 'UK' via the resolver.
+  // TAX TOOLS — an OWNER-ONLY subcard, nested under Finance, gated behind its OWN switch
+  // (church.features.taxTools, default/undefined = OFF). It replaces the standalone Region selector: the
+  // switch is the on/off, and only when ON does the Region <select> appear (REAL regions only — 'None' is the
+  // switch being off). It is shown only when the Finance feature is on (features.finance !== false) AND to the
+  // owner (featOwner) — publishProfile refuses a delegate, so a delegate must never see a switch that silently
+  // fails. The switch keeps the LEGACY church.features.giftAid boolean in sync (true iff the active region is
+  // UK) so an un-upgraded console that still reads the raw boolean agrees; the finance console's resolver is
+  // the source of truth. An existing UK church (giftAid:true, no taxTools) reads switch-ON + UK — back-compat.
   const _FL = window.FinanceLedger;
-  const JX_OPTS = (_FL && _FL.listJurisdictions) ? _FL.listJurisdictions()
-    : [{ id: 'None', label: 'None (neutral)' }, { id: 'UK', label: 'United Kingdom' }];
+  const financeOn = f.finance !== false;   // the Finance feature (default-on); the subcard lives under it
+  // taxOn mirrors resolveJurisdiction's gate so the switch reads ON for a legacy giftAid church too.
+  const taxOn = f.taxTools === true || (f.taxTools === undefined && f.giftAid === true);
+  const JX_REGIONS = ((_FL && _FL.listJurisdictions) ? _FL.listJurisdictions()
+    : [{ id: 'None', label: 'None (neutral)' }, { id: 'UK', label: 'United Kingdom' }]).filter(o => o.id !== 'None');
   const jxValue = (_FL && _FL.resolveJurisdiction) ? _FL.resolveJurisdiction({ features: f })
-    : (f.giftAid === true ? 'UK' : 'None');
-  const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, jurisdiction: id, giftAid: id === 'UK' } }); };
+    : (taxOn ? 'UK' : 'None');
+  const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, taxTools: true, jurisdiction: id, giftAid: id === 'UK' } }); };
+  // The scripture "moment": 1 Samuel 8:10–18 pops ONLY on the OFF→ON flip of the switch (set in toggleTaxTools,
+  // never on load/render/off). State lives here; the modal itself is the top-level TaxScriptureModal component
+  // (its own role="dialog" + useStewDialog), so DashFeaturesPanel carries no dialog of its own.
+  const [taxScripture, setTaxScripture] = React.useState(false);
+  const toggleTaxTools = () => {
+    const next = !taxOn;
+    const region = next ? ((jxValue && jxValue !== 'None') ? jxValue : 'UK') : 'None';
+    window.Steward.publishProfile({ features: { ...f, taxTools: next, giftAid: region === 'UK' } });
+    if (next) setTaxScripture(true);   // OFF→ON only
+  };
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
   const allGroups = window.useStewardGroups ? window.useStewardGroups() : [];
   const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -11986,21 +12029,38 @@ function DashFeaturesPanel({ church, show = null }) {
             </button>
           </div>
         ))}
-        {/* JURISDICTION (wave 3) — OWNER ONLY (featOwner), the single selector that replaced the Gift Aid
-            toggle. A delegate cannot publish the profile this writes to, so like MODULES it is not shown to
-            them rather than failing silently under their hand. The region drives the treasurer's tax tools
-            and the default book currency. */}
-        {featOwner ? (
-          <div className="set-row" style={{ display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Region (tax tools)</div>
-              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>Sets the default currency for a new book and which tax tools your treasurer sees. United Kingdom turns on Gift Aid; None keeps the book nation-neutral.</div>
+        {/* TAX TOOLS subcard — OWNER ONLY (featOwner) and only when Finance is on (financeOn). Its own switch
+            (church.features.taxTools) gates the Region picker: OFF shows just the switch + helper line and the
+            book stays neutral; ON reveals the Region <select> (real regions only). Flipping it OFF→ON pops the
+            1 Samuel 8:10–18 scripture moment below — a deliberate, knowing moment about engaging the state. */}
+        {featOwner && financeOn ? (
+          <div style={{ borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>Tax tools</div>
+                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{taxOn ? 'On — your treasurer has the tools for your region.' : 'Off — the book stays nation-neutral.'}</div>
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); toggleTaxTools(); }} aria-label="Toggle Tax tools" role="switch" aria-checked={taxOn} title={(taxOn ? 'Turn off ' : 'Turn on ') + 'tax tools'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: taxOn ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+                <span style={{ position: 'absolute', top: 3, left: taxOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+              </button>
             </div>
-            <select aria-label="Region / jurisdiction" value={jxValue} onChange={(e) => setJurisdiction(e.target.value)} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
-              {JX_OPTS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-            </select>
+            {taxOn ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 11, paddingTop: 11, borderTop: '1px solid var(--line)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>Region</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>Sets the default currency for a new book and which tax tools your treasurer sees.</div>
+                </div>
+                <select aria-label="Region / jurisdiction" value={jxValue} onChange={(e) => setJurisdiction(e.target.value)} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
+                  {JX_REGIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                </select>
+              </div>
+            ) : null}
           </div>
         ) : null}
+        {/* SCRIPTURE MOMENT — its OWN top-level dialog component (TaxScriptureModal), so this panel carries no
+            role="dialog" of its own and the whole-console dialog-mount gate stays satisfied. Fires only via
+            toggleTaxTools on the OFF→ON flip. */}
+        {taxScripture ? <TaxScriptureModal onClose={() => setTaxScripture(false)} /> : null}
         {/* PRACTICAL CARE AND GIVING ARE ROWS HERE, not cards of their own. Both were a Panel wrapping a
             single switch, and the Features tab read as five boxes of equal weight when two of them were one
             toggle each. Practical care first: it is a live control a church turns on and uses. Giving last,
