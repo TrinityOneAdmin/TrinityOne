@@ -11861,6 +11861,12 @@ function DashFeaturesPanel({ church, show = null }) {
   const jxValue = (_FL && _FL.resolveJurisdiction) ? _FL.resolveJurisdiction({ features: f })
     : (taxOn ? 'UK' : 'None');
   const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, taxTools: true, jurisdiction: id, giftAid: id === 'UK' } }); };
+  // Some regions' receipts legally need the church's own REGISTRATION number (e.g. Canada's CRA charity number)
+  // + an authorised signatory. taxRegLabel() returns the label iff the ACTIVE region needs one, else '' (so no
+  // field shows for US/NZ/UK/IE). Captured OWNER-ONLY here (publishProfile, like the switch) and read by the
+  // finance console into the generated receipt.
+  const jxRegLabel = (_FL && _FL.taxRegLabel) ? _FL.taxRegLabel(jxValue) : '';
+  const setTaxReg = (patch) => { window.Steward.publishProfile({ features: { ...f, ...patch } }); };
   // The scripture "moment": 1 Samuel 8:10–18 pops ONLY on the OFF→ON flip of the switch (set in toggleTaxTools,
   // never on load/render/off). State lives here; the modal itself is the top-level TaxScriptureModal component
   // (its own role="dialog" + useStewDialog), so DashFeaturesPanel carries no dialog of its own.
@@ -12039,6 +12045,18 @@ function DashFeaturesPanel({ church, show = null }) {
                   <select aria-label="Region / jurisdiction" value={jxValue} onChange={(e) => setJurisdiction(e.target.value)} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
                     {JX_REGIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                   </select>
+                </div>
+              ) : null}
+              {/* Registration capture — shown ONLY when the active region's receipt needs it (jxRegLabel truthy,
+                  e.g. Canada). Owner-only (publishProfile). The finance console threads these into every receipt. */}
+              {taxOn && jxRegLabel ? (
+                <div style={{ marginTop: 11, paddingTop: 11, borderTop: '1px solid var(--line)' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>Receipt registration</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-2)', margin: '1px 0 8px' }}>Required on the official receipts your treasurer issues.</div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--ink-2)', marginBottom: 3 }}>{jxRegLabel}</label>
+                  <input aria-label={jxRegLabel} value={f.taxRegNumber || ''} onChange={(e) => setTaxReg({ taxRegNumber: e.target.value })} placeholder="e.g. 123456789RR0001" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 13, padding: '8px 10px', marginBottom: 8 }} />
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--ink-2)', marginBottom: 3 }}>Authorised signatory (name)</label>
+                  <input aria-label="Authorised signatory" value={f.taxRegSignatory || ''} onChange={(e) => setTaxReg({ taxRegSignatory: e.target.value })} placeholder="e.g. Treasurer’s name" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 13, padding: '8px 10px' }} />
                 </div>
               ) : null}
               {/* A tax tool must never present figures as authoritative — the ONE shared disclaimer (every panel

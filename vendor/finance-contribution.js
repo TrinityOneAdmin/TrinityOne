@@ -45,6 +45,26 @@ var FinanceContribution = (() => {
       // $5.00 in cents — the donation tax credit applies to gifts of $5 or more
       statement: "Donation to an approved donee organisation. No goods or services were received in return. Retain this receipt to claim your donation tax credit.",
       source: "Inland Revenue New Zealand \u2014 Tax credits for donations (ird.govt.nz)"
+    },
+    // CANADA — an OFFICIAL DONATION RECEIPT (Income Tax Regulations s.3501). Unlike US/NZ it is NOT a single annual
+    // summary: each receipt is PER DONOR and carries a UNIQUE SERIAL, the charity's CRA registration number, place +
+    // date of issue, the donor's name/address, the gift amount, the eligible amount, an authorised signature line,
+    // and the CRA name + website. The DONOR claims a non-refundable credit; the church reclaims nothing. The fixed
+    // strings here are DATA, traced to CRA's "What information must be on an official donation receipt" (2026-10-30).
+    CA: {
+      label: "Canada",
+      requiredFields: ["officialReceiptLine", "serial", "orgName", "orgAddress", "regNumber", "placeOfIssue", "dateGift", "dateIssued", "name", "donorAddress", "amount", "advantage", "eligibleAmount", "signature", "authorityName", "authorityUrl"],
+      perDonorReceipt: true,
+      // one serial-numbered OFFICIAL receipt per donor, not a single summary table
+      needsReg: true,
+      // the church must supply its CRA registration number (+ an authorised signatory)
+      regLabel: "CRA charity registration number",
+      officialReceiptLine: "Official receipt for income tax purposes",
+      authorityName: "Canada Revenue Agency",
+      authorityUrl: "canada.ca/charities-giving",
+      statement: "",
+      // CA's required wording is the officialReceiptLine on each receipt, not a summary line
+      source: "Canada Revenue Agency \u2014 What information must be on an official donation receipt (Income Tax Regulations s.3501), canada.ca"
     }
   };
   function contributionStatement(book, { donors = [], from = "", to = "\uFFFF", givingByMember, jurisdiction = "" } = {}) {
@@ -74,12 +94,33 @@ var FinanceContribution = (() => {
       requiredFields: rule.requiredFields || ["name", "total"]
     };
   }
-  function contributionStatementDoc(stmt, { orgName = "", disclaimer = "", money = (m) => String(m) } = {}) {
+  function contributionStatementDoc(stmt, opts = {}) {
     const s = stmt || {};
+    const {
+      orgName = "",
+      orgAddress = "",
+      regNumber = "",
+      authorizedBy = "",
+      placeOfIssue = "",
+      dateIssued = "",
+      disclaimer = "",
+      money = (m) => String(m)
+    } = opts;
     const esc = (v) => String(v == null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const rule = STATEMENT_RULES[s.jurisdiction] || {};
     const period = (s.from || "") + (s.to && s.to !== "\uFFFF" ? " to " + s.to : "");
+    const year = (s.from || dateIssued || "").slice(0, 4);
+    const discP = disclaimer ? `<p class="tax-disclaimer"><small>${esc(disclaimer)}</small></p>` : "";
+    if (rule.perDonorReceipt) {
+      const regLine = regNumber ? `${esc(rule.regLabel || "Registration number")}: ${esc(regNumber)}` : `${esc(rule.regLabel || "Registration number")}: [REQUIRED \u2014 enter it in Tax tools]`;
+      const receipts = (s.rows || []).map((r) => {
+        const serial = (year ? year + "-" : "") + String(r.donor);
+        return `<section class="receipt" style="page-break-after:always;border:1px solid #ccc;padding:12px;margin:0 0 12px"><h2>${esc(rule.officialReceiptLine || "Official receipt")}</h2><p>Receipt no.: ${esc(serial)}</p><p>${esc(orgName)}${orgAddress ? ", " + esc(orgAddress) : ""}</p><p>${regLine}</p><p>Issued: ${esc(dateIssued || period)}${placeOfIssue ? " \xB7 " + esc(placeOfIssue) : ""}</p><p>Donor: ${esc(r.name)}${r.address ? ", " + esc(r.address) : ""}</p><p>Gift received in: ${esc(period || year)}</p><p>Amount of gift: ${esc(money(r.total))} \xB7 Value of advantage: ${esc(money(0))} \xB7 Eligible amount: ${esc(money(r.total))}</p><p>Authorised signature: ${esc(authorizedBy)} _______________________</p><p><small>${esc(rule.authorityName || "")}${rule.authorityUrl ? " \u2014 " + esc(rule.authorityUrl) : ""}</small></p>` + discP + "</section>";
+      }).join("");
+      return `<!doctype html><html><head><meta charset="utf-8"><title>Official donation receipts${orgName ? " \u2014 " + esc(orgName) : ""}</title></head><body><h1>Official donation receipts${orgName ? " \u2014 " + esc(orgName) : ""}</h1>` + (receipts || "<p>No attributed giving in this period.</p>") + "</body></html>";
+    }
     const body = (s.rows || []).map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.address)}</td><td style="text-align:right">${esc(money(r.total))}</td></tr>`).join("");
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Annual giving statement${orgName ? " \u2014 " + esc(orgName) : ""}</title></head><body><h1>Annual giving statement</h1>` + (orgName ? `<p>${esc(orgName)}</p>` : "") + (period ? `<p>Period: ${esc(period)}</p>` : "") + `<table><thead><tr><th>Donor</th><th>Address</th><th>Total</th></tr></thead><tbody>${body}</tbody><tfoot><tr><td></td><td style="text-align:right">Total</td><td style="text-align:right">${esc(money(s.totalDonated || 0))}</td></tr></tfoot></table>` + (s.statement ? `<p>${esc(s.statement)}</p>` : "") + (s.source ? `<p><small>Source: ${esc(s.source)}</small></p>` : "") + (disclaimer ? `<p class="tax-disclaimer"><small>${esc(disclaimer)}</small></p>` : "") + "</body></html>";
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Annual giving statement${orgName ? " \u2014 " + esc(orgName) : ""}</title></head><body><h1>Annual giving statement</h1>` + (orgName ? `<p>${esc(orgName)}</p>` : "") + (period ? `<p>Period: ${esc(period)}</p>` : "") + `<table><thead><tr><th>Donor</th><th>Address</th><th>Total</th></tr></thead><tbody>${body}</tbody><tfoot><tr><td></td><td style="text-align:right">Total</td><td style="text-align:right">${esc(money(s.totalDonated || 0))}</td></tr></tfoot></table>` + (s.statement ? `<p>${esc(s.statement)}</p>` : "") + (s.source ? `<p><small>Source: ${esc(s.source)}</small></p>` : "") + discP + "</body></html>";
   }
   function contributionReportFormats() {
     return [

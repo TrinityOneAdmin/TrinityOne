@@ -118,6 +118,48 @@ test('contributionReportFormats advertises the givingStatement format (not colli
   assert.ok(fmts.some(f => f.key === 'givingStatement' && f.pack === 'contributionStatement' && typeof f.build === 'function'), 'the pack does not advertise its report format');
 });
 
+// ── CANADA: a per-donor OFFICIAL receipt with every CRA-required field + registration data + disclaimer ──
+test('CA STATEMENT_RULES carries the CRA official-receipt metadata (per-donor, serial, registration)', () => {
+  const r = STATEMENT_RULES.CA;
+  assert.ok(r, 'Canada is not in STATEMENT_RULES');
+  assert.equal(r.perDonorReceipt, true, 'Canada must emit a per-donor official receipt, not a summary');
+  assert.equal(r.needsReg, true, 'Canada must flag that it needs a registration number');
+  assert.equal(r.authorityName, 'Canada Revenue Agency');
+  assert.ok(/canada\.ca/.test(r.authorityUrl), 'the CRA website line is missing');
+  assert.ok(/official receipt for income tax purposes/i.test(r.officialReceiptLine), 'the official-receipt statement is missing');
+});
+
+test('CA generates one serial-numbered OFFICIAL receipt per donor, with registration data and the disclaimer', () => {
+  const b = book('CAD');
+  gift(b, 120000, 'd1', '2026-03-01');   // $1,200 — Ada
+  gift(b, 30000, 'd2', '2026-04-01');    // $300 — Ben
+  const donors = [{ id: 'd1', name: 'Ada', address: '1 Main St' }, { id: 'd2', name: 'Ben', address: '2 Oak Ave' }];
+  const s = contributionStatement(b, { donors, from: '2026-01-01', to: '2026-12-31', givingByMember, jurisdiction: 'CA' });
+  const html = contributionStatementDoc(s, {
+    orgName: 'Grace Church', orgAddress: '10 Faith Rd, Toronto', regNumber: '123456789RR0001',
+    authorizedBy: 'Pat Treasurer', dateIssued: '2026-12-31', disclaimer: TAX_DISCLAIMER,
+    money: (m) => '$' + (m / 100).toFixed(2),
+  });
+  // one official receipt per donor (two donors → two receipt sections)
+  assert.equal((html.match(/Official receipt for income tax purposes/g) || []).length, 2, 'Canada did not emit one official receipt per donor');
+  // CRA-required content on the receipts
+  assert.ok(html.includes('123456789RR0001'), 'the CRA registration number is not on the receipt');
+  assert.ok(html.includes('CRA charity registration number'), 'the registration-number LABEL is missing');
+  assert.ok(html.includes('Canada Revenue Agency') && html.includes('canada.ca/charities-giving'), 'the CRA name/website line is missing');
+  assert.ok(html.includes('Pat Treasurer'), 'the authorised signatory is not on the receipt');
+  assert.ok(html.includes('2026-d1') && html.includes('2026-d2'), 'the unique per-donor serial (YEAR-donorId) is missing');
+  assert.ok(html.includes('Eligible amount'), 'the eligible amount is not stated');
+  assert.ok(html.includes('$1200.00') && html.includes('$300.00'), 'a donor gift amount is missing from its receipt');
+  assert.ok((html.match(new RegExp(TAX_DISCLAIMER.slice(0, 24).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length >= 2, 'the tax disclaimer is not on every receipt');
+});
+
+test('CA receipt shows a VISIBLE placeholder when the registration number is missing (never silently absent)', () => {
+  const b = book('CAD'); gift(b, 50000, 'd1');
+  const s = contributionStatement(b, { donors: [{ id: 'd1', name: 'Ada' }], givingByMember, jurisdiction: 'CA' });
+  const html = contributionStatementDoc(s, { orgName: 'Grace Church', disclaimer: TAX_DISCLAIMER });   // no regNumber
+  assert.ok(/\[REQUIRED/.test(html), 'a missing registration number was not surfaced as a visible placeholder');
+});
+
 // ── STRUCTURAL: the pack stays OUT of the core bundle and the registry, and INSIDE its own bundle ─────────
 function importGraph(entry) {
   const dir = mkdtempSync(join(tmpdir(), 'cs-meta-'));

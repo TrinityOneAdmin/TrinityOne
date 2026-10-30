@@ -75,7 +75,7 @@ function finItemToDoc(it) {
   // DONOR RECORD (finance/donor:<id>, Phase 4b) — member-identifying giving data, NOT part of the double-entry
   // book. Like template/reconcile it maps to its own `t`, which rebuildBook ignores, and DashFinanceBook
   // collects it into SEPARATE console state (donors) for the giving-by-member + Gift Aid screens.
-  if (id.startsWith('donor:')) return { t: 'donor', id: id.slice(6), name: it.name || '', eligible: it.eligible === true, address: it.address || '', postcode: it.postcode || '', giftAidDeclaredAt: it.giftAidDeclaredAt || '', title: it.title || '', firstName: it.firstName || '', lastName: it.lastName || '', house: it.house || '' };
+  if (id.startsWith('donor:')) return { t: 'donor', id: id.slice(6), name: it.name || '', eligible: it.eligible === true, address: it.address || '', postcode: it.postcode || '', giftAidDeclaredAt: it.giftAidDeclaredAt || '', title: it.title || '', firstName: it.firstName || '', lastName: it.lastName || '', house: it.house || '', certType: it.certType || '', certDeclaredAt: it.certDeclaredAt || '' };
   // INVOICE + CONTACT side docs (Phase 5) — metadata, NOT part of the double-entry book (the money rides the
   // journal). Like template/reconcile/donor they map to their own `t`, which rebuildBook ignores, and
   // DashFinanceBook collects them into SEPARATE console state. The invoice's `status` is a DISPLAY CACHE only:
@@ -770,7 +770,7 @@ function BooksBillEdit({ book, contacts, onSave, onClose }) {
 // one for a new donor). Marking a donor "eligible" + recording a declaration date is what lets the UK Gift Aid
 // pack build a claim line for them; it does nothing on its own and nothing at all unless the church turns the
 // Gift Aid feature on.
-function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, addressLabel }) {
+function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, addressLabel, cdsOn }) {
   const ed = initial || {};
   const editing = !!ed.id;
   const [name, setName] = React.useState(ed.name || '');
@@ -778,6 +778,8 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, ad
   const [address, setAddress] = React.useState(ed.address || '');
   const [postcode, setPostcode] = React.useState(ed.postcode || '');
   const [giftAidDeclaredAt, setDeclaredAt] = React.useState(ed.giftAidDeclaredAt || '');
+  const [certType, setCertType] = React.useState(ed.certType || 'CHY3');   // Ireland: CHY3 (enduring) | CHY4 (annual)
+  const [certDeclaredAt, setCertDeclaredAt] = React.useState(ed.certDeclaredAt || '');
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const dlgRef = useStewDialog(onClose);
@@ -786,7 +788,7 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, ad
     if (!nm) return setErr('Give the donor a name.');
     setBusy(true); setErr('');
     try {
-      const ok = await onSave({ id: editing ? ed.id : undefined, name: nm, eligible, address: address.trim(), postcode: postcode.trim(), giftAidDeclaredAt });
+      const ok = await onSave({ id: editing ? ed.id : undefined, name: nm, eligible, address: address.trim(), postcode: postcode.trim(), giftAidDeclaredAt, certType, certDeclaredAt });
       if (ok) onClose(); else { setBusy(false); setErr('That didn’t save — your church’s relay refused or did not answer. Try again.'); }
     } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not save that donor.'); }
   };
@@ -822,6 +824,21 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, ad
         {statementOn && !giftAidOn && (<>
         <label style={bkLbl}>{addressLabel || 'Mailing address'}</label>
         <input value={address} onChange={e => setAddress(e.target.value)} placeholder="Street, city, postcode" style={{ ...bkFld, marginBottom: 12 }} />
+        </>)}
+        {/* IRELAND Charitable Donation Scheme (cdsOn): the reclaim needs a valid CHY3/CHY4 certificate from the
+            donor + their address, mirroring Gift Aid's declaration. The `eligible`/`address` states + submit
+            payload are shared with the other schemes, so switching region never drops a stored value. */}
+        {cdsOn && !giftAidOn && (<>
+        <label onClick={() => setEligible(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 12 }}>
+          <input type="checkbox" checked={eligible} onChange={e => setEligible(e.target.checked)} aria-label="Has a CHY3 or CHY4 certificate" style={{ width: 18, height: 18 }} />
+          <span style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>Has given a CHY3/CHY4 certificate (Ireland)</span>
+        </label>
+        <label style={bkLbl}>Address</label>
+        <input value={address} onChange={e => setAddress(e.target.value)} placeholder="Street, town, county" style={{ ...bkFld, marginBottom: 12 }} />
+        <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Certificate type</label><select value={certType} onChange={e => setCertType(e.target.value)} aria-label="Certificate type" style={bkFld}><option value="CHY3">CHY3 (enduring, up to 5 years)</option><option value="CHY4">CHY4 (annual)</option></select></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Certificate date</label><input type="date" value={certDeclaredAt} onChange={e => setCertDeclaredAt(e.target.value)} style={bkFld} /></div>
+        </div>
         </>)}
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
@@ -990,7 +1007,7 @@ function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport }) {
 // panel says so rather than crashing. A contribution statement is the DONOR's record for their own deduction —
 // NO church rebate, NO church filing (unlike Gift Aid). The Download hands out an HTML statement document that
 // CARRIES the sourced wording AND the shared tax disclaimer (built by the pure pack helper).
-function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExport }) {
+function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExport, regWarn }) {
   if (!statementOn) return null;
   const pack = (typeof window !== 'undefined' && window.FinanceContribution) || null;
   if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Giving statements</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The giving-statement pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
@@ -1003,6 +1020,7 @@ function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExp
         <button onClick={() => onExport && onExport(stmt)} title="Download each donor’s year-end giving statement (HTML) to hand out" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Download statements</button>
       </div>
       <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>A per-donor summary each donor uses for their own return. Your church reclaims nothing and files nothing.</div>
+      {regWarn ? <div data-reg-warn style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginBottom: 8, lineHeight: 1.4 }}>{regWarn}</div> : null}
       {stmt.rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '4px 0' }}>No attributed giving in this period yet.</div>}
       {stmt.rows.map(r => (
         <div key={r.donor} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
@@ -1012,6 +1030,40 @@ function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExp
       ))}
       {stmt.rows.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '5px 0 0', fontWeight: 800 }}><span>Total</span><span>{booksFmt(stmt.totalDonated, book)}</span></div>}
       {stmt.statement ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 8, lineHeight: 1.4 }}>{stmt.statement}</div> : null}
+      {/* A tax tool must never present figures as authoritative — the ONE shared disclaimer (F.TAX_DISCLAIMER). */}
+      {F && F.TAX_DISCLAIMER ? <div data-tax-disclaimer style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.4 }}>{F.TAX_DISCLAIMER}</div> : null}
+    </div>
+  );
+}
+
+// ---- IRELAND Charitable Donation Scheme panel (receipts/reclaim wave) — OFF BY DEFAULT, additive -----------
+// Renders NOTHING unless the resolved jurisdiction's active tax tool is 'charitableDonationScheme' (passed as
+// cdsOn). The reclaim logic lives in the SEPARATE window.FinanceIrishCDS bundle the core never imports; this
+// panel is the only caller. Like Gift Aid, the CHARITY claims — here from Revenue. Donors need a CHY3/CHY4
+// certificate (eligible + certType + certDeclaredAt). Shows per-donor donated → refund, the associated-donor
+// review list, the total to reclaim, the shared disclaimer, and a CSV export carrying the disclaimer.
+function BooksCdsPanel({ book, F, donors, cdsOn, onExport }) {
+  if (!cdsOn) return null;
+  const pack = (typeof window !== 'undefined' && window.FinanceIrishCDS) || null;
+  if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Charitable Donation Scheme (Ireland)</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The Irish CDS pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
+  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
+  const claim = pack.charitableDonationClaim(book, { donors: donorList, givingByMember: F.givingByMember });
+  return (
+    <div style={{ ...bkCard, marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16 }}>Charitable Donation Scheme claim (Ireland)</div>
+        <button onClick={() => onExport && onExport(claim)} title="Download the CDS claim schedule as a spreadsheet (CSV)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Download claim (CSV)</button>
+      </div>
+      <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>Donors with a CHY3/CHY4 certificate who gave €250+ this year. The refund is the donation grossed up at 31% (≈44.93%), subject to the tax the donor has paid (Revenue checks this).</div>
+      {claim.rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '4px 0' }}>No certified donors with €250+ of giving in this period yet.</div>}
+      {claim.rows.map(r => (
+        <div key={r.donor} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
+          <span>{r.name}<span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {r.certType}</span></span>
+          <span style={{ fontWeight: 700 }}>{booksFmt(r.donated, book)} → {booksFmt(r.refund, book)}</span>
+        </div>
+      ))}
+      {claim.rows.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '5px 0 0', fontWeight: 800 }}><span>Total to reclaim</span><span>{booksFmt(claim.totalRefund, book)}</span></div>}
+      {claim.needsReview && claim.needsReview.length > 0 && <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginTop: 8, lineHeight: 1.4 }}>{claim.needsReview.length} associated donor(s) need a total-income figure before the 10% relief restriction can be applied — not included in the total above.</div>}
       {/* A tax tool must never present figures as authoritative — the ONE shared disclaimer (F.TAX_DISCLAIMER). */}
       {F && F.TAX_DISCLAIMER ? <div data-tax-disclaimer style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.4 }}>{F.TAX_DISCLAIMER}</div> : null}
     </div>
@@ -2522,9 +2574,9 @@ function DashFinanceBook() {
   // (the relay's generic finance/ write prefix); the relay keeps it off a network peer on READ (the explicit
   // finance/donor read rule). NOTE a "forget this donor" removes this doc but CANNOT scrub the opaque donorId
   // already embedded in the append-only journal — acceptable under HMRC retention, surfaced in the UI copy.
-  const saveDonor = async ({ id, name, eligible, address, postcode, giftAidDeclaredAt, title, firstName, lastName, house }) => {
+  const saveDonor = async ({ id, name, eligible, address, postcode, giftAidDeclaredAt, title, firstName, lastName, house, certType, certDeclaredAt }) => {
     const theId = id || opaqueId();
-    const body = { name: name || '', eligible: eligible === true, address: address || '', postcode: postcode || '', giftAidDeclaredAt: giftAidDeclaredAt || '', title: title || '', firstName: firstName || '', lastName: lastName || '', house: house || '' };
+    const body = { name: name || '', eligible: eligible === true, address: address || '', postcode: postcode || '', giftAidDeclaredAt: giftAidDeclaredAt || '', title: title || '', firstName: firstName || '', lastName: lastName || '', house: house || '', certType: certType || '', certDeclaredAt: certDeclaredAt || '' };
     if (!useRelay) { setDonors(ds => [...ds.filter(d => d.id !== theId), { t: 'donor', id: theId, ...body }]); bump(); return true; }
     const ok = await S.encPublish('finance/donor:' + theId, body);
     bump();
@@ -2744,7 +2796,13 @@ function DashFinanceBook() {
   // "Mailing address" (US) / "Postal address" (NZ) follow the region rather than being hardcoded.
   const jxId = (F && F.resolveJurisdiction) ? F.resolveJurisdiction({ features: church && church.features }) : 'None';
   const statementOn = (F && F.taxToolFor) ? F.taxToolFor(jxId) === 'contributionStatement' : false;
+  const cdsOn = (F && F.taxToolFor) ? F.taxToolFor(jxId) === 'charitableDonationScheme' : false;   // Ireland reclaim
   const jxLabels = (F && F.donorLabels) ? (F.donorLabels(jxId) || {}) : {};
+  // Church REGISTRATION data a receipt legally needs (e.g. Canada's CRA charity number + authorised signatory),
+  // captured OWNER-ONLY on church.features (via the Tax tools subcard) and threaded into the generated receipt.
+  const taxRegLabel = (F && F.taxRegLabel) ? F.taxRegLabel(jxId) : '';          // '' unless the region needs one (CA)
+  const taxRegNumber = (church && church.features && church.features.taxRegNumber) || '';
+  const taxRegSignatory = (church && church.features && church.features.taxRegSignatory) || '';
   // Bill approval mode — DUAL control is an OPT-IN a church turns on, OFF BY DEFAULT: strict === true (NOT the
   // default-on `!== false` convention — DOMAIN nation-neutral/silent, like giftAid). Default is the LIGHT flow
   // (approval is a field on the replaceable bill doc). In BOTH modes the Mark-paid control and the engine guard
@@ -3171,13 +3229,36 @@ function DashFinanceBook() {
         if (F && F.TAX_DISCLAIMER) rows.push([], [F.TAX_DISCLAIMER]);
         booksDownload('gift-aid-claim-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
       }} />
-      <BooksStatementPanel book={book} F={F} donors={donorMap} statementOn={statementOn} jurisdiction={jxId} onExport={(stmt) => {
-        // The generated giving statement is an HTML document built by the PURE pack helper — it embeds the sourced
-        // statement wording AND the ONE shared tax disclaimer (F.TAX_DISCLAIMER), so a figure never leaves without it.
+      <BooksStatementPanel book={book} F={F} donors={donorMap} statementOn={statementOn} jurisdiction={jxId}
+        regWarn={taxRegLabel && !taxRegNumber ? ('Enter your ' + taxRegLabel + ' in Tax tools (Congregation → features) so the receipts you issue are complete.') : ''}
+        onExport={(stmt) => {
+        // The generated receipt/statement is an HTML document built by the PURE pack helper — it embeds the sourced
+        // wording, the church REGISTRATION data (Canada), AND the ONE shared tax disclaimer (F.TAX_DISCLAIMER), so a
+        // figure never leaves without the caveat. For Canada the pack emits one serial-numbered official receipt
+        // per donor; for US/NZ a single annual summary.
         const pack = (typeof window !== 'undefined' && window.FinanceContribution) || null;
         if (!pack || !pack.contributionStatementDoc) { setRptFlash('The giving-statement module hasn’t loaded.'); return; }
-        const html = pack.contributionStatementDoc(stmt, { orgName: (church && church.name) || '', disclaimer: (F && F.TAX_DISCLAIMER) || '', money: (m) => booksFmt(m, book) });
+        const html = pack.contributionStatementDoc(stmt, {
+          orgName: (church && church.name) || '',
+          orgAddress: (church && church.features && church.features.address) || '',
+          regNumber: taxRegNumber, authorizedBy: taxRegSignatory,
+          dateIssued: booksTodayISO(),
+          disclaimer: (F && F.TAX_DISCLAIMER) || '', money: (m) => booksFmt(m, book),
+        });
         booksDownload('giving-statements-' + booksTodayISO() + '.html', html).then(m => setRptFlash(m)).catch(() => {});
+      }} />
+      <BooksCdsPanel book={book} F={F} donors={donorMap} cdsOn={cdsOn} onExport={(claim) => {
+        // The CDS claim schedule leaves the app as a CSV — it carries the ONE shared tax disclaimer (a reclaim
+        // figure must never leave without the caveat). Same CSV-injection guard as the Gift Aid export.
+        const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+        const sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
+        const div = Math.pow(10, book.decimals || 2);
+        const money = m => (m / div).toFixed(book.decimals || 2);
+        const rows = [['Name', 'Address', 'Certificate', 'Donated (' + sym + ')', 'Refund (' + sym + ')'],
+          ...claim.rows.map(r => [r.name, r.address, r.certType, money(r.donated), money(r.refund)]),
+          ['', '', 'TOTAL', money(claim.totalDonated), money(claim.totalRefund)]];
+        if (F && F.TAX_DISCLAIMER) rows.push([], [F.TAX_DISCLAIMER]);
+        booksDownload('cds-claim-ireland-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
       }} />
         </div>}
       </div>}
@@ -3318,7 +3399,7 @@ function DashFinanceBook() {
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} banner={church.banner || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
-      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} statementOn={statementOn} addressLabel={jxLabels.address} />}
+      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} statementOn={statementOn} addressLabel={jxLabels.address} cdsOn={cdsOn} />}
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
       {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}

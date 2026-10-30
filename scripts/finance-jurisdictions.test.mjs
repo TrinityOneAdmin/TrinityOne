@@ -10,28 +10,42 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   JURISDICTIONS, DEFAULT_JURISDICTION, listJurisdictions, listTaxRegions, getJurisdiction,
-  resolveJurisdiction, currencyDefaults, donorFields, donorLabels, taxToolFor, TAX_DISCLAIMER,
+  resolveJurisdiction, currencyDefaults, donorFields, donorLabels, taxToolFor, taxRegLabel, TAX_DISCLAIMER,
 } from '../src/finance-jurisdictions.mjs';
 
-// ── the shipped set (expansion wave): None + UK + the two verified contribution-statement regions (US, NZ) ──
-// COUNT NOTE (CLAUDE.md rule 8): this test was "UK + None only"; the expansion wave adds US + NZ as live
-// entries (both verified against an official source), so it now asserts the four-entry set. The DESIGNED-BUT-HELD
-// countries (CA/AU/DE/FR/NL/ZA/IE) are deliberately NOT live entries — see the registry comment — so this test
-// also pins that they are ABSENT (shipping a currency-only or unverified-wording region is forbidden).
-test('the shipped registry is None + UK + the verified schemes US + NZ; held countries are absent', () => {
-  assert.deepEqual(Object.keys(JURISDICTIONS).sort(), ['NZ', 'None', 'UK', 'US'], 'the shipped jurisdictions are not exactly None + UK + US + NZ');
+// ── the shipped set (receipts/reclaim wave): None + UK + US + NZ + Canada + Ireland ─────────────────────
+// COUNT NOTE (CLAUDE.md rule 8): this test asserted None+UK+US+NZ; the receipts/reclaim wave adds CA (CRA
+// official receipt, verified) and IE (Charitable Donation Scheme reclaim, verified against Revenue), so it now
+// asserts the six-entry set. The STILL-HELD countries (AU/DE/FR/NL/ZA) are deliberately NOT live entries — their
+// prescribed wording/template was not traceable this round — so this test pins they are ABSENT.
+test('the shipped registry is None + UK + US + NZ + Canada + Ireland; still-held countries are absent', () => {
+  assert.deepEqual(Object.keys(JURISDICTIONS).sort(), ['CA', 'IE', 'NZ', 'None', 'UK', 'US'], 'the shipped jurisdictions are not exactly None+UK+US+NZ+CA+IE');
   assert.equal(DEFAULT_JURISDICTION, 'None', 'the default jurisdiction is not the nation-neutral None');
-  assert.deepEqual(listJurisdictions().map(o => o.id).sort(), ['NZ', 'None', 'UK', 'US'], 'the picker-source options are not the shipped four');
+  assert.deepEqual(listJurisdictions().map(o => o.id).sort(), ['CA', 'IE', 'NZ', 'None', 'UK', 'US'], 'the picker-source options are not the shipped six');
   assert.ok(listJurisdictions().every(o => o.id && o.label), 'a picker option is missing an id or a label');
-  for (const held of ['CA', 'AU', 'DE', 'FR', 'NL', 'ZA', 'IE']) assert.ok(!JURISDICTIONS[held], held + ' shipped as a live entry — it is designed-but-HELD and must not be live until its receipt wording is verified');
+  for (const held of ['AU', 'DE', 'FR', 'NL', 'ZA']) assert.ok(!JURISDICTIONS[held], held + ' shipped as a live entry — it is still HELD until its prescribed receipt wording is verified');
 });
 
 // ── the Region picker lists ACTUAL schemes only (taxTool != null) — currency-only places are not regions ──
-test('listTaxRegions returns the real schemes only (UK, US, NZ) and never None', () => {
+test('listTaxRegions returns the real schemes only (UK, US, NZ, CA, IE) and never None', () => {
   const ids = listTaxRegions().map(o => o.id).sort();
-  assert.deepEqual(ids, ['NZ', 'UK', 'US'], 'listTaxRegions is not exactly the three real schemes: ' + JSON.stringify(ids));
+  assert.deepEqual(ids, ['CA', 'IE', 'NZ', 'UK', 'US'], 'listTaxRegions is not exactly the five real schemes: ' + JSON.stringify(ids));
   assert.ok(!ids.includes('None'), 'listTaxRegions offered None — None is the switch being off, not a region');
   assert.ok(listTaxRegions().every(o => taxToolFor(o.id) != null), 'listTaxRegions returned an entry with no tax tool');
+});
+
+// ── Canada (official receipt) + Ireland (reclaim) are the receipts/reclaim-wave regions ─────────────────
+test('Canada is a contribution-statement region needing a CRA registration number; Ireland is a reclaim region', () => {
+  assert.equal(taxToolFor('CA'), 'contributionStatement', 'Canada did not resolve to the contribution-statement tool');
+  assert.deepEqual(currencyDefaults('CA'), { base: 'CAD', decimals: 2, fiscalYearStart: '01-01' }, 'Canada currency default wrong');
+  assert.ok(/CRA/.test(taxRegLabel('CA')), 'Canada must declare it needs a CRA registration number (taxRegLabel)');
+  assert.equal(taxToolFor('IE'), 'charitableDonationScheme', 'Ireland did not resolve to the reclaim tool');
+  assert.deepEqual(currencyDefaults('IE'), { base: 'EUR', decimals: 2, fiscalYearStart: '01-01' }, 'Ireland currency default wrong');
+  for (const k of ['eligible', 'certType', 'certDeclaredAt']) assert.ok(donorFields('IE').includes(k), 'the Ireland donor field set is missing ' + k);
+});
+
+test('taxRegLabel is empty for regions whose receipt needs no church registration number', () => {
+  for (const id of ['US', 'NZ', 'UK', 'IE', 'None']) assert.equal(taxRegLabel(id), '', id + ' must not demand a registration number');
 });
 
 // ── US + NZ are verified CONTRIBUTION-STATEMENT regions; currency is DECOUPLED from the tool ────────────
