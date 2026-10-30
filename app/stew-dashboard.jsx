@@ -4349,6 +4349,9 @@ function GroupChatModal({ group, onClose }) {
       .catch(() => showMod('Couldn’t put it back — the relay could not be reached, so it is still removed.'));
   };
   const msgText = (m) => {   // render polls gracefully (members vote in the member app); avoids showing raw JSON
+    // A renderable card (e.g. a finance statement) draws as a card below; this is its SENSIBLE TEXT — shown in
+    // a reply's quote bar and as the fallback body when the card type is unknown. title + period.
+    if (m.card && m.card.type === 'finance') return (m.card.title || 'Financial statement') + (m.card.periodLabel ? ' · ' + m.card.periodLabel : '');
     if (m.kind === 'poll') { try { const p = JSON.parse(m.text); return '📊 ' + (p.question || 'Poll') + ' — ' + (p.options || []).join(' · '); } catch { return '📊 Poll'; } }
     return (m.kind === 'prayer' ? '🙏 ' : '') + m.text;
   };
@@ -4468,7 +4471,7 @@ function GroupChatModal({ group, onClose }) {
                 ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: msgText(m.quote) })
                 : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
-                <div data-gc-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
+                <div data-gc-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={(m.card && m.card.type === 'finance') ? { padding: 0, background: 'none', border: 'none', cursor: 'pointer' } : { padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{cardRenderable(m.card) ? <ConsoleCard card={m.card} church={gcChurch} /> : msgText(m)}</div>
                 <div data-chat-menu="1" style={{ position: 'relative', flexShrink: 0 }}>
                   {/* NAMED, and it is the ONLY route to Remove and Pin. Measured 2026-09-04: 21px wide,
                       empty innerText, aria-label null — a screen reader had nothing to announce. */}

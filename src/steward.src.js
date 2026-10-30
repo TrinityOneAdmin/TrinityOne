@@ -8649,7 +8649,7 @@ window.Steward = {
       // A REMOVED message is never quoted: that would reprint, one row down, the words the steward took away.
       // quote is null when the target is not loaded (older than the window) — the UI says "an earlier message".
       const q = m.replyTo ? byId.get(m.replyTo) : null;
-      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind } : null;
+      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
       const r = rx.get(m.id); return { ...m, quote, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
     });
     const emit = () => onMsgs(attach());
@@ -8683,7 +8683,13 @@ window.Steward = {
           for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
           if (!ok) return;
         }
-        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '' });
+        // A RENDERABLE CARD rides as a ['card','1',<json>] tag on an ordinary kind-1 post (the member app's
+        // FinanceCard reads the same tag). The plain-text `text` above is the UNCHANGED fallback body an old
+        // console shows; the card is drawn by GroupChatModal only when the json parses to an object. Guarded:
+        // malformed json never throws — it just yields no card and the body shows. Matches CARD-ENVELOPE-contract.md.
+        let card = null;
+        try { const ct = e.tags.find(t => t[0] === 'card'); if (ct && ct[2]) { const parsed = JSON.parse(ct[2]); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) card = parsed; } } catch (x) {}
+        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, card, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();
       },
