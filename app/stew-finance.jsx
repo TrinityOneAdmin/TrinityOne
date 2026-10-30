@@ -766,7 +766,7 @@ function BooksBillEdit({ book, contacts, onSave, onClose }) {
 // one for a new donor). Marking a donor "eligible" + recording a declaration date is what lets the UK Gift Aid
 // pack build a claim line for them; it does nothing on its own and nothing at all unless the church turns the
 // Gift Aid feature on.
-function BooksDonor({ book, initial, onSave, onClose }) {
+function BooksDonor({ book, initial, onSave, onClose, giftAidOn }) {
   const ed = initial || {};
   const editing = !!ed.id;
   const [name, setName] = React.useState(ed.name || '');
@@ -793,6 +793,12 @@ function BooksDonor({ book, initial, onSave, onClose }) {
         <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 14 }}>Kept private to your church — only the church key and a Finance steward can ever read it.</div>
         <label style={bkLbl}>Name</label>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Jane Okafor" style={{ ...bkFld, marginBottom: 12 }} />
+        {/* UK Gift Aid fields — shown ONLY when the church turned the UK pack on (giftAidOn). The state hooks
+            (eligible/address/postcode/giftAidDeclaredAt) and the submit() payload are DELIBERATELY left intact
+            above: hiding the INPUTS must not drop the values, so a save with the pack off re-sends whatever was
+            loaded and saveDonor preserves it. giftAidOn is a single boolean threaded from DashFinanceBook —
+            wave #3's jurisdiction registry swaps only its SOURCE, not this form. */}
+        {giftAidOn && (<>
         <label onClick={() => setEligible(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 12 }}>
           <input type="checkbox" checked={eligible} onChange={e => setEligible(e.target.checked)} aria-label="Eligible for Gift Aid" style={{ width: 18, height: 18 }} />
           <span style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>Has made a Gift Aid declaration (UK)</span>
@@ -803,6 +809,7 @@ function BooksDonor({ book, initial, onSave, onClose }) {
           <div style={{ flex: 1 }}><label style={bkLbl}>Postcode</label><input value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="e.g. SW1A 1AA" style={bkFld} /></div>
           <div style={{ flex: 1 }}><label style={bkLbl}>Declaration date</label><input type="date" value={giftAidDeclaredAt} onChange={e => setDeclaredAt(e.target.value)} style={bkFld} /></div>
         </div>
+        </>)}
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
@@ -912,7 +919,7 @@ function BooksBudgetEdit({ book, initial, onSave, onClose }) {
 // (already behind the finance-key gate) and it DELIBERATELY has no Share / Post-to-members control: aggregate
 // statements are name-free and this one must never reach the broadcast path. If you ever add a share button
 // here, finance-giving-by-member.test.mjs turns red by design.
-function BooksGivingByMember({ book, F, donors }) {
+function BooksGivingByMember({ book, F, donors, giftAidOn }) {
   const rows = F.givingByMember(book, { donors });
   const total = rows.reduce((s, r) => s + r.amount, 0);
   return (
@@ -922,7 +929,7 @@ function BooksGivingByMember({ book, F, donors }) {
       {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13, padding: '6px 0' }}>No giving has been attributed to a donor yet. Tag a gift with a donor when you record it.</div>}
       {rows.map(r => (
         <div key={r.donor || 'unattributed'} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0', borderTop: '1px solid var(--line)' }}>
-          <span style={{ color: r.unattributed ? 'var(--ink-3)' : 'var(--ink)' }}>{r.name}{r.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}</span>
+          <span style={{ color: r.unattributed ? 'var(--ink-3)' : 'var(--ink)' }}>{r.name}{giftAidOn && r.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}</span>
           <span style={{ fontWeight: 700 }}>{booksFmt(r.amount, book)}</span>
         </div>
       ))}
@@ -3045,20 +3052,20 @@ function DashFinanceBook() {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
           <button onClick={() => setDonorEditing({})} title="Add a donor record" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>+ Add donor</button>
           </div>
-            {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member and (if your church uses it) Gift Aid.</div>}
+            {donors.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No donor records yet. Add one to track giving by member{giftAidOn ? ' and (if your church uses it) Gift Aid' : ''}.</div>}
             {donors.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(d => (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ fontSize: 13.5, fontWeight: 600 }}>{d.name || '(unnamed)'}</span>
-                  {d.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}
-                  {d.postcode ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {d.postcode}</span> : null}
+                  {giftAidOn && d.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}
+                  {giftAidOn && d.postcode ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {d.postcode}</span> : null}
                 </div>
                 <button onClick={() => setDonorEditing({ id: d.id, name: d.name, eligible: d.eligible, address: d.address, postcode: d.postcode, giftAidDeclaredAt: d.giftAidDeclaredAt })} title="Edit this donor" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
               </div>
             ))}
         </div>}
         {donorTab === 'giving' && <div style={{ marginTop: 4 }}>
-            <BooksGivingByMember book={book} F={F} donors={donorMap} />
+            <BooksGivingByMember book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} />
       <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
         // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
@@ -3209,7 +3216,7 @@ function DashFinanceBook() {
       {sharing && <FinanceShareStatement book={book} F={F} churchName={church.name || ''} accent={church.accent || ''} logo={church.picture || ''} canPost={canPost} groups={groups} onPostToMembers={postStatementToMembers} onClose={() => setSharing(false)} />}
       {reconciling && <FinanceReconcile book={book} F={F} today={booksTodayISO()} saved={reconciling && reconciling.id ? reconciles.find(r => r.id === reconciling.id) : reconciling} onSaveReconcile={saveReconcile} onClose={() => setReconciling(null)} />}
       {tplEditing && <BooksTemplateEdit book={book} initial={tplEditing} onSave={saveTemplate} onClose={() => setTplEditing(null)} />}
-      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} />}
+      {donorEditing && <BooksDonor book={book} initial={donorEditing} onSave={saveDonor} onClose={() => setDonorEditing(null)} giftAidOn={giftAidOn} />}
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
       {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}

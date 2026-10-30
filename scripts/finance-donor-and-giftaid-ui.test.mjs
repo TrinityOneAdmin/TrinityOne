@@ -42,7 +42,9 @@ test('BooksDonor renders a name field, a Gift Aid-declaration toggle and a Save 
     React, useStewDialog: () => ({ current: null }),
     bkCard: {}, bkLbl: {}, bkFld: {},
   });
-  const tree = draw(BooksDonor, { book: { baseCurrency: 'GBP', decimals: 2 }, initial: null, onSave: (d) => { saved.push(d); return true; }, onClose() {} });
+  // giftAidOn: true — the UK Gift Aid pack is ON, so the eligibility toggle is on the form (the gate's
+  // on-branch; the off-branch is the dedicated gate tests below).
+  const tree = draw(BooksDonor, { book: { baseCurrency: 'GBP', decimals: 2 }, initial: null, giftAidOn: true, onSave: (d) => { saved.push(d); return true; }, onClose() {} });
   // it is a real dialog
   assert.ok(find(tree, n => n.props && n.props.role === 'dialog').length === 1, 'BooksDonor did not render a dialog');
   // a name input
@@ -53,6 +55,63 @@ test('BooksDonor renders a name field, a Gift Aid-declaration toggle and a Save 
   // a Save/Add control
   const buttons = find(tree, n => n.type === 'button');
   assert.ok(buttons.some(b => /add donor|save/i.test(texts(b).join(' '))), 'there is no Save/Add control on the donor form: ' + buttons.map(b => texts(b).join('')).join(', '));
+});
+
+// ── The Gift Aid wording is GATED on the UK pack (wave 2, 2026-10-30) ────────────────────────────────────
+// Point-of-use (CLAUDE.md rules 1 & 3): these render the REAL BooksDonor body (lifted via fnBody) and read the
+// RENDERED tree, so a `false &&` left in app/*.jsx cannot satisfy them — the strings/inputs must actually be
+// absent from (or present in) the tree. giftAidOn is the single boolean the pack gate keys on.
+async function loadBooksDonor() {
+  const { React, draw } = miniReact();
+  const BooksDonor = await loadComponent('app/stew-finance.jsx', 'BooksDonor', 'function BooksDonor(', {
+    React, useStewDialog: () => ({ current: null }), bkCard: {}, bkLbl: {}, bkFld: {},
+  });
+  return { React, draw, BooksDonor };
+}
+
+test('T1 — with giftAidOn=false the donor editor shows NO Gift Aid text and none of the UK-only inputs', async () => {
+  const { draw, BooksDonor } = await loadBooksDonor();
+  const tree = draw(BooksDonor, { book: { baseCurrency: 'GBP', decimals: 2 }, initial: null, giftAidOn: false, onSave: () => true, onClose() {} });
+  // No "Gift Aid" anywhere in the rendered tree — texts() also collects the checkbox aria-label, so a hidden
+  // field cannot smuggle the phrase back in through a prop.
+  assert.ok(!/Gift Aid/.test(texts(tree).join(' ')), 'with the UK pack off, the donor editor still shows "Gift Aid" wording: ' + texts(tree).join(' | '));
+  // None of the UK-only inputs: the eligibility checkbox and the declaration-date picker.
+  const inputs = find(tree, n => n.type === 'input');
+  assert.ok(!inputs.some(i => i.props && i.props.type === 'checkbox'), 'the Gift Aid eligibility checkbox is still on the form with the pack off');
+  assert.ok(!inputs.some(i => i.props && i.props.type === 'date'), 'the Gift Aid declaration-date picker is still on the form with the pack off');
+  // The name field + a Save control still render (the editor is not gone, only the UK fields). Match the Name
+  // field by its own placeholder — NOT /name/i, which would also match the hidden address field's "House
+  // name/number & street" placeholder and so could not tell "name field present" from "address field present".
+  assert.ok(inputs.some(i => /jane okafor/i.test((i.props && i.props.placeholder) || '')), 'gating the UK fields also removed the donor name field');
+  assert.ok(find(tree, n => n.type === 'button' && /add donor|save/i.test(texts(n).join(' '))).length >= 1, 'gating the UK fields also removed the Save control');
+});
+
+test('T2 — with giftAidOn=true the UK Gift Aid fields and labels are all present', async () => {
+  const { draw, BooksDonor } = await loadBooksDonor();
+  const tree = draw(BooksDonor, { book: { baseCurrency: 'GBP', decimals: 2 }, initial: null, giftAidOn: true, onSave: () => true, onClose() {} });
+  const all = texts(tree).join(' ');
+  assert.ok(/Has made a Gift Aid declaration \(UK\)/.test(all), 'the Gift Aid declaration wording is missing with the pack on');
+  assert.ok(/Address \(for a Gift Aid claim\)/.test(all), 'the "Address (for a Gift Aid claim)" label is missing with the pack on');
+  assert.ok(/Declaration date/.test(all), 'the Declaration date label is missing with the pack on');
+  const inputs = find(tree, n => n.type === 'input');
+  assert.ok(inputs.some(i => i.props && i.props.type === 'checkbox'), 'the eligibility checkbox is missing with the pack on');
+  assert.ok(inputs.some(i => i.props && i.props.type === 'date'), 'the declaration-date picker is missing with the pack on');
+});
+
+test('T3 — saving with the UK fields hidden PRESERVES the donor’s prior eligible/address/postcode/declaration values', async () => {
+  const { draw, BooksDonor } = await loadBooksDonor();
+  let saved = null;
+  const initial = { id: 'd1', name: 'Ada Lovelace', eligible: true, address: '1 Analytical St', postcode: 'AB1 2CD', giftAidDeclaredAt: '2026-01-01' };
+  const tree = draw(BooksDonor, { book: { baseCurrency: 'GBP', decimals: 2 }, initial, giftAidOn: false, onSave: (d) => { saved = d; return true; }, onClose() {} });
+  // The UK inputs are hidden (giftAidOn=false) — but the Save control must still carry the loaded values.
+  const saveBtn = find(tree, n => n.type === 'button' && /save|add donor/i.test(texts(n).join(' ')))[0];
+  assert.ok(saveBtn, 're-anchor: no Save control on the donor editor');
+  await saveBtn.props.onClick({ stopPropagation() {}, preventDefault() {} });
+  assert.ok(saved, 'clicking Save did not call onSave');
+  assert.equal(saved.eligible, true, 'eligible was dropped on save when the UK fields were hidden');
+  assert.equal(saved.address, '1 Analytical St', 'address was dropped on save when the UK fields were hidden');
+  assert.equal(saved.postcode, 'AB1 2CD', 'postcode was dropped on save when the UK fields were hidden');
+  assert.equal(saved.giftAidDeclaredAt, '2026-01-01', 'the declaration date was dropped on save when the UK fields were hidden');
 });
 
 // ── DashFeaturesPanel: the Gift Aid toggle, and that it DEFAULTS OFF ─────────────────────────────────────

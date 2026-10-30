@@ -156,3 +156,46 @@ test('the Gift Aid panel is wired under the Giving-record sub-tab, gated by the 
   assert.ok(gaOn, 'the Gift Aid panel is not under the Giving-record sub-tab when giftAid is on');
   assert.equal(gaOn.props.giftAidOn, true, 'with the church giftAid feature on, the panel must be handed giftAidOn=true');
 });
+
+// T4 — DashFinanceBook threads the giftAidOn gate to BOTH donor-facing children (wave 2, 2026-10-30). Rule 2:
+// the callers threaded are the BooksDonor render (donor editor) and the BooksGivingByMember render (giving-by-
+// member list). console-screens renders DashFinanceBook's own body and leaves these as element nodes, so the
+// prop it hands them is exactly what we assert. Drop either prop and the matching assertion reads undefined.
+test('T4 — DashFinanceBook hands giftAidOn to the donor editor and the giving-by-member list', () => {
+  for (const flag of [false, true]) {
+    const h = setup({ giftAid: flag });
+    h.draw();
+    h.feedItems(seedItems());
+    h.click('Donors');            // opens the Donors tab; its DEFAULT sub-tab is the records list
+    // the donor editor child (opened from the records sub-tab) gets the gate
+    h.click('Add donor');
+    const ed = h.comp('BooksDonor');
+    assert.ok(ed, 'opening "Add donor" did not mount the BooksDonor editor');
+    assert.equal(ed.props.giftAidOn, flag, 'BooksDonor was not handed giftAidOn=' + flag);
+    // the giving-by-member child (under the Giving-record sub-tab) gets the gate. Switch the sub-tab directly
+    // (do NOT re-click "Donors" — the tab and the sub-tab share that label).
+    h.click('Giving record');
+    const gbm = h.comp('BooksGivingByMember');
+    assert.ok(gbm, 'BooksGivingByMember is not rendered under the Giving-record sub-tab');
+    assert.equal(gbm.props.giftAidOn, flag, 'BooksGivingByMember was not handed giftAidOn=' + flag);
+  }
+});
+
+// T5 — the donor-RECORDS list badge + postcode line are gated (these live in DashFinanceBook's OWN body, so
+// console-screens renders them for real). seedItems()'s donor d1 is eligible with postcode AB1 2CD.
+test('T5 — the donor-records list gates the Gift Aid badge and the postcode on the UK pack', () => {
+  const off = setup({ giftAid: false });
+  off.draw();
+  off.feedItems(seedItems());
+  off.click('Donors');
+  assert.match(off.screen(), /Ada Lovelace/, 're-anchor: the seeded donor is not in the records list');
+  assert.ok(!/Gift Aid/.test(off.screen()), 'the "Gift Aid" badge still shows in the donor list with the UK pack off');
+  assert.ok(!/AB1 2CD/.test(off.screen()), 'the donor postcode still shows in the list with the UK pack off');
+
+  const on = setup({ giftAid: true });
+  on.draw();
+  on.feedItems(seedItems());
+  on.click('Donors');
+  assert.ok(/Gift Aid/.test(on.screen()), 'the "Gift Aid" badge is missing from the donor list with the UK pack on');
+  assert.ok(/AB1 2CD/.test(on.screen()), 'the donor postcode is missing from the list with the UK pack on');
+});
