@@ -9,16 +9,53 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  JURISDICTIONS, DEFAULT_JURISDICTION, listJurisdictions, getJurisdiction,
-  resolveJurisdiction, currencyDefaults, donorFields, donorLabels, taxToolFor,
+  JURISDICTIONS, DEFAULT_JURISDICTION, listJurisdictions, listTaxRegions, getJurisdiction,
+  resolveJurisdiction, currencyDefaults, donorFields, donorLabels, taxToolFor, TAX_DISCLAIMER,
 } from '../src/finance-jurisdictions.mjs';
 
-// ── the shipped set is exactly UK + None (US is designed, not shipped) ──────────────────────────────────
-test('the shipped registry is UK + None only (US is designed, not a live entry)', () => {
-  assert.deepEqual(Object.keys(JURISDICTIONS).sort(), ['None', 'UK'], 'the shipped jurisdictions are not exactly None + UK');
+// ── the shipped set (expansion wave): None + UK + the two verified contribution-statement regions (US, NZ) ──
+// COUNT NOTE (CLAUDE.md rule 8): this test was "UK + None only"; the expansion wave adds US + NZ as live
+// entries (both verified against an official source), so it now asserts the four-entry set. The DESIGNED-BUT-HELD
+// countries (CA/AU/DE/FR/NL/ZA/IE) are deliberately NOT live entries — see the registry comment — so this test
+// also pins that they are ABSENT (shipping a currency-only or unverified-wording region is forbidden).
+test('the shipped registry is None + UK + the verified schemes US + NZ; held countries are absent', () => {
+  assert.deepEqual(Object.keys(JURISDICTIONS).sort(), ['NZ', 'None', 'UK', 'US'], 'the shipped jurisdictions are not exactly None + UK + US + NZ');
   assert.equal(DEFAULT_JURISDICTION, 'None', 'the default jurisdiction is not the nation-neutral None');
-  assert.deepEqual(listJurisdictions().map(o => o.id).sort(), ['None', 'UK'], 'the picker options are not None + UK');
+  assert.deepEqual(listJurisdictions().map(o => o.id).sort(), ['NZ', 'None', 'UK', 'US'], 'the picker-source options are not the shipped four');
   assert.ok(listJurisdictions().every(o => o.id && o.label), 'a picker option is missing an id or a label');
+  for (const held of ['CA', 'AU', 'DE', 'FR', 'NL', 'ZA', 'IE']) assert.ok(!JURISDICTIONS[held], held + ' shipped as a live entry — it is designed-but-HELD and must not be live until its receipt wording is verified');
+});
+
+// ── the Region picker lists ACTUAL schemes only (taxTool != null) — currency-only places are not regions ──
+test('listTaxRegions returns the real schemes only (UK, US, NZ) and never None', () => {
+  const ids = listTaxRegions().map(o => o.id).sort();
+  assert.deepEqual(ids, ['NZ', 'UK', 'US'], 'listTaxRegions is not exactly the three real schemes: ' + JSON.stringify(ids));
+  assert.ok(!ids.includes('None'), 'listTaxRegions offered None — None is the switch being off, not a region');
+  assert.ok(listTaxRegions().every(o => taxToolFor(o.id) != null), 'listTaxRegions returned an entry with no tax tool');
+});
+
+// ── US + NZ are verified CONTRIBUTION-STATEMENT regions; currency is DECOUPLED from the tool ────────────
+test('US and NZ are contribution-statement regions with their own currency defaults + address labels', () => {
+  assert.equal(taxToolFor('US'), 'contributionStatement', 'US did not resolve to the contribution-statement tool');
+  assert.equal(taxToolFor('NZ'), 'contributionStatement', 'NZ did not resolve to the contribution-statement tool');
+  assert.deepEqual(currencyDefaults('US'), { base: 'USD', decimals: 2, fiscalYearStart: '01-01' }, 'US currency default wrong');
+  assert.deepEqual(currencyDefaults('NZ'), { base: 'NZD', decimals: 2, fiscalYearStart: '04-01' }, 'NZ currency default wrong');
+  for (const id of ['US', 'NZ']) assert.ok(donorFields(id).includes('name') && donorFields(id).includes('address'), id + ' donor field set must carry name + address for the statement');
+  assert.equal(donorLabels('US').address, 'Mailing address', 'US address label is not "Mailing address"');
+  assert.equal(donorLabels('NZ').address, 'Postal address', 'NZ address label is not "Postal address"');
+});
+
+test('currency and tax tool are INDEPENDENT dimensions — same tool, different currencies', () => {
+  // US and NZ share a tool but NOT a currency: the scheme never implies a single currency, and the currency
+  // default is only a suggestion (the Book-settings picker sets the real currency, free of the region).
+  assert.equal(taxToolFor('US'), taxToolFor('NZ'), 're-anchor: US and NZ should share the contribution-statement tool');
+  assert.notEqual(currencyDefaults('US').base, currencyDefaults('NZ').base, 'two same-tool regions collapsed to one currency — currency is not decoupled from the tax scheme');
+});
+
+test('TAX_DISCLAIMER is exported, non-empty, and reads as a caveat (never retyped by the panels/exports)', () => {
+  assert.equal(typeof TAX_DISCLAIMER, 'string');
+  assert.ok(TAX_DISCLAIMER.length > 20, 'the tax disclaimer is empty/too short');
+  assert.ok(/not tax advice/i.test(TAX_DISCLAIMER), 'the disclaimer does not read as a tax caveat');
 });
 
 // ── resolve precedence (the migration rule) ─────────────────────────────────────────────────────────────

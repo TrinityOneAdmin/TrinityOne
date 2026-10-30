@@ -271,6 +271,10 @@
 <!-- UK Gift Aid regional pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the core does NOT
      import — exposes window.FinanceGiftAid, used by Finance only when church.features.giftAid === true -->
 <script src="vendor/finance-giftaid.js"></script>
+<!-- Shared contribution-statement regional pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the
+     core does NOT import — exposes window.FinanceContribution, used by Finance only when the active tax tool is
+     'contributionStatement' (US, New Zealand, …) -->
+<script src="vendor/finance-contribution.js"></script>
 <!-- optional Manna module (money-out / disbursements; encrypted to the church key); exposes window.StewardManna -->
 <script src="vendor/steward-manna.js"></script>
 <!-- optional Meal trains / practical-care module (community-glue); exposes window.StewardMeals -->

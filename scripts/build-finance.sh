@@ -8,3 +8,8 @@ echo "built vendor/finance-ledger.js ($(du -h vendor/finance-ledger.js | cut -f1
 # core stays nation-neutral (DOMAIN); the console loads this only when church.features.giftAid === true.
 npx esbuild src/finance-giftaid-bundle.mjs --bundle --format=iife --global-name=FinanceGiftAid --target=es2020 --legal-comments=none --outfile=vendor/finance-giftaid.js
 echo "built vendor/finance-giftaid.js ($(du -h vendor/finance-giftaid.js | cut -f1))"
+# Shared CONTRIBUTION-STATEMENT regional pack — a SEPARATE bundle (window.FinanceContribution), NOT folded into
+# the core above. Same nation-neutral seam as Gift Aid; the console loads this only when the active tax tool is
+# 'contributionStatement' (US, New Zealand, …).
+npx esbuild src/finance-contribution-bundle.mjs --bundle --format=iife --global-name=FinanceContribution --target=es2020 --legal-comments=none --outfile=vendor/finance-contribution.js
+echo "built vendor/finance-contribution.js ($(du -h vendor/finance-contribution.js | cut -f1))"

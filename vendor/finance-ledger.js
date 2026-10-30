@@ -32,6 +32,7 @@ var FinanceLedger = (() => {
     FX_ACCT: () => FX_ACCT,
     JURISDICTIONS: () => JURISDICTIONS,
     STATEMENT_SECTIONS: () => STATEMENT_SECTIONS,
+    TAX_DISCLAIMER: () => TAX_DISCLAIMER,
     accentInk: () => accentInk,
     accountHasPostings: () => accountHasPostings,
     addAccount: () => addAccount,
@@ -84,6 +85,7 @@ var FinanceLedger = (() => {
     journalCsvRows: () => journalCsvRows,
     lineKey: () => lineKey,
     listJurisdictions: () => listJurisdictions,
+    listTaxRegions: () => listTaxRegions,
     match: () => match,
     minorToMajorText: () => minorToMajorText,
     monthlyFundBalances: () => monthlyFundBalances,
@@ -1453,6 +1455,7 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
   }
 
   // src/finance-jurisdictions.mjs
+  var TAX_DISCLAIMER = "A best-effort guide, not tax advice \u2014 tax rules change, sometimes overnight, so always check these figures against your tax authority\u2019s current guidance (or your accountant) before you file or claim.";
   var JURISDICTIONS = {
     None: {
       id: "None",
@@ -1478,19 +1481,62 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
         }
       },
       taxTool: "giftAid"
+    },
+    // ── US — SHIPPED (expansion wave, 2026-10-30). A year-end per-donor CONTRIBUTION STATEMENT: an annual giving
+    //    summary the DONOR uses for their own deduction — NO church rebate, NO church filing (unlike Gift Aid). The
+    //    engine is the SHARED src/finance-pack-contribution.mjs (window.FinanceContribution). The statement a church
+    //    produces IS the valid written acknowledgment: IRS Pub 1771 blesses an annual summary that carries the org
+    //    name, the amount/date(s), and the "no goods or services … other than intangible religious benefits"
+    //    statement (that fixed wording lives as DATA in the pack's STATEMENT_RULES.US, traced to Pub 1771).
+    US: {
+      id: "US",
+      label: "United States",
+      currency: { base: "USD", decimals: 2, fiscalYearStart: "01-01" },
+      // SUGGESTED default only — currency is a free, independent Book setting
+      donor: { fields: ["name", "address"], labels: { name: "Name", address: "Mailing address" } },
+      taxTool: "contributionStatement"
+    },
+    // ── NZ — SHIPPED (expansion wave). Same shared CONTRIBUTION-STATEMENT engine. The DONOR claims a 33.33%
+    //    donation tax credit from Inland Revenue (NOT a church reclaim), and IRD requires a receipt per claimed
+    //    donation. A receipt showing the donee-org name, the donor, the amount/date and that no goods/services were
+    //    received is what IRD wants (STATEMENT_RULES.NZ, traced to ird.govt.nz) — no prescribed template to miss.
+    NZ: {
+      id: "NZ",
+      label: "New Zealand",
+      currency: { base: "NZD", decimals: 2, fiscalYearStart: "04-01" },
+      // NZ tax year 1 Apr–31 Mar; SUGGESTED default only
+      donor: { fields: ["name", "address"], labels: { name: "Name", address: "Postal address" } },
+      taxTool: "contributionStatement"
     }
-    // ── US — DESIGNED, NOT BUILT this round (owner: one pack at a time). Kept as a comment, not a live entry,
-    //    so the SHIPPED registry is UK + None only. The US tax tool is a year-end per-donor CONTRIBUTION
-    //    STATEMENT (an annual giving summary the DONOR uses for their own deduction — NO church rebate, unlike
-    //    Gift Aid). Adding it later is exactly one entry here plus a separate src/finance-pack-us.mjs engine:
-    //    US: { id:'US', label:'United States',
-    //          currency:{ base:'USD', decimals:2, fiscalYearStart:'01-01' },
-    //          donor:{ fields:['name','address'], labels:{ address:'Mailing address' } },
-    //          taxTool:'contributionStatement' },
+    // ── DESIGNED, HELD — NOT shipped this wave (CLAUDE.md rule 4 / owner: never ship guessed mandatory wording).
+    //    Each of these has a real charitable-giving scheme (see PLAN-JURISDICTION-EXPANSION-2026-10-30.md), but its
+    //    VALID receipt needs a prescribed official template or church-registration data we do not yet collect, so it
+    //    is NOT a live region (the Region picker lists ACTUAL schemes only; currency for these churches is handled by
+    //    the free Book-settings currency picker, no region needed). Flip each on in a focused wave once its receipt
+    //    wording is verified and the per-church registration gate is built:
+    //      · Canada (CA, CAD)  — official receipt is PRESCRIBED by Income Tax Reg. s.3501 (unique serial number,
+    //        BN/registration number, CRA web address, authorised signature, split-receipting). HELD: those fields
+    //        are church-registration data we don't collect; a summary without them is not a valid CRA receipt.
+    //      · Australia (AU, AUD, FY 07-01) — deductible only via a DGR; a church is NOT a DGR in its own right.
+    //        HELD: needs an explicit "this church operates a DGR fund (ABN …)" gate before any deductible receipt.
+    //      · Germany (DE, EUR)  — Zuwendungsbestätigung on the OFFICIAL template (§50 EStDV / BMF 07.11.2013).
+    //        HELD: the deduction depends on matching that prescribed template.
+    //      · France (FR, EUR)   — reçu fiscal on the Cerfa 11580 model + a post-2021 annual declaration. HELD: form.
+    //      · Netherlands (NL, EUR) — ANBI; the deductible instrument is a 5-year PERIODIC-GIFT AGREEMENT, not a
+    //        receipt. HELD: a plain summary is not the instrument.
+    //      · South Africa (ZA, ZAR, FY 03-01) — s18A receipt (prescribed content) PLUS an IT3(d) filing duty the
+    //        church inherits. HELD: receipt wording + the filing obligation need verification + a gate.
+    //      · Ireland (IE, EUR)  — the one new RECLAIM scheme (church claims money back, like Gift Aid): a blended
+    //        31% GROSSED-UP refund (= donation × 0.31/0.69 ≈ 44.93%), €250/yr minimum, CHY3/CHY4 certificates, caps.
+    //        HELD by explicit owner instruction: reclaim math ships only after Revenue's current rate/caps are
+    //        re-confirmed and legal signs off. Its engine (src/finance-pack-ie.mjs) is deliberately ABSENT for now.
   };
   var DEFAULT_JURISDICTION = "None";
   function listJurisdictions() {
     return Object.values(JURISDICTIONS).map((j) => ({ id: j.id, label: j.label }));
+  }
+  function listTaxRegions() {
+    return Object.values(JURISDICTIONS).filter((j) => j.taxTool != null).map((j) => ({ id: j.id, label: j.label }));
   }
   function getJurisdiction(id) {
     return JURISDICTIONS[id] || JURISDICTIONS[DEFAULT_JURISDICTION];
