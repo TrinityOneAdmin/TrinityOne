@@ -122,7 +122,7 @@ test('T3 — saving with the UK fields hidden PRESERVES the donor’s prior elig
 // moment, and nation-neutral-by-default ─────────────────────────────────────────────────────────────────
 // Owner change (2026-10-30): the standalone Region selector is now nested under Finance, behind its own
 // owner-only "Tax tools" switch (church.features.taxTools). Switch OFF → no Region picker; ON → the Region
-// <select> (real regions only, no None). Flipping OFF→ON pops a 1 Samuel 8:10–18 scripture moment. The panel
+// <select> (real regions only, no None). Flipping OFF→ON pops a 1 Samuel 8:17–18 scripture moment. The panel
 // reads the registry via window.FinanceLedger (real src module) and uses window.useStewDialog (stubbed).
 const furniture = (React) => ({
   Panel: function Panel({ title, children }) { return React.createElement('section', { 'data-panel': title }, children); },
@@ -282,7 +282,7 @@ test('turning Tax tools OFF does NOT pop the scripture moment', async () => {
 // TaxScriptureModal ITSELF — lifted and rendered directly, so we prove the passage text, the reference label,
 // a role="dialog", and that the single "Amen" dismiss calls onClose. (Extracted from DashFeaturesPanel so the
 // panel carries no dialog; registered in every-console-dialog-mounts.test.mjs.)
-test('TaxScriptureModal renders 1 Samuel 8:10–18 (WEB), a role="dialog", and an Amen dismiss that closes', async () => {
+test('TaxScriptureModal renders 1 Samuel 8:17–18 (WEB), a role="dialog", and an Amen dismiss that closes', async () => {
   const { React, draw } = miniReact();
   let closed = 0;
   const Modal = await loadComponent('app/stew-dashboard.jsx', 'TaxScriptureModal', 'function TaxScriptureModal(', {
@@ -290,11 +290,11 @@ test('TaxScriptureModal renders 1 Samuel 8:10–18 (WEB), a role="dialog", and a
   });
   const tree = draw(Modal, { onClose: () => { closed++; } });
   const dlg = find(tree, n => n.props && n.props.role === 'dialog' && /1 Samuel 8/.test(n.props['aria-label'] || ''))[0];
-  assert.ok(dlg, 'TaxScriptureModal did not render a role="dialog" labelled 1 Samuel 8:10–18');
+  assert.ok(dlg, 'TaxScriptureModal did not render a role="dialog" labelled 1 Samuel 8:17–18');
   const words = texts(tree).join(' ');
-  assert.ok(/1 Samuel 8:10/.test(words), 'the modal does not carry the 1 Samuel 8:10–18 reference');
-  assert.ok(/will take your sons/.test(words), 'the modal does not carry a line of the WEB passage (1 Sam 8:11)');
-  assert.ok(/a tenth of your flocks/.test(words), 'the modal does not carry the later passage text (1 Sam 8:17)');
+  assert.ok(/1 Samuel 8:17/.test(words), 'the modal does not carry the 1 Samuel 8:17–18 reference');
+  assert.ok(/a tenth of your flocks/.test(words), 'the modal does not carry the passage text (1 Sam 8:17)');
+  assert.ok(/will not answer you/.test(words), 'the modal does not carry the passage text (1 Sam 8:18)');
   const amen = find(tree, n => n.type === 'button' && /Amen/.test(texts(n).join(' ')))[0];
   assert.ok(amen, 'the modal has no "Amen" dismiss');
   amen.props.onClick({ stopPropagation() {} });
