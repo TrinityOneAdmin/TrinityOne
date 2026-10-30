@@ -730,7 +730,7 @@ var FinanceLedger = (() => {
     return "#" + hx(r) + hx(g) + hx(b);
   }
   var validLogo = (s) => /^data:image\//i.test(String(s || "").trim()) ? String(s).trim() : "";
-  function buildStatement(book, { from = "", to = "\uFFFF", title = "", note = "", sections = null, periodLabel = "", generatedAt = "", accent = "", logo = "" } = {}) {
+  function buildStatement(book, { from = "", to = "\uFFFF", title = "", note = "", sections = null, periodLabel = "", generatedAt = "", accent = "", logo = "", banner = "" } = {}) {
     const enabled = sections || STATEMENT_SECTIONS.filter((s) => s.on).map((s) => s.key);
     const has = (k) => enabled.includes(k);
     const nameOf = (id) => (book.accounts.get(id) || {}).name || id;
@@ -755,8 +755,10 @@ var FinanceLedger = (() => {
       sections: enabled,
       accent: validHex(accent),
       // the church's brand accent (hex) — colours the statement header/rules; '' → default
-      logo: validLogo(logo)
+      logo: validLogo(logo),
       // the church's dp/logo as a data: URI (letterhead); '' when none / not a data URI
+      banner: validLogo(banner)
+      // the church's banner as a data: URI (full-width letterhead above the logo); '' when none / not a data URI
     };
     if (has("summary")) model.summary = { income: ie.income, expenditure: ie.expenditure, surplus: ie.surplus };
     if (has("income")) model.income = incomeRows;
@@ -881,6 +883,7 @@ var FinanceLedger = (() => {
   * { box-sizing:border-box; }
   body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:var(--ink); max-width:640px; margin:0 auto; padding:40px 28px; line-height:1.5; }
   header { border-bottom:2px solid var(--accent); padding-bottom:14px; margin-bottom:8px; }
+  header img.banner { width:100%; max-height:120px; object-fit:cover; border-radius:10px; margin:0 0 12px; }
   header img.logo { height:48px; width:auto; max-width:180px; display:block; margin:0 0 12px; object-fit:contain; }
   h1 { font-size:26px; margin:0 0 2px; color:var(--accent); }
   .period { color:var(--ink3); font-size:15px; font-weight:600; }
@@ -895,7 +898,7 @@ var FinanceLedger = (() => {
   footer { margin-top:34px; padding-top:12px; border-top:1px solid var(--line); color:var(--ink3); font-size:12px; }
   @media print { body { padding:0; } @page { margin:18mm; } }
 </style></head><body>
-<header>${model.logo ? `<img class="logo" src="${esc(model.logo)}" alt="">` : ""}<h1>${esc(model.title)}</h1><div class="period">${esc(model.periodLabel)}</div></header>
+<header>${model.banner ? `<img class="banner" src="${esc(model.banner)}" alt="">` : ""}${model.logo ? `<img class="logo" src="${esc(model.logo)}" alt="">` : ""}<h1>${esc(model.title)}</h1><div class="period">${esc(model.periodLabel)}</div></header>
 ${S.join("\n")}
 <footer>${model.generatedAt ? "Generated " + esc(model.generatedAt) + " \xB7 " : ""}Prepared with TrinityOne \u2014 aggregate figures only.</footer>
 </body></html>`;
