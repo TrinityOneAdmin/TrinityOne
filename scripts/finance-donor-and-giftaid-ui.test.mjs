@@ -130,6 +130,10 @@ const furniture = (React) => ({
   Icon: function Icon() { return null; },
   DashMealsPanel: function DashMealsPanel() { return null; },
   DashGivingPanel: function DashGivingPanel() { return null; },
+  // The scripture moment is its OWN top-level component (extracted so the panel carries no role="dialog"). The
+  // DashFeaturesPanel slice references it by name, so supply a marker stub; its PRESENCE is what the OFF→ON
+  // test asserts. The modal's CONTENT (the 1 Samuel 8 text) is proven by lifting TaxScriptureModal itself below.
+  TaxScriptureModal: function TaxScriptureModal(props) { return React.createElement('div', { 'data-tax-scripture': true }); },
   stewCapState: () => ({ allowed: true, owner: true, why: '' }),
   useStewKeyRecipients: () => ({ approved: () => [] }),
 });
@@ -153,8 +157,10 @@ async function featuresPanel(church, { actingChurch = null } = {}) {
 const taxSwitch = (tree) => find(tree, n => n.props && n.props.role === 'switch' && /Toggle Tax tools/.test(n.props['aria-label'] || ''))[0];
 // the Region selector inside the subcard (aria-label "Region / jurisdiction")
 const regionSelect = (tree) => find(tree, n => n.type === 'select' && (n.props && /Region/.test(n.props['aria-label'] || '')))[0];
-// the scripture dialog (role=dialog, aria-label "1 Samuel 8:10–18")
-const scriptureDialog = (tree) => find(tree, n => n.props && n.props.role === 'dialog' && /1 Samuel 8/.test(n.props['aria-label'] || ''))[0];
+// the scripture moment — now its OWN component (extracted so the panel carries no role="dialog"); the panel
+// renders it as a <TaxScriptureModal> node, which the furniture stub above marks. Assert PRESENCE here; the
+// modal's text is proven by the direct-lift test at the end of the file.
+const scriptureDialog = (tree) => find(tree, n => typeof n.type === 'function' && n.type.name === 'TaxScriptureModal')[0];
 
 test('the Tax tools switch is on the Congregation features page (owner, Finance on), region picker hidden by default', async () => {
   const s = await featuresPanel({ features: {} });
@@ -211,17 +217,15 @@ test('the Tax tools subcard is hidden when the Finance feature is off (features.
 });
 
 // ── CHANGE C: the 1 Samuel 8 scripture moment on the OFF→ON flip ────────────────────────────────────────
-test('flipping Tax tools OFF→ON pops the 1 Samuel 8:10–18 scripture moment (with passage text)', async () => {
+// The panel pops it ONLY on OFF→ON. The modal is its own component (TaxScriptureModal); here we assert the
+// panel renders that node at the right moment. Its TEXT is proven by lifting TaxScriptureModal directly below.
+test('flipping Tax tools OFF→ON pops the scripture moment (the TaxScriptureModal component)', async () => {
   const s = await featuresPanel({ features: {} });   // OFF
   const tree0 = s.draw();
-  assert.ok(!scriptureDialog(tree0), 're-anchor: the scripture dialog is up before the toggle');
+  assert.ok(!scriptureDialog(tree0), 're-anchor: the scripture modal is up before the toggle');
   taxSwitch(tree0).props.onClick({ stopPropagation() {} });   // OFF → ON
   const tree1 = s.draw();                                      // re-render reads the new local state
-  const dlg = scriptureDialog(tree1);
-  assert.ok(dlg, 'flipping Tax tools on did not pop the 1 Samuel 8 scripture moment');
-  const words = texts(dlg).join(' ');
-  assert.ok(/1 Samuel 8:10/.test(words), 'the scripture moment does not carry the 1 Samuel 8:10–18 reference');
-  assert.ok(/will take your sons/.test(words), 'the scripture moment does not carry a line of the passage text (1 Sam 8:11)');
+  assert.ok(scriptureDialog(tree1), 'flipping Tax tools on did not pop the TaxScriptureModal scripture moment');
   // and the publish turned the switch on
   assert.equal(s.published.length, 1, 'flipping the switch published nothing');
   assert.equal(s.published[0].features.taxTools, true, 'flipping the switch on did not write features.taxTools = true');
@@ -237,4 +241,26 @@ test('turning Tax tools OFF does NOT pop the scripture moment', async () => {
   taxSwitch(s.draw()).props.onClick({ stopPropagation() {} });       // ON → OFF
   assert.ok(!scriptureDialog(s.draw()), 'the scripture moment fired when turning Tax tools OFF');
   assert.equal(s.published[0].features.taxTools, false, 'turning the switch off did not write features.taxTools = false');
+});
+
+// TaxScriptureModal ITSELF — lifted and rendered directly, so we prove the passage text, the reference label,
+// a role="dialog", and that the single "Amen" dismiss calls onClose. (Extracted from DashFeaturesPanel so the
+// panel carries no dialog; registered in every-console-dialog-mounts.test.mjs.)
+test('TaxScriptureModal renders 1 Samuel 8:10–18 (WEB), a role="dialog", and an Amen dismiss that closes', async () => {
+  const { React, draw } = miniReact();
+  let closed = 0;
+  const Modal = await loadComponent('app/stew-dashboard.jsx', 'TaxScriptureModal', 'function TaxScriptureModal(', {
+    React, window: { useStewDialog: () => ({ current: null }) },
+  });
+  const tree = draw(Modal, { onClose: () => { closed++; } });
+  const dlg = find(tree, n => n.props && n.props.role === 'dialog' && /1 Samuel 8/.test(n.props['aria-label'] || ''))[0];
+  assert.ok(dlg, 'TaxScriptureModal did not render a role="dialog" labelled 1 Samuel 8:10–18');
+  const words = texts(tree).join(' ');
+  assert.ok(/1 Samuel 8:10/.test(words), 'the modal does not carry the 1 Samuel 8:10–18 reference');
+  assert.ok(/will take your sons/.test(words), 'the modal does not carry a line of the WEB passage (1 Sam 8:11)');
+  assert.ok(/a tenth of your flocks/.test(words), 'the modal does not carry the later passage text (1 Sam 8:17)');
+  const amen = find(tree, n => n.type === 'button' && /Amen/.test(texts(n).join(' ')))[0];
+  assert.ok(amen, 'the modal has no "Amen" dismiss');
+  amen.props.onClick({ stopPropagation() {} });
+  assert.equal(closed, 1, 'the Amen dismiss did not call onClose');
 });

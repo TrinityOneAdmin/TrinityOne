@@ -11781,6 +11781,37 @@ window.DashChatTagsPanel = DashChatTagsPanel;
 // Congregation features — the steward chooses which parts of the app members see. Published on the
 // kind-0 profile as `features:{read,community,library}`; the member app hides the disabled tabs.
 // Unset = on (so existing churches are unaffected). Today (home) + Giving are controlled separately.
+// TAX TOOLS SCRIPTURE MOMENT — a stand-alone console dialog (its own role="dialog" + useStewDialog), popped by
+// DashFeaturesPanel on the OFF→ON flip of the Tax tools switch. 1 Samuel 8:10–18 — Samuel's warning about what
+// the king/state will take — a deliberate, knowing moment about engaging the tax system. The passage is the
+// WORLD ENGLISH BIBLE (PUBLIC DOMAIN), EMBEDDED for robustness (the steward may have no Bible installed, so we
+// do not depend on window.Bible). Registered in scripts/every-console-dialog-mounts.test.mjs ({ onClose }).
+function TaxScriptureModal({ onClose }) {
+  const dlgRef = window.useStewDialog ? window.useStewDialog(onClose) : { current: null };
+  const SAMUEL_8_WEB = [
+    '10 Samuel told all Yahweh’s words to the people who asked him for a king.',
+    '11 He said, “This will be the way of the king who shall reign over you: he will take your sons, and appoint them as his servants, for his chariots and to be his horsemen; and they will run before his chariots.',
+    '12 He will appoint them to him for captains of thousands, and captains of fifties; and he will assign some to plow his ground, and to reap his harvest, and to make his instruments of war, and the instruments of his chariots.',
+    '13 He will take your daughters to be perfumers, to be cooks, and to be bakers.',
+    '14 He will take your fields, your vineyards, and your olive groves, even their best, and give them to his servants.',
+    '15 He will take a tenth of your seed, and of your vineyards, and give it to his officers, and to his servants.',
+    '16 He will take your male servants, your female servants, your best young men, and your donkeys, and assign them to his own work.',
+    '17 He will take a tenth of your flocks; and you will be his servants.',
+    '18 You will cry out in that day because of your king whom you will have chosen for yourselves; and Yahweh will not answer you in that day.”',
+  ].join('\n');
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="1 Samuel 8:10–18" tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', maxHeight: '88vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)', padding: '22px 22px 18px', outline: 'none', boxShadow: '0 12px 40px rgba(0,0,0,.3)' }}>
+        <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 13, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--clay, #b4462f)', marginBottom: 10 }}>1 Samuel 8:10–18</div>
+        <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 15.5, lineHeight: 1.62, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{SAMUEL_8_WEB}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onClose} style={{ height: 44, padding: '0 26px', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14 }}>Amen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashFeaturesPanel({ church, show = null }) {
   const f = church.features || {};
   const on = (k) => f[k] !== false;   // default enabled
@@ -11823,29 +11854,15 @@ function DashFeaturesPanel({ church, show = null }) {
     : (taxOn ? 'UK' : 'None');
   const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, taxTools: true, jurisdiction: id, giftAid: id === 'UK' } }); };
   // The scripture "moment": 1 Samuel 8:10–18 pops ONLY on the OFF→ON flip of the switch (set in toggleTaxTools,
-  // never on load/render/off). State lives here; the dialog registers for Escape/back/focus via useStewDialog.
+  // never on load/render/off). State lives here; the modal itself is the top-level TaxScriptureModal component
+  // (its own role="dialog" + useStewDialog), so DashFeaturesPanel carries no dialog of its own.
   const [taxScripture, setTaxScripture] = React.useState(false);
-  const taxScriptureRef = window.useStewDialog ? window.useStewDialog(() => setTaxScripture(false), taxScripture) : { current: null };
   const toggleTaxTools = () => {
     const next = !taxOn;
     const region = next ? ((jxValue && jxValue !== 'None') ? jxValue : 'UK') : 'None';
     window.Steward.publishProfile({ features: { ...f, taxTools: next, giftAid: region === 'UK' } });
     if (next) setTaxScripture(true);   // OFF→ON only
   };
-  // 1 Samuel 8:10–18 — WORLD ENGLISH BIBLE (PUBLIC DOMAIN). Embedded for robustness: the steward may have no
-  // Bible installed, so we do not depend on window.Bible. Defined IN the component so the point-of-use slice
-  // test carries it (app/*.jsx share one global scope on the phone, so a module-level const would work too).
-  const SAMUEL_8_WEB = [
-    '10 Samuel told all Yahweh’s words to the people who asked him for a king.',
-    '11 He said, “This will be the way of the king who shall reign over you: he will take your sons, and appoint them as his servants, for his chariots and to be his horsemen; and they will run before his chariots.',
-    '12 He will appoint them to him for captains of thousands, and captains of fifties; and he will assign some to plow his ground, and to reap his harvest, and to make his instruments of war, and the instruments of his chariots.',
-    '13 He will take your daughters to be perfumers, to be cooks, and to be bakers.',
-    '14 He will take your fields, your vineyards, and your olive groves, even their best, and give them to his servants.',
-    '15 He will take a tenth of your seed, and of your vineyards, and give it to his officers, and to his servants.',
-    '16 He will take your male servants, your female servants, your best young men, and your donkeys, and assign them to his own work.',
-    '17 He will take a tenth of your flocks; and you will be his servants.',
-    '18 You will cry out in that day because of your king whom you will have chosen for yourselves; and Yahweh will not answer you in that day.”',
-  ].join('\n');
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
   const allGroups = window.useStewardGroups ? window.useStewardGroups() : [];
   const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -12040,19 +12057,10 @@ function DashFeaturesPanel({ church, show = null }) {
             ) : null}
           </div>
         ) : null}
-        {/* SCRIPTURE MOMENT — 1 Samuel 8:10–18 (World English Bible, public domain). Rendered INLINE (not a
-            child component) so it is part of this panel's own tree. Fires only via toggleTaxTools on OFF→ON. */}
-        {taxScripture ? (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70, padding: 16 }} onClick={() => setTaxScripture(false)}>
-            <div ref={taxScriptureRef} role="dialog" aria-modal="true" aria-label="1 Samuel 8:10–18" tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', maxHeight: '88vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)', padding: '22px 22px 18px', outline: 'none', boxShadow: '0 12px 40px rgba(0,0,0,.3)' }}>
-              <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 13, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--clay, #b4462f)', marginBottom: 10 }}>1 Samuel 8:10–18</div>
-              <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 15.5, lineHeight: 1.62, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{SAMUEL_8_WEB}</div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
-                <button onClick={() => setTaxScripture(false)} style={{ height: 44, padding: '0 26px', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14 }}>Amen</button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        {/* SCRIPTURE MOMENT — its OWN top-level dialog component (TaxScriptureModal), so this panel carries no
+            role="dialog" of its own and the whole-console dialog-mount gate stays satisfied. Fires only via
+            toggleTaxTools on the OFF→ON flip. */}
+        {taxScripture ? <TaxScriptureModal onClose={() => setTaxScripture(false)} /> : null}
         {/* PRACTICAL CARE AND GIVING ARE ROWS HERE, not cards of their own. Both were a Panel wrapping a
             single switch, and the Features tab read as five boxes of equal weight when two of them were one
             toggle each. Practical care first: it is a live control a church turns on and uses. Giving last,
