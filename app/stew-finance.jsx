@@ -1528,6 +1528,35 @@ async function fsSavePdf(doc, fname) {
   return saveConsoleFile(fname, b64, { mime: 'application/pdf', base64: true, title: 'Financial statement', blurb: 'Open it to print or share.' });
 }
 
+// THE renderable ['card','1'] finance envelope, built from a statement `model`. ONE source of truth for BOTH
+// the posted member card (postStatementToMembers) AND the in-dialog preview (FinanceShareStatement renders it
+// through ConsoleFinanceCard) — so what the treasurer previews is byte-for-byte what members receive, and the
+// two can never drift. NAME-FREE by construction: ONLY aggregate labels (category/fund names) + minor-unit
+// figures are copied — never a member/donor name, never a per-person row. Money stays in MINOR units exactly as
+// the model carries it. Banner/logo are NOT inlined (anti-beacon) — only the `branded` flag rides; the member
+// app and ConsoleFinanceCard pull banner/logo from the church profile they already hold. Matches
+// CARD-ENVELOPE-contract.md and the member renderer fixture (scripts/a-finance-statement-renders-as-a-branded-card.test.mjs).
+// Callers (rule 2): postStatementToMembers (DashFinanceBook) + FinanceShareStatement preview — both below.
+function financeCardEnvelope(model, { branded = true, churchName = '' } = {}) {
+  const sections = [];
+  if (model.summary) sections.push({ kind: 'summary', income: model.summary.income, expenditure: model.summary.expenditure, surplus: model.summary.surplus });
+  if (model.income && model.income.length) sections.push({ kind: 'rows', label: 'Income by category', rows: model.income.map(r => ({ name: r.name, amount: r.amount })) });
+  if (model.spending && model.spending.length) sections.push({ kind: 'rows', label: 'Spending by category', rows: model.spending.map(r => ({ name: r.name, amount: r.amount })) });
+  if (model.funds && model.funds.length) sections.push({ kind: 'rows', label: 'Fund balances (closing)', tag: true, rows: model.funds.map(r => ({ name: r.name, kind: r.kind, balance: r.balance })) });
+  // The treasurer's NOTE (the 'note' section, when ticked and filled) rides as its own card section.
+  if (model.note && model.note.trim()) sections.push({ kind: 'note', text: model.note.trim() });
+  return {
+    type: 'finance',
+    title: churchName || model.title || 'Financial statement',
+    periodLabel: model.periodLabel || '',
+    sections,
+    branded: branded !== false,
+    currency: model.currency,
+    decimals: model.decimals,
+    generatedAt: model.generatedAt || '',
+  };
+}
+
 function FinanceShareStatement({ book, F, churchName, accent, logo, banner, canPost, groups, onPostToMembers, onClose }) {
   // resolve the church dp/logo to a self-contained data: URI (invImgDataUrl lives in stew-dashboard.jsx; shared
   // steward bundle). Kept in state so the live preview, the HTML download and the PDF all embed the same image.
@@ -1603,16 +1632,16 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, banner, canP
     catch (e) { setFlash(e && e.message ? e.message : 'Could not post to members.'); setPosting(false); }
   };
 
-  const fmt = m => F.fmtMoney(m, book.baseCurrency, book.decimals);
   const presetBtn = (v, label) => (
     <button key={v} onClick={() => setPreset(v)} title={'Show the report for: ' + label} style={{ padding: '7px 12px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5,
       border: '1px solid ' + (preset === v ? 'var(--clay)' : 'var(--line)'), background: preset === v ? 'var(--clay)' : 'transparent', color: preset === v ? '#fff' : 'var(--ink)' }}>{label}</button>
   );
-  const prevRows = (rows, valKey, tag) => rows.map(r => (
-    <div key={r.fund || r.account} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
-      <span style={{ color: 'var(--ink-2, var(--ink))' }}>{r.name}{tag && r.kind !== 'general' ? ' · ' + r.kind : ''}</span><span style={{ fontWeight: 700 }}>{fmt(r[valKey])}</span>
-    </div>
-  ));
+  // The preview IS the posted card: the SAME envelope postStatementToMembers emits (financeCardEnvelope), drawn
+  // by the SAME ConsoleFinanceCard members' stewards see — so preview == result and the two cannot drift. The
+  // banner/logo are read from previewChurch (the raw profile data: URIs the member/console card validates), and
+  // the `branded` toggle feeds the envelope so the card shows/hides them exactly as a real post does.
+  const previewEnvelope = React.useMemo(() => financeCardEnvelope(model, { branded, churchName }), [model, branded, churchName]);
+  const previewChurch = { name: churchName, picture: logo, banner, accent };
 
   const dlgRef = useStewDialog(onClose);
   return (
@@ -1654,24 +1683,12 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, banner, canP
             <input type="checkbox" checked={branded} onChange={e => setBranded(e.target.checked)} /> Show church banner &amp; logo
           </label>
 
-          {/* live preview of exactly what will be shared — honours the branding toggle (banner + logo when on, neither when off) */}
-          <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 14, marginTop: 14, background: 'var(--surface-2, #f7f3ec)' }}>
-            {branded && bannerData ? <img src={bannerData} alt="" style={{ width: '100%', maxHeight: 90, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 8 }} /> : null}
-            {branded && logoData ? <img src={logoData} alt="" style={{ height: 34, maxWidth: 130, objectFit: 'contain', display: 'block', marginBottom: 8 }} /> : null}
-            <div style={{ fontWeight: 800, fontSize: 15, fontFamily: 'var(--font-display, var(--font-ui))', color: accent || undefined, borderTop: '3px solid ' + (accent || 'var(--ink)'), paddingTop: 8 }}>{title || 'Financial statement'}</div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginBottom: 8 }}>{period.label}</div>
-            {model.summary && <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}><span>Total income</span><span style={{ fontWeight: 700, color: 'var(--sage, #4f7a5e)' }}>{fmt(model.summary.income)}</span></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}><span>Total spending</span><span style={{ fontWeight: 700, color: 'var(--clay-deep, #b4462f)' }}>{fmt(model.summary.expenditure)}</span></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, padding: '5px 0 0', marginTop: 4, borderTop: '1px solid var(--line)', fontWeight: 800 }}><span>{model.summary.surplus < 0 ? 'Deficit' : 'Surplus'}</span><span>{fmt(model.summary.surplus)}</span></div>
-            </div>}
-            {model.income && model.income.length ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Income by category</div>{prevRows(model.income, 'amount')}</div> : null}
-            {model.spending && model.spending.length ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Spending by category</div>{prevRows(model.spending, 'amount')}</div> : null}
-            {model.funds && model.funds.length ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Fund balances (closing)</div>{prevRows(model.funds, 'balance', true)}</div> : null}
-            {model.balance ? <div style={{ marginTop: 10 }}><div style={bkLbl}>Balance sheet</div>
-              {prevRows([{ account: 'a', name: 'Assets', amount: model.balance.assets }, { account: 'l', name: 'Liabilities', amount: model.balance.liabilities }, { account: 'n', name: 'Net funds', amount: model.balance.funds }], 'amount')}</div> : null}
-            {model.note ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--ink-3)', whiteSpace: 'pre-wrap' }}><span style={bkLbl}>Note</span>{model.note}</div> : null}
-            {!enabledKeys.length && <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Tick at least one section to include.</div>}
+          {/* live preview — renders the REAL ConsoleFinanceCard (stew-cards.jsx, loaded before this file) from the
+              SAME envelope the post emits, so the treasurer previews exactly what members receive. */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
+            {enabledKeys.length
+              ? <ConsoleFinanceCard card={previewEnvelope} church={previewChurch} />
+              : <div style={{ fontSize: 13, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 12, padding: 14, width: '100%' }}>Tick at least one section to include.</div>}
           </div>
         </div>
 
@@ -2061,36 +2078,15 @@ function DashFinanceBook() {
     const groupId = targetId || (broadcastGroup && broadcastGroup.id);
     if (!groupId) throw new Error('No channel to post to. Create a broadcast group first.');
     const lead = (model.title || 'Financial statement') + ' — ' + (model.periodLabel || '') + '\n\n';
-    // CARD ENVELOPE (PLAN-UX-E / Stream G, 2026-10-30): attach the SAME aggregate buildStatement `model` as a
+    // CARD ENVELOPE (PLAN-UX-E / Stream G, 2026-10-30): attach the aggregate buildStatement `model` as a
     // structured ['card','1',json] tag so a NEW member app can draw a branded finance card, while the plain
-    // `lead + text` body stays the fallback every OLD app shows. Matches CARD-ENVELOPE-contract.md and the
-    // member renderer fixture (scripts/a-finance-statement-renders-as-a-branded-card.test.mjs) byte-for-byte.
-    // NAME-FREE by construction: we copy ONLY aggregate labels (category/fund names) + minor-unit figures —
-    // never a member/donor name, never a per-person row (statements are aggregate by design). Money stays in
-    // MINOR units exactly as the model carries it. The logo/accent are NOT inlined — the member app pulls them
-    // from the church profile it already holds (thin-pipe / anti-beacon).
-    const cardSections = [];
-    if (model.summary) cardSections.push({ kind: 'summary', income: model.summary.income, expenditure: model.summary.expenditure, surplus: model.summary.surplus });
-    if (model.income && model.income.length) cardSections.push({ kind: 'rows', label: 'Income by category', rows: model.income.map(r => ({ name: r.name, amount: r.amount })) });
-    if (model.spending && model.spending.length) cardSections.push({ kind: 'rows', label: 'Spending by category', rows: model.spending.map(r => ({ name: r.name, amount: r.amount })) });
-    if (model.funds && model.funds.length) cardSections.push({ kind: 'rows', label: 'Fund balances (closing)', tag: true, rows: model.funds.map(r => ({ name: r.name, kind: r.kind, balance: r.balance })) });
-    // The treasurer's NOTE (the 'note' section, when ticked and filled) rides as its own card section so the
-    // member card shows it under the figures — the same aggregate, name-free note the PDF carries.
-    if (model.note && model.note.trim()) cardSections.push({ kind: 'note', text: model.note.trim() });
-    // BRANDED (2026-10-30): whether the member card shows the church banner + logo. Default on; the "Show church
-    // banner & logo" toggle in FinanceShareStatement can switch it off for a plain card. The branding itself is
-    // NOT inlined — only this flag — so the member app still pulls banner/logo from the profile it holds.
+    // `lead + text` body stays the fallback every OLD app shows. Built by financeCardEnvelope() — the SAME
+    // helper the dialog preview renders through ConsoleFinanceCard, so preview == what members receive.
+    // BRANDED (2026-10-30): whether the card shows the church banner + logo. Default on; the "Show church banner
+    // & logo" toggle can switch it off. The branding is NOT inlined — only this flag — so the member app pulls
+    // banner/logo from the profile it holds (thin-pipe / anti-beacon).
     const branded = !opts || opts.branded !== false;
-    const cardEnvelope = {
-      type: 'finance',
-      title: church.name || model.title || 'Financial statement',
-      periodLabel: model.periodLabel || '',
-      sections: cardSections,
-      branded: branded,
-      currency: model.currency,
-      decimals: model.decimals,
-      generatedAt: model.generatedAt || '',
-    };
+    const cardEnvelope = financeCardEnvelope(model, { branded, churchName: church.name });
     // THE FOURTH CALLER OF publishPost, and it had the same hole as the two in stew-dashboard.jsx:
     // publishPost RESOLVES `false` when the publish set was empty or every relay refused — it never throws —
     // so awaiting it alone let doPost() in FinanceShareStatement print "Shared with members." over a
