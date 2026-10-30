@@ -40,9 +40,11 @@ test('on a gapped book, Record and Import are disabled and a warning shows', asy
     relayAuthed: () => true,
   });
   const { window } = fakeBrowser({ Steward });
-  const _store = await import('../src/finance-store.mjs');
-  const _ledger = await import('../src/finance-ledger.mjs');
-  window.FinanceLedger = { ..._ledger, ..._store };
+  // The real console loads the WHOLE finance bundle (window.FinanceLedger = vendor/finance-ledger.js),
+  // which includes finance-statement (F.yearRange, called by the reports code at render). A partial
+  // {ledger,store} stub broke once Phase 4a's reports render path landed — mirror the real bundle instead.
+  const _bundle = await import('../src/finance-bundle.mjs');
+  window.FinanceLedger = { ..._bundle };
   const mods = loadConsole({ React, window, expr: '{ DashFinanceBook }' });
 
   let tree;
