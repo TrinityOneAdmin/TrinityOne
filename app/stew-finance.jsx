@@ -2009,13 +2009,35 @@ function DashFinanceBook() {
     const groupId = targetId || (broadcastGroup && broadcastGroup.id);
     if (!groupId) throw new Error('No channel to post to. Create a broadcast group first.');
     const lead = (model.title || 'Financial statement') + ' — ' + (model.periodLabel || '') + '\n\n';
+    // CARD ENVELOPE (PLAN-UX-E / Stream G, 2026-10-30): attach the SAME aggregate buildStatement `model` as a
+    // structured ['card','1',json] tag so a NEW member app can draw a branded finance card, while the plain
+    // `lead + text` body stays the fallback every OLD app shows. Matches CARD-ENVELOPE-contract.md and the
+    // member renderer fixture (scripts/a-finance-statement-renders-as-a-branded-card.test.mjs) byte-for-byte.
+    // NAME-FREE by construction: we copy ONLY aggregate labels (category/fund names) + minor-unit figures —
+    // never a member/donor name, never a per-person row (statements are aggregate by design). Money stays in
+    // MINOR units exactly as the model carries it. The logo/accent are NOT inlined — the member app pulls them
+    // from the church profile it already holds (thin-pipe / anti-beacon).
+    const cardSections = [];
+    if (model.summary) cardSections.push({ kind: 'summary', income: model.summary.income, expenditure: model.summary.expenditure, surplus: model.summary.surplus });
+    if (model.income && model.income.length) cardSections.push({ kind: 'rows', label: 'Income by category', rows: model.income.map(r => ({ name: r.name, amount: r.amount })) });
+    if (model.spending && model.spending.length) cardSections.push({ kind: 'rows', label: 'Spending by category', rows: model.spending.map(r => ({ name: r.name, amount: r.amount })) });
+    if (model.funds && model.funds.length) cardSections.push({ kind: 'rows', label: 'Fund balances (closing)', tag: true, rows: model.funds.map(r => ({ name: r.name, kind: r.kind, balance: r.balance })) });
+    const cardEnvelope = {
+      type: 'finance',
+      title: church.name || model.title || 'Financial statement',
+      periodLabel: model.periodLabel || '',
+      sections: cardSections,
+      currency: model.currency,
+      decimals: model.decimals,
+      generatedAt: model.generatedAt || '',
+    };
     // THE FOURTH CALLER OF publishPost, and it had the same hole as the two in stew-dashboard.jsx:
     // publishPost RESOLVES `false` when the publish set was empty or every relay refused — it never throws —
     // so awaiting it alone let doPost() in FinanceShareStatement print "Shared with members." over a
     // statement no member received. Nothing typed is lost here (the text is rebuilt from the book), but the
     // claim was still false. Throw, so the existing catch in doPost shows the reason and keeps the dialog open.
     // A sealed group with no key makes publishPost resolve `null` → the throw fires honestly, same as a refusal.
-    const ok = await S.publishPost(lead + text, groupId);
+    const ok = await S.publishPost(lead + text, groupId, null, [['card', '1', JSON.stringify(cardEnvelope)]]);
     if (!ok) throw new Error('That didn’t post — nothing reached your church. Check your connection and try again.');
   };
   React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving

@@ -8541,7 +8541,7 @@ window.Steward = {
   // ['e', id, '', 'reply'] and a ['p', author]. They are APPENDED after ['p', pub] — which must stay first
   // and present, because subscribeGroupChat/subscribeGroup scope on it. The relay scopes a kind-1 by the
   // group's ['t'] tag (GROUP_CHURCH), not by p-tags, so these tags change neither church nor membership gate.
-  publishPost(content, group, replyTo) {
+  publishPost(content, group, replyTo, extraTags = []) {
     if (!sk) return Promise.resolve(null);
     let body = content || '', encTag = [];
     const gkey = group && (_skeys[group] || [])[0];
@@ -8551,7 +8551,7 @@ window.Steward = {
       console.warn('[steward] refusing plaintext post into sealed room — no key for', group);
       return Promise.resolve(null);
     }
-    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : [])], content: body }));
+    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : []), ...(Array.isArray(extraTags) ? extraTags : [])], content: body }));
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
   // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
