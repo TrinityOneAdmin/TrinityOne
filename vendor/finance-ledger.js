@@ -55,6 +55,7 @@ var FinanceLedger = (() => {
     creditNoteEntry: () => creditNoteEntry,
     docFor: () => docFor,
     dropFrom: () => dropFrom,
+    fiscalYearRange: () => fiscalYearRange,
     fmtMoney: () => fmtMoney,
     foreignBalances: () => foreignBalances,
     foreignCashAccount: () => foreignCashAccount,
@@ -78,6 +79,8 @@ var FinanceLedger = (() => {
     lineKey: () => lineKey,
     match: () => match,
     minorToMajorText: () => minorToMajorText,
+    monthlyFundBalances: () => monthlyFundBalances,
+    monthlyTotals: () => monthlyTotals,
     openBills: () => openBills,
     openInvoices: () => openInvoices,
     parseCsv: () => parseCsv,
@@ -100,6 +103,7 @@ var FinanceLedger = (() => {
     templateImportKey: () => templateImportKey,
     templatePost: () => templatePost,
     trialBalance: () => trialBalance,
+    yearEndProjection: () => yearEndProjection,
     yearRange: () => yearRange
   });
 
@@ -1296,6 +1300,144 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
   }
   function openBills(bills, journalEntries, todayLocalISO) {
     return (bills || []).map((b) => ({ bill: b, status: billStatus(b, todayLocalISO, journalEntries), outstanding: billOutstanding(b.id, journalEntries), total: billTotal(b) })).filter((x) => x.status !== "paid");
+  }
+
+  // src/finance-charts.mjs
+  var END2 = "\uFFFF";
+  function dayMs(iso) {
+    const [y, m, d] = String(iso).split("-").map(Number);
+    return Date.UTC(y, (m || 1) - 1, d || 1);
+  }
+  function dayDiff(a, b) {
+    return Math.round((dayMs(b) - dayMs(a)) / 864e5);
+  }
+  function addDays(iso, n) {
+    const d = new Date(dayMs(iso) + n * 864e5);
+    return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
+  }
+  var monthKey = (iso) => String(iso).slice(0, 7);
+  function stepMonth(ym) {
+    let [y, m] = ym.split("-").map(Number);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    return y + "-" + String(m).padStart(2, "0");
+  }
+  function monthList(fromYM, toYM) {
+    const out = [];
+    let cur = fromYM;
+    for (let i = 0; i < 1200 && cur <= toYM; i++) {
+      out.push(cur);
+      cur = stepMonth(cur);
+    }
+    return out;
+  }
+  function fundDelta2(book, p) {
+    if (!p.fund) return 0;
+    if (p.account === FUND_TRANSFER_ACCT) return p.dir === "cr" ? p.amount : -p.amount;
+    const a = book.accounts.get(p.account);
+    if (!a) return 0;
+    if (a.type === "income") return p.dir === "cr" ? p.amount : -p.amount;
+    if (a.type === "expense") return p.dir === "dr" ? -p.amount : p.amount;
+    return 0;
+  }
+  function fiscalYearRange(today, fiscalYearStart = "01-01") {
+    const t = String(today);
+    const mmdd = /^\d{2}-\d{2}$/.test(String(fiscalYearStart)) ? String(fiscalYearStart) : "01-01";
+    const y = Number(t.slice(0, 4));
+    const cand = y + "-" + mmdd;
+    const from = cand <= t ? cand : y - 1 + "-" + mmdd;
+    const fromYear = Number(from.slice(0, 4));
+    const to = addDays(fromYear + 1 + "-" + mmdd, -1);
+    const label = mmdd === "01-01" ? String(fromYear) : fromYear + "/" + (fromYear + 1);
+    return { from, to, label };
+  }
+  function yearEndProjection(book, { today = "", fiscalYearStart = "01-01" } = {}) {
+    const { from, to, label } = fiscalYearRange(today, fiscalYearStart);
+    const ytd = incomeExpenditure(book, { from, to: today });
+    const totalDays = dayDiff(from, to) + 1;
+    let elapsedDays = dayDiff(from, today) + 1;
+    if (elapsedDays < 0) elapsedDays = 0;
+    if (elapsedDays > totalDays) elapsedDays = totalDays;
+    const fraction = totalDays > 0 ? elapsedDays / totalDays : 0;
+    const scale = (v) => fraction > 0 ? Math.round(v / fraction) : 0;
+    const pIncome = scale(ytd.income), pExp = scale(ytd.expenditure);
+    return {
+      from,
+      to,
+      label,
+      today: String(today),
+      elapsedDays,
+      totalDays,
+      fraction,
+      ytd: { income: ytd.income, expenditure: ytd.expenditure, surplus: ytd.surplus },
+      projected: { income: pIncome, expenditure: pExp, surplus: pIncome - pExp },
+      lowConfidence: fraction < 1 / 12
+    };
+  }
+  function monthlyTotals(book, { from = "", to = END2 } = {}) {
+    const buckets = /* @__PURE__ */ new Map();
+    for (const e of book.journal) {
+      if (e.date < from || e.date > to) continue;
+      const ym = monthKey(e.date);
+      for (const p of e.postings) {
+        const a = book.accounts.get(p.account);
+        if (!a || a.type !== "income" && a.type !== "expense") continue;
+        const signed = a.type === "income" ? p.dir === "cr" ? p.amount : -p.amount : p.dir === "dr" ? p.amount : -p.amount;
+        let b = buckets.get(ym);
+        if (!b) {
+          b = { income: 0, expenditure: 0 };
+          buckets.set(ym, b);
+        }
+        if (a.type === "income") b.income += signed;
+        else b.expenditure += signed;
+      }
+    }
+    const dates = book.journal.map((e) => e.date).filter(Boolean);
+    const loYM = from ? monthKey(from) : dates.length ? monthKey(dates.reduce((a, b) => a < b ? a : b)) : "";
+    const hiYM = to && to !== END2 ? monthKey(to) : dates.length ? monthKey(dates.reduce((a, b) => a > b ? a : b)) : loYM;
+    const months = loYM ? monthList(loYM, hiYM < loYM ? loYM : hiYM) : [];
+    return months.map((ym) => {
+      const b = buckets.get(ym) || { income: 0, expenditure: 0 };
+      return { month: ym, income: b.income, expenditure: b.expenditure, surplus: b.income - b.expenditure };
+    });
+  }
+  function monthlyFundBalances(book, { from = "", to = END2 } = {}) {
+    const dates = book.journal.map((e) => e.date).filter(Boolean);
+    const loYM = from ? monthKey(from) : dates.length ? monthKey(dates.reduce((a, b) => a < b ? a : b)) : "";
+    const hiYM = to && to !== END2 ? monthKey(to) : dates.length ? monthKey(dates.reduce((a, b) => a > b ? a : b)) : loYM;
+    const months = loYM ? monthList(loYM, hiYM < loYM ? loYM : hiYM) : [];
+    const perMonth = /* @__PURE__ */ new Map();
+    for (const e of book.journal) {
+      const ym = monthKey(e.date);
+      for (const p of e.postings) {
+        const d = fundDelta2(book, p);
+        if (d === 0) continue;
+        let fm = perMonth.get(ym);
+        if (!fm) {
+          fm = /* @__PURE__ */ new Map();
+          perMonth.set(ym, fm);
+        }
+        fm.set(p.fund, (fm.get(p.fund) || 0) + d);
+      }
+    }
+    const funds = [...book.funds.values()];
+    const running = new Map(funds.map((f) => [f.id, 0]));
+    if (loYM) {
+      for (const [ym, fm] of perMonth) if (ym < loYM) for (const [fund, d] of fm) running.set(fund, (running.get(fund) || 0) + d);
+    }
+    const series = new Map(funds.map((f) => [f.id, []]));
+    for (const ym of months) {
+      const fm = perMonth.get(ym);
+      if (fm) for (const [fund, d] of fm) running.set(fund, (running.get(fund) || 0) + d);
+      for (const f of funds) series.get(f.id).push(running.get(f.id) || 0);
+    }
+    return {
+      months,
+      funds: funds.map((f) => ({ fund: f.id, name: f.name, kind: f.kind, balances: series.get(f.id) })).sort((a, b) => a.fund === "general" ? -1 : b.fund === "general" ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    };
   }
   return __toCommonJS(finance_bundle_exports);
 })();
