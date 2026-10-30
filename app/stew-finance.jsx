@@ -15,16 +15,24 @@ const CCY_SYM = { GBP: '£', USD: '$', EUR: '€', sats: '⚡' };
 // is not the church's giving feature (that is `givingOn` in the member app, also off). Off because the
 // addresses below are not ours yet — and an unclaimed handle in a donation prompt is money going to whoever
 // registers it first. Restore: true, once DONATE.ln and DONATE.alt are real and owned.
-const DONATE_ON = false;
+// ⚠ ON for the TEST build (funnel) with a PLACEHOLDER address so the owner can see the prompt + Support button.
+// DONATE.ln below is NOT ours yet — an unclaimed handle in a live prompt is money going to whoever registers it
+// first. DO NOT merge this ON to main until DONATE.ln is a REAL, OWNED Lightning address/LNURL. (DOMAIN: the
+// steward donation ask was parked for the pilot; this build re-enables it on the owner's instruction, test-only.)
+const DONATE_ON = true;
 const DONATE_LS = 'trinityone.books.donateHiddenUntil';
+const DONATE_DUE_LS = 'trinityone.books.donateNextDue';   // monthly cadence: don't prompt again before this time
 const DONATE = {
   ln: 'donate@trinityone.church',        // TODO(owner): real Lightning address / LNURL for donations
   alt: '',                               // TODO(owner): a real, OWNED donation link. Was 'https://strike.me/trinityone' — an unclaimed public handle anyone could register. '' hides the button.
   suggest: ['£5', '£10', '£25'],
-  hideDays: 90,
+  hideDays: 90,                          // after a gift, snooze the prompt ~3 months
+  everyDays: 30,                         // otherwise prompt at most once a month
 };
-let _booksDonateShown = false;           // once per app session
+let _booksDonateShown = false;           // once per app session (belt-and-braces over the monthly LS gate)
 function booksDonateHiddenUntil() { try { return parseInt(localStorage.getItem(DONATE_LS) || '0', 10) || 0; } catch (e) { return 0; } }
+function booksDonateNextDue() { try { return parseInt(localStorage.getItem(DONATE_DUE_LS) || '0', 10) || 0; } catch (e) { return 0; } }
+function booksDonateMarkShown() { try { localStorage.setItem(DONATE_DUE_LS, String(Date.now() + DONATE.everyDays * 864e5)); } catch (e) {} }
 function booksDonateGave() { try { localStorage.setItem(DONATE_LS, String(Date.now() + DONATE.hideDays * 864e5)); } catch (e) {} }
 
 // `ccy` is the jurisdiction's currency DEFAULT ({ base, decimals, fiscalYearStart }), passed by the empty-book
@@ -2104,9 +2112,9 @@ function DashFinanceBook() {
     const ok = await S.publishPost(lead + text, groupId, null, [['card', '1', JSON.stringify(cardEnvelope)]]);
     if (!ok) throw new Error('That didn’t post — nothing reached your church. Check your connection and try again.');
   };
-  React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving
-    if (!DONATE_ON || _booksDonateShown || Date.now() < booksDonateHiddenUntil()) return;
-    _booksDonateShown = true; setDonate(true);
+  React.useEffect(() => {   // gentle donation nudge — at most MONTHLY, snoozed ~3 months after a gift, once per session
+    if (!DONATE_ON || _booksDonateShown || Date.now() < booksDonateHiddenUntil() || Date.now() < booksDonateNextDue()) return;
+    _booksDonateShown = true; booksDonateMarkShown(); setDonate(true);
   }, []);
 
   // Discard a local entry the relay refused. NOT history editing: an entry nothing accepted is not history,
@@ -2786,6 +2794,9 @@ function DashFinanceBook() {
           {/* Share statement lives HERE (header), not in the Transactions tab's card — it is a whole-screen
               action, reachable from any tab. Not disabled on bookErrors: it only reads + posts a summary. */}
           <button onClick={() => setSharing(true)} title="Choose what to share and send a statement to members" className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="share" size={16} color="var(--ink)" /> Share statement</button>
+          {/* Small, always-available "support the project" affordance — opens the same BooksDonate panel the
+              monthly nudge uses. Deliberately quiet (ghost, ink-3) so it never competes with the real tools. */}
+          <button onClick={() => setDonate(true)} title="Support TrinityOne — a gift helps cover the shared relays" className="sk-btn" style={{ padding: '10px 14px', fontSize: 13, border: '1px solid var(--line)', background: 'transparent', color: 'var(--ink-3)' }}><Icon name="gift" size={15} color="var(--clay)" /> Support the project</button>
         </div>
       </div>
 
