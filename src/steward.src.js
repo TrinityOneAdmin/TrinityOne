@@ -10230,9 +10230,18 @@ window.Steward = {
       if (expIn && Object.prototype.hasOwnProperty.call(expIn, p)) {
         const raw = expIn[p];
         if (raw) {
-          const w = permissionWindow('dated', { until: String(raw), at: now() });
-          if (!w) throw new Error('That clearance expiry date could not be used. Choose a real date that is in the future and no more than about a year ahead — it is not back-dated, and nothing renews it on its own.');
-          expiry[p] = w.until;
+          if (typeof raw === 'number') {
+            // ALREADY-VALIDATED SECONDS, CARRIED FORWARD UNCHANGED. A 'YYYY-MM-DD' string is a date a church
+            // just TYPED, so it is re-validated below (and refused if beyond the cap). A number is a date this
+            // product itself already stored and is moving — a device re-seat carrying the old key's date onto
+            // the new one — so it is taken as-is and NOT re-validated: the record must survive a phone change
+            // even if it is close to lapsing or has already lapsed, exactly as `cleared` survives it.
+            if (Number.isInteger(raw) && raw > 0) expiry[p] = raw;
+          } else {
+            const w = permissionWindow('dated', { until: String(raw), at: now() });
+            if (!w) throw new Error('That clearance expiry date could not be used. Choose a real date that is in the future and no more than about a year ahead — it is not back-dated, and nothing renews it on its own.');
+            expiry[p] = w.until;
+          }
         }   // a falsy override REMOVES the date: leave expiry[p] unset
       } else if (Number.isInteger(priorExp[p]) && priorExp[p] > 0) {
         expiry[p] = priorExp[p];   // nobody touched this person's date — keep what we hold
@@ -10722,11 +10731,16 @@ window.Steward = {
     if (wasCleared && appr.indexOf(newH) === -1) {
       nextAppr = [...appr, newH];
       // `listKnown` is safe to assert HERE specifically: this line is only reached because `appr` contained the
-      // OLD key, so the list is provably real and loaded rather than an empty placeholder. The new key has
-      // never been cleared before, so it is genuinely new and today's date is the truth about it.
-      // (Open question for later, not invented here: whether a re-seat should CARRY the old key's clearance
-      // date across, so the record survives someone changing phones. It reads as a fresh clearance today.)
-      if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true }))) throw new Error('Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.');
+      // OLD key, so the list is provably real and loaded rather than an empty placeholder.
+      // CARRY THE EXPIRY DATE ACROSS (owner decision, 2026-11-02). A person changing phones keeps the clearance
+      // END DATE the church set, rather than having it read as a fresh, dateless clearance \u2014 the record must
+      // survive the move. The old key's held date comes from the caller's live safeguarding read (`o.expiry`),
+      // in SECONDS, and is passed as a number so setApproved takes it as-is WITHOUT re-validating against the
+      // year cap: a date close to lapsing, or already lapsed, must still carry (that is the whole point). A
+      // person who had NO date still gets none, because there is nothing to carry.
+      const oldExp = (o.expiry && Number.isInteger(o.expiry[oldH]) && o.expiry[oldH] > 0) ? o.expiry[oldH] : null;
+      const carry = oldExp ? { expiry: { [newH]: oldExp } } : null;
+      if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true, ...(carry || {}) }))) throw new Error('Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.');
     }
 
     // The seat may be the CHILD (an entry keyed by them) or a PARENT (named in some child's list). Both break.

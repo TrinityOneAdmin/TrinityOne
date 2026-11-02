@@ -31,6 +31,7 @@ import { permissionWindow } from './checkin-role-source.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
+const DATA = readFileSync(join(ROOT, 'app/stew-data.jsx'), 'utf8');   // SK_TINT lives here
 const STEWARD = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 
 const PK = 'a'.repeat(64);
@@ -116,6 +117,23 @@ test('A DATE-LESS clearance shows NO expiry badge — the pilot back-compat case
   assert.equal(badges.length, 0,
     'a clearance with no date painted a status badge — a date-less record must read as cleared-with-no-expiry, ' +
     'not as lapsed');
+});
+
+test('the three reminder stages wear three DISTINCT tints on the row', async () => {
+  // The colour, not only the wording, says how close a clearance is: amber a month out, a stronger orange a
+  // fortnight out, red once lapsed. The badge is the SkPill, and the tint it is handed is read off it here.
+  const urgent = (await renderRow(1800000000 + 10 * DAY)).badges[0].props.tint;   // <= 2 weeks
+  const soon   = (await renderRow(1800000000 + 20 * DAY)).badges[0].props.tint;   // <= 1 month, > 2 weeks
+  const expired = (await renderRow(1800000000 - 5 * DAY)).badges[0].props.tint;   // past
+  assert.equal(soon, 'gold', 'the one-month reminder no longer wears the amber tint');
+  assert.equal(expired, 'clay', 'a lapsed clearance no longer wears the red tint');
+  assert.notEqual(urgent, soon, 'the two-week (urgent) badge wears the SAME tint as the one-month one — the owner asked for a stronger, distinct colour');
+  assert.notEqual(urgent, expired, 'the two-week (urgent) badge is indistinguishable from the red Expired badge');
+  assert.equal(new Set([urgent, soon, expired]).size, 3, 'the three stages are not three distinct colours');
+  // …and the urgent tint must be a REAL SK_TINT entry, or SkPill silently falls back to clay (red) and the
+  // fortnight badge would be indistinguishable from an expired one on the actual screen.
+  assert.match(DATA, new RegExp(urgent + ':\\s*\\{'),
+    'the urgent tint "' + urgent + '" is not a defined SK_TINT colour in app/stew-data.jsx — SkPill would fall back to red');
 });
 
 test('the row’s Save control is WIRED to setApproved and carries an expiry map', async () => {
@@ -211,6 +229,16 @@ test('setApproved CARRIES a held expiry forward for everyone the write keeps', a
   assert.ok(out.expiry[PK] > NOW, 'the newly dated person got no expiry');
 });
 
+test('setApproved takes an already-validated NUMERIC expiry as-is — the re-seat carry, even when lapsed', async () => {
+  // A 'YYYY-MM-DD' string is a date a church just typed, so it is validated (and refused beyond the cap). A
+  // NUMBER is a date this product itself already stored and is moving onto a new key in a device re-seat — it
+  // must carry unchanged, even if it is already in the past, so the record survives the phone change.
+  const past = NOW - 10 * DAY;
+  const out = await runSetApproved({ pub: CHURCH1, trail: EMPTY, pubkeys: [PK], listKnown: true, expiry: { [PK]: past } });
+  assert.equal(out && out._rejected, undefined, 'a carried numeric expiry was refused instead of taken as-is: ' + (out && out._rejected));
+  assert.equal(out.expiry[PK], past, 'the carried expiry seconds were not preserved exactly');
+});
+
 // ── PART C: subscribeSafeguard reads the expiry back, and a legacy write cannot erase it ────────────────────
 function runApprovedHandler(events) {
   const body = grab(STEWARD, 'subscribeSafeguard(onLists)');
@@ -247,4 +275,49 @@ test('an older console republishing the plain list does not erase the expiry dat
   const legacy = ev('trinityone/approved:' + CP, { pubkeys: [PK], cleared: { [PK]: { by: CP, at: 555 } } }, 200);  // no expiry field
   const out = runApprovedHandler([modern, legacy]);
   assert.equal(out.expiry[PK], until, 'a write from an older console with no expiry field wiped the dates it never heard of');
+});
+
+// ── PART D: a device re-seat carries the clearance expiry date onto the new key ─────────────────────────────
+// The shipped reseatMember is brace-grabbed out of the bundle and RUN with spy setters, exactly as
+// scripts/reseat-write-results.test.mjs drives it — so this proves what reaches window.Steward.setApproved,
+// not what the source looks like.
+function reseater() {
+  const body = grab(STEWARD, 'async reseatMember(oldPub, newPub, o) {');
+  const calls = [];
+  const setter = (name) => async (...args) => { calls.push({ name, args }); return { id: name + '-evt' }; };
+  const Steward = {};
+  for (const n of ['setReseats', 'setAdmitted', 'setMinors', 'setApproved', 'setGuardians', 'setBlocked']) Steward[n] = setter(n);
+  Steward.refreshClearances = async (...a) => { calls.push({ name: 'refreshClearances', args: a }); return { results: [], failed: 0, skipped: 0, total: 0, unverified: false, pending: 0 }; };
+  const scope = {
+    toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(String(x || '')) ? String(x).toLowerCase() : null),
+    now: () => Math.floor(Date.now() / 1000),
+    window: { Steward },
+  };
+  const names = Object.keys(scope);
+  const obj = new Function(...names, 'return ({ ' + body + ' });')(...names.map(n => scope[n]));
+  return { run: (a, b, o) => obj.reseatMember(a, b, o), calls };
+}
+const OLD = 'a'.repeat(64), NEW = 'd'.repeat(64);
+const reseatOpts = (extra) => ({ reseats: [], admitted: [], minors: [], approved: [OLD], guardians: {}, guardiansClosed: {}, blocked: [], ...extra });
+
+test('a device re-seat CARRIES the clearance expiry date onto the new key', async () => {
+  const held = 1800000000 + 77 * DAY;
+  const r = reseater();
+  await r.run(OLD, NEW, reseatOpts({ expiry: { [OLD]: held } }));
+  const sa = r.calls.find(c => c.name === 'setApproved');
+  assert.ok(sa, 'the re-seat never re-recorded the clearance on the new key');
+  const [list, opts] = sa.args;
+  assert.ok(list.includes(NEW), 'the new key was not added to the cleared list on re-seat');
+  assert.ok(opts && opts.expiry && opts.expiry[NEW] === held,
+    "the old key's expiry date was dropped on the re-seat instead of carried onto the new key: " + JSON.stringify(opts));
+});
+
+test('a re-seat of a DATE-LESS clearance leaves the new key date-less', async () => {
+  const r = reseater();
+  await r.run(OLD, NEW, reseatOpts({ expiry: {} }));
+  const sa = r.calls.find(c => c.name === 'setApproved');
+  assert.ok(sa, 'the re-seat never re-recorded the clearance');
+  const opts = sa.args[1] || {};
+  assert.ok(!opts.expiry || !(NEW in opts.expiry),
+    'a date was invented for a clearance that never had one: ' + JSON.stringify(opts));
 });

@@ -225,10 +225,11 @@ function clearanceExpiryLabel(untilSec, nowSec) {
   const weeks = Math.max(1, Math.round(days / 7));
   return 'Expires in ' + weeks + (weeks === 1 ? ' week' : ' weeks');
 }
-// The SkPill tint for a state: neutral for a far-off date, amber for the two reminder windows, red (clay) for
-// a lapsed one. (soon and urgent share the amber tint; the LABEL carries which of the two it is.)
+// The SkPill tint for a state: three distinguishable steps up the scale of alarm — neutral `ink` for a far-off
+// date, amber `gold` one month out (soon), a stronger orange `ember` two weeks out (urgent), red `clay` once it
+// has lapsed (expired). The colour, not only the wording, tells the steward how close it is.
 function clearanceExpiryTint(st) {
-  return st === 'expired' ? 'clay' : (st === 'soon' || st === 'urgent') ? 'gold' : 'ink';
+  return st === 'expired' ? 'clay' : st === 'urgent' ? 'ember' : st === 'soon' ? 'gold' : 'ink';
 }
 // How many of a set of clearances are expiring (within the month) or already expired — for the section header
 // and the Overview nudge. `untils` is the per-person expiry seconds (0/undefined/null meaning "no date").
@@ -7356,7 +7357,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   // A re-seat is a SEAT MOVING, and everything attached to the seat has to move with it — the child marking,
   // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
   // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
-  const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], expiry: {} };
   const _gdCheckin = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
   const guardiansNow = _gdCheckin.links || {};
   // …AND THE CLOSED PAIRS. reseatMember copies `closed` to the new key and keeps the old pairs (src/steward.src.js,
@@ -7424,7 +7425,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
       // about all of them — including the stolen-phone block, which it never mentioned at all.
       const r = await window.Steward.reseatMember(member, newPub, {
         name: realName || '', reseats, admitted: admittedList,
-        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
+        minors: sgNow.minors, approved: sgNow.approved, expiry: sgNow.expiry, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
         blocked: blockedNow, blockOld: taken,
         rosters: rostersNow, rotas: rotasNow, careTeamId: careTeamIdNow,
       });

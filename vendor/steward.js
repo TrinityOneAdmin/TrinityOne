@@ -23442,9 +23442,13 @@ zoo`.split("\n");
         if (expIn && Object.prototype.hasOwnProperty.call(expIn, p)) {
           const raw = expIn[p];
           if (raw) {
-            const w = permissionWindow("dated", { until: String(raw), at: now() });
-            if (!w) throw new Error("That clearance expiry date could not be used. Choose a real date that is in the future and no more than about a year ahead \u2014 it is not back-dated, and nothing renews it on its own.");
-            expiry[p] = w.until;
+            if (typeof raw === "number") {
+              if (Number.isInteger(raw) && raw > 0) expiry[p] = raw;
+            } else {
+              const w = permissionWindow("dated", { until: String(raw), at: now() });
+              if (!w) throw new Error("That clearance expiry date could not be used. Choose a real date that is in the future and no more than about a year ahead \u2014 it is not back-dated, and nothing renews it on its own.");
+              expiry[p] = w.until;
+            }
           }
         } else if (Number.isInteger(priorExp[p]) && priorExp[p] > 0) {
           expiry[p] = priorExp[p];
@@ -23994,7 +23998,9 @@ zoo`.split("\n");
       }
       if (wasCleared && appr.indexOf(newH) === -1) {
         nextAppr = [...appr, newH];
-        if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true }))) throw new Error("Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.");
+        const oldExp = o.expiry && Number.isInteger(o.expiry[oldH]) && o.expiry[oldH] > 0 ? o.expiry[oldH] : null;
+        const carry = oldExp ? { expiry: { [newH]: oldExp } } : null;
+        if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true, ...carry || {} }))) throw new Error("Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.");
       }
       const g = o.guardians || {};
       let nextG = null;

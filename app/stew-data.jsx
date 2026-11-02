@@ -113,6 +113,11 @@ const SK_TINT = {
   gold: { bg: 'var(--gold-tint)', fg: '#8a6717' },
   sage: { bg: 'var(--sage-soft)', fg: '#345c41' },
   ink:  { bg: 'var(--surface-2)', fg: 'var(--ink-2)' },
+  // A warmer, more alarming orange than `gold` and still clearly short of `clay` red — the middle of three
+  // distinguishable steps for the safeguarding clearance-expiry badge (soon=gold, urgent=ember, expired=clay).
+  // a11y: #A8461C on #F7DCC3 is ~5.8:1, AA for the pill's small bold text. Explicit hex, mirroring the fixed
+  // fg values above, because the steward console is light-only (brand.css: "App is light-only").
+  ember: { bg: '#F7DCC3', fg: '#A8461C' },
 };
 
 // ── ministry-team presets: icon + accent + a starter role list (for New team) ──
