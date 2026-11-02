@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { createBook, addAccount, post, trialBalance, fundBalances, check } from '../src/finance-ledger.mjs';
 import {
   AR_ACCT, AR_ACCOUNT, assertArAccount, invoiceTotal, invoiceIssueEntry, invoiceSettlementEntry,
-  creditNoteEntry, invoiceOutstanding, invoiceStatus, openInvoices, invoiceHtml,
+  creditNoteEntry, invoiceOutstanding, invoiceStatus, invoiceStatuses, openInvoices, invoiceHtml,
 } from '../src/finance-invoice.mjs';
 
 function book({ withAr = true } = {}) {
@@ -175,4 +175,32 @@ test('invoiceHtml renders the lines, total and derived status into self-containe
   assert.match(html, /£95\.00/, 'the total/line money must render in major units with the symbol');
   assert.match(html, /OVERDUE/, 'the derived status must be stamped on the document');
   assert.match(html, /St Test/);
+});
+
+// ── invoiceStatuses (batch, one-pass) must NEVER drift from invoiceStatus (single-item) ──────────────────────
+// The screen renders a status badge per invoice. invoiceStatuses() does ONE journal pass for the whole list
+// instead of invoiceStatus()'s per-row walk (the perf fix); if the two ever disagree the badge lies. This seeds
+// a book with every lifecycle state at once and asserts the batch Map matches the canonical single-item fn.
+test('invoiceStatuses(batch) === invoiceStatus(per-invoice) for every invoice over a seeded multi-entry book', () => {
+  const b = book();
+  const today = '2026-06-01';
+  const paid    = invoice({ id: 'ip', due: '2026-05-31', lines: [{ desc: 'Hall', account: 'hire', fund: 'general', amount: 9500 }] });
+  const overdue = invoice({ id: 'io', due: '2026-05-01', lines: [{ desc: 'Hall', account: 'hire', fund: 'general', amount: 4200 }] });
+  const unpaid  = invoice({ id: 'iu', due: '2026-12-31', lines: [{ desc: 'Hall', account: 'hire', fund: 'general', amount: 3100 }] });
+  const unissued = invoice({ id: 'ix', due: '2026-12-31', lines: [{ desc: 'Draft', account: 'hire', fund: 'general', amount: 777 }] });   // never issued → never "paid" (future due so it reads unpaid, not overdue)
+  // Issue paid + overdue + unpaid (unissued is deliberately NOT posted), then fully settle only `paid`.
+  post(b, invoiceIssueEntry(paid));
+  post(b, invoiceIssueEntry(overdue));
+  post(b, invoiceIssueEntry(unpaid));
+  post(b, invoiceSettlementEntry(paid, { amount: invoiceTotal(paid) }));
+  const invoices = [paid, overdue, unpaid, unissued];
+  const map = invoiceStatuses(invoices, b.journal, today);
+  for (const inv of invoices) {
+    assert.equal(map.get(inv.id), invoiceStatus(inv, today, b.journal), 'batch status drifted from invoiceStatus for ' + inv.id);
+  }
+  // and the states are the expected ones (so the test is not vacuously "both wrong the same way")
+  assert.equal(map.get('ip'), 'paid');
+  assert.equal(map.get('io'), 'overdue');
+  assert.equal(map.get('iu'), 'unpaid');
+  assert.equal(map.get('ix'), 'unpaid', 'a never-issued invoice (no AR debit) must not read as paid on a zero net');
 });

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBook, addAccount, addFund, post, trialBalance, fundBalances, incomeExpenditure, importedKeys } from '../src/finance-ledger.mjs';
-import { bookToDocs, rebuildBook } from '../src/finance-store.mjs';
+import { bookToDocs, rebuildBook, bookDocSignature } from '../src/finance-store.mjs';
 
 function sampleBook() {
   const b = createBook({ baseCurrency: 'GBP', decimals: 2 });
@@ -76,4 +76,44 @@ test('rebuilding an empty/settings-only stream yields a valid empty book', () =>
   assert.ok(ok);
   assert.ok(book.funds.has('general'));
   assert.equal(book.journal.length, 0);
+});
+
+// ── bookDocSignature: the "skip rebuildBook on a side-doc-only delivery" guard (perf fix) ─────────────────────
+// The console compares this fingerprint across finance/ deliveries and skips a full rebuildBook()+check() when
+// it is unchanged. It MUST be stable for the same book docs (so a side-doc-only delivery is skipped) and MUST
+// change for any real ledger change (so a true change is never wrongly skipped).
+test('bookDocSignature is STABLE for identical book docs — order-independent and ignoring side docs', () => {
+  const docs = bookToDocs(sampleBook());
+  const sig = bookDocSignature(docs);
+  // reordered delivery (the relay delivers in any order) → same signature
+  assert.equal(bookDocSignature(docs.slice().reverse()), sig, 'signature must not depend on doc order');
+  // a delivery that ALSO carries side docs rebuildBook ignores (invoice/bill/donor/budget/attachment) → same
+  const withSide = docs.concat([
+    { t: 'invoice', id: 'inv1', number: '1', lines: [], issued: '2026-01-01' },
+    { t: 'bill', id: 'b1', supplier: 'X', lines: [] },
+    { t: 'donor', id: 'd1', name: 'Jo' },
+    { t: 'attachment', id: 'a1', data: 'data:image/png;base64,AAA' },
+  ]);
+  assert.equal(bookDocSignature(withSide), sig, 'side docs must not move the signature (they do not enter the book)');
+  // mutating a side doc only → still same signature (this is exactly the delivery we want to SKIP rebuilding)
+  withSide[withSide.length - 1] = { t: 'attachment', id: 'a1', data: 'data:image/png;base64,ZZZ' };
+  assert.equal(bookDocSignature(withSide), sig, 'a side-doc-only change must leave the signature unchanged');
+});
+
+test('bookDocSignature CHANGES when a journal entry is appended, or an account is renamed / archived', () => {
+  const base = bookToDocs(sampleBook());
+  const sig = bookDocSignature(base);
+  // append a journal entry (the common case: a new transaction)
+  const b2 = sampleBook();
+  post(b2, { date: '2026-02-01', memo: 'extra', postings: [ { account: 'bank', dir: 'dr', amount: 100 }, { account: 'giving', dir: 'cr', amount: 100 } ] });
+  assert.notEqual(bookDocSignature(bookToDocs(b2)), sig, 'an appended journal entry must change the signature');
+  // rename an account (REPLACEABLE doc, same count/seq — content must be folded in)
+  const renamed = base.map(d => d.t === 'account' && d.id === 'giving' ? { ...d, name: 'Offerings' } : d);
+  assert.notEqual(bookDocSignature(renamed), sig, 'an account rename must change the signature');
+  // archive an account (REPLACEABLE doc, same count/seq)
+  const archived = base.map(d => d.t === 'account' && d.id === 'giving' ? { ...d, archived: true } : d);
+  assert.notEqual(bookDocSignature(archived), sig, 'an account archive must change the signature');
+  // retype an account (chart change that re-signs projections)
+  const retyped = base.map(d => d.t === 'account' && d.id === 'giving' ? { ...d, type: 'equity' } : d);
+  assert.notEqual(bookDocSignature(retyped), sig, 'an account type change must change the signature');
 });

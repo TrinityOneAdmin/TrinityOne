@@ -142,6 +142,34 @@ export function billStatus(bill, todayLocalISO, journalEntries) {
   return 'unpaid';
 }
 
+// BATCH status for a WHOLE list of bills in ONE journal pass — the mirror of invoiceStatuses. The screen renders
+// a status badge per row (app/stew-finance.jsx Bills tab), and calling billStatus() per row re-walks the entire
+// journal each time: O(bills × journal). This pre-aggregates Σ AP credit/debit per bill id in a single pass, then
+// derives each status with the IDENTICAL rule as billStatus — so it is O(journal + bills). The two share one
+// definition: finance-bill.test.mjs asserts billStatuses(...).get(b.id) === billStatus(b, ...) over a seeded
+// multi-entry book, so this batch path can never drift from the canonical single-item version. Returns
+// Map(billId -> 'paid'|'overdue'|'unpaid').
+export function billStatuses(bills, journalEntries, todayLocalISO) {
+  const ap = new Map();   // billId -> { cr, dr } over AP postings, from a single journal pass
+  for (const e of (journalEntries || [])) {
+    if (!e || e.bill == null) continue;
+    let a = ap.get(e.bill); if (!a) { a = { cr: 0, dr: 0 }; ap.set(e.bill, a); }
+    for (const p of (e.postings || [])) if (p.account === AP_ACCT) { if (p.dir === 'cr') a.cr += p.amount; else a.dr += p.amount; }
+  }
+  const out = new Map();
+  for (const b of (bills || [])) {
+    if (!b) continue;
+    const a = ap.get(b.id) || { cr: 0, dr: 0 };
+    const recorded = a.cr > 0;   // same split as billStatus: a never-recorded bill is never "paid" on a zero net
+    let status;
+    if (recorded && (a.cr - a.dr) <= 0) status = 'paid';
+    else if (b.due && todayLocalISO && String(b.due) < String(todayLocalISO)) status = 'overdue';
+    else status = 'unpaid';
+    out.set(b.id, status);
+  }
+  return out;
+}
+
 // ── approval: the state machine draft → approved → paid, decided PURELY ─────────────────────────────────────
 // WHETHER a bill is approved, in the owner's chosen mode. Shared by the screen (to enable Mark-paid) and by the
 // engine guard (billPaymentEntry takes the boolean this returns). WHO MAY approve is NOT decided here — that is
