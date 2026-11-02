@@ -1264,42 +1264,31 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             </React.Fragment>
           ) : comm.length ? <React.Fragment>
             {comm.length > 1 ? (
-              <div style={{ marginBottom: 14 }}>
-                <select value={commSrc || ''} onChange={e => setCommSrc(e.target.value || null)} style={{
-                  width: '100%', padding: '9px 12px', borderRadius: 12, border: '1px solid var(--line)',
-                  background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)',
-                  fontWeight: 700, fontSize: 14, cursor: 'pointer', appearance: 'auto'
-                }}>
-                  <option value="">All commentaries</option>
-                  {comm.map(s => <option key={s.abbr} value={s.abbr}>{s.name}</option>)}
-                </select>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 14 }}>
+                {comm.map(s => (
+                  <button key={s.abbr} onClick={() => setCommSrc(s.abbr)} style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 12,
+                    border: (commSrc || comm[0].abbr) === s.abbr ? '1.5px solid var(--clay)' : '1px solid var(--line)',
+                    background: (commSrc || comm[0].abbr) === s.abbr ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)',
+                    cursor: 'pointer', textAlign: 'left', width: '100%'
+                  }}>
+                    <Icon name={s.kind === 'footnotes' ? 'note' : 'comment'} size={15} color={(commSrc || comm[0].abbr) === s.abbr ? 'var(--clay)' : 'var(--ink-3)'} />
+                    <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: (commSrc || comm[0].abbr) === s.abbr ? 'var(--ink)' : 'var(--ink-2)' }}>{s.name}</span>
+                  </button>
+                ))}
               </div>
             ) : null}
-            {(commSrc ? comm.filter(s => s.abbr === commSrc) : comm).map((srcBlk, si) => (
+            {((commSrc || comm[0].abbr) ? comm.filter(s => s.abbr === (commSrc || comm[0].abbr)) : comm).map((srcBlk, si) => (
             <div key={si} style={{ marginBottom: 22 }}>
-              {/* THE SOURCE'S OWN CREDIT SITS WITH ITS WORDS. Openly-licensed study notes (Aquifer's are
-                  CC BY-SA 4.0) oblige us to name the author and the licence wherever the notes are shown.
-                  The notice is read out of the module file itself (engine.js detailsOf → Details.License →
-                  getCommentary), not out of catalog.json, so a commentary a member loaded from a FILE —
-                  which has no catalogue entry — still credits its source. It goes directly under the
-                  heading rather than in a footer or an About screen: it is the only placement that is on
-                  screen every time the words are, and a reader scrolling a long chapter never has to know
-                  to go looking for it. Public-domain modules carry no notice and show no line. */}
-              <div style={{ marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--line)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <Icon name={srcBlk.kind === 'footnotes' ? 'note' : 'comment'} size={14} color="var(--clay)" />
-                  <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink-2)' }}>{srcBlk.name}</span>
-                </div>
-                {srcBlk.license ? (
-                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 4, paddingLeft: 21 }}>{srcBlk.license}</div>
-                ) : null}
-              </div>
               {srcBlk.rows.map((b, i) => (
                 <div key={i} style={{ marginBottom: 14 }}>
                   <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 6 }}>{b.v && b.vTo && b.vTo > b.v ? `v${b.v}–${b.vTo}` : (b.v ? `v${b.v}` : 'Note')}</span>
                   <div className="commentary-body" style={{ fontFamily: 'var(--font-read)', fontSize: 16, lineHeight: 1.6, color: 'var(--ink)' }} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(b.html) }} />
                 </div>
               ))}
+              {srcBlk.license ? (
+                <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10, lineHeight: 1.4, color: 'var(--ink-3)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)' }}>{srcBlk.license}</div>
+              ) : null}
             </div>
           ))}
           </React.Fragment> : (
