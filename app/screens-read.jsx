@@ -1093,7 +1093,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
       try {
         const c = window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : [];
         setComm(c);
-        const all = window.Bible.commentaryList ? window.Bible.commentaryList() : [];
+        const all = window.Bible.commentaryList ? window.Bible.commentaryList(ctx.version) : [];
         setCommAll(all);
       } catch (e) { setComm([]); }
     };

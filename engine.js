@@ -1350,7 +1350,7 @@ window.safeImgUrl = function (v) {
     if(s && s.footnotes){ let fn = []; try { fn = s.footnotes(b, c); } catch(e){} if(fn.length) out.push({ abbr: s.abbr, name: s.name + " — footnotes", kind: "footnotes", rows: fn.map(f => ({ v: f.v, vTo: f.v, html: f.notes.map(t => "<p>" + t + "</p>").join("") })) }); }
     return out;
   }
-  function commentaryList(){ return Object.keys(commentaries).map(a => ({ abbr: a, name: commentaries[a].name })); }
+  function commentaryList(version){ const out = Object.keys(commentaries).map(a => ({ abbr: a, name: commentaries[a].name })); const s = src(version); if(s && s.footnotes) out.push({ abbr: s.abbr, name: s.name + " — footnotes" }); return out; }
 
   function bookMeta(version){
     return books(version).map(n => ({ num: n, name: bookName(n), abbr: bookAbbr(n), group: bookGroup(n), ch: maxChapter(n, version) }));
