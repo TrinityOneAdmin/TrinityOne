@@ -559,7 +559,8 @@ window.safeImgUrl = function (v) {
   }
   function buildFromUSFM(files, fallbackName){
     const dec = new TextDecoder("utf-8");
-    const rawByBook = {}, parsed = {}, maxChap = {}, books = [];
+    const rawByBook = {}, parsed = {}, fnByChap = {}, maxChap = {}, books = [];
+    let hasFn = false;
     for(const nm of Object.keys(files)){
       if(nm.startsWith("__MACOSX") || !/\.(usfm|sfm)$/i.test(nm)) continue;
       const text = dec.decode(files[nm]);
@@ -574,19 +575,27 @@ window.safeImgUrl = function (v) {
       let mc = 0; const cre = /^\\c\s+(\d+)/gm; let cm; while((cm = cre.exec(text))){ const n = +cm[1]; if(n > mc) mc = n; }
       if(mc <= 0) continue;
       rawByBook[bookNum] = text; maxChap[bookNum] = mc;
+      if(!hasFn && /\\f\b/.test(text)) hasFn = true;
       if(!books.includes(bookNum)) books.push(bookNum);
     }
     if(!books.length) return null;
     books.sort((a, b) => a - b);
     const chaptersFor = (b) => {
-      if(!parsed[b]){ const raw = rawByBook[b]; parsed[b] = raw ? (parseUSFM(raw).chapters || {}) : {}; rawByBook[b] = null; }
+      if(!parsed[b]){
+        const raw = rawByBook[b];
+        parsed[b] = raw ? (parseUSFM(raw).chapters || {}) : {};
+        // extract \f … \f* footnotes per chapter+verse before the raw text is discarded
+        if(raw){ const fn = {}; let ch = 0, v = 0; for(const line of raw.split(/\r?\n/)){ let m; if((m = line.match(/^\\c\s+(\d+)/))){ ch = +m[1]; v = 0; continue; } if((m = line.match(/^\\v\s+(\d+)/))) v = +m[1]; const fre = /\\f\b([\s\S]*?)\\f\*/g; let fm; while((fm = fre.exec(line))){ const t = fm[1].replace(/^\s*[+\-*]\s*/, "").replace(/\\fr\s[^\\]*/, "").replace(/\\f[rtkqa]\s?/g, "").replace(/\\\+?[a-z]+\d?\*?/gi, "").trim(); if(t && ch){ (fn[ch] = fn[ch] || {})[v] = (fn[ch][v] || []).concat(t); } } } fnByChap[b] = fn; }
+        rawByBook[b] = null;
+      }
       return parsed[b];
     };
     const get = (b, c) => { const ch = chaptersFor(b); return (ch && ch[c]) ? ch[c].map(x => ({ v: x.v, html: x.html, text: usfmText(x.html) })) : []; };
     return {
       abbr: (fallbackName || "USFM").replace(/\.(zip|usfm|sfm)$/i, "").slice(0, 12) || "USFM",
       name: fallbackName || "USFM Bible", kind: "usfm", books, maxChap,
-      getVerses: get, plain: (b, c) => get(b, c).map(x => ({ v: x.v, text: x.text }))
+      getVerses: get, plain: (b, c) => get(b, c).map(x => ({ v: x.v, text: x.text })),
+      ...(hasFn ? { footnotes: (b, c) => { chaptersFor(b); const ch = fnByChap[b] && fnByChap[b][c]; if(!ch) return []; return Object.keys(ch).map(Number).sort((a,b) => a - b).map(v => ({ v, notes: ch[v] })); } } : {})
     };
   }
   // THE PLAIN TEXT OF A USFM VERSE, from the html parseUSFM built for it. (2026-10-01, FIX-PLAN item 3.)
