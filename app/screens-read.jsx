@@ -1264,21 +1264,15 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             </React.Fragment>
           ) : comm.length ? <React.Fragment>
             {comm.length > 1 ? (
-              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 14 }}>
-                <button onClick={() => setCommSrc(null)} style={{
-                  padding: '6px 14px', borderRadius: 10, border: '1px solid var(--line)',
-                  background: commSrc === null ? 'var(--clay)' : 'var(--surface)',
-                  color: commSrc === null ? 'var(--on-clay)' : 'var(--ink-2)',
-                  fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, cursor: 'pointer'
-                }}>All</button>
-                {comm.map(s => (
-                  <button key={s.abbr} onClick={() => setCommSrc(s.abbr)} style={{
-                    padding: '6px 14px', borderRadius: 10, border: '1px solid var(--line)',
-                    background: commSrc === s.abbr ? 'var(--clay)' : 'var(--surface)',
-                    color: commSrc === s.abbr ? 'var(--on-clay)' : 'var(--ink-2)',
-                    fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, cursor: 'pointer'
-                  }}>{s.name}</button>
-                ))}
+              <div style={{ marginBottom: 14 }}>
+                <select value={commSrc || ''} onChange={e => setCommSrc(e.target.value || null)} style={{
+                  width: '100%', padding: '9px 12px', borderRadius: 12, border: '1px solid var(--line)',
+                  background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)',
+                  fontWeight: 700, fontSize: 14, cursor: 'pointer', appearance: 'auto'
+                }}>
+                  <option value="">All commentaries</option>
+                  {comm.map(s => <option key={s.abbr} value={s.abbr}>{s.name}</option>)}
+                </select>
               </div>
             ) : null}
             {(commSrc ? comm.filter(s => s.abbr === commSrc) : comm).map((srcBlk, si) => (
@@ -1718,7 +1712,7 @@ function ReadScreen({ ctx }) {
         onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setArrived(null); setSheet(null); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
-      <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
+      <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : close} onWord={pushWord} canBack={wordStack.length > 1 || (wordVerse && wordVerse.from === 'define')} onBack={wordStack.length > 1 ? backWord : wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : backWord} />
       <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} verses={sheet === 'define' ? passage.flatMap(p => p.verses.map(v => ({ book: p.book, chap: p.chap, v }))) : []} open={sheet === 'define'} onClose={() => setSheet('action')} onWord={(sid, sourceOrV) => {
           if (typeof sourceOrV === 'string' && /^[GH]\d/i.test(sourceOrV)) {
             setWordStack([sourceOrV, sid]);
