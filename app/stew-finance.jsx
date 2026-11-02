@@ -974,8 +974,10 @@ function BooksBudgetEdit({ book, initial, onSave, onClose }) {
 // (already behind the finance-key gate) and it DELIBERATELY has no Share / Post-to-members control: aggregate
 // statements are name-free and this one must never reach the broadcast path. If you ever add a share button
 // here, finance-giving-by-member.test.mjs turns red by design.
-function BooksGivingByMember({ book, F, donors, giftAidOn }) {
-  const rows = F.givingByMember(book, { donors });
+function BooksGivingByMember({ book, F, donors, giftAidOn, rev }) {
+  // PERF (#4): givingByMember walks the journal; memoise on the book revision (`rev` = parent tick, since the book
+  // is mutated in place) + the donor map, so an unrelated parent re-render does not re-walk it.
+  const rows = React.useMemo(() => F.givingByMember(book, { donors }), [rev, donors]);
   const total = rows.reduce((s, r) => s + r.amount, 0);
   return (
     <div style={{ marginTop: 8 }}>
@@ -998,12 +1000,13 @@ function BooksGivingByMember({ book, F, donors, giftAidOn }) {
 // The claim logic lives in the SEPARATE window.FinanceGiftAid bundle (vendor/finance-giftaid.js) which the core
 // never imports; this panel is the only caller, and it reaches for it only when the toggle is on. If the bundle
 // is not present the panel says so rather than crashing.
-function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport }) {
-  if (!giftAidOn) return null;
+function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport, rev }) {
   const pack = (typeof window !== 'undefined' && window.FinanceGiftAid) || null;
+  // PERF (#4): memoise the claim (it walks the journal via givingByMember) on the book revision + donors. The hook
+  // is UNCONDITIONAL (before the early returns) so the hook order never shifts; the factory returns null when off.
+  const claim = React.useMemo(() => (giftAidOn && pack) ? pack.giftAidClaim(book, { donors: Array.isArray(donors) ? donors : [...donors.values()], givingByMember: F.givingByMember }) : null, [rev, donors, giftAidOn, pack]);
+  if (!giftAidOn) return null;
   if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Gift Aid (UK)</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The Gift Aid pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
-  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
-  const claim = pack.giftAidClaim(book, { donors: donorList, givingByMember: F.givingByMember });
   return (
     <div style={{ ...bkCard, marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1032,12 +1035,13 @@ function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport }) {
 // panel says so rather than crashing. A contribution statement is the DONOR's record for their own deduction —
 // NO church rebate, NO church filing (unlike Gift Aid). The Download hands out an HTML statement document that
 // CARRIES the sourced wording AND the shared tax disclaimer (built by the pure pack helper).
-function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExport, regWarn }) {
-  if (!statementOn) return null;
+function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExport, regWarn, rev }) {
   const pack = (typeof window !== 'undefined' && window.FinanceContribution) || null;
+  // PERF (#4): memoise the statement (walks the journal via givingByMember) on the book revision + donors +
+  // jurisdiction. Unconditional hook (before the early returns); the factory returns null when off / no pack.
+  const stmt = React.useMemo(() => (statementOn && pack) ? pack.contributionStatement(book, { donors: Array.isArray(donors) ? donors : [...donors.values()], givingByMember: F.givingByMember, jurisdiction }) : null, [rev, donors, statementOn, pack, jurisdiction]);
+  if (!statementOn) return null;
   if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Giving statements</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The giving-statement pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
-  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
-  const stmt = pack.contributionStatement(book, { donors: donorList, givingByMember: F.givingByMember, jurisdiction });
   return (
     <div style={{ ...bkCard, marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1067,12 +1071,13 @@ function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExp
 // panel is the only caller. Like Gift Aid, the CHARITY claims — here from Revenue. Donors need a CHY3/CHY4
 // certificate (eligible + certType + certDeclaredAt). Shows per-donor donated → refund, the associated-donor
 // review list, the total to reclaim, the shared disclaimer, and a CSV export carrying the disclaimer.
-function BooksCdsPanel({ book, F, donors, cdsOn, onExport }) {
-  if (!cdsOn) return null;
+function BooksCdsPanel({ book, F, donors, cdsOn, onExport, rev }) {
   const pack = (typeof window !== 'undefined' && window.FinanceIrishCDS) || null;
+  // PERF (#4): memoise the claim (walks the journal via givingByMember) on the book revision + donors.
+  // Unconditional hook (before the early returns); the factory returns null when off / no pack.
+  const claim = React.useMemo(() => (cdsOn && pack) ? pack.charitableDonationClaim(book, { donors: Array.isArray(donors) ? donors : [...donors.values()], givingByMember: F.givingByMember }) : null, [rev, donors, cdsOn, pack]);
+  if (!cdsOn) return null;
   if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Charitable Donation Scheme (Ireland)</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The Irish CDS pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
-  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
-  const claim = pack.charitableDonationClaim(book, { donors: donorList, givingByMember: F.givingByMember });
   return (
     <div style={{ ...bkCard, marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -2118,8 +2123,16 @@ function DashFinanceBook() {
   // Receipt images, kept OUT of the ledger (they are side blobs): id → data: URI. Filled from every finance/
   // delivery (encSubscribe) and optimistically on upload, read by the feed's receipt viewer.
   const attByIdRef = React.useRef({});
-  const [, setTick] = React.useState(0);
+  // PERF: the book is MUTATED IN PLACE on the optimistic path (F.post(bookRef.current,…) then bump()), so its
+  // object identity does NOT change on a hand-typed entry — only on a relay rebuild/seed. `tick` advances on
+  // EVERY book change (both), so the render-body projections below memoise on `tick`, never on `book` identity
+  // (keying on `book` would show stale totals until the relay round-trips — a control reporting the wrong number).
+  const [tick, setTick] = React.useState(0);
   const bump = () => setTick(t => t + 1);
+  // PERF (#3): the last book-doc signature we actually rebuilt from. The console subscribes to the WHOLE finance/
+  // namespace, so a delivery that changed only a SIDE doc (donor/contact/invoice/bill/budget/attachment — all
+  // ignored by rebuildBook) still arrives; when the book docs are unchanged we skip the O(N) replay + check().
+  const lastSigRef = React.useRef(null);
   // A journal entry is the church's money record — it must not be published fire-and-forget. This wasn't
   // awaited and the promise rejection escaped the try, so a write the relay refused (its seq rule rejects
   // whenever this console's view of the journal was incomplete) left the entry on screen and GONE on reload,
@@ -2156,6 +2169,7 @@ function DashFinanceBook() {
   React.useEffect(() => {
     if (!useRelay) return;
     let seeded = false;
+    lastSigRef.current = null;   // a fresh subscription (mount / church switch / reconnect) always rebuilds on its first delivery
     const unsub = S.encSubscribe('finance/', items => {
       const docs = items.map(finItemToDoc).filter(Boolean);
       // Receipt blobs ride the same subscription. Pull their data: URIs into the side map BEFORE rebuildBook,
@@ -2197,6 +2211,15 @@ function DashFinanceBook() {
         for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
         return;
       }
+      // PERF (#3): skip the full rebuildBook()+check() when NO book doc changed since the last rebuild — the book
+      // would replay identically, so a side-doc-only delivery (the common case: a donor/invoice/bill/budget edit)
+      // need not re-verify the whole ledger. The side-doc state setters above already re-render the lists, and
+      // bookRef.current + its `tick`-keyed projections stay put. bookDocSignature is append-only-sound (the relay
+      // rejects journal gaps/forks/edits; see src/finance-store.mjs). Falls through to a rebuild if the helper is
+      // absent (older bundle) so correctness never depends on it.
+      const sig = F.bookDocSignature ? F.bookDocSignature(docs) : null;
+      if (sig != null && sig === lastSigRef.current) return;
+      lastSigRef.current = sig;
       const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; setBookErrors(r.errors || []); bump(); }
     });
     return unsub;
@@ -2896,14 +2919,32 @@ function DashFinanceBook() {
   // refuse payment before approval; dual adds the tamper-evident, approver-signed approval doc.
   const billApprovalMode = (church && church.features && church.features.billApproval === true) ? 'dual' : 'light';
 
-  const funds = F.fundBalances(book);
+  const funds = React.useMemo(() => F.fundBalances(book), [tick]);
   const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
   const fyYear = fyStart.slice(0, 4);   // the fiscal year the Budget panel plans/compares against
   const budgetForFy = budgets.find(b => b.year === fyYear) || budgets[0] || null;   // one budget per year; fall back to any saved budget
-  const ie = F.incomeExpenditure(book, { from: fyStart });
-  const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
+  const ie = React.useMemo(() => F.incomeExpenditure(book, { from: fyStart }), [tick, fyStart]);
+  const bank = React.useMemo(() => F.trialBalance(book), [tick]).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
-  const recent = book.journal.slice().reverse().slice(0, 16);
+  const recent = React.useMemo(() => book.journal.slice(-16).reverse(), [tick]);
+  // PERF (#2 wiring): one journal pass per list instead of a per-row walk (invoiceStatus/billStatus were O(rows × journal)).
+  // Gated on the active tab so the pass runs only for the tab on screen; keyed on `tick` + the side-doc list + the local day.
+  const invoiceStatusMap = React.useMemo(() => (tab === 'invoices' && F.invoiceStatuses) ? F.invoiceStatuses(invoices, book.journal, booksTodayISO()) : null, [tick, tab, invoices, booksTodayISO()]);
+  const billStatusMap = React.useMemo(() => (tab === 'bills' && F.billStatuses) ? F.billStatuses(bills, book.journal, booksTodayISO()) : null, [tick, tab, bills, booksTodayISO()]);
+  // PERF (#4): the four Insights projections, computed ONLY when the Insights tab is open and memoised so an
+  // unrelated re-render (opening the More popover, a modal toggle) does not re-walk the journal four times.
+  const insights = React.useMemo(() => {
+    if (tab !== 'insights') return null;
+    const today = booksTodayISO();
+    const fyr = F.fiscalYearRange(today, book.fiscalYearStart || '01-01');
+    return {
+      fyr,
+      proj: F.yearEndProjection(book, { today, fiscalYearStart: book.fiscalYearStart || '01-01' }),
+      monthly: F.monthlyTotals(book, { from: fyr.from, to: fyr.to }),
+      fundSeries: F.monthlyFundBalances(book, { from: fyr.from, to: fyr.to }),
+      budgetRows: F.budgetVsActual(book, budgetForFy, { from: fyStart, to: today }),
+    };
+  }, [tick, tab, book.fiscalYearStart, budgetForFy, fyStart]);
   const exportCsv = async () => {
     // MAJOR UNITS (pounds), not the ledger's integer pence — F.journalCsvRows does the conversion (sim 2026-10-02 #62).
     // The base debit/credit columns are ALWAYS pounds; a multi-currency church also gets the original-currency
@@ -2930,11 +2971,15 @@ function DashFinanceBook() {
       ? (() => { const f = rptCFrom || (rptY + '-01-01'); const t = rptCTo || booksTodayISO(); return { from: f, to: t, label: F.rangeLabel(f, t) }; })()
     : { ...F.yearRange(rptY), to: booksTodayISO(), label: 'Year to date ' + rptY };
   const rptDef = FIN_REPORT_PRESETS.find(p => p.key === rptPreset) || FIN_REPORT_PRESETS[0];
-  const rptModel = F.buildStatement(book, {
+  // PERF (#1): the Reports model is a full statement rebuild (several journal walks). It is kept computed (the
+  // export handlers read it from any tab) but memoised on the book (`tick`) + the preset/period inputs that feed
+  // it, so it no longer rebuilds on every unrelated re-render. rptRange/rptDef are pure functions of the period/
+  // preset deps, so the cached closure stays consistent with them.
+  const rptModel = React.useMemo(() => F.buildStatement(book, {
     from: rptRange.from, to: rptRange.to, periodLabel: rptRange.label,
     title: (church.name || 'Financial statement') + ' — ' + rptDef.label,
     sections: rptDef.sections, generatedAt: booksTodayISO(), accent: (church.accent || ''),
-  });
+  }), [tick, rptPreset, rptPeriod, rptCFrom, rptCTo]);
   const rptBase = () => fsSlug((church.name || 'report') + '-' + rptDef.label) + '-' + fsSlug(rptRange.label);
   const exportReportPdf = async () => {
     try {
@@ -3305,8 +3350,8 @@ function DashFinanceBook() {
             ))}
         </div>}
         {donorTab === 'giving' && <div style={{ marginTop: 4 }}>
-            <BooksGivingByMember book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} />
-      <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
+            <BooksGivingByMember book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} rev={tick} />
+      <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} rev={tick} onExport={(claim) => {
         // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
         const sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
@@ -3319,7 +3364,7 @@ function DashFinanceBook() {
         if (F && F.TAX_DISCLAIMER) rows.push([], [F.TAX_DISCLAIMER]);
         booksDownload('gift-aid-claim-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
       }} />
-      <BooksStatementPanel book={book} F={F} donors={donorMap} statementOn={statementOn} jurisdiction={jxId}
+      <BooksStatementPanel book={book} F={F} donors={donorMap} statementOn={statementOn} jurisdiction={jxId} rev={tick}
         regWarn={taxRegLabel && !taxRegNumber ? ('Enter your ' + taxRegLabel + ' in Tax tools (Congregation → features) so the receipts you issue are complete.') : ''}
         onExport={(stmt) => {
         // The generated receipt/statement is an HTML document built by the PURE pack helper — it embeds the sourced
@@ -3337,7 +3382,7 @@ function DashFinanceBook() {
         });
         booksDownload('giving-statements-' + booksTodayISO() + '.html', html).then(m => setRptFlash(m)).catch(() => {});
       }} />
-      <BooksCdsPanel book={book} F={F} donors={donorMap} cdsOn={cdsOn} onExport={(claim) => {
+      <BooksCdsPanel book={book} F={F} donors={donorMap} cdsOn={cdsOn} rev={tick} onExport={(claim) => {
         // The CDS claim schedule leaves the app as a CSV — it carries the ONE shared tax disclaimer (a reclaim
         // figure must never leave without the caveat). Same CSV-injection guard as the Gift Aid export.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
@@ -3371,7 +3416,7 @@ function DashFinanceBook() {
             {invFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>{invFlash}</div> : null}
             {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No invoices yet. Raise one for facility hire or any amount owed to the church — the double-entry and the receivable are kept for you.</div>}
             {rows.map(inv => {
-              const status = inv.credit ? 'credit' : F.invoiceStatus(inv, today, book.journal);
+              const status = inv.credit ? 'credit' : (invoiceStatusMap ? invoiceStatusMap.get(inv.id) : F.invoiceStatus(inv, today, book.journal));
               const total = F.invoiceTotal(inv);
               return (
                 <div key={inv.id} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
@@ -3418,7 +3463,7 @@ function DashFinanceBook() {
             {billFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>{billFlash}</div> : null}
             {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No bills yet. Record one you have received — the double-entry and what you owe are kept for you, and it must be approved before it is paid.</div>}
             {rows.map(bill => {
-              const status = F.billStatus(bill, today, book.journal);
+              const status = billStatusMap ? billStatusMap.get(bill.id) : F.billStatus(bill, today, book.journal);
               const approved = F.isBillApproved(bill, { mode: billApprovalMode, approvals: billApprovals, recordedBy: bill.by || '' });
               // In dual mode the recorder may not approve their OWN bill (separation of duties). The engine
               // ignores a self-approval regardless; this disables the control so the steward is not misled.
@@ -3457,13 +3502,10 @@ function DashFinanceBook() {
           as distinct. The pure projections (F.yearEndProjection / monthlyTotals / monthlyFundBalances) all take
           the INJECTED local day and the FULL fiscal frame (fyr.from → fyr.to), so nothing here reads a raw
           clock and empty future months still show the shape of the year. ── */}
-      {tab === 'insights' && (() => {
-        const today = booksTodayISO();
-        const fyr = F.fiscalYearRange(today, book.fiscalYearStart || '01-01');
-        const proj = F.yearEndProjection(book, { today, fiscalYearStart: book.fiscalYearStart || '01-01' });
-        const monthly = F.monthlyTotals(book, { from: fyr.from, to: fyr.to });
-        const fundSeries = F.monthlyFundBalances(book, { from: fyr.from, to: fyr.to });
-        const budgetRows = F.budgetVsActual(book, budgetForFy, { from: fyStart, to: today });
+      {tab === 'insights' && insights && (() => {
+        // PERF (#4): the projections come PRE-COMPUTED from the `insights` memo (keyed on tick+tab+fy) so an
+        // unrelated re-render does not re-walk the journal four times. This block only lays them out.
+        const { proj, monthly, fundSeries, budgetRows } = insights;
         const cellHd = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 };
         const cell = (heading, chart) => <div style={{ minWidth: 0 }}><div style={cellHd}>{heading}</div>{chart}</div>;
         return (
