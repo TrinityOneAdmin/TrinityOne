@@ -907,7 +907,7 @@ function BookPicker({ open, onClose, onPick, version }) {
   const [book, setBook] = useS(null);   // selected book (showing chapters)
   const [chap, setChap] = useS(null);   // selected chapter (showing verses)
   useE(() => { if (!open) { setBook(null); setChap(null); } }, [open]);
-  const groups = [['ot', 'OLD TESTAMENT'], ['nt', 'NEW TESTAMENT']].filter(([g]) => B.some(b => b.group === g));
+  const groups = [['ot', 'OLD TESTAMENT'], ['nt', 'NEW TESTAMENT'], ['ap', 'APOCRYPHA']].filter(([g]) => B.some(b => b.group === g));
   const back = () => { if (chap) setChap(null); else if (book) setBook(null); else onClose(); };
   const title = chap ? `${book.name} ${chap}` : book ? book.name : 'Books';
   const cellBtn = { aspectRatio: '1', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', fontWeight: 700, fontSize: 15, color: 'var(--ink)', fontFamily: 'var(--font-display)' };
