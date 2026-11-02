@@ -1063,8 +1063,9 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
     try { sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 10; } catch (e) {}
   };
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs' | 'bookmarks'
-  const [commSrc, setCommSrc] = useS(null);      // null = show all commentary sources, or abbr of chosen source
-  const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
+  const [commSrc, setCommSrc] = useS(null);      // null = default to first, or abbr of chosen source
+  const [commAll, setCommAll] = useS([]);        // all installed commentary modules (from commentaryList)
+  const [comm, setComm] = useS([]);              // commentary content for this chapter (from getCommentary)
   const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
   const [xrefPreview, setXrefPreview] = useS(null);   // a cross-reference being previewed before jumping to it
   const [xrefOpen, setXrefOpen] = useS({});           // verse -> show all its cross-refs (past the first 4)
@@ -1092,7 +1093,8 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
       try {
         const c = window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : [];
         setComm(c);
-        setCommSrc(prev => prev && !c.some(s => s.abbr === prev) ? null : prev);
+        const all = window.Bible.commentaryList ? window.Bible.commentaryList() : [];
+        setCommAll(all);
       } catch (e) { setComm([]); }
     };
     read();
@@ -1262,23 +1264,22 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
               </div>
             )}
             </React.Fragment>
-          ) : comm.length ? <React.Fragment>
-            {comm.length > 1 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 14 }}>
-                {comm.map(s => (
-                  <button key={s.abbr} onClick={() => setCommSrc(s.abbr)} style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 12,
-                    border: (commSrc || comm[0].abbr) === s.abbr ? '1.5px solid var(--clay)' : '1px solid var(--line)',
-                    background: (commSrc || comm[0].abbr) === s.abbr ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)',
-                    cursor: 'pointer', textAlign: 'left', width: '100%'
-                  }}>
-                    <Icon name={s.kind === 'footnotes' ? 'note' : 'comment'} size={15} color={(commSrc || comm[0].abbr) === s.abbr ? 'var(--clay)' : 'var(--ink-3)'} />
-                    <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: (commSrc || comm[0].abbr) === s.abbr ? 'var(--ink)' : 'var(--ink-2)' }}>{s.name}</span>
-                  </button>
-                ))}
+          ) : comm.length || commAll.length ? (() => {
+            const active = commSrc || (comm[0] && comm[0].abbr) || (commAll[0] && commAll[0].abbr);
+            const filtered = active ? comm.filter(s => s.abbr === active) : comm;
+            return <React.Fragment>
+            {commAll.length > 1 ? (
+              <div style={{ marginBottom: 14 }}>
+                <select value={active || ''} onChange={e => setCommSrc(e.target.value || null)} style={{
+                  width: '100%', padding: '10px 13px', borderRadius: 12, border: '1px solid var(--line)',
+                  background: 'var(--surface-2)', color: 'var(--ink)', fontFamily: 'var(--font-ui)',
+                  fontWeight: 700, fontSize: 14, cursor: 'pointer'
+                }}>
+                  {commAll.map(s => <option key={s.abbr} value={s.abbr}>{s.name}</option>)}
+                </select>
               </div>
             ) : null}
-            {((commSrc || comm[0].abbr) ? comm.filter(s => s.abbr === (commSrc || comm[0].abbr)) : comm).map((srcBlk, si) => (
+            {filtered.length ? filtered.map((srcBlk, si) => (
             <div key={si} style={{ marginBottom: 22 }}>
               {srcBlk.rows.map((b, i) => (
                 <div key={i} style={{ marginBottom: 14 }}>
@@ -1290,8 +1291,12 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
                 <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10, lineHeight: 1.4, color: 'var(--ink-3)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)' }}>{srcBlk.license}</div>
               ) : null}
             </div>
-          ))}
-          </React.Fragment> : (
+          )) : (
+              <div style={{ textAlign: 'center', padding: '30px 16px', color: 'var(--ink-3)' }}>
+                <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14 }}>No content for this chapter</div>
+              </div>
+            )}
+          </React.Fragment>; })() : (
             <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
               <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="comment" size={26} /></div>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>Nothing here for {label}</div>
