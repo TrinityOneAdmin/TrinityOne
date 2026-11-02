@@ -2057,24 +2057,39 @@ const FIN_TABS_MORE = [
 // Combined list (any reader / label lookup). Unchanged key set, so every `tab === '…'` panel is untouched.
 const FIN_TABS = [...FIN_TABS_PRIMARY, ...FIN_TABS_MORE];
 
-// The Finance tab strip. Two primary pills + a "More ▾" popover holding the rest. NOT a dialog (no
-// role="dialog") — it is a lightweight menu, so it stays OFF every-console-dialog-mounts. Extracted as its own
-// component so a point-of-use test can render it in one piece (CLAUDE.md rule 1: delete the strip → the test
-// fails; rule 3: the test drives the rendered tree, never text in app/*.jsx).
+// The Finance tab strip. RESPONSIVE: on a desktop/wide console (>=760) every tab is a top-level pill (there is
+// room); only on a narrow/phone width (<760) does it collapse to two primary pills + a "More ▾" popover holding
+// the rest. The breakpoint is useStewNarrow() — the house convention (the sidebar collapses at the same 760),
+// and it works in the APK WebView too. NOT a dialog (no role="dialog") — the popover is a lightweight menu, so
+// it stays OFF every-console-dialog-mounts. Extracted as its own component so a point-of-use test can render it
+// in one piece (CLAUDE.md rule 1: delete the desktop branch → the test fails; rule 3: it drives the tree).
 function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
+  // Always called (same order every render), house-guarded like stew-meals/stew-schedule so a missing hook
+  // falls back to the wide layout rather than throwing. Default false = show all tabs (desktop).
+  const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;
   const pill = (active, onClick, label, key, extra) => (
     <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, minHeight: 44, boxSizing: 'border-box',
       border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)', ...(extra || {}) }}>{label}</button>
   );
   const activeMore = FIN_TABS_MORE.find(t => t.key === tab);
   // close the popover on any outside pointerdown (same pattern the reaction/menu pickers use here). Guarded on
-  // `document` so the slice test (no DOM) runs the component without throwing.
+  // `document` so the slice test (no DOM) runs the component without throwing. Called UNCONDITIONALLY (before the
+  // narrow/desktop branch) so the hook order is stable across both layouts.
   React.useEffect(() => {
     if (!moreOpen || typeof document === 'undefined') return;
     const off = (e) => { if (!(e.target && e.target.closest && e.target.closest('[data-fin-more]'))) setMoreOpen(false); };
     document.addEventListener('pointerdown', off, true);
     return () => document.removeEventListener('pointerdown', off, true);
   }, [moreOpen]);
+  // DESKTOP / wide (>=760): all tabs inline, flex-wrap, no "More" button.
+  if (!narrow) {
+    return (
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+        {FIN_TABS.map(t => pill(tab === t.key, () => { setTab(t.key); setMoreOpen(false); }, t.label, t.key))}
+      </div>
+    );
+  }
+  // NARROW / phone (<760): two primary pills + the More ▾ popover.
   return (
     <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
       {FIN_TABS_PRIMARY.map(t => pill(tab === t.key, () => { setTab(t.key); setMoreOpen(false); }, t.label, t.key))}
