@@ -55,22 +55,30 @@ window.safeImgUrl = function (v) {
     "Mark","Luke","John","Acts","Romans","1 Corinthians","2 Corinthians","Galatians",
     "Ephesians","Philippians","Colossians","1 Thessalonians","2 Thessalonians","1 Timothy","2 Timothy","Titus",
     "Philemon","Hebrews","James","1 Peter","2 Peter","1 John","2 John","3 John",
-    "Jude","Revelation"
+    "Jude","Revelation",
+    "Tobit","Judith","Additions to Esther","Wisdom of Solomon","Sirach","Baruch",
+    "Letter of Jeremiah","Prayer of Azariah","Susanna","Bel and the Dragon",
+    "1 Maccabees","2 Maccabees","1 Esdras","2 Esdras","Prayer of Manasseh",
+    "Psalm 151","3 Maccabees","4 Maccabees"
   ];
   const BOOK_ABBR = [
     "Gen","Exo","Lev","Num","Deu","Jos","Jdg","Rut","1Sa","2Sa","1Ki","2Ki","1Ch","2Ch","Ezr","Neh",
     "Est","Job","Psa","Pro","Ecc","Sng","Isa","Jer","Lam","Ezk","Dan","Hos","Jol","Amo","Oba","Jon",
     "Mic","Nam","Hab","Zep","Hag","Zec","Mal","Mat","Mrk","Luk","Joh","Act","Rom","1Co","2Co","Gal",
-    "Eph","Php","Col","1Th","2Th","1Ti","2Ti","Tit","Phm","Heb","Jas","1Pe","2Pe","1Jn","2Jn","3Jn","Jud","Rev"
+    "Eph","Php","Col","1Th","2Th","1Ti","2Ti","Tit","Phm","Heb","Jas","1Pe","2Pe","1Jn","2Jn","3Jn","Jud","Rev",
+    "Tob","Jdt","AddEst","Wis","Sir","Bar","LJe","PrAz","Sus","Bel","1Ma","2Ma","1Es","2Es","Man","Ps151","3Ma","4Ma"
   ];
   const bookName = n => BOOK_NAMES[n - 1] || ("Book " + n);
   const bookAbbr = n => BOOK_ABBR[n - 1] || ("B" + n);
-  const bookGroup = n => (n <= 39 ? "ot" : "nt");
+  const bookGroup = n => (n <= 39 ? "ot" : n <= 66 ? "nt" : "ap");
 
   // name → book number, and "John 5" / "1 John 2:3" / "Psalms 23" → {book, chap, verse}
   const NAME_TO_NUM = {};
   BOOK_NAMES.forEach((nm, i) => { NAME_TO_NUM[nm.toLowerCase()] = i + 1; });
   NAME_TO_NUM["psalm"] = 19; NAME_TO_NUM["song of songs"] = 22;
+  NAME_TO_NUM["ecclesiasticus"] = 71; NAME_TO_NUM["wisdom"] = 70;
+  NAME_TO_NUM["1 maccabees"] = 77; NAME_TO_NUM["2 maccabees"] = 78;
+  NAME_TO_NUM["1 esdras"] = 79; NAME_TO_NUM["2 esdras"] = 80;
   const bookNum = name => NAME_TO_NUM[String(name || "").trim().toLowerCase().replace(/\s+/g, " ")] || 0;
   function parseRef(str){
     // "John 3:16-21" -> verse 16 AND verseEnd 21. verseEnd is present only for a same-chapter range that really
@@ -93,7 +101,9 @@ window.safeImgUrl = function (v) {
     MRK:41,LUK:42,JHN:43,ACT:44,ROM:45,"1CO":46,"2CO":47,GAL:48,
     EPH:49,PHP:50,COL:51,"1TH":52,"2TH":53,"1TI":54,"2TI":55,TIT:56,
     PHM:57,HEB:58,JAS:59,"1PE":60,"2PE":61,"1JN":62,"2JN":63,"3JN":64,
-    JUD:65,REV:66
+    JUD:65,REV:66,
+    TOB:67,JDT:68,ESG:69,WIS:70,SIR:71,BAR:72,LJE:73,S3Y:74,SUS:75,BEL:76,
+    "1MA":77,"2MA":78,"1ES":79,"2ES":80,MAN:81,PS2:82,"3MA":83,"4MA":84
   };
 
   // ── built-in Strong's lexicon (merged: design glosses + common terms) ──
