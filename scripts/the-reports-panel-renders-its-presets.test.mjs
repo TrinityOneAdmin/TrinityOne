@@ -48,8 +48,9 @@ function setup() {
   const all = () => nodes(tree);
   const button = (label) => all().find(n => n.type === 'button' && texts(n).join(' ').includes(label));
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
+  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
   const feedItems = (items) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(items); draw(); };
-  return { fr, draw, all, button, click, feedItems, get tree() { return tree; } };
+  return { fr, draw, all, button, click, goTab, feedItems, get tree() { return tree; } };
 }
 
 // A book with a restricted Building fund and income to both funds, dated in the CURRENT year so it falls inside
@@ -71,7 +72,7 @@ test('the Reports panel offers every Phase-4a preset + an export control', () =>
   const h = setup();
   h.draw();
   h.feedItems(toItems(FL.bookToDocs(seedBook())));
-  h.click('Reports');   // open the collapsible
+  h.goTab('reports');   // open the collapsible
   for (const label of ['Income & expenditure', 'Balance sheet', 'Fund summary', 'Giving by fund', 'Receipts & payments', "Trustees' report"]) {
     assert.ok(h.button(label), 'NO "' + label + '" report preset on the screen');
   }
@@ -95,7 +96,7 @@ test("the Trustees' report renders the fund-movements table over the ledger", ()
   const h = setup();
   h.draw();
   h.feedItems(toItems(FL.bookToDocs(seedBook())));
-  h.click('Reports');
+  h.goTab('reports');
   h.click("Trustees' report");
   const joined = texts(h.tree).join(' ');
   assert.ok(joined.includes('Fund movements'), 'the fund-movements section did not render');
@@ -108,7 +109,7 @@ test('the Giving-by-fund report renders aggregate per-fund giving (no member nam
   const h = setup();
   h.draw();
   h.feedItems(toItems(FL.bookToDocs(seedBook())));
-  h.click('Reports');
+  h.goTab('reports');
   h.click('Giving by fund');
   const joined = texts(h.tree).join(' ');
   assert.ok(joined.includes('Giving by fund'), 'the giving-by-fund section did not render');
@@ -120,7 +121,7 @@ test('the Receipts & payments (SORP) report renders its totals', () => {
   const h = setup();
   h.draw();
   h.feedItems(toItems(FL.bookToDocs(seedBook())));
-  h.click('Reports');
+  h.goTab('reports');
   h.click('Receipts & payments');
   const joined = texts(h.tree).join(' ');
   assert.ok(joined.includes('Total receipts'), 'the receipts total did not render');
@@ -135,7 +136,7 @@ test('the Reports period dropdown offers a Custom range that renders a report fo
   const h = setup();
   h.draw();
   h.feedItems(toItems(FL.bookToDocs(seedBook())));
-  h.click('Reports');
+  h.goTab('reports');
   const Y = new Date().getFullYear();
 
   const sel = h.all().find(n => n.type === 'select' && n.props && n.props['aria-label'] === 'Report period');

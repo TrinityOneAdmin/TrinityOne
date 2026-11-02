@@ -49,7 +49,9 @@ var FinanceLedger = (() => {
     billPaymentEntry: () => billPaymentEntry,
     billReceiveEntry: () => billReceiveEntry,
     billStatus: () => billStatus,
+    billStatuses: () => billStatuses,
     billTotal: () => billTotal,
+    bookDocSignature: () => bookDocSignature,
     bookToDocs: () => bookToDocs,
     budgetVsActual: () => budgetVsActual,
     buildStatement: () => buildStatement,
@@ -80,6 +82,7 @@ var FinanceLedger = (() => {
     invoiceOutstanding: () => invoiceOutstanding,
     invoiceSettlementEntry: () => invoiceSettlementEntry,
     invoiceStatus: () => invoiceStatus,
+    invoiceStatuses: () => invoiceStatuses,
     invoiceTotal: () => invoiceTotal,
     isBillApproved: () => isBillApproved,
     journalCsvRows: () => journalCsvRows,
@@ -388,6 +391,25 @@ var FinanceLedger = (() => {
   }
   function docFor(entryOrObj, t) {
     return { t, ...entryOrObj };
+  }
+  function bookDocSignature(docs) {
+    let jCount = 0, jMax = 0, jSum = 0;
+    let settings = "";
+    const accounts = [], funds = [];
+    for (const d of docs || []) {
+      if (!d) continue;
+      if (d.t === "journal") {
+        const s = Number(d.seq) || 0;
+        jCount++;
+        if (s > jMax) jMax = s;
+        jSum += s;
+      } else if (d.t === "settings") settings = JSON.stringify({ baseCurrency: d.baseCurrency, decimals: d.decimals, fiscalYearStart: d.fiscalYearStart, multiCurrency: !!d.multiCurrency });
+      else if (d.t === "account") accounts.push(d.id + "\0" + d.code + "\0" + d.name + "\0" + d.type + "\0" + (d.archived ? 1 : 0));
+      else if (d.t === "fund") funds.push(d.id + "\0" + d.name + "\0" + d.kind);
+    }
+    accounts.sort();
+    funds.sort();
+    return "j" + jCount + ":" + jMax + ":" + jSum + "|s" + settings + "|a" + accounts.join("") + "|f" + funds.join("");
   }
   function rebuildBook(docs) {
     const errors = [];
@@ -1150,6 +1172,33 @@ ${S.join("\n")}
     if (due && todayLocalISO && String(due) < String(todayLocalISO)) return "overdue";
     return "unpaid";
   }
+  function invoiceStatuses(invoices, journalEntries, todayLocalISO) {
+    const ar = /* @__PURE__ */ new Map();
+    for (const e of journalEntries || []) {
+      if (!e || e.invoice == null) continue;
+      let a = ar.get(e.invoice);
+      if (!a) {
+        a = { dr: 0, cr: 0 };
+        ar.set(e.invoice, a);
+      }
+      for (const p of e.postings || []) if (p.account === AR_ACCT) {
+        if (p.dir === "dr") a.dr += p.amount;
+        else a.cr += p.amount;
+      }
+    }
+    const out = /* @__PURE__ */ new Map();
+    for (const inv of invoices || []) {
+      if (!inv) continue;
+      const a = ar.get(inv.id) || { dr: 0, cr: 0 };
+      const issued = a.dr > 0;
+      let status;
+      if (issued && a.dr - a.cr <= 0) status = "paid";
+      else if (inv.due && todayLocalISO && String(inv.due) < String(todayLocalISO)) status = "overdue";
+      else status = "unpaid";
+      out.set(inv.id, status);
+    }
+    return out;
+  }
   function openInvoices(invoices, journalEntries, todayLocalISO) {
     return (invoices || []).filter((inv) => inv && !inv.credit).map((inv) => ({ invoice: inv, status: invoiceStatus(inv, todayLocalISO, journalEntries), outstanding: invoiceOutstanding(inv.id, journalEntries), total: invoiceTotal(inv) })).filter((x) => x.status !== "paid");
   }
@@ -1296,6 +1345,33 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
     const due = bill && bill.due;
     if (due && todayLocalISO && String(due) < String(todayLocalISO)) return "overdue";
     return "unpaid";
+  }
+  function billStatuses(bills, journalEntries, todayLocalISO) {
+    const ap = /* @__PURE__ */ new Map();
+    for (const e of journalEntries || []) {
+      if (!e || e.bill == null) continue;
+      let a = ap.get(e.bill);
+      if (!a) {
+        a = { cr: 0, dr: 0 };
+        ap.set(e.bill, a);
+      }
+      for (const p of e.postings || []) if (p.account === AP_ACCT) {
+        if (p.dir === "cr") a.cr += p.amount;
+        else a.dr += p.amount;
+      }
+    }
+    const out = /* @__PURE__ */ new Map();
+    for (const b of bills || []) {
+      if (!b) continue;
+      const a = ap.get(b.id) || { cr: 0, dr: 0 };
+      const recorded = a.cr > 0;
+      let status;
+      if (recorded && a.cr - a.dr <= 0) status = "paid";
+      else if (b.due && todayLocalISO && String(b.due) < String(todayLocalISO)) status = "overdue";
+      else status = "unpaid";
+      out.set(b.id, status);
+    }
+    return out;
   }
   var _lc = (s) => String(s || "").toLowerCase();
   function isBillApproved(bill, { mode = "light", approvals = [], recordedBy } = {}) {

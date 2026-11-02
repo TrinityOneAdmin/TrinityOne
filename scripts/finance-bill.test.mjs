@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { createBook, addAccount, post, check, fundBalances, trialBalance } from '../src/finance-ledger.mjs';
 import {
   AP_ACCT, AP_ACCOUNT, assertApAccount, billTotal, billReceiveEntry, billPaymentEntry,
-  billOutstanding, billStatus, isBillApproved, billApprovers, openBills,
+  billOutstanding, billStatus, billStatuses, isBillApproved, billApprovers, openBills,
 } from '../src/finance-bill.mjs';
 
 // A book with a bank asset, an expense account, a fund, and the reserved AP liability account.
@@ -162,4 +162,32 @@ test('the bill id round-trips through the four serializers (post → bookToDocs 
   const { book: rebuilt, ok } = rebuildBook(docs);
   assert.equal(ok, true, 'the rebuilt book did not balance');
   assert.equal(rebuilt.journal[0].bill, 'b1', 'applyEntry dropped the bill tag on rebuild');
+});
+
+// ── billStatuses (batch, one-pass) must NEVER drift from billStatus (single-item) ────────────────────────────
+// The screen renders a status badge per bill. billStatuses() does ONE journal pass for the whole list instead
+// of billStatus()'s per-row walk (the perf fix); if the two ever disagree the badge lies. This seeds a book
+// with every lifecycle state at once and asserts the batch Map matches the canonical single-item fn for each.
+test('billStatuses(batch) === billStatus(per-bill) for every bill over a seeded multi-entry book', () => {
+  const b = book();
+  const today = '2026-06-01';
+  const paid     = bill({ id: 'bp', due: '2026-05-31', lines: [{ desc: 'Gas',   account: 'utilities', fund: 'general', amount: 9500 }] });
+  const overdue  = bill({ id: 'bo', due: '2026-05-01', lines: [{ desc: 'Water', account: 'utilities', fund: 'general', amount: 4200 }] });
+  const unpaid   = bill({ id: 'bu', due: '2026-12-31', lines: [{ desc: 'Elec',  account: 'utilities', fund: 'general', amount: 3100 }] });
+  const unrecorded = bill({ id: 'bx', due: '2026-12-31', lines: [{ desc: 'Phantom', account: 'utilities', fund: 'general', amount: 999 }] });   // never received → never "paid" (future due so it reads unpaid, not overdue)
+  // Record paid + overdue + unpaid (unrecorded is deliberately NOT posted), then fully pay only `paid`.
+  post(b, billReceiveEntry(paid));
+  post(b, billReceiveEntry(overdue));
+  post(b, billReceiveEntry(unpaid));
+  post(b, billPaymentEntry(paid, { amount: billTotal(paid), approved: true }));
+  const bills = [paid, overdue, unpaid, unrecorded];
+  const map = billStatuses(bills, b.journal, today);
+  for (const x of bills) {
+    assert.equal(map.get(x.id), billStatus(x, today, b.journal), 'batch status drifted from billStatus for ' + x.id);
+  }
+  // and the states are the expected ones (so the test is not vacuously "both wrong the same way")
+  assert.equal(map.get('bp'), 'paid');
+  assert.equal(map.get('bo'), 'overdue');
+  assert.equal(map.get('bu'), 'unpaid');
+  assert.equal(map.get('bx'), 'unpaid', 'a never-recorded bill (no AP credit) must not read as paid on a zero net');
 });

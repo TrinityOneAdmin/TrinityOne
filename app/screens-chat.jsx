@@ -2097,7 +2097,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
           <Icon name="pin" size={15} color="var(--gold)" style={{ marginTop: 2, flexShrink: 0 }} />
           {/* tapping the banner body scrolls the chat to the full pinned message; the Unpin X stops propagation */}
-          <div role="button" tabIndex={0} onClick={scrollToPinned} title="Go to the pinned message" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+          <div role="button" tabIndex={0} onClick={scrollToPinned} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToPinned(); } }} title="Go to the pinned message" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
             <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', marginBottom: 1 }}>PINNED</div>
             <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{pin.text || '(message)'}</div>
           </div>

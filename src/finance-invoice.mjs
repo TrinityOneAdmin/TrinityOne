@@ -135,6 +135,35 @@ export function invoiceStatus(invoice, todayLocalISO, journalEntries) {
   return 'unpaid';
 }
 
+// BATCH status for a WHOLE list of invoices in ONE journal pass — the screen renders a status badge per row
+// (app/stew-finance.jsx Invoices tab), and calling invoiceStatus() per row re-walks the entire journal each
+// time: O(invoices × journal). This pre-aggregates Σ AR debit/credit per invoice id in a single pass, then
+// derives each status with the IDENTICAL rule as invoiceStatus — so it is O(journal + invoices). The two share
+// one definition: finance-invoice.test.mjs asserts invoiceStatuses(...).get(inv.id) === invoiceStatus(inv, ...)
+// over a seeded multi-entry book, so this batch path can never drift from the canonical single-item version.
+// Returns Map(invoiceId -> 'paid'|'overdue'|'unpaid'). Credit-note docs get a status too (harmless — the screen
+// renders 'credit' for inv.credit and never reads it).
+export function invoiceStatuses(invoices, journalEntries, todayLocalISO) {
+  const ar = new Map();   // invoiceId -> { dr, cr } over AR postings, from a single journal pass
+  for (const e of (journalEntries || [])) {
+    if (!e || e.invoice == null) continue;
+    let a = ar.get(e.invoice); if (!a) { a = { dr: 0, cr: 0 }; ar.set(e.invoice, a); }
+    for (const p of (e.postings || [])) if (p.account === AR_ACCT) { if (p.dir === 'dr') a.dr += p.amount; else a.cr += p.amount; }
+  }
+  const out = new Map();
+  for (const inv of (invoices || [])) {
+    if (!inv) continue;
+    const a = ar.get(inv.id) || { dr: 0, cr: 0 };
+    const issued = a.dr > 0;   // same split as invoiceStatus: a never-issued invoice is never "paid" on a zero net
+    let status;
+    if (issued && (a.dr - a.cr) <= 0) status = 'paid';
+    else if (inv.due && todayLocalISO && String(inv.due) < String(todayLocalISO)) status = 'overdue';
+    else status = 'unpaid';
+    out.set(inv.id, status);
+  }
+  return out;
+}
+
 // The not-yet-paid invoices, each with its DERIVED status + outstanding minor units, for the list and for an
 // auto-match pass (a bank line can only settle an OPEN invoice). Deliberately depends on nothing in Phase 3 —
 // manual settlement and this list work standalone; auto-match is the only part that consults reconcile.

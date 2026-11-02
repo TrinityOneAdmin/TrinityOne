@@ -162,3 +162,21 @@ test('…and givingByMember then attributes the imported gift to the donor, not 
   assert.equal(ada.amount, 10000, 'the attributed amount is wrong (expected £100.00 in minor units)');
   assert.ok(!rows.some(row => row.unattributed), 'the imported gift still shows as unattributed — the INTO path is broken');
 });
+
+// ── 5. PHONE LAYOUT (#1): the review row's category/fund/donor selects WRAP and share the width, so they do not
+//       crush to ~30px each on a ≤360px screen. Reads the rendered style, never the .jsx text (rule 3); delete
+//       the wrap/flex basis and this goes red.
+test('the review row wraps its category/fund/donor selects and gives each a flex basis (phone layout)', async () => {
+  const h = await openFinance();
+  const r = await importCsv(h, HEAD + '02/09/2026,Sunday gift,100.00\n', { post: false });
+  const fields = r.nodesOf().find(n => n.props && n.props['data-import-row-fields']);
+  assert.ok(fields, 're-anchor: the import review row has no [data-import-row-fields] container');
+  assert.equal(fields.props.style.flexWrap, 'wrap', 'the review row selects do not wrap — they crush on a phone');
+  const sels = nodes(fields).filter(n => n.type === 'select');
+  assert.ok(sels.length >= 3, 'expected category + fund + donor selects on a money-in review row');
+  for (const s of sels) {
+    const st = s.props.style || {};
+    assert.ok(typeof st.flex === 'string' && /1\s+\d/.test(st.flex), 'a review select has no flex basis (still a fixed width) — it will crush on a phone');
+    assert.ok((st.minWidth || 0) >= 100, 'a review select has no sensible min width');
+  }
+});

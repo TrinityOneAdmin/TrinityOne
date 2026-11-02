@@ -55,9 +55,10 @@ function setup() {
   const all = () => nodes(tree);
   const button = (label) => all().find(n => n.type === 'button' && texts(n).join(' ').includes(label));
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
+  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
   const feedItems = (items) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(items); draw(); };
   const statusNode = () => all().find(n => n.props && n.props['data-invoice-status']);
-  return { fr, draw, drawComp, all, button, click, feedItems, statusNode, get tree() { return tree; } };
+  return { fr, draw, drawComp, all, button, click, goTab, feedItems, statusNode, get tree() { return tree; } };
 }
 
 // A minimal book carrying an income account, for the dialogs rendered on their own.
@@ -85,7 +86,7 @@ test('the Invoices panel shows an invoice with a status badge, a Mark paid contr
   const h = setup();
   h.draw();
   h.feedItems(seed({ due: '2000-01-01' }));   // a long-overdue, unpaid invoice
-  h.click('Invoices');                          // open the collapsible
+  h.goTab('invoices');                          // open the collapsible
   assert.ok(h.button('New invoice'), 'the "New invoice" control is not on the screen');
   assert.ok(h.button('Add contact'), 'the "Add contact" control is not on the screen');
   const joined = texts(h.tree).join(' ');
@@ -102,7 +103,7 @@ test('a settled invoice badges PAID on the screen (derived from the journal)', (
   const h = setup();
   h.draw();
   h.feedItems(seed({ due: '2000-01-01', settle: true }));
-  h.click('Invoices');
+  h.goTab('invoices');
   const badge = h.statusNode();
   assert.ok(badge, 'no status badge rendered');
   assert.equal(badge.props['data-invoice-status'], 'paid', 'an invoice with a settlement entry must badge PAID');

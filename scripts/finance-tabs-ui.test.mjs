@@ -61,7 +61,12 @@ function setup(opts = {}) {
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
   const feedItems = (items) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(items); draw(); };
   const screen = () => texts(tree).join(' ');
-  return { fr, draw, all, button, comp, click, feedItems, screen, pubs, get tree() { return tree; } };
+  // Owner's 2+More tab layout: only Transactions + Reports are top-level; the rest live in the FinTabStrip
+  // "More" popover (a child component console-screens does not render), so a main-tab switch goes through its
+  // setTab prop. Sub-tabs/buttons INSIDE a panel are still reached with click(). (The strip's own layout is
+  // covered by scripts/finance-tabs-tidy-ui.test.mjs.)
+  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); assert.ok(s, 're-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
+  return { fr, draw, all, button, comp, click, goTab, feedItems, screen, pubs, get tree() { return tree; } };
 }
 
 // A minimal relay delivery: settings + two accounts + one donor-tagged gift, so the screen is NOT in the seed
@@ -77,14 +82,25 @@ function seedItems() {
   ];
 }
 
-const TAB_LABELS = ['Transactions', 'Reports', 'Accounts & funds', 'Invoices', 'Bills', 'Budget', 'Donors', 'Insights'];
+// Owner's 2+More layout (2026-11-02). The tab strip is its own component (FinTabStrip), so the pills are NOT in
+// DashFinanceBook's own rendered tree — the strip's shape (which pills are primary, the More menu, the active-
+// child label) is covered by scripts/finance-tabs-tidy-ui.test.mjs. Here we prove every tab is still REACHABLE
+// (via the strip's setTab) and reveals its panel.
+const PANEL_PROBE = [
+  ['reports', 'Export PDF'], ['accounts', 'Add account'], ['invoices', 'New invoice'],
+  ['bills', 'New bill'], ['budget', 'Edit budget'], ['donors', 'Add donor'],
+];
 
-test('the tab strip renders all eight tabs', () => {
+test('every tab is reachable via the strip and reveals its own panel', () => {
   const h = setup();
   h.draw();
-  for (const label of TAB_LABELS) {
-    assert.ok(h.button(label), 'the "' + label + '" tab is not on the strip — the Finance screen is missing a tab');
+  h.feedItems(seedItems());
+  for (const [key, probe] of PANEL_PROBE) {
+    h.goTab(key);
+    assert.ok(h.button(probe), 'reaching "' + key + '" did not reveal its panel (no "' + probe + '")');
   }
+  h.goTab('transactions');
+  assert.match(h.screen(), /Recent transactions/, 'reaching Transactions did not show the recent-transactions list');
 });
 
 test('the DEFAULT tab is Transactions (the recent-transactions list), not any other panel', () => {
@@ -103,20 +119,20 @@ test('selecting a tab shows THAT panel and hides the others', () => {
   h.draw();
   h.feedItems(seedItems());
 
-  h.click('Reports');
+  h.goTab('reports');
   assert.ok(h.button('Export PDF'), 'the Reports tab did not reveal the Reports panel (no Export PDF)');
   assert.ok(!h.button('Add account'), 'the Accounts & funds panel is still showing on the Reports tab');
   assert.ok(!/Recent transactions/.test(h.screen()), 'the Transactions panel is still showing on the Reports tab');
 
-  h.click('Accounts & funds');
+  h.goTab('accounts');
   assert.ok(h.button('Add account'), 'the Accounts & funds tab did not reveal its panel (no Add account)');
   assert.ok(!h.button('Export PDF'), 'the Reports panel is still showing on the Accounts & funds tab');
 
-  h.click('Bills');
+  h.goTab('bills');
   assert.ok(h.button('New bill'), 'the Bills tab did not reveal its panel (no New bill)');
   assert.ok(!h.button('Add account'), 'the Accounts & funds panel is still showing on the Bills tab');
 
-  h.click('Transactions');
+  h.goTab('transactions');
   assert.match(h.screen(), /Recent transactions/, 'returning to the Transactions tab did not bring the recent list back');
   assert.ok(!h.button('New bill'), 'the Bills panel is still showing on the Transactions tab');
 });
@@ -125,7 +141,7 @@ test('the Donors tab has two sub-tabs that switch between the donor records and 
   const h = setup();
   h.draw();
   h.feedItems(seedItems());
-  h.click('Donors');
+  h.goTab('donors');
   // sub-tab strip is present
   assert.ok(h.button('Giving record'), 'the Donors tab has no "Giving record" sub-tab');
   // DEFAULT sub-tab is the donor records: the Add-donor control shows and the giving-by-member view does not
@@ -143,7 +159,7 @@ test('the Gift Aid panel is wired under the Giving-record sub-tab, gated by the 
   const off = setup({ giftAid: false });
   off.draw();
   off.feedItems(seedItems());
-  off.click('Donors');
+  off.goTab('donors');
   assert.ok(!off.comp('BooksGiftAidPanel'), 'the Gift Aid panel is on the donor-records sub-tab — it belongs under Giving record');
   off.click('Giving record');
   const gaOff = off.comp('BooksGiftAidPanel');
@@ -154,7 +170,7 @@ test('the Gift Aid panel is wired under the Giving-record sub-tab, gated by the 
   const on = setup({ giftAid: true });
   on.draw();
   on.feedItems(seedItems());
-  on.click('Donors');
+  on.goTab('donors');
   on.click('Giving record');
   const gaOn = on.comp('BooksGiftAidPanel');
   assert.ok(gaOn, 'the Gift Aid panel is not under the Giving-record sub-tab when giftAid is on');
@@ -170,7 +186,7 @@ test('T4 — DashFinanceBook hands giftAidOn to the donor editor and the giving-
     const h = setup({ giftAid: flag });
     h.draw();
     h.feedItems(seedItems());
-    h.click('Donors');            // opens the Donors tab; its DEFAULT sub-tab is the records list
+    h.goTab('donors');            // opens the Donors tab; its DEFAULT sub-tab is the records list
     // the donor editor child (opened from the records sub-tab) gets the gate
     h.click('Add donor');
     const ed = h.comp('BooksDonor');
@@ -191,7 +207,7 @@ test('T5 — the donor-records list gates the Gift Aid badge and the postcode on
   const off = setup({ giftAid: false });
   off.draw();
   off.feedItems(seedItems());
-  off.click('Donors');
+  off.goTab('donors');
   assert.match(off.screen(), /Ada Lovelace/, 're-anchor: the seeded donor is not in the records list');
   assert.ok(!/Gift Aid/.test(off.screen()), 'the "Gift Aid" badge still shows in the donor list with the UK pack off');
   assert.ok(!/AB1 2CD/.test(off.screen()), 'the donor postcode still shows in the list with the UK pack off');
@@ -199,7 +215,7 @@ test('T5 — the donor-records list gates the Gift Aid badge and the postcode on
   const on = setup({ giftAid: true });
   on.draw();
   on.feedItems(seedItems());
-  on.click('Donors');
+  on.goTab('donors');
   assert.ok(/Gift Aid/.test(on.screen()), 'the "Gift Aid" badge is missing from the donor list with the UK pack on');
   assert.ok(/AB1 2CD/.test(on.screen()), 'the donor postcode is missing from the list with the UK pack on');
 });
@@ -243,7 +259,7 @@ function gaPanelFor(features) {
   const h = setup({ features });
   h.draw();
   h.feedItems(seedItems());
-  h.click('Donors');
+  h.goTab('donors');
   h.click('Giving record');
   const ga = h.comp('BooksGiftAidPanel');
   assert.ok(ga, 're-anchor: the Gift Aid panel is not under the Giving-record sub-tab');
@@ -270,12 +286,12 @@ test('W3-2 — the NATION-NEUTRAL default (no features) leaves the Gift Aid tool
 // (The records-list badge/postcode live in DashFinanceBook's own body, so console-screens renders them.)
 test('W3-3 — donor labels follow the switch: on+UK shows the Gift Aid badge + postcode, off hides them', () => {
   const uk = setup({ features: { taxTools: true, jurisdiction: 'UK' } });
-  uk.draw(); uk.feedItems(seedItems()); uk.click('Donors');
+  uk.draw(); uk.feedItems(seedItems()); uk.goTab('donors');
   assert.ok(/Gift Aid/.test(uk.screen()), 'jurisdiction=UK did not show the Gift Aid wording in the donor list');
   assert.ok(/AB1 2CD/.test(uk.screen()), 'jurisdiction=UK did not show the donor postcode');
 
   const none = setup({ features: {} });
-  none.draw(); none.feedItems(seedItems()); none.click('Donors');
+  none.draw(); none.feedItems(seedItems()); none.goTab('donors');
   assert.match(none.screen(), /Ada Lovelace/, 're-anchor: the seeded donor is not in the list');
   assert.ok(!/Gift Aid/.test(none.screen()), 'the neutral default still shows Gift Aid wording in the donor list');
   assert.ok(!/AB1 2CD/.test(none.screen()), 'the neutral default still shows the donor postcode');

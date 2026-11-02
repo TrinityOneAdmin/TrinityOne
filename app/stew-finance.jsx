@@ -91,7 +91,12 @@ function finItemToDoc(it) {
   // (the money rides the journal, accrued through the reserved AP account). Like invoice/contact they map to
   // their own `t`, which rebuildBook ignores, and DashFinanceBook collects them into SEPARATE console state. The
   // bill's `approved` is the LIGHT-mode flag; status is DERIVED (F.billStatus), never read from here.
-  if (id.startsWith('bill:')) return { t: 'bill', id: id.slice(5), number: it.number || '', supplier: it.supplier || '', lines: Array.isArray(it.lines) ? it.lines : [], received: it.received || '', due: it.due || '', by: it.by || '', approved: it.approved || null, receiveSeq: it.receiveSeq ?? null };
+  // `by` = WHO RECORDED IT, the dual-control separation-of-duties anchor. It is taken from `it._by` — the
+  // RELAY-AUTHENTICATED author (the signer of the bill doc, surfaced by encSubscribe), NOT `it.by` inside the
+  // encrypted body, which a crafting writer could set to anyone to approve their own bill (finance-audit-
+  // 2026-11-02 #1). Fall back to the body field ONLY in local/no-relay mode, where `_by` is absent and the
+  // single local user is both parties, so it is not a security boundary.
+  if (id.startsWith('bill:')) return { t: 'bill', id: id.slice(5), number: it.number || '', supplier: it.supplier || '', lines: Array.isArray(it.lines) ? it.lines : [], received: it.received || '', due: it.due || '', by: (it._by != null ? it._by : (it.by || '')), approved: it.approved || null, receiveSeq: it.receiveSeq ?? null };
   // A DUAL-CONTROL approval (finance/billapproval:<billId>:<approverhex>). The APPROVER is read from the d-tag,
   // which the relay BINDS to the event signer (it refuses a write whose signer != the hex in the address — the
   // check-in-arrival house pattern), so it cannot be forged by another writer. `id` here is the d-tag suffix
@@ -211,6 +216,13 @@ function booksEntryView(book, e) {
 const bkFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
 const bkLbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 6px', display: 'block', textTransform: 'uppercase' };
 const bkCard = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 18 };
+// Inline action buttons in the LIST ROWS (Correct, Edit, Archive, Mark paid, Approve, PDF, Credit note…) sit
+// several to a row and were ~24-30px tall — below a phone tap target. These tokens give each a real ≥44px
+// hit area (centred), as ONE source of truth so a point-of-use test can assert the size in one place. Spread
+// FIRST in a button's style so its own border/background/colour/opacity still win; the token only contributes
+// the minimum size + centring the row buttons lacked.
+const bkRowBtn = { minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box' };
+const bkRowIconBtn = { minHeight: 44, minWidth: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box' };
 const ACCT_TYPE_LABEL = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity', income: 'Income', expense: 'Expenses' };
 const ACCT_TYPES_ORDER = ['asset', 'liability', 'equity', 'income', 'expense'];
 // Month names for the financial-year-start picker. The stored value stays 'MM-DD' (day pinned to 01), as
@@ -522,7 +534,7 @@ function BooksAccountEdit({ book, initial, onSave, onClose }) {
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add account'}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: busy ? 'var(--line)' : 'var(--clay)', color: busy ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 11, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{busy ? 'Saving…' : (editing ? 'Save changes' : 'Add account')}</button>
         </div>
       </div>
     </div>
@@ -567,7 +579,7 @@ function BooksFundEdit({ book, initial, onSave, onClose }) {
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add fund'}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: busy ? 'var(--line)' : 'var(--clay)', color: busy ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 11, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{busy ? 'Saving…' : (editing ? 'Save changes' : 'Add fund')}</button>
         </div>
       </div>
     </div>
@@ -611,7 +623,7 @@ function BooksContact({ initial, onSave, onClose }) {
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add contact'}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: busy ? 'var(--line)' : 'var(--clay)', color: busy ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 11, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{busy ? 'Saving…' : (editing ? 'Save changes' : 'Add contact')}</button>
         </div>
       </div>
     </div>
@@ -856,7 +868,7 @@ function BooksDonor({ book, initial, onSave, onClose, giftAidOn, statementOn, ad
         {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '4px 0 0' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{editing ? 'Save changes' : 'Add donor'}</button>
+          <button onClick={submit} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: busy ? 'var(--line)' : 'var(--clay)', color: busy ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 11, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{busy ? 'Saving…' : (editing ? 'Save changes' : 'Add donor')}</button>
         </div>
       </div>
     </div>
@@ -962,8 +974,10 @@ function BooksBudgetEdit({ book, initial, onSave, onClose }) {
 // (already behind the finance-key gate) and it DELIBERATELY has no Share / Post-to-members control: aggregate
 // statements are name-free and this one must never reach the broadcast path. If you ever add a share button
 // here, finance-giving-by-member.test.mjs turns red by design.
-function BooksGivingByMember({ book, F, donors, giftAidOn }) {
-  const rows = F.givingByMember(book, { donors });
+function BooksGivingByMember({ book, F, donors, giftAidOn, rev }) {
+  // PERF (#4): givingByMember walks the journal; memoise on the book revision (`rev` = parent tick, since the book
+  // is mutated in place) + the donor map, so an unrelated parent re-render does not re-walk it.
+  const rows = React.useMemo(() => F.givingByMember(book, { donors }), [rev, donors]);
   const total = rows.reduce((s, r) => s + r.amount, 0);
   return (
     <div style={{ marginTop: 8 }}>
@@ -986,12 +1000,13 @@ function BooksGivingByMember({ book, F, donors, giftAidOn }) {
 // The claim logic lives in the SEPARATE window.FinanceGiftAid bundle (vendor/finance-giftaid.js) which the core
 // never imports; this panel is the only caller, and it reaches for it only when the toggle is on. If the bundle
 // is not present the panel says so rather than crashing.
-function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport }) {
-  if (!giftAidOn) return null;
+function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport, rev }) {
   const pack = (typeof window !== 'undefined' && window.FinanceGiftAid) || null;
+  // PERF (#4): memoise the claim (it walks the journal via givingByMember) on the book revision + donors. The hook
+  // is UNCONDITIONAL (before the early returns) so the hook order never shifts; the factory returns null when off.
+  const claim = React.useMemo(() => (giftAidOn && pack) ? pack.giftAidClaim(book, { donors: Array.isArray(donors) ? donors : [...donors.values()], givingByMember: F.givingByMember }) : null, [rev, donors, giftAidOn, pack]);
+  if (!giftAidOn) return null;
   if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Gift Aid (UK)</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The Gift Aid pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
-  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
-  const claim = pack.giftAidClaim(book, { donors: donorList, givingByMember: F.givingByMember });
   return (
     <div style={{ ...bkCard, marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1020,12 +1035,13 @@ function BooksGiftAidPanel({ book, F, donors, giftAidOn, onExport }) {
 // panel says so rather than crashing. A contribution statement is the DONOR's record for their own deduction —
 // NO church rebate, NO church filing (unlike Gift Aid). The Download hands out an HTML statement document that
 // CARRIES the sourced wording AND the shared tax disclaimer (built by the pure pack helper).
-function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExport, regWarn }) {
-  if (!statementOn) return null;
+function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExport, regWarn, rev }) {
   const pack = (typeof window !== 'undefined' && window.FinanceContribution) || null;
+  // PERF (#4): memoise the statement (walks the journal via givingByMember) on the book revision + donors +
+  // jurisdiction. Unconditional hook (before the early returns); the factory returns null when off / no pack.
+  const stmt = React.useMemo(() => (statementOn && pack) ? pack.contributionStatement(book, { donors: Array.isArray(donors) ? donors : [...donors.values()], givingByMember: F.givingByMember, jurisdiction }) : null, [rev, donors, statementOn, pack, jurisdiction]);
+  if (!statementOn) return null;
   if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Giving statements</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The giving-statement pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
-  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
-  const stmt = pack.contributionStatement(book, { donors: donorList, givingByMember: F.givingByMember, jurisdiction });
   return (
     <div style={{ ...bkCard, marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1055,12 +1071,13 @@ function BooksStatementPanel({ book, F, donors, statementOn, jurisdiction, onExp
 // panel is the only caller. Like Gift Aid, the CHARITY claims — here from Revenue. Donors need a CHY3/CHY4
 // certificate (eligible + certType + certDeclaredAt). Shows per-donor donated → refund, the associated-donor
 // review list, the total to reclaim, the shared disclaimer, and a CSV export carrying the disclaimer.
-function BooksCdsPanel({ book, F, donors, cdsOn, onExport }) {
-  if (!cdsOn) return null;
+function BooksCdsPanel({ book, F, donors, cdsOn, onExport, rev }) {
   const pack = (typeof window !== 'undefined' && window.FinanceIrishCDS) || null;
+  // PERF (#4): memoise the claim (walks the journal via givingByMember) on the book revision + donors.
+  // Unconditional hook (before the early returns); the factory returns null when off / no pack.
+  const claim = React.useMemo(() => (cdsOn && pack) ? pack.charitableDonationClaim(book, { donors: Array.isArray(donors) ? donors : [...donors.values()], givingByMember: F.givingByMember }) : null, [rev, donors, cdsOn, pack]);
+  if (!cdsOn) return null;
   if (!pack) return <div style={{ ...bkCard, marginBottom: 16 }}><div style={{ fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, marginBottom: 6 }}>Charitable Donation Scheme (Ireland)</div><div style={{ color: 'var(--ink-3)', fontSize: 13 }}>The Irish CDS pack is enabled but its module hasn’t loaded. Reload the console.</div></div>;
-  const donorList = Array.isArray(donors) ? donors : [...donors.values()];
-  const claim = pack.charitableDonationClaim(book, { donors: donorList, givingByMember: F.givingByMember });
   return (
     <div style={{ ...bkCard, marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1350,15 +1367,18 @@ function FinanceImport({ book, F, donors, onPost, onClose }) {
                   <div style={{ width: 82, flexShrink: 0, fontSize: 12, color: 'var(--ink-3)' }}>{l.date || <span style={{ color: 'var(--clay-deep, #b4462f)' }}>no date</span>}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.description || '(no description)'}{r.dup ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 11.5 }}> · already imported</span> : ''}</div>
-                    <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                      <select value={r.account} disabled={r.dup} onChange={e => setRow(i, { account: e.target.value })} style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', flex: 1 }}>{accts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-                      <select value={r.fund} disabled={r.dup} onChange={e => setRow(i, { fund: e.target.value })} style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', width: 130 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+                    {/* PHONE LAYOUT (≤360px): the category/fund/donor selects WRAP to their own lines with a
+                        min width instead of crushing to ~30px each. Each is `flex: 1 1 <basis>` so on a wide row
+                        they still share one line; on a narrow one they stack and stay readable + tappable. */}
+                    <div data-import-row-fields style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                      <select value={r.account} disabled={r.dup} onChange={e => setRow(i, { account: e.target.value })} style={{ ...bkFld, height: 40, fontSize: 12.5, padding: '0 8px', flex: '2 1 150px', minWidth: 140 }}>{accts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                      <select value={r.fund} disabled={r.dup} onChange={e => setRow(i, { fund: e.target.value })} style={{ ...bkFld, height: 40, fontSize: 12.5, padding: '0 8px', flex: '1 1 110px', minWidth: 110 }}>{funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
                       {/* DONOR — money-IN lines only (an imported bank credit has a giver; a debit does not). Writes
                           the OPAQUE id, never the name; "(unattributed)" default leaves the gift off giving-by-member
                           + Gift Aid. importStatement applies it to the income (cr) leg alone. Deleting this select
                           removes imported-gift attribution from the screen (point-of-use test: finance-import-tags-donor). */}
                       {l.dir === 'in' ? (
-                        <select value={r.donor} disabled={r.dup} onChange={e => setRow(i, { donor: e.target.value })} aria-label="Donor" style={{ ...bkFld, height: 30, fontSize: 12.5, padding: '0 8px', width: 130 }}>
+                        <select value={r.donor} disabled={r.dup} onChange={e => setRow(i, { donor: e.target.value })} aria-label="Donor" style={{ ...bkFld, height: 40, fontSize: 12.5, padding: '0 8px', flex: '1 1 110px', minWidth: 110 }}>
                           <option value="">(unattributed)</option>
                           {donorList.map(d => <option key={d.id} value={d.id}>{d.name || '(unnamed)'}</option>)}
                         </select>
@@ -2019,16 +2039,58 @@ function BooksFundBalanceChart({ book, data, height = 300 }) {
   );
 }
 
-const FIN_TABS = [
+// TAB LAYOUT — owner's 2+More (2026-11-02). Only the two everyday tabs stay top-level; the rest live in a
+// "More ▾" menu so the strip is ONE row on a phone and the transaction list is not pushed down. The active
+// child surfaces on the More button ("More · Bills") so a treasurer in a More tab always knows where they are.
+const FIN_TABS_PRIMARY = [
   { key: 'transactions', label: 'Transactions' },
   { key: 'reports', label: 'Reports' },
-  { key: 'accounts', label: 'Accounts & funds' },
+];
+const FIN_TABS_MORE = [
   { key: 'invoices', label: 'Invoices' },
   { key: 'bills', label: 'Bills' },
+  { key: 'accounts', label: 'Accounts & funds' },
   { key: 'budget', label: 'Budget' },
   { key: 'donors', label: 'Donors' },
   { key: 'insights', label: 'Insights' },
 ];
+// Combined list (any reader / label lookup). Unchanged key set, so every `tab === '…'` panel is untouched.
+const FIN_TABS = [...FIN_TABS_PRIMARY, ...FIN_TABS_MORE];
+
+// The Finance tab strip. Two primary pills + a "More ▾" popover holding the rest. NOT a dialog (no
+// role="dialog") — it is a lightweight menu, so it stays OFF every-console-dialog-mounts. Extracted as its own
+// component so a point-of-use test can render it in one piece (CLAUDE.md rule 1: delete the strip → the test
+// fails; rule 3: the test drives the rendered tree, never text in app/*.jsx).
+function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
+  const pill = (active, onClick, label, key, extra) => (
+    <button key={key} onClick={onClick} style={{ padding: '8px 14px', borderRadius: 9, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, minHeight: 44, boxSizing: 'border-box',
+      border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)', ...(extra || {}) }}>{label}</button>
+  );
+  const activeMore = FIN_TABS_MORE.find(t => t.key === tab);
+  // close the popover on any outside pointerdown (same pattern the reaction/menu pickers use here). Guarded on
+  // `document` so the slice test (no DOM) runs the component without throwing.
+  React.useEffect(() => {
+    if (!moreOpen || typeof document === 'undefined') return;
+    const off = (e) => { if (!(e.target && e.target.closest && e.target.closest('[data-fin-more]'))) setMoreOpen(false); };
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [moreOpen]);
+  return (
+    <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+      {FIN_TABS_PRIMARY.map(t => pill(tab === t.key, () => { setTab(t.key); setMoreOpen(false); }, t.label, t.key))}
+      <div data-fin-more style={{ position: 'relative' }}>
+        {pill(!!activeMore || moreOpen, () => setMoreOpen(o => !o), (activeMore ? 'More · ' + activeMore.label : 'More') + ' ▾', 'more', { display: 'inline-flex', alignItems: 'center' })}
+        {moreOpen ? (
+          <div role="menu" style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, zIndex: 20, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 11, boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,.18))', padding: 6, display: 'flex', flexDirection: 'column', gap: 4, minWidth: 190 }}>
+            {FIN_TABS_MORE.map(t => (
+              <button key={t.key} role="menuitem" onClick={() => { setTab(t.key); setMoreOpen(false); }} style={{ textAlign: 'left', minHeight: 44, boxSizing: 'border-box', padding: '0 12px', borderRadius: 8, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: 'none', background: tab === t.key ? 'color-mix(in oklab, var(--clay) 14%, var(--surface))' : 'transparent', color: 'var(--ink)' }}>{t.label}</button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function DashFinance() {
   const F = window.FinanceLedger;
@@ -2061,8 +2123,16 @@ function DashFinanceBook() {
   // Receipt images, kept OUT of the ledger (they are side blobs): id → data: URI. Filled from every finance/
   // delivery (encSubscribe) and optimistically on upload, read by the feed's receipt viewer.
   const attByIdRef = React.useRef({});
-  const [, setTick] = React.useState(0);
+  // PERF: the book is MUTATED IN PLACE on the optimistic path (F.post(bookRef.current,…) then bump()), so its
+  // object identity does NOT change on a hand-typed entry — only on a relay rebuild/seed. `tick` advances on
+  // EVERY book change (both), so the render-body projections below memoise on `tick`, never on `book` identity
+  // (keying on `book` would show stale totals until the relay round-trips — a control reporting the wrong number).
+  const [tick, setTick] = React.useState(0);
   const bump = () => setTick(t => t + 1);
+  // PERF (#3): the last book-doc signature we actually rebuilt from. The console subscribes to the WHOLE finance/
+  // namespace, so a delivery that changed only a SIDE doc (donor/contact/invoice/bill/budget/attachment — all
+  // ignored by rebuildBook) still arrives; when the book docs are unchanged we skip the O(N) replay + check().
+  const lastSigRef = React.useRef(null);
   // A journal entry is the church's money record — it must not be published fire-and-forget. This wasn't
   // awaited and the promise rejection escaped the try, so a write the relay refused (its seq rule rejects
   // whenever this console's view of the journal was incomplete) left the entry on screen and GONE on reload,
@@ -2099,6 +2169,7 @@ function DashFinanceBook() {
   React.useEffect(() => {
     if (!useRelay) return;
     let seeded = false;
+    lastSigRef.current = null;   // a fresh subscription (mount / church switch / reconnect) always rebuilds on its first delivery
     const unsub = S.encSubscribe('finance/', items => {
       const docs = items.map(finItemToDoc).filter(Boolean);
       // Receipt blobs ride the same subscription. Pull their data: URIs into the side map BEFORE rebuildBook,
@@ -2140,6 +2211,15 @@ function DashFinanceBook() {
         for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
         return;
       }
+      // PERF (#3): skip the full rebuildBook()+check() when NO book doc changed since the last rebuild — the book
+      // would replay identically, so a side-doc-only delivery (the common case: a donor/invoice/bill/budget edit)
+      // need not re-verify the whole ledger. The side-doc state setters above already re-render the lists, and
+      // bookRef.current + its `tick`-keyed projections stay put. bookDocSignature is append-only-sound (the relay
+      // rejects journal gaps/forks/edits; see src/finance-store.mjs). Falls through to a rebuild if the helper is
+      // absent (older bundle) so correctness never depends on it.
+      const sig = F.bookDocSignature ? F.bookDocSignature(docs) : null;
+      if (sig != null && sig === lastSigRef.current) return;
+      lastSigRef.current = sig;
       const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; setBookErrors(r.errors || []); bump(); }
     });
     return unsub;
@@ -2151,6 +2231,7 @@ function DashFinanceBook() {
   const [importing, setImporting] = React.useState(false);
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
   const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors|insights (default Transactions)
+  const [moreOpen, setMoreOpen] = React.useState(false);  // the tab strip's "More ▾" popover (owner 2+More layout)
   const [donorTab, setDonorTab] = React.useState('donors'); // Donors tab sub-tab: 'donors' (records) | 'giving' (giving-by-member + Gift Aid)
   const [rptPreset, setRptPreset] = React.useState('pl');    // which aggregate report the Reports panel shows
   const [rptPeriod, setRptPeriod] = React.useState('this-y'); // this-q | this-y | last-y | custom
@@ -2587,9 +2668,19 @@ function DashFinanceBook() {
   // (the relay's generic finance/ write prefix); the relay keeps it off a network peer on READ (the explicit
   // finance/donor read rule). NOTE a "forget this donor" removes this doc but CANNOT scrub the opaque donorId
   // already embedded in the append-only journal — acceptable under HMRC retention, surfaced in the UI copy.
-  const saveDonor = async ({ id, name, eligible, address, postcode, giftAidDeclaredAt, title, firstName, lastName, house, certType, certDeclaredAt, natureOfPerson, idType, idNumber, taxRef, contactNumber, email, tradingName }) => {
-    const theId = id || opaqueId();
-    const body = { name: name || '', eligible: eligible === true, address: address || '', postcode: postcode || '', giftAidDeclaredAt: giftAidDeclaredAt || '', title: title || '', firstName: firstName || '', lastName: lastName || '', house: house || '', certType: certType || '', certDeclaredAt: certDeclaredAt || '', natureOfPerson: natureOfPerson || '', idType: idType || '', idNumber: idNumber || '', taxRef: taxRef || '', contactNumber: contactNumber || '', email: email || '', tradingName: tradingName || '' };
+  const saveDonor = async (patch) => {
+    const theId = (patch && patch.id) || opaqueId();
+    // MERGE over the stored donor so an edit NEVER drops a field the current form does not control — the
+    // jurisdiction cert/registry fields (certType, idNumber, taxRef, natureOfPerson…) that only some regions
+    // show AND the Gift-Aid name parts (title/firstName/lastName/house) no form captures. finance/donor is a
+    // REPLACEABLE doc (a full re-publish), so a partial payload over the bare schema used to zero everything
+    // unsupplied. Start from the existing record, overlay only the keys the form actually sent, then normalise
+    // to the known schema. For a brand-new donor `prev` is {} → identical to a fresh record.
+    const prev = donors.find(d => d.id === theId) || {};
+    const merged = { ...prev };
+    if (patch) Object.keys(patch).forEach(k => { if (k !== 'id' && k !== 't' && patch[k] !== undefined) merged[k] = patch[k]; });
+    const g = (k) => merged[k] || '';
+    const body = { name: g('name'), eligible: merged.eligible === true, address: g('address'), postcode: g('postcode'), giftAidDeclaredAt: g('giftAidDeclaredAt'), title: g('title'), firstName: g('firstName'), lastName: g('lastName'), house: g('house'), certType: g('certType'), certDeclaredAt: g('certDeclaredAt'), natureOfPerson: g('natureOfPerson'), idType: g('idType'), idNumber: g('idNumber'), taxRef: g('taxRef'), contactNumber: g('contactNumber'), email: g('email'), tradingName: g('tradingName') };
     if (!useRelay) { setDonors(ds => [...ds.filter(d => d.id !== theId), { t: 'donor', id: theId, ...body }]); bump(); return true; }
     const ok = await S.encPublish('finance/donor:' + theId, body);
     bump();
@@ -2828,14 +2919,32 @@ function DashFinanceBook() {
   // refuse payment before approval; dual adds the tamper-evident, approver-signed approval doc.
   const billApprovalMode = (church && church.features && church.features.billApproval === true) ? 'dual' : 'light';
 
-  const funds = F.fundBalances(book);
+  const funds = React.useMemo(() => F.fundBalances(book), [tick]);
   const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
   const fyYear = fyStart.slice(0, 4);   // the fiscal year the Budget panel plans/compares against
   const budgetForFy = budgets.find(b => b.year === fyYear) || budgets[0] || null;   // one budget per year; fall back to any saved budget
-  const ie = F.incomeExpenditure(book, { from: fyStart });
-  const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
+  const ie = React.useMemo(() => F.incomeExpenditure(book, { from: fyStart }), [tick, fyStart]);
+  const bank = React.useMemo(() => F.trialBalance(book), [tick]).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
-  const recent = book.journal.slice().reverse().slice(0, 16);
+  const recent = React.useMemo(() => book.journal.slice(-16).reverse(), [tick]);
+  // PERF (#2 wiring): one journal pass per list instead of a per-row walk (invoiceStatus/billStatus were O(rows × journal)).
+  // Gated on the active tab so the pass runs only for the tab on screen; keyed on `tick` + the side-doc list + the local day.
+  const invoiceStatusMap = React.useMemo(() => (tab === 'invoices' && F.invoiceStatuses) ? F.invoiceStatuses(invoices, book.journal, booksTodayISO()) : null, [tick, tab, invoices, booksTodayISO()]);
+  const billStatusMap = React.useMemo(() => (tab === 'bills' && F.billStatuses) ? F.billStatuses(bills, book.journal, booksTodayISO()) : null, [tick, tab, bills, booksTodayISO()]);
+  // PERF (#4): the four Insights projections, computed ONLY when the Insights tab is open and memoised so an
+  // unrelated re-render (opening the More popover, a modal toggle) does not re-walk the journal four times.
+  const insights = React.useMemo(() => {
+    if (tab !== 'insights') return null;
+    const today = booksTodayISO();
+    const fyr = F.fiscalYearRange(today, book.fiscalYearStart || '01-01');
+    return {
+      fyr,
+      proj: F.yearEndProjection(book, { today, fiscalYearStart: book.fiscalYearStart || '01-01' }),
+      monthly: F.monthlyTotals(book, { from: fyr.from, to: fyr.to }),
+      fundSeries: F.monthlyFundBalances(book, { from: fyr.from, to: fyr.to }),
+      budgetRows: F.budgetVsActual(book, budgetForFy, { from: fyStart, to: today }),
+    };
+  }, [tick, tab, book.fiscalYearStart, budgetForFy, fyStart]);
   const exportCsv = async () => {
     // MAJOR UNITS (pounds), not the ledger's integer pence — F.journalCsvRows does the conversion (sim 2026-10-02 #62).
     // The base debit/credit columns are ALWAYS pounds; a multi-currency church also gets the original-currency
@@ -2862,11 +2971,15 @@ function DashFinanceBook() {
       ? (() => { const f = rptCFrom || (rptY + '-01-01'); const t = rptCTo || booksTodayISO(); return { from: f, to: t, label: F.rangeLabel(f, t) }; })()
     : { ...F.yearRange(rptY), to: booksTodayISO(), label: 'Year to date ' + rptY };
   const rptDef = FIN_REPORT_PRESETS.find(p => p.key === rptPreset) || FIN_REPORT_PRESETS[0];
-  const rptModel = F.buildStatement(book, {
+  // PERF (#1): the Reports model is a full statement rebuild (several journal walks). It is kept computed (the
+  // export handlers read it from any tab) but memoised on the book (`tick`) + the preset/period inputs that feed
+  // it, so it no longer rebuilds on every unrelated re-render. rptRange/rptDef are pure functions of the period/
+  // preset deps, so the cached closure stays consistent with them.
+  const rptModel = React.useMemo(() => F.buildStatement(book, {
     from: rptRange.from, to: rptRange.to, periodLabel: rptRange.label,
     title: (church.name || 'Financial statement') + ' — ' + rptDef.label,
     sections: rptDef.sections, generatedAt: booksTodayISO(), accent: (church.accent || ''),
-  });
+  }), [tick, rptPreset, rptPeriod, rptCFrom, rptCTo]);
   const rptBase = () => fsSlug((church.name || 'report') + '-' + rptDef.label) + '-' + fsSlug(rptRange.label);
   const exportReportPdf = async () => {
     try {
@@ -2942,10 +3055,8 @@ function DashFinanceBook() {
         </div>
       </div>
 
-      {/* ── TAB STRIP (under the Funds card): the content area below swaps to ONE panel at a time; default Transactions ── */}
-      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
-        {FIN_TABS.map(t => tabBtn(tab === t.key, () => setTab(t.key), t.label, t.key))}
-      </div>
+      {/* ── TAB STRIP (under the Funds card): 2 primary tabs + a "More ▾" menu; content below swaps to ONE panel ── */}
+      <FinTabStrip tab={tab} setTab={setTab} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />
 
       {/* ── TRANSACTIONS tab (default): recent transactions, then the Recurring-payments collapsible ── */}
       {tab === 'transactions' && <div style={{ ...bkCard, marginBottom: 16 }}>
@@ -2964,13 +3075,16 @@ function DashFinanceBook() {
               <div style={{ fontWeight: 700, fontSize: 14, textDecoration: v.wasReversed ? 'line-through' : 'none', opacity: v.wasReversed ? .6 : 1 }}>{v.category}{v.memo ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {v.memo}</span> : ''}{v.wasReversed ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>reversed</span> : ''}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{v.date}{v.fund && v.fund !== 'general' ? ' · ' + ((book.funds.get(v.fund) || {}).name || v.fund) : ''}</div>
             </div>
-            {e.attachmentRefs && e.attachmentRefs.length ? <button title="View the receipt attached to this entry" aria-label="View receipt" onClick={() => setViewingAtt(attByIdRef.current[e.attachmentRefs[0]] || 'pending')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 14, padding: 4 }}>📎</button> : null}
+            {e.attachmentRefs && e.attachmentRefs.length ? <button title="View the receipt attached to this entry" aria-label="View receipt" onClick={() => setViewingAtt(attByIdRef.current[e.attachmentRefs[0]] || 'pending')} style={{ ...bkRowIconBtn, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 14, padding: 4 }}>📎</button> : null}
             <div style={{ fontWeight: 800, fontSize: 14.5, color: v.isTransfer ? 'var(--ink-3)' : (v.inflow ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)'), whiteSpace: 'nowrap' }}>{v.isTransfer ? '' : (v.inflow ? '+' : '−')}{booksFmt(v.amount, book)}</div>
             {/* Correct and Reverse share the gate: both are hidden on a reversal row and on an already-reversed
                 row (reuse booksEntryView's isReversal/wasReversed). Correct additionally skips a fund transfer,
                 which has no BooksRecord (income/expense) shape to pre-fill. */}
-            {!v.isReversal && !v.wasReversed && !v.isTransfer && <button title="Reverse this entry and enter a corrected copy" onClick={() => correctEntry(e)} disabled={bookErrors.length > 0} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '3px 9px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Correct</button>}
-            {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" aria-label="Reverse this entry" onClick={() => undo(e.seq)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
+            {!v.isReversal && !v.wasReversed && !v.isTransfer && <button title="Reverse this entry and enter a corrected copy" onClick={() => correctEntry(e)} disabled={bookErrors.length > 0} style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Correct</button>}
+            {/* Reverse posts a matching, member-visible reversal and cannot be undone once published — confirm
+                first (console house pattern: window.confirm, as plan-delete / leave-network do). "Correct" keeps
+                its own flow (it is a deliberate reverse-then-re-enter), per the owner. */}
+            {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" aria-label="Reverse this entry" onClick={() => { if (window.confirm('Reverse this entry? It posts a matching reversal, which members see on shared statements. The original stays in the ledger.')) undo(e.seq); }} style={{ ...bkRowIconBtn, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
           </div>
         ); })}
       </div>}
@@ -2992,8 +3106,8 @@ function DashFinanceBook() {
                     <div style={{ fontSize: 13.5, fontWeight: 600 }}>{t.name || '(unnamed)'}<span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {(acct && acct.name) || t.account} · day {t.dayOfMonth || 1}</span></div>
                     <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{t.dir === 'in' ? '+' : '−'}{booksFmt(t.amount, book)} each month</div>
                   </div>
-                  <button onClick={() => setTplEditing({ id: t.id, name: t.name, account: t.account, fund: t.fund, dir: t.dir, amount: t.amount, dayOfMonth: t.dayOfMonth })} title="Edit this recurring payment" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
-                  <button onClick={() => postTemplate(t)} disabled={postedThisMonth || bookErrors.length > 0} title={postedThisMonth ? 'Already posted this month' : 'Post this month’s entry to the ledger'} style={{ border: 'none', background: postedThisMonth ? 'var(--line)' : 'var(--clay)', color: postedThisMonth ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: postedThisMonth ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12 }}>{postedThisMonth ? 'Posted this month' : 'Post this month'}</button>
+                  <button onClick={() => setTplEditing({ id: t.id, name: t.name, account: t.account, fund: t.fund, dir: t.dir, amount: t.amount, dayOfMonth: t.dayOfMonth })} title="Edit this recurring payment" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                  <button onClick={() => postTemplate(t)} disabled={postedThisMonth || bookErrors.length > 0} title={postedThisMonth ? 'Already posted this month' : 'Post this month’s entry to the ledger'} style={{ ...bkRowBtn, border: 'none', background: postedThisMonth ? 'var(--line)' : 'var(--clay)', color: postedThisMonth ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: postedThisMonth ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12 }}>{postedThisMonth ? 'Posted this month' : 'Post this month'}</button>
                 </div>
               );
             })}
@@ -3139,7 +3253,7 @@ function DashFinanceBook() {
                     </div>
                   </div>
                   {locked
-                    ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>🔒 Currency and decimal places are locked because this book already has transactions — changing them would reinterpret every figure already recorded. To use a different currency, start a fresh book. You can still change when the financial year starts.</div>
+                    ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>🔒 Currency and decimal places are locked because this book already has transactions — changing them would reinterpret every figure already recorded. You can still change when the financial year starts.</div>
                     : <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.45 }}>Set these before you record anything. Once the book has transactions, the currency and decimal places lock — they would reinterpret every stored figure. The financial-year start stays changeable.</div>}
                 </div>
               );
@@ -3158,7 +3272,7 @@ function DashFinanceBook() {
                 <div style={{ flex: 1, minWidth: 0 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>{f.name}</span>{f.kind !== 'general' ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {FUND_KIND_LABEL[f.kind] || f.kind}</span> : null}</div>
                 {f.id === 'general'
                   ? <span style={{ color: 'var(--ink-3)', fontSize: 11.5 }}>default</span>
-                  : <button onClick={() => setFundEditing({ id: f.id, name: f.name, kind: f.kind })} title="Rename this fund or change its kind" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>}
+                  : <button onClick={() => setFundEditing({ id: f.id, name: f.name, kind: f.kind })} title="Rename this fund or change its kind" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>}
               </div>
             ))}
 
@@ -3174,14 +3288,14 @@ function DashFinanceBook() {
                 <div key={type} style={{ marginBottom: 6 }}>
                   <div style={{ ...bkLbl, margin: '10px 0 2px' }}>{ACCT_TYPE_LABEL[type] || type}</div>
                   {list.map(a => (
-                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)', opacity: a.archived ? 0.55 : 1 }}>
+                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)', opacity: a.archived ? 0.55 : 1 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ fontSize: 13.5, fontWeight: 600 }}>{a.name}</span>
                         <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {a.code}</span>
                         {a.archived ? <span style={{ color: 'var(--ink-3)', fontSize: 11.5, fontWeight: 400 }}> · archived</span> : null}
                       </div>
-                      <button onClick={() => setAccEditing({ id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived, posted: F.accountHasPostings(book, a.id) })} title="Rename this account or change its code" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
-                      <button onClick={() => setAccountArchived(a.id, !a.archived)} title={a.archived ? 'Show this account in the pickers again' : 'Hide this account from the pickers (kept in the ledger and reports)'} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>{a.archived ? 'Unarchive' : 'Archive'}</button>
+                      <button onClick={() => setAccEditing({ id: a.id, code: a.code, name: a.name, type: a.type, archived: !!a.archived, posted: F.accountHasPostings(book, a.id) })} title="Rename this account or change its code" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                      <button onClick={() => setAccountArchived(a.id, !a.archived)} title={a.archived ? 'Show this account in the pickers again' : 'Hide this account from the pickers (kept in the ledger and reports)'} style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>{a.archived ? 'Unarchive' : 'Archive'}</button>
                     </div>
                   ))}
                 </div>
@@ -3229,13 +3343,15 @@ function DashFinanceBook() {
                   {giftAidOn && d.eligible ? <span style={{ color: 'var(--sage, #4f7a5e)', fontSize: 11, fontWeight: 700, marginLeft: 6 }}>Gift Aid</span> : null}
                   {giftAidOn && d.postcode ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {d.postcode}</span> : null}
                 </div>
-                <button onClick={() => setDonorEditing({ id: d.id, name: d.name, eligible: d.eligible, address: d.address, postcode: d.postcode, giftAidDeclaredAt: d.giftAidDeclaredAt })} title="Edit this donor" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                {/* pass the FULL stored record (not a 6-field subset) so the form seeds every field it controls —
+                    incl. jurisdiction cert/registry fields — and an edit round-trips them instead of blanking. */}
+                <button onClick={() => setDonorEditing({ ...d })} title="Edit this donor" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
               </div>
             ))}
         </div>}
         {donorTab === 'giving' && <div style={{ marginTop: 4 }}>
-            <BooksGivingByMember book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} />
-      <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} onExport={(claim) => {
+            <BooksGivingByMember book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} rev={tick} />
+      <BooksGiftAidPanel book={book} F={F} donors={donorMap} giftAidOn={giftAidOn} rev={tick} onExport={(claim) => {
         // CSV formula-injection guard, same as exportCsv / exportReportCsv — a donor name/postcode is free text.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
         const sym = CCY_SYM[book.baseCurrency] || book.baseCurrency;
@@ -3248,7 +3364,7 @@ function DashFinanceBook() {
         if (F && F.TAX_DISCLAIMER) rows.push([], [F.TAX_DISCLAIMER]);
         booksDownload('gift-aid-claim-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n')).then(m => setRptFlash(m)).catch(() => {});
       }} />
-      <BooksStatementPanel book={book} F={F} donors={donorMap} statementOn={statementOn} jurisdiction={jxId}
+      <BooksStatementPanel book={book} F={F} donors={donorMap} statementOn={statementOn} jurisdiction={jxId} rev={tick}
         regWarn={taxRegLabel && !taxRegNumber ? ('Enter your ' + taxRegLabel + ' in Tax tools (Congregation → features) so the receipts you issue are complete.') : ''}
         onExport={(stmt) => {
         // The generated receipt/statement is an HTML document built by the PURE pack helper — it embeds the sourced
@@ -3266,7 +3382,7 @@ function DashFinanceBook() {
         });
         booksDownload('giving-statements-' + booksTodayISO() + '.html', html).then(m => setRptFlash(m)).catch(() => {});
       }} />
-      <BooksCdsPanel book={book} F={F} donors={donorMap} cdsOn={cdsOn} onExport={(claim) => {
+      <BooksCdsPanel book={book} F={F} donors={donorMap} cdsOn={cdsOn} rev={tick} onExport={(claim) => {
         // The CDS claim schedule leaves the app as a CSV — it carries the ONE shared tax disclaimer (a reclaim
         // figure must never leave without the caveat). Same CSV-injection guard as the Gift Aid export.
         const csvCell = c => { let s = String(c == null ? '' : c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
@@ -3300,17 +3416,17 @@ function DashFinanceBook() {
             {invFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>{invFlash}</div> : null}
             {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No invoices yet. Raise one for facility hire or any amount owed to the church — the double-entry and the receivable are kept for you.</div>}
             {rows.map(inv => {
-              const status = inv.credit ? 'credit' : F.invoiceStatus(inv, today, book.journal);
+              const status = inv.credit ? 'credit' : (invoiceStatusMap ? invoiceStatusMap.get(inv.id) : F.invoiceStatus(inv, today, book.journal));
               const total = F.invoiceTotal(inv);
               return (
-                <div key={inv.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+                <div key={inv.id} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600 }}>{inv.credit ? 'Credit note' : 'Invoice'}{inv.number ? ' ' + inv.number : ''}{inv.contact ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {inv.contact}</span> : null}{!inv.credit ? badge(status) : null}</div>
                     <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{booksFmt(total, book)}{inv.issued ? ' · issued ' + inv.issued : ''}{inv.due && !inv.credit ? ' · due ' + inv.due : ''}</div>
                   </div>
-                  <button onClick={() => exportInvoicePdf(inv)} title="Download this as a printable PDF" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>PDF</button>
-                  {!inv.credit && status !== 'paid' && <button onClick={() => { settleInvoice(inv).then(ok => setInvFlash(ok ? 'Marked paid.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Record payment in full (dr bank / cr receivables)" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: bookErrors.length ? 0.5 : 1 }}>Mark paid</button>}
-                  {!inv.credit && <button onClick={() => { creditInvoice(inv).then(ok => setInvFlash(ok ? 'Credit note raised.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Raise a credit note that reverses this invoice (its own entry; the original is untouched)" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Credit note</button>}
+                  <button onClick={() => exportInvoicePdf(inv)} title="Download this as a printable PDF" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>PDF</button>
+                  {!inv.credit && status !== 'paid' && <button onClick={() => { settleInvoice(inv).then(ok => setInvFlash(ok ? 'Marked paid.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Record payment in full (dr bank / cr receivables)" style={{ ...bkRowBtn, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: bookErrors.length ? 0.5 : 1 }}>Mark paid</button>}
+                  {!inv.credit && <button onClick={() => { creditInvoice(inv).then(ok => setInvFlash(ok ? 'Credit note raised.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Raise a credit note that reverses this invoice (its own entry; the original is untouched)" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Credit note</button>}
                 </div>
               );
             })}
@@ -3319,7 +3435,7 @@ function DashFinanceBook() {
               {contacts.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(c => (
                 <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid var(--line)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>{c.name || '(unnamed)'}</span>{c.email ? <span style={{ color: 'var(--ink-3)', fontSize: 12 }}> · {c.email}</span> : null}</div>
-                  <button onClick={() => setContactEditing({ id: c.id, name: c.name, email: c.email, address: c.address })} title="Edit this contact" style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
+                  <button onClick={() => setContactEditing({ id: c.id, name: c.name, email: c.email, address: c.address })} title="Edit this contact" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>Edit</button>
                 </div>
               ))}
             </div>}
@@ -3347,20 +3463,20 @@ function DashFinanceBook() {
             {billFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>{billFlash}</div> : null}
             {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No bills yet. Record one you have received — the double-entry and what you owe are kept for you, and it must be approved before it is paid.</div>}
             {rows.map(bill => {
-              const status = F.billStatus(bill, today, book.journal);
+              const status = billStatusMap ? billStatusMap.get(bill.id) : F.billStatus(bill, today, book.journal);
               const approved = F.isBillApproved(bill, { mode: billApprovalMode, approvals: billApprovals, recordedBy: bill.by || '' });
               // In dual mode the recorder may not approve their OWN bill (separation of duties). The engine
               // ignores a self-approval regardless; this disables the control so the steward is not misled.
               const iRecorded = billApprovalMode === 'dual' && me && me === (bill.by || '').toLowerCase();
               const total = F.billTotal(bill);
               return (
-                <div key={bill.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
+                <div key={bill.id} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600 }}>Bill{bill.number ? ' ' + bill.number : ''}{bill.supplier ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {bill.supplier}</span> : null}{badge(status)}{approved ? <span data-bill-approved="1" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--sage, #4f7a5e)', border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 6 }}>approved</span> : null}</div>
                     <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{booksFmt(total, book)}{bill.received ? ' · received ' + bill.received : ''}{bill.due ? ' · due ' + bill.due : ''}</div>
                   </div>
-                  {!approved && status !== 'paid' && <button onClick={() => { approveBill(bill).then(ok => setBillFlash(ok ? 'Approved.' : 'That didn’t approve — your church’s relay refused or did not answer.')); }} disabled={bookErrors.length > 0 || iRecorded} title={iRecorded ? 'You recorded this bill — another finance steward must approve it (dual control)' : 'Approve this bill so it can be paid (finance stewards only)'} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: (bookErrors.length || iRecorded) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: (bookErrors.length || iRecorded) ? 0.5 : 1 }}>Approve</button>}
-                  {status !== 'paid' && <button onClick={() => { payBill(bill).then(ok => setBillFlash(ok ? 'Marked paid.' : 'That didn’t post — the bill must be approved first, or the relay refused.')); }} disabled={!approved || bookErrors.length > 0} title={approved ? 'Record payment in full (dr payables / cr bank)' : 'Approve the bill first — an unapproved bill cannot be paid'} style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '4px 12px', cursor: (!approved || bookErrors.length) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: (!approved || bookErrors.length) ? 0.5 : 1 }}>Mark paid</button>}
+                  {!approved && status !== 'paid' && <button onClick={() => { approveBill(bill).then(ok => setBillFlash(ok ? 'Approved.' : 'That didn’t approve — your church’s relay refused or did not answer.')); }} disabled={bookErrors.length > 0 || iRecorded} title={iRecorded ? 'You recorded this bill — another finance steward must approve it (dual control)' : 'Approve this bill so it can be paid (finance stewards only)'} style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: (bookErrors.length || iRecorded) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: (bookErrors.length || iRecorded) ? 0.5 : 1 }}>Approve</button>}
+                  {status !== 'paid' && <button onClick={() => { payBill(bill).then(ok => setBillFlash(ok ? 'Marked paid.' : 'That didn’t post — the bill must be approved first, or the relay refused.')); }} disabled={!approved || bookErrors.length > 0} title={approved ? 'Record payment in full (dr payables / cr bank)' : 'Approve the bill first — an unapproved bill cannot be paid'} style={{ ...bkRowBtn, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: (!approved || bookErrors.length) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: (!approved || bookErrors.length) ? 0.5 : 1 }}>Mark paid</button>}
                 </div>
               );
             })}
@@ -3386,13 +3502,10 @@ function DashFinanceBook() {
           as distinct. The pure projections (F.yearEndProjection / monthlyTotals / monthlyFundBalances) all take
           the INJECTED local day and the FULL fiscal frame (fyr.from → fyr.to), so nothing here reads a raw
           clock and empty future months still show the shape of the year. ── */}
-      {tab === 'insights' && (() => {
-        const today = booksTodayISO();
-        const fyr = F.fiscalYearRange(today, book.fiscalYearStart || '01-01');
-        const proj = F.yearEndProjection(book, { today, fiscalYearStart: book.fiscalYearStart || '01-01' });
-        const monthly = F.monthlyTotals(book, { from: fyr.from, to: fyr.to });
-        const fundSeries = F.monthlyFundBalances(book, { from: fyr.from, to: fyr.to });
-        const budgetRows = F.budgetVsActual(book, budgetForFy, { from: fyStart, to: today });
+      {tab === 'insights' && insights && (() => {
+        // PERF (#4): the projections come PRE-COMPUTED from the `insights` memo (keyed on tick+tab+fy) so an
+        // unrelated re-render does not re-walk the journal four times. This block only lays them out.
+        const { proj, monthly, fundSeries, budgetRows } = insights;
         const cellHd = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 };
         const cell = (heading, chart) => <div style={{ minWidth: 0 }}><div style={cellHd}>{heading}</div>{chart}</div>;
         return (

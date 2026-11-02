@@ -1,0 +1,78 @@
+// POINT-OF-USE (CLAUDE.md 1 & 3): the Finance tab strip is the owner's 2+More layout, ON THE SCREEN.
+//   Run: node --test scripts/finance-tabs-tidy-ui.test.mjs
+//
+// Renders the REAL FinTabStrip (app/stew-finance.jsx) through scripts/console-screens.mjs — the whole console
+// compiled the way the phone loads it — and reads the RENDERED TREE, never the .jsx text. Delete the strip (or
+// move a tab between primary/More) and these fail.
+//
+// Asserts: only Transactions + Reports are top-level; a "More ▾" button is present; the six More tabs are
+// ABSENT until the popover is open and PRESENT once it is; choosing a More tab calls setTab(key); the More
+// button shows the active child ("More · Bills") when a More tab is selected; and the popover is NOT a dialog
+// (role!=="dialog") so it stays off every-console-dialog-mounts.
+//
+// Callers of the sliced code: app/stew-finance.jsx (DashFinanceBook renders <FinTabStrip/>).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { loadConsole, fakeReact, fakeBrowser, fakeSteward, nodes } from './console-screens.mjs';
+
+import * as _ledger from '../src/finance-ledger.mjs';
+import * as _store from '../src/finance-store.mjs';
+import * as _statement from '../src/finance-statement.mjs';
+import * as _import from '../src/finance-import.mjs';
+const FL = { ..._ledger, ..._store, ..._statement, ..._import };
+
+const PRIMARY = ['Transactions', 'Reports'];
+const MORE = ['Invoices', 'Bills', 'Accounts & funds', 'Budget', 'Donors', 'Insights'];
+
+function strip({ tab = 'transactions', moreOpen = false } = {}) {
+  const fr = fakeReact();
+  const { window } = fakeBrowser({ Steward: fakeSteward({ actingChurch: '' }) });
+  window.FinanceLedger = FL;
+  const { FinTabStrip } = loadConsole({ React: fr.React, window, expr: '{ FinTabStrip }' });
+  assert.equal(typeof FinTabStrip, 'function', 'FinTabStrip is not exported — the tab strip was removed/renamed');
+  const calls = { setTab: [], setMore: [] };
+  let moreVal = moreOpen;
+  const setMoreOpen = (u) => { moreVal = typeof u === 'function' ? u(moreVal) : u; calls.setMore.push(moreVal); };
+  const setTab = (t) => calls.setTab.push(t);
+  fr.reset();
+  const tree = FinTabStrip({ tab, setTab, moreOpen, setMoreOpen });
+  fr.flush();
+  return { tree, calls };
+}
+
+const buttonLabels = (tree) => nodes(tree).filter(n => n.type === 'button').map(b => String((b.kids || [])[0] || ''));
+const findButton = (tree, label) => nodes(tree).find(n => n.type === 'button' && String((n.kids || [])[0] || '') === label);
+
+test('closed: only Transactions + Reports + a More button are top-level; the six More tabs are hidden', () => {
+  const { tree } = strip({ tab: 'transactions', moreOpen: false });
+  const labels = buttonLabels(tree);
+  for (const p of PRIMARY) assert.ok(labels.includes(p), `primary tab "${p}" is not a top-level button`);
+  assert.ok(labels.some(l => l.startsWith('More')), 'the "More" button is not on the strip');
+  for (const m of MORE) assert.ok(!labels.includes(m), `"${m}" is top-level but should be inside the closed More menu`);
+});
+
+test('open: the six More tabs render as buttons and choosing one calls setTab(key)', () => {
+  const { tree, calls } = strip({ tab: 'transactions', moreOpen: true });
+  const labels = buttonLabels(tree);
+  for (const m of MORE) assert.ok(labels.includes(m), `"${m}" is not in the open More menu`);
+  findButton(tree, 'Bills').props.onClick();
+  assert.deepEqual(calls.setTab, ['bills'], 'choosing "Bills" from More did not call setTab("bills")');
+});
+
+test('the More button shows the ACTIVE child when a More tab is selected', () => {
+  const { tree } = strip({ tab: 'bills', moreOpen: false });
+  const labels = buttonLabels(tree);
+  assert.ok(labels.some(l => l === 'More · Bills ▾'), 'the More button does not surface the active child "Bills"; got: ' + labels.join(' | '));
+});
+
+test('clicking More toggles the popover open (calls setMoreOpen(true))', () => {
+  const { tree, calls } = strip({ tab: 'transactions', moreOpen: false });
+  const more = nodes(tree).find(n => n.type === 'button' && String((n.kids || [])[0] || '').startsWith('More'));
+  more.props.onClick();
+  assert.ok(calls.setMore.includes(true), 'clicking More did not open the popover');
+});
+
+test('the More popover is NOT a dialog (stays off every-console-dialog-mounts)', () => {
+  const { tree } = strip({ tab: 'transactions', moreOpen: true });
+  assert.equal(nodes(tree).filter(n => n.props && n.props.role === 'dialog').length, 0, 'the tab strip rendered a role="dialog" — it must be a lightweight menu');
+});

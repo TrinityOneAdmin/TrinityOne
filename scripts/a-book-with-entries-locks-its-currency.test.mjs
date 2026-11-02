@@ -43,10 +43,11 @@ async function mountBook() {
   let tree;
   const draw = () => { reset(); tree = mods.DashFinanceBook(); flush(); return tree; };
   const all = () => nodes(tree);
+  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
   const selectByLabel = (label) => all().find(n => n.type === 'select' && n.props && n.props['aria-label'] === label);
   const button = (label) => all().find(n => n.type === 'button' && (n.kids || []).some(k => typeof k === 'string' && k.includes(label)));
   const hasText = (t) => all().some(n => (n.kids || []).some(k => typeof k === 'string' && k.includes(t)));
-  return { window, draw, all, selectByLabel, button, hasText, unmount, pubs, encSubCb: () => encSubCb };
+  return { window, draw, all, selectByLabel, button, goTab, hasText, unmount, pubs, encSubCb: () => encSubCb };
 }
 
 // Build the docs for a book that already has ONE journal entry, shaped exactly as encSubscribe delivers them
@@ -86,10 +87,7 @@ test('CONTROL: createBook round-trips a non-GBP, non-2dp book through the doc st
 test('POINT OF USE: the Book-settings picker is on Accounts & funds and writes currency/decimals/fiscal-year', async () => {
   const m = await mountBook();
   m.draw();                                  // tab defaults to 'transactions'
-  const toAccounts = m.button('Accounts & funds');
-  assert.ok(toAccounts, 're-anchor: no "Accounts & funds" tab button');
-  toAccounts.props.onClick();
-  m.draw();
+  m.goTab('accounts');
 
   const ccy = m.selectByLabel('Base currency');
   const dec = m.selectByLabel('Decimal places');
@@ -114,8 +112,7 @@ test('POINT OF USE: the Book-settings picker is on Accounts & funds and writes c
 test('POINT OF USE: once the book has an entry, currency + decimals lock (with a 🔒 note); fiscal-year stays editable', async () => {
   const m = await mountBook();
   m.draw();
-  m.button('Accounts & funds').props.onClick();
-  m.draw();
+  m.goTab('accounts');
 
   const F = m.window.FinanceLedger;
   assert.ok(m.encSubCb(), 'encSubscribe was not called');
@@ -139,8 +136,7 @@ test('POINT OF USE: once the book has an entry, currency + decimals lock (with a
 test('POINT OF USE: an empty book leaves currency + decimals editable (not over-locked)', async () => {
   const m = await mountBook();
   m.draw();
-  m.button('Accounts & funds').props.onClick();
-  m.draw();
+  m.goTab('accounts');
   const ccy = m.selectByLabel('Base currency');
   const dec = m.selectByLabel('Decimal places');
   assert.ok(ccy && dec, 're-anchor: Book-settings controls missing on an empty book');

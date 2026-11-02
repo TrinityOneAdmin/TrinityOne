@@ -54,14 +54,15 @@ function setup() {
   const button = (label) => all().find(n => n.type === 'button' && (n.kids || []).some(k => typeof k === 'string' && k.includes(label)));
   const comp = (name) => all().find(n => typeof n.type === 'function' && n.type.name === name);
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
+  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
   const feed = (docs) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(toItems(docs)); draw(); };
-  return { fr, pub, mods, draw, all, button, comp, click, feed, get tree() { return tree; } };
+  return { fr, pub, mods, draw, all, button, comp, click, goTab, feed, get tree() { return tree; } };
 }
 
 test('the Accounts & funds panel offers Add account, Add fund and Move between funds', () => {
   const h = setup();
   h.draw();
-  h.click('Accounts & funds');   // open the collapsible panel
+  h.goTab('accounts');   // open the collapsible panel
   assert.ok(h.button('Add account'), 'NO "Add account" control on the Accounts & funds panel');
   assert.ok(h.button('Add fund'), 'NO "Add fund" control on the Accounts & funds panel');
   assert.ok(h.button('Move between funds'), 'NO "Move between funds" control on the Accounts & funds panel');
@@ -70,7 +71,7 @@ test('the Accounts & funds panel offers Add account, Add fund and Move between f
 test('adding an account publishes a replaceable finance/account:<id> doc', async () => {
   const h = setup();
   h.draw();
-  h.click('Accounts & funds');
+  h.goTab('accounts');
   h.click('Add account');
   const modal = h.comp('BooksAccountEdit');
   assert.ok(modal, '"Add account" did not open the account modal');
@@ -103,7 +104,7 @@ test('a fund transfer posts ONE balanced journal entry on the reserved account, 
   FL.addFund(b, { id: 'building', name: 'Building', kind: 'restricted' });
   FL.post(b, { date: '2026-01-01', memo: 'gift', postings: [{ account: 'bank', dir: 'dr', amount: 10000 }, { account: 'giving', fund: 'general', dir: 'cr', amount: 10000 }] });
   h.feed(FL.bookToDocs(b));
-  h.click('Accounts & funds');
+  h.goTab('accounts');
   h.click('Move between funds');
   const modal = h.comp('BooksFundMove');
   assert.ok(modal, '"Move between funds" did not open the transfer modal');
