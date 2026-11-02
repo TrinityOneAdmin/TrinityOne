@@ -44,8 +44,9 @@ function setup() {
   const button = (label) => all().find(n => n.type === 'button' && texts(n).join(' ').includes(label));
   const comp = (name) => all().find(n => typeof n.type === 'function' && n.type.name === name);
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
+  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
   const feedItems = (items) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(items); draw(); };
-  return { mods, draw, all, button, comp, click, feedItems, get tree() { return tree; } };
+  return { mods, draw, all, button, comp, click, goTab, feedItems, get tree() { return tree; } };
 }
 
 // A book with activity across a few months of THIS fiscal year, so the charts have data to draw.
@@ -64,17 +65,21 @@ function seedItems() {
 
 // ── half 1: the Insights tab in the real DashFinanceBook ──
 
-test('the Insights tab is on the strip', () => {
+test('the Insights tab is reachable (owner 2+More layout: it lives under More)', () => {
+  // The tab pills now live in the FinTabStrip child (covered by finance-tabs-tidy-ui); here we prove Insights is
+  // still REACHABLE via the strip's setTab and reveals its panel.
   const h = setup();
   h.draw();
-  assert.ok(h.button('Insights'), 'the Insights tab is not on the Finance tab strip');
+  h.feedItems(seedItems());
+  h.goTab('insights');
+  assert.ok(h.comp('BooksProjectionChart'), 'reaching Insights did not reveal the Insights panel');
 });
 
 test('selecting Insights renders ALL FOUR charts at once on the one card, each under its heading', () => {
   const h = setup();
   h.draw();
   h.feedItems(seedItems());
-  h.click('Insights');
+  h.goTab('insights');
   // All four chart components are present TOGETHER — delete any one from the grid and its line here fails.
   const proj = h.comp('BooksProjectionChart'), trend = h.comp('BooksMonthlyTrendChart'), budg = h.comp('BooksBudgetChart'), funds = h.comp('BooksFundBalanceChart');
   assert.ok(proj, 'the year-end projection chart is missing from the Insights grid');
@@ -93,7 +98,7 @@ test('the sub-view switcher is GONE — the four headings are not clickable butt
   const h = setup();
   h.draw();
   h.feedItems(seedItems());
-  h.click('Insights');
+  h.goTab('insights');
   // Before the grid reflow these were <button> pills; now they are plain headings. No switcher button remains.
   for (const label of ['Monthly trend', 'Budget vs actual', 'Fund balances']) assert.ok(!h.button(label), 'a "' + label + '" switcher button is still on the Insights tab — the switcher was not removed');
 });

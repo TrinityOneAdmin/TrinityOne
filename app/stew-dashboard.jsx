@@ -4417,7 +4417,7 @@ function GroupChatModal({ group, onClose }) {
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
             <Icon name="pin" size={14} color="#8a6717" style={{ marginTop: 2, flexShrink: 0 }} />
             {/* tapping the banner body scrolls the chat to the full pinned message; the Unpin X stops propagation */}
-            <div role="button" tabIndex={0} onClick={scrollToPinned} title="Go to the pinned message" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+            <div role="button" tabIndex={0} onClick={scrollToPinned} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToPinned(); } }} title="Go to the pinned message" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
               <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: '#8a6717', marginBottom: 1 }}>PINNED</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{pin.text || '(message)'}</div>
             </div>

@@ -176,7 +176,10 @@ function openManaging({ multiCurrency = undefined } = {}) {
   ];
   encSubCb(docs); draw();
   const button = (label) => nodes(tree).find(n => n.type === 'button' && texts(n).join(' ').includes(label));
-  button('Accounts & funds').props.onClick({ stopPropagation() {}, preventDefault() {} }); draw();
+  // Owner 2+More tab layout: "Accounts & funds" lives in the FinTabStrip More popover (a child component not
+  // rendered here), so switch via its setTab prop rather than a top-level pill click.
+  const _strip = nodes(tree).find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip');
+  if (!_strip) throw new Error('re-anchor: FinTabStrip not rendered'); _strip.props.setTab('accounts'); draw();
   return { tree: () => tree };
 }
 

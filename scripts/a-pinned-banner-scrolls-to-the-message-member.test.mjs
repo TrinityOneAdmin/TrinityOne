@@ -139,3 +139,23 @@ test('SABOTAGE (member banner): removing the banner onClick drops the tap handle
   const b = bannerBtn(drawChatRoom(sab));
   assert.ok(!b || typeof b.props.onClick !== 'function', 'the banner still had a tap handler with scrollToPinned removed');
 });
+
+// ── #6: the pinned banner is operable by KEYBOARD (Enter/Space), not mouse/touch only ───────────────────────
+test('the pinned banner body handles Enter/Space (keyboard a11y)', () => {
+  const b = bannerBtn(drawChatRoom());
+  assert.equal(typeof b.props.onKeyDown, 'function', 'the pinned banner has no onKeyDown — it is not keyboard-operable');
+  let prevented = 0;
+  b.props.onKeyDown({ key: 'Enter', preventDefault: () => { prevented++; } });
+  b.props.onKeyDown({ key: ' ', preventDefault: () => { prevented++; } });
+  assert.equal(prevented, 2, 'Enter and Space are not handled by the banner');
+  let other = 0;
+  b.props.onKeyDown({ key: 'a', preventDefault: () => { other++; } });
+  assert.equal(other, 0, 'a non-activation key should be ignored by the banner');
+});
+
+test('SABOTAGE (member banner keyboard): removing onKeyDown drops keyboard operation', () => {
+  const sab = CHAT_SRC.replace(/onKeyDown=\{\(e\) => \{ if \(e\.key === 'Enter' \|\| e\.key === ' '\) \{ e\.preventDefault\(\); scrollToPinned\(\); \} \}\} title="Go to the pinned message"/, 'title="Go to the pinned message"');
+  assert.notEqual(sab, CHAT_SRC, 'the banner onKeyDown anchor did not match — re-scope');
+  const b = bannerBtn(drawChatRoom(sab));
+  assert.ok(!b || typeof b.props.onKeyDown !== 'function', 'the banner still had onKeyDown after removal');
+});

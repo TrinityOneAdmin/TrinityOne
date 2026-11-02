@@ -107,3 +107,25 @@ test('SABOTAGE: removing data-msg-id from the row drops the handle; removing the
   const b = bannerBtn(t2);
   assert.ok(!b || typeof b.props.onClick !== 'function', 'the banner still had a tap handler with scrollToPinned removed');
 });
+
+// ── #6: the pinned banner is operable by KEYBOARD (Enter/Space), not mouse/touch only ───────────────────────
+test('the pinned banner body handles Enter/Space (keyboard a11y)', async () => {
+  const { tree } = await loadGCM();
+  const b = bannerBtn(tree);
+  assert.equal(typeof b.props.onKeyDown, 'function', 'the pinned banner has no onKeyDown — it is not keyboard-operable');
+  let prevented = 0;
+  b.props.onKeyDown({ key: 'Enter', preventDefault: () => { prevented++; } });
+  b.props.onKeyDown({ key: ' ', preventDefault: () => { prevented++; } });
+  assert.equal(prevented, 2, 'Enter and Space are not handled by the banner');
+  let other = 0;
+  b.props.onKeyDown({ key: 'a', preventDefault: () => { other++; } });
+  assert.equal(other, 0, 'a non-activation key should be ignored by the banner');
+});
+
+test('SABOTAGE (console banner keyboard): removing onKeyDown drops keyboard operation', async () => {
+  const noKey = SRC.replace(/onKeyDown=\{\(e\) => \{ if \(e\.key === 'Enter' \|\| e\.key === ' '\) \{ e\.preventDefault\(\); scrollToPinned\(\); \} \}\} title="Go to the pinned message"/, 'title="Go to the pinned message"');
+  assert.notEqual(noKey, SRC, 'the banner onKeyDown anchor did not match — re-scope');
+  const { tree } = await loadGCM(noKey);
+  const b = bannerBtn(tree);
+  assert.ok(!b || typeof b.props.onKeyDown !== 'function', 'the banner still had onKeyDown after removal');
+});

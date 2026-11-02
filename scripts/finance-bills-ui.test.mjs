@@ -58,9 +58,10 @@ function setup(opts) {
   const all = () => nodes(tree);
   const button = (label) => all().find(n => n.type === 'button' && texts(n).join(' ').includes(label));
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
+  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
   const feedItems = (items) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(items); draw(); };
   const statusNode = () => all().find(n => n.props && n.props['data-bill-status']);
-  return { fr, draw, drawComp, all, button, click, feedItems, statusNode, get tree() { return tree; } };
+  return { fr, draw, drawComp, all, button, click, goTab, feedItems, statusNode, get tree() { return tree; } };
 }
 
 function editorBook() {
@@ -107,7 +108,7 @@ test('the Bills panel shows a bill with a status badge, an Approve control and a
   const h = setup();
   h.draw();
   h.feedItems(seed({ due: '2000-01-01' }));   // a long-overdue, unapproved bill
-  h.click('Bills');                            // open the collapsible
+  h.goTab('bills');                            // open the collapsible
   assert.ok(h.button('New bill'), 'the "New bill" control is not on the screen');
   const joined = texts(h.tree).join(' ');
   assert.ok(/INV-4471/.test(joined), 'the bill reference is not on the screen');
@@ -125,7 +126,7 @@ test('an UNAPPROVED bill’s Mark-paid control is DISABLED, and it ENABLES once 
   const unapproved = setup();
   unapproved.draw();
   unapproved.feedItems(seed({ due: '2000-01-01', approved: false }));
-  unapproved.click('Bills');
+  unapproved.goTab('bills');
   const payOff = unapproved.button('Mark paid');
   assert.ok(payOff, 'the Mark paid control must render even when disabled, so its state is on the screen');
   assert.equal(payOff.props.disabled, true, 'an UNAPPROVED bill’s Mark-paid control must be DISABLED (assert the rendered disabled prop, not .jsx text)');
@@ -134,7 +135,7 @@ test('an UNAPPROVED bill’s Mark-paid control is DISABLED, and it ENABLES once 
   const approved = setup();
   approved.draw();
   approved.feedItems(seed({ due: '2000-01-01', approved: true }));
-  approved.click('Bills');
+  approved.goTab('bills');
   const payOn = approved.button('Mark paid');
   assert.ok(payOn, 'the Mark paid control vanished once approved — it must stay and enable');
   assert.equal(payOn.props.disabled, false, 'an APPROVED bill’s Mark-paid control must be ENABLED — the disabled-until-approved wiring is gone');
@@ -149,7 +150,7 @@ test('DUAL: the RECORDER’s own Approve control is DISABLED (you cannot approve
   const h = setup({ me: ME, dual: true });
   h.draw();
   h.feedItems(dualSeed({ recordedBy: ME, approvers: [] }));   // I recorded it; nobody has approved
-  h.click('Bills');
+  h.goTab('bills');
   const approve = h.button('Approve');
   assert.ok(approve, 'the Approve control must render so the recorder can see it is not theirs to use');
   assert.equal(approve.props.disabled, true, 'the steward who RECORDED the bill must not be able to approve it (dual control)');
@@ -157,7 +158,7 @@ test('DUAL: the RECORDER’s own Approve control is DISABLED (you cannot approve
   const h2 = setup({ me: ME, dual: true });
   h2.draw();
   h2.feedItems(dualSeed({ recordedBy: ME, approvers: [ME] }));   // the recorder "approved" their own bill
-  h2.click('Bills');
+  h2.goTab('bills');
   const pay = h2.button('Mark paid');
   assert.ok(pay, 'the Mark paid control must still render');
   assert.equal(pay.props.disabled, true, 'a self-approval must NOT enable Mark paid — separation of duties is not enforced on the screen');
@@ -168,7 +169,7 @@ test('DUAL: a DIFFERENT finance steward may approve, and that ENABLES Mark paid'
   const h = setup({ me: ME, dual: true });
   h.draw();
   h.feedItems(dualSeed({ recordedBy: OTHER, approvers: [] }));
-  h.click('Bills');
+  h.goTab('bills');
   const approve = h.button('Approve');
   assert.ok(approve, 'a steward who did not record the bill must see an Approve control');
   assert.equal(approve.props.disabled, false, 'a steward who did not record the bill must be able to approve it');
@@ -178,7 +179,7 @@ test('DUAL: a DIFFERENT finance steward may approve, and that ENABLES Mark paid'
   const h2 = setup({ me: ME, dual: true });
   h2.draw();
   h2.feedItems(dualSeed({ recordedBy: OTHER, approvers: [ME] }));
-  h2.click('Bills');
+  h2.goTab('bills');
   const pay = h2.button('Mark paid');
   assert.ok(pay, 'the Mark paid control must render');
   assert.equal(pay.props.disabled, false, 'a bill approved by a DIFFERENT finance steward must enable Mark paid');
@@ -212,7 +213,7 @@ test('DUAL: the recorder is the SIGNER (_by), not the forgeable body `by` — a 
   const h = setup({ me: ME, dual: true });
   h.draw();
   h.feedItems(forgedDualSeed({ authedBy: ME, bodyBy: OTHER, approvers: [ME] }));
-  h.click('Bills');
+  h.goTab('bills');
   const approve = h.button('Approve');
   assert.ok(approve, 'the Approve control must render');
   assert.equal(approve.props.disabled, true, 'the recorder (BY SIGNATURE) must not be able to approve — a forged body `by` must not grant it; revert finItemToDoc to read `it.by` and this ENABLES → fails');
@@ -227,7 +228,7 @@ test('DUAL: with the recorder locked to the signer, a genuinely DIFFERENT approv
   const h = setup({ me: ME, dual: true });
   h.draw();
   h.feedItems(forgedDualSeed({ authedBy: OTHER, bodyBy: ME, approvers: [ME] }));
-  h.click('Bills');
+  h.goTab('bills');
   const pay = h.button('Mark paid');
   assert.ok(pay, 'the Mark paid control must render');
   assert.equal(pay.props.disabled, false, 'a bill approved by a steward who is NOT the signer-recorder must enable Mark paid');
@@ -238,7 +239,7 @@ test('a paid bill badges PAID and no longer offers Mark paid (derived from the j
   const h = setup();
   h.draw();
   h.feedItems(seed({ due: '2000-01-01', approved: true, pay: true }));
-  h.click('Bills');
+  h.goTab('bills');
   const badge = h.statusNode();
   assert.ok(badge, 'no status badge rendered');
   assert.equal(badge.props['data-bill-status'], 'paid', 'a bill with a payment entry must badge PAID');
