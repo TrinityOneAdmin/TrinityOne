@@ -49,6 +49,9 @@ test('GET /v with ref, text, version renders the verse with OG tags', async () =
   assert.ok(html.includes('WEB'), 'version in body');
   assert.match(html, /og:title/, 'OG title tag present');
   assert.match(html, /og:description/, 'OG description tag present');
+  assert.match(html, /og:image/, 'OG image tag present');
+  assert.match(html, /twitter:image/, 'Twitter image tag present');
+  assert.match(html, /summary_large_image/, 'twitter:card is summary_large_image');
 });
 
 test('GET /v with no params still serves a valid page', async () => {

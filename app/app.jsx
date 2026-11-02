@@ -216,7 +216,7 @@ function verseShareUrl(v) {
   if (!relays || !relays.length) return '';
   var base = String(relays[0]).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/, '').replace(/\/+$/, '');
   if (!base) return '';
-  var p = new URLSearchParams(); p.set('r', String(v.ref || '')); p.set('t', String(v.text || '')); if (v.version) p.set('v', v.version);
+  var p = new URLSearchParams(); p.set('r', String(v.ref || '')); var tt = String(v.text || ''); p.set('t', tt.length > 220 ? tt.slice(0, 220) : tt); if (v.version) p.set('v', v.version);
   return base + '/v?' + p.toString();
 }
 function verseShareFull(v) { var t = verseShareText(v); var u = verseShareUrl(v); return u ? t + '\n\n' + u : t; }
@@ -240,7 +240,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
           {/* These two used to be theatre: one toasted "Card ready to share" and the other "Saved to Photos",
               and neither rendered, saved or shared anything. ctx.shareText is the real thing (native share
               sheet, then Web Share, then clipboard), so share the verse itself rather than lie about a file. */}
-          <IconBtn name="share" title="Share this verse" onClick={() => { ctx.shareText(verseShareFull(verse), 'A verse for you'); }} />
+          <IconBtn name="share" title="Share this verse" onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you', verseShareUrl(verse)); }} />
         </div>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 26px' }}>
           <div style={{
@@ -268,7 +268,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
               }} />
             ))}
           </div>
-          <button onClick={() => { ctx.shareText(verseShareFull(verse), 'A verse for you'); }} style={{
+          <button onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you', verseShareUrl(verse)); }} style={{
             width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
             fontWeight: 700, fontSize: 15.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -2240,12 +2240,12 @@ function App() {
     openShare: (v) => setShare(v),
     openShareSheet: (v) => setShareSheet(v),
     // share arbitrary text via the OS share sheet (native or web), falling back to clipboard
-    shareText: async (text, title) => {
+    shareText: async (text, title, url) => {
       const t = (text || '').trim(); if (!t) return;
       const Cap = window.Capacitor, P = Cap && Cap.Plugins;
       try {
-        if (P && P.Share && Cap.isNativePlatform && Cap.isNativePlatform()) { await P.Share.share({ title: title || 'TrinityOne', text: t }); return; }
-        if (navigator.share) { await navigator.share({ text: t }); return; }
+        if (P && P.Share && Cap.isNativePlatform && Cap.isNativePlatform()) { await P.Share.share({ title: title || 'TrinityOne', text: t, ...(url ? { url } : {}) }); return; }
+        if (navigator.share) { await navigator.share({ text: t, ...(url ? { title: title || 'TrinityOne', url } : {}) }); return; }
       } catch (e) { if (e && e.name === 'AbortError') return; }
       try { if (navigator.clipboard) { await navigator.clipboard.writeText(t); toast('Copied — paste it anywhere'); } } catch (e) {}
     },
