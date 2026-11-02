@@ -431,7 +431,7 @@ function LexDetail({ id, onWord, showLemma }) {
             {/* turn each Strong's cross-reference (G3956 / H1234) into a tappable link to that entry */}
             {e.deriv.split(/([GH]\d{1,5})/).map((part, i) => (
               /^[GH]\d{1,5}$/.test(part) && onWord && !window.Bible.lex(part).missing
-                ? <span key={i} onClick={() => onWord(part)} style={{ color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in oklab, var(--clay) 45%, transparent)', textUnderlineOffset: 2 }}>{part}</span>
+                ? <span key={i} onClick={() => onWord(part, id)} style={{ color: 'var(--clay)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in oklab, var(--clay) 45%, transparent)', textUnderlineOffset: 2 }}>{part}</span>
                 : part
             ))}
           </div>
@@ -1063,6 +1063,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
     try { sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 10; } catch (e) {}
   };
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs' | 'bookmarks'
+  const [commSrc, setCommSrc] = useS(null);      // null = show all commentary sources, or abbr of chosen source
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
   const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
   const [xrefPreview, setXrefPreview] = useS(null);   // a cross-reference being previewed before jumping to it
@@ -1087,7 +1088,13 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   // effect re-runs on every chapter change.
   useE(() => {
     if (!open) return;
-    const read = () => { try { setComm(window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : []); } catch (e) { setComm([]); } };
+    const read = () => {
+      try {
+        const c = window.Bible.getCommentary ? window.Bible.getCommentary(loc.book, loc.chap) : [];
+        setComm(c);
+        setCommSrc(prev => prev && !c.some(s => s.abbr === prev) ? null : prev);
+      } catch (e) { setComm([]); }
+    };
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
   }, [open, loc.book, loc.chap, ctx.version]);
@@ -1255,7 +1262,26 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
               </div>
             )}
             </React.Fragment>
-          ) : comm.length ? comm.map((srcBlk, si) => (
+          ) : comm.length ? <React.Fragment>
+            {comm.length > 1 ? (
+              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 14 }}>
+                <button onClick={() => setCommSrc(null)} style={{
+                  padding: '6px 14px', borderRadius: 10, border: '1px solid var(--line)',
+                  background: commSrc === null ? 'var(--clay)' : 'var(--surface)',
+                  color: commSrc === null ? 'var(--on-clay)' : 'var(--ink-2)',
+                  fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, cursor: 'pointer'
+                }}>All</button>
+                {comm.map(s => (
+                  <button key={s.abbr} onClick={() => setCommSrc(s.abbr)} style={{
+                    padding: '6px 14px', borderRadius: 10, border: '1px solid var(--line)',
+                    background: commSrc === s.abbr ? 'var(--clay)' : 'var(--surface)',
+                    color: commSrc === s.abbr ? 'var(--on-clay)' : 'var(--ink-2)',
+                    fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, cursor: 'pointer'
+                  }}>{s.name}</button>
+                ))}
+              </div>
+            ) : null}
+            {(commSrc ? comm.filter(s => s.abbr === commSrc) : comm).map((srcBlk, si) => (
             <div key={si} style={{ marginBottom: 22 }}>
               {/* THE SOURCE'S OWN CREDIT SITS WITH ITS WORDS. Openly-licensed study notes (Aquifer's are
                   CC BY-SA 4.0) oblige us to name the author and the licence wherever the notes are shown.
@@ -1281,7 +1307,8 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
                 </div>
               ))}
             </div>
-          )) : (
+          ))}
+          </React.Fragment> : (
             <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
               <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="comment" size={26} /></div>
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>Nothing here for {label}</div>
@@ -1692,7 +1719,15 @@ function ReadScreen({ ctx }) {
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} verse={wordVerse} open={sheet === 'word'} onClose={wordVerse && wordVerse.from === 'define' ? () => setSheet('define') : close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
-      <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} verses={sheet === 'define' ? passage.flatMap(p => p.verses.map(v => ({ book: p.book, chap: p.chap, v }))) : []} open={sheet === 'define'} onClose={() => setSheet('action')} onWord={(sid, v) => openWord(sid, v, 'define')} />
+      <DefineSheet label={rangeRef} text={sheet === 'define' ? passageText() : ''} verses={sheet === 'define' ? passage.flatMap(p => p.verses.map(v => ({ book: p.book, chap: p.chap, v }))) : []} open={sheet === 'define'} onClose={() => setSheet('action')} onWord={(sid, sourceOrV) => {
+          if (typeof sourceOrV === 'string' && /^[GH]\d/i.test(sourceOrV)) {
+            setWordStack([sourceOrV, sid]);
+            setWordVerse(prev => prev ? { ...prev, from: 'define' } : null);
+            setSheet('word');
+          } else {
+            openWord(sid, sourceOrV, 'define');
+          }
+        }} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
       {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
