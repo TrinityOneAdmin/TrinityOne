@@ -91,7 +91,12 @@ function finItemToDoc(it) {
   // (the money rides the journal, accrued through the reserved AP account). Like invoice/contact they map to
   // their own `t`, which rebuildBook ignores, and DashFinanceBook collects them into SEPARATE console state. The
   // bill's `approved` is the LIGHT-mode flag; status is DERIVED (F.billStatus), never read from here.
-  if (id.startsWith('bill:')) return { t: 'bill', id: id.slice(5), number: it.number || '', supplier: it.supplier || '', lines: Array.isArray(it.lines) ? it.lines : [], received: it.received || '', due: it.due || '', by: it.by || '', approved: it.approved || null, receiveSeq: it.receiveSeq ?? null };
+  // `by` = WHO RECORDED IT, the dual-control separation-of-duties anchor. It is taken from `it._by` — the
+  // RELAY-AUTHENTICATED author (the signer of the bill doc, surfaced by encSubscribe), NOT `it.by` inside the
+  // encrypted body, which a crafting writer could set to anyone to approve their own bill (finance-audit-
+  // 2026-11-02 #1). Fall back to the body field ONLY in local/no-relay mode, where `_by` is absent and the
+  // single local user is both parties, so it is not a security boundary.
+  if (id.startsWith('bill:')) return { t: 'bill', id: id.slice(5), number: it.number || '', supplier: it.supplier || '', lines: Array.isArray(it.lines) ? it.lines : [], received: it.received || '', due: it.due || '', by: (it._by != null ? it._by : (it.by || '')), approved: it.approved || null, receiveSeq: it.receiveSeq ?? null };
   // A DUAL-CONTROL approval (finance/billapproval:<billId>:<approverhex>). The APPROVER is read from the d-tag,
   // which the relay BINDS to the event signer (it refuses a write whose signer != the hex in the address — the
   // check-in-arrival house pattern), so it cannot be forged by another writer. `id` here is the d-tag suffix

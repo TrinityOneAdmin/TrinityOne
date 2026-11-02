@@ -185,6 +185,55 @@ test('DUAL: a DIFFERENT finance steward may approve, and that ENABLES Mark paid'
   assert.ok(!h2.button('Approve'), 'an approved bill no longer offers Approve');
 });
 
+// ── THE RECORDER IS THE SIGNER, NOT A FORGEABLE BODY FIELD (finance-audit-2026-11-02 #1) ─────────────────────
+// encSubscribe now surfaces `_by` = the RELAY-AUTHENTICATED author (the signer of the bill doc). finItemToDoc
+// reads the recorder from `_by`, NOT the in-body `by` a crafting writer controls. These feed a bill whose
+// authenticated author (_by) and forged body `by` DISAGREE — the exact attack: a lone steward records a bill but
+// writes someone else into `by` so their own signed approval reads as a different person's. Revert finItemToDoc
+// to read `it.by` and the first test's controls ENABLE (the recorder no longer == me) → it fails.
+function forgedDualSeed({ authedBy, bodyBy, approvers = [], due = '2000-01-01' } = {}) {
+  const b = FL.createBook({ baseCurrency: 'GBP', decimals: 2 });
+  FL.addAccount(b, { id: 'bank', code: '1000', name: 'Bank', type: 'asset' });
+  FL.addAccount(b, { id: 'utilities', code: '5000', name: 'Utilities', type: 'expense' });
+  FL.addAccount(b, { id: FL.AP_ACCT, code: FL.AP_ACCOUNT.code, name: FL.AP_ACCOUNT.name, type: FL.AP_ACCOUNT.type });
+  const bill = { id: 'b1', number: 'INV-4471', supplier: 'British Gas', received: '2026-05-01', due, lines: [{ desc: 'Gas', account: 'utilities', fund: 'general', amount: 9500 }] };
+  FL.post(b, FL.billReceiveEntry(bill));
+  const docs = toItems(FL.bookToDocs(b));
+  // _by = the signer encSubscribe authenticated (what the relay bound to the event); by = the forgeable sealed field.
+  docs.push({ t: 'bill', id: 'bill:' + bill.id, number: bill.number, supplier: bill.supplier, lines: bill.lines, received: bill.received, due: bill.due, by: bodyBy, _by: authedBy, receiveSeq: 1 });
+  for (const ap of approvers) docs.push({ t: 'billapproval', id: 'billapproval:' + bill.id + ':' + ap, bill: bill.id, approver: ap, ts: 1 });
+  return docs;
+}
+
+test('DUAL: the recorder is the SIGNER (_by), not the forgeable body `by` — a forged recorder cannot unlock a self-approval', () => {
+  // ME recorded it (authenticated signer _by = ME) but wrote OTHER into the sealed `by` field, then signed their
+  // OWN approval. If the recorder were read from the body `by` (= OTHER), ME ≠ OTHER and the self-approval would
+  // count — the attack. With the recorder locked to the signer (_by = ME), it must not.
+  const h = setup({ me: ME, dual: true });
+  h.draw();
+  h.feedItems(forgedDualSeed({ authedBy: ME, bodyBy: OTHER, approvers: [ME] }));
+  h.click('Bills');
+  const approve = h.button('Approve');
+  assert.ok(approve, 'the Approve control must render');
+  assert.equal(approve.props.disabled, true, 'the recorder (BY SIGNATURE) must not be able to approve — a forged body `by` must not grant it; revert finItemToDoc to read `it.by` and this ENABLES → fails');
+  const pay = h.button('Mark paid');
+  assert.ok(pay, 'the Mark paid control must render');
+  assert.equal(pay.props.disabled, true, 'a self-approval behind a forged recorder must NOT enable Mark paid');
+});
+
+test('DUAL: with the recorder locked to the signer, a genuinely DIFFERENT approver still enables payment', () => {
+  // OTHER is the authenticated recorder (_by = OTHER); the body `by` is a red herring forged to ME. ME, a
+  // different steward, approves → recorder (= _by = OTHER) ≠ ME → the approval is real and Mark paid enables.
+  const h = setup({ me: ME, dual: true });
+  h.draw();
+  h.feedItems(forgedDualSeed({ authedBy: OTHER, bodyBy: ME, approvers: [ME] }));
+  h.click('Bills');
+  const pay = h.button('Mark paid');
+  assert.ok(pay, 'the Mark paid control must render');
+  assert.equal(pay.props.disabled, false, 'a bill approved by a steward who is NOT the signer-recorder must enable Mark paid');
+  assert.ok(!h.button('Approve'), 'an approved bill no longer offers Approve');
+});
+
 test('a paid bill badges PAID and no longer offers Mark paid (derived from the journal)', () => {
   const h = setup();
   h.draw();

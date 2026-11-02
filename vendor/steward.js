@@ -24611,7 +24611,7 @@ zoo`.split("\n");
       const kk = kind || "finance";
       const held = /* @__PURE__ */ new Map();
       const HELD_CAP = 2e3;
-      const take = (id, content, ts, tags) => {
+      const take = (id, content, ts, tags, by) => {
         let obj = window.Steward.encOpen(kk, content);
         if (obj == null) obj = _encOpenSealedCopy(kk, tags);
         if (obj == null) {
@@ -24619,21 +24619,21 @@ zoo`.split("\n");
             const oldest = held.keys().next().value;
             held.delete(oldest);
           }
-          held.set(id, { content, ts, tags });
+          held.set(id, { content, ts, tags, by });
           return false;
         }
         held.delete(id);
         const prev = byId.get(id);
         if (prev && (prev.ts || 0) > (ts || 0)) return true;
         const _tag = (k) => ((tags || []).find((t) => t[0] === k) || [])[1] || "";
-        byId.set(id, { id, ...obj, ts, _sid: _tag("session"), _rel: _tag("rel") });
+        byId.set(id, { id, ...obj, ts, _sid: _tag("session"), _rel: _tag("rel"), _by: by || "" });
         return true;
       };
       const retry = () => {
         if (!held.size) return;
         let opened = 0;
         for (const [id, h] of [...held]) {
-          if (take(id, h.content, h.ts, h.tags)) opened++;
+          if (take(id, h.content, h.ts, h.tags, h.by)) opened++;
         }
         if (opened) emit();
       };
@@ -24656,7 +24656,7 @@ zoo`.split("\n");
             emit();
             return;
           }
-          if (!take(id, e.content, e.created_at, e.tags)) return;
+          if (!take(id, e.content, e.created_at, e.tags, e.pubkey)) return;
           emit();
         },
         oneose() {

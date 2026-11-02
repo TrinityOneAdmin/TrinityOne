@@ -11448,7 +11448,7 @@ window.Steward = {
     // below pass tags, and THE HOLDING PEN KEEPS THEM TOO: a record parked waiting for a key and retried
     // later must still be able to reach its second copy, or the fallback would work on a live delivery and
     // silently not on a retry — which is the harder of the two to notice.
-    const take = (id, content, ts, tags) => {
+    const take = (id, content, ts, tags, by) => {
       let obj = window.Steward.encOpen(kk, content);
       // ── THE HELPER'S COPY, WHEN THE RING WILL NOT OPEN THE RECORD ─────────────────────────────────────
       // Tried ONLY after the ring has failed, never before it: `content` is the church's copy and the ring
@@ -11467,7 +11467,7 @@ window.Steward = {
       if (obj == null) obj = _encOpenSealedCopy(kk, tags);
       if (obj == null) {
         if (!held.has(id) && held.size >= HELD_CAP) { const oldest = held.keys().next().value; held.delete(oldest); }
-        held.set(id, { content, ts, tags });
+        held.set(id, { content, ts, tags, by });
         return false;
       }
       held.delete(id);
@@ -11481,14 +11481,20 @@ window.Steward = {
       // `_rel` come from the tags the RELAY enforces on, never from the sealed body a helper wrote — so a
       // release cannot claim a session it was not admitted under. Additive: a finance document has neither
       // and gets '', which every existing finance reader ignores. See subscribeCheckins for the fold.
+      // `_by` IS THE RELAY-AUTHENTICATED AUTHOR — the event's signer pubkey (e.pubkey), carried the SAME way
+      // and for the SAME reason as `_sid`/`_rel`: from the event the relay admitted, NEVER the sealed body a
+      // client wrote. The bill dual-control recorder reads it so "a DIFFERENT person approved it" rests on who
+      // SIGNED the record, not a forgeable `by` field inside the ciphertext (finance-audit-2026-11-02 #1). It
+      // is placed AFTER `...obj` so a `_by` smuggled into the sealed body can never override the real signer.
+      // Additive: every other reader ignores it, exactly as when `_sid`/`_rel` were added.
       const _tag = (k) => ((tags || []).find(t => t[0] === k) || [])[1] || '';
-      byId.set(id, { id, ...obj, ts, _sid: _tag('session'), _rel: _tag('rel') });
+      byId.set(id, { id, ...obj, ts, _sid: _tag('session'), _rel: _tag('rel'), _by: by || '' });
       return true;
     };
     const retry = () => {
       if (!held.size) return;
       let opened = 0;
-      for (const [id, h] of [...held]) { if (take(id, h.content, h.ts, h.tags)) opened++; }
+      for (const [id, h] of [...held]) { if (take(id, h.content, h.ts, h.tags, h.by)) opened++; }
       if (opened) emit();
     };
     if (_capWaiters[kk]) _capWaiters[kk].add(retry);
@@ -11530,7 +11536,7 @@ window.Steward = {
         // than deletion. A delete button on either would make it live, and the fix is to remember the
         // tombstone's created_at and refuse anything older.
         if (tomb) { byId.delete(id); held.delete(id); emit(); return; }
-        if (!take(id, e.content, e.created_at, e.tags)) return;   // held for a key that has not arrived yet
+        if (!take(id, e.content, e.created_at, e.tags, e.pubkey)) return;   // held for a key that has not arrived yet
         emit();
       },
       oneose() { emit(); },
