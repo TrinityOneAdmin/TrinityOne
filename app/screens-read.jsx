@@ -1070,6 +1070,12 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
   const [xrefPreview, setXrefPreview] = useS(null);   // a cross-reference being previewed before jumping to it
   const [xrefOpen, setXrefOpen] = useS({});           // verse -> show all its cross-refs (past the first 4)
+  // The cross-reference SOURCE picker (mirrors the commentary picker). 'all' is the merge; any other value is
+  // a source abbr. Persisted in localStorage; resolved against the live crossrefList() on every read, so a
+  // removed source falls back (to TSK if installed, else the first installed) without a reload.
+  const [xrSrc, setXrSrc] = useS('TSK');         // resolved from lsGet in the Cross refs effect below, which alone reads it
+  const [xrDrop, setXrDrop] = useS(false);       // cross-ref source dropdown open
+  const [xrAll, setXrAll] = useS([]);            // all installed cross-ref sources (from crossrefList)
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
   // Written under the SAME key the verse card uses, so the note shows on its verse as well as in this list. A
   // verse that already has a note gets this one added under it, never replaced by it.
@@ -1107,10 +1113,32 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   useE(() => {
     if (!open || view !== 'crossrefs') return;
     setXrefOpen({});   // a new chapter collapses every group back to its first few
-    const read = () => { try { setXrefs(window.Bible.getCrossRefs ? window.Bible.getCrossRefs(loc.book, loc.chap) : {}); } catch (e) { setXrefs({}); } };
+    const read = () => {
+      try {
+        const list = window.Bible.crossrefList ? window.Bible.crossrefList() : [];
+        setXrAll(list);
+        // Resolve the active source against what is installed NOW. 'all' is always valid (the merge); any
+        // other abbr must still be present, or we fall back to TSK / the first installed and REWRITE the
+        // stored value so the UI reflects the fallback. removeModule notify()s, so this re-runs on removal.
+        let want = lsGet('trinityone.crossrefSource', 'TSK');
+        if (want !== 'all' && !list.some(s => s.abbr === want)) {
+          want = list.some(s => s.abbr === 'TSK') ? 'TSK' : ((list[0] && list[0].abbr) || 'TSK');
+          lsSet('trinityone.crossrefSource', want);
+        }
+        setXrSrc(want);
+        setXrefs(window.Bible.getCrossRefs ? window.Bible.getCrossRefs(loc.book, loc.chap, want) : {});
+      } catch (e) { setXrefs({}); }
+    };
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
   }, [open, view, loc.book, loc.chap]);
+  // Switch source: persist, re-read this chapter from the new source. The choice sticks across chapters and
+  // restarts because it is read back from localStorage in the effect above.
+  const pickXrSource = (abbr) => {
+    lsSet('trinityone.crossrefSource', abbr);
+    setXrSrc(abbr); setXrDrop(false);
+    try { setXrefs(window.Bible.getCrossRefs ? window.Bible.getCrossRefs(loc.book, loc.chap, abbr) : {}); } catch (e) { setXrefs({}); }
+  };
   // Follow the reader: register the scroll handler and align to the reader's current verse whenever the Cross
   // refs tab is shown or its list fills. On a phone the panel is an overlay, so this aligns on open; when the
   // panel is docked beside the reader, the reader's onScroll calls the same handler live.
@@ -1183,43 +1211,84 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
           </div>
         </div>
         <div ref={panelScrollRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
-          {view === 'crossrefs' ? (
-            Object.keys(xrefs).length ? (
-              <React.Fragment>
-                {Object.keys(xrefs).map(n => parseInt(n, 10)).sort((a, b) => a - b).map(v => (
-                  <div key={v} id={'xr-' + v} style={{ marginBottom: 16 }}>
-                    <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 8 }}>{label}:{v}</span>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {(xrefOpen[v] ? xrefs[v] : xrefs[v].slice(0, 4)).map((r, i) => (
-                        <button key={i} onClick={() => setXrefPreview(r)} style={{
-                          border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', cursor: 'pointer',
-                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          {r}<Icon name="chevR" size={13} color="var(--ink-3)" />
-                        </button>
-                      ))}
-                      {xrefs[v].length > 4 ? (
-                        <button onClick={() => setXrefOpen(o => ({ ...o, [v]: !o[v] }))} style={{
-                          border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', color: 'var(--clay-ink)', cursor: 'pointer',
-                          padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                          {xrefOpen[v] ? 'Show fewer' : `${xrefs[v].length - 4} more`}
-                          <Icon name={xrefOpen[v] ? 'chevU' : 'chevD'} size={14} color="var(--clay)" />
-                        </button>
-                      ) : null}
-                    </div>
+          {view === 'crossrefs' ? (() => {
+            const active = xrSrc;
+            const activeName = active === 'all' ? 'All sources' : ((xrAll.find(s => s.abbr === active) || {}).name || active);
+            const lic = window.Bible.crossrefLicense ? window.Bible.crossrefLicense(active) : '';
+            // The source picker — shown only with two or more installed sources, exactly like the commentary
+            // picker. An "All sources" row keeps today's combined view; every other row names a source + abbr.
+            const picker = xrAll.length >= 2 ? (
+              <div style={{ position: 'relative', marginBottom: 14 }}>
+                <button onClick={() => setXrDrop(!xrDrop)} style={{
+                  width: '100%', padding: '10px 13px', borderRadius: 12, border: '1px solid var(--line)',
+                  background: 'var(--surface-2)', color: 'var(--ink)', fontFamily: 'var(--font-ui)',
+                  fontWeight: 700, fontSize: 14, cursor: 'pointer', textAlign: 'left',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+                }}>
+                  <span>{activeName}</span>
+                  <Icon name={xrDrop ? 'chevU' : 'chevD'} size={16} />
+                </button>
+                {xrDrop ? <React.Fragment>
+                  <div onClick={() => setXrDrop(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 41,
+                    marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
+                    borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: '6px 0',
+                    maxHeight: '50vh', overflowY: 'auto', animation: 'trinityRise .16s ease both'
+                  }}>
+                    {[{ abbr: 'all', name: 'All sources' }].concat(xrAll.map(s => ({ abbr: s.abbr, name: s.name + ' · ' + s.abbr }))).map(s => (
+                      <button key={s.abbr} onClick={() => pickXrSource(s.abbr)} style={{
+                        width: '100%', padding: '11px 15px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                        background: s.abbr === active ? 'color-mix(in oklab, var(--clay) 18%, var(--surface))' : 'transparent',
+                        color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: s.abbr === active ? 700 : 500,
+                        fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+                      }}>
+                        <span>{s.name}</span>
+                        {s.abbr === active ? <div style={{ width: 18, height: 18, borderRadius: 9, border: '2px solid var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ width: 10, height: 10, borderRadius: 5, background: 'var(--clay)' }} /></div> : <div style={{ width: 18, height: 18, borderRadius: 9, border: '2px solid var(--line)' }} />}
+                      </button>
+                    ))}
                   </div>
-                ))}
-                {window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? (
-                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>{window.Bible.crossrefLicense()}</div>
-                ) : null}
-              </React.Fragment>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
-                <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="link" size={24} /></div>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? `No cross references for ${label}` : 'Gathering cross references…'}</div>
-                <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>{window.Bible.crossrefLicense && window.Bible.crossrefLicense() ? 'This chapter has none in the set yet.' : 'Fetching the cross-reference set the first time — a moment on a new phone, then it is saved.'}</p>
+                </React.Fragment> : null}
               </div>
-            )
-          ) : view === 'bookmarks' ? (
+            ) : null;
+            return <React.Fragment>
+              {picker}
+              {Object.keys(xrefs).length ? (
+                <React.Fragment>
+                  {Object.keys(xrefs).map(n => parseInt(n, 10)).sort((a, b) => a - b).map(v => (
+                    <div key={v} id={'xr-' + v} style={{ marginBottom: 16 }}>
+                      <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 8 }}>{label}:{v}</span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {(xrefOpen[v] ? xrefs[v] : xrefs[v].slice(0, 4)).map((r, i) => (
+                          <button key={i} onClick={() => setXrefPreview(r)} style={{
+                            border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', cursor: 'pointer',
+                            padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            {r}<Icon name="chevR" size={13} color="var(--ink-3)" />
+                          </button>
+                        ))}
+                        {xrefs[v].length > 4 ? (
+                          <button onClick={() => setXrefOpen(o => ({ ...o, [v]: !o[v] }))} style={{
+                            border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 6%, var(--surface))', color: 'var(--clay-ink)', cursor: 'pointer',
+                            padding: '7px 12px', borderRadius: 999, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            {xrefOpen[v] ? 'Show fewer' : `${xrefs[v].length - 4} more`}
+                            <Icon name={xrefOpen[v] ? 'chevU' : 'chevD'} size={14} color="var(--clay)" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                  {lic ? (
+                    <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--ink-3)', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>{lic}</div>
+                  ) : null}
+                </React.Fragment>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
+                  <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="link" size={24} /></div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>{lic ? `No cross references for ${label}` : 'Gathering cross references…'}</div>
+                  <p style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 280, margin: '0 auto' }}>{lic ? `This chapter has none in ${activeName} yet.` : 'Fetching the cross-reference set the first time — a moment on a new phone, then it is saved.'}</p>
+                </div>
+              )}
+            </React.Fragment>;
+          })() : view === 'bookmarks' ? (
             myMarks.length ? myMarks.map(bm => (
               <div key={bm.key} data-bookmark={bm.key} style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
                 <button onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 9, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
