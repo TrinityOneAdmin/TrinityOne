@@ -88,8 +88,20 @@ return {
   SeriesNameModal: { current: '', count: 0, onSave() {}, onClose },
   SeriesScheduleModal: { label: 'devotional', count: 0, onApply() {}, onClear() {}, onClose },
   PinModal: { action: 'set', onClose },
-  BooksRecord: { book, onRecord() {}, onClose }, BooksDonate: { onGave() {}, onClose },
-  FinanceImport: { book, F, onPost() {}, onClose },
+  BooksRecord: { book, onRecord() {}, donors: [], onClose }, BooksDonate: { onGave() {}, onClose },
+  BooksReceiptView: { data: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==', onClose },
+  BooksAccountEdit: { book, initial: null, onSave() {}, onClose },
+  BooksFundEdit: { book, initial: null, onSave() {}, onClose },
+  BooksFundMove: { book, onTransfer() {}, onClose },
+  BooksTemplateEdit: { book, initial: null, onSave() {}, onClose },
+  BooksDonor: { book, initial: null, onSave() {}, onClose },
+  BooksContact: { initial: null, onSave() {}, onClose },
+  BooksInvoiceEdit: { book, contacts: [], onIssue() {}, onClose },
+  BooksBillEdit: { book, contacts: [], onSave() {}, onClose },
+  BillPaymentDialog: { book, bill: { id: 'b1', number: 'INV-1', supplier: 'Acme', lines: [{ account: 'bank', fund: 'general', amount: 1000 }] }, mode: 'pay', amount0: 1000, date0: '2026-10-29', onConfirm() {}, onClose },
+  BooksBudgetEdit: { book, initial: null, onSave() {}, onClose },
+  FinanceReconcile: { book, F, today: '2026-10-29', saved: null, onSaveReconcile() {}, onClose },
+  FinanceImport: { book, F, donors: [], onPost() {}, onClose },
   FinanceShareStatement: { book, F, churchName: 'St Test', accent: '', logo: '', canPost: false, onPostToMembers() {}, onClose },
   StewardHelp: { onClose, initialId: 'console' },
   AnnounceCareModal: { onClose },
@@ -104,6 +116,7 @@ return {
   // not in the tree is simply never looked up.
   StewSectionsMenu: { nav: [{ key: 'overview', label: 'Overview', ic: 'today' }], tab: 'overview', onPick() {}, onHelp() {}, onClose },
   StewMemberSheet: { label: 'Ivy Whitlock', initials: 'IW', av: null, pubkey: 'ab'.repeat(32), accent: '#000', facts: [], actions: [{ key: 'child', icon: 'pray', label: 'Mark as child', onPick() {} }], onClose },
+  TaxScriptureModal: { onClose },   // the 1 Samuel 8:10–18 moment popped by DashFeaturesPanel on the Tax-tools OFF→ON flip
 };
 };
 

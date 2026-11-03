@@ -188,6 +188,70 @@ function stewNav(NAV, church, opts) {
   return copy.map(mark);
 }
 
+// SAFEGUARDING CLEARANCE EXPIRY (2026-11-02). A cleared adult's youth clearance may carry an optional end
+// DATE, because a real-world clearance (DBS and the church's own checks) is renewed, not forever. These are
+// FLAG ONLY: an expired clearance never cuts off any access — the relay stores and serves the cleared list
+// exactly as before, nothing here touches the relay gate or approvedIn, and the member never sees their own
+// date in v1. The state is computed at RENDER time from the device clock and never baked at ingest, so a
+// clearance crosses from "expiring" to "expired" on the day it falls due with no write anywhere. The two
+// reminder thresholds are the owner's: a gentle nudge one MONTH before, a stronger one two WEEKS before.
+//
+// NO date is NEVER "expired" — it is the pilot back-compat case (a person cleared before this field existed),
+// read as "cleared, no expiry". PURE on purpose, same reason as stewNav above: app/*.jsx ships UNBUNDLED, so
+// CLAUDE.md rule 3 forbids proving the badge by matching text — the point-of-use test RUNS these and renders
+// the row that calls them (scripts/clearance-expiry.test.mjs).
+const EXPIRY_SOON_SECONDS = 30 * 24 * 3600;     // one month out: the first, gentle reminder
+const EXPIRY_URGENT_SECONDS = 14 * 24 * 3600;   // two weeks out: the stronger one
+// 'none' (no date set — never treated as expired), 'future' (> a month off), 'soon' (<= a month),
+// 'urgent' (<= a fortnight), 'expired' (the date has passed). Seconds are whole unix seconds.
+function clearanceExpiryState(untilSec, nowSec) {
+  if (!Number.isFinite(untilSec) || untilSec <= 0) return 'none';
+  const left = untilSec - nowSec;
+  if (left < 0) return 'expired';
+  if (left <= EXPIRY_URGENT_SECONDS) return 'urgent';
+  if (left <= EXPIRY_SOON_SECONDS) return 'soon';
+  return 'future';
+}
+// The words for the per-row badge. '' when there is no date, so a date-less clearance shows no badge at all.
+function clearanceExpiryLabel(untilSec, nowSec) {
+  const st = clearanceExpiryState(untilSec, nowSec);
+  if (st === 'none') return '';
+  let dateStr = '';
+  try { dateStr = new Date(untilSec * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch (e) {}
+  if (st === 'expired') return dateStr ? 'Expired ' + dateStr : 'Expired';
+  if (st === 'future') return dateStr ? 'Expires ' + dateStr : '';
+  const days = Math.max(0, Math.ceil((untilSec - nowSec) / 86400));
+  if (st === 'urgent') return 'Expires in ' + days + (days === 1 ? ' day' : ' days');
+  const weeks = Math.max(1, Math.round(days / 7));
+  return 'Expires in ' + weeks + (weeks === 1 ? ' week' : ' weeks');
+}
+// The SkPill tint for a state: three distinguishable steps up the scale of alarm — neutral `ink` for a far-off
+// date, amber `gold` one month out (soon), a stronger orange `ember` two weeks out (urgent), red `clay` once it
+// has lapsed (expired). The colour, not only the wording, tells the steward how close it is.
+function clearanceExpiryTint(st) {
+  return st === 'expired' ? 'clay' : st === 'urgent' ? 'ember' : st === 'soon' ? 'gold' : 'ink';
+}
+// How many of a set of clearances are expiring (within the month) or already expired — for the section header
+// and the Overview nudge. `untils` is the per-person expiry seconds (0/undefined/null meaning "no date").
+function clearanceExpiryCounts(untils, nowSec) {
+  let expiring = 0, expired = 0;
+  for (const u of (untils || [])) {
+    const st = clearanceExpiryState(u, nowSec);
+    if (st === 'expired') expired++;
+    else if (st === 'soon' || st === 'urgent') expiring++;
+  }
+  return { expiring, expired };
+}
+// A unix-seconds date as the 'YYYY-MM-DD' a <input type="date"> wants, in LOCAL time to match permissionWindow().
+function _expiryIsoDay(untilSec) {
+  if (!Number.isFinite(untilSec) || untilSec <= 0) return '';
+  try {
+    const d = new Date(untilSec * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  } catch (e) { return ''; }
+}
+
 // sidebar identity control: switch the WHOLE console between the church and any network it owns.
 // With no owned networks it's just the church name button (tap to rename).
 //
@@ -3608,6 +3672,28 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
+  // SAFEGUARDING CLEARANCE EXPIRY — one gentle line on the home page when a youth clearance is within a month
+  // of its date or already past it, so a steward who rarely opens Members still learns a renewal is due. The
+  // state is computed here from the device clock (clearanceExpiryCounts), the same engine the Members list
+  // header uses, so the two can never disagree. FLAG ONLY: it links to the list and removes nobody's access.
+  // Gated on the Members capability so a delegate without it is not sent to a tab that is locked for them
+  // (the scar the stewardReqBanner beside this carries: directions to a door that is not there for a delegate).
+  const _sgExpiry = window.useStewardSafeguard ? window.useStewardSafeguard() : { approved: [], expiry: {} };
+  const _sgExpiryCounts = clearanceExpiryCounts((_sgExpiry.approved || []).map(pk => (_sgExpiry.expiry || {})[pk] || null), Math.floor(Date.now() / 1000));
+  const _sgExpiryParts = [
+    _sgExpiryCounts.expired ? (_sgExpiryCounts.expired + ' youth ' + (_sgExpiryCounts.expired === 1 ? 'clearance has expired' : 'clearances have expired')) : '',
+    _sgExpiryCounts.expiring ? (_sgExpiryCounts.expiring + ' ' + (_sgExpiryCounts.expiring === 1 ? 'is expiring soon' : 'are expiring soon')) : '',
+  ].filter(Boolean);
+  const safeguardExpiryBanner = (stewCapState('members').allowed && _sgExpiryParts.length) ? (
+    <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))', background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
+      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={21} color="#fff" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 15.5, color: '#8a6717' }}>A youth clearance needs renewing</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{_sgExpiryParts.join(' · ')}. Open Members to set a new date — nobody loses access in the meantime.</div>
+      </div>
+      <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Open <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
+    </button>
+  ) : null;
   // live verse prompt indicator on overview
   var _ovVpState = React.useState(null), _ovVp = _ovVpState[0], _setOvVp = _ovVpState[1];
   React.useEffect(function() {
@@ -3712,7 +3798,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{safeguardExpiryBanner}{bannerPair}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3721,7 +3807,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{groupsPanel}{joinPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{safeguardExpiryBanner}{bannerPair}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3731,6 +3817,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       {pendingBanner}
       {careReqBanner}
       {stewardReqBanner}
+      {safeguardExpiryBanner}
       {bannerPair}
       {stat}
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
@@ -4248,6 +4335,8 @@ function GroupChatModal({ group, onClose }) {
   const [text, setText] = React.useState('');
   const [rxFor, setRxFor] = React.useState('');
   const [pin, setPin] = React.useState(null);     // the group's pinned message { msgId, text, by, ts } or null
+  const [flashMsgId, setFlashMsgId] = React.useState(null);   // a message briefly highlighted after the pinned banner scrolls to it
+  const flashTimer = React.useRef(null);
   const [menuFor, setMenuFor] = React.useState('');   // message id whose moderation menu is open
   // MODERATION IS REVERSIBLE AND NEVER SAID SO. Audit 2026-09-02 #16.
   // `unhideMessage` has been built on both surfaces since the feature landed and was called by nothing, so
@@ -4285,6 +4374,18 @@ function GroupChatModal({ group, onClose }) {
     return () => document.removeEventListener('pointerdown', off, true);
   }, [rxFor]);
   const scRef = React.useRef(null);
+  // TAP THE PINNED BANNER → SCROLL TO THE FULL MESSAGE. The list is not virtualised, so the pinned message is
+  // in the DOM when loaded. Query the SCROLL CONTAINER only (not document) so a second open chat can't match,
+  // and CSS.escape the id. If it isn't loaded (old/trimmed) do nothing. A brief gold flash marks it, self-clearing.
+  const scrollToPinned = () => {
+    const id = pin && pin.msgId; if (!id || !scRef.current) return;
+    let el = null; try { el = scRef.current.querySelector('[data-msg-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]'); } catch (e) {}
+    if (!el) return;
+    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    setFlashMsgId(id);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashMsgId(null), 1600);
+  };
   // ⚠ THE ⋯ MENU IS CLIPPED NEAR THE BOTTOM. It lives inside the `overflowY: auto` message scroller, so a menu
   // opened on the last message(s) was cut off under the composer (owner device report, Pixel console group
   // chat). Same fix StewDmWindow already carries: the LAST message opens its menu UPWARD (over the message
@@ -4353,6 +4454,9 @@ function GroupChatModal({ group, onClose }) {
       .catch(() => showMod('Couldn’t put it back — the relay could not be reached, so it is still removed.'));
   };
   const msgText = (m) => {   // render polls gracefully (members vote in the member app); avoids showing raw JSON
+    // A renderable card (e.g. a finance statement) draws as a card below; this is its SENSIBLE TEXT — shown in
+    // a reply's quote bar and as the fallback body when the card type is unknown. title + period.
+    if (m.card && m.card.type === 'finance') return (m.card.title || 'Financial statement') + (m.card.periodLabel ? ' · ' + m.card.periodLabel : '');
     if (m.kind === 'poll') { try { const p = JSON.parse(m.text); return '📊 ' + (p.question || 'Poll') + ' — ' + (p.options || []).join(' · '); } catch { return '📊 Poll'; } }
     return (m.kind === 'prayer' ? '🙏 ' : '') + m.text;
   };
@@ -4403,11 +4507,12 @@ function GroupChatModal({ group, onClose }) {
         {pin && pin.msgId ? (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
             <Icon name="pin" size={14} color="#8a6717" style={{ marginTop: 2, flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
+            {/* tapping the banner body scrolls the chat to the full pinned message; the Unpin X stops propagation */}
+            <div role="button" tabIndex={0} onClick={scrollToPinned} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToPinned(); } }} title="Go to the pinned message" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
               <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.5px', color: '#8a6717', marginBottom: 1 }}>PINNED</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{pin.text || '(message)'}</div>
             </div>
-            <button onClick={doUnpin} title="Unpin" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={15} /></button>
+            <button onClick={(e) => { if (e) e.stopPropagation(); doUnpin(); }} title="Unpin" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={15} /></button>
           </div>
         ) : null}
         {composeEvt ? (
@@ -4463,13 +4568,15 @@ function GroupChatModal({ group, onClose }) {
                caller, so pausing to think meant losing the message for good. The text is NOT shown: this
                says a message was removed and offers to put it back, it does not reprint what was said.
                Members never see this row — the member app filters removed messages out entirely. */
-            <div key={m.id} style={{ alignSelf: 'center', maxWidth: '86%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
+            <div key={m.id} data-msg-id={m.id} style={{ alignSelf: 'center', maxWidth: '86%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px dashed var(--line)' }}>
               <Icon name="trash" size={13} color="var(--ink-3)" />
               <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Message from {nameFor(m.by) || 'a member'} removed</span>
               <button onClick={() => doUnremove(m)} aria-label={'Put back the removed message from ' + (nameFor(m.by) || 'a member')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', padding: '4px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Put back</button>
             </div>
           ) : (
-            <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative',
+            <div key={m.id} data-msg-id={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '76%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative',
+              // brief gold flash when the pinned banner scrolls here (self-clearing)
+              ...(flashMsgId === m.id ? { outline: '2px solid var(--gold)', outlineOffset: 2, borderRadius: 14, background: 'color-mix(in oklab, var(--gold) 12%, transparent)', transition: 'outline-color .3s, background .3s' } : {}),
               ...(isNative ? TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) : {}) }}>
               {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
               {!m.mine ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, paddingLeft: 2 }}>
@@ -4480,7 +4587,7 @@ function GroupChatModal({ group, onClose }) {
                 ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: msgText(m.quote) })
                 : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
-                <div data-gc-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
+                <div data-gc-rx="1" onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={(m.card && m.card.type === 'finance') ? { padding: 0, background: 'none', border: 'none', cursor: 'pointer' } : { padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{cardRenderable(m.card) ? <ConsoleCard card={m.card} church={gcChurch} /> : msgText(m)}</div>
                 <div data-chat-menu="1" style={{ position: 'relative', flexShrink: 0 }}>
                   {/* NAMED, and it is the ONLY route to Remove and Pin. Measured 2026-09-04: 21px wide,
                       empty innerText, aria-label null — a screen reader had nothing to announce. */}
@@ -7282,7 +7389,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   // A re-seat is a SEAT MOVING, and everything attached to the seat has to move with it — the child marking,
   // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
   // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
-  const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], expiry: {} };
   const _gdCheckin = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
   const guardiansNow = _gdCheckin.links || {};
   // …AND THE CLOSED PAIRS. reseatMember copies `closed` to the new key and keeps the old pairs (src/steward.src.js,
@@ -7350,7 +7457,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
       // about all of them — including the stolen-phone block, which it never mentioned at all.
       const r = await window.Steward.reseatMember(member, newPub, {
         name: realName || '', reseats, admitted: admittedList,
-        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
+        minors: sgNow.minors, approved: sgNow.approved, expiry: sgNow.expiry, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
         blocked: blockedNow, blockOld: taken,
         rosters: rostersNow, rotas: rotasNow, careTeamId: careTeamIdNow,
       });
@@ -8168,13 +8275,86 @@ function DashMembers() {
   //
   // Declared HERE, below nameByPub and idOf, because it is worked out while the screen DRAWS — the first
   // version sat above them and took the whole Members screen down to the error page.
-  const clearedList = (sg.approved || []).map(pk => ({ pk, name: nameByPub[pk] || '', rec: (sg.cleared || {})[pk] || null }))
+  // `until`: the OPTIONAL clearance expiry, pub -> unix seconds, additive beside the cleared record (see
+  // setApproved / subscribeSafeguard). Absent means "cleared, no expiry" — NEVER expired; the back-compat case.
+  const clearedList = (sg.approved || []).map(pk => ({ pk, name: nameByPub[pk] || '', rec: (sg.cleared || {})[pk] || null, until: (sg.expiry || {})[pk] || null }))
     .sort((a, b) => (a.name || 'zz').localeCompare(b.name || 'zz'));
   const [showCleared, setShowCleared] = React.useState(false);
+  // Computed once per draw rather than per row, so every badge on the panel agrees about "now".
+  const _nowSec = Math.floor(Date.now() / 1000);
+  // The expiring/expired tallies for the section header (and the Overview nudge reads the same engine).
+  const _clExpiryCounts = clearanceExpiryCounts(clearedList.map(c => c.until), _nowSec);
   const _clDate = (rec) => {
     if (!rec || !rec.at) return 'no record of when';
     try { return new Date(rec.at * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
     catch (e) { return 'no record of when'; }
+  };
+  // The optional-date control's own transient state: the in-progress date per person (before Save), and a
+  // one-line result under the row it was pressed on. localStorage-free: this is not church state.
+  const [expiryDraft, setExpiryDraft] = React.useState({});
+  const [expiryNote, setExpiryNote] = React.useState(null);   // { pk, tone: 'ok'|'fail', text }
+  const [expiryEditing, setExpiryEditing] = React.useState(null);   // the ONE pk whose date picker is open; null = every row at rest
+  // SET OR CHANGE one person's clearance expiry. This is the "re-clear with a date" control. It republishes
+  // the WHOLE cleared list unchanged (so nobody is added or removed) with just this person's `expiry` set or
+  // cleared; setApproved carries everyone else's date across untouched. A refusal (a date beyond the year cap,
+  // or in the past) comes back as a thrown message from setApproved and is SURFACED here, not swallowed.
+  const saveExpiry = (pk, override) => {
+    const dateStr = override !== undefined ? override : (expiryDraft[pk] != null ? expiryDraft[pk] : '');
+    const r = (() => { try { return Promise.resolve(window.Steward.setApproved(sg.approved || [], { listKnown: !!sg.clearedKnown, expiry: { [pk]: dateStr } })); } catch (e) { return Promise.reject(e); } })()
+      .then((ok) => {
+        if (ok === false || ok == null) { setExpiryNote({ pk, tone: 'fail', text: 'That date did not save on every relay. Check your connection and try again.' }); return ok; }
+        setExpiryNote({ pk, tone: 'ok', text: dateStr ? 'Expiry date saved.' : 'Expiry date removed.' });
+        setExpiryDraft(d => { const n = { ...d }; delete n[pk]; return n; });
+        setExpiryEditing(e => (e === pk ? null : e));   // COLLAPSE back to the resting state on success
+        return ok;
+      })
+      .catch((e) => { setExpiryNote({ pk, tone: 'fail', text: (e && e.message) ? e.message : 'That date could not be used. Choose a real date within about a year.' }); return false; });
+    return r;
+  };
+  // ONE cleared person's row, lifted out so the point-of-use test can render it and read the badge off the
+  // screen (CLAUDE.md rules 1 & 3) rather than matching text in this unbundled file.
+  const clearedRow = (c) => {
+    const who = c.name || idOf(c.pk);
+    const st = clearanceExpiryState(c.until, _nowSec);
+    const label = clearanceExpiryLabel(c.until, _nowSec);
+    const note = (expiryNote && expiryNote.pk === c.pk) ? expiryNote : null;
+    const editing = expiryEditing === c.pk;
+    // A small inline button (resting) or a bare text link (cancel/remove), sharing one look.
+    const _mini = { border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '3px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 };
+    const _link = { border: 'none', background: 'none', padding: '3px 2px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontSize: 11.5, textDecoration: 'underline', flexShrink: 0 };
+    const openEdit = () => { setExpiryDraft(d => ({ ...d, [c.pk]: _expiryIsoDay(c.until) })); setExpiryNote(n => (n && n.pk === c.pk ? null : n)); setExpiryEditing(c.pk); };
+    const cancelEdit = () => { setExpiryDraft(d => { const n = { ...d }; delete n[c.pk]; return n; }); setExpiryEditing(e => (e === c.pk ? null : e)); };
+    // THE CONTROL, RIGHT-ALIGNED ON THE NAME ROW so the row stays one line tall at rest. At rest it is a single
+    // small button (Edit when a date is set, Add date when none is); only tapping it reveals the picker, and a
+    // successful Save collapses straight back here (see saveExpiry).
+    const control = editing ? (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <input type="date" aria-label={'Clearance expiry date for ' + who}
+          value={expiryDraft[c.pk] != null ? expiryDraft[c.pk] : _expiryIsoDay(c.until)}
+          onChange={e => setExpiryDraft(d => ({ ...d, [c.pk]: e.target.value }))}
+          style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface)', padding: '3px 7px', fontSize: 12, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', minWidth: 0 }} />
+        <button onClick={() => saveExpiry(c.pk)} aria-label={'Save clearance expiry date for ' + who} style={_mini}>Save</button>
+        <button onClick={cancelEdit} aria-label={'Cancel editing clearance expiry date for ' + who} style={_link}>Cancel</button>
+        {c.until ? <button onClick={() => saveExpiry(c.pk, '')} aria-label={'Remove clearance expiry date for ' + who} style={_link}>Remove</button> : null}
+      </span>
+    ) : (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', flexShrink: 0 }}>
+        {c.until
+          ? <button onClick={openEdit} aria-label={'Change clearance expiry date for ' + who} style={_link}>Edit</button>
+          : <button onClick={openEdit} aria-label={'Add a clearance expiry date for ' + who} style={_mini}>Add date</button>}
+      </span>
+    );
+    return (
+      <div key={c.pk} style={{ padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--sage) 18%, var(--line))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{who}</span>
+          {label ? <SkPill tint={clearanceExpiryTint(st)}>{label}</SkPill> : null}
+          {control}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Cleared {_clDate(c.rec)}</div>
+        {note ? <div role="status" style={{ fontSize: 11, lineHeight: 1.4, marginTop: 3, color: note.tone === 'fail' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{note.text}</div> : null}
+      </div>
+    );
   };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = async (r) => {
@@ -8997,18 +9177,13 @@ function DashMembers() {
           <div style={{ marginBottom: 10, flexShrink: 0, borderRadius: 12, border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', overflow: 'hidden' }}>
             <button onClick={() => setShowCleared(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '11px 13px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
               <Icon name="shield" size={16} color="var(--sage)" />
-              <span style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--ink)' }}>Cleared for youth work · {clearedList.length}</span>
+              <span style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--ink)' }}>Cleared for youth work · {clearedList.length}{_clExpiryCounts.expiring ? ' · ' + _clExpiryCounts.expiring + ' expiring' : ''}{_clExpiryCounts.expired ? ' · ' + _clExpiryCounts.expired + ' expired' : ''}</span>
               <span style={{ marginLeft: 'auto', display: 'flex' }}><Icon name={showCleared ? 'chevU' : 'chevD'} size={15} color="var(--ink-3)" /></span>
             </button>
             {showCleared ? (
               <div className="no-scrollbar" style={{ maxHeight: 220, overflowY: 'auto', padding: '0 13px 11px' }}>
-                {clearedList.map(c => (
-                  <div key={c.pk} style={{ padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--sage) 18%, var(--line))' }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{c.name || idOf(c.pk)}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Cleared {_clDate(c.rec)}</div>
-                  </div>
-                ))}
-                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, paddingTop: 9 }}>Clearances granted before this record existed show as <b>no record of when</b> — they are not back-dated.</div>
+                {clearedList.map(clearedRow)}
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, paddingTop: 9 }}>Clearances granted before this record existed show as <b>no record of when</b> — they are not back-dated. An expiry date is optional and is a reminder only: it never removes anyone's access on its own.</div>
               </div>
             ) : null}
           </div>
@@ -11790,6 +11965,30 @@ window.DashChatTagsPanel = DashChatTagsPanel;
 // Congregation features — the steward chooses which parts of the app members see. Published on the
 // kind-0 profile as `features:{read,community,library}`; the member app hides the disabled tabs.
 // Unset = on (so existing churches are unaffected). Today (home) + Giving are controlled separately.
+// TAX TOOLS SCRIPTURE MOMENT — a stand-alone console dialog (its own role="dialog" + useStewDialog), popped by
+// DashFeaturesPanel on the OFF→ON flip of the Tax tools switch. 1 Samuel 8:17–18 — Samuel's warning about what
+// the king/state will take — a deliberate, knowing moment about engaging the tax system. The passage is the
+// WORLD ENGLISH BIBLE (PUBLIC DOMAIN), EMBEDDED for robustness (the steward may have no Bible installed, so we
+// do not depend on window.Bible). Registered in scripts/every-console-dialog-mounts.test.mjs ({ onClose }).
+function TaxScriptureModal({ onClose }) {
+  const dlgRef = window.useStewDialog ? window.useStewDialog(onClose) : { current: null };
+  const SAMUEL_8_WEB = [
+    '17 He will take a tenth of your flocks; and you will be his servants.',
+    '18 You will cry out in that day because of your king whom you will have chosen for yourselves; and Yahweh will not answer you in that day.',
+  ].join('\n');
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="1 Samuel 8:17–18" tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ width: 460, maxWidth: '100%', maxHeight: '88vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)', padding: '22px 22px 18px', outline: 'none', boxShadow: '0 12px 40px rgba(0,0,0,.3)' }}>
+        <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 13, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--clay, #b4462f)', marginBottom: 10 }}>1 Samuel 8:17–18</div>
+        <div style={{ fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 15.5, lineHeight: 1.62, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{SAMUEL_8_WEB}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onClose} style={{ height: 44, padding: '0 26px', border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14 }}>Amen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashFeaturesPanel({ church, show = null }) {
   const f = church.features || {};
   const on = (k) => f[k] !== false;   // default enabled
@@ -11812,8 +12011,57 @@ function DashFeaturesPanel({ church, show = null }) {
   // therefore never be shown a switch that cannot work, so these rows render only on the owner's own console.
   // `!actingChurch` is exactly the condition publishProfile itself refuses on.
   const featOwner = !(window.Steward && window.Steward.actingChurch);
-  // opt-in extras (default OFF, switchable per church) — kids check-in
+  // opt-in extras (default OFF, switchable per church) — kids check-in.
   const EXTRAS = [['checkin', 'Kids check-in', 'Check children in/out with a secure pickup code']];
+  // TAX TOOLS — an OWNER-ONLY subcard, nested under Finance, gated behind its OWN switch
+  // (church.features.taxTools, default/undefined = OFF). It replaces the standalone Region selector: the
+  // switch is the on/off, and only when ON does the Region <select> appear (REAL regions only — 'None' is the
+  // switch being off). It is shown only when the Finance feature is on (features.finance !== false) AND to the
+  // owner (featOwner) — publishProfile refuses a delegate, so a delegate must never see a switch that silently
+  // fails. The switch keeps the LEGACY church.features.giftAid boolean in sync (true iff the active region is
+  // UK) so an un-upgraded console that still reads the raw boolean agrees; the finance console's resolver is
+  // the source of truth. An existing UK church (giftAid:true, no taxTools) reads switch-ON + UK — back-compat.
+  const _FL = window.FinanceLedger;
+  // The Tax tools subcard is NESTED under the Finance MODULES row — rendered when `on('finance')`, so there is
+  // no separate financeOn flag; the Finance-on check lives at the nested render below.
+  // taxOn mirrors resolveJurisdiction's gate so the switch reads ON for a legacy giftAid church too.
+  const taxOn = f.taxTools === true || (f.taxTools === undefined && f.giftAid === true);
+  // REAL schemes only — listTaxRegions already drops 'None' and any designed-but-held (taxTool null) entry, so a
+  // currency-only place never appears here (owner model: currency is a free Book setting, not a region). Fall back
+  // to the old filter only if an OLD core bundle predates listTaxRegions.
+  const JX_REGIONS = (_FL && _FL.listTaxRegions) ? _FL.listTaxRegions()
+    : ((_FL && _FL.listJurisdictions) ? _FL.listJurisdictions().filter(o => o.id !== 'None')
+    : [{ id: 'UK', label: 'United Kingdom' }]);
+  // The ONE shared tax disclaimer (window.FinanceLedger.TAX_DISCLAIMER). A tax tool must never present figures as
+  // authoritative; this renders on the subcard and every tax panel/export pulls the same constant.
+  const TAX_DISCLAIMER = (_FL && _FL.TAX_DISCLAIMER) || '';
+  const jxValue = (_FL && _FL.resolveJurisdiction) ? _FL.resolveJurisdiction({ features: f })
+    : (taxOn ? 'UK' : 'None');
+  const setJurisdiction = (id) => { window.Steward.publishProfile({ features: { ...f, taxTools: true, jurisdiction: id, giftAid: id === 'UK' } }); };
+  // FLICKER FIX. The Region <select> is controlled by jxValue = resolveJurisdiction(church.features), but a
+  // change only reaches church.features after a relay round-trip (publishProfile echoes the kind-0 back), so
+  // the select would snap back to the OLD region and then jump to the new one — a visible flicker/lag. Hold an
+  // OPTIMISTIC draft of the chosen region and show it until the published value catches up, then reconcile
+  // (clear the draft once jxValue === jxDraft). The draft is ignored unless it is still a valid region.
+  const [jxDraft, setJxDraft] = React.useState(null);
+  const jxShown = (jxDraft != null && JX_REGIONS.some(o => o.id === jxDraft)) ? jxDraft : jxValue;
+  React.useEffect(() => { if (jxDraft != null && jxValue === jxDraft) setJxDraft(null); }, [jxValue, jxDraft]);
+  // Some regions' receipts legally need the church's own REGISTRATION number (e.g. Canada's CRA charity number)
+  // + an authorised signatory. taxRegLabel() returns the label iff the ACTIVE region needs one, else '' (so no
+  // field shows for US/NZ/UK/IE). Captured OWNER-ONLY here (publishProfile, like the switch) and read by the
+  // finance console into the generated receipt.
+  const jxRegLabel = (_FL && _FL.taxRegLabel) ? _FL.taxRegLabel(jxValue) : '';
+  const setTaxReg = (patch) => { window.Steward.publishProfile({ features: { ...f, ...patch } }); };
+  // The scripture "moment": 1 Samuel 8:17–18 pops ONLY on the OFF→ON flip of the switch (set in toggleTaxTools,
+  // never on load/render/off). State lives here; the modal itself is the top-level TaxScriptureModal component
+  // (its own role="dialog" + useStewDialog), so DashFeaturesPanel carries no dialog of its own.
+  const [taxScripture, setTaxScripture] = React.useState(false);
+  const toggleTaxTools = () => {
+    const next = !taxOn;
+    const region = next ? ((jxValue && jxValue !== 'None') ? jxValue : 'UK') : 'None';
+    window.Steward.publishProfile({ features: { ...f, taxTools: next, giftAid: region === 'UK' } });
+    if (next) setTaxScripture(true);   // OFF→ON only
+  };
   // Privacy: "Encrypt all comms" — seal every group + default new groups to encrypted.
   const allGroups = window.useStewardGroups ? window.useStewardGroups() : [];
   const allMembers = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -11947,7 +12195,8 @@ function DashFeaturesPanel({ church, show = null }) {
         {/* OWNER ONLY — see featOwner above. A delegate cannot publish the profile these write to, so the row
             would silently do nothing; it is not shown to them rather than failing under their hand. */}
         {featOwner ? MODULES.map(([k, label, sub]) => (
-          <div key={k} onClick={() => toggle(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
+          <React.Fragment key={k}>
+          <div onClick={() => toggle(k)} className="set-row" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: on(k) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>{label}</div>
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{on(k) ? 'On' : 'Off'} — {sub}</div>
@@ -11956,6 +12205,53 @@ function DashFeaturesPanel({ church, show = null }) {
               <span style={{ position: 'absolute', top: 3, left: on(k) ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
+          {/* TAX TOOLS subcard — NESTED under the Finance row (owner feedback): it appears indented right
+              beneath Finance when Finance is ON, and is hidden when Finance is off. featOwner is already
+              guaranteed by this branch. Its own switch (church.features.taxTools) gates the Region picker
+              (OFF → book stays neutral; ON → Region <select>, real regions only). Flipping OFF→ON pops the
+              1 Samuel 8 moment via toggleTaxTools (TaxScriptureModal, rendered below). */}
+          {k === 'finance' && on('finance') ? (
+            <div style={{ marginLeft: 18, borderRadius: 11, border: '1px solid var(--line)', borderLeft: '3px solid var(--sage)', background: 'var(--surface-2)', padding: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>Tax tools</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>{taxOn ? 'On — your treasurer has the tools for your region.' : 'Off — the book stays nation-neutral.'}</div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); toggleTaxTools(); }} aria-label="Toggle Tax tools" role="switch" aria-checked={taxOn} title={(taxOn ? 'Turn off ' : 'Turn on ') + 'tax tools'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: taxOn ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+                  <span style={{ position: 'absolute', top: 3, left: taxOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+                </button>
+              </div>
+              {taxOn ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 11, paddingTop: 11, borderTop: '1px solid var(--line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>Region</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1 }}>Sets the default currency for a new book and which tax tools your treasurer sees.</div>
+                  </div>
+                  <select aria-label="Region / jurisdiction" value={jxShown} onChange={(e) => { setJxDraft(e.target.value); setJurisdiction(e.target.value); }} style={{ flexShrink: 0, borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: '8px 10px', cursor: 'pointer' }}>
+                    {JX_REGIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </div>
+              ) : null}
+              {/* Registration capture — shown ONLY when the active region's receipt needs it (jxRegLabel truthy,
+                  e.g. Canada). Owner-only (publishProfile). The finance console threads these into every receipt. */}
+              {taxOn && jxRegLabel ? (
+                <div style={{ marginTop: 11, paddingTop: 11, borderTop: '1px solid var(--line)' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>Receipt registration</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-2)', margin: '1px 0 8px' }}>Required on the official receipts your treasurer issues.</div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--ink-2)', marginBottom: 3 }}>{jxRegLabel}</label>
+                  <input aria-label={jxRegLabel} value={f.taxRegNumber || ''} onChange={(e) => setTaxReg({ taxRegNumber: e.target.value })} placeholder="e.g. 123456789RR0001" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 13, padding: '8px 10px', marginBottom: 8 }} />
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--ink-2)', marginBottom: 3 }}>Authorised signatory (name)</label>
+                  <input aria-label="Authorised signatory" value={f.taxRegSignatory || ''} onChange={(e) => setTaxReg({ taxRegSignatory: e.target.value })} placeholder="e.g. Treasurer’s name" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontSize: 13, padding: '8px 10px' }} />
+                </div>
+              ) : null}
+              {/* A tax tool must never present figures as authoritative — the ONE shared disclaimer (every panel
+                  and export pulls the same constant; see window.FinanceLedger.TAX_DISCLAIMER). */}
+              {taxOn && TAX_DISCLAIMER ? (
+                <div data-tax-disclaimer style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.4 }}>{TAX_DISCLAIMER}</div>
+              ) : null}
+            </div>
+          ) : null}
+          </React.Fragment>
         )) : null}
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Today (home) and Giving are controlled separately. Members see changes on their next sync.</div>
@@ -11980,6 +12276,10 @@ function DashFeaturesPanel({ church, show = null }) {
             </button>
           </div>
         ))}
+        {/* SCRIPTURE MOMENT — its OWN top-level dialog component (TaxScriptureModal), so this panel carries no
+            role="dialog" of its own and the whole-console dialog-mount gate stays satisfied. Triggered by the
+            nested Tax tools switch (above, under the Finance row) on its OFF→ON flip via toggleTaxTools. */}
+        {taxScripture ? <TaxScriptureModal onClose={() => setTaxScripture(false)} /> : null}
         {/* PRACTICAL CARE AND GIVING ARE ROWS HERE, not cards of their own. Both were a Panel wrapping a
             single switch, and the Features tab read as five boxes of equal weight when two of them were one
             toggle each. Practical care first: it is a live control a church turns on and uses. Giving last,

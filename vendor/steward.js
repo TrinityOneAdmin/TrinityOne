@@ -15353,7 +15353,7 @@ zoo`.split("\n");
   var BLOCKED_D = "trinityone/blocked:";
   var MINORS_D = "trinityone/minors:";
   var APPROVED_D = "trinityone/approved:";
-  var _clearedTrail = { cp: "", map: {}, list: [], loaded: false };
+  var _clearedTrail = { cp: "", map: {}, list: [], expiry: {}, loaded: false };
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
   var NAMEKEY_D = "trinityone/namekey:";
@@ -17842,7 +17842,7 @@ zoo`.split("\n");
   function _resetChurchScopedState() {
     lastProfile = {};
     _profileLoaded = false;
-    _clearedTrail = { cp: "", map: {}, list: [], loaded: false };
+    _clearedTrail = { cp: "", map: {}, list: [], expiry: {}, loaded: false };
     _clearanceSent.clear();
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
@@ -20121,6 +20121,18 @@ zoo`.split("\n");
     pubkey: null,
     npub: null,
     hasKey: false,
+    // THE KEY THIS CONSOLE ACTUALLY SIGNS WITH = getPublicKey(sk), the identity the relay sees as e.pubkey and
+    // the one every document this console publishes lands under. This is NOT `pubkey`: on a DELEGATED console
+    // `pubkey` is the church we act for (our OWN key still signs), and in network-identity mode `pubkey` is the
+    // network key — so neither `pubkey` nor `churchPub` equals the signer in every mode (owner: all three agree;
+    // delegated: signer == churchPub != pubkey; network: signer == pubkey != churchPub). Dual-control binds the
+    // approver to the SIGNER at the relay (finance/billapproval:<billId>:<approverhex>, scripts/gateway.mjs), so
+    // the console's "is this me?" / "who recorded it?" check MUST anchor on this, not on pubkey. Exposes the
+    // existing internal _myOwnPub(). Callers: app/stew-finance.jsx — recordBill, approveBill, and the Bills-row
+    // self-approval guard (the only three readers; see finance-dual-control-anchors-on-the-signer.test.mjs).
+    signerPub() {
+      return _myOwnPub();
+    },
     // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
     // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
     // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console
@@ -21921,7 +21933,8 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const podTag = opts && opts.pod ? [["pod", opts.pod]] : [];
-      return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag, ...podTag, ...replyTo && replyTo.id ? [["e", replyTo.id, "", "reply"], ...replyTo.by ? [["p", replyTo.by]] : []] : []], content: body }));
+      const extraTags = Array.isArray(opts) ? opts : opts && opts.tags ? opts.tags : [];
+      return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag, ...podTag, ...replyTo && replyTo.id ? [["e", replyTo.id, "", "reply"], ...replyTo.by ? [["p", replyTo.by]] : []] : [], ...extraTags], content: body }));
     },
     // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
     // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
@@ -22027,7 +22040,7 @@ zoo`.split("\n");
       const attach = () => [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)).map((m) => {
         if (hidden.has(m.id)) return { ...m, name: names.get(m.by) || "", removed: true, text: "", replyTo: "", quote: null, reactions: [], myReaction: "" };
         const q = m.replyTo ? byId.get(m.replyTo) : null;
-        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind } : null;
+        const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
         const r = rx.get(m.id);
         return { ...m, quote, name: names.get(m.by) || "", reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || "" : "" };
       });
@@ -22090,7 +22103,16 @@ zoo`.split("\n");
             }
             if (!ok) return;
           }
-          byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "", replyTo: (e.tags.find((t) => t[0] === "e" && t[3] === "reply") || [])[1] || "", _podTag: (e.tags.find((t) => t[0] === "pod") || [])[1] || "" });
+          let card = null;
+          try {
+            const ct = e.tags.find((t) => t[0] === "card");
+            if (ct && ct[2]) {
+              const parsed = JSON.parse(ct[2]);
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) card = parsed;
+            }
+          } catch (x) {
+          }
+          byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, card, ts: e.created_at, kind: (e.tags.find((t) => t[0] === "k") || [])[1] || "", replyTo: (e.tags.find((t) => t[0] === "e" && t[3] === "reply") || [])[1] || "", _podTag: (e.tags.find((t) => t[0] === "pod") || [])[1] || "" });
           resolveName(e.pubkey);
           emit();
         },
@@ -22903,6 +22925,7 @@ zoo`.split("\n");
       let tMinors = 0, tApproved = 0, tNophoto = 0, tGuardians = 0;
       let sawMinors = false, sawEose = false, sawApproved = false;
       let cleared = {};
+      let expiry = {};
       const isLoaded = () => sawMinors && sawEose;
       const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed();
       const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed();
@@ -22920,7 +22943,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -22930,11 +22953,12 @@ zoo`.split("\n");
               const _a2 = JSON.parse(e.content);
               approved = _a2.pubkeys || [];
               if (_a2.cleared && typeof _a2.cleared === "object") cleared = _a2.cleared;
-              _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true };
+              if (_a2.expiry && typeof _a2.expiry === "object") expiry = _a2.expiry;
+              _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), expiry, loaded: true };
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -22945,7 +22969,7 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === GUARDIANS_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
@@ -22955,7 +22979,7 @@ zoo`.split("\n");
             } catch {
               guardians = {};
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -22966,7 +22990,7 @@ zoo`.split("\n");
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
           sawEose = true;
-          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+          onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
         }
       });
       return () => {
@@ -23431,16 +23455,29 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       const mine = _clearedTrail.cp === pub && _clearedTrail.loaded ? _clearedTrail : null;
       const prior = mine && mine.map || {};
+      const priorExp = mine && mine.expiry || {};
       const knownPrev = mine ? new Set(mine.list || []) : opts && opts.listKnown ? /* @__PURE__ */ new Set() : null;
       const cleared = {};
+      const expIn = opts && opts.expiry && typeof opts.expiry === "object" ? opts.expiry : null;
+      const expiry = {};
       for (const p of list) {
-        if (prior[p]) {
-          cleared[p] = prior[p];
-          continue;
+        cleared[p] = prior[p] ? prior[p] : knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
+        if (expIn && Object.prototype.hasOwnProperty.call(expIn, p)) {
+          const raw = expIn[p];
+          if (raw) {
+            if (typeof raw === "number") {
+              if (Number.isInteger(raw) && raw > 0) expiry[p] = raw;
+            } else {
+              const w = permissionWindow("dated", { until: String(raw), at: now() });
+              if (!w) throw new Error("That clearance expiry date could not be used. Choose a real date that is in the future and no more than about a year ahead \u2014 it is not back-dated, and nothing renews it on its own.");
+              expiry[p] = w.until;
+            }
+          }
+        } else if (Number.isInteger(priorExp[p]) && priorExp[p] > 0) {
+          expiry[p] = priorExp[p];
         }
-        cleared[p] = knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
       }
-      return _landed("cleared-adults list", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk))));
+      return _landed("cleared-adults list", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared, expiry }) }), sk))));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -23984,7 +24021,9 @@ zoo`.split("\n");
       }
       if (wasCleared && appr.indexOf(newH) === -1) {
         nextAppr = [...appr, newH];
-        if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true }))) throw new Error("Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.");
+        const oldExp = o.expiry && Number.isInteger(o.expiry[oldH]) && o.expiry[oldH] > 0 ? o.expiry[oldH] : null;
+        const carry = oldExp ? { expiry: { [newH]: oldExp } } : null;
+        if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true, ...carry || {} }))) throw new Error("Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.");
       }
       const g = o.guardians || {};
       let nextG = null;
@@ -24603,7 +24642,7 @@ zoo`.split("\n");
       const kk = kind || "finance";
       const held = /* @__PURE__ */ new Map();
       const HELD_CAP = 2e3;
-      const take = (id, content, ts, tags) => {
+      const take = (id, content, ts, tags, by) => {
         let obj = window.Steward.encOpen(kk, content);
         if (obj == null) obj = _encOpenSealedCopy(kk, tags);
         if (obj == null) {
@@ -24611,21 +24650,21 @@ zoo`.split("\n");
             const oldest = held.keys().next().value;
             held.delete(oldest);
           }
-          held.set(id, { content, ts, tags });
+          held.set(id, { content, ts, tags, by });
           return false;
         }
         held.delete(id);
         const prev = byId.get(id);
         if (prev && (prev.ts || 0) > (ts || 0)) return true;
         const _tag = (k) => ((tags || []).find((t) => t[0] === k) || [])[1] || "";
-        byId.set(id, { id, ...obj, ts, _sid: _tag("session"), _rel: _tag("rel") });
+        byId.set(id, { id, ...obj, ts, _sid: _tag("session"), _rel: _tag("rel"), _by: by || "" });
         return true;
       };
       const retry = () => {
         if (!held.size) return;
         let opened = 0;
         for (const [id, h] of [...held]) {
-          if (take(id, h.content, h.ts, h.tags)) opened++;
+          if (take(id, h.content, h.ts, h.tags, h.by)) opened++;
         }
         if (opened) emit();
       };
@@ -24648,7 +24687,7 @@ zoo`.split("\n");
             emit();
             return;
           }
-          if (!take(id, e.content, e.created_at, e.tags)) return;
+          if (!take(id, e.content, e.created_at, e.tags, e.pubkey)) return;
           emit();
         },
         oneose() {
@@ -24669,7 +24708,9 @@ zoo`.split("\n");
     // carries the pinned message snapshot so both apps render the banner without re-fetching the message.
     pinPost(groupId, msg) {
       if (!sk || !groupId || !msg || !msg.id) return Promise.resolve(null);
-      const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.by || "", ts: msg.ts || now() });
+      const _pc = msg.card;
+      const pinText = _pc && _pc.type === "finance" ? [typeof _pc.title === "string" ? _pc.title.trim() : "", "Financial statement", typeof _pc.periodLabel === "string" ? _pc.periodLabel.trim() : ""].filter(Boolean).join(" \xB7 ") : msg.text || "";
+      const content = JSON.stringify({ msgId: msg.id, text: pinText, by: msg.by || "", ts: msg.ts || now() });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PIN_D + groupId], ["t", NET], ["t", groupId], ["p", pub]], content }));
     },
     unpin(groupId) {

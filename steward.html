@@ -268,6 +268,17 @@
 <script src="vendor/recovery.js"></script>
 <!-- double-entry ledger engine (FINANCE-MODULE.md); exposes window.FinanceLedger -->
 <script src="vendor/finance-ledger.js"></script>
+<!-- UK Gift Aid regional pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the core does NOT
+     import — exposes window.FinanceGiftAid, used by Finance only when church.features.giftAid === true -->
+<script src="vendor/finance-giftaid.js"></script>
+<!-- Shared contribution-statement regional pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the
+     core does NOT import — exposes window.FinanceContribution, used by Finance only when the active tax tool is
+     'contributionStatement' (US, New Zealand, …) -->
+<script src="vendor/finance-contribution.js"></script>
+<!-- Ireland Charitable Donation Scheme RECLAIM pack (OFF by default; DOMAIN nation-neutral). A SEPARATE bundle the
+     core does NOT import — exposes window.FinanceIrishCDS, used by Finance only when the active tax tool is
+     'charitableDonationScheme' (Ireland) -->
+<script src="vendor/finance-ie.js"></script>
 <!-- optional Manna module (money-out / disbursements; encrypted to the church key); exposes window.StewardManna -->
 <script src="vendor/steward-manna.js"></script>
 <!-- optional Meal trains / practical-care module (community-glue); exposes window.StewardMeals -->
@@ -295,6 +306,7 @@
 <script type="text/babel" src="app/stew-schedule.jsx"></script>
 <script type="text/babel" src="app/stew-templates.jsx"></script>
 <script type="text/babel" src="app/reply-kit.jsx"></script>
+<script type="text/babel" src="app/stew-cards.jsx"></script>
 <script type="text/babel" src="app/stew-dashboard.jsx"></script>
 <script type="text/babel" src="app/stew-finance.jsx"></script>
 <script type="text/babel" src="app/stew-manna.jsx"></script>

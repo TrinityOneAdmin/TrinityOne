@@ -832,11 +832,116 @@ function ReactionsRow({ summary, onReact, pickerOpen, onOpenPicker, live, me }) 
   );
 }
 
-function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy }) {
+// ── a branded, renderable resource CARD (PLAN-UX-E) ───────────────────────────────────────────────────────
+// The church posts a kind-1 with a ['card', ver, json] tag; the member app renders it as a DESIGNED card.
+// Thin-pipe / anti-beacon: the post carries ONLY the figures. The church's logo + accent come from the church
+// profile the app already holds (ctx.church — the same data ChurchBadge uses), NEVER from the post, so no
+// image rides the wire and a re-brand re-skins old posts for free. The envelope is a general resource shape:
+//   { type, title, periodLabel, sections:[…], currency, decimals, generatedAt }
+// `type:'finance'` carries the AGGREGATE statement model only — a summary and category/fund ROWS. It is
+// name-free by design: NO member or donor names, NO per-person giving (statements are aggregate — see
+// src/finance-statement.mjs). The letterhead design mirrors statementHtml: accentInk header rule, tabular
+// figures, sectioned rows, an "aggregate figures only" footer, so the card and the printable PDF are a family.
+const CARD_SYM = { GBP: '£', USD: '$', EUR: '€', sats: 'sats' };
+// Mirrors fmtMoney in src/finance-statement.mjs: minor-unit integer → a localised major-unit amount.
+function cardMoney(minor, currency, decimals) {
+  const d = Number.isInteger(decimals) && decimals >= 0 ? decimals : 2;
+  const s = ((Number(minor) || 0) / Math.pow(10, d)).toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const sym = CARD_SYM[currency] || '';
+  return currency === 'sats' ? (s + ' ' + sym) : (sym + s);
+}
+// Accent as INK on a pale card (mirrors accentInk in finance-statement.mjs): darken a pale brand HEX so the
+// title/rules stay legible. A CSS-var accent (the app's own design tokens, already legible) passes straight
+// through safeCssColor — and safeCssColor also blocks a url() beacon smuggled in the untrusted profile accent.
+function cardInk(accent) {
+  const h = typeof accent === 'string' ? accent.trim() : '';
+  if (!/^#[0-9a-fA-F]{3,8}$/.test(h)) return safeCssColor(accent, 'var(--clay)');
+  let c = h.slice(1);
+  if (c.length === 3) c = c.split('').map(x => x + x).join('');
+  if (c.length < 6) return '#2b2723';
+  c = c.slice(0, 6);
+  let r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  if (lum > 0.62) { const k = 0.62 / lum; r = Math.round(r * k); g = Math.round(g * k); b = Math.round(b * k); }
+  const hx = n => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
+  return '#' + hx(r) + hx(g) + hx(b);
+}
+function FinanceCard({ card, church }) {
+  const ch = church || {};
+  const ink = cardInk(ch.accent);
+  // Branding — the church BANNER + logo ride from the profile the app already holds (ctx.church), NEVER the
+  // post (thin-pipe / anti-beacon), and the treasurer can switch it off per-post (card.branded === false) to
+  // send a plain card. safeImgUrl keeps each to a data: URI so no image beacon rides the wire.
+  const branded = card.branded !== false;
+  const banner = branded ? safeImgUrl(ch.banner) : '';
+  const logo = branded ? safeImgUrl(ch.picture) : '';   // data: URI only (anti-beacon) — never a remote logo URL
+  const f = m => cardMoney(m, card.currency, card.decimals);
+  const sections = Array.isArray(card.sections) ? card.sections : [];
+  const line = (label, value, strong, key) => (
+    <div key={key} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '3px 0', fontSize: 13.5 }}>
+      <span style={{ color: 'var(--ink-2)', fontWeight: strong ? 700 : 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+      <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', fontWeight: strong ? 800 : 600, color: 'var(--ink)' }}>{value}</span>
+    </div>
+  );
+  return (
+    <div style={{ maxWidth: 300, borderRadius: 16, overflow: 'hidden', background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
+      {banner ? <img src={banner} alt="" style={{ display: 'block', width: '100%', height: 72, objectFit: 'cover' }} /> : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px 11px', borderBottom: '2px solid ' + ink }}>
+        {logo
+          ? <img src={logo} alt="" width={34} height={34} style={{ width: 34, height: 34, borderRadius: 9, objectFit: 'cover', flexShrink: 0 }} />
+          : <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, background: ink, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 13 }}>{ch.initials || ''}</div>}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15, color: ink, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.title || ch.name || 'Financial statement'}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', color: 'var(--ink-3)', textTransform: 'uppercase', marginTop: 2 }}>Financial statement{card.periodLabel ? ' · ' + card.periodLabel : ''}</div>
+        </div>
+      </div>
+      <div style={{ padding: '10px 15px 13px' }}>
+        {sections.map((s, i) => {
+          if (!s || typeof s !== 'object') return null;
+          if (s.kind === 'summary') {
+            return (
+              <div key={i} style={{ marginBottom: 10 }}>
+                {line('Total income', f(s.income), false, 'in')}
+                {line('Total spending', f(s.expenditure), false, 'ex')}
+                {line(Number(s.surplus) < 0 ? 'Deficit' : 'Surplus', f(s.surplus), true, 'su')}
+              </div>
+            );
+          }
+          if (s.kind === 'rows') {
+            const rows = Array.isArray(s.rows) ? s.rows : [];
+            if (!rows.length) return null;
+            return (
+              <div key={i} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: ink, textTransform: 'uppercase', margin: '4px 0 3px' }}>{s.label || ''}</div>
+                {rows.map((r, j) => line((r && r.name) || '—', f(r && (r.amount != null ? r.amount : r.balance)), false, j))}
+              </div>
+            );
+          }
+          if (s.kind === 'note') {
+            const txt = typeof s.text === 'string' ? s.text.trim() : '';
+            if (!txt) return null;
+            return (
+              <div key={i} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', color: ink, textTransform: 'uppercase', margin: '4px 0 3px' }}>Treasurer’s note</div>
+                <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--ink-2)', whiteSpace: 'pre-wrap', textWrap: 'pretty' }}>{txt}</div>
+              </div>
+            );
+          }
+          return null;   // a section kind this build does not know → skip it, never throw
+        })}
+        <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 6, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+          Prepared with TrinityOne · aggregate figures only{card.generatedAt ? ' · ' + card.generatedAt : ''}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash }) {
   const me = m.me;
   const bg = me ? 'var(--clay)' : 'var(--surface)';
   const fg = me ? '#fff' : 'var(--ink)';
-  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy };
+  const mod = { canModerate, isPinned, menuOpen, onOpenMenu, onPin, onUnpin, onRemove, onReply, replyParent, onDelete, modBusy, flash };
   const react = <ReactionsRow me={me} summary={summary} onReact={onReact} pickerOpen={pickerOpen} onOpenPicker={onOpenPicker} live={live} />;
 
   if (m.kind === 'verse') {
@@ -950,6 +1055,20 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
     );
   }
 
+  if (m.kind === 'card') {
+    const c = m.card || {};
+    if (c.type === 'finance') {
+      return (
+        <Row me={me} m={m} ctx={ctx} mod={mod}>
+          <FinanceCard card={c} church={ctx && ctx.church} />
+          {react}
+        </Row>
+      );
+    }
+    // a card TYPE this build does not know → fall through to the plain-text body below (forward-compat:
+    // a newer card type degrades to its text on an older member build, PLAN-UX-E §3/§6).
+  }
+
   return (
     <Row me={me} m={m} ctx={ctx} mod={mod}>
       <div style={{ maxWidth: 270, borderRadius: 18, padding: '10px 14px', background: bg, color: fg,
@@ -965,8 +1084,9 @@ function Bubble({ m, ctx, summary, onReact, pickerOpen, onOpenPicker, live, canM
 // shareable text for any message kind (plain text, verse, or a shared card)
 function shareTextOf(m) {
   if (!m) return '';
-  if (m.text) return m.text;
+  if (m.text) return m.text;   // a resource card (PLAN-UX-E) always carries the statement text here → shared verbatim
   if (m.kind === 'verse' && m.verse) return '“' + m.verse.text + '” — ' + m.verse.ref + (m.verse.version ? ' (' + m.verse.version + ')' : '');
+  if (m.kind === 'card' && m.card) return [m.card.title, m.card.periodLabel].filter(Boolean).join(' — ');   // fallback if a card ever lacked a text body
   if (m.card) return [m.card.title, m.card.ref, m.card.text].filter(Boolean).join('\n');
   if (m.kind === 'poll' && m.poll) return '📊 ' + (m.poll.question || 'Poll');
   return '';
@@ -1033,9 +1153,12 @@ function Row({ me, m, children, ctx, mod }) {
     // its message (top:100%) and each row is its own stacking context (the trinityFade entrance), so the menu's own
     // zIndex:5 only ranks it inside the row and the NEXT message painted over it. Gated on the menu ONLY: the reaction
     // picker opens upward and needs no lift.
-    <div {...sw.handlers} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+    <div {...sw.handlers} data-msg-id={m.id} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
       style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
-        position: 'relative', zIndex: M.menuOpen ? 30 : undefined, ...sw.style }}>
+        position: 'relative', zIndex: M.menuOpen ? 30 : undefined,
+        // brief gold flash when the pinned banner scrolls here (M.flash, self-clearing in the chat room)
+        ...(M.flash ? { outline: '2px solid var(--gold)', outlineOffset: 2, borderRadius: 14, background: 'color-mix(in oklab, var(--gold) 12%, transparent)', transition: 'outline-color .3s, background .3s' } : {}),
+        ...sw.style }}>
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
       {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
@@ -1135,6 +1258,9 @@ function relTime(ts) {
 }
 // plain text of a message event (text, or the words inside a shared card) for search
 function searchableText(e) {
+  // a resource card (PLAN-UX-E) → its title/period plus the plain-text body already in `content`
+  const cardTag = e.tags.find(t => t[0] === 'card');
+  if (cardTag) { try { const c = JSON.parse(cardTag[2]); return [c && c.title, c && c.periodLabel, e.content].filter(Boolean).join(' '); } catch { return e.content; } }
   const k = (e.tags.find(t => t[0] === 'k') || [])[1];
   if (k === 'verse' || k === 'note' || k === 'devotional') {
     try { const c = JSON.parse(e.content); return [c.text, c.note, c.title, c.excerpt, c.ref].filter(Boolean).join(' '); } catch { return e.content; }
@@ -1158,6 +1284,8 @@ function evtToMsg(e) {
   const replyTo = (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || e.tags.find(t => t[0] === 'e') || [])[1] || null;
   const podTag = (e.tags.find(t => t[0] === 'pod') || [])[1] || null;
   const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at, replyTo, _podTag: podTag };
+  const cardTag = e.tags.find(t => t[0] === 'card');
+  if (cardTag) { try { const card = JSON.parse(cardTag[2]); if (card && typeof card === 'object' && !Array.isArray(card)) return { ...base, kind: 'card', card, text: e.content }; } catch {} }
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'devotional') { try { return { ...base, kind: 'devotional', card: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'note') { try { return { ...base, kind: 'note', card: JSON.parse(e.content) }; } catch {} }
@@ -1541,6 +1669,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [evOpen, setEvOpenState] = useC(() => { try { return lsGet(evOpenKey, true) !== false; } catch (e) { return true; } });
   const setEvOpen = (v) => { setEvOpenState(v); try { lsSet(evOpenKey, v); } catch (e) {} };
   const [pin, setPin] = useC(null);              // the group's pinned message { msgId, text, by, ts } or null
+  const [flashMsgId, setFlashMsgId] = useC(null);   // a message briefly highlighted after the pinned banner scrolls to it
+  const flashTimer = useCR();
   const [hidden, setHidden] = useC(null);        // Set of removed message ids (null until first load)
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
   const [infoOpen, setInfoOpen] = useC(false);   // the Group info + members overlay (opened by tapping the header)
@@ -1577,6 +1707,18 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const canPostHere = !(isBroadcast && !isLeader);
   const id = useIdentity();
   const scRef = useCR();
+  // TAP THE PINNED BANNER → SCROLL TO THE FULL MESSAGE. The pinned one is in the DOM when loaded (the list is
+  // not virtualised). Query the SCROLL CONTAINER only (not document) so a second open room can't match, and
+  // CSS.escape the id. If it isn't loaded (old/trimmed), do nothing. A brief gold flash marks it, self-clearing.
+  const scrollToPinned = () => {
+    const id = pin && pin.msgId; if (!id || !scRef.current) return;
+    let el = null; try { el = scRef.current.querySelector('[data-msg-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]'); } catch (e) {}
+    if (!el) return;
+    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    setFlashMsgId(id);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashMsgId(null), 1600);
+  };
   // { gid, ids } — the message ids already shown, kept ACROSS a reconnect so the relay's replay is deduped
   // rather than appended a second time. Reset only when the room changes. See the effect below.
   const seenRef = useCR(null);
@@ -1878,9 +2020,9 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     menuOpen={menuFor === m.id} onOpenMenu={() => setMenuFor(menuFor === m.id ? null : m.id)}
     onReply={canPostHere ? (() => { setReplyTo(m); setMenuFor(null); }) : null} replyParent={m.replyTo ? msgById[m.replyTo] : null}
     onDelete={m.me && window.Fellowship && window.Fellowship.deleteOwnMessage ? () => { setMenuFor(null); if (confirm('Delete this message? It’s removed for everyone.')) window.Fellowship.deleteOwnMessage(group.id, m.id); } : null}
-    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} />
+    onPin={() => doPin(m)} onUnpin={doUnpin} onRemove={() => doRemove(m)} modBusy={!!modBusy} flash={flashMsgId === m.id} />
   </React.Fragment>),
-    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, canPostHere, flags, modBusy]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles; `canPostHere` so a mid-session promotion to leader restores public reply
+    [visibleMsgs, reactions, pickerFor, menuFor, pin, canModerate, canPostHere, flags, modBusy, flashMsgId]);   // eslint-disable-line — `flags` so a steward tag rename/re-accent re-renders the flagged bubbles; `canPostHere` so a mid-session promotion to leader restores public reply
   if (!group) return null;   // guard AFTER every hook (incl. the bubbles useMemo) so the hook count is identical on every render — a hook must never sit behind a conditional early return
 
   // events the church tagged to THIS group — surfaced here and on everyone's calendar
@@ -1958,11 +2100,12 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       {pin && pin.msgId ? (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 14px', background: 'color-mix(in oklab, var(--gold) 11%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
           <Icon name="pin" size={15} color="var(--gold)" style={{ marginTop: 2, flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
+          {/* tapping the banner body scrolls the chat to the full pinned message; the Unpin X stops propagation */}
+          <div role="button" tabIndex={0} onClick={scrollToPinned} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToPinned(); } }} title="Go to the pinned message" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
             <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--gold)', marginBottom: 1 }}>PINNED</div>
             <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{pin.text || '(message)'}</div>
           </div>
-          {canModerate ? <button onClick={doUnpin} disabled={!!modBusy} title="Unpin" style={{ border: 'none', background: 'none', cursor: modBusy ? 'default' : 'pointer', opacity: modBusy ? .45 : 1, color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
+          {canModerate ? <button onClick={(e) => { if (e) e.stopPropagation(); doUnpin(); }} disabled={!!modBusy} title="Unpin" style={{ border: 'none', background: 'none', cursor: modBusy ? 'default' : 'pointer', opacity: modBusy ? .45 : 1, color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={16} /></button> : null}
         </div>
       ) : null}
 

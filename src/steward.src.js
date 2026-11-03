@@ -168,7 +168,7 @@ const APPROVED_D = 'trinityone/approved:';
 // was re-stamped with today — the exact defect this exists to prevent. It is reset in
 // _resetChurchScopedState() AND stamped with the church it came from, because the reset alone is the
 // mechanism that already failed: it relies on someone remembering to add to it, and I did not.
-let _clearedTrail = { cp: '', map: {}, list: [], loaded: false };  // safeguarding: adults cleared to contact youth, d=approved:<churchpub>
+let _clearedTrail = { cp: '', map: {}, list: [], expiry: {}, loaded: false };  // safeguarding: adults cleared to contact youth, d=approved:<churchpub>; `expiry` is the optional per-person clearance end date (unix seconds), added 2026-11-02
 const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploaded photo is suppressed, d=nophoto:<churchpub>
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
 const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per member (ring: current first)
@@ -3486,7 +3486,7 @@ function setKey(mnemonic) {
 // So: one function, called from both. Adding a per-church global without adding it here is the bug.
 function _resetChurchScopedState() {
   lastProfile = {}; _profileLoaded = false;
-  _clearedTrail = { cp: '', map: {}, list: [], loaded: false };   // safeguarding: whose clearance record this is
+  _clearedTrail = { cp: '', map: {}, list: [], expiry: {}, loaded: false };   // safeguarding: whose clearance record this is
   _clearanceSent.clear();
   _careRoster = new Set(); _careRosterKnown = false; _careRosterSeen = false;
   // …AND WHAT THAT ROSTER GRANTED EACH OF THEM. `_stewardCaps` is the roster's other half and was left out
@@ -6825,6 +6825,17 @@ function _webFeedBase() {
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
 
+  // THE KEY THIS CONSOLE ACTUALLY SIGNS WITH = getPublicKey(sk), the identity the relay sees as e.pubkey and
+  // the one every document this console publishes lands under. This is NOT `pubkey`: on a DELEGATED console
+  // `pubkey` is the church we act for (our OWN key still signs), and in network-identity mode `pubkey` is the
+  // network key — so neither `pubkey` nor `churchPub` equals the signer in every mode (owner: all three agree;
+  // delegated: signer == churchPub != pubkey; network: signer == pubkey != churchPub). Dual-control binds the
+  // approver to the SIGNER at the relay (finance/billapproval:<billId>:<approverhex>, scripts/gateway.mjs), so
+  // the console's "is this me?" / "who recorded it?" check MUST anchor on this, not on pubkey. Exposes the
+  // existing internal _myOwnPub(). Callers: app/stew-finance.jsx — recordBill, approveBill, and the Bills-row
+  // self-approval guard (the only three readers; see finance-dual-control-anchors-on-the-signer.test.mjs).
+  signerPub() { return _myOwnPub(); },
+
   // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
   // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
   // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console
@@ -8552,7 +8563,8 @@ window.Steward = {
       return Promise.resolve(null);
     }
     const podTag = opts && opts.pod ? [['pod', opts.pod]] : [];
-    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...podTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : [])], content: body }));
+    const extraTags = Array.isArray(opts) ? opts : (opts && opts.tags ? opts.tags : []);
+    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...podTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : []), ...extraTags], content: body }));
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
   // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
@@ -8650,7 +8662,7 @@ window.Steward = {
       // A REMOVED message is never quoted: that would reprint, one row down, the words the steward took away.
       // quote is null when the target is not loaded (older than the window) — the UI says "an earlier message".
       const q = m.replyTo ? byId.get(m.replyTo) : null;
-      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind } : null;
+      const quote = q && !hidden.has(q.id) ? { id: q.id, by: q.by, text: q.text, kind: q.kind, card: q.card } : null;
       const r = rx.get(m.id); return { ...m, quote, name: names.get(m.by) || '', reactions: r ? [...r.values()].filter(Boolean) : [], myReaction: r ? r.get(pub) || '' : '' };
     });
     const emit = () => onMsgs(attach());
@@ -8684,7 +8696,9 @@ window.Steward = {
           for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
           if (!ok) return;
         }
-        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '', _podTag: (e.tags.find(t => t[0] === 'pod') || [])[1] || '' });
+        let card = null;
+        try { const ct = e.tags.find(t => t[0] === 'card'); if (ct && ct[2]) { const parsed = JSON.parse(ct[2]); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) card = parsed; } } catch (x) {}
+        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, card, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '', _podTag: (e.tags.find(t => t[0] === 'pod') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();
       },
@@ -9493,6 +9507,7 @@ window.Steward = {
     // and the back-fill was left guessing. Guessing is what emptied children's parent lists. It also returns
     // a subscription slot, against a cap this codebase has been bitten by before.
     let cleared = {};   // pub -> { by, at } — the record beside the list; see setApproved
+    let expiry = {};    // pub -> unix seconds — the OPTIONAL clearance end date, additive beside `cleared`; see setApproved. Flag only: nothing gates on it.
     const isLoaded = () => sawMinors && sawEose;
     // CAN WE TRUST THAT AN ABSENT CLEARANCE LIST IS REALLY ABSENT? This is a different question from
     // `loaded`, which is built on the MINORS document because it exists for the clearance back-fill. Asking it
@@ -9530,17 +9545,22 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; sawApproved = true; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
           // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
           // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped
           // every clearance date permanently, because the wipe then echoed back as the truth. A church with
           // two stewards and one stale browser tab would have lost its history. Keep what we hold.
           if (_a.cleared && typeof _a.cleared === 'object') cleared = _a.cleared;
-          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+          // THE SAME GUARD, FOR THE EXPIRY MAP. An older console writes approved: with no `expiry` field at
+          // all; that is "written by something that never heard of the dates", NOT "every date was cleared",
+          // so an absent field must keep what we hold rather than blank it. Only an object actually present
+          // replaces it (a fresh write from a current console, which carries the dates forward itself).
+          if (_a.expiry && typeof _a.expiry === 'object') expiry = _a.expiry;
+          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), expiry, loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -9548,7 +9568,7 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { sawEose = true; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); },
+      oneose() { sawEose = true; onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -10204,13 +10224,45 @@ window.Steward = {
     // does not belong in it, and there is no field for one until a stewards-only document exists.
     const mine = (_clearedTrail.cp === pub && _clearedTrail.loaded) ? _clearedTrail : null;
     const prior = (mine && mine.map) || {};
+    const priorExp = (mine && mine.expiry) || {};
     const knownPrev = mine ? new Set(mine.list || []) : ((opts && opts.listKnown) ? new Set() : null);
     const cleared = {};
+    // THE OPTIONAL CLEARANCE END DATE (safeguarding clearance expiry, 2026-11-02). An additive map beside
+    // `cleared`, pub -> unix seconds, and like `cleared` it is CARRIED ACROSS every person this write keeps:
+    // clearing or re-clearing one person must not drop another's date. An entry in `opts.expiry` overrides
+    // (a 'YYYY-MM-DD' string sets/changes it; a falsy value removes it); anyone it does not mention keeps the
+    // date we hold. Validated by the check-in module's own `dated` helper so ONE vocabulary governs both this
+    // record and `checkinperm:` — a date beyond the 400-day cap, or in the past, is REFUSED here (and the
+    // console surfaces the throw) rather than silently shortened, exactly as permissionWindow() already
+    // refuses a check-in that typed 2099. FLAG ONLY: the relay neither reads nor enforces `expiry`; it just
+    // round-trips through this member-readable document, so no gate, no approvedIn and no member-app change
+    // depends on it. The field holds only a date — never a certificate number or any other note, for the
+    // same reason `cleared` does not (see above).
+    const expIn = (opts && opts.expiry && typeof opts.expiry === 'object') ? opts.expiry : null;
+    const expiry = {};
     for (const p of list) {
-      if (prior[p]) { cleared[p] = prior[p]; continue; }
-      cleared[p] = (knownPrev && !knownPrev.has(p)) ? { by: pub, at: now() } : { by: '', at: 0 };
+      cleared[p] = prior[p] ? prior[p] : ((knownPrev && !knownPrev.has(p)) ? { by: pub, at: now() } : { by: '', at: 0 });
+      if (expIn && Object.prototype.hasOwnProperty.call(expIn, p)) {
+        const raw = expIn[p];
+        if (raw) {
+          if (typeof raw === 'number') {
+            // ALREADY-VALIDATED SECONDS, CARRIED FORWARD UNCHANGED. A 'YYYY-MM-DD' string is a date a church
+            // just TYPED, so it is re-validated below (and refused if beyond the cap). A number is a date this
+            // product itself already stored and is moving — a device re-seat carrying the old key's date onto
+            // the new one — so it is taken as-is and NOT re-validated: the record must survive a phone change
+            // even if it is close to lapsing or has already lapsed, exactly as `cleared` survives it.
+            if (Number.isInteger(raw) && raw > 0) expiry[p] = raw;
+          } else {
+            const w = permissionWindow('dated', { until: String(raw), at: now() });
+            if (!w) throw new Error('That clearance expiry date could not be used. Choose a real date that is in the future and no more than about a year ahead — it is not back-dated, and nothing renews it on its own.');
+            expiry[p] = w.until;
+          }
+        }   // a falsy override REMOVES the date: leave expiry[p] unset
+      } else if (Number.isInteger(priorExp[p]) && priorExp[p] > 0) {
+        expiry[p] = priorExp[p];   // nobody touched this person's date — keep what we hold
+      }
     }
-    return _landed('cleared-adults list', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk))));
+    return _landed('cleared-adults list', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared, expiry }) }), sk))));
   },
 
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
@@ -10694,11 +10746,16 @@ window.Steward = {
     if (wasCleared && appr.indexOf(newH) === -1) {
       nextAppr = [...appr, newH];
       // `listKnown` is safe to assert HERE specifically: this line is only reached because `appr` contained the
-      // OLD key, so the list is provably real and loaded rather than an empty placeholder. The new key has
-      // never been cleared before, so it is genuinely new and today's date is the truth about it.
-      // (Open question for later, not invented here: whether a re-seat should CARRY the old key's clearance
-      // date across, so the record survives someone changing phones. It reads as a fresh clearance today.)
-      if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true }))) throw new Error('Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.');
+      // OLD key, so the list is provably real and loaded rather than an empty placeholder.
+      // CARRY THE EXPIRY DATE ACROSS (owner decision, 2026-11-02). A person changing phones keeps the clearance
+      // END DATE the church set, rather than having it read as a fresh, dateless clearance \u2014 the record must
+      // survive the move. The old key's held date comes from the caller's live safeguarding read (`o.expiry`),
+      // in SECONDS, and is passed as a number so setApproved takes it as-is WITHOUT re-validating against the
+      // year cap: a date close to lapsing, or already lapsed, must still carry (that is the whole point). A
+      // person who had NO date still gets none, because there is nothing to carry.
+      const oldExp = (o.expiry && Number.isInteger(o.expiry[oldH]) && o.expiry[oldH] > 0) ? o.expiry[oldH] : null;
+      const carry = oldExp ? { expiry: { [newH]: oldExp } } : null;
+      if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true, ...(carry || {}) }))) throw new Error('Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.');
     }
 
     // The seat may be the CHILD (an entry keyed by them) or a PARENT (named in some child's list). Both break.
@@ -11443,7 +11500,7 @@ window.Steward = {
     // below pass tags, and THE HOLDING PEN KEEPS THEM TOO: a record parked waiting for a key and retried
     // later must still be able to reach its second copy, or the fallback would work on a live delivery and
     // silently not on a retry — which is the harder of the two to notice.
-    const take = (id, content, ts, tags) => {
+    const take = (id, content, ts, tags, by) => {
       let obj = window.Steward.encOpen(kk, content);
       // ── THE HELPER'S COPY, WHEN THE RING WILL NOT OPEN THE RECORD ─────────────────────────────────────
       // Tried ONLY after the ring has failed, never before it: `content` is the church's copy and the ring
@@ -11462,7 +11519,7 @@ window.Steward = {
       if (obj == null) obj = _encOpenSealedCopy(kk, tags);
       if (obj == null) {
         if (!held.has(id) && held.size >= HELD_CAP) { const oldest = held.keys().next().value; held.delete(oldest); }
-        held.set(id, { content, ts, tags });
+        held.set(id, { content, ts, tags, by });
         return false;
       }
       held.delete(id);
@@ -11476,14 +11533,20 @@ window.Steward = {
       // `_rel` come from the tags the RELAY enforces on, never from the sealed body a helper wrote — so a
       // release cannot claim a session it was not admitted under. Additive: a finance document has neither
       // and gets '', which every existing finance reader ignores. See subscribeCheckins for the fold.
+      // `_by` IS THE RELAY-AUTHENTICATED AUTHOR — the event's signer pubkey (e.pubkey), carried the SAME way
+      // and for the SAME reason as `_sid`/`_rel`: from the event the relay admitted, NEVER the sealed body a
+      // client wrote. The bill dual-control recorder reads it so "a DIFFERENT person approved it" rests on who
+      // SIGNED the record, not a forgeable `by` field inside the ciphertext (finance-audit-2026-11-02 #1). It
+      // is placed AFTER `...obj` so a `_by` smuggled into the sealed body can never override the real signer.
+      // Additive: every other reader ignores it, exactly as when `_sid`/`_rel` were added.
       const _tag = (k) => ((tags || []).find(t => t[0] === k) || [])[1] || '';
-      byId.set(id, { id, ...obj, ts, _sid: _tag('session'), _rel: _tag('rel') });
+      byId.set(id, { id, ...obj, ts, _sid: _tag('session'), _rel: _tag('rel'), _by: by || '' });
       return true;
     };
     const retry = () => {
       if (!held.size) return;
       let opened = 0;
-      for (const [id, h] of [...held]) { if (take(id, h.content, h.ts, h.tags)) opened++; }
+      for (const [id, h] of [...held]) { if (take(id, h.content, h.ts, h.tags, h.by)) opened++; }
       if (opened) emit();
     };
     if (_capWaiters[kk]) _capWaiters[kk].add(retry);
@@ -11525,7 +11588,7 @@ window.Steward = {
         // than deletion. A delete button on either would make it live, and the fix is to remember the
         // tombstone's created_at and refuse anything older.
         if (tomb) { byId.delete(id); held.delete(id); emit(); return; }
-        if (!take(id, e.content, e.created_at, e.tags)) return;   // held for a key that has not arrived yet
+        if (!take(id, e.content, e.created_at, e.tags, e.pubkey)) return;   // held for a key that has not arrived yet
         emit();
       },
       oneose() { emit(); },
@@ -11539,7 +11602,15 @@ window.Steward = {
   // carries the pinned message snapshot so both apps render the banner without re-fetching the message.
   pinPost(groupId, msg) {
     if (!sk || !groupId || !msg || !msg.id) return Promise.resolve(null);
-    const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.by || '', ts: msg.ts || now() });
+    // A FINANCE CARD pins as a SHORT summary, not its full plain-text statement body — the banner showed the
+    // whole "…Total income…BALANCE SHEET…" dump otherwise. Only a well-formed finance card is summarised; any
+    // other message (or a garbage/absent card) keeps its text exactly as before. Fixes newly-pinned cards only
+    // (re-pin an old one to fix it); stored pins are not migrated.
+    const _pc = msg.card;
+    const pinText = (_pc && _pc.type === 'finance')
+      ? [typeof _pc.title === 'string' ? _pc.title.trim() : '', 'Financial statement', typeof _pc.periodLabel === 'string' ? _pc.periodLabel.trim() : ''].filter(Boolean).join(' · ')
+      : (msg.text || '');
+    const content = JSON.stringify({ msgId: msg.id, text: pinText, by: msg.by || '', ts: msg.ts || now() });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PIN_D + groupId], ['t', NET], ['t', groupId], ['p', pub]], content }));
   },
   unpin(groupId) {   // clear the group's pin (tombstone the addressable doc)

@@ -66,6 +66,7 @@ async function chatShowing(messages, { labels = {}, stewards = [], church = { na
   const mod = await loadComponent('app/stew-dashboard.jsx', ['function GroupChatModal({ group, onClose }) {', 'function groupIcon('], {
     React, window: win, CustomEvent, setTimeout, clearTimeout,
     Icon: Stub('Icon'), SkBadge: Stub('SkBadge'), useStewDialog: () => ({}),
+    cardRenderable: () => false, ConsoleCard: Stub('ConsoleCard'),   // GroupChatModal now draws a renderable card (app/stew-cards.jsx) or falls back to text; no card here
   });
   const props = { group: { id: 'g1', name: 'Whole Church', kind: 'group' }, onClose() {} };
   draw(mod.GroupChatModal, props);

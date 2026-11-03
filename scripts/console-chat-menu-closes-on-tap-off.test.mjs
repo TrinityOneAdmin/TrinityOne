@@ -57,6 +57,7 @@ async function chat({ msgs = [REMOVED, NORMAL], unhide = () => Promise.resolve({
     React, window: win, document: doc, CustomEvent, setTimeout, clearTimeout,
     Icon: Stub('Icon'), SkBadge: Stub('SkBadge'), SkConfirm: Stub('SkConfirm'),
     EventComposer: Stub('EventComposer'), useStewDialog: () => ({}),
+    cardRenderable: () => false, ConsoleCard: Stub('ConsoleCard'),   // GroupChatModal now draws a renderable card (app/stew-cards.jsx) or falls back to text; no card here
     initialsFor: () => 'XX', avFor: () => '', nameFor: (pk) => (pk === 'aa11' ? 'Ruth' : 'Ada'),
     GROUP_EMOJI: ['❤️'],
   });
