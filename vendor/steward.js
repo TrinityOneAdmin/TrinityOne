@@ -16263,6 +16263,17 @@ zoo`.split("\n");
         const j = await resolveRelayName(entry.name);
         const newUrl = normRelay(j && j.url);
         if (!newUrl || newUrl === entry.url) continue;
+        if (entry.pub) {
+          if (String(j && j.pub || "").toLowerCase() !== entry.pub) continue;
+          let provedPub = "";
+          try {
+            const pr = await verifyRelayIdentity(newUrl);
+            provedPub = String(pr && pr.relayPub || "").toLowerCase();
+          } catch (e) {
+            provedPub = "";
+          }
+          if (provedPub !== entry.pub) continue;
+        }
         if (!await admitRemoteRelay(newUrl)) continue;
         if (isSharedRelaySpelling(newUrl)) continue;
         extra = extra.filter((u) => u !== entry.url);
@@ -16733,12 +16744,19 @@ zoo`.split("\n");
   }
   async function discoverRelayOffers(seedExtra, region) {
     let dirUrls = [];
+    const handleByUrl = /* @__PURE__ */ new Map();
     for (const base of _dirBases()) {
       try {
         const r = await fetch(base + "/relay-names/offers", { cache: "no-store" });
         if (r.ok) {
           const j = await r.json();
-          dirUrls.push(...(j.relays || []).map((x) => normRelay(x && x.url)).filter(Boolean));
+          for (const x of j.relays || []) {
+            const u = normRelay(x && x.url);
+            if (!u) continue;
+            dirUrls.push(u);
+            const h = String(x && x.handle || "").toLowerCase();
+            if (/^[a-z0-9][a-z0-9-]{0,62}$/.test(h) && !handleByUrl.has(u)) handleByUrl.set(u, h);
+          }
         }
       } catch (e) {
       }
@@ -16759,7 +16777,7 @@ zoo`.split("\n");
           return null;
         }
       }
-      return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: t.name || "", ms: Number.isFinite(t.ms) ? t.ms : null };
+      return { url, operator: t.operator || "", region: t.region || "", churches: t.churches || 0, name: handleByUrl.get(url) || t.name || "", handle: handleByUrl.get(url) || "", ms: Number.isFinite(t.ms) ? t.ms : null };
     }));
     const offers = probed.filter(Boolean);
     offers.sort((a, b) => {
@@ -18940,7 +18958,7 @@ zoo`.split("\n");
       setTimeout(finish, ms);
     });
   }
-  function _readCovers(r, leaving) {
+  function _readCovers(r, leaving, droppable) {
     const k = (u) => {
       try {
         return normalizeURL2(u);
@@ -18957,7 +18975,7 @@ zoo`.split("\n");
       }
     }
     const said = new Set((r && r.answeredUrls || []).map(k));
-    const need = (r && r.askedUrls || []).map(k).filter((u) => !skip || u !== skip);
+    const need = (r && r.askedUrls || []).map(k).filter((u) => !skip || u !== skip).filter((u) => !(droppable && droppable.has(u) && !said.has(u)));
     return need.length > 0 && need.every((u) => said.has(u));
   }
   function relayNetDoc() {
@@ -19149,9 +19167,22 @@ zoo`.split("\n");
     const u = normRelay(url);
     if (!u) return { removed: false };
     const sk0 = sk, pub0 = pub;
+    const _k0 = (x) => {
+      try {
+        return normalizeURL2(x);
+      } catch (e) {
+        return String(x || "");
+      }
+    };
+    let _droppable = /* @__PURE__ */ new Set();
+    try {
+      _droppable = new Set(extraRelays().map(_k0));
+    } catch (e) {
+      _droppable = /* @__PURE__ */ new Set();
+    }
     const read = await relayNetDoc();
     const { ev: existing } = read;
-    if (!_readCovers(read, u)) return { removed: false, unknown: true };
+    if (!_readCovers(read, u, _droppable)) return { removed: false, unknown: true };
     const mine = existing && existing.pubkey === pub ? existing : null;
     if (!mine) return { removed: false, notListed: true };
     const entries = parseRelayNet(mine.content);
@@ -19185,7 +19216,7 @@ zoo`.split("\n");
       const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [["d", RELAY_NET_D]], content: JSON.stringify(list) }), sk));
       if (!ev) return { removed: false, entries: list };
       const back = await relayNetDoc();
-      if (!_readCovers(back, u)) return { removed: false, unknown: true, unverified: true, entries: list };
+      if (!_readCovers(back, u, _droppable)) return { removed: false, unknown: true, unverified: true, entries: list };
       const newest = back.ev && back.ev.pubkey === pub ? back.ev : null;
       const found = newest ? parseRelayNet(newest.content) : [];
       const still = found.filter(isDropped);
@@ -19406,6 +19437,20 @@ zoo`.split("\n");
         live = cur;
       }
       _writeExtraRelays(live.filter((u) => !retired.includes(u)));
+      const retK = new Set(retired.map((u) => {
+        try {
+          return normRelay(u);
+        } catch (e) {
+          return u;
+        }
+      }));
+      setNamedRelays(getNamedRelays().filter((e) => !retK.has((() => {
+        try {
+          return normRelay(e.url);
+        } catch (err2) {
+          return e.url;
+        }
+      })())));
     }
     let tags = tagged;
     try {
@@ -19424,6 +19469,14 @@ zoo`.split("\n");
     const kn = Object.keys(strikes), kw = Object.keys(was);
     if (kn.length !== kw.length || kn.some((k) => Number(was[k]) !== Number(strikes[k]))) setDeadStrikes(strikes);
     return retired;
+  }
+  function _rememberAdoptedName(e, url, proved) {
+    const nm = String(e && e.name || "").toLowerCase();
+    if (!_RELAY_NAME_RE.test(nm)) return;
+    try {
+      window.Steward.rememberRelayName(nm, url, proved);
+    } catch (err2) {
+    }
   }
   async function adoptNetDocAddresses() {
     if (!pub || pub !== churchPub) return [];
@@ -19487,6 +19540,7 @@ zoo`.split("\n");
         if (!now2.includes(stale) || now2.includes(u)) continue;
         _writeExtraRelays(now2.map((r) => r === stale ? u : r));
         setAdoptedRelays([...adoptedRelays().filter((r) => r !== stale), u]);
+        _rememberAdoptedName(e, u, proved);
         added.push(u);
         continue;
       }
@@ -19499,6 +19553,7 @@ zoo`.split("\n");
       }
       if (ok) {
         _tagAdopted(u);
+        _rememberAdoptedName(e, u, proved);
         added.push(u);
       }
     }
@@ -27614,12 +27669,22 @@ zoo`.split("\n");
       const hit = getNamedRelays().find((e) => e && normRelay(e.url) === u);
       return hit ? String(hit.name || "") : "";
     },
-    // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
-    rememberRelayName(name, url) {
+    // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates.
+    // PUBKEY PINNING (SPEC self-healing 2026-11-03, item 7): persist the box's proved identity key when the
+    // caller knows it (connect-by-name has it from the directory record; net-doc adoption has it from the
+    // proof it just ran). refreshNamedRelays then refuses to swap a pinned name onto any box but that one — a
+    // handle is held by whoever claimed it and could be re-pointed, and without the pin a re-point would
+    // silently swing the church's traffic to a DIFFERENT box. Omitted when unknown (a nameless auto-find
+    // binding, or an older stored entry): those keep the prior admit-only behaviour, which is all that can be
+    // checked for them, and the next adoption pass upgrades the entry to a pinned one once the box is signed.
+    rememberRelayName(name, url, pub2) {
       const n = String(name || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
       const u = normRelay(url);
       if (!n || !u) return;
-      setNamedRelays([...getNamedRelays().filter((e) => e.name !== n), { name: n, url: u }]);
+      const p = String(pub2 || "").toLowerCase();
+      const entry = { name: n, url: u };
+      if (/^[0-9a-f]{64}$/.test(p)) entry.pub = p;
+      setNamedRelays([...getNamedRelays().filter((e) => e.name !== n), entry]);
     },
     // FEDERATION Phase 3c — list relays that have OFFERED to host new churches (enforcing + open + live).
     discoverRelayOffers(region) {
@@ -27635,7 +27700,16 @@ zoo`.split("\n");
     async listRelayOffers(region) {
       const offers = await discoverRelayOffers(null, region || null);
       const have = new Set(relays());
-      return rankOffersByLatency(offers.filter((o) => !have.has(o.url)));
+      const ranked = rankOffersByLatency(offers.filter((o) => !have.has(o.url)));
+      let mineHandles = /* @__PURE__ */ new Set();
+      try {
+        mineHandles = new Set((await relayNetEntries(pub)).map((e) => String(e && e.name || "").toLowerCase()).filter(Boolean));
+      } catch (e) {
+      }
+      for (const o of ranked) {
+        if (o && o.handle && mineHandles.has(o.handle)) o.mine = true;
+      }
+      return ranked;
     },
     // set/extend the bootstrap discovery seed (discovery-only relays to probe for offers).
     setDiscoverySeed(urls) {
@@ -27657,6 +27731,10 @@ zoo`.split("\n");
       for (const p of picks || []) {
         try {
           window.Steward.addRelay(p.url);
+        } catch (e) {
+        }
+        try {
+          if (p && p.name && window.Steward.rememberRelayName) window.Steward.rememberRelayName(p.name, p.url);
         } catch (e) {
         }
       }
