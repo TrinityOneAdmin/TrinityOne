@@ -4217,6 +4217,10 @@ function EditGroupMembersModal({ group, getCurrent, onClose, seed }) {
 // Console chat view for one group/team — read the scrollback + post as the church.
 function GroupChatModal({ group, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
+  const [podFilter, setPodFilter] = React.useState(null);
+  const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
+  const teamRoster = group.kind === 'team' ? rosters.find(r => r && r.team === group.id) : null;
+  const teamPods = (teamRoster && teamRoster.pods) || [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];   // resolve a sender's display name
   // THE CHURCH AND ITS STEWARDS ARE NOT "member …1a2b3c4d". This is the console's own chat, where the owner
   // and every delegated steward post AS THE CHURCH, so the commonest author on the screen was the one it could
@@ -4305,7 +4309,7 @@ function GroupChatModal({ group, onClose }) {
     const t = text.trim(); if (!t || sending) return;
     setSending(true);
     const quoting = replyTo;
-    Promise.resolve(window.Steward.publishPost(t, group.id, quoting ? { id: quoting.id, by: quoting.by } : undefined))
+    Promise.resolve(window.Steward.publishPost(t, group.id, quoting ? { id: quoting.id, by: quoting.by } : undefined, podFilter ? { pod: podFilter } : undefined))
       .then((ok) => { setSending(false); if (ok) { setText(''); setReplyTo(r => (r === quoting ? null : r)); } else { setReplyTo(r => r || quoting); showMod('That didn’t send — nothing reached your church. Your message is still in the box; try again.'); } })
       .catch(() => { setSending(false); setReplyTo(r => r || quoting); showMod('That didn’t send — the relay could not be reached. Your message is still in the box; try again.'); });
   };
@@ -4442,9 +4446,17 @@ function GroupChatModal({ group, onClose }) {
           </div>
           );
         })() : null}
+        {group.kind === 'team' && teamPods.length > 0 ? (
+          <div style={{ display: 'flex', gap: 6, padding: '7px 14px', borderBottom: '1px solid var(--line)', overflowX: 'auto' }}>
+            <button onClick={() => setPodFilter(null)} style={{ padding: '4px 11px', borderRadius: 999, border: podFilter === null ? 'none' : '1px solid var(--line)', background: podFilter === null ? 'var(--clay)' : 'var(--surface-2)', color: podFilter === null ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>All</button>
+            {teamPods.map(p => (
+              <button key={p.id} onClick={() => setPodFilter(podFilter === p.id ? null : p.id)} style={{ padding: '4px 11px', borderRadius: 999, border: podFilter === p.id ? 'none' : '1px solid var(--line)', background: podFilter === p.id ? 'var(--clay)' : 'var(--surface-2)', color: podFilter === p.id ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{p.name}</button>
+            ))}
+          </div>
+        ) : null}
         <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           {msgs.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto' }}>No messages yet. Say hello to your church.</div> : null}
-          {msgs.map(m => (m.removed ? (
+          {(podFilter ? msgs.filter(m => m._podTag === podFilter || !m._podTag) : msgs).map(m => (m.removed ? (
             /* A REMOVED MESSAGE STAYS REACHABLE TO THE STEWARD WHO REMOVED IT. Removal is reversible —
                it publishes a `hidden:` doc and the message itself is never deleted — but the only way
                back was an Undo on a banner that clears after 9 seconds, and unhideMessage had no other

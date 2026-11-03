@@ -1899,6 +1899,7 @@ const GROUP_LEADER_BY = new Map(); // groupId -> { by, cp } — who authored the
 const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the owner-signed stewards: roster (delegated, revocable authority)
 // Meal trains / care module state (rebuilt from stored events by note()):
 const ROSTER_PEOPLE = new Map();     // teamId(groupId) -> Set(pubkey) — people LINKED on a team roster; the care-team's members live here
+const ROSTER_PODS = new Map();       // teamId(groupId) -> Map(podId -> Set(pubkey)) — pod membership from the roster's cleartext podPubs (push scoping)
 const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who authored the roster (M2: void the care-admin grant if they're later revoked)
 const FIN_SEEN = new Map();           // churchpub -> Set(journal seqs stored for that book, ANY author) — FINANCE_SEQ is its contiguous prefix
 const FINANCE_SEQ = new Map();        // churchpub -> last accepted finance-journal seq — the relay is the ordering authority; the next write must be seq+1 (single-writer, no gaps/forks/edits)
@@ -3150,29 +3151,55 @@ function maybePushMessage(evt) {
       return;
     }
     if (evt.kind === 1) {                                          // group chat post
-      const gid = gidOf(evt); if (!gid || !BROADCAST.has(gid)) return;   // announcements only (church-posted)
-      const gname = GROUP_NAMES.get(gid) || 'Your church';
-      // SECURITY: scope to the OWNING church's members — MEMBERS is the global union across every church on a
-      // shared relay, so an unscoped fan-out pushes one church's announcement to unrelated churches (cross-tenant
-      // metadata leak + spam). Mirror maybePushSermon's church filter.
-      const gcp = GROUP_CHURCH.get(gid);
-      const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
-        : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
-        : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
-      // SAFEGUARDING: THE ROOM'S NAME IS THE PUSH TITLE. canRead already refuses a minor the MESSAGES of a
-      // room their church has not marked child-safe — and this pushed that same room's name to their lock
-      // screen, which is the disclosure the withholding exists to prevent, on a path no client filter can
-      // reach. Found 2026-08-29, on the same day the member app's own room-name leak was closed; fixing one
-      // without the other would have moved the leak rather than removed it.
-      //
-      // Same rule, same maps, same fallback as the read gate twelve hundred lines below — deliberately
-      // written to look identical, because two safeguarding rules that are meant to agree should be
-      // recognisable as the same rule.
-      const gcpSafe = gcp || idNamesOwner(gid);
-      for (const r of recips) {
-        if (!r || r === evt.pubkey) continue;
-        if (gcpSafe && !GROUP_CHILDSAFE.has(gid) && (MINORS_BY.get(gcpSafe) || new Set()).has(r)) continue;
-        pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
+      const gid = gidOf(evt); if (!gid) return;
+      // BROADCAST announcements: push to the whole church (or the room's audience, for invite/team).
+      if (BROADCAST.has(gid)) {
+        const gname = GROUP_NAMES.get(gid) || 'Your church';
+        // SECURITY: scope to the OWNING church's members — MEMBERS is the global union across every church on a
+        // shared relay, so an unscoped fan-out pushes one church's announcement to unrelated churches (cross-tenant
+        // metadata leak + spam). Mirror maybePushSermon's church filter.
+        const gcp = GROUP_CHURCH.get(gid);
+        const recips = (GROUP_VIS.get(gid) === 'invite') ? [...(GROUP_MEMBERS.get(gid) || [])]
+          : (GROUP_VIS.get(gid) === 'team') ? [...(ROSTER_PEOPLE.get(gid) || [])]
+          : [...MEMBERS].filter(m => !gcp || memberIn(m, gcp));
+        // SAFEGUARDING: THE ROOM'S NAME IS THE PUSH TITLE. canRead already refuses a minor the MESSAGES of a
+        // room their church has not marked child-safe — and this pushed that same room's name to their lock
+        // screen, which is the disclosure the withholding exists to prevent, on a path no client filter can
+        // reach. Found 2026-08-29, on the same day the member app's own room-name leak was closed; fixing one
+        // without the other would have moved the leak rather than removed it.
+        //
+        // Same rule, same maps, same fallback as the read gate twelve hundred lines below — deliberately
+        // written to look identical, because two safeguarding rules that are meant to agree should be
+        // recognisable as the same rule.
+        const gcpSafe = gcp || idNamesOwner(gid);
+        for (const r of recips) {
+          if (!r || r === evt.pubkey) continue;
+          if (gcpSafe && !GROUP_CHILDSAFE.has(gid) && (MINORS_BY.get(gcpSafe) || new Set()).has(r)) continue;
+          pushTo(r, { title: gname, body: 'New announcement', url: '/?tab=chat&group=' + gid, tag: 'grp-' + gid }, 'announce');
+        }
+        return;
+      }
+      // TEAM ROOM messages: push scoped to the pod when a pod tag is present, otherwise the whole team.
+      // Untagged messages push to every team member (owner decision: whole-team messages reach everyone).
+      if (GROUP_VIS.get(gid) === 'team') {
+        const podTag = (evt.tags.find(t => t[0] === 'pod') || [])[1];
+        const podMap = ROSTER_PODS.get(gid);
+        let recips;
+        if (podTag && podMap && podMap.has(podTag)) {
+          recips = podMap.get(podTag);             // push only to this pod's members
+        } else {
+          recips = ROSTER_PEOPLE.get(gid);         // whole team
+        }
+        if (!recips || !recips.size) return;
+        const gname = GROUP_NAMES.get(gid) || 'Your team';
+        const gcp = GROUP_CHURCH.get(gid);
+        const gcpSafe = gcp || idNamesOwner(gid);
+        for (const r of recips) {
+          if (!r || r === evt.pubkey) continue;
+          if (gcpSafe && !GROUP_CHILDSAFE.has(gid) && (MINORS_BY.get(gcpSafe) || EMPTY_SET).has(r)) continue;
+          pushTo(r, { title: gname, body: podTag ? 'New message in your pod' : 'New team message', url: '/?tab=chat&group=' + gid, tag: 'team-' + gid }, 'team');
+        }
+        return;
       }
     }
   } catch {}
@@ -3395,7 +3422,7 @@ let _hydrating = false;
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
-                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
+                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, ROSTER_PODS, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
                    FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
@@ -3743,7 +3770,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(ROSTER_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {   // a team roster — track its LINKED people so care-team admins can be resolved
     const id = d.slice(ROSTER_D.length);
     { const prev = ROSTER_BY.get(id); if (!idOwnerOk(prev && prev.cp, e, id)) return; }   // AUDIT-2026-07-24 C2: a co-tenant church must not be able to rewrite this team's roster and become its care-admin
-    if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_BY.delete(id); return; }
+    if (removed) { ROSTER_PEOPLE.delete(id); ROSTER_PODS.delete(id); ROSTER_BY.delete(id); return; }
     // READ `pubs` FIRST, FALL BACK TO `people`. From 2026-09-05 the console seals the roster's NAMES under
     // the church name key and publishes the keys alongside in the clear, as `{ pubs: [...], e: "<sealed>" }`.
     //
@@ -3763,6 +3790,23 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       src.forEach(v => { const h = toHexPub(v); if (h) set.add(h); });
     } catch {}
     ROSTER_PEOPLE.set(id, set); ROSTER_BY.set(id, { by: e.pubkey, cp: namedChurch(e) || e.pubkey });
+    // Pod membership for push scoping (team rooms only). The relay cannot read the sealed envelope,
+    // so publishRoster writes `podPubs` alongside `pubs` in the clear.
+    const podMap = new Map();
+    try {
+      const c = JSON.parse(e.content);
+      const pp = c.podPubs;
+      if (pp && typeof pp === 'object') {
+        for (const [pid, pks] of Object.entries(pp)) {
+          if (Array.isArray(pks)) {
+            const ps = new Set();
+            pks.forEach(v => { const h = toHexPub(v); if (h) ps.add(h); });
+            if (ps.size) podMap.set(pid, ps);
+          }
+        }
+      }
+    } catch {}
+    ROSTER_PODS.set(id, podMap);
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
     const fcp = finCp(e);

@@ -8541,7 +8541,7 @@ window.Steward = {
   // ['e', id, '', 'reply'] and a ['p', author]. They are APPENDED after ['p', pub] — which must stay first
   // and present, because subscribeGroupChat/subscribeGroup scope on it. The relay scopes a kind-1 by the
   // group's ['t'] tag (GROUP_CHURCH), not by p-tags, so these tags change neither church nor membership gate.
-  publishPost(content, group, replyTo) {
+  publishPost(content, group, replyTo, opts) {
     if (!sk) return Promise.resolve(null);
     let body = content || '', encTag = [];
     const gkey = group && (_skeys[group] || [])[0];
@@ -8551,7 +8551,8 @@ window.Steward = {
       console.warn('[steward] refusing plaintext post into sealed room — no key for', group);
       return Promise.resolve(null);
     }
-    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : [])], content: body }));
+    const podTag = opts && opts.pod ? [['pod', opts.pod]] : [];
+    return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag, ...podTag, ...(replyTo && replyTo.id ? [['e', replyTo.id, '', 'reply'], ...(replyTo.by ? [['p', replyTo.by]] : [])] : [])], content: body }));
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
   // and can respond; each response is encrypted to US (the creator, `pub`). Works as owner OR delegated steward.
@@ -8683,7 +8684,7 @@ window.Steward = {
           for (const k of ring) { try { text = nip44d(e.content, k); ok = true; break; } catch (x) {} }   // current key, then superseded
           if (!ok) return;
         }
-        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '' });
+        byId.set(e.id, { id: e.id, by: e.pubkey, mine: e.pubkey === pub, text, ts: e.created_at, kind: (e.tags.find(t => t[0] === 'k') || [])[1] || '', replyTo: (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || [])[1] || '', _podTag: (e.tags.find(t => t[0] === 'pod') || [])[1] || '' });
         resolveName(e.pubkey);
         emit();
       },
@@ -11858,7 +11859,18 @@ window.Steward = {
     const sealed = await _sealChurchDocReady({ roles, people, pods });
     if (sealed == null) return _saveFailed('nokey');   // no church key: NOT saved, and never with names in the clear
     if (_addrLocked(ROSTER_D + teamId)) return _saveFailed('locked');   // it went locked while we waited for the key
-    const content = JSON.stringify({ pubs: people.map(p => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
+    // podPubs: cleartext map of pod-id → pubkeys for the relay's ROSTER_PODS (push scoping).
+    // The relay cannot open the sealed envelope, so pod membership must sit alongside `pubs`.
+    const podPubs = {};
+    for (const p of pods) {
+      const pks = new Set();
+      for (const [, personId] of Object.entries(p.fills || {})) {
+        const person = people.find(x => x.id === personId);
+        if (person && person.pub) pks.add(person.pub);
+      }
+      if (pks.size) podPubs[p.id] = [...pks];
+    }
+    const content = JSON.stringify({ pubs: people.map(p => p.pub).filter(Boolean), podPubs, e: JSON.parse(sealed).e });
     // `po` carries the relay's own words back, so a refused same-second clash with a co-steward is told apart
     // from a relay that took nothing (schNoKey used to call both "your church's key hasn't arrived").
     const po = {};

@@ -1156,7 +1156,8 @@ function evtToMsg(e) {
   const kTag = (e.tags.find(t => t[0] === 'k') || [])[1];
   // NIP-10: a reply carries an 'e' tag pointing at the message it answers (marked 'reply', else the first e-tag)
   const replyTo = (e.tags.find(t => t[0] === 'e' && t[3] === 'reply') || e.tags.find(t => t[0] === 'e') || [])[1] || null;
-  const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at, replyTo };
+  const podTag = (e.tags.find(t => t[0] === 'pod') || [])[1] || null;
+  const base = { id: e.id, me, pubkey: e.pubkey, when: fmtClock(e.created_at), _ts: e.created_at, replyTo, _podTag: podTag };
   if (kTag === 'verse') { try { return { ...base, kind: 'verse', verse: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'devotional') { try { return { ...base, kind: 'devotional', card: JSON.parse(e.content) }; } catch {} }
   if (kTag === 'note') { try { return { ...base, kind: 'note', card: JSON.parse(e.content) }; } catch {} }
@@ -1543,6 +1544,10 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const [hidden, setHidden] = useC(null);        // Set of removed message ids (null until first load)
   const [menuFor, setMenuFor] = useC(null);      // message id whose leader actions menu is open
   const [infoOpen, setInfoOpen] = useC(false);   // the Group info + members overlay (opened by tapping the header)
+  const [podFilter, setPodFilter] = useC(null);  // selected pod id for team-room filtering (null = show all)
+  // Resolve the team's pods from the church roster subscription (same data source as teamRoster in GroupInfoOverlay).
+  const teamRosterForPods = group && group.team ? (ctx.churchRosters || []).find(r => r && r.team === group.id) : null;
+  const teamPods = (teamRosterForPods && teamRosterForPods.pods) || [];
   // TAP OFF A POP-OVER TO CLOSE IT (owner 2026-10-15). The reactions picker and the leader ⋯ menu stayed open
   // on a phone until tapped again — there is no "click elsewhere" the way a mouse gives one. The rule for
   // "off" is shared (TrinityReplyKit.tapOffHandler); the effect is local so it uses this screen's own React
@@ -1592,7 +1597,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         // the composer and the message tag out from under someone mid-sentence. It also emptied the prefill
         // that "share this verse to chat" depends on.
         setDraft(''); setFlag(null);
-        setMsgs([]); setReactions({}); setPickerFor(null);
+        setMsgs([]); setReactions({}); setPickerFor(null); setPodFilter(null);
         seenRef.current = { gid: group.id, ids: new Set() };
       }
       const seen = seenRef.current.ids;
@@ -1645,6 +1650,8 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const send = (extra) => {
     // NIP-10 reply markers, when this message answers another
     const rtags = replyTo ? [['e', replyTo.id, '', 'reply'], ['p', replyTo.pubkey]] : [];
+    // Pod tag: when a pod filter is active, tag the outgoing message so the relay scopes its push notification.
+    if (podFilter) rtags.push(['pod', podFilter]);
     if (window.Fellowship) {                        // publish over Nostr; relay echoes it back to our sub
       const p = extra.kind === 'verse' ? window.Fellowship.publishMessage(group.id, JSON.stringify(extra.verse), [['k', 'verse'], ...rtags], { encrypted: !!(group && group.encrypted) })
         : extra.flag ? window.Fellowship.publishMessage(group.id, extra.text, [['k', extra.flag], ...rtags], { encrypted: !!(group && group.encrypted) })
@@ -1801,11 +1808,13 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   const retainRef = React.useRef({});
   React.useEffect(() => { retainRef.current = {}; }, [group && group.id, ctx.connTick]);
   const visibleMsgs = React.useMemo(() => {
-    const shown = msgs.filter(m => !hideSet.has(m.id));
+    let shown = msgs.filter(m => !hideSet.has(m.id));
+    // Pod filter: when a team room's pod is selected, show only that pod's messages + untagged whole-team messages.
+    if (podFilter) shown = shown.filter(m => m._podTag === podFilter || !m._podTag);
     const { visible, retainedNext } = reconcileVisible(shown, queued, retainRef.current);
     retainRef.current = retainedNext;
     return visible;
-  }, [msgs, hidden, queued]);   // eslint-disable-line
+  }, [msgs, hidden, queued, podFilter]);   // eslint-disable-line
   const msgById = {}; visibleMsgs.forEach(x => { msgById[x.id] = x; });   // resolve reply parents from the VISIBLE set only — a hidden/deleted parent must not leak back through a quote (audit U3)
   // perf #2: memoize the rendered bubbles so a composer keystroke (draft state) doesn't re-render the whole
   // thread. Recompute only when message / reaction / menu / pin / picker state actually changes — NOT on draft.
@@ -1972,6 +1981,14 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', padding: '5px 12px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
           <Icon name="lock" size={13} /> {encState === 'sealed' ? 'End-to-end encrypted' : encState === 'nokey' ? 'Encrypted · no key yet' : 'Not encrypted'}</span>
       </div>
+      {group.team && teamPods.length > 0 ? (
+        <div className="no-scrollbar" style={{ display: 'flex', gap: 7, padding: '7px 14px', borderBottom: '1px solid var(--line)', overflowX: 'auto', flexShrink: 0 }}>
+          <button onClick={() => setPodFilter(null)} style={{ padding: '5px 12px', borderRadius: 999, border: podFilter === null ? 'none' : '1px solid var(--line)', background: podFilter === null ? 'var(--clay)' : 'var(--surface-2)', color: podFilter === null ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>All</button>
+          {teamPods.map(p => (
+            <button key={p.id} onClick={() => setPodFilter(podFilter === p.id ? null : p.id)} style={{ padding: '5px 12px', borderRadius: 999, border: podFilter === p.id ? 'none' : '1px solid var(--line)', background: podFilter === p.id ? 'var(--clay)' : 'var(--surface-2)', color: podFilter === p.id ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{p.name}</button>
+          ))}
+        </div>
+      ) : null}
       <div ref={scRef} className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* THE STATE, AND NOTHING ELSE. This was a full sentence — "Church room · not end-to-end encrypted, so
             the relay can read messages here" — shown over every room, every time. The owner removed it
