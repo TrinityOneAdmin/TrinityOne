@@ -20121,6 +20121,18 @@ zoo`.split("\n");
     pubkey: null,
     npub: null,
     hasKey: false,
+    // THE KEY THIS CONSOLE ACTUALLY SIGNS WITH = getPublicKey(sk), the identity the relay sees as e.pubkey and
+    // the one every document this console publishes lands under. This is NOT `pubkey`: on a DELEGATED console
+    // `pubkey` is the church we act for (our OWN key still signs), and in network-identity mode `pubkey` is the
+    // network key — so neither `pubkey` nor `churchPub` equals the signer in every mode (owner: all three agree;
+    // delegated: signer == churchPub != pubkey; network: signer == pubkey != churchPub). Dual-control binds the
+    // approver to the SIGNER at the relay (finance/billapproval:<billId>:<approverhex>, scripts/gateway.mjs), so
+    // the console's "is this me?" / "who recorded it?" check MUST anchor on this, not on pubkey. Exposes the
+    // existing internal _myOwnPub(). Callers: app/stew-finance.jsx — recordBill, approveBill, and the Bills-row
+    // self-approval guard (the only three readers; see finance-dual-control-anchors-on-the-signer.test.mjs).
+    signerPub() {
+      return _myOwnPub();
+    },
     // C2. Proof of possession for a relay's advertised identity key — see src/relay-identity.src.js.
     // CONSUMED BY THE C4 GATE: every candidate address is proved through this before it can receive anything.
     // Still exposed so a browser session can ask a relay the question by hand. The `relayPub` this console

@@ -82,6 +82,11 @@ export function fakeReact() {
 // render", never as a pass. `hasKey` is a property on the real object, so it is one here.
 export function fakeSteward(overrides = {}) {
   const base = { hasKey: false, ...overrides };
+  // The console reads S.signerPub() for "who am I?" — the key it actually SIGNS with. On an owner console that
+  // equals pubkey (the default these screens model); a delegated/network test can override signerPub. Default it
+  // here so the Proxy's catch-all (k => () => undefined) does not blank out the identity. Real accessor:
+  // window.Steward.signerPub() in src/steward.src.js.
+  if (!('signerPub' in base)) base.signerPub = () => base.pubkey;
   return new Proxy(base, {
     get: (t, k) => (k in t ? t[k] : (typeof k === 'symbol' || k === 'then') ? undefined : () => undefined),
     has: (t, k) => k in t || typeof k === 'string',
