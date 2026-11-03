@@ -181,8 +181,8 @@ test('(b) the licence follows the active source, and "All (merge)" concatenates 
   // switch to "All (merge)" → BOTH credits (CC BY obliges each source\'s attribution)
   button(tree, 'Cross References (openbible.info)')[0].props.onClick();
   let t = render();
-  const allOpt = button(t, 'All (merge)');
-  assert.equal(allOpt.length, 1, 'there is no "All (merge)" option in the picker');
+  const allOpt = button(t, 'All sources');
+  assert.equal(allOpt.length, 1, 'there is no "All sources" option in the picker');
   allOpt[0].props.onClick();
   t = render();
   const page = reads(t);

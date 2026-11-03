@@ -1216,7 +1216,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             const activeName = active === 'all' ? 'All sources' : ((xrAll.find(s => s.abbr === active) || {}).name || active);
             const lic = window.Bible.crossrefLicense ? window.Bible.crossrefLicense(active) : '';
             // The source picker — shown only with two or more installed sources, exactly like the commentary
-            // picker. An "All (merge)" row keeps today's combined view; every other row names a source + abbr.
+            // picker. An "All sources" row keeps today's combined view; every other row names a source + abbr.
             const picker = xrAll.length >= 2 ? (
               <div style={{ position: 'relative', marginBottom: 14 }}>
                 <button onClick={() => setXrDrop(!xrDrop)} style={{
@@ -1235,7 +1235,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
                     borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: '6px 0',
                     maxHeight: '50vh', overflowY: 'auto', animation: 'trinityRise .16s ease both'
                   }}>
-                    {[{ abbr: 'all', name: 'All (merge)' }].concat(xrAll.map(s => ({ abbr: s.abbr, name: s.name + ' · ' + s.abbr }))).map(s => (
+                    {[{ abbr: 'all', name: 'All sources' }].concat(xrAll.map(s => ({ abbr: s.abbr, name: s.name + ' · ' + s.abbr }))).map(s => (
                       <button key={s.abbr} onClick={() => pickXrSource(s.abbr)} style={{
                         width: '100%', padding: '11px 15px', border: 'none', cursor: 'pointer', textAlign: 'left',
                         background: s.abbr === active ? 'color-mix(in oklab, var(--clay) 18%, var(--surface))' : 'transparent',

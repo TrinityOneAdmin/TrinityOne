@@ -15,6 +15,10 @@
 // The catalogue `license` string is still set (for the Library download card), but the panel credit comes
 // from this DB column.
 //
+// REBUILD ⇒ RE-PIN: this zip's sha256 is pinned in catalog.json. The zip mtime is fixed for determinism, but a
+// rebuild on a different sqlite/node version can still change the DB page layout (and thus the hash), so after
+// ANY rebuild recompute the hash and update the catalog.json `sha256` for geneva-notes, or install will refuse it.
+//
 // Run: node scripts/build-geneva-commentary.mjs [path-to.cmt.mybible]
 import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync, mkdirSync, copyFileSync, readFileSync } from 'node:fs';
