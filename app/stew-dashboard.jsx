@@ -8261,6 +8261,7 @@ function DashMembers() {
   // one-line result under the row it was pressed on. localStorage-free: this is not church state.
   const [expiryDraft, setExpiryDraft] = React.useState({});
   const [expiryNote, setExpiryNote] = React.useState(null);   // { pk, tone: 'ok'|'fail', text }
+  const [expiryEditing, setExpiryEditing] = React.useState(null);   // the ONE pk whose date picker is open; null = every row at rest
   // SET OR CHANGE one person's clearance expiry. This is the "re-clear with a date" control. It republishes
   // the WHOLE cleared list unchanged (so nobody is added or removed) with just this person's `expiry` set or
   // cleared; setApproved carries everyone else's date across untouched. A refusal (a date beyond the year cap,
@@ -8272,6 +8273,7 @@ function DashMembers() {
         if (ok === false || ok == null) { setExpiryNote({ pk, tone: 'fail', text: 'That date did not save on every relay. Check your connection and try again.' }); return ok; }
         setExpiryNote({ pk, tone: 'ok', text: dateStr ? 'Expiry date saved.' : 'Expiry date removed.' });
         setExpiryDraft(d => { const n = { ...d }; delete n[pk]; return n; });
+        setExpiryEditing(e => (e === pk ? null : e));   // COLLAPSE back to the resting state on success
         return ok;
       })
       .catch((e) => { setExpiryNote({ pk, tone: 'fail', text: (e && e.message) ? e.message : 'That date could not be used. Choose a real date within about a year.' }); return false; });
@@ -8280,25 +8282,44 @@ function DashMembers() {
   // ONE cleared person's row, lifted out so the point-of-use test can render it and read the badge off the
   // screen (CLAUDE.md rules 1 & 3) rather than matching text in this unbundled file.
   const clearedRow = (c) => {
+    const who = c.name || idOf(c.pk);
     const st = clearanceExpiryState(c.until, _nowSec);
     const label = clearanceExpiryLabel(c.until, _nowSec);
     const note = (expiryNote && expiryNote.pk === c.pk) ? expiryNote : null;
+    const editing = expiryEditing === c.pk;
+    // A small inline button (resting) or a bare text link (cancel/remove), sharing one look.
+    const _mini = { border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '3px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, flexShrink: 0 };
+    const _link = { border: 'none', background: 'none', padding: '3px 2px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontSize: 11.5, textDecoration: 'underline', flexShrink: 0 };
+    const openEdit = () => { setExpiryDraft(d => ({ ...d, [c.pk]: _expiryIsoDay(c.until) })); setExpiryNote(n => (n && n.pk === c.pk ? null : n)); setExpiryEditing(c.pk); };
+    const cancelEdit = () => { setExpiryDraft(d => { const n = { ...d }; delete n[c.pk]; return n; }); setExpiryEditing(e => (e === c.pk ? null : e)); };
+    // THE CONTROL, RIGHT-ALIGNED ON THE NAME ROW so the row stays one line tall at rest. At rest it is a single
+    // small button (Edit when a date is set, Add date when none is); only tapping it reveals the picker, and a
+    // successful Save collapses straight back here (see saveExpiry).
+    const control = editing ? (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <input type="date" aria-label={'Clearance expiry date for ' + who}
+          value={expiryDraft[c.pk] != null ? expiryDraft[c.pk] : _expiryIsoDay(c.until)}
+          onChange={e => setExpiryDraft(d => ({ ...d, [c.pk]: e.target.value }))}
+          style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface)', padding: '3px 7px', fontSize: 12, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', minWidth: 0 }} />
+        <button onClick={() => saveExpiry(c.pk)} aria-label={'Save clearance expiry date for ' + who} style={_mini}>Save</button>
+        <button onClick={cancelEdit} aria-label={'Cancel editing clearance expiry date for ' + who} style={_link}>Cancel</button>
+        {c.until ? <button onClick={() => saveExpiry(c.pk, '')} aria-label={'Remove clearance expiry date for ' + who} style={_link}>Remove</button> : null}
+      </span>
+    ) : (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', flexShrink: 0 }}>
+        {c.until
+          ? <button onClick={openEdit} aria-label={'Change clearance expiry date for ' + who} style={_link}>Edit</button>
+          : <button onClick={openEdit} aria-label={'Add a clearance expiry date for ' + who} style={_mini}>Add date</button>}
+      </span>
+    );
     return (
       <div key={c.pk} style={{ padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--sage) 18%, var(--line))' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{c.name || idOf(c.pk)}</span>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{who}</span>
           {label ? <SkPill tint={clearanceExpiryTint(st)}>{label}</SkPill> : null}
+          {control}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Cleared {_clDate(c.rec)}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>Expires</span>
-          <input type="date" aria-label={'Clearance expiry date for ' + (c.name || idOf(c.pk))}
-            value={expiryDraft[c.pk] != null ? expiryDraft[c.pk] : _expiryIsoDay(c.until)}
-            onChange={e => setExpiryDraft(d => ({ ...d, [c.pk]: e.target.value }))}
-            style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface)', padding: '4px 7px', fontSize: 12, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
-          <button onClick={() => saveExpiry(c.pk)} aria-label={'Save clearance expiry date for ' + (c.name || idOf(c.pk))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '4px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}>Save</button>
-          {c.until ? <button onClick={() => saveExpiry(c.pk, '')} aria-label={'Remove clearance expiry date for ' + (c.name || idOf(c.pk))} style={{ border: 'none', background: 'none', padding: '4px 2px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontSize: 11.5, textDecoration: 'underline' }}>Remove date</button> : null}
-        </div>
         {note ? <div role="status" style={{ fontSize: 11, lineHeight: 1.4, marginTop: 3, color: note.tone === 'fail' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{note.text}</div> : null}
       </div>
     );
