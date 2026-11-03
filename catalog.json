@@ -318,6 +318,19 @@
      "desc": "Cross-references by topic — verses that share a subject in Nave's classic 1903 topical index. 22,455 verses linked across thousands of topics."
     },
     {
+     "id": "crossrefs-commentaries",
+     "name": "Commentary cross-references",
+     "abbr": "CMT",
+     "lang": "English",
+     "size": "1.3 MB",
+     "license": "Extracted from public-domain commentary text (JFB, Matthew Henry, Adam Clarke, Geneva Notes)",
+     "kind": "crossref",
+     "format": "JSON",
+     "url": "modules/crossrefs-commentaries.json",
+     "sha256": "46851c912584197b6e2e1b9de41a319ba83b84a52c45085d3b6fba4b9dd9d08b",
+     "desc": "Cross-references drawn from the text of four public-domain commentaries — 15,649 verses linked from the scripture references those authors cite."
+    },
+    {
      "id": "crossrefs-douayrheims",
      "name": "Douay-Rheims Marginal References",
      "abbr": "DR",

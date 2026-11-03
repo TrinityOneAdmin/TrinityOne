@@ -81,7 +81,7 @@ cp modules/geneva-notes.cmt.mybible.zip modules/crossrefs-geneva.json modules/cr
 if [ "${BUNDLE_MODULES:-}" = "1" ]; then
   cp modules/engbsb.zip modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
      modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \
-     modules/crossrefs-openbible.json modules/crossrefs-naves.json modules/crossrefs-douayrheims.json \
+     modules/crossrefs-openbible.json modules/crossrefs-naves.json modules/crossrefs-commentaries.json modules/crossrefs-douayrheims.json \
      modules/worddefs-wordnet.json modules/worddefs-webster.json \
      "$WWW/modules/" 2>/dev/null || true
 fi
