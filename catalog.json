@@ -303,6 +303,13 @@
      "url": "modules/crossrefs-geneva.json",
      "sha256": "207070d3717a1918e52750f2dcecb05438bd02695e7f4f4fe7814020892127f9",
      "desc": "Where the Geneva Bible's own margins send the reader — 1,874 verses cross-linked from the 1599 notes."
+    },
+    {
+     "id": "import-xref",
+     "name": "Import cross-references…",
+     "kind": "import",
+     "accept": "crossref",
+     "desc": "Add a cross-reference file you already have (.json with meta.kind = crossref)."
     }
    ]
   }
