@@ -39,11 +39,11 @@ const realParseRef = (() => {
 function xrEngine() {
   const crossrefs = {};
   let notified = 0;
-  const factory = new Function('crossrefs', 'ensureCrossrefs', 'notify',
+  const factory = new Function('CROSSREF_ALL', 'crossrefs', 'ensureCrossrefs', 'notify',
     fnBody(ENGINE, 'function loadCrossrefsJSON(obj, abbr){') + '\n' +
-    fnBody(ENGINE, 'function getCrossRefs(b, c){') + '\n' +
+    fnBody(ENGINE, 'function getCrossRefs(b, c, source){') + '\n' +
     'return { loadCrossrefsJSON, getCrossRefs };');
-  const api = factory(crossrefs, () => {}, () => { notified++; });
+  const api = factory('all', crossrefs, () => {}, () => { notified++; });
   const abbr = api.loadCrossrefsJSON(MODULE, 'TSK');
   assert.ok(notified > 0, 'loadCrossrefsJSON never called notify — the harness reached nothing');
   return { ...api, crossrefs, abbr };

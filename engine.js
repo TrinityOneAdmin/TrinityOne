@@ -191,20 +191,33 @@ window.safeImgUrl = function (v) {
   // Each module's `map` is { "<book>.<chap>.<verse>": ["Display Ref", …] } in TrinityOne book numbering,
   // best-voted first. The display strings round-trip through parseRef(), so a caller navigates straight from
   // one with Bible.parseRef(ref) — no second OSIS mapping at read time.
+  // The merge sentinel: getCrossRefs/crossrefLicense treat "all" as "every installed source". It is NOT a
+  // real abbr — loadCrossrefsJSON below refuses to register a source under it, so a module that happens to
+  // call itself "all" can never hide the merge option or shadow getCrossRefs(b,c,"all").
+  const CROSSREF_ALL = "all";
   const crossrefs = {};   // abbr -> { name, license, map }
   function loadCrossrefsJSON(obj, abbr){
-    const a = (obj && obj.meta && obj.meta.abbr) || abbr || "TSK";
+    let a = (obj && obj.meta && obj.meta.abbr) || abbr || "TSK";
+    if(a === CROSSREF_ALL) a = a + "_";   // keep the sentinel out of the store (see CROSSREF_ALL)
     crossrefs[a] = { name: (obj && obj.meta && obj.meta.name) || a, license: (obj && obj.meta && obj.meta.license) || "", map: (obj && obj.refs) || {} };
     notify();
     return a;
   }
+  // The installed cross-ref sources, for the reader's source picker — mirrors commentaryList().
+  function crossrefList(){ return Object.keys(crossrefs).map(a => ({ abbr: a, name: crossrefs[a].name })); }
   // Every cross-reference for a chapter, keyed by verse number, merged across installed cross-ref modules.
   // Lazily installs the default set on first use (like the lexicon), so the reader tab works with no manual
   // module install; returns what is loaded now (empty until the install lands, then populated on next read).
-  function getCrossRefs(b, c){
+  // `source` omitted or the "all" sentinel → merge every installed set (the original behaviour, kept so a
+  // no-arg caller is unchanged and "all" is the explicit merge). A named, installed source → ONLY that set.
+  // A named-but-absent source reads nothing: the app resolver falls back before it reaches here, but a stale
+  // pick must never leak another source's references.
+  function getCrossRefs(b, c, source){
     ensureCrossrefs();
     const out = {}, prefix = b + "." + c + ".";
-    for(const a in crossrefs){
+    const names = (source == null || source === CROSSREF_ALL) ? Object.keys(crossrefs)
+      : (Object.prototype.hasOwnProperty.call(crossrefs, source) ? [source] : []);
+    for(const a of names){
       const map = crossrefs[a].map;
       for(const key in map){
         if(key.lastIndexOf(prefix, 0) !== 0) continue;
@@ -216,7 +229,20 @@ window.safeImgUrl = function (v) {
     return out;
   }
   // The credit that must appear wherever these references are shown (CC BY obliges attribution).
-  function crossrefLicense(){ for(const a in crossrefs) if(crossrefs[a].license) return crossrefs[a].license; return ""; }
+  //   "all"      → EVERY contributing source's credit, de-duplicated (a merge shows each source's refs, so
+  //                each source's attribution is owed — returning only the first would break CC BY);
+  //   a source   → that source's own credit;
+  //   no arg     → the first credit found (legacy callers, unchanged).
+  function crossrefLicense(source){
+    if(source === CROSSREF_ALL){
+      const out = [];
+      for(const a in crossrefs){ const l = crossrefs[a].license; if(l && out.indexOf(l) === -1) out.push(l); }
+      return out.join(" · ");
+    }
+    if(source != null) return (crossrefs[source] && crossrefs[source].license) || "";
+    for(const a in crossrefs) if(crossrefs[a].license) return crossrefs[a].license;
+    return "";
+  }
 
   // ── original-language text (STEPBible TAGNT Greek NT / TAHOT Hebrew OT) — a JSON module, installed on demand ──
   // Module shape (scripts/build-original.mjs): { meta:{abbr,name,license,kind:"original",lang:"greek"|"hebrew"},
@@ -710,7 +736,16 @@ window.safeImgUrl = function (v) {
       const src = buildFromUSFM({ "book.usfm": u8 }, srcName);
       if(src) return { kind: "bible", abbr: addSource(applyMeta(src, meta)) };
     }
-    throw new Error("unrecognized file — expected a MySword .mybible module, a USFM book, or a .zip containing either");
+    // A user-supplied cross-reference JSON (the shape scripts/build-crossrefs.mjs emits). A HOSTED set is
+    // sha256-pinned and installs through installModule's JSON branch; a FILE a member imports carries no pin,
+    // so it arrives here on TLS trust (the same trust every file import rests on). Validate the shape rather
+    // than register arbitrary JSON as a cross-ref set: meta.kind must be "crossref" and refs a plain object.
+    if(head.replace(/^﻿/, "").trimStart().charAt(0) === "{"){
+      let parsed = null; try{ parsed = JSON.parse(new TextDecoder().decode(u8)); }catch(e){ parsed = null; }
+      if(parsed && parsed.meta && parsed.meta.kind === "crossref" && parsed.refs && typeof parsed.refs === "object" && !Array.isArray(parsed.refs))
+        return { kind: "crossref", abbr: loadCrossrefsJSON(parsed, (parsed.meta && parsed.meta.abbr) || (meta && meta.abbr)) };
+    }
+    throw new Error("unrecognized file — expected a MySword .mybible module, a USFM book, a cross-reference JSON, or a .zip containing either");
   }
 
   // ── IndexedDB cache (download-once) ──
@@ -1192,7 +1227,7 @@ window.safeImgUrl = function (v) {
         // (a module handed over by Quick Share must stick, not vanish when the app reopens).
         if(r && r.abbr){
           const url = "imported/" + f.name;
-          const cat = r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles";
+          const cat = r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : r.kind === "crossref" ? "crossrefs" : "bibles";
           try{ await cachePut(url, u8); }catch(e){ console.warn("cachePut failed for import (full phone?)", e); window.Bible._error = "Loaded " + r.abbr + " but couldn't save it — not enough space on this phone"; }
           recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: cat });
           noteLoadedFrom(url, r.abbr, cat);
@@ -1335,6 +1370,7 @@ window.safeImgUrl = function (v) {
       else if(meta && meta.kind === "original") removeOriginal(abbr);
       else if(cat === "commentaries") delete commentaries[abbr];
       else if(cat === "dictionaries") removeDict(abbr, url);
+      else if(cat === "crossrefs") delete crossrefs[abbr];
       else if(modules[abbr]){ delete modules[abbr]; order = order.filter(a => a !== abbr); }
       if(here === url) delete urlOf[urlKey(cat, abbr)];
     }
@@ -1518,7 +1554,7 @@ window.safeImgUrl = function (v) {
     // a record written by an older build can carry a name no loaded module has.
     get activeUrl(){ return (active && urlOf[urlKey("bibles", active)]) || null; },
     setActive(v){ if(modules[v]){ active = v; notify(); } },
-    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
+    versions, books, maxChapter, getVerses, getCommentary, commentaryList, getCrossRefs, crossrefLicense, crossrefList, getOriginal, originalList, hasOriginal, getDefinition, defineText, worddefsLicense, worddefsState, retryWorddefs, bookMeta, defaultLoc, step, refLabel, refKey, search, searchDict,
     _error: null
   };
 
