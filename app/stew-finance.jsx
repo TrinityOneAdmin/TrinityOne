@@ -2107,6 +2107,55 @@ function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
   );
 }
 
+// ---- record or EDIT a bill payment (dr accounts-payable / cr bank) --------------------------------------------
+// Used by BOTH "Mark paid" and "Edit payment". The amount pre-fills to what is still OUTSTANDING (the whole bill
+// on a first payment, the remainder afterwards) dated today, in MAJOR units (parsed to minor via booksParse) —
+// reviewing this dialog is the confirmation before any money moves. A part payment is just a smaller amount. In
+// EDIT mode the parent reverses the prior payment(s) on confirm (append-only); here we only collect the corrected
+// amount + date and never touch the ledger until Record/Update is pressed, so Cancel is always safe.
+function BillPaymentDialog({ book, bill, mode, amount0, date0, onConfirm, onClose }) {
+  const F = window.FinanceLedger;
+  const editing = mode === 'edit';
+  const dec = book.decimals || 2;
+  const [amount, setAmount] = React.useState(((amount0 || 0) / Math.pow(10, dec)).toFixed(dec));
+  const [date, setDate] = React.useState(date0 || booksTodayISO());
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const dlgRef = useStewDialog(onClose);
+  const amountMinor = booksParse(amount, book);
+  const total = F.billTotal(bill);
+  const outstanding = F.billOutstanding(bill.id, book.journal);   // owed right now; in edit mode this is ~0 (still paid), so only shown for pay mode
+  const submit = async () => {
+    if (!(amountMinor > 0)) return setErr('Enter a payment amount.');
+    if (!date) return setErr('Pick a payment date.');
+    setBusy(true); setErr('');
+    try {
+      const ok = await onConfirm({ amountMinor, dateISO: date });
+      if (ok) onClose(); else { setBusy(false); setErr('That didn’t post — the bill must be approved, or your church’s relay refused. Try again.'); }
+    } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not record that payment.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit payment' : 'Record payment'} tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>{editing ? 'Edit payment' : 'Record payment'}</h3>
+        <div style={{ fontSize: 13, color: 'var(--ink-3)', margin: '0 0 14px' }}>Bill{bill.number ? ' ' + bill.number : ''}{bill.supplier ? ' · ' + bill.supplier : ''} · total {booksFmt(total, book)}{!editing && outstanding > 0 && outstanding !== total ? ' · ' + booksFmt(outstanding, book) + ' outstanding' : ''}</div>
+        {editing ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '-8px 0 12px', lineHeight: 1.45 }}>The recorded payment is reversed and this one posted in its place — both stay in the ledger.</div> : null}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Amount ({CCY_SYM[book.baseCurrency] || book.baseCurrency})</label><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00" aria-label="Payment amount" style={bkFld} /></div>
+          <div style={{ flex: 1 }}><label style={bkLbl}>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} aria-label="Payment date" style={bkFld} /></div>
+        </div>
+        {!editing && amountMinor > 0 && outstanding > 0 && amountMinor < outstanding ? <p style={{ color: 'var(--ink-3)', fontSize: 12, margin: '8px 0 0' }}>Part payment — {booksFmt(outstanding - amountMinor, book)} will remain outstanding.</p> : null}
+        {!editing && amountMinor > outstanding && outstanding > 0 ? <p style={{ color: 'var(--ink-3)', fontSize: 12, margin: '8px 0 0' }}>More than the {booksFmt(outstanding, book)} outstanding — the extra will show as overpaid.</p> : null}
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy || !(amountMinor > 0)} style={{ flex: 2, height: 44, border: 'none', background: (busy || !(amountMinor > 0)) ? 'var(--line)' : 'var(--clay)', color: (busy || !(amountMinor > 0)) ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 11, cursor: (busy || !(amountMinor > 0)) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{busy ? (editing ? 'Updating…' : 'Recording…') : (editing ? 'Update payment' : 'Record payment')}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashFinance() {
   const F = window.FinanceLedger;
   const S = window.Steward;
@@ -2243,6 +2292,7 @@ function DashFinanceBook() {
   }, [_bIdv, _bConn]);
   const [bookErrors, setBookErrors] = React.useState([]);
   const [recording, setRecording] = React.useState(false);   // null|true for a fresh entry, or a {initial} prefill for a correction
+  const [paying, setPaying] = React.useState(null);        // bill payment dialog: null closed · {bill, mode:'pay'|'edit', amount0, date0, reverseSeqs}
   const [importing, setImporting] = React.useState(false);
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
   const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors|insights (default Transactions)
@@ -2877,15 +2927,51 @@ function DashFinanceBook() {
   // same path so the guard still applies. THE APPROVAL GUARD is in F.billPaymentEntry (it throws unless the bill
   // is approved), so this cannot pay an unapproved bill even if the disabled Mark-paid control were bypassed —
   // the screen control AND the engine guard both have to be deleted for an unapproved bill to be paid.
-  const payBill = async (bill, amount) => {
+  const payBill = async (bill, amount, date) => {
     const b = bookRef.current;
     const approved = F.isBillApproved(bill, { mode: billApprovalMode, approvals: billApprovals, recordedBy: bill.by || '' });
     let entry = null;
-    try { if (!F.assertApAccount(b)) return false; entry = F.post(b, F.billPaymentEntry(bill, { date: booksTodayISO(), amount, approved })); }
+    try { if (!F.assertApAccount(b)) return false; entry = F.post(b, F.billPaymentEntry(bill, { date: date || booksTodayISO(), amount, approved })); }
     catch (e) { setBillFlash((e && e.message) || 'That bill cannot be paid yet.'); bump(); return false; }
     const ok = await pubEntry(b, entry);
     if (!ok) _dropIfRefused(b, entry);
     bump();
+    return ok;
+  };
+  // --- Bill PAYMENT dialog flow (Mark paid opens it; a paid bill can Edit its payment) -------------------------
+  // Open the payment dialog. Pay mode pre-fills the amount with what is still OUTSTANDING (the whole bill on a
+  // first payment, the remainder on a later one) dated today; reviewing the dialog IS the confirmation step.
+  const openPay = (bill) => setPaying({ bill, mode: 'pay', amount0: F.billOutstanding(bill.id, bookRef.current.journal), date0: booksTodayISO(), reverseSeqs: [] });
+  // A bill's LIVE payment entries: tagged with the bill, DEBIT accounts-payable (the receive entry credits it),
+  // not themselves reversals, and not already reversed. These are what "Edit payment" reverses and re-records.
+  const billPayEntries = (billId) => { const b = bookRef.current; return (b.journal || []).filter(e => e && e.bill === billId && e.reverses == null && (e.postings || []).some(p => p.account === F.AP_ACCT && p.dir === 'dr') && !(b.journal || []).some(j => j.reverses === e.seq)); };
+  // Edit a recorded payment: pre-fill from the paid total + latest date, and remember the seqs so SUBMIT reverses
+  // them (append-only) before posting the correction. Opening the dialog changes nothing; Cancel changes nothing.
+  const openEditPayment = (bill) => {
+    const pes = billPayEntries(bill.id);
+    if (!pes.length) { setBillFlash('There is no recorded payment to edit.'); return; }
+    const total = pes.reduce((s, e) => s + (e.postings || []).filter(p => p.account === F.AP_ACCT && p.dir === 'dr').reduce((t, p) => t + p.amount, 0), 0);
+    const date0 = pes.map(e => e.date).filter(Boolean).sort().slice(-1)[0] || booksTodayISO();
+    setPaying({ bill, mode: 'edit', amount0: total, date0, reverseSeqs: pes.map(e => e.seq) });
+  };
+  // Dialog confirm: reverse any prior payments (edit mode), then post the new one. If a reversal fails, stop and
+  // say so rather than leaving a half-done edit.
+  const confirmPay = async ({ amountMinor, dateISO }) => {
+    const info = paying; if (!info) return false;
+    const b = bookRef.current;
+    for (const seq of (info.reverseSeqs || [])) {
+      const orig = (b.journal || []).find(e => e.seq === seq);
+      if (!orig) continue;
+      // A bill-TAGGED reversal: F.reverse / undo build an UNtagged mirror, so billOutstanding (which filters by
+      // the bill tag) would not see the payment come back and the bill would still read paid. Tag it so the
+      // subledger nets correctly; the original payment entry is then excluded from a later edit (it is reversed).
+      let rev; try { rev = F.post(b, { reverses: seq, bill: info.bill.id, memo: 'Reversal of #' + seq, postings: orig.postings.map(p => ({ account: p.account, fund: p.fund, dir: p.dir === 'dr' ? 'cr' : 'dr', amount: p.amount })) }); }
+      catch (e) { setBillFlash('Could not reverse the old payment — nothing changed. Try again.'); bump(); return false; }
+      const okR = await pubEntry(b, rev);
+      if (!okR) { _dropIfRefused(b, rev); setBillFlash('Could not reverse the old payment — nothing changed. Try again.'); bump(); return false; }
+    }
+    const ok = await payBill(info.bill, amountMinor, dateISO);
+    setBillFlash(ok ? (info.mode === 'edit' ? 'Payment updated.' : 'Marked paid.') : 'That didn’t post — the bill must be approved first, or the relay refused.');
     return ok;
   };
   // AN ANNUAL BUDGET (finance/budget:<id>, Phase 7) — a REPLACEABLE finance doc that is a pure READ OVERLAY:
@@ -3494,7 +3580,8 @@ function DashFinanceBook() {
                     <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{booksFmt(total, book)}{bill.received ? ' · received ' + bill.received : ''}{bill.due ? ' · due ' + bill.due : ''}</div>
                   </div>
                   {!approved && status !== 'paid' && <button onClick={() => { approveBill(bill).then(ok => setBillFlash(ok ? 'Approved.' : 'That didn’t approve — your church’s relay refused or did not answer.')); }} disabled={bookErrors.length > 0 || iRecorded} title={iRecorded ? 'You recorded this bill — another finance steward must approve it (dual control)' : 'Approve this bill so it can be paid (finance stewards only)'} style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: (bookErrors.length || iRecorded) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: (bookErrors.length || iRecorded) ? 0.5 : 1 }}>Approve</button>}
-                  {status !== 'paid' && <button onClick={() => { payBill(bill).then(ok => setBillFlash(ok ? 'Marked paid.' : 'That didn’t post — the bill must be approved first, or the relay refused.')); }} disabled={!approved || bookErrors.length > 0} title={approved ? 'Record payment in full (dr payables / cr bank)' : 'Approve the bill first — an unapproved bill cannot be paid'} style={{ ...bkRowBtn, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: (!approved || bookErrors.length) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: (!approved || bookErrors.length) ? 0.5 : 1 }}>Mark paid</button>}
+                  {status !== 'paid' && <button onClick={() => openPay(bill)} disabled={!approved || bookErrors.length > 0} title={approved ? 'Record a payment against this bill' : 'Approve the bill first — an unapproved bill cannot be paid'} style={{ ...bkRowBtn, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: (!approved || bookErrors.length) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: (!approved || bookErrors.length) ? 0.5 : 1 }}>Mark paid</button>}
+                  {status === 'paid' && <button onClick={() => openEditPayment(bill)} disabled={bookErrors.length > 0} title="Edit the recorded payment — reverses it and lets you re-enter the amount or date" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Edit payment</button>}
                 </div>
               );
             })}
@@ -3553,6 +3640,7 @@ function DashFinanceBook() {
       {contactEditing && <BooksContact initial={contactEditing} onSave={saveContact} onClose={() => setContactEditing(null)} />}
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
       {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}
+      {paying && <BillPaymentDialog book={book} bill={paying.bill} mode={paying.mode} amount0={paying.amount0} date0={paying.date0} onConfirm={confirmPay} onClose={() => setPaying(null)} />}
       {budgetEditing && <BooksBudgetEdit book={book} initial={budgetEditing} onSave={saveBudget} onClose={() => setBudgetEditing(null)} />}
     </div>
   );

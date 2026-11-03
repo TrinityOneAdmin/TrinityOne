@@ -98,6 +98,7 @@ return {
   BooksContact: { initial: null, onSave() {}, onClose },
   BooksInvoiceEdit: { book, contacts: [], onIssue() {}, onClose },
   BooksBillEdit: { book, contacts: [], onSave() {}, onClose },
+  BillPaymentDialog: { book, bill: { id: 'b1', number: 'INV-1', supplier: 'Acme', lines: [{ account: 'bank', fund: 'general', amount: 1000 }] }, mode: 'pay', amount0: 1000, date0: '2026-10-29', onConfirm() {}, onClose },
   BooksBudgetEdit: { book, initial: null, onSave() {}, onClose },
   FinanceReconcile: { book, F, today: '2026-10-29', saved: null, onSaveReconcile() {}, onClose },
   FinanceImport: { book, F, donors: [], onPost() {}, onClose },
