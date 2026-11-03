@@ -484,6 +484,11 @@
           <span class="apply-tag" id="gpStatus"></span>
         </div>
         <div id="gpBody"><div class="muted">Checking…</div></div>
+        <div class="toggle-row" id="stayPublicRow">
+          <div class="toggle-main"><div class="toggle-t">Stay public</div><div class="toggle-s">Keeps the secure public tunnel open, and reopens it after a restart. Off closes it and keeps it closed.</div></div>
+          <span class="wz-meta" id="stayMsg"></span>
+          <input type="checkbox" class="sw" id="t-stay" title="On: keep this relay reachable from the internet over a secure tunnel. Off: close it." aria-label="Stay public">
+        </div>
       </section>
 
       <section class="card" id="relayNameCard" aria-label="Your relay's name">
