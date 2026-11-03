@@ -2211,6 +2211,60 @@ function StewMemberSheet({ label, initials, av, pubkey, accent, facts, actions, 
   );
 }
 
+function DmHeaderDropdown({ dmConvos, narrow }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  React.useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('pointerdown', close, true);
+    return () => document.removeEventListener('pointerdown', close, true);
+  }, [open]);
+  const openDm = (c) => {
+    const m = members.find(x => x.pubkey === c.peer);
+    window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: c.peer, npub: c.npub, name: (m && m.name) || '', nip05: m && m.nip05 } }));
+    setOpen(false);
+  };
+  const count = dmConvos.length;
+  const _tap = narrow ? { minWidth: 44, minHeight: 44, padding: '8px 10px', justifyContent: 'center' } : { padding: '9px 14px' };
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(v => !v)} title="Private messages" aria-label={narrow ? 'Messages' : undefined} className="sk-btn sk-btn--ghost" style={{ ..._tap, fontSize: 13 }}>
+        <Icon name="chat" size={15} color="currentColor" />
+        {!narrow ? ' Messages' : null}
+        {count > 0 ? <span style={{ position: 'absolute', top: narrow ? 4 : 2, right: narrow ? 4 : 6, minWidth: 17, height: 17, borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', lineHeight: 1, pointerEvents: 'none' }}>{count}</span> : null}
+      </button>
+      {open && count > 0 ? (
+        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, width: 300, maxHeight: 340, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ padding: '6px 8px 8px', fontWeight: 800, fontSize: 12, letterSpacing: '.4px', color: 'var(--ink-3)' }}>PRIVATE MESSAGES</div>
+          {dmConvos.map(c => {
+            const m = members.find(x => x.pubkey === c.peer);
+            const name = (m && m.name) || 'Member';
+            const handle = m && m.nip05 ? m.nip05 : null;
+            const initials = (name !== 'Member' ? name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+            return (
+              <div key={c.peer} onClick={() => openDm(c)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
+                <SkBadge initials={initials} av={(m && m.av) || null} pubkey={c.peer} size={32} radius={10} accent={SK_TINT.gold.fg} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                  {handle ? <div style={{ fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, fontFamily: 'var(--font-ui)' }}>@{handle}</div> : null}
+                </div>
+                <Icon name="chat" size={15} color="var(--clay-ink)" />
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {open && count === 0 ? (
+        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, width: 260, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: '18px 16px', textAlign: 'center' }}>
+          <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>No private messages yet</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings PAGE (see SETTINGS_GROUPS); the four old tab keys are aliased
@@ -2355,6 +2409,11 @@ function StewDashboard({ initial = 'overview' }) {
   React.useEffect(() => { const f = () => setVw(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
   const narrow = vw < 760;
 
+  // DM conversations — lifted here so the badge and dropdown are visible on every tab, not only Members.
+  const [dmConvos, setDmConvos] = React.useState([]);
+  const _dmConnTop = window.useStewardConn ? window.useStewardConn() : 0;
+  React.useEffect(() => (window.Steward && window.Steward.subscribeDMConvos ? window.Steward.subscribeDMConvos(setDmConvos) : undefined), [_dmConnTop]);
+
   // first-run wizard: shown only when THIS device created THIS church (`newchurch`, set by seedNewChurch) and
   // setup hasn't been completed or skipped. It used to infer "fresh church" from the name still being empty
   // 1.8s after mount, which is a guess about relay latency — wrong on 2G, and since this wizard now publishes
@@ -2407,7 +2466,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'calendar' && (stewCapState('content').allowed ? <DashCalendar /> : <StewCapBlocked cap='content' />)}
       {tab === 'rooms' && (stewCapState('content').allowed ? <DashRooms /> : <StewCapBlocked cap='content' />)}
       {tab === 'resources' && (stewCapState('content').allowed ? <DashResources /> : <StewCapBlocked cap='content' />)}
-      {tab === 'members' && (stewCapState('members').allowed ? <DashMembers /> : <StewCapBlocked cap='members' />)}
+      {tab === 'members' && (stewCapState('members').allowed ? <DashMembers dmConvos={dmConvos} /> : <StewCapBlocked cap='members' />)}
       {tab === 'checkin' && (stewCapState('safeguarding').allowed ? <DashCheckin /> : <StewCapBlocked cap='safeguarding' />)}
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
@@ -2436,7 +2495,8 @@ function StewDashboard({ initial = 'overview' }) {
   );
   const actions = (
     <React.Fragment>
-      <button onClick={() => setInvite(true)} title="Show your church’s joining code and QR for new members" aria-label={narrow ? 'Invite code' : undefined} className="sk-btn sk-btn--ghost" style={{ ..._tap, fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> {narrow ? '' : 'Invite code'}</button>
+      <DmHeaderDropdown dmConvos={dmConvos} narrow={narrow} />
+      <button onClick={() => setInvite(true)} title="Show your church's joining code and QR for new members" aria-label={narrow ? 'Invite code' : undefined} className="sk-btn sk-btn--ghost" style={{ ..._tap, fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> {narrow ? '' : 'Invite code'}</button>
       {tab === 'rota'
         ? _capBtn(_contentCap.allowed, _contentCap.why, 'New team', 'plus', () => setAddingTeam(true), 'Create a new serving team')
         : _capBtn(_contentCap.allowed, _contentCap.why, 'New post', 'send', () => setPosting(true), 'Write a new post for your church')}
@@ -7891,7 +7951,7 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
   return Promise.all(jobs).then(() => [...new Set(failed)]);
 }
 
-function DashMembers() {
+function DashMembers({ dmConvos: dmConvosProp }) {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers();   // real members: joined (presence) and/or active (posts)
@@ -7936,10 +7996,8 @@ function DashMembers() {
   // Which member we have just told the steward something about, and what. Per-row rather than a page banner:
   // the thing being explained happened to one person and the row is where they are looking.
   const [minorNotice, setMinorNotice] = React.useState(null);   // { pk, text }
-  const [dmConvos, setDmConvos] = React.useState([]);
+  const dmConvos = dmConvosProp || [];
   const [dmOpen, setDmOpen] = React.useState(true);
-  const _dmConn = window.useStewardConn ? window.useStewardConn() : 0;
-  React.useEffect(() => (window.Steward && window.Steward.subscribeDMConvos ? window.Steward.subscribeDMConvos(setDmConvos) : undefined), [_dmConn]);
   const openDm = (c) => { const m = members.find(x => x.pubkey === c.peer); window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: c.peer, npub: c.npub, name: (m && m.name) || '', nip05: m && m.nip05 } })); };
   // does THIS church allow children to have photographs at all? (church profile → features.childPhotos)
   const kidPhotosAllowed = !!(church && church.features && church.features.childPhotos === true);

@@ -2337,7 +2337,9 @@ function TodayScreen({ ctx }) {
   // U6: the pinned-sermon card can be dismissed (per sermon id, persisted) and stops saying "New" once it ages,
   // so it doesn't hold the prime Today slot forever. A newly-pinned sermon (different id) reappears.
   const [sermonSeen, setSermonSeen] = React.useState(() => { try { return localStorage.getItem('trinityone.sermon-seen') || ''; } catch { return ''; } });
-  // Verse of the day STARTS MINIMISED as a compact bar you tap to open (owner, 2026-09-01); the preference
+  // Verse of the day — can be turned off entirely from Settings (trinityone.votd-off).
+  const [votdOff, setVotdOff] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-off') === '1'; } catch { return false; } });
+  // STARTS MINIMISED as a compact bar you tap to open (owner, 2026-09-01); the preference
   // persists, and an explicit choice outranks the default. The stored key tells the three cases apart:
   // ABSENT = never touched it (gets the new default, minimised), '0' = chose expanded, '1' = chose minimised.
   // Only the absent case moves, so no member's existing choice is discarded. `!== '0'` and not `!== '1'` is
@@ -2775,8 +2777,8 @@ function TodayScreen({ ctx }) {
         </div>
       ) : null}
 
-      {/* Verse of the day — minimisable hero (near the reading section) */}
-      {votdMin ? (
+      {/* Verse of the day — minimisable hero (near the reading section); hidden entirely when turned off in Settings */}
+      {!votdOff && (votdMin ? (
         <button type="button" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
           <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
@@ -2817,7 +2819,7 @@ function TodayScreen({ ctx }) {
           </div>
         </div>
       </div>
-      )}
+      ))}
 
             {/* Continue reading */}
       <SectionLabel>Continue reading</SectionLabel>
