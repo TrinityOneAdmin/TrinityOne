@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';
+import { createTunnelWatchdog } from './relay-selfheal.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
 // The names this relay gates by, from the ONE declared list (ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
@@ -1736,6 +1737,47 @@ function startCloudflared() {
   });
   return CF_STARTING;
 }
+// ── Self-healing tunnel watchdog (SPEC §3). A quick tunnel can die AT THE EDGE (its trycloudflare name
+// goes NXDOMAIN, or Cloudflare answers 530/1033 "origin unreachable") while the local cloudflared child
+// stays alive, so the box advertises a dead address for ever. The watchdog probes OUR OWN current public
+// url FROM THE OUTSIDE (never loopback — loopback passes while the edge is dead), and on N consecutive
+// failures heals: kill the dead child FIRST, respawn (only a fresh process mints a new url), reclaim OUR
+// name. The real decision lives in ./relay-selfheal.mjs (dependency-injected so it is testable without a
+// tunnel or the network); this wires the real side-effects.
+//
+// (1) External edge probe of our own url. A response that routes to our origin = reachable; a Cloudflare
+//     edge error (530/1033/1016) = origin/tunnel dead; a DNS/connection failure throws = dead.
+async function probeOwnPublicUrl(url) {
+  try {
+    const r = await fetch(url.replace(/\/+$/, '') + '/status', { cache: 'no-store', redirect: 'manual', signal: AbortSignal.timeout(8000) });
+    if (r.status === 530 || r.status === 1033 || r.status === 1016) return { ok: false, status: r.status };   // edge up, origin tunnel dead (transient within the N-window)
+    return { ok: true, status: r.status };   // any ordinary response proves the edge routed to us
+  } catch { return { ok: false, status: 0 }; }
+}
+// (3) Known-good control probe: distinguishes "my tunnel is dead" from "my uplink/internet is down /
+//     box asleep". If BOTH our url and a canonical url fail, the uplink is down and we must NOT restart.
+//     Any response (even a 404) proves DNS+TLS+uplink work; two endpoints so one being down isn't mistaken
+//     for our own uplink being down.
+async function controlUrlReachable() {
+  for (const u of [DIRECTORY + '/status', 'https://www.cloudflare.com/cdn-cgi/trace']) {
+    try { await fetch(u, { cache: 'no-store', redirect: 'manual', signal: AbortSignal.timeout(8000) }); return true; } catch {}
+  }
+  return false;
+}
+// (4) Heal teardown — mirrors /tunnel/down EXCEPT it must NOT unlink TUNNEL_FLAG: we are healing, the box
+//     stays public. Without this kill-first, startCloudflared() short-circuits on CF_CHILD && CF_URL and
+//     returns the DEAD url, re-claiming the DEAD address.
+function tunnelTeardownForHeal() { try { if (CF_CHILD) CF_CHILD.kill(); } catch {} CF_CHILD = null; CF_URL = ''; }
+const tunnelWatchdog = createTunnelWatchdog({
+  getState: () => ({ child: CF_CHILD, url: CF_URL, startInFlight: !!CF_STARTING }),   // (5) startInFlight = the CF_STARTING lock
+  wantPublic: () => { try { return existsSync(TUNNEL_FLAG); } catch { return false; } },   // §2: stay-public flag → ensure a tunnel on boot
+  probe: probeOwnPublicUrl,
+  controlProbe: controlUrlReachable,
+  teardown: tunnelTeardownForHeal,
+  start: startCloudflared,            // re-enters the CF_STARTING lock; only a fresh process mints a new url
+  reclaim: reclaimRelayName,          // RULE 10: re-points OUR name only (MY_RELAY_NAME at CF_URL); dials no other relay
+  log: (m) => { try { console.log(m); } catch {} },
+}, { intervalMs: Number(process.env.RELAY_SELFHEAL_INTERVAL_MS) || 60_000 });
 // Open a URL in the host's default browser. The relay runs locally in the desktop Suite, so it can do what the
 // sandboxed webview can't (the webview has no Tauri IPC + target="_blank" is a no-op there). Fire-and-forget.
 function openExternal(url) {
@@ -9044,7 +9086,18 @@ server.listen(PORT, BIND_HOST, () =>
 _firstPublicRefresh.then(() => logDeclaredAddresses('startup')).catch(() => {});
 // "Stay public": if the operator turned on the tunnel before, re-open it on boot (a fresh quick-tunnel URL) and
 // re-point the relay's directory name at it — so a restart doesn't silently drop members' access.
-if (existsSync(TUNNEL_FLAG)) { setTimeout(() => { startCloudflared().then(r => console.log(r.ok ? `  tunnel re-opened: ${r.url}` : `  tunnel re-open failed: ${r.error || ''}`)).catch(() => {}); }, 2500); }
+// §2 FAST PATH: one quick re-open 2.5s after boot. This is a SINGLE attempt with no retry — if wifi/DNS
+// is not ready that early on a real reboot, or cloudflared's one attempt hits a transient edge failure,
+// it settles ok:false and the box would stay private with the flag still set (the measured reboot bug,
+// 2026-11-03). The §2 SAFETY NET for that is the watchdog below: stay-public ON + no tunnel up => it
+// OPENS one and keeps retrying (uplink-gated, backed off), so a missed/failed boot re-open self-recovers.
+if (existsSync(TUNNEL_FLAG)) { setTimeout(() => { startCloudflared().then(r => console.log(r.ok ? `  tunnel re-opened: ${r.url}` : `  tunnel re-open failed: ${r.error || ''} (watchdog will retry)`)).catch(() => {}); }, 2500); }
+// SPEC §2+§3: arm the self-healing tunnel supervisor. §3: on N consecutive external-probe failures of our
+// OWN url (with a reachable control url) it heals a silently-dead tunnel (kill→respawn→reclaim). §2: when
+// stay-public is on and no tunnel is up, it ensures one is opened. It is a no-op when stay-public is off
+// and no tunnel is up, and its boot-grace + CF_STARTING-lock checks keep it from fighting the 2.5s boot
+// re-open above. Timer is unref'd so it never holds the process open.
+tunnelWatchdog.start();
 // KEEP THE INSTALLER CURRENT ACROSS A CODE UPDATE. relay-update.sh unpacks with --exclude='relay/*', so a
 // relay that has just updated its code is still handing out whatever APK it held before — this boot check is
 // the moment that gap closes. Both timers are no-ops unless the operator turned SETTINGS.keepApkCurrent on,
