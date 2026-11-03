@@ -188,6 +188,70 @@ function stewNav(NAV, church, opts) {
   return copy.map(mark);
 }
 
+// SAFEGUARDING CLEARANCE EXPIRY (2026-11-02). A cleared adult's youth clearance may carry an optional end
+// DATE, because a real-world clearance (DBS and the church's own checks) is renewed, not forever. These are
+// FLAG ONLY: an expired clearance never cuts off any access — the relay stores and serves the cleared list
+// exactly as before, nothing here touches the relay gate or approvedIn, and the member never sees their own
+// date in v1. The state is computed at RENDER time from the device clock and never baked at ingest, so a
+// clearance crosses from "expiring" to "expired" on the day it falls due with no write anywhere. The two
+// reminder thresholds are the owner's: a gentle nudge one MONTH before, a stronger one two WEEKS before.
+//
+// NO date is NEVER "expired" — it is the pilot back-compat case (a person cleared before this field existed),
+// read as "cleared, no expiry". PURE on purpose, same reason as stewNav above: app/*.jsx ships UNBUNDLED, so
+// CLAUDE.md rule 3 forbids proving the badge by matching text — the point-of-use test RUNS these and renders
+// the row that calls them (scripts/clearance-expiry.test.mjs).
+const EXPIRY_SOON_SECONDS = 30 * 24 * 3600;     // one month out: the first, gentle reminder
+const EXPIRY_URGENT_SECONDS = 14 * 24 * 3600;   // two weeks out: the stronger one
+// 'none' (no date set — never treated as expired), 'future' (> a month off), 'soon' (<= a month),
+// 'urgent' (<= a fortnight), 'expired' (the date has passed). Seconds are whole unix seconds.
+function clearanceExpiryState(untilSec, nowSec) {
+  if (!Number.isFinite(untilSec) || untilSec <= 0) return 'none';
+  const left = untilSec - nowSec;
+  if (left < 0) return 'expired';
+  if (left <= EXPIRY_URGENT_SECONDS) return 'urgent';
+  if (left <= EXPIRY_SOON_SECONDS) return 'soon';
+  return 'future';
+}
+// The words for the per-row badge. '' when there is no date, so a date-less clearance shows no badge at all.
+function clearanceExpiryLabel(untilSec, nowSec) {
+  const st = clearanceExpiryState(untilSec, nowSec);
+  if (st === 'none') return '';
+  let dateStr = '';
+  try { dateStr = new Date(untilSec * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch (e) {}
+  if (st === 'expired') return dateStr ? 'Expired ' + dateStr : 'Expired';
+  if (st === 'future') return dateStr ? 'Expires ' + dateStr : '';
+  const days = Math.max(0, Math.ceil((untilSec - nowSec) / 86400));
+  if (st === 'urgent') return 'Expires in ' + days + (days === 1 ? ' day' : ' days');
+  const weeks = Math.max(1, Math.round(days / 7));
+  return 'Expires in ' + weeks + (weeks === 1 ? ' week' : ' weeks');
+}
+// The SkPill tint for a state: three distinguishable steps up the scale of alarm — neutral `ink` for a far-off
+// date, amber `gold` one month out (soon), a stronger orange `ember` two weeks out (urgent), red `clay` once it
+// has lapsed (expired). The colour, not only the wording, tells the steward how close it is.
+function clearanceExpiryTint(st) {
+  return st === 'expired' ? 'clay' : st === 'urgent' ? 'ember' : st === 'soon' ? 'gold' : 'ink';
+}
+// How many of a set of clearances are expiring (within the month) or already expired — for the section header
+// and the Overview nudge. `untils` is the per-person expiry seconds (0/undefined/null meaning "no date").
+function clearanceExpiryCounts(untils, nowSec) {
+  let expiring = 0, expired = 0;
+  for (const u of (untils || [])) {
+    const st = clearanceExpiryState(u, nowSec);
+    if (st === 'expired') expired++;
+    else if (st === 'soon' || st === 'urgent') expiring++;
+  }
+  return { expiring, expired };
+}
+// A unix-seconds date as the 'YYYY-MM-DD' a <input type="date"> wants, in LOCAL time to match permissionWindow().
+function _expiryIsoDay(untilSec) {
+  if (!Number.isFinite(untilSec) || untilSec <= 0) return '';
+  try {
+    const d = new Date(untilSec * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  } catch (e) { return ''; }
+}
+
 // sidebar identity control: switch the WHOLE console between the church and any network it owns.
 // With no owned networks it's just the church name button (tap to rename).
 //
@@ -3608,6 +3672,28 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
+  // SAFEGUARDING CLEARANCE EXPIRY — one gentle line on the home page when a youth clearance is within a month
+  // of its date or already past it, so a steward who rarely opens Members still learns a renewal is due. The
+  // state is computed here from the device clock (clearanceExpiryCounts), the same engine the Members list
+  // header uses, so the two can never disagree. FLAG ONLY: it links to the list and removes nobody's access.
+  // Gated on the Members capability so a delegate without it is not sent to a tab that is locked for them
+  // (the scar the stewardReqBanner beside this carries: directions to a door that is not there for a delegate).
+  const _sgExpiry = window.useStewardSafeguard ? window.useStewardSafeguard() : { approved: [], expiry: {} };
+  const _sgExpiryCounts = clearanceExpiryCounts((_sgExpiry.approved || []).map(pk => (_sgExpiry.expiry || {})[pk] || null), Math.floor(Date.now() / 1000));
+  const _sgExpiryParts = [
+    _sgExpiryCounts.expired ? (_sgExpiryCounts.expired + ' youth ' + (_sgExpiryCounts.expired === 1 ? 'clearance has expired' : 'clearances have expired')) : '',
+    _sgExpiryCounts.expiring ? (_sgExpiryCounts.expiring + ' ' + (_sgExpiryCounts.expiring === 1 ? 'is expiring soon' : 'are expiring soon')) : '',
+  ].filter(Boolean);
+  const safeguardExpiryBanner = (stewCapState('members').allowed && _sgExpiryParts.length) ? (
+    <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--gold) 34%, var(--line))', background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
+      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={21} color="#fff" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 15.5, color: '#8a6717' }}>A youth clearance needs renewing</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{_sgExpiryParts.join(' · ')}. Open Members to set a new date — nobody loses access in the meantime.</div>
+      </div>
+      <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Open <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
+    </button>
+  ) : null;
   // live verse prompt indicator on overview
   var _ovVpState = React.useState(null), _ovVp = _ovVpState[0], _setOvVp = _ovVpState[1];
   React.useEffect(function() {
@@ -3712,7 +3798,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{safeguardExpiryBanner}{bannerPair}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3721,7 +3807,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{bannerPair}{stat}{groupsPanel}{joinPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{safeguardExpiryBanner}{bannerPair}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3731,6 +3817,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       {pendingBanner}
       {careReqBanner}
       {stewardReqBanner}
+      {safeguardExpiryBanner}
       {bannerPair}
       {stat}
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
@@ -7290,7 +7377,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   // A re-seat is a SEAT MOVING, and everything attached to the seat has to move with it — the child marking,
   // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
   // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
-  const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
+  const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [], expiry: {} };
   const _gdCheckin = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
   const guardiansNow = _gdCheckin.links || {};
   // …AND THE CLOSED PAIRS. reseatMember copies `closed` to the new key and keeps the old pairs (src/steward.src.js,
@@ -7358,7 +7445,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
       // about all of them — including the stolen-phone block, which it never mentioned at all.
       const r = await window.Steward.reseatMember(member, newPub, {
         name: realName || '', reseats, admitted: admittedList,
-        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
+        minors: sgNow.minors, approved: sgNow.approved, expiry: sgNow.expiry, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
         blocked: blockedNow, blockOld: taken,
         rosters: rostersNow, rotas: rotasNow, careTeamId: careTeamIdNow,
       });
@@ -8176,13 +8263,65 @@ function DashMembers() {
   //
   // Declared HERE, below nameByPub and idOf, because it is worked out while the screen DRAWS — the first
   // version sat above them and took the whole Members screen down to the error page.
-  const clearedList = (sg.approved || []).map(pk => ({ pk, name: nameByPub[pk] || '', rec: (sg.cleared || {})[pk] || null }))
+  // `until`: the OPTIONAL clearance expiry, pub -> unix seconds, additive beside the cleared record (see
+  // setApproved / subscribeSafeguard). Absent means "cleared, no expiry" — NEVER expired; the back-compat case.
+  const clearedList = (sg.approved || []).map(pk => ({ pk, name: nameByPub[pk] || '', rec: (sg.cleared || {})[pk] || null, until: (sg.expiry || {})[pk] || null }))
     .sort((a, b) => (a.name || 'zz').localeCompare(b.name || 'zz'));
   const [showCleared, setShowCleared] = React.useState(false);
+  // Computed once per draw rather than per row, so every badge on the panel agrees about "now".
+  const _nowSec = Math.floor(Date.now() / 1000);
+  // The expiring/expired tallies for the section header (and the Overview nudge reads the same engine).
+  const _clExpiryCounts = clearanceExpiryCounts(clearedList.map(c => c.until), _nowSec);
   const _clDate = (rec) => {
     if (!rec || !rec.at) return 'no record of when';
     try { return new Date(rec.at * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
     catch (e) { return 'no record of when'; }
+  };
+  // The optional-date control's own transient state: the in-progress date per person (before Save), and a
+  // one-line result under the row it was pressed on. localStorage-free: this is not church state.
+  const [expiryDraft, setExpiryDraft] = React.useState({});
+  const [expiryNote, setExpiryNote] = React.useState(null);   // { pk, tone: 'ok'|'fail', text }
+  // SET OR CHANGE one person's clearance expiry. This is the "re-clear with a date" control. It republishes
+  // the WHOLE cleared list unchanged (so nobody is added or removed) with just this person's `expiry` set or
+  // cleared; setApproved carries everyone else's date across untouched. A refusal (a date beyond the year cap,
+  // or in the past) comes back as a thrown message from setApproved and is SURFACED here, not swallowed.
+  const saveExpiry = (pk, override) => {
+    const dateStr = override !== undefined ? override : (expiryDraft[pk] != null ? expiryDraft[pk] : '');
+    const r = (() => { try { return Promise.resolve(window.Steward.setApproved(sg.approved || [], { listKnown: !!sg.clearedKnown, expiry: { [pk]: dateStr } })); } catch (e) { return Promise.reject(e); } })()
+      .then((ok) => {
+        if (ok === false || ok == null) { setExpiryNote({ pk, tone: 'fail', text: 'That date did not save on every relay. Check your connection and try again.' }); return ok; }
+        setExpiryNote({ pk, tone: 'ok', text: dateStr ? 'Expiry date saved.' : 'Expiry date removed.' });
+        setExpiryDraft(d => { const n = { ...d }; delete n[pk]; return n; });
+        return ok;
+      })
+      .catch((e) => { setExpiryNote({ pk, tone: 'fail', text: (e && e.message) ? e.message : 'That date could not be used. Choose a real date within about a year.' }); return false; });
+    return r;
+  };
+  // ONE cleared person's row, lifted out so the point-of-use test can render it and read the badge off the
+  // screen (CLAUDE.md rules 1 & 3) rather than matching text in this unbundled file.
+  const clearedRow = (c) => {
+    const st = clearanceExpiryState(c.until, _nowSec);
+    const label = clearanceExpiryLabel(c.until, _nowSec);
+    const note = (expiryNote && expiryNote.pk === c.pk) ? expiryNote : null;
+    return (
+      <div key={c.pk} style={{ padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--sage) 18%, var(--line))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{c.name || idOf(c.pk)}</span>
+          {label ? <SkPill tint={clearanceExpiryTint(st)}>{label}</SkPill> : null}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Cleared {_clDate(c.rec)}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>Expires</span>
+          <input type="date" aria-label={'Clearance expiry date for ' + (c.name || idOf(c.pk))}
+            value={expiryDraft[c.pk] != null ? expiryDraft[c.pk] : _expiryIsoDay(c.until)}
+            onChange={e => setExpiryDraft(d => ({ ...d, [c.pk]: e.target.value }))}
+            style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface)', padding: '4px 7px', fontSize: 12, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <button onClick={() => saveExpiry(c.pk)} aria-label={'Save clearance expiry date for ' + (c.name || idOf(c.pk))} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 8, padding: '4px 9px', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}>Save</button>
+          {c.until ? <button onClick={() => saveExpiry(c.pk, '')} aria-label={'Remove clearance expiry date for ' + (c.name || idOf(c.pk))} style={{ border: 'none', background: 'none', padding: '4px 2px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontSize: 11.5, textDecoration: 'underline' }}>Remove date</button> : null}
+        </div>
+        {note ? <div role="status" style={{ fontSize: 11, lineHeight: 1.4, marginTop: 3, color: note.tone === 'fail' ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{note.text}</div> : null}
+      </div>
+    );
   };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = async (r) => {
@@ -9005,18 +9144,13 @@ function DashMembers() {
           <div style={{ marginBottom: 10, flexShrink: 0, borderRadius: 12, border: '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))', background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', overflow: 'hidden' }}>
             <button onClick={() => setShowCleared(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '11px 13px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
               <Icon name="shield" size={16} color="var(--sage)" />
-              <span style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--ink)' }}>Cleared for youth work · {clearedList.length}</span>
+              <span style={{ fontWeight: 800, fontSize: 13.5, color: 'var(--ink)' }}>Cleared for youth work · {clearedList.length}{_clExpiryCounts.expiring ? ' · ' + _clExpiryCounts.expiring + ' expiring' : ''}{_clExpiryCounts.expired ? ' · ' + _clExpiryCounts.expired + ' expired' : ''}</span>
               <span style={{ marginLeft: 'auto', display: 'flex' }}><Icon name={showCleared ? 'chevU' : 'chevD'} size={15} color="var(--ink-3)" /></span>
             </button>
             {showCleared ? (
               <div className="no-scrollbar" style={{ maxHeight: 220, overflowY: 'auto', padding: '0 13px 11px' }}>
-                {clearedList.map(c => (
-                  <div key={c.pk} style={{ padding: '7px 0', borderTop: '1px solid color-mix(in oklab, var(--sage) 18%, var(--line))' }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{c.name || idOf(c.pk)}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>Cleared {_clDate(c.rec)}</div>
-                  </div>
-                ))}
-                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, paddingTop: 9 }}>Clearances granted before this record existed show as <b>no record of when</b> — they are not back-dated.</div>
+                {clearedList.map(clearedRow)}
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, paddingTop: 9 }}>Clearances granted before this record existed show as <b>no record of when</b> — they are not back-dated. An expiry date is optional and is a reminder only: it never removes anyone's access on its own.</div>
               </div>
             ) : null}
           </div>

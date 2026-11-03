@@ -15353,7 +15353,7 @@ zoo`.split("\n");
   var BLOCKED_D = "trinityone/blocked:";
   var MINORS_D = "trinityone/minors:";
   var APPROVED_D = "trinityone/approved:";
-  var _clearedTrail = { cp: "", map: {}, list: [], loaded: false };
+  var _clearedTrail = { cp: "", map: {}, list: [], expiry: {}, loaded: false };
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
   var NAMEKEY_D = "trinityone/namekey:";
@@ -17842,7 +17842,7 @@ zoo`.split("\n");
   function _resetChurchScopedState() {
     lastProfile = {};
     _profileLoaded = false;
-    _clearedTrail = { cp: "", map: {}, list: [], loaded: false };
+    _clearedTrail = { cp: "", map: {}, list: [], expiry: {}, loaded: false };
     _clearanceSent.clear();
     _careRoster = /* @__PURE__ */ new Set();
     _careRosterKnown = false;
@@ -22911,6 +22911,7 @@ zoo`.split("\n");
       let tMinors = 0, tApproved = 0, tNophoto = 0, tGuardians = 0;
       let sawMinors = false, sawEose = false, sawApproved = false;
       let cleared = {};
+      let expiry = {};
       const isLoaded = () => sawMinors && sawEose;
       const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed();
       const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed();
@@ -22928,7 +22929,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -22938,11 +22939,12 @@ zoo`.split("\n");
               const _a2 = JSON.parse(e.content);
               approved = _a2.pubkeys || [];
               if (_a2.cleared && typeof _a2.cleared === "object") cleared = _a2.cleared;
-              _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), loaded: true };
+              if (_a2.expiry && typeof _a2.expiry === "object") expiry = _a2.expiry;
+              _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), expiry, loaded: true };
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -22953,7 +22955,7 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           } else if (d === GUARDIANS_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
@@ -22963,7 +22965,7 @@ zoo`.split("\n");
             } catch {
               guardians = {};
             }
-            onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -22974,7 +22976,7 @@ zoo`.split("\n");
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
           sawEose = true;
-          onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+          onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
         }
       });
       return () => {
@@ -23439,16 +23441,29 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       const mine = _clearedTrail.cp === pub && _clearedTrail.loaded ? _clearedTrail : null;
       const prior = mine && mine.map || {};
+      const priorExp = mine && mine.expiry || {};
       const knownPrev = mine ? new Set(mine.list || []) : opts && opts.listKnown ? /* @__PURE__ */ new Set() : null;
       const cleared = {};
+      const expIn = opts && opts.expiry && typeof opts.expiry === "object" ? opts.expiry : null;
+      const expiry = {};
       for (const p of list) {
-        if (prior[p]) {
-          cleared[p] = prior[p];
-          continue;
+        cleared[p] = prior[p] ? prior[p] : knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
+        if (expIn && Object.prototype.hasOwnProperty.call(expIn, p)) {
+          const raw = expIn[p];
+          if (raw) {
+            if (typeof raw === "number") {
+              if (Number.isInteger(raw) && raw > 0) expiry[p] = raw;
+            } else {
+              const w = permissionWindow("dated", { until: String(raw), at: now() });
+              if (!w) throw new Error("That clearance expiry date could not be used. Choose a real date that is in the future and no more than about a year ahead \u2014 it is not back-dated, and nothing renews it on its own.");
+              expiry[p] = w.until;
+            }
+          }
+        } else if (Number.isInteger(priorExp[p]) && priorExp[p] > 0) {
+          expiry[p] = priorExp[p];
         }
-        cleared[p] = knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
       }
-      return _landed("cleared-adults list", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk))));
+      return _landed("cleared-adults list", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared, expiry }) }), sk))));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -23992,7 +24007,9 @@ zoo`.split("\n");
       }
       if (wasCleared && appr.indexOf(newH) === -1) {
         nextAppr = [...appr, newH];
-        if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true }))) throw new Error("Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.");
+        const oldExp = o.expiry && Number.isInteger(o.expiry[oldH]) && o.expiry[oldH] > 0 ? o.expiry[oldH] : null;
+        const carry = oldExp ? { expiry: { [newH]: oldExp } } : null;
+        if (!await w(() => window.Steward.setApproved(nextAppr, { listKnown: true, ...carry || {} }))) throw new Error("Couldn\u2019t save their youth clearance, so nothing was changed. Check your connection and try again.");
       }
       const g = o.guardians || {};
       let nextG = null;
