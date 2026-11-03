@@ -96,7 +96,7 @@ function finItemToDoc(it) {
   // encrypted body, which a crafting writer could set to anyone to approve their own bill (finance-audit-
   // 2026-11-02 #1). Fall back to the body field ONLY in local/no-relay mode, where `_by` is absent and the
   // single local user is both parties, so it is not a security boundary.
-  if (id.startsWith('bill:')) return { t: 'bill', id: id.slice(5), number: it.number || '', supplier: it.supplier || '', lines: Array.isArray(it.lines) ? it.lines : [], received: it.received || '', due: it.due || '', by: (it._by != null ? it._by : (it.by || '')), approved: it.approved || null, receiveSeq: it.receiveSeq ?? null };
+  if (id.startsWith('bill:')) return { t: 'bill', id: id.slice(5), number: it.number || '', supplier: it.supplier || '', lines: Array.isArray(it.lines) ? it.lines : [], received: it.received || '', due: it.due || '', by: (it._by != null ? it._by : (it.by || '')), approved: it.approved || null, receiveSeq: it.receiveSeq ?? null, voided: !!it.voided };
   // A DUAL-CONTROL approval (finance/billapproval:<billId>:<approverhex>). The APPROVER is read from the d-tag,
   // which the relay BINDS to the event signer (it refuses a write whose signer != the hex in the address — the
   // check-in-arrival house pattern), so it cannot be forged by another writer. `id` here is the d-tag suffix
@@ -2107,6 +2107,40 @@ function FinTabStrip({ tab, setTab, moreOpen, setMoreOpen }) {
   );
 }
 
+// ---- confirm REMOVING a bill (void) ---------------------------------------------------------------------------
+// Removing a bill moves money (its recorded payment is reversed so the bank is restored), so it is a confirmed
+// MOMENT, never one tap. The ledger keeps every entry: the parent posts append-only reversals and marks the bill
+// doc voided, so the bill is hidden from the list (a "Show removed" toggle brings it back) but the audit trail
+// stays. onConfirm does the void and returns ok; nothing changes until "Remove bill" is pressed, so Cancel is safe.
+function BillRemoveDialog({ book, bill, onConfirm, onClose }) {
+  const F = window.FinanceLedger;
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const dlgRef = useStewDialog(onClose);
+  const total = F.billTotal(bill);
+  const paid = total - F.billOutstanding(bill.id, book.journal);   // what has actually been paid out against it
+  const go = async () => {
+    setBusy(true); setErr('');
+    try { const ok = await onConfirm(); if (ok) onClose(); else { setBusy(false); setErr('That didn’t remove — your church’s relay refused or did not answer. Nothing changed. Try again.'); } }
+    catch (e) { setBusy(false); setErr((e && e.message) || 'Could not remove that bill.'); }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,24,28,.44)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 66, padding: 16 }} onClick={onClose}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Remove bill" tabIndex={-1} style={{ ...bkCard, width: 420, maxWidth: '100%', maxHeight: '92vh', overflow: 'auto', outline: 'none' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 19 }}>Remove this bill?</h3>
+        <div style={{ fontSize: 13, color: 'var(--ink-3)', margin: '0 0 12px' }}>Bill{bill.number ? ' ' + bill.number : ''}{bill.supplier ? ' · ' + bill.supplier : ''} · total {booksFmt(total, book)}</div>
+        <p style={{ color: 'var(--ink)', fontSize: 13.5, lineHeight: 1.5, margin: '0 0 6px' }}>{paid > 0 ? 'Its recorded payment of ' + booksFmt(paid, book) + ' is reversed, so the bank balance is restored, and the bill is hidden from the list.' : 'The bill is hidden from the list.'}</p>
+        <p style={{ color: 'var(--ink-3)', fontSize: 12.5, lineHeight: 1.5, margin: '0 0 2px' }}>Every entry stays in the ledger for your records — nothing is deleted. Turn on <b>Show removed</b> to see it again.</p>
+        {err && <p style={{ color: 'var(--clay-deep, #b4462f)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, height: 44, border: '1px solid var(--line)', background: 'transparent', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, color: 'var(--ink)' }}>Cancel</button>
+          <button onClick={go} disabled={busy} style={{ flex: 2, height: 44, border: 'none', background: busy ? 'var(--line)' : 'var(--clay)', color: busy ? 'var(--ink-3)' : 'var(--on-clay)', borderRadius: 11, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800 }}>{busy ? 'Removing…' : 'Remove bill'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---- record or EDIT a bill payment (dr accounts-payable / cr bank) --------------------------------------------
 // Used by BOTH "Mark paid" and "Edit payment". The amount pre-fills to what is still OUTSTANDING (the whole bill
 // on a first payment, the remainder afterwards) dated today, in MAJOR units (parsed to minor via booksParse) —
@@ -2293,6 +2327,8 @@ function DashFinanceBook() {
   const [bookErrors, setBookErrors] = React.useState([]);
   const [recording, setRecording] = React.useState(false);   // null|true for a fresh entry, or a {initial} prefill for a correction
   const [paying, setPaying] = React.useState(null);        // bill payment dialog: null closed · {bill, mode:'pay'|'edit', amount0, date0, reverseSeqs}
+  const [removing, setRemoving] = React.useState(null);    // bill REMOVE (void) confirm dialog: null closed · {bill}
+  const [showRemovedBills, setShowRemovedBills] = React.useState(false);   // reveal voided bills in the list (audit trail)
   const [importing, setImporting] = React.useState(false);
   const [viewingAtt, setViewingAtt] = React.useState('');    // the data: URI of a receipt being viewed, or ''
   const [tab, setTab] = React.useState('transactions');   // which Finance tab shows: transactions|reports|accounts|invoices|bills|budget|donors|insights (default Transactions)
@@ -2916,7 +2952,7 @@ function DashFinanceBook() {
     }
     // LIGHT: re-publish the bill doc with the approval field set. PRESERVE `by` (the recorder) — a replaceable
     // doc is overwritten wholesale, so dropping it here would wipe who recorded the bill.
-    const body = { number: bill.number || '', supplier: bill.supplier || '', lines: bill.lines || [], received: bill.received || '', due: bill.due || '', by: bill.by || '', receiveSeq: bill.receiveSeq ?? null, approved: { by: me, ts: Math.floor(Date.now() / 1000) } };
+    const body = { number: bill.number || '', supplier: bill.supplier || '', lines: bill.lines || [], received: bill.received || '', due: bill.due || '', by: bill.by || '', receiveSeq: bill.receiveSeq ?? null, approved: { by: me, ts: Math.floor(Date.now() / 1000) }, voided: !!bill.voided };
     if (!useRelay) { setBills(xs => xs.map(x => x.id === bill.id ? { ...x, approved: body.approved } : x)); bump(); return true; }
     const ok = await S.encPublish('finance/bill:' + bill.id, body);
     bump();
@@ -2941,7 +2977,11 @@ function DashFinanceBook() {
   // --- Bill PAYMENT dialog flow (Mark paid opens it; a paid bill can Edit its payment) -------------------------
   // Open the payment dialog. Pay mode pre-fills the amount with what is still OUTSTANDING (the whole bill on a
   // first payment, the remainder on a later one) dated today; reviewing the dialog IS the confirmation step.
-  const openPay = (bill) => setPaying({ bill, mode: 'pay', amount0: F.billOutstanding(bill.id, bookRef.current.journal), date0: booksTodayISO(), reverseSeqs: [] });
+  // GUARD: outstanding can be <= 0 on a corrupt/stale bill (e.g. a payment tagged to the bill but its receive
+  // never was — the subledger then reads a NEGATIVE balance). Pre-filling that would put a negative amount in the
+  // field and the dialog's amount>0 check would dead-lock the Record button. Fall back to the bill total so the
+  // control is never stuck; such a bill is normally cleared with Remove, but paying it must stay possible.
+  const openPay = (bill) => { const out = F.billOutstanding(bill.id, bookRef.current.journal); setPaying({ bill, mode: 'pay', amount0: out > 0 ? out : F.billTotal(bill), date0: booksTodayISO(), reverseSeqs: [] }); };
   // A bill's LIVE payment entries: tagged with the bill, DEBIT accounts-payable (the receive entry credits it),
   // not themselves reversals, and not already reversed. These are what "Edit payment" reverses and re-records.
   const billPayEntries = (billId) => { const b = bookRef.current; return (b.journal || []).filter(e => e && e.bill === billId && e.reverses == null && (e.postings || []).some(p => p.account === F.AP_ACCT && p.dir === 'dr') && !(b.journal || []).some(j => j.reverses === e.seq)); };
@@ -2973,6 +3013,45 @@ function DashFinanceBook() {
     const ok = await payBill(info.bill, amountMinor, dateISO);
     setBillFlash(ok ? (info.mode === 'edit' ? 'Payment updated.' : 'Marked paid.') : 'That didn’t post — the bill must be approved first, or the relay refused.');
     return ok;
+  };
+  // --- REMOVE a bill (void) ------------------------------------------------------------------------------------
+  // The journal entries attributable to a bill: everything TAGGED with the bill id (its receive + any payments +
+  // any reversals' originals), plus the stored receiveSeq for the stale case where an OLD build posted the receive
+  // UNtagged (so billOutstanding can read negative). Skip entries that are themselves reversals, or already
+  // reversed, so we never double-reverse. These are what Remove unwinds so AP and bank net back to zero.
+  const billLiveEntries = (billId, receiveSeq) => {
+    const b = bookRef.current; const j = b.journal || [];
+    const reversed = new Set(j.filter(e => e && e.reverses != null).map(e => e.reverses));
+    const seqs = [];
+    for (const e of j) {
+      if (!e || e.reverses != null || reversed.has(e.seq)) continue;
+      if (e.bill === billId || (receiveSeq != null && e.seq === receiveSeq)) seqs.push(e.seq);
+    }
+    return seqs;
+  };
+  // Void a bill: post a bill-TAGGED reversal of each live entry (append-only — the originals stay in the ledger),
+  // so any recorded payment is given back to the bank and the expense unwound, then mark the bill doc `voided` so
+  // the list hides it (a "Show removed" toggle brings it back). This is ALSO the escape hatch for a stale bill
+  // whose payment was tagged but receive was not: reversing the tagged payment restores the bank even then.
+  const voidBill = async (bill) => {
+    const b = bookRef.current;
+    for (const seq of billLiveEntries(bill.id, bill.receiveSeq)) {
+      const orig = (b.journal || []).find(e => e.seq === seq);
+      if (!orig) continue;
+      let rev; try { rev = F.post(b, { reverses: seq, bill: bill.id, memo: 'Removed bill' + (bill.number ? ' ' + bill.number : ''), postings: orig.postings.map(p => ({ account: p.account, fund: p.fund, dir: p.dir === 'dr' ? 'cr' : 'dr', amount: p.amount })) }); }
+      catch (e) { setBillFlash('Could not remove the bill — nothing changed. Try again.'); bump(); return false; }
+      const okR = await pubEntry(b, rev);
+      if (!okR) { _dropIfRefused(b, rev); setBillFlash('Could not remove the bill — nothing changed. Try again.'); bump(); return false; }
+    }
+    // Mark the bill doc voided. A replaceable doc is overwritten wholesale, so carry every field (dropping `by`
+    // or `approved` here would rewrite who recorded/approved it).
+    const body = { number: bill.number || '', supplier: bill.supplier || '', lines: bill.lines || [], received: bill.received || '', due: bill.due || '', by: bill.by || '', receiveSeq: bill.receiveSeq ?? null, approved: bill.approved || null, voided: true };
+    if (!useRelay) { setBills(xs => xs.map(x => x.id === bill.id ? { ...x, voided: true } : x)); bump(); return true; }
+    const ok = await S.encPublish('finance/bill:' + bill.id, body);
+    if (ok === false || ok == null) { setBillFlash('That didn’t remove — your church’s relay refused or did not answer.'); bump(); return false; }
+    setBills(xs => xs.map(x => x.id === bill.id ? { ...x, voided: true } : x));   // optimistic; the round-trip confirms it
+    bump();
+    return true;
   };
   // AN ANNUAL BUDGET (finance/budget:<id>, Phase 7) — a REPLACEABLE finance doc that is a pure READ OVERLAY:
   // it carries {year, lines:[{account, fund, amount}]} and is NEVER posted to the journal (no encPublish of a
@@ -3560,10 +3639,12 @@ function DashFinanceBook() {
             const tone = status === 'paid' ? 'var(--sage, #4f7a5e)' : status === 'overdue' ? 'var(--clay-deep, #b4462f)' : 'var(--ink-3)';
             return <span data-bill-status={status} style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: tone, border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 8 }}>{status}</span>;
           };
-          const rows = bills.slice().sort((a, b) => (a.received < b.received ? 1 : a.received > b.received ? -1 : 0));
+          const hasRemoved = bills.some(b => b.voided);
+          const rows = bills.filter(b => showRemovedBills || !b.voided).slice().sort((a, b) => (a.received < b.received ? 1 : a.received > b.received ? -1 : 0));
           return (
           <div style={{ marginTop: 12 }}>
             <div style={{ color: 'var(--ink-3)', fontSize: 12.5, marginBottom: 8 }}>Recording a bill books the expense now (accrual) and tracks what is owed. A bill must be <b>approved</b> before it can be paid{billApprovalMode === 'dual' ? ' — dual control is on, so a DIFFERENT finance steward than the one who recorded it must approve it (you cannot approve your own bill).' : '.'}</div>
+            {hasRemoved ? <button onClick={() => setShowRemovedBills(v => !v)} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink-3)', marginBottom: 8 }}>{showRemovedBills ? 'Hide removed bills' : 'Show removed bills'}</button> : null}
             {billFlash ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '0 0 8px' }}>{billFlash}</div> : null}
             {rows.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 13.5, padding: '4px 0' }}>No bills yet. Record one you have received — the double-entry and what you owe are kept for you, and it must be approved before it is paid.</div>}
             {rows.map(bill => {
@@ -3576,12 +3657,13 @@ function DashFinanceBook() {
               return (
                 <div key={bill.id} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>Bill{bill.number ? ' ' + bill.number : ''}{bill.supplier ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {bill.supplier}</span> : null}{badge(status)}{approved ? <span data-bill-approved="1" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--sage, #4f7a5e)', border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 6 }}>approved</span> : null}</div>
+                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>Bill{bill.number ? ' ' + bill.number : ''}{bill.supplier ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {bill.supplier}</span> : null}{bill.voided ? <span data-bill-removed="1" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 8 }}>removed</span> : <>{badge(status)}{approved ? <span data-bill-approved="1" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--sage, #4f7a5e)', border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 6 }}>approved</span> : null}</>}</div>
                     <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{booksFmt(total, book)}{bill.received ? ' · received ' + bill.received : ''}{bill.due ? ' · due ' + bill.due : ''}</div>
                   </div>
-                  {!approved && status !== 'paid' && <button onClick={() => { approveBill(bill).then(ok => setBillFlash(ok ? 'Approved.' : 'That didn’t approve — your church’s relay refused or did not answer.')); }} disabled={bookErrors.length > 0 || iRecorded} title={iRecorded ? 'You recorded this bill — another finance steward must approve it (dual control)' : 'Approve this bill so it can be paid (finance stewards only)'} style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: (bookErrors.length || iRecorded) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: (bookErrors.length || iRecorded) ? 0.5 : 1 }}>Approve</button>}
-                  {status !== 'paid' && <button onClick={() => openPay(bill)} disabled={!approved || bookErrors.length > 0} title={approved ? 'Record a payment against this bill' : 'Approve the bill first — an unapproved bill cannot be paid'} style={{ ...bkRowBtn, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: (!approved || bookErrors.length) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: (!approved || bookErrors.length) ? 0.5 : 1 }}>Mark paid</button>}
-                  {status === 'paid' && <button onClick={() => openEditPayment(bill)} disabled={bookErrors.length > 0} title="Edit the recorded payment — reverses it and lets you re-enter the amount or date" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Edit payment</button>}
+                  {!bill.voided && !approved && status !== 'paid' && <button onClick={() => { approveBill(bill).then(ok => setBillFlash(ok ? 'Approved.' : 'That didn’t approve — your church’s relay refused or did not answer.')); }} disabled={bookErrors.length > 0 || iRecorded} title={iRecorded ? 'You recorded this bill — another finance steward must approve it (dual control)' : 'Approve this bill so it can be paid (finance stewards only)'} style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: (bookErrors.length || iRecorded) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: (bookErrors.length || iRecorded) ? 0.5 : 1 }}>Approve</button>}
+                  {!bill.voided && status !== 'paid' && <button onClick={() => openPay(bill)} disabled={!approved || bookErrors.length > 0} title={approved ? 'Record a payment against this bill' : 'Approve the bill first — an unapproved bill cannot be paid'} style={{ ...bkRowBtn, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: (!approved || bookErrors.length) ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: (!approved || bookErrors.length) ? 0.5 : 1 }}>Mark paid</button>}
+                  {!bill.voided && status === 'paid' && <button onClick={() => openEditPayment(bill)} disabled={bookErrors.length > 0} title="Edit the recorded payment — reverses it and lets you re-enter the amount or date" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Edit payment</button>}
+                  {!bill.voided && <button onClick={() => setRemoving({ bill })} disabled={bookErrors.length > 0} title="Remove this bill — reverses any recorded payment and hides it (every entry is kept in the ledger)" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink-3)', opacity: bookErrors.length ? 0.5 : 1 }}>Remove</button>}
                 </div>
               );
             })}
@@ -3641,6 +3723,7 @@ function DashFinanceBook() {
       {invEditing && <BooksInvoiceEdit book={book} contacts={contacts} onIssue={issueInvoice} onClose={() => setInvEditing(null)} />}
       {billEditing && <BooksBillEdit book={book} contacts={contacts} onSave={recordBill} onClose={() => setBillEditing(null)} />}
       {paying && <BillPaymentDialog book={book} bill={paying.bill} mode={paying.mode} amount0={paying.amount0} date0={paying.date0} onConfirm={confirmPay} onClose={() => setPaying(null)} />}
+      {removing && <BillRemoveDialog book={book} bill={removing.bill} onConfirm={() => voidBill(removing.bill)} onClose={() => setRemoving(null)} />}
       {budgetEditing && <BooksBudgetEdit book={book} initial={budgetEditing} onSave={saveBudget} onClose={() => setBudgetEditing(null)} />}
     </div>
   );
