@@ -1633,6 +1633,20 @@ async function refreshNamedRelays() {
     try {
       const j = await resolveRelayName(entry.name); const newUrl = normRelay(j && j.url);
       if (!newUrl || newUrl === entry.url) continue;
+      // PUBKEY PINNING (SPEC self-healing 2026-11-03, item 7; CLAUDE.md rule 10). A name is held by whoever
+      // claimed it, so a re-pointed directory record could aim it at a DIFFERENT box. When this binding was
+      // armed with the box's proved key (connect-by-name, net-doc adoption), the swap is allowed only when
+      // BOTH the resolved directory record AND a fresh identity proof at the new address present that same
+      // key — so a re-point can never silently move the church's traffic between two boxes. This is bounded
+      // to a key the console already held for this name (no widening, so not a rule-10 breach); it only
+      // refuses a swing to a key it did not. Entries with no pinned key (a nameless auto-find binding, an
+      // entry saved before pinning) keep the admit-only path below, which is all that can be checked.
+      if (entry.pub) {
+        if (String((j && j.pub) || '').toLowerCase() !== entry.pub) continue;   // the directory now points this name elsewhere
+        let provedPub = '';
+        try { const pr = await verifyRelayIdentity(newUrl); provedPub = String((pr && pr.relayPub) || '').toLowerCase(); } catch (e) { provedPub = ''; }
+        if (provedPub !== entry.pub) continue;                                  // the box answering at the new address is not the pinned one
+      }
       // C5 — AND THIS IS THE PATH NOBODY WATCHES. It runs 2.5 seconds after load, then every 90 seconds,
       // then on every window focus, for ever, with NO user action after the first connect. A name is held by
       // whoever claimed it, so a record re-pointed at another machine would otherwise swap the address a
@@ -2183,8 +2197,25 @@ async function discoverRelayOffers(seedExtra, region) {
   // surface relays this church has NEVER added. Merge with the local seed; each candidate is still NIP-11
   // probed below, so a stale/dishonest directory entry can't fake an offer.
   let dirUrls = [];
+  // url → claimed directory HANDLE (SPEC self-healing 2026-11-03, item 4b). The /relay-names/offers record
+  // already carries each box's handle; it was being discarded here (only `.url` was kept), which is why every
+  // Auto-find row showed the generic NIP-11 name instead of the box's recognisable claimed name. Keep it, and
+  // prefer it as the row's display name below. Display only — it changes nothing about admission.
+  const handleByUrl = new Map();
   for (const base of _dirBases()) {
-    try { const r = await fetch(base + '/relay-names/offers', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); dirUrls.push(...(j.relays || []).map(x => normRelay(x && x.url)).filter(Boolean)); } } catch (e) {}
+    try {
+      const r = await fetch(base + '/relay-names/offers', { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        for (const x of (j.relays || [])) {
+          const u = normRelay(x && x.url);
+          if (!u) continue;
+          dirUrls.push(u);
+          const h = String((x && x.handle) || '').toLowerCase();
+          if (/^[a-z0-9][a-z0-9-]{0,62}$/.test(h) && !handleByUrl.has(u)) handleByUrl.set(u, h);
+        }
+      }
+    } catch (e) {}
   }
   const seed = [...new Set([...(seedExtra || []), ...dirUrls, ..._discoverySeed, ...CANONICAL_RELAYS, ...extraRelays()])];
   const probed = await Promise.all(seed.map(async (url) => {
@@ -2213,7 +2244,9 @@ async function discoverRelayOffers(seedExtra, region) {
     // once already and must not be again.)
     const canonical = (CANONICAL_RELAYS || []).includes(url);
     if (!canonical) { const v = await _probeRelayEnforces(url); if (!v.ok) { try { console.warn('[relay-offers] rejected', url, '—', v.why); } catch (e) {} return null; } }
-    return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: t.name || '', ms: Number.isFinite(t.ms) ? t.ms : null };
+    // THE CLAIMED HANDLE FIRST (SPEC item 4b): the directory's handle is the box's recognisable name; the
+    // NIP-11 `name` is a generic fallback for a seeded/non-directory candidate that has no claimed handle.
+    return { url, operator: t.operator || '', region: t.region || '', churches: t.churches || 0, name: handleByUrl.get(url) || t.name || '', handle: handleByUrl.get(url) || '', ms: Number.isFinite(t.ms) ? t.ms : null };
   }));
   const offers = probed.filter(Boolean);
   offers.sort((a, b) => { if (region) { const ra = a.region === region ? 0 : 1, rb = b.region === region ? 0 : 1; if (ra !== rb) return ra - rb; } return (a.churches || 0) - (b.churches || 0); });
@@ -5035,12 +5068,26 @@ function _oneComplete(filters, ms = 6000, privateDoc = false) {
 // it would drop the REAL shared relay from the read (…//relay normalises onto …/relay). An address that only
 // relayAddrKey calls shared (ws://…, a different scheme the read dials separately) is its own entry in the read and
 // may be skipped like any other leaving relay — waiting for it froze the list while the dead spelling sat there.
-function _readCovers(r, leaving) {
+// `droppable` (SPEC self-healing 2026-11-03, item 3 — the delete fix, and the deferred "skip every
+// unreachable row" change the comment above unenrolRelayNet pointed at a dedicated branch): a set of
+// normalised church-added addresses that do NOT block the read when they are themselves unreachable (did not
+// answer this pass). Passed ONLY by the removal path. It unjams the documented circular wedge — with two dead
+// rows, removing A waited on B and removing B waited on A, so neither could ever go — by letting a row that is
+// itself unreachable be removed even while other church-added rows are also dead. The all-answer guard is
+// KEPT for every OTHER relay: the shared/canonical pool and the console's own box are never droppable, so the
+// read still has to be complete from the relays that hold the church's authoritative list before it is
+// re-signed. Residual, and accepted for a deliberate removal: a church-added box briefly down that happened to
+// hold a newer list than the answering relays could lose that edit — but enrolment is additive and each box's
+// own console re-signs its entry on its next unlock, so a wrongly-dropped entry self-heals. Every other caller
+// (enrolment, adoption) passes no set, so their behaviour is unchanged.
+function _readCovers(r, leaving, droppable) {
   const k = (u) => { try { return normalizeURL(u); } catch (e) { return String(u || ''); } };
   let skip = leaving ? k(leaving) : '';
   if (skip) { try { if (Object.keys(CANONICAL_RELAY_PUBS).some(h => k(h) === skip)) skip = ''; } catch (e) { skip = ''; } }
   const said = new Set(((r && r.answeredUrls) || []).map(k));
-  const need = ((r && r.askedUrls) || []).map(k).filter(u => !skip || u !== skip);
+  const need = ((r && r.askedUrls) || []).map(k)
+    .filter(u => !skip || u !== skip)
+    .filter(u => !(droppable && droppable.has(u) && !said.has(u)));
   return need.length > 0 && need.every(u => said.has(u));
 }
 // This church's own signed membership document, newest wins.
@@ -5309,9 +5356,18 @@ async function unenrolRelayNet(url) {
   const sk0 = sk, pub0 = pub;
   // FIFTH AUDIT, finding 1: every relay asked must answer EXCEPT the one being removed. It is leaving; requiring it
   // to answer made an offline relay impossible to remove, and its row then blocked every other change for ever.
+  // THE UNREACHABLE CHURCH-ADDED ROWS THAT MUST NOT BLOCK THIS REMOVAL (SPEC item 3). The jam this clears:
+  // `_readCovers` demanded every relay asked answer, so one dead row froze every removal — and with two dead
+  // rows the advice "remove the other one first" was circular and nothing could ever leave the list again.
+  // These are the church-added addresses (never the shared pool, never the own box); a read stays "covered"
+  // when one of them is simply unreachable. Computed from the normalised extra-relays store so a cosmetic
+  // re-spelling cannot slip a row past it.
+  const _k0 = (x) => { try { return normalizeURL(x); } catch (e) { return String(x || ''); } };
+  let _droppable = new Set();
+  try { _droppable = new Set(extraRelays().map(_k0)); } catch (e) { _droppable = new Set(); }
   const read = await relayNetDoc();
   const { ev: existing } = read;
-  if (!_readCovers(read, u)) return { removed: false, unknown: true };
+  if (!_readCovers(read, u, _droppable)) return { removed: false, unknown: true };
   const mine = (existing && existing.pubkey === pub) ? existing : null;
   if (!mine) return { removed: false, notListed: true };
   const entries = parseRelayNet(mine.content);
@@ -5339,7 +5395,7 @@ async function unenrolRelayNet(url) {
     const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: Math.max(now(), floorAt), tags: [['d', RELAY_NET_D]], content: JSON.stringify(list) }), sk));
     if (!ev) return { removed: false, entries: list };
     const back = await relayNetDoc();
-    if (!_readCovers(back, u)) return { removed: false, unknown: true, unverified: true, entries: list };
+    if (!_readCovers(back, u, _droppable)) return { removed: false, unknown: true, unverified: true, entries: list };
     const newest = (back.ev && back.ev.pubkey === pub) ? back.ev : null;
     const found = newest ? parseRelayNet(newest.content) : [];
     const still = found.filter(isDropped);
@@ -5799,6 +5855,16 @@ async function retireDeadAdoptedRows(signed) {
   if (retired.length) {
     let live = cur; try { live = extraRelays(); } catch (e) { live = cur; }
     _writeExtraRelays(live.filter(u => !retired.includes(u)));
+    // FORGET THE NAME TOO (SPEC self-healing 2026-11-03, item 1). Adoption now arms a name→row binding
+    // (_rememberAdoptedName), and refreshNamedRelays re-adds a named row the moment the directory resolves it.
+    // A row this pass retired is one the box no longer backs — it proved a key the church no longer signs, or
+    // it answered-and-failed DEAD_STRIKES_MAX times — so its binding must go, or auto-follow would re-add it
+    // UNTAGGED (no adopted tag, so retireDeadAdoptedRows could never reach it again) and wedge the list. This
+    // forgets the name ONLY; it is not a decline (a box merely off for an afternoon keeps its row, is never in
+    // `retired`, and its name is untouched). A box the church still signs is re-adopted AND re-named on the
+    // next pass, so nothing durable is lost.
+    const retK = new Set(retired.map(u => { try { return normRelay(u); } catch (e) { return u; } }));
+    setNamedRelays(getNamedRelays().filter(e => !retK.has((() => { try { return normRelay(e.url); } catch (err) { return e.url; } })())));
   }
   let tags = tagged; try { tags = adoptedRelays(); } catch (e) { tags = tagged; }
   let rows = cur; try { rows = extraRelays(); } catch (e) { rows = cur; }
@@ -5820,6 +5886,20 @@ async function retireDeadAdoptedRows(signed) {
 // extraRelays() is ONE store for the whole device, not per church, so adopting another church's box here
 // would put an address on this church's dial list too. Narrower than it could be — a delegated steward gets
 // no benefit from this — and that is deliberate: the measured failure is one church's own key on two devices.
+// ARM THE NAME→ROW BINDING ON ADOPTION (SPEC self-healing 2026-11-03, item 1 — the real root cause). Before
+// this, the binding refreshNamedRelays follows was created by connect-by-name ALONE; a box that entered the
+// list by net-doc adoption recorded no name, so refreshNamedRelays' `if (!named.length) return` was inert for
+// it and relayNameFor returned '' — the row rendered as a raw tunnel address and never followed the box when
+// its address churned. The signed relay-net entry carries the box's stable directory handle (selfRelayName,
+// written by that box's own console; parseRelayNet keeps it), and this path has just PROVED the key the entry
+// names (`proved === e.pubkey`). So persist both: the name makes refreshNamedRelays/relayNameFor follow and
+// label the box, and the pinned key stops a later re-point of that handle from swinging the church onto
+// another box. A nameless entry (a box signed with no handle) is left raw, exactly as before.
+function _rememberAdoptedName(e, url, proved) {
+  const nm = String((e && e.name) || '').toLowerCase();
+  if (!_RELAY_NAME_RE.test(nm)) return;
+  try { window.Steward.rememberRelayName(nm, url, proved); } catch (err) {}
+}
 async function adoptNetDocAddresses() {
   if (!pub || pub !== churchPub) return [];
   const pub0 = pub;
@@ -5895,12 +5975,13 @@ async function adoptNetDocAddresses() {
       if (!now.includes(stale) || now.includes(u)) continue;
       _writeExtraRelays(now.map(r => (r === stale ? u : r)));
       setAdoptedRelays([...adoptedRelays().filter(r => r !== stale), u]);
+      _rememberAdoptedName(e, u, proved);
       added.push(u);
       continue;
     }
     if (_alreadyACandidate(u)) continue;     // something else added it while we waited
     let ok = false; try { ok = !!window.Steward.addRelay(u); } catch (err) { ok = false; }
-    if (ok) { _tagAdopted(u); added.push(u); }
+    if (ok) { _tagAdopted(u); _rememberAdoptedName(e, u, proved); added.push(u); }
   }
   return added;
 }
@@ -14114,11 +14195,21 @@ window.Steward = {
     const hit = getNamedRelays().find(e => e && normRelay(e.url) === u);
     return hit ? String(hit.name || '') : '';
   },
-  // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
-  rememberRelayName(name, url) {
+  // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates.
+  // PUBKEY PINNING (SPEC self-healing 2026-11-03, item 7): persist the box's proved identity key when the
+  // caller knows it (connect-by-name has it from the directory record; net-doc adoption has it from the
+  // proof it just ran). refreshNamedRelays then refuses to swap a pinned name onto any box but that one — a
+  // handle is held by whoever claimed it and could be re-pointed, and without the pin a re-point would
+  // silently swing the church's traffic to a DIFFERENT box. Omitted when unknown (a nameless auto-find
+  // binding, or an older stored entry): those keep the prior admit-only behaviour, which is all that can be
+  // checked for them, and the next adoption pass upgrades the entry to a pinned one once the box is signed.
+  rememberRelayName(name, url, pub) {
     const n = String(name || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
     const u = normRelay(url); if (!n || !u) return;
-    setNamedRelays([...getNamedRelays().filter(e => e.name !== n), { name: n, url: u }]);
+    const p = String(pub || '').toLowerCase();
+    const entry = { name: n, url: u };
+    if (/^[0-9a-f]{64}$/.test(p)) entry.pub = p;
+    setNamedRelays([...getNamedRelays().filter(e => e.name !== n), entry]);
   },
   // FEDERATION Phase 3c — list relays that have OFFERED to host new churches (enforcing + open + live).
   discoverRelayOffers(region) { return discoverRelayOffers(null, region); },
@@ -14132,7 +14223,17 @@ window.Steward = {
   async listRelayOffers(region) {
     const offers = await discoverRelayOffers(null, region || null);
     const have = new Set(relays());
-    return rankOffersByLatency(offers.filter(o => !have.has(o.url)));
+    const ranked = rankOffersByLatency(offers.filter(o => !have.has(o.url)));
+    // "ONE OF YOURS" BADGE (SPEC self-healing 2026-11-03, item 4b — clarity only, NOT a gate). Auto-find
+    // intentionally lists other pilot churches' boxes too, so the steward needs to tell their own boxes from
+    // the shared pool at a glance. Mark a row whose claimed handle matches a box this church has signed into
+    // its own relay-net document. A DISPLAY HINT, matched on the handle the signing console recorded — not an
+    // admission decision (that stays identity-key-bound, upstream in discoverRelayOffers) and it never
+    // suppresses or re-orders a peer box.
+    let mineHandles = new Set();
+    try { mineHandles = new Set((await relayNetEntries(pub)).map(e => String((e && e.name) || '').toLowerCase()).filter(Boolean)); } catch (e) {}
+    for (const o of ranked) { if (o && o.handle && mineHandles.has(o.handle)) o.mine = true; }
+    return ranked;
   },
   // set/extend the bootstrap discovery seed (discovery-only relays to probe for offers).
   setDiscoverySeed(urls) { _discoverySeed = [...new Set((urls || []).map(u => normRelay(u)).filter(Boolean))]; return _discoverySeed; },
@@ -14148,7 +14249,16 @@ window.Steward = {
     return pickRelays(offers.filter(o => !have.has(o.url)), n || 2);
   },
   async connectFoundRelays(picks) {
-    for (const p of (picks || [])) { try { window.Steward.addRelay(p.url); } catch (e) {} }
+    for (const p of (picks || [])) {
+      try { window.Steward.addRelay(p.url); } catch (e) {}
+      // ARM THE NAME→ROW BINDING (SPEC self-healing 2026-11-03, item 1). Auto-find rows carry the directory
+      // HANDLE (set by discoverRelayOffers), which is the box's durable name as its tunnel address churns. So
+      // remember it, exactly as connect-by-name does, or an auto-found box would render as a raw address and
+      // never follow when it moved. The key is not known at this path (the offers directory carries no pub),
+      // so the binding is un-pinned — admitRemoteRelay still gates every swap, and the next adoption pass
+      // upgrades it to a pinned entry once the church signs the box.
+      try { if (p && p.name && window.Steward.rememberRelayName) window.Steward.rememberRelayName(p.name, p.url); } catch (e) {}
+    }
     if ((picks || []).length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks || [];
   },
