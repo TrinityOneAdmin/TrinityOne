@@ -199,7 +199,7 @@ function stewNav(NAV, church, opts) {
 // NO date is NEVER "expired" — it is the pilot back-compat case (a person cleared before this field existed),
 // read as "cleared, no expiry". PURE on purpose, same reason as stewNav above: app/*.jsx ships UNBUNDLED, so
 // CLAUDE.md rule 3 forbids proving the badge by matching text — the point-of-use test RUNS these and renders
-// the row that calls them (scripts/clearance-expiry-shows-on-the-screen.test.mjs).
+// the row that calls them (scripts/clearance-expiry.test.mjs).
 const EXPIRY_SOON_SECONDS = 30 * 24 * 3600;     // one month out: the first, gentle reminder
 const EXPIRY_URGENT_SECONDS = 14 * 24 * 3600;   // two weeks out: the stronger one
 // 'none' (no date set — never treated as expired), 'future' (> a month off), 'soon' (<= a month),
