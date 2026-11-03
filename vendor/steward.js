@@ -22321,8 +22321,27 @@ zoo`.split("\n");
     },
     // list of members who have a DM thread with the church (most recent first)
     subscribeDMConvos(onConvos) {
+      const SEED_KEY = "trinityone.steward.dmconvos." + (actingChurch || churchPub || "");
+      const SEED_CAP = 400;
       const byPeer = /* @__PURE__ */ new Map();
-      const emit = () => onConvos([...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const emit = () => {
+        const arr = [...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        try {
+          localStorage.setItem(SEED_KEY, JSON.stringify(arr.slice(0, SEED_CAP)));
+        } catch {
+        }
+        onConvos(arr);
+      };
+      try {
+        const cached = JSON.parse(localStorage.getItem(SEED_KEY) || "[]");
+        if (Array.isArray(cached) && cached.length) {
+          for (const c of cached) {
+            if (c && c.peer) byPeer.set(c.peer, { peer: c.peer, npub: c.npub || "", ts: c.ts || 0 });
+          }
+          onConvos([...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+        }
+      } catch {
+      }
       const sub = pool.subscribeMany(relays(), [{ kinds: [4], authors: [pub] }, { kinds: [4], "#p": [pub] }], {
         onevent(e) {
           const mine = e.pubkey === pub;

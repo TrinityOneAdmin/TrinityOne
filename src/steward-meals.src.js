@@ -74,6 +74,56 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   const enKey = () => 'trinityone.meals.enabled.' + activeChurch();
   function cachedEnabled() { try { return localStorage.getItem(enKey()) === '1'; } catch (e) { return false; } }
 
+  // ---- PRELOAD WARMING (2026-11-03): cache-first seeds for the console's blank Care screens ----
+  // The console's care streams (needs/slots/skips/avail) kept NO on-disk copy, so Care opened BLANK on
+  // first-ever open until the relay answered over the tunnel. Seed last-known rows to localStorage so the
+  // grid paints instantly, then the live subs refresh in place (blank-then-fill -> stale-then-fresh).
+  //
+  // THE LOAD-BEARING RULE (S-7, SECURITY-AUDIT-2026-07-20, mirrored from app.jsx:1390-1398): these streams
+  // emit ALREADY-DECRYPTED objects (subscribeNeeds merges the sealed displayLabel/notes/recipient/dietary via
+  // openNeed; subscribeCareAvail opens a sealed note via openChurchDoc). NEVER snapshot the emitted value — a
+  // seed is a PUBLIC SUBSET built field-by-field, so no decrypted/free-text content ever reaches disk.
+  //
+  // KEYED on activeChurch() (= actingChurch || churchPub, the makeSub key) so a delegated/acting console
+  // cannot paint another church's seed. The cache READ (primes first paint) and WRITE (on emit) live together.
+  //
+  // LOCK GATE (m4): the console-side equivalent of fellowship's `_mayCache = () => !!sk`. Steward exposes the
+  // same signal as `hasKey` (true once a signing key is loaded, cleared to false on lock/clear alongside the
+  // internal `sk`) and `locked` (true when an encrypted key exists but has not been unlocked). A PIN-locked
+  // or keyless console does NOT write these sensitive seeds. Reading a seed already on disk is untouched.
+  const _mayCacheSeed = () => { const s = S(); return !!(s && s.hasKey && !s.locked); };
+  const SEED_ROW_CAP = 500;               // rows per seed
+  const SEED_BYTE_CAP = 1000000;          // ~1MB per seed; HUB_SAVE_CAP (member hubs, all streams) is ~3MB
+  function _writeSeed(key, rows) {
+    try {
+      let arr = Array.isArray(rows) ? rows.slice(0, SEED_ROW_CAP) : [];
+      let json = JSON.stringify(arr);
+      while (json.length > SEED_BYTE_CAP && arr.length) { arr = arr.slice(0, Math.floor(arr.length / 2)); json = JSON.stringify(arr); }   // halve rather than throw
+      if (json.length > SEED_BYTE_CAP) return;   // even the trimmed set is too big — drop it, never throw
+      localStorage.setItem(key, json);
+    } catch (e) {}
+  }
+  function _readSeed(key) { try { const a = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  const _needsSeedKey = () => 'trinityone.steward.care.needs.' + activeChurch();
+  const _slotsSeedKey = () => 'trinityone.steward.care.slots.' + activeChurch();
+  const _skipsSeedKey = () => 'trinityone.steward.care.skips.' + activeChurch();
+  const _availSeedKey = () => 'trinityone.steward.care.avail.' + activeChurch();
+  // PUBLIC-SUBSET projections — the ONLY shapes that touch disk.
+  // needs: exact mirror of app.jsx:1397. Drops displayLabel / recipient / notes / dietary (sealed), marks _sealed.
+  const _needSeedRow = (n) => ({ id: n.id, _by: n._by, type: n.type, dates: n.dates, meals: n.meals, dayMeals: n.dayMeals, startDate: n.startDate, endDate: n.endDate, ts: n.ts, _sealed: true });
+  // slots/skips: STRUCTURAL ONLY. The console reads these cleartext-on-relay, but `note` (member free text) and
+  // `reason` (recipient free text) are dropped from disk — the grid paints from needId/isoDate/meal/pubkey and
+  // the note/reason refresh when the live sub answers. (More conservative than the member app, which caches
+  // slots/skips whole — see report.)
+  const _slotSeedRow = (s) => ({ needId: s.needId, isoDate: s.isoDate, meal: s.meal, pubkey: s.pubkey, ts: s.ts });
+  const _skipSeedRow = (s) => ({ needId: s.needId, isoDate: s.isoDate, meal: s.meal, pubkey: s.pubkey, ts: s.ts });
+  // avail: DECRYPTED stream (openChurchDoc). Drops the sealed free-text `note`. Keeps who-offered + the
+  // availability window + help tags — but a tag is a short chip label, so each is CAPPED (string, <=TAG_MAX
+  // chars, <=TAG_N tags) so a crafted/non-standard client cannot smuggle free text onto disk through `tags`
+  // (audit 2026-11-03). (Diverges from app.jsx:1402, which caches avail whole.)
+  const TAG_MAX = 40, TAG_N = 8;
+  const _availSeedRow = (a) => ({ pubkey: a.pubkey, tags: (Array.isArray(a.tags) ? a.tags : []).filter(t => typeof t === 'string').slice(0, TAG_N).map(t => t.slice(0, TAG_MAX)), dates: a.dates, ts: a.ts });
+
   const DEFAULTS = { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
   // THE CARE TEAM AS LAST READ, for publishCareTeam's locked-roster refusal when a caller does not name it.
   let _careTeamSeen = '';
@@ -295,7 +345,9 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     let openedByMember = false;       // from the church-signed meals-settings (same sub — it's church-authored + NET-tagged)
     const delOk = (by, need) => !openedByMember || by === cp || by === S().churchPub || (!!need && need._by === by);
     const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (delOk(by, need)) return true; } return false; };
-    const emit = () => cb([...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)));
+    const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (_mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow)); };
+    // paint the last-known PUBLIC SUBSET instantly (sealed cards show "details hidden" until the key lands)
+    { const seeded = _readSeed(_needsSeedKey()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
       [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }],
       {
@@ -333,10 +385,12 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   // Both shapes are member-signed events tagged with ['church', cp]; the steward console listens
   // for the church-tag stream. Slots are filtered by the SLOT_D prefix; skips by SKIP_D. We expose
   // them as separate streams so the UI can apply skips as a mask over slots.
-  function _subscribeChurchTagged(prefix, normalise, cb) {
+  function _subscribeChurchTagged(prefix, normalise, cb, seedKeyFn, seedRowFn) {
     if (!S() || !S().subscribeMany || !activeChurch()) { cb([]); return () => {}; }
     const byKey = new Map();   // key = needId|isoDate|pubkey   (one entry per member-per-(need,date))
-    const emit = () => cb([...byKey.values()]);
+    const emit = () => { const list = [...byKey.values()]; cb(list); if (seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn)); };
+    // paint the last-known STRUCTURAL SUBSET instantly so the slot grid doesn't flash empty
+    if (seedKeyFn) { const seeded = _readSeed(seedKeyFn()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
       [{ kinds: [30078], '#church': [activeChurch()], '#t': [NET] }],
       {
@@ -364,10 +418,10 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   }
 
   function subscribeSlots(cb) {
-    return _subscribeChurchTagged(SLOT_D, (o) => ({ note: String(o.note || '').trim() }), cb);
+    return _subscribeChurchTagged(SLOT_D, (o) => ({ note: String(o.note || '').trim() }), cb, _slotsSeedKey, _slotSeedRow);
   }
   function subscribeSkips(cb) {
-    return _subscribeChurchTagged(SKIP_D, (o) => ({ reason: String(o.reason || '').trim() }), cb);
+    return _subscribeChurchTagged(SKIP_D, (o) => ({ reason: String(o.reason || '').trim() }), cb, _skipsSeedKey, _skipSeedRow);
   }
 
   // ---- delegated-publish: care-team admins ----
@@ -545,7 +599,9 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const dtag = CAREAVAIL_D + cp;
     const byPub = new Map(), seenTs = new Map(), locked = new Map();
     let eosed = false;   // sticky: do not blank on a transient empty before EOSE
-    const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; try { cb(v); } catch (e) {} };
+    const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; try { cb(v); } catch (e) {} if (_mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow)); };
+    // paint the last-known PUBLIC SUBSET instantly (who offered + help tags + window; the sealed note is NOT on disk)
+    { const seeded = _readSeed(_availSeedKey()); if (seeded.length) { try { cb(seeded); } catch (e) {} } }
     const handlers = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';

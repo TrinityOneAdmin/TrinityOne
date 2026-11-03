@@ -8858,8 +8858,20 @@ window.Steward = {
   },
   // list of members who have a DM thread with the church (most recent first)
   subscribeDMConvos(onConvos) {
+    // PRELOAD WARMING (2026-11-03): the DM conversation list kept NO on-disk copy, so the console's
+    // private-messages list opened BLANK on first-ever open until the relay answered over the tunnel.
+    // This list is BODY-FREE — each row is only { peer, npub, ts }, never any message text — so seeding it
+    // to localStorage leaks nothing sensitive, and it may follow the existing unconditional seed pattern
+    // (subscribeGroups/_subAddr). Keyed on `actingChurch || churchPub` (the makeSub key, steward-root.jsx:215),
+    // NOT the bare `pub` the old seeds use, so a delegated/acting console cannot paint another church's list.
+    // The cache READ and WRITE live together (read primes first paint; emit() writes) so no test can be
+    // satisfied by a dead line.
+    const SEED_KEY = 'trinityone.steward.dmconvos.' + (actingChurch || churchPub || '');
+    const SEED_CAP = 400;   // rows kept on disk; an unusually chatty church drops the oldest threads from the seed
     const byPeer = new Map();
-    const emit = () => onConvos([...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const emit = () => { const arr = [...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(SEED_KEY, JSON.stringify(arr.slice(0, SEED_CAP))); } catch {} onConvos(arr); };
+    // paint the last-known list instantly so the page doesn't flash empty before the relay answers
+    try { const cached = JSON.parse(localStorage.getItem(SEED_KEY) || '[]'); if (Array.isArray(cached) && cached.length) { for (const c of cached) { if (c && c.peer) byPeer.set(c.peer, { peer: c.peer, npub: c.npub || '', ts: c.ts || 0 }); } onConvos([...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [4], authors: [pub] }, { kinds: [4], '#p': [pub] }], {
       onevent(e) {
         const mine = e.pubkey === pub; const peer = mine ? (e.tags.find(t => t[0] === 'p') || [])[1] : e.pubkey;

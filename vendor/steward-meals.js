@@ -85,6 +85,42 @@
         return false;
       }
     }
+    const _mayCacheSeed = () => {
+      const s = S();
+      return !!(s && s.hasKey && !s.locked);
+    };
+    const SEED_ROW_CAP = 500;
+    const SEED_BYTE_CAP = 1e6;
+    function _writeSeed(key, rows) {
+      try {
+        let arr = Array.isArray(rows) ? rows.slice(0, SEED_ROW_CAP) : [];
+        let json = JSON.stringify(arr);
+        while (json.length > SEED_BYTE_CAP && arr.length) {
+          arr = arr.slice(0, Math.floor(arr.length / 2));
+          json = JSON.stringify(arr);
+        }
+        if (json.length > SEED_BYTE_CAP) return;
+        localStorage.setItem(key, json);
+      } catch (e) {
+      }
+    }
+    function _readSeed(key) {
+      try {
+        const a = JSON.parse(localStorage.getItem(key) || "[]");
+        return Array.isArray(a) ? a : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    const _needsSeedKey = () => "trinityone.steward.care.needs." + activeChurch();
+    const _slotsSeedKey = () => "trinityone.steward.care.slots." + activeChurch();
+    const _skipsSeedKey = () => "trinityone.steward.care.skips." + activeChurch();
+    const _availSeedKey = () => "trinityone.steward.care.avail." + activeChurch();
+    const _needSeedRow = (n) => ({ id: n.id, _by: n._by, type: n.type, dates: n.dates, meals: n.meals, dayMeals: n.dayMeals, startDate: n.startDate, endDate: n.endDate, ts: n.ts, _sealed: true });
+    const _slotSeedRow = (s) => ({ needId: s.needId, isoDate: s.isoDate, meal: s.meal, pubkey: s.pubkey, ts: s.ts });
+    const _skipSeedRow = (s) => ({ needId: s.needId, isoDate: s.isoDate, meal: s.meal, pubkey: s.pubkey, ts: s.ts });
+    const TAG_MAX = 40, TAG_N = 8;
+    const _availSeedRow = (a) => ({ pubkey: a.pubkey, tags: (Array.isArray(a.tags) ? a.tags : []).filter((t) => typeof t === "string").slice(0, TAG_N).map((t) => t.slice(0, TAG_MAX)), dates: a.dates, ts: a.ts });
     const DEFAULTS = { enabled: false, visibility: "all", openedBy: "steward", adminGroupId: "" };
     let _careTeamSeen = "";
     function subscribeSettings(cb) {
@@ -281,7 +317,15 @@
         }
         return false;
       };
-      const emit = () => cb([...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0)));
+      const emit = () => {
+        const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
+        cb(list);
+        if (_mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow));
+      };
+      {
+        const seeded = _readSeed(_needsSeedKey());
+        if (seeded.length) cb(seeded);
+      }
       const sub = S().subscribeMany(
         [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }],
         {
@@ -326,14 +370,22 @@
         }
       };
     }
-    function _subscribeChurchTagged(prefix, normalise, cb) {
+    function _subscribeChurchTagged(prefix, normalise, cb, seedKeyFn, seedRowFn) {
       if (!S() || !S().subscribeMany || !activeChurch()) {
         cb([]);
         return () => {
         };
       }
       const byKey = /* @__PURE__ */ new Map();
-      const emit = () => cb([...byKey.values()]);
+      const emit = () => {
+        const list = [...byKey.values()];
+        cb(list);
+        if (seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn));
+      };
+      if (seedKeyFn) {
+        const seeded = _readSeed(seedKeyFn());
+        if (seeded.length) cb(seeded);
+      }
       const sub = S().subscribeMany(
         [{ kinds: [30078], "#church": [activeChurch()], "#t": [NET] }],
         {
@@ -372,10 +424,10 @@
       };
     }
     function subscribeSlots(cb) {
-      return _subscribeChurchTagged(SLOT_D, (o) => ({ note: String(o.note || "").trim() }), cb);
+      return _subscribeChurchTagged(SLOT_D, (o) => ({ note: String(o.note || "").trim() }), cb, _slotsSeedKey, _slotSeedRow);
     }
     function subscribeSkips(cb) {
-      return _subscribeChurchTagged(SKIP_D, (o) => ({ reason: String(o.reason || "").trim() }), cb);
+      return _subscribeChurchTagged(SKIP_D, (o) => ({ reason: String(o.reason || "").trim() }), cb, _skipsSeedKey, _skipSeedRow);
     }
     function isCareAdmin(memberPub, adminGroupId, groupRosters) {
       if (!memberPub || !adminGroupId) return false;
@@ -587,7 +639,17 @@
           cb(v);
         } catch (e) {
         }
+        if (_mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow));
       };
+      {
+        const seeded = _readSeed(_availSeedKey());
+        if (seeded.length) {
+          try {
+            cb(seeded);
+          } catch (e) {
+          }
+        }
+      }
       const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
