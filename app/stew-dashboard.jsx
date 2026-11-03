@@ -2211,10 +2211,20 @@ function StewMemberSheet({ label, initials, av, pubkey, accent, facts, actions, 
   );
 }
 
+function _dmSeenKey(peer) { return 'trinityone.dm-seen.' + peer; }
+function _dmReadSeen() { var out = {}; try { for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.startsWith('trinityone.dm-seen.')) { var v = Number(localStorage.getItem(k)); if (v > 0) out[k.slice(19)] = v; } } } catch (e) {} return out; }
+function _dmMarkSeen(peer) { try { localStorage.setItem(_dmSeenKey(peer), String(Math.floor(Date.now() / 1000))); } catch (e) {} }
+
 function DmHeaderDropdown({ dmConvos, narrow }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const [seen, setSeen] = React.useState(_dmReadSeen);
+  React.useEffect(() => {
+    var h = function(e) { var pk = e.detail && e.detail.pubkey; if (!pk) return; _dmMarkSeen(pk); setSeen(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[pk] = Math.floor(Date.now() / 1000); return n; }); };
+    window.addEventListener('steward-open-dm', h);
+    return function() { window.removeEventListener('steward-open-dm', h); };
+  }, []);
   React.useEffect(() => {
     if (!open) return;
     const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -2226,16 +2236,18 @@ function DmHeaderDropdown({ dmConvos, narrow }) {
     window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: c.peer, npub: c.npub, name: (m && m.name) || '', nip05: m && m.nip05 } }));
     setOpen(false);
   };
-  const count = dmConvos.length;
+  const isUnread = (c) => { var s = seen[c.peer]; return !s || c.ts > s; };
+  const unread = dmConvos.filter(isUnread).length;
+  const hasAny = dmConvos.length > 0;
   const _tap = narrow ? { minWidth: 44, minHeight: 44, padding: '8px 10px', justifyContent: 'center' } : { padding: '9px 14px' };
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button onClick={() => setOpen(v => !v)} title="Private messages" aria-label={narrow ? 'Messages' : undefined} className="sk-btn sk-btn--ghost" style={{ ..._tap, fontSize: 13 }}>
         <Icon name="chat" size={15} color="currentColor" />
         {!narrow ? ' Messages' : null}
-        {count > 0 ? <span style={{ position: 'absolute', top: narrow ? 4 : 2, right: narrow ? 4 : 6, minWidth: 17, height: 17, borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', lineHeight: 1, pointerEvents: 'none' }}>{count}</span> : null}
+        {unread > 0 ? <span style={{ position: 'absolute', top: narrow ? 4 : 2, right: narrow ? 4 : 6, minWidth: 17, height: 17, borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', lineHeight: 1, pointerEvents: 'none' }}>{unread}</span> : null}
       </button>
-      {open && count > 0 ? (
+      {open && hasAny ? (
         <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, width: 300, maxHeight: 340, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ padding: '6px 8px 8px', fontWeight: 800, fontSize: 12, letterSpacing: '.4px', color: 'var(--ink-3)' }}>PRIVATE MESSAGES</div>
           {dmConvos.map(c => {
@@ -2250,13 +2262,13 @@ function DmHeaderDropdown({ dmConvos, narrow }) {
                   <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
                   {handle ? <div style={{ fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, fontFamily: 'var(--font-ui)' }}>@{handle}</div> : null}
                 </div>
-                <Icon name="chat" size={15} color="var(--clay-ink)" />
+                {isUnread(c) ? <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--clay)', flexShrink: 0 }} /> : <Icon name="chat" size={15} color="var(--clay-ink)" />}
               </div>
             );
           })}
         </div>
       ) : null}
-      {open && count === 0 ? (
+      {open && !hasAny ? (
         <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, width: 260, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: '18px 16px', textAlign: 'center' }}>
           <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>No private messages yet</div>
         </div>
