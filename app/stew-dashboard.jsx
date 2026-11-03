@@ -5785,7 +5785,7 @@ function DashAddRelayCard() {
       // message below said "Added", which is at best confusing and at worst tells a steward they have a
       // second box when they have one. Audit 2026-09-02 #17.
       const added = window.Steward.addRelay ? window.Steward.addRelay(j.url) : false;
-      window.Steward.rememberRelayName(n, j.url);   // so it auto-follows when the relay's tunnel url rotates
+      window.Steward.rememberRelayName(n, j.url, j.pub);   // so it auto-follows when the relay's tunnel url rotates — pinned to the key the directory record names (SPEC item 7)
       setByNameMsg({ text: 'Connecting your church…' });
       let reg = { ok: false }; try { reg = await window.Steward.registerAtRelay(j.url, church.name); } catch (e) {}
       // THE MISSING-NAME REFUSAL IS A NOT-YET, NOT A VERDICT, and it is the one the steward can fix. Telling
@@ -5903,6 +5903,10 @@ function DashAddRelayCard() {
                       onChange={() => setSelected(prev => { const n = new Set(prev); if (n.has(o.url)) n.delete(o.url); else n.add(o.url); return n; })} />
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontWeight: 700, color: 'var(--ink)', fontSize: 13 }}>{o.name || o.url}</span>
+                      {/* "One of yours" (SPEC item 4b): a box this church has already signed, so the steward
+                          can tell their own boxes from the shared pilot pool. Clarity only — the row is
+                          connected the same way whether or not it is badged. */}
+                      {o.mine ? <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: 'var(--on-sage)', background: 'var(--sage)', borderRadius: 7, padding: '1px 6px' }}>One of yours</span> : null}
                       {o.name ? <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.url}</span> : null}
                     </span>
                     {Number.isFinite(o.ms) ? <span style={{ fontSize: 11, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{o.ms} ms</span> : null}
