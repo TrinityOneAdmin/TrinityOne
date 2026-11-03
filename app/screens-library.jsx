@@ -58,7 +58,7 @@ function LibraryHome({ ctx }) {
   const nJournals = (ctx.journalEntries || []).length;
   const countFor = (id) => {
     if (id === 'journals') return nJournals === 0 ? 'None yet' : nJournals + (nJournals === 1 ? ' entry' : ' entries');
-    const n = id === 'bibles' ? nBibles : (byCat[id] || 0);
+    const n = id === 'bibles' ? nBibles : id === 'commentaries' ? ((byCat.commentaries || 0) + (byCat.crossrefs || 0)) : (byCat[id] || 0);
     if (n === 0) return 'None yet';
     const noun = id === 'bibles' ? 'version' : id === 'commentaries' ? 'set' : id === 'dictionaries' ? 'reference' : 'item';
     return n + ' ' + noun + (n === 1 ? '' : 's');
@@ -882,6 +882,7 @@ const CAT_STYLE = {
   bibles:       { icon: 'book',    accent: 'var(--clay)' },
   dictionaries: { icon: 'lex',     accent: 'var(--gold)' },
   commentaries: { icon: 'comment', accent: 'var(--sage)' },
+  crossrefs:    { icon: 'link',    accent: 'var(--sage)' },
   devotionals:  { icon: 'sun',     accent: 'var(--clay)' },
 };
 
@@ -960,10 +961,10 @@ function InstalledBrowser({ ctx, category, force }) {
   const activeUrl = window.Bible.activeUrl;
   const isActiveRow = (r) => (r.category || 'bibles') === 'bibles' && (activeUrl ? r.url === activeUrl : r.abbr === active);
   let rows = Object.values(map);
-  if (category) rows = rows.filter(r => (r.category || 'bibles') === category);
+  if (category) rows = rows.filter(r => { var rc = r.category || 'bibles'; return rc === category || (category === 'commentaries' && rc === 'crossrefs'); });
   rows.sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
 
-  const CAT_LABEL = { bibles: 'Bible', dictionaries: 'Dictionary', commentaries: 'Commentary', devotionals: 'Devotional' };
+  const CAT_LABEL = { bibles: 'Bible', dictionaries: 'Dictionary', commentaries: 'Commentary', crossrefs: 'Cross references', devotionals: 'Devotional' };
   // AWAIT IT. removeModule is `async`, so this tested a PROMISE — always truthy — and the success toast
   // fired even when the removal returned false. A commentary that is not in `modules` could not be removed
   // at all, and the app said "Removed" anyway. Same family as every other control in this programme that
@@ -1086,7 +1087,7 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
   const [mirror, setMirror] = React.useState(null);
   const [view, setView] = React.useState(initialView || 'featured');
   const showLang = !category || category === 'bibles';   // "By language" (eBible mirror) is bibles-only
-  const titleFor = category ? ({ bibles: 'Bibles', dictionaries: 'Dictionaries & Lexicons', commentaries: 'Commentaries', devotionals: 'Devotionals' }[category] || 'Get Modules') : 'Get Modules';
+  const titleFor = category ? ({ bibles: 'Bibles', dictionaries: 'Dictionaries & Lexicons', commentaries: 'Commentaries & Cross refs', devotionals: 'Devotionals' }[category] || 'Get Modules') : 'Get Modules';
   React.useEffect(() => window.Bible.subscribe(() => force(x => x + 1)), []);
   React.useEffect(() => { if (open) setView(initialView || 'featured'); }, [open, initialView]);
   React.useEffect(() => { if (open && !cat) window.Bible.getCatalog().then(setCat); }, [open]);
@@ -1122,7 +1123,7 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
         {view === 'featured' ? (
           !cat ? <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spinner size={26} /></div>
-          : (cat.categories || []).filter(c => !category || c.id === category).map(c => {
+          : (cat.categories || []).filter(c => !category || c.id === category || (category === 'commentaries' && c.id === 'crossrefs')).map(c => {
             const ic = (CAT_STYLE[c.id] || CAT_STYLE.bibles).icon;
             return (
               <div key={c.id} style={{ marginBottom: 22 }}>

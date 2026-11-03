@@ -682,7 +682,7 @@ PLANS.forEach(p => { p.len = p.days.length; });
 
 const MODULES = [
   { id: 'bibles', name: 'Bibles', count: '12 versions', icon: 'book', accent: 'var(--clay)' },
-  { id: 'commentaries', name: 'Commentaries', count: '8 sets', icon: 'comment', accent: 'var(--sage)' },
+  { id: 'commentaries', name: 'Commentaries & Cross refs', count: '8 sets', icon: 'comment', accent: 'var(--sage)' },
   { id: 'dictionaries', name: 'Dictionaries & Lexicons', count: '6 references', icon: 'lex', accent: 'var(--gold)' },
   { id: 'journals', name: 'Journals & Notes', count: '3 entries', icon: 'pen', accent: 'var(--gold)' },
 ];
