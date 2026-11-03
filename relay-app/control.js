@@ -627,6 +627,22 @@
       if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ couldn’t register “' + m.handle + '” — it was taken. Choose another.'; }
     }
   }
+  // STAY-PUBLIC-BEGIN (lifted and run by scripts/relay-app-stay-public.test.mjs — keep the markers)
+  // The "Stay public" switch governs the cloudflared quick tunnel only. ON = POST /tunnel/up (opens the tunnel AND
+  // writes the stay-public flag, so the watchdog keeps it up). OFF = POST /tunnel/down (kills it AND clears the flag,
+  // so the watchdog leaves it alone). Pure: returns a result and never touches the DOM.
+  async function stayPublicRequest(on, headers, fetchFn) {
+    const url = on ? '/tunnel/up' : '/tunnel/down';
+    try {
+      const r = await fetchFn(url, { method: 'POST', headers: headers || {} });
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      if (!r.ok) return { ok: false, error: (j && j.error) || ('HTTP ' + r.status) };
+      return { ok: true, url: on ? (j.url || '') : '' };
+    } catch (e) { return { ok: false, error: e.message || 'network error' }; }
+  }
+  // What the switch should show for a /tunnel/state reply. null (relay unreachable) = leave the switch as it is.
+  function stayPublicChecked(cf) { return cf ? !!(cf.running && cf.url) : null; }
+  // STAY-PUBLIC-END
   function renderCfPublic(cf) {
     const body = document.getElementById('gpBody');
     publicBase = cf.url; try { refreshReach(); } catch (e) {}
@@ -1051,6 +1067,8 @@
     try {
       // Cloudflare quick tunnel is the no-account default — if it's up, show that and skip the Tailscale flow.
       let cf = null; try { cf = await (await fetch('/tunnel/state', { headers: authHeaders(), cache: 'no-store' })).json(); } catch (e) {}
+      const _sp = stayPublicChecked(cf), _spEl = document.getElementById('t-stay');
+      if (_spEl && _sp !== null) _spEl.checked = _sp;   // the switch mirrors the real tunnel state (skipped while cfHold freezes us)
       if (cf && cf.running && cf.url) { renderCfPublic(cf); gpNotePublic(true); return; }
       const r = await fetch('/tailscale/state', { headers: authHeaders(), cache:'no-store' });
       if (r.status === 401) { renderGoPublic({ locked:true }); return; }
@@ -1086,6 +1104,23 @@
     } catch (e) { tsBusy = false; if (msg) { msg.style.color='var(--clay)'; msg.textContent='✗ '+e.message; } }
   }
 
+  // "Stay public" switch: a thin DOM wrapper around stayPublicRequest(). cfHold freezes the 4s refresh (so it can't
+  // flip the switch back mid-request) and is released on every path.
+  function wireStayPublic() {
+    const t = document.getElementById('t-stay'); if (!t || t._wired) return; t._wired = true;
+    t.onchange = async () => {
+      const on = t.checked, msg = document.getElementById('stayMsg');
+      cfHold = true; t.disabled = true;
+      if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = on ? '· opening… (up to 30s)' : '· closing…'; }
+      const res = await stayPublicRequest(on, authHeaders(), (u, o) => fetch(u, o));
+      t.disabled = false; cfHold = false;
+      if (!res.ok) { t.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + res.error; } return; }
+      if (msg) msg.textContent = '';
+      gpTick();
+      if (on) { setTimeout(() => { loadRelayName(); }, 900); verifyReservationRegistered(); }
+    };
+  }
+  wireStayPublic();
   gpTick(); setInterval(gpTick, 4000);
 
   // ── Dashboard / Settings tabs ──────────────────────────────────────────────────────────────────
