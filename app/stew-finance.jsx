@@ -2825,10 +2825,12 @@ function DashFinanceBook() {
     catch (e) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'bill', message: (e && e.message) || 'The payables account is the wrong type.' } })); } catch (e2) {} return false; }
     if (!okAp) return false;
     const id = booksRandId();
-    // WHO RECORDED IT — the separation-of-duties anchor for dual mode. window.Steward.pubkey is this console's
-    // signing pubkey (the key the relay sees as e.pubkey): the church key on an owner console, the steward's own
-    // key on a delegated one. Stored on the bill doc so a DIFFERENT finance steward must be the one who approves.
-    const me = ((S && S.pubkey) || '').toLowerCase();
+    // WHO RECORDED IT — the separation-of-duties anchor for dual mode. S.signerPub() is the key this console
+    // actually SIGNS with (the key the relay sees as e.pubkey): the church key on an owner console, the steward's
+    // OWN key on a delegated one. NOT S.pubkey — on a delegated console that is the CHURCH we act for, not the
+    // signer, so the recorder would never match the real author. Stored on the bill doc so a DIFFERENT finance
+    // steward must be the one who approves.
+    const me = ((S && S.signerPub && S.signerPub()) || '').toLowerCase();
     const bill = { id, number: number || '', supplier: supplier || '', lines: clean, received: received || booksTodayISO(), due: due || '' };
     let entry = null;
     try { entry = F.post(b, F.billReceiveEntry(bill)); }
@@ -2847,9 +2849,10 @@ function DashFinanceBook() {
   //  · DUAL (features.billApproval===true): publish a SEPARATE approver-SIGNED finance/billapproval:<billId>:
   //    <approverhex> doc. The relay refuses any write whose signer != the hex in the address (the check-in-
   //    arrival pattern), so the approver is BOUND to the signer and cannot be forged. We sign as ourselves, so
-  //    the hex is our own signing pubkey (window.Steward.pubkey — the key the relay sees as e.pubkey).
+  //    the hex is our own signing pubkey (S.signerPub() — the key the relay sees as e.pubkey; NOT S.pubkey, which
+  //    on a delegated console is the church, so the relay would refuse an approval addressed to the wrong key).
   const approveBill = async (bill) => {
-    const me = ((S && S.pubkey) || '').toLowerCase();
+    const me = ((S && S.signerPub && S.signerPub()) || '').toLowerCase();
     if (billApprovalMode === 'dual') {
       if (!/^[0-9a-f]{64}$/.test(me)) { setBillFlash('Could not read your signing key, so nothing was approved.'); return false; }
       // SEPARATION OF DUTIES: you cannot approve a bill you recorded. The engine (isBillApproved) ignores a
@@ -3466,7 +3469,7 @@ function DashFinanceBook() {
         </div>
         {(() => {
           const today = booksTodayISO();
-          const me = ((S && S.pubkey) || '').toLowerCase();   // this console's signing pubkey — who "I" am, for the self-approval block
+          const me = ((S && S.signerPub && S.signerPub()) || '').toLowerCase();   // the key this console SIGNS with (NOT S.pubkey — that is the church on a delegated console) — who "I" am, for the self-approval block
           const badge = (status) => {
             const tone = status === 'paid' ? 'var(--sage, #4f7a5e)' : status === 'overdue' ? 'var(--clay-deep, #b4462f)' : 'var(--ink-3)';
             return <span data-bill-status={status} style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: tone, border: '1px solid var(--line)', borderRadius: 7, padding: '2px 8px', marginLeft: 8 }}>{status}</span>;
