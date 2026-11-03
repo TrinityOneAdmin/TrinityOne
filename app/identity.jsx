@@ -1490,7 +1490,7 @@ function DirectoryToggle({ identity, onSave, ctx }) {
 function VotdToggle() {
   const [off, setOff] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-off') === '1'; } catch { return false; } });
   const on = !off;
-  const flip = () => { const nv = !off; setOff(nv); try { localStorage.setItem('trinityone.votd-off', nv ? '1' : '0'); } catch {} };
+  const flip = () => { const nv = !off; setOff(nv); try { localStorage.setItem('trinityone.votd-off', nv ? '1' : '0'); } catch {} try { window.dispatchEvent(new CustomEvent('votd-off-changed', { detail: nv })); } catch {} };
   return (
     <div onClick={flip} style={{ cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderTop: '1px solid var(--line-2)', textAlign: 'left' }}>
       <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--clay-soft)', color: 'var(--clay)' }}>

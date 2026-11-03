@@ -2339,6 +2339,7 @@ function TodayScreen({ ctx }) {
   const [sermonSeen, setSermonSeen] = React.useState(() => { try { return localStorage.getItem('trinityone.sermon-seen') || ''; } catch { return ''; } });
   // Verse of the day — can be turned off entirely from Settings (trinityone.votd-off).
   const [votdOff, setVotdOff] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-off') === '1'; } catch { return false; } });
+  React.useEffect(() => { const h = (e) => setVotdOff(!!e.detail); window.addEventListener('votd-off-changed', h); return () => window.removeEventListener('votd-off-changed', h); }, []);
   // STARTS MINIMISED as a compact bar you tap to open (owner, 2026-09-01); the preference
   // persists, and an explicit choice outranks the default. The stored key tells the three cases apart:
   // ABSENT = never touched it (gets the new default, minimised), '0' = chose expanded, '1' = chose minimised.
