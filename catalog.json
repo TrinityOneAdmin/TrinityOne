@@ -237,6 +237,19 @@
      "desc": "Whole-Bible verse-by-verse commentary."
     },
     {
+     "id": "geneva-notes",
+     "name": "Geneva Bible Notes 1599",
+     "abbr": "GNVNotes",
+     "lang": "English",
+     "url": "modules/geneva-notes.cmt.mybible.zip",
+     "format": "MySword",
+     "kind": "comment",
+     "size": "1.9 MB",
+     "license": "Marginal notes of the 1599 Geneva Bible, modern spelling (Ikram Hawramani ebook) — public domain",
+     "sha256": "bdd609907d47b1a10d3b98670d55fa0a48a75611e8fb23590ad9b47d03a57a29",
+     "desc": "The Reformation study notes that shaped English Bible reading — marginal commentary on all 66 books, in modern spelling."
+    },
+    {
      "id": "import-cmt",
      "name": "Import a commentary…",
      "kind": "import",
@@ -277,6 +290,19 @@
      "featured": true,
      "sha256": "f14c43a15167ff959186cdb54ede7e493a54387f40534e8da15ebeb45ffe2815",
      "desc": "Where scripture echoes scripture — 29,320 verses linked, best-voted first, from the Treasury of Scripture Knowledge."
+    },
+    {
+     "id": "crossrefs-geneva",
+     "name": "Geneva Notes 1599 cross-references",
+     "abbr": "GNV",
+     "lang": "English",
+     "size": "65 KB",
+     "license": "Public Domain · cross-references drawn from the marginal notes of the 1599 Geneva Bible (Ikram Hawramani modern-spelling ebook)",
+     "kind": "crossref",
+     "format": "JSON",
+     "url": "modules/crossrefs-geneva.json",
+     "sha256": "207070d3717a1918e52750f2dcecb05438bd02695e7f4f4fe7814020892127f9",
+     "desc": "Where the Geneva Bible's own margins send the reader — 1,874 verses cross-linked from the 1599 notes."
     }
    ]
   }
