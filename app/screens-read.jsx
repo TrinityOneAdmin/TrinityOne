@@ -1064,6 +1064,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   };
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs' | 'bookmarks'
   const [commSrc, setCommSrc] = useS(null);      // null = default to first, or abbr of chosen source
+  const [commDrop, setCommDrop] = useS(false);   // commentary source dropdown open
   const [commAll, setCommAll] = useS([]);        // all installed commentary modules (from commentaryList)
   const [comm, setComm] = useS([]);              // commentary content for this chapter (from getCommentary)
   const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
@@ -1269,14 +1270,34 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
             const filtered = active ? comm.filter(s => s.abbr === active) : comm;
             return <React.Fragment>
             {commAll.length > 1 ? (
-              <div style={{ marginBottom: 14 }}>
-                <select value={active || ''} onChange={e => setCommSrc(e.target.value || null)} style={{
+              <div style={{ position: 'relative', marginBottom: 14 }}>
+                <button onClick={() => setCommDrop(!commDrop)} style={{
                   width: '100%', padding: '10px 13px', borderRadius: 12, border: '1px solid var(--line)',
                   background: 'var(--surface-2)', color: 'var(--ink)', fontFamily: 'var(--font-ui)',
-                  fontWeight: 700, fontSize: 14, cursor: 'pointer'
+                  fontWeight: 700, fontSize: 14, cursor: 'pointer', textAlign: 'left',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between'
                 }}>
-                  {commAll.map(s => <option key={s.abbr} value={s.abbr}>{s.name}</option>)}
-                </select>
+                  <span>{(commAll.find(s => s.abbr === active) || commAll[0] || {}).name}</span>
+                  <Icon name={commDrop ? 'chevU' : 'chevD'} size={16} />
+                </button>
+                {commDrop ? <React.Fragment>
+                  <div onClick={() => setCommDrop(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 41,
+                    marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
+                    borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: '6px 0',
+                    maxHeight: '50vh', overflowY: 'auto', animation: 'trinityRise .16s ease both'
+                  }}>
+                    {commAll.map(s => <button key={s.abbr} onClick={() => { setCommSrc(s.abbr); setCommDrop(false); }} style={{
+                      width: '100%', padding: '11px 15px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                      background: s.abbr === active ? 'color-mix(in oklab, var(--clay) 18%, var(--surface))' : 'transparent',
+                      color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: s.abbr === active ? 700 : 500,
+                      fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+                    }}>
+                      <span>{s.name}</span>
+                      {s.abbr === active ? <div style={{ width: 18, height: 18, borderRadius: 9, border: '2px solid var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ width: 10, height: 10, borderRadius: 5, background: 'var(--clay)' }} /></div> : <div style={{ width: 18, height: 18, borderRadius: 9, border: '2px solid var(--line)' }} />}
+                    </button>)}
+                  </div>
+                </React.Fragment> : null}
               </div>
             ) : null}
             {filtered.length ? filtered.map((srcBlk, si) => (
@@ -1349,6 +1370,10 @@ function ReadScreen({ ctx }) {
   const wordId = wordStack.length ? wordStack[wordStack.length - 1] : null;
   const [cvAnchor, setCvAnchor] = useS(null);   // header chapter-pill rect for the chapter/verse dropdown
   const [commentaryOpen, setCommentaryOpen] = useS(false);
+  // ── bookmark tag picker ──
+  const [tagPick, setTagPick] = useS(null);       // ref being tagged, or null
+  const [pickTags, setPickTags] = useS([]);        // currently selected tags in picker
+  const [newTag, setNewTag] = useS('');
   // ── narration (Listen): read the chapter aloud with the device's speech engine (offline, no audio files) ──
   const [narrateState, setNarrateState] = useS('idle');   // idle | playing | paused
   const [narrateV, setNarrateV] = useS(null);              // verse number currently being spoken
@@ -1499,7 +1524,19 @@ function ReadScreen({ ctx }) {
   }).filter(Boolean).join(' ');
   const sheetCtx = {
     toast: ctx.toast,
-    _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
+    _bm: () => {
+      const k = keyOf(sel0);
+      const wasBookmarked = ctx.bookmarks.includes(k);
+      ctx.toggleBookmark(k);
+      if (wasBookmarked) { ctx.toast('Bookmark removed'); }
+      else {
+        // initialise tag picker with the bookmark's current tags (empty for a new bookmark)
+        const item = ctx.bookmarkItems.find(b => b.ref === k);
+        setPickTags(item && item.tags ? [...item.tags] : []);
+        setNewTag('');
+        setTagPick(k);
+      }
+    },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
     _define: () => setSheet('define'),
@@ -1728,6 +1765,39 @@ function ReadScreen({ ctx }) {
         onPick={(book, c, v) => { close(); ctx.setLoc({ book, chap: c, verse: v || undefined }); }} />
       <ChapterVerseMenu open={sheet === 'cv'} onClose={close} anchor={cvAnchor} loc={loc} version={version}
         onPick={(c, v) => { ctx.setLoc({ book: loc.book, chap: c, verse: v || undefined }); if (v != null) close(); }} />
+
+      {/* bookmark tag picker — shown after toggling a bookmark ON */}
+      {tagPick ? (() => {
+        const dismissTagPick = () => { ctx.setBookmarkTags(tagPick, pickTags); setTagPick(null); ctx.toast('Bookmarked'); };
+        const addNewTag = () => { const t = newTag.trim().toLowerCase(); if (t && !pickTags.includes(t)) setPickTags([...pickTags, t]); setNewTag(''); };
+        const allTags = ctx.allBookmarkTags.filter(t => !pickTags.includes(t));
+        return (
+          <React.Fragment>
+            <div onClick={dismissTagPick} style={{ position: 'fixed', inset: 0, zIndex: 52, background: 'rgba(20,15,10,.32)', animation: 'trinityFade .16s ease both' }} />
+            <div style={{ position: 'fixed', left: 16, right: 16, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)', zIndex: 53, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, boxShadow: 'var(--shadow-lg)', padding: '18px 18px 14px', animation: 'trinityRise .16s ease both', maxHeight: '60vh', overflowY: 'auto' }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, marginBottom: 2 }}>Tag this bookmark</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 14 }}>(optional)</div>
+              {pickTags.length > 0 || allTags.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+                  {pickTags.map(t => (
+                    <button key={t} onClick={() => setPickTags(pickTags.filter(x => x !== t))} style={{ padding: '6px 14px', borderRadius: 999, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <Icon name="check" size={12} stroke={2.4} color="var(--on-clay)" />{t}</button>
+                  ))}
+                  {allTags.map(t => (
+                    <button key={t} onClick={() => setPickTags([...pickTags, t])} style={{ padding: '6px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{t}</button>
+                  ))}
+                </div>
+              ) : null}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                <input value={newTag} onChange={e => setNewTag(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addNewTag(); }}
+                  placeholder="New tag" style={{ flex: 1, minWidth: 0, height: 40, padding: '0 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+                <button onClick={addNewTag} disabled={!newTag.trim()} style={{ padding: '0 16px', height: 40, borderRadius: 11, border: 'none', background: newTag.trim() ? 'var(--clay)' : 'var(--surface-2)', color: newTag.trim() ? 'var(--on-clay)' : 'var(--ink-3)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', cursor: newTag.trim() ? 'pointer' : 'default' }}>Add</button>
+              </div>
+              <button onClick={dismissTagPick} style={{ width: '100%', padding: '12px 0', borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 15, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>Done</button>
+            </div>
+          </React.Fragment>
+        );
+      })() : null}
 
       {/* narration control bar — appears while the chapter is being read aloud */}
       {narrateState !== 'idle' ? (

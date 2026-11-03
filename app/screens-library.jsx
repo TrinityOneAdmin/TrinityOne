@@ -378,13 +378,29 @@ const JOURNAL_COLORS = ['var(--hl-yellow)', 'var(--hl-green)', 'var(--hl-pink)',
 
 function JournalEditor({ entry, open, onClose, ctx }) {
   const editing = !!(entry && entry.id);
-  const [ref, setRef] = React.useState('');
+  const [selBook, setSelBook] = React.useState(null);
+  const [selChap, setSelChap] = React.useState(null);
+  const [selVerse, setSelVerse] = React.useState(null);
+  const [selEndVerse, setSelEndVerse] = React.useState(null);
+  const [pickOpen, setPickOpen] = React.useState(null);
   const [title, setTitle] = React.useState('');
   const [body, setBody] = React.useState('');
   const [color, setColor] = React.useState('var(--hl-yellow)');
+  const ref = selBook ? (selBook.name + (selChap ? ' ' + selChap + (selVerse ? ':' + selVerse + (selEndVerse && selEndVerse > selVerse ? '-' + selEndVerse : '') : '') : '')) : '';
   React.useEffect(() => {
     if (open) {
-      setRef((entry && entry.ref) || '');
+      const _r = (entry && entry.ref) ? window.Bible.parseRef(entry.ref) : null;
+      if (_r && _r.book) {
+        const meta = (window.Bible.bookMeta ? window.Bible.bookMeta() : []).find(b => b.num === _r.book);
+        setSelBook(meta || null);
+        setSelChap(_r.chap || null);
+        setSelVerse(_r.verse || null);
+        const rm = entry.ref.match(/:(\d+)\s*[-–]\s*(\d+)/);
+        setSelEndVerse(rm ? parseInt(rm[2], 10) : null);
+      } else {
+        setSelBook(null); setSelChap(null); setSelVerse(null); setSelEndVerse(null);
+      }
+      setPickOpen(null);
       setTitle((entry && entry.title) || '');
       setBody((entry && entry.body) || '');
       setColor((entry && entry.color) || 'var(--hl-yellow)');
@@ -417,10 +433,137 @@ function JournalEditor({ entry, open, onClose, ctx }) {
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 20px 30px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, height: 42, padding: '0 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 16 }}>
-          <Icon name="link" size={16} color="var(--clay)" />
-          <input value={ref} onChange={e => setRef(e.target.value)} placeholder="Link a verse — e.g. John 1:4 (optional)" style={{
-            flex: 1, minWidth: 0, border: 'none', background: 'none', outline: 'none', fontSize: 14, fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative', marginBottom: 16 }}>
+          <Icon name="link" size={16} color="var(--clay)" style={{ flexShrink: 0 }} />
+          <button onClick={() => setPickOpen(pickOpen === 'book' ? null : 'book')} style={{
+            flex: 1, minWidth: 0, height: 42, padding: '0 10px', borderRadius: 12, border: '1px solid var(--line)',
+            background: 'var(--surface-2)', color: selBook ? 'var(--ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)',
+            fontWeight: 600, fontSize: 13.5, cursor: 'pointer', textAlign: 'left',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', overflow: 'hidden'
+          }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selBook ? selBook.name : 'Book'}</span>
+            <Icon name={pickOpen === 'book' ? 'chevU' : 'chevD'} size={14} />
+          </button>
+          <button onClick={() => { if (selBook) setPickOpen(pickOpen === 'chap' ? null : 'chap'); }} disabled={!selBook} style={{
+            width: 56, height: 42, padding: '0 6px', borderRadius: 12, border: '1px solid var(--line)',
+            background: 'var(--surface-2)', color: selChap ? 'var(--ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)',
+            fontWeight: 600, fontSize: 13.5, cursor: selBook ? 'pointer' : 'default', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', opacity: selBook ? 1 : 0.4
+          }}>
+            <span>{selChap || 'Ch'}</span>
+            <Icon name={pickOpen === 'chap' ? 'chevU' : 'chevD'} size={14} />
+          </button>
+          <button onClick={() => { if (selChap) setPickOpen(pickOpen === 'verse' ? null : 'verse'); }} disabled={!selChap} style={{
+            width: 52, height: 42, padding: '0 6px', borderRadius: 12, border: '1px solid var(--line)',
+            background: 'var(--surface-2)', color: selVerse ? 'var(--ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)',
+            fontWeight: 600, fontSize: 13.5, cursor: selChap ? 'pointer' : 'default', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', opacity: selChap ? 1 : 0.4
+          }}>
+            <span>{selVerse || 'V'}</span>
+            <Icon name={pickOpen === 'verse' ? 'chevU' : 'chevD'} size={14} />
+          </button>
+          {selBook ? <button onClick={() => { setSelBook(null); setSelChap(null); setSelVerse(null); setSelEndVerse(null); setPickOpen(null); }} style={{
+            border: 'none', background: 'none', cursor: 'pointer', padding: 4, flexShrink: 0, color: 'var(--ink-3)'
+          }}><Icon name="x" size={16} /></button> : null}
+          {pickOpen === 'book' ? <React.Fragment>
+            <div onClick={() => setPickOpen(null)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div className="no-scrollbar" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 41,
+              marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
+              borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: '6px 0',
+              maxHeight: '50vh', overflowY: 'auto', animation: 'trinityRise .16s ease both'
+            }}>
+              {(() => {
+                const allBooks = window.Bible && window.Bible.bookMeta ? window.Bible.bookMeta() : [];
+                const ot = allBooks.filter(b => b.num <= 39);
+                const nt = allBooks.filter(b => b.num >= 40);
+                const hd = { fontSize: 10, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', padding: '10px 15px 4px', fontFamily: 'var(--font-ui)' };
+                const renderBook = (b) => <button key={b.num} onClick={() => { setSelBook(b); setSelChap(null); setSelVerse(null); setSelEndVerse(null); setPickOpen(null); }} style={{
+                  width: '100%', padding: '9px 15px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                  background: selBook && selBook.num === b.num ? 'color-mix(in oklab, var(--clay) 18%, var(--surface))' : 'transparent',
+                  color: 'var(--ink)', fontFamily: 'var(--font-ui)', fontWeight: selBook && selBook.num === b.num ? 700 : 500,
+                  fontSize: 14
+                }}>{b.name}</button>;
+                return <React.Fragment>
+                  <div style={hd}>OLD TESTAMENT</div>
+                  {ot.map(renderBook)}
+                  <div style={hd}>NEW TESTAMENT</div>
+                  {nt.map(renderBook)}
+                </React.Fragment>;
+              })()}
+            </div>
+          </React.Fragment> : null}
+          {pickOpen === 'chap' && selBook ? <React.Fragment>
+            <div onClick={() => setPickOpen(null)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div className="no-scrollbar" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 41,
+              marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
+              borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 12,
+              maxHeight: '50vh', overflowY: 'auto', animation: 'trinityRise .16s ease both'
+            }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
+                {Array.from({ length: selBook.ch }, (_, i) => i + 1).map(c => (
+                  <button key={c} onClick={() => { setSelChap(c); setSelVerse(null); setSelEndVerse(null); setPickOpen(null); }} style={{
+                    aspectRatio: '1', borderRadius: 10, border: '1px solid var(--line)',
+                    background: selChap === c ? 'var(--clay)' : 'var(--surface-2)',
+                    color: selChap === c ? '#fff' : 'var(--ink)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-display)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+                  }}>{c}</button>
+                ))}
+              </div>
+            </div>
+          </React.Fragment> : null}
+          {pickOpen === 'verse' && selChap ? <React.Fragment>
+            <div onClick={() => setPickOpen(null)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div className="no-scrollbar" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 41,
+              marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
+              borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 12,
+              maxHeight: '50vh', overflowY: 'auto', animation: 'trinityRise .16s ease both'
+            }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
+                {Array.from({ length: (window.Bible.getVerses(selBook.num, selChap) || []).length || 1 }, (_, i) => i + 1).map(v => (
+                  <button key={v} onClick={() => { setSelVerse(v); setSelEndVerse(null); setPickOpen(null); }} style={{
+                    aspectRatio: '1', borderRadius: 10, border: '1px solid var(--line)',
+                    background: selVerse === v ? 'var(--clay)' : 'var(--surface-2)',
+                    color: selVerse === v ? '#fff' : 'var(--ink)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-display)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+                  }}>{v}</button>
+                ))}
+              </div>
+            </div>
+          </React.Fragment> : null}
+          {selVerse ? <React.Fragment>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-3)', flexShrink: 0 }}>–</span>
+            <button onClick={() => setPickOpen(pickOpen === 'endverse' ? null : 'endverse')} style={{
+              width: 52, height: 42, padding: '0 6px', borderRadius: 12, border: '1px solid var(--line)',
+              background: 'var(--surface-2)', color: selEndVerse ? 'var(--ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)',
+              fontWeight: 600, fontSize: 13.5, cursor: 'pointer', flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+            }}>
+              <span>{selEndVerse || 'V'}</span>
+              <Icon name={pickOpen === 'endverse' ? 'chevU' : 'chevD'} size={14} />
+            </button>
+          </React.Fragment> : null}
+          {pickOpen === 'endverse' && selVerse && selChap ? <React.Fragment>
+            <div onClick={() => setPickOpen(null)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div className="no-scrollbar" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 41,
+              marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
+              borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 12,
+              maxHeight: '50vh', overflowY: 'auto', animation: 'trinityRise .16s ease both'
+            }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
+                {Array.from({ length: (window.Bible.getVerses(selBook.num, selChap) || []).length || 1 }, (_, i) => i + 1).filter(v => v >= selVerse).map(v => (
+                  <button key={v} onClick={() => { setSelEndVerse(v === selVerse ? null : v); setPickOpen(null); }} style={{
+                    aspectRatio: '1', borderRadius: 10, border: '1px solid var(--line)',
+                    background: selEndVerse === v ? 'var(--clay)' : 'var(--surface-2)',
+                    color: selEndVerse === v ? '#fff' : 'var(--ink)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: 13.5, fontFamily: 'var(--font-display)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+                  }}>{v}</button>
+                ))}
+              </div>
+            </div>
+          </React.Fragment> : null}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 18 }}>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)' }}>Marker</span>
@@ -573,18 +716,22 @@ function CollectionView({ coll, open, onClose, ctx }) {
   // Notes only: the note being edited (the MyData item) and its draft text.
   const [editNote, setEditNote] = React.useState(null);
   const [noteText, setNoteText] = React.useState('');
-  React.useEffect(() => { if (open) { setEditNote(null); setQ(''); setAdding(false); setPWho(''); setPText(''); } }, [open, coll && coll.id]);
+  const [tagFilter, setTagFilter] = React.useState(null);   // null = "All", string = specific tag
+  React.useEffect(() => { if (open) { setEditNote(null); setQ(''); setAdding(false); setPWho(''); setPText(''); setTagFilter(null); } }, [open, coll && coll.id]);
   React.useEffect(() => MD.on(() => force(x => x + 1)), []);
   if (!coll) return null;
 
   const isXref = coll.id === 'crossrefs';
   const isNotes = coll.id === 'notes';
   const isPrayer = coll.id === 'prayer';
+  const isBookmarks = coll.id === 'bookmarks';
   const owned = !isXref;   // user-owned types are managed; cross-refs are read-only reference data
 
   const raw = isXref ? (D.COLLECTION_ITEMS.crossrefs || []) : MD.list(coll.id);
+  const allTags = isBookmarks ? [...new Set(raw.flatMap(b => b.tags || []))].sort() : [];
   const ql = q.trim().toLowerCase();
-  const items = ql ? raw.filter(it => ((it.ref || '') + ' ' + (it.text || '') + ' ' + (it.who || '')).toLowerCase().includes(ql)) : raw;
+  const preFilter = ql ? raw.filter(it => ((it.ref || '') + ' ' + (it.text || '') + ' ' + (it.who || '')).toLowerCase().includes(ql)) : raw;
+  const items = isBookmarks && tagFilter ? preFilter.filter(it => (it.tags || []).includes(tagFilter)) : preFilter;
   const blurb = { highlights: 'Verses you’ve marked', bookmarks: 'Saved for later', notes: 'Your reflections in the margin',
     prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
 
@@ -630,6 +777,16 @@ function CollectionView({ coll, open, onClose, ctx }) {
         </div>
       </div>
 
+      {/* bookmark tag filter chips */}
+      {isBookmarks && allTags.length > 0 ? (
+        <div className="no-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 16px 12px', flexShrink: 0 }}>
+          <button onClick={() => setTagFilter(null)} style={{ padding: '5px 14px', borderRadius: 999, border: tagFilter === null ? 'none' : '1px solid var(--line)', background: tagFilter === null ? 'var(--clay)' : 'var(--surface-2)', color: tagFilter === null ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>All</button>
+          {allTags.map(t => (
+            <button key={t} onClick={() => setTagFilter(tagFilter === t ? null : t)} style={{ padding: '5px 14px', borderRadius: 999, border: tagFilter === t ? 'none' : '1px solid var(--line)', background: tagFilter === t ? 'var(--clay)' : 'var(--surface-2)', color: tagFilter === t ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t}</button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '12px 16px 30px' }}>
         {/* prayer add form */}
         {isPrayer && adding ? (
@@ -669,6 +826,13 @@ function CollectionView({ coll, open, onClose, ctx }) {
                 <p style={{ margin: 0, fontFamily: isXref ? 'var(--font-ui)' : 'var(--font-read)', fontSize: isXref ? 13.5 : 16, fontWeight: isXref ? 600 : 400,
                   lineHeight: 1.5, color: isXref ? 'var(--ink-2)' : 'var(--ink)', textWrap: 'pretty',
                   display: '-webkit-box', WebkitLineClamp: isNotes || isPrayer ? 3 : 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{it.text}</p>
+                {isBookmarks && (it.tags || []).length > 0 ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
+                    {it.tags.map(t => (
+                      <span key={t} style={{ padding: '2px 9px', borderRadius: 999, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>{t}</span>
+                    ))}
+                  </div>
+                ) : null}
 
                 {/* management footer (user-owned only) */}
                 {owned ? (

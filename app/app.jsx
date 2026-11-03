@@ -2342,7 +2342,14 @@ function App() {
     readScale: t.readScale,
     highlights, setHighlight: (k, c) => { if (c) MD.put('highlights', { id: k, ref: k, color: c }); else MD.remove('highlights', k); },
     notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
-    bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
+    bookmarks,
+    bookmarkItems: MD.list('bookmarks'),
+    allBookmarkTags: [...new Set(MD.list('bookmarks').flatMap(b => b.tags || []))].sort(),
+    setBookmarkTags: (ref, tags) => {
+      const existing = MD.list('bookmarks').find(b => b.ref === ref || b.id === ref);
+      if (existing) MD.put('bookmarks', { ...existing, tags: tags.filter(Boolean) });
+    },
+    toggleBookmark: (k) => { if (MD.has('bookmarks', k)) { MD.remove('bookmarks', k); return false; } else { MD.put('bookmarks', { id: k, ref: k }); return true; } },
     planProgress,
     planLast,
     planRead,
