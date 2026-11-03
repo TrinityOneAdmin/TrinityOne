@@ -73,10 +73,14 @@ async function loadRow(globals) {
 // BADGE is the node whose type IS that SkPill — matched by identity, which tells it apart from the control's
 // own always-present "Expires" label and aria-labels.
 const SkPill = function SkPill({ children }) { return children; };
-async function renderRow(until) {
+// `editing` selects the row's state: at REST (null) the picker is collapsed to a single Edit/Add button; when
+// expiryEditing equals the row's pk the picker + Save are revealed. `edits` captures setExpiryEditing calls so
+// a test can prove the resting button opens the editor.
+async function renderRow(until, editing = null) {
   const { React } = miniReact();
   const now = 1800000000;                         // a fixed "now" so the day maths is deterministic
   const calls = { approved: [] };
+  const edits = [];
   const mod = await loadRow({
     React, Promise, SkPill,
     Icon: () => null,
@@ -87,13 +91,17 @@ async function renderRow(until) {
     setExpiryDraft: () => {},
     expiryNote: null,
     setExpiryNote: () => {},
+    expiryEditing: editing,
+    setExpiryEditing: (v) => edits.push(v),
     sg: { approved: [PK], clearedKnown: true },
     window: { Steward: { setApproved: (list, opts) => { calls.approved.push([list, opts]); return true; } } },
   });
   const tree = mod.clearedRow({ pk: PK, name: NAME, rec: { by: 'x', at: 1 }, until });
   const badges = find(tree, n => n.type === SkPill);
   const badgeText = badges.map(b => texts(b).join(' ')).join(' ');
-  return { tree, badges, badgeText, calls, root: mod };
+  const inputs = find(tree, n => n.type === 'input');
+  const btn = (starts) => find(tree, n => n.type === 'button' && new RegExp('^' + starts).test(String((n.props || {})['aria-label'] || '')));
+  return { tree, badges, badgeText, inputs, btn, calls, edits, root: mod };
 }
 
 test('A DATED clearance shows an "Expired" badge on the row when the date has passed', async () => {
@@ -136,12 +144,38 @@ test('the three reminder stages wear three DISTINCT tints on the row', async () 
     'the urgent tint "' + urgent + '" is not a defined SK_TINT colour in app/stew-data.jsx — SkPill would fall back to red');
 });
 
-test('the row’s Save control is WIRED to setApproved and carries an expiry map', async () => {
-  // The badge could be perfect and the control dead. Press Save and assert what reached the engine — the
-  // whole cleared list unchanged (nobody added/removed) plus just this person’s expiry override.
-  const { tree, calls } = await renderRow(1800000000 + 10 * DAY);
-  const save = find(tree, n => n.type === 'button' && /^Save clearance expiry date/.test(String((n.props || {})['aria-label'] || '')));
-  assert.equal(save.length, 1, 'the row no longer carries exactly one Save control for the expiry date');
+// ── the compact, collapsing control: resting vs editing ─────────────────────────────────────────────────────
+test('AT REST a dated clearance shows the date + an Edit control and NO date input', async () => {
+  // The owner's screenshot had a permanently-open mm/dd/yyyy picker on a second line, making every row taller.
+  // At rest the picker must be hidden: the saved date (the badge) plus a single Edit control, no <input>.
+  const { badges, inputs, btn } = await renderRow(1800000000 + 200 * DAY);   // a date that is set, far off
+  assert.equal(badges.length, 1, 'a dated clearance shows no date at rest');
+  assert.equal(inputs.length, 0, 'the date picker is still open at rest — it must be hidden until Edit is tapped');
+  assert.equal(btn('Change clearance expiry date').length, 1, 'a dated row has no Edit control to reopen the picker');
+});
+
+test('AT REST a DATE-LESS clearance shows a compact Add control and NO open input', async () => {
+  const { inputs, btn } = await renderRow(null);
+  assert.equal(inputs.length, 0, 'a date-less row still shows a permanently-open date input — it must stay short');
+  assert.equal(btn('Add a clearance expiry date').length, 1, 'a date-less row offers no compact "Add date" affordance');
+});
+
+test('tapping the resting control opens the editor (sets the editing pk)', async () => {
+  const rest = await renderRow(null);                       // date-less -> "Add date"
+  rest.btn('Add a clearance expiry date')[0].props.onClick();
+  assert.deepEqual(rest.edits, [PK], 'the Add control does not open the editor for this row');
+  const dated = await renderRow(1800000000 + 200 * DAY);    // dated -> "Edit"
+  dated.btn('Change clearance expiry date')[0].props.onClick();
+  assert.deepEqual(dated.edits, [PK], 'the Edit control does not open the editor for this row');
+});
+
+test('IN EDIT MODE the picker + Save appear, and Save is WIRED to setApproved with the expiry map', async () => {
+  // Enter edit (expiryEditing === this row's pk): the date <input> and Save are revealed. Pressing Save must
+  // still re-send the whole cleared list unchanged plus just this person's expiry override.
+  const { inputs, btn, calls } = await renderRow(1800000000 + 10 * DAY, PK);
+  assert.equal(inputs.length, 1, 'entering edit did not reveal the date picker');
+  const save = btn('Save clearance expiry date');
+  assert.equal(save.length, 1, 'the editor carries no Save control');
   save[0].props.onClick();
   assert.equal(calls.approved.length, 1, 'pressing Save published nothing — the date control is not wired to the engine');
   const [list, opts] = calls.approved[0];
