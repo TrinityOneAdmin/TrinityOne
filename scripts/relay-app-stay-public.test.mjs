@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'relay-app', 'control.js'), 'utf8');
 const m = SRC.match(/\/\/ STAY-PUBLIC-BEGIN[^\n]*\n([\s\S]*?)\/\/ STAY-PUBLIC-END/);
 assert.ok(m, 'STAY-PUBLIC markers are gone from control.js — re-anchor this test');
-const api = new Function(m[1] + '\nreturn { stayPublicRequest, stayPublicChecked };')();
+const api = new Function(m[1] + '\nreturn { stayPublicRequest, stayPublicChecked, stayPublicDisabled };')();
 
 function stubFetch(spec) {
   const calls = [];
@@ -62,4 +62,16 @@ test('switch state follows /tunnel/state: ON only when running AND a url exists'
   assert.equal(api.stayPublicChecked({ running: false, url: '' }), false);
   assert.equal(api.stayPublicChecked({ running: true, url: '' }), false, 'running without a url is not public yet');
   assert.equal(api.stayPublicChecked(null), null, 'unreachable relay leaves the switch alone');
+});
+
+test('switch is DISABLED only when Tailscale funnel is the active public path (owner: lean on Tailscale)', () => {
+  const tsFunnel = { funnelOn: true, publicUrl: 'https://box.ts.net' };
+  // Tailscale funnel up and the cloudflared tunnel NOT up → disable (this switch doesn't govern that path).
+  assert.equal(api.stayPublicDisabled(null, tsFunnel), true);
+  assert.equal(api.stayPublicDisabled({ running: false, url: '' }, tsFunnel), true);
+  // Cloudflared tunnel IS up → the switch governs the live path → enabled even if a funnel also exists.
+  assert.equal(api.stayPublicDisabled({ running: true, url: 'https://a.trycloudflare.com' }, tsFunnel), false);
+  // No Tailscale funnel → enabled so the user can turn the quick tunnel on/off.
+  assert.equal(api.stayPublicDisabled(null, { funnelOn: false, publicUrl: '' }), false);
+  assert.equal(api.stayPublicDisabled(null, null), false);
 });

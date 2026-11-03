@@ -642,6 +642,14 @@
   }
   // What the switch should show for a /tunnel/state reply. null (relay unreachable) = leave the switch as it is.
   function stayPublicChecked(cf) { return cf ? !!(cf.running && cf.url) : null; }
+  // Disable the switch when the Tailscale funnel is the active public path: this switch governs only the cloudflared
+  // quick tunnel, so toggling it there would mislead (the box stays reachable via Tailscale regardless). Owner
+  // direction 2026-11-03: lean on Tailscale, not a single provider. cf (tunnel state) + ts (tailscale state).
+  function stayPublicDisabled(cf, ts) {
+    const cfUp = !!(cf && cf.running && cf.url);
+    const tsFunnel = !!(ts && ts.funnelOn && ts.publicUrl);
+    return !cfUp && tsFunnel;
+  }
   // STAY-PUBLIC-END
   function renderCfPublic(cf) {
     const body = document.getElementById('gpBody');
@@ -1069,13 +1077,15 @@
       let cf = null; try { cf = await (await fetch('/tunnel/state', { headers: authHeaders(), cache: 'no-store' })).json(); } catch (e) {}
       const _sp = stayPublicChecked(cf), _spEl = document.getElementById('t-stay');
       if (_spEl && _sp !== null) _spEl.checked = _sp;   // the switch mirrors the real tunnel state (skipped while cfHold freezes us)
-      if (cf && cf.running && cf.url) { renderCfPublic(cf); gpNotePublic(true); return; }
+      if (cf && cf.running && cf.url) { if (_spEl) _spEl.disabled = false; renderCfPublic(cf); gpNotePublic(true); return; }
       const r = await fetch('/tailscale/state', { headers: authHeaders(), cache:'no-store' });
       if (r.status === 401) { renderGoPublic({ locked:true }); return; }
       const s = await r.json();
       if (s.loggedIn) lastAuthUrl = '';
       renderGoPublic(s);
       gpNotePublic(!!(s.funnelOn && s.publicUrl));
+      // Tailscale funnel is the public path here → this cloudflared switch doesn't govern it; disable + say so.
+      if (_spEl) { const _dis = stayPublicDisabled(cf, s); _spEl.disabled = _dis; const _sm = document.getElementById('stayMsg'); if (_sm) _sm.textContent = _dis ? '· public via Tailscale — managed there' : ''; }
     } catch (e) { /* relay unreachable — the hero card already says so */ }
   }
 
