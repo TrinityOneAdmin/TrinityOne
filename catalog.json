@@ -305,6 +305,32 @@
      "desc": "Where the Geneva Bible's own margins send the reader — 1,874 verses cross-linked from the 1599 notes."
     },
     {
+     "id": "crossrefs-naves",
+     "name": "Nave's Topical Bible",
+     "abbr": "Nave",
+     "lang": "English",
+     "size": "4.2 MB",
+     "license": "Public Domain — Orville J. Nave, 1903 (data via j86schroeder/topical-bible-search, MIT)",
+     "kind": "crossref",
+     "format": "JSON",
+     "url": "modules/crossrefs-naves.json",
+     "sha256": "375469bea787e20cc6c1fbf6a03f8bf6d0b87eca6dcf7f45d0b6fa9e1e7ec7b3",
+     "desc": "Cross-references by topic — verses that share a subject in Nave's classic 1903 topical index. 22,455 verses linked across thousands of topics."
+    },
+    {
+     "id": "crossrefs-douayrheims",
+     "name": "Douay-Rheims Marginal References",
+     "abbr": "DR",
+     "lang": "English",
+     "size": "54 KB",
+     "license": "Unlicense (public domain) — marginal cross-references of the 1609/1582 Douay-Rheims Bible",
+     "kind": "crossref",
+     "format": "JSON",
+     "url": "modules/crossrefs-douayrheims.json",
+     "sha256": "984f1106e3148d70a1f307138ccb719eb384e2a1bee651c14f0db2d8e0f2f700",
+     "desc": "The marginal cross-references printed in the 1609/1582 Douay-Rheims Bible — 1,643 verses linked from an older Catholic tradition."
+    },
+    {
      "id": "import-xref",
      "name": "Import cross-references…",
      "kind": "import",

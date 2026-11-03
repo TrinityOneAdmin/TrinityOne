@@ -74,14 +74,15 @@ rm -f "$WWW"/vendor/fonts/f00[123].woff2 "$WWW"/vendor/fonts/f01[0123].woff2   #
 # Bluetooth is the distribution route for exactly the places where that connection does not exist.
 # 2.9 MB on a ~7 MB APK is the right trade for making that promise true. AUDIT-2026-07-27.
 cp modules/engbsb.zip "$WWW/modules/" 2>/dev/null || echo "  (warning: modules/engbsb.zip missing — the APK will ship with no Bible)"
-cp modules/geneva-notes.cmt.mybible.zip modules/crossrefs-geneva.json "$WWW/modules/" 2>/dev/null || true
+cp modules/geneva-notes.cmt.mybible.zip modules/crossrefs-geneva.json modules/crossrefs-douayrheims.json "$WWW/modules/" 2>/dev/null || true
 
 # The REST of the library still downloads on demand — the full set below is 25 MB and would quadruple the
 # APK. Set BUNDLE_MODULES=1 for an everything-offline build (a church with no connection at all).
 if [ "${BUNDLE_MODULES:-}" = "1" ]; then
   cp modules/engbsb.zip modules/eng-kjv.zip modules/eng-web.zip modules/eng-asv.zip \
      modules/ahirani-usfm.zip modules/eng-akjv.bbl.mybible modules/strongs-dict.json \
-     modules/crossrefs-openbible.json modules/worddefs-wordnet.json modules/worddefs-webster.json \
+     modules/crossrefs-openbible.json modules/crossrefs-naves.json modules/crossrefs-douayrheims.json \
+     modules/worddefs-wordnet.json modules/worddefs-webster.json \
      "$WWW/modules/" 2>/dev/null || true
 fi
 
