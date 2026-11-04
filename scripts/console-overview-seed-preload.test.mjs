@@ -43,6 +43,12 @@ function load(signature, name, opts = {}) {
     NET: 'trinityone',
     JOINPOLICY_D: 'trinityone/joinpolicy:',
     ADMITTED_D: 'trinityone/admitted:',
+    STEWARDS_D: 'trinityone/stewards:',
+    STEWARDREQ_D: 'trinityone/stewardreq:',
+    VERSE_PROMPT_D: 'trinityone/verseprompt',
+    nip44d: (ct) => ct,
+    nip44ck: () => 'k',
+    sk: 'SK',
     npubEncode: (h) => 'npub-' + String(h).slice(0, 8),
     localStorage: ls,
     // stubs for the shared console plumbing these methods close over (identity/no-op where behaviour is unrelated)
@@ -240,4 +246,116 @@ test('admitted: church isolation — church B never paints or overwrites church 
   fresh[0].onDone();
   assert.deepEqual(JSON.parse(ls.getItem(ADM_KEY('CHURCH_A'))), ['pkA'], 'church A allowlist overwritten');
   assert.ok(ls.getItem(ADM_KEY('CHURCH_B')), 'church B allowlist must be under its own key');
+});
+
+// ───────────────────────── STEWARD REQUESTS (name-free) ─────────────────────────
+const REQ_KEY = (cp) => 'trinityone.steward.stewardreqs.' + cp;
+const reqEvent = (cp, pubkey, name, ts = 100) => ({ tags: [['d', 'trinityone/stewardreq:' + cp]], created_at: ts, pubkey, content: JSON.stringify({ name }) });
+
+test('stewardReqs: paints last-known requests on first open', () => {
+  const ls = fakeLS();
+  ls.setItem(REQ_KEY('CHURCH_A'), JSON.stringify([{ pubkey: 'reqpk', npub: 'npub-reqpk', ts: 50 }]));
+  const { fn } = load('subscribeStewardRequests(onReqs)', 'subscribeStewardRequests', { localStorage: ls });
+  const paints = [];
+  fn((list) => paints.push(list));
+  assert.ok(paints.length >= 1 && paints[0][0] && paints[0][0].pubkey === 'reqpk', 'first paint must be the cached requests');
+});
+
+test('stewardReqs: the seed is NAME-FREE — a request name never reaches disk', () => {
+  const { fn, subs, localStorage } = load('subscribeStewardRequests(onReqs)', 'subscribeStewardRequests');
+  fn(() => {});
+  subs[0].handlers.onevent(reqEvent('CHURCH_A', 'reqpk', 'Jane Secret-Surname'));
+  subs[0].handlers.oneose();
+  const onDisk = localStorage.getItem(REQ_KEY('CHURCH_A'));
+  assert.ok(onDisk, 'nothing was seeded on settle');
+  assert.equal(onDisk.includes('Jane'), false, 'the request NAME reached the seed — must be name-free');
+  const row = JSON.parse(onDisk)[0];
+  assert.deepEqual(Object.keys(row).sort(), ['npub', 'pubkey', 'ts'], 'the seed row must carry ONLY pubkey/npub/ts');
+});
+
+test('stewardReqs: writes on settle, not per replay event', () => {
+  const { fn, subs, localStorage } = load('subscribeStewardRequests(onReqs)', 'subscribeStewardRequests');
+  fn(() => {});
+  subs[0].handlers.onevent(reqEvent('CHURCH_A', 'reqpk', 'Jane'));
+  assert.equal(localStorage.getItem(REQ_KEY('CHURCH_A')), null, 'wrote during the replay burst — must wait for EOSE');
+  subs[0].handlers.oneose();
+  assert.ok(localStorage.getItem(REQ_KEY('CHURCH_A')), 'nothing seeded on settle');
+});
+
+test('stewardReqs: a transient/offline empty EOSE does NOT clobber the seed', () => {
+  const ls = fakeLS();
+  ls.setItem(REQ_KEY('CHURCH_A'), JSON.stringify([{ pubkey: 'reqpk', npub: 'npub-reqpk', ts: 50 }]));
+  const { fn, subs } = load('subscribeStewardRequests(onReqs)', 'subscribeStewardRequests', { localStorage: ls });
+  fn(() => {});
+  subs[0].handlers.oneose();   // relay down — no request events this run
+  assert.deepEqual(JSON.parse(ls.getItem(REQ_KEY('CHURCH_A')))[0].pubkey, 'reqpk', 'an empty EOSE clobbered the seed');
+});
+
+test('stewardReqs: a GENUINE resolved-empty (a request withdrawn) DOES clear the seed', () => {
+  const ls = fakeLS();
+  ls.setItem(REQ_KEY('CHURCH_A'), JSON.stringify([{ pubkey: 'reqpk', npub: 'npub-reqpk', ts: 50 }]));
+  const { fn, subs } = load('subscribeStewardRequests(onReqs)', 'subscribeStewardRequests', { localStorage: ls });
+  fn(() => {});
+  // the one request is withdrawn (a deletion event) → sawReq set, byPub emptied → genuine empty
+  subs[0].handlers.onevent({ tags: [['d', 'trinityone/stewardreq:CHURCH_A'], ['deleted', '1']], created_at: 200, pubkey: 'reqpk', content: '' });
+  subs[0].handlers.oneose();
+  assert.deepEqual(JSON.parse(ls.getItem(REQ_KEY('CHURCH_A'))), [], 'a genuine withdrawal must clear the seed to []');
+});
+
+// ───────────────────────── VERSE PROMPT (ref/schedule, note dropped) ─────────────────────────
+const VP_KEY = (cp) => 'trinityone.steward.versebanner.' + cp;
+const vpEvent = (ref, note, ts = 100, id = 'v1') => ({ id, tags: [['d', 'trinityone/verseprompt']], created_at: ts, content: JSON.stringify({ ref, note, schedule: [{ at: ts, ref }] }) });
+
+test('versePrompt: paints the last-known prompt on first open', () => {
+  const ls = fakeLS();
+  ls.setItem(VP_KEY('CHURCH_A'), JSON.stringify({ ref: 'John 3:16', schedule: [], ts: 50, id: 'v0' }));
+  const { fn } = load('subscribeVersePrompt(cb)', 'subscribeVersePrompt', { localStorage: ls });
+  const paints = [];
+  fn((v) => paints.push(v));
+  assert.ok(paints[0] && paints[0].ref === 'John 3:16', 'first paint must be the cached prompt');
+});
+
+test('versePrompt: the seed DROPS the steward note', () => {
+  const { fn, subs, localStorage } = load('subscribeVersePrompt(cb)', 'subscribeVersePrompt');
+  fn(() => {});
+  subs[0].handlers.onevent(vpEvent('Psalm 23', 'A private pastoral note nobody else should read'));
+  subs[0].handlers.oneose();
+  const onDisk = localStorage.getItem(VP_KEY('CHURCH_A'));
+  assert.ok(onDisk && onDisk.includes('Psalm 23'), 'the ref must be seeded');
+  assert.equal(onDisk.includes('private pastoral note'), false, 'the steward note reached the seed — must be dropped');
+  assert.ok(!('note' in JSON.parse(onDisk)), 'the seed row must not carry a note field');
+});
+
+test('versePrompt: a bare/offline EOSE re-delivers the seed and does NOT clear it', () => {
+  const ls = fakeLS();
+  ls.setItem(VP_KEY('CHURCH_A'), JSON.stringify({ ref: 'John 3:16', schedule: [], ts: 50, id: 'v0' }));
+  const { fn, subs } = load('subscribeVersePrompt(cb)', 'subscribeVersePrompt', { localStorage: ls });
+  const paints = [];
+  fn((v) => paints.push(v));
+  subs[0].handlers.oneose();   // relay down — no prompt event this run
+  assert.ok(paints[paints.length - 1] && paints[paints.length - 1].ref === 'John 3:16', 'a bare EOSE cleared the banner');
+  assert.ok(ls.getItem(VP_KEY('CHURCH_A')), 'a bare EOSE removed the good seed');
+});
+
+test('versePrompt: a GENUINE delete clears the seed', () => {
+  const ls = fakeLS();
+  ls.setItem(VP_KEY('CHURCH_A'), JSON.stringify({ ref: 'John 3:16', schedule: [], ts: 50, id: 'v0' }));
+  const { fn, subs } = load('subscribeVersePrompt(cb)', 'subscribeVersePrompt', { localStorage: ls });
+  fn(() => {});
+  subs[0].handlers.onevent({ id: 'del', tags: [['d', 'trinityone/verseprompt'], ['deleted', '1']], created_at: 300, content: '' });
+  subs[0].handlers.oneose();
+  assert.equal(ls.getItem(VP_KEY('CHURCH_A')), null, 'a genuine delete must remove the seed');
+});
+
+test('LEAKS: no request name or steward note lands on disk', () => {
+  const r = load('subscribeStewardRequests(onReqs)', 'subscribeStewardRequests');
+  r.fn(() => {});
+  r.subs[0].handlers.onevent(reqEvent('CHURCH_A', 'reqpk', 'LEAK-NAME'));
+  r.subs[0].handlers.oneose();
+  for (const [, v] of r.localStorage.store) assert.equal(String(v).includes('LEAK-NAME'), false, 'request name on disk: ' + v);
+  const v = load('subscribeVersePrompt(cb)', 'subscribeVersePrompt');
+  v.fn(() => {});
+  v.subs[0].handlers.onevent(vpEvent('Psalm 1', 'LEAK-NOTE'));
+  v.subs[0].handlers.oneose();
+  for (const [, val] of v.localStorage.store) assert.equal(String(val).includes('LEAK-NOTE'), false, 'steward note on disk: ' + val);
 });

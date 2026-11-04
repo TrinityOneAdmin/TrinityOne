@@ -7600,12 +7600,23 @@ window.Steward = {
   subscribeStewardRequests(onReqs) {
     const byPub = new Map();
     let roster = new Set(), rosterAt = 0;
-    const emit = () => onReqs([...byPub.values()].filter(r => !roster.has(r.pubkey)));
+    // PRELOAD WARMING (overview seed): the "people want to help steward" banner opened silent until the relay
+    // answered. Seed a NAME-FREE subset — {pubkey, npub, ts} — which drives the banner (it reads .length only,
+    // stew-dashboard.jsx:3735) and the Settings approve UI (which takes the display name from the MEMBERS map,
+    // never this row). The requester's name is sealed in transit and MUST NOT reach disk. Write on SETTLE; sawReq
+    // (set on any genuine request event, add OR delete) tells a real resolved-empty from a transient/offline one.
+    const REQ_KEY = 'trinityone.steward.stewardreqs.' + (pub || '');
+    const _reqSeedRow = (r) => ({ pubkey: r.pubkey, npub: r.npub, ts: r.ts });
+    let eosed = false, sawReq = false;
+    const emit = () => { const list = [...byPub.values()].filter(r => !roster.has(r.pubkey)); onReqs(list); if (eosed && (list.length || sawReq)) { try { lsSet(REQ_KEY, JSON.stringify(list.map(_reqSeedRow))); } catch {} } };
+    try { const c = JSON.parse(lsGet(REQ_KEY) || '[]'); if (Array.isArray(c)) for (const r of c) if (r && typeof r.pubkey === 'string') byPub.set(r.pubkey, { pubkey: r.pubkey, npub: r.npub || npubEncode(r.pubkey), name: '', ts: r.ts || 0 }); } catch {}
+    if (byPub.size) emit();   // paint the last-known requests instantly
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d === STEWARDS_D + pub) { if (e.created_at < rosterAt) return; rosterAt = e.created_at; try { roster = new Set((JSON.parse(e.content).pubkeys) || []); } catch {} emit(); return; }
         if (d !== STEWARDREQ_D + pub || e.pubkey === pub) return;
+        sawReq = true;   // a genuine request event was delivered this run (add or delete) — distinguishes a real empty from an offline one
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byPub.delete(e.pubkey); emit(); return; }
         // `n` is the sealed form (2026-09-05), sealed by the requester to THIS church's key; `name` is what
         // was written before that and is still on relays. Read both. A request whose name will not open is
@@ -7620,7 +7631,7 @@ window.Steward = {
         byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
         emit();
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -11912,19 +11923,28 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', VERSE_PROMPT_D], ['t', NET], ['deleted', '1']], content: '' }));
   },
   subscribeVersePrompt(cb) {
-    let current = null;
+    // PRELOAD WARMING (overview seed): the verse-prompt banner opened blank until the relay answered. Seed the
+    // subset the banner reads — {ref, schedule, ts, id} — and DROP `note` (steward-authored body text; the banner
+    // shows only `ref`). HYDRATE `current` so a bare/offline EOSE re-delivers the last-known rather than clearing
+    // the banner. Write on SETTLE; CLEAR the seed only on a GENUINE delete (sawDelete), never a transient empty.
+    const VP_KEY = 'trinityone.steward.versebanner.' + (pub || '');
+    const _vpSeedRow = (v) => ({ ref: v.ref || '', schedule: Array.isArray(v.schedule) ? v.schedule : [], ts: v.ts || 0, id: v.id || '' });
+    let current = null, eosed = false, sawDelete = false;
+    try { const c = JSON.parse(lsGet(VP_KEY) || 'null'); if (c && c.ref) current = { ref: c.ref, note: '', schedule: Array.isArray(c.schedule) ? c.schedule : [], ts: c.ts || 0, id: c.id || '' }; } catch {}
+    const _vpWrite = () => { if (!eosed) return; if (!current && !sawDelete) return; try { if (current) lsSet(VP_KEY, JSON.stringify(_vpSeedRow(current))); else localStorage.removeItem(VP_KEY); } catch {} };
+    if (current) cb(current);   // paint the last-known prompt instantly
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [VERSE_PROMPT_D] }, { kinds: [30078], '#church': [pub], '#d': [VERSE_PROMPT_D] }], {
       onevent(e) {
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { sawDelete = true; if (current) { current = null; cb(null); } _vpWrite(); return; }
         // NEVER let an OLDER copy overwrite a newer one. On an exact same-second tie the RELAY keeps the lowest
         // event id (its replaceable-event rule), so do the same here: a tie between two DIFFERENT events (two
         // stewards, one second) resolves to the copy the relay holds, not to whichever arrived first. The same
         // event arriving again from a second relay has an equal id and is skipped, as before. Our own writes
         // never tie with each other: feChurch() -> _monotonic() already bumps a same-document write to last+1.
         if (current && (current.ts > e.created_at || (current.ts === e.created_at && String(current.id || '') <= String(e.id || '')))) return;
-        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at, id: e.id }; cb(current); } catch {}
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at, id: e.id }; cb(current); _vpWrite(); } catch {}
       },
-      oneose() { cb(current); },
+      oneose() { eosed = true; cb(current); _vpWrite(); },
     });
     return () => { try { sub.close(); } catch {} };
   },

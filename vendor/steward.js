@@ -20855,7 +20855,27 @@ zoo`.split("\n");
     subscribeStewardRequests(onReqs) {
       const byPub = /* @__PURE__ */ new Map();
       let roster = /* @__PURE__ */ new Set(), rosterAt = 0;
-      const emit = () => onReqs([...byPub.values()].filter((r) => !roster.has(r.pubkey)));
+      const REQ_KEY = "trinityone.steward.stewardreqs." + (pub || "");
+      const _reqSeedRow = (r) => ({ pubkey: r.pubkey, npub: r.npub, ts: r.ts });
+      let eosed = false, sawReq = false;
+      const emit = () => {
+        const list = [...byPub.values()].filter((r) => !roster.has(r.pubkey));
+        onReqs(list);
+        if (eosed && (list.length || sawReq)) {
+          try {
+            lsSet(REQ_KEY, JSON.stringify(list.map(_reqSeedRow)));
+          } catch {
+          }
+        }
+      };
+      try {
+        const c = JSON.parse(lsGet(REQ_KEY) || "[]");
+        if (Array.isArray(c)) {
+          for (const r of c) if (r && typeof r.pubkey === "string") byPub.set(r.pubkey, { pubkey: r.pubkey, npub: r.npub || npubEncode(r.pubkey), name: "", ts: r.ts || 0 });
+        }
+      } catch {
+      }
+      if (byPub.size) emit();
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -20870,6 +20890,7 @@ zoo`.split("\n");
             return;
           }
           if (d !== STEWARDREQ_D + pub || e.pubkey === pub) return;
+          sawReq = true;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
             byPub.delete(e.pubkey);
             emit();
@@ -20891,6 +20912,7 @@ zoo`.split("\n");
           emit();
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });
@@ -25103,14 +25125,33 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", VERSE_PROMPT_D], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeVersePrompt(cb) {
-      let current = null;
+      const VP_KEY = "trinityone.steward.versebanner." + (pub || "");
+      const _vpSeedRow = (v) => ({ ref: v.ref || "", schedule: Array.isArray(v.schedule) ? v.schedule : [], ts: v.ts || 0, id: v.id || "" });
+      let current = null, eosed = false, sawDelete = false;
+      try {
+        const c = JSON.parse(lsGet(VP_KEY) || "null");
+        if (c && c.ref) current = { ref: c.ref, note: "", schedule: Array.isArray(c.schedule) ? c.schedule : [], ts: c.ts || 0, id: c.id || "" };
+      } catch {
+      }
+      const _vpWrite = () => {
+        if (!eosed) return;
+        if (!current && !sawDelete) return;
+        try {
+          if (current) lsSet(VP_KEY, JSON.stringify(_vpSeedRow(current)));
+          else localStorage.removeItem(VP_KEY);
+        } catch {
+        }
+      };
+      if (current) cb(current);
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [VERSE_PROMPT_D] }, { kinds: [30078], "#church": [pub], "#d": [VERSE_PROMPT_D] }], {
         onevent(e) {
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            sawDelete = true;
             if (current) {
               current = null;
               cb(null);
             }
+            _vpWrite();
             return;
           }
           if (current && (current.ts > e.created_at || current.ts === e.created_at && String(current.id || "") <= String(e.id || ""))) return;
@@ -25118,11 +25159,14 @@ zoo`.split("\n");
             const j = JSON.parse(e.content);
             current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at, id: e.id };
             cb(current);
+            _vpWrite();
           } catch {
           }
         },
         oneose() {
+          eosed = true;
           cb(current);
+          _vpWrite();
         }
       });
       return () => {
