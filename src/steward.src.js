@@ -8872,8 +8872,11 @@ window.Steward = {
     let eosed = false;   // PRELOAD WARMING: write the on-disk seed only once the stream has SETTLED (and on
     // later steady-state changes) — never on every event of the initial kind:4 replay. A chatty church
     // replays many DMs, and a synchronous JSON.stringify + localStorage.setItem of up to SEED_CAP rows on
-    // EACH one blocks the main thread and made the whole console feel slow on load. onConvos still fires
-    // per event for liveness; only the disk write is deferred.
+    // EACH one blocks the main thread and made the whole console feel slow on load. onConvos still fires per
+    // event for liveness; only the disk write is deferred. (No transient-empty guard is needed here: the
+    // cache-first read below re-hydrates byPeer from the stored seed, so arr is never empty while a non-empty
+    // seed exists — an empty EOSE cannot clobber it. The needs/slots seeds DO need that guard because their
+    // cache read repaints without re-hydrating the map.)
     const emit = () => { const arr = [...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (eosed) { try { localStorage.setItem(SEED_KEY, JSON.stringify(arr.slice(0, SEED_CAP))); } catch {} } onConvos(arr); };
     // paint the last-known list instantly so the page doesn't flash empty before the relay answers
     try { const cached = JSON.parse(localStorage.getItem(SEED_KEY) || '[]'); if (Array.isArray(cached) && cached.length) { for (const c of cached) { if (c && c.peer) byPeer.set(c.peer, { peer: c.peer, npub: c.npub || '', ts: c.ts || 0 }); } onConvos([...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))); } } catch {}

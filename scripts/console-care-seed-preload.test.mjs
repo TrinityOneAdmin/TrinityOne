@@ -205,3 +205,41 @@ test('an unlocked, keyed console DOES write the seed (the lock gate is not stuck
   subs[subs.length - 1].oneose();   // stream settles → seed persisted (not per replay event)
   assert.ok(localStorage.getItem(needsKey(churchPub)), 'control: an unlocked console must seed, or test 4 proves nothing');
 });
+
+// ── 5. TRANSIENT-EMPTY GUARD (a slow/offline relay must not blank a good seed) ───────────────────────────
+test('a transient / offline empty EOSE does NOT clobber a non-empty needs seed', () => {
+  const ls = fakeLS();
+  const seed = [{ id: 'keep1', _by: churchPub, type: 'meals', dates: ['2026-08-01'], meals: ['dinner'], startDate: '2026-08-01', endDate: '2026-08-01', ts: 1, _sealed: true }];
+  ls.setItem(needsKey(churchPub), JSON.stringify(seed));
+  const { api, subs } = loadMeals({ localStorage: ls });
+  api.subscribeNeeds(() => {});
+  subs[subs.length - 1].oneose();   // the relay settles having delivered NO need events (offline / still connecting)
+  const onDisk = JSON.parse(ls.getItem(needsKey(churchPub)));
+  assert.equal(onDisk.length, 1, 'the good seed was clobbered to [] by an empty EOSE — the device would open blank');
+  assert.equal(onDisk[0].id, 'keep1', 'the preserved seed must be the original row');
+});
+
+test('a GENUINE empty (a need was seen then retracted) DOES clear the needs seed', async () => {
+  const ls = fakeLS();
+  ls.setItem(needsKey(churchPub), JSON.stringify([{ id: 'stale', _by: churchPub, type: 'meals', dates: ['2026-08-01'], startDate: '2026-08-01', endDate: '2026-08-01', ts: 1, _sealed: true }]));
+  const { api, published, subs } = loadMeals({ localStorage: ls });
+  api.subscribeNeeds(() => {});
+  const h = subs[subs.length - 1];
+  await api.publishNeed({ id: 'n9', type: 'meals', dates: ['2026-08-01'] });
+  h.onevent(finalizeEvent(published[0], churchSk));                 // the need arrives
+  const dtag = published[0].tags.find(t => t[0] === 'd')[1];
+  h.onevent(finalizeEvent({ kind: 30078, created_at: 30, tags: [['d', dtag], ['t', 'trinityone'], ['deleted', '1']], content: '' }, churchSk));  // church retracts it
+  h.oneose();
+  assert.deepEqual(JSON.parse(ls.getItem(needsKey(churchPub))), [], 'a genuinely emptied need list must clear the seed, not keep stale rows');
+});
+
+test('a transient / offline empty EOSE does NOT clobber a non-empty slots seed', () => {
+  const ls = fakeLS();
+  ls.setItem(slotsKey(churchPub), JSON.stringify([{ needId: 'n1', isoDate: '2026-08-01', meal: 'dinner', pubkey: memberPub, ts: 2 }]));
+  const { api, subs } = loadMeals({ localStorage: ls });
+  api.subscribeSlots(() => {});
+  subs[subs.length - 1].oneose();   // relay settles having delivered no slot events (offline / still connecting)
+  const onDisk = JSON.parse(ls.getItem(slotsKey(churchPub)));
+  assert.equal(onDisk.length, 1, 'the good slots seed was clobbered to [] by an empty EOSE');
+  assert.equal(onDisk[0].needId, 'n1', 'the preserved slots seed must be the original row');
+});

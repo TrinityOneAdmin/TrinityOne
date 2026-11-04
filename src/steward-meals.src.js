@@ -345,10 +345,12 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     let openedByMember = false;       // from the church-signed meals-settings (same sub — it's church-authored + NET-tagged)
     const delOk = (by, need) => !openedByMember || by === cp || by === S().churchPub || (!!need && need._by === by);
     const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (delOk(by, need)) return true; } return false; };
-    let eosed = false;   // PRELOAD WARMING: persist the seed only once the stream has SETTLED (and on later
-    // changes), not on every event of the initial replay — a per-event synchronous _writeSeed blocks the
-    // main thread and slows load. cb() still fires per event for liveness.
-    const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (eosed && _mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow)); };
+    let eosed = false, sawNeed = false;   // PRELOAD WARMING: persist the seed only once the stream has SETTLED
+    // (and on later changes), not on every event of the initial replay — a per-event synchronous _writeSeed
+    // blocks the main thread and slows load. cb() still fires per event for liveness. sawNeed tells a GENUINE
+    // empty (a need was seen then all were closed) from a TRANSIENT/offline empty EOSE — so the latter never
+    // clobbers a good non-empty seed to [] (the device would then open blank until the relay answered).
+    const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (eosed && _mayCacheSeed() && (list.length || sawNeed)) _writeSeed(_needsSeedKey(), list.map(_needSeedRow)); };
     // paint the last-known PUBLIC SUBSET instantly (sealed cards show "details hidden" until the key lands)
     { const seeded = _readSeed(_needsSeedKey()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
@@ -359,6 +361,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
           // capture the church's openedBy so deletion authority can be judged (church-signed doc, same filters)
           if (d === SETTINGS_D) { if (e.pubkey === cp) { try { openedByMember = JSON.parse(e.content || '{}').openedBy === 'member'; emit(); } catch (x) {} } return; }
           if (!d.startsWith(NEED_D)) return;
+          sawNeed = true;   // a real need event (incl. a tombstone) — see the sawNeed note above
           const id = d.slice(NEED_D.length);
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
           if (deleted) { const s = tombs.get(id) || new Set(); s.add(e.pubkey); tombs.set(id, s); emit(); return; }
@@ -391,8 +394,9 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   function _subscribeChurchTagged(prefix, normalise, cb, seedKeyFn, seedRowFn) {
     if (!S() || !S().subscribeMany || !activeChurch()) { cb([]); return () => {}; }
     const byKey = new Map();   // key = needId|isoDate|pubkey   (one entry per member-per-(need,date))
-    let eosed = false;   // PRELOAD WARMING: write the seed on settle + later changes, not per replay event
-    const emit = () => { const list = [...byKey.values()]; cb(list); if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn)); };
+    let eosed = false, sawRow = false;   // PRELOAD WARMING: write the seed on settle + later changes, not per
+    // replay event; sawRow guards a transient/offline empty EOSE from clobbering a good non-empty seed to []
+    const emit = () => { const list = [...byKey.values()]; cb(list); if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed() && (list.length || sawRow)) _writeSeed(seedKeyFn(), list.map(seedRowFn)); };
     // paint the last-known STRUCTURAL SUBSET instantly so the slot grid doesn't flash empty
     if (seedKeyFn) { const seeded = _readSeed(seedKeyFn()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
@@ -401,6 +405,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           if (!d.startsWith(prefix)) return;
+          sawRow = true;   // a real slot/skip event — see sawRow note above
           const rest = d.slice(prefix.length).split(':');
           const needId  = rest[0] || '';
           const isoDate = rest[1] || '';

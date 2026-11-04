@@ -317,11 +317,11 @@
         }
         return false;
       };
-      let eosed = false;
+      let eosed = false, sawNeed = false;
       const emit = () => {
         const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
         cb(list);
-        if (eosed && _mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow));
+        if (eosed && _mayCacheSeed() && (list.length || sawNeed)) _writeSeed(_needsSeedKey(), list.map(_needSeedRow));
       };
       {
         const seeded = _readSeed(_needsSeedKey());
@@ -343,6 +343,7 @@
               return;
             }
             if (!d.startsWith(NEED_D)) return;
+            sawNeed = true;
             const id = d.slice(NEED_D.length);
             const deleted = e.tags.some((t) => t[0] === "deleted") || !e.content;
             if (deleted) {
@@ -379,11 +380,11 @@
         };
       }
       const byKey = /* @__PURE__ */ new Map();
-      let eosed = false;
+      let eosed = false, sawRow = false;
       const emit = () => {
         const list = [...byKey.values()];
         cb(list);
-        if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn));
+        if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed() && (list.length || sawRow)) _writeSeed(seedKeyFn(), list.map(seedRowFn));
       };
       if (seedKeyFn) {
         const seeded = _readSeed(seedKeyFn());
@@ -395,6 +396,7 @@
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (!d.startsWith(prefix)) return;
+            sawRow = true;
             const rest = d.slice(prefix.length).split(":");
             const needId = rest[0] || "";
             const isoDate = rest[1] || "";
