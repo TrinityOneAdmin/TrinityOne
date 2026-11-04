@@ -2248,7 +2248,7 @@ function DmHeaderDropdown({ dmConvos, narrow }) {
         {unread > 0 ? <span style={{ position: 'absolute', top: narrow ? 4 : 2, right: narrow ? 4 : 6, minWidth: 17, height: 17, borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', lineHeight: 1, pointerEvents: 'none' }}>{unread}</span> : null}
       </button>
       {open && hasAny ? (
-        <div style={{ position: 'fixed', top: 56, left: 16, right: 16, maxWidth: 320, marginLeft: 'auto', marginRight: 'auto', maxHeight: 340, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ ...(narrow ? { position: 'fixed', top: 56, left: 16, right: 16, maxWidth: 320, marginLeft: 'auto', marginRight: 'auto' } : { position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: 320, maxWidth: '90vw' }), maxHeight: 340, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ padding: '6px 8px 8px', fontWeight: 800, fontSize: 12, letterSpacing: '.4px', color: 'var(--ink-3)' }}>PRIVATE MESSAGES</div>
           {dmConvos.map(c => {
             const m = members.find(x => x.pubkey === c.peer);
@@ -2269,7 +2269,7 @@ function DmHeaderDropdown({ dmConvos, narrow }) {
         </div>
       ) : null}
       {open && !hasAny ? (
-        <div style={{ position: 'fixed', top: 56, left: 16, right: 16, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: '18px 16px', textAlign: 'center' }}>
+        <div style={{ ...(narrow ? { position: 'fixed', top: 56, left: 16, right: 16, maxWidth: 280, marginLeft: 'auto', marginRight: 'auto' } : { position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: 280, maxWidth: '90vw' }), borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: '18px 16px', textAlign: 'center' }}>
           <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>No private messages yet</div>
         </div>
       ) : null}
