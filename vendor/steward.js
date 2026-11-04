@@ -17661,6 +17661,56 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
+  var SGCLEAR_LAST_LS = "trinityone.steward.sgclear.";
+  function _sgClearGet(cp) {
+    if (!cp || !churchSk) return null;
+    const v = lsGet(SGCLEAR_LAST_LS + cp);
+    if (v == null) return null;
+    let o = null;
+    try {
+      o = JSON.parse(v);
+    } catch (e) {
+      o = null;
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o) || typeof o.s !== "string") {
+      try {
+        localStorage.removeItem(SGCLEAR_LAST_LS + cp);
+      } catch (e) {
+      }
+      return null;
+    }
+    try {
+      const d = JSON.parse(decrypt3(o.s, churchSk));
+      if (!d || d.cp !== cp || !Array.isArray(d.approved) || !d.expiry || typeof d.expiry !== "object") return null;
+      return { approved: d.approved.map((p) => String(p)), expiry: d.expiry };
+    } catch (e) {
+      return null;
+    }
+  }
+  function _sgClearSet(cp, approved, expiry) {
+    if (!cp || !churchSk) return;
+    const a = [...new Set((approved || []).map((p) => String(p)))];
+    const ex = {};
+    if (expiry && typeof expiry === "object") for (const k of Object.keys(expiry)) {
+      const n = Number(expiry[k]);
+      if (n) ex[String(k)] = n;
+    }
+    try {
+      lsSet(SGCLEAR_LAST_LS + cp, JSON.stringify({ s: encrypt2(JSON.stringify({ cp, approved: a, expiry: ex }), churchSk) }));
+    } catch (e) {
+    }
+  }
+  function _sgClearClear(keep) {
+    try {
+      const ks = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (k && k.startsWith(SGCLEAR_LAST_LS) && (!keep || k !== SGCLEAR_LAST_LS + keep)) ks.push(k);
+      }
+      for (const k of ks) localStorage.removeItem(k);
+    } catch (e) {
+    }
+  }
   var BLOCKED_SINCE_LS = "trinityone.steward.blockedsince.";
   function _blockedSinceGet(cp) {
     try {
@@ -17902,6 +17952,7 @@ zoo`.split("\n");
     } catch (e) {
     }
     _minorsLastClear("");
+    _sgClearClear("");
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -20932,6 +20983,7 @@ zoo`.split("\n");
     // with my 12 words" (audit of 83b7a4f).
     forgetChildrenLists() {
       _minorsLastClear("");
+      _sgClearClear("");
     },
     removeKey() {
       try {
@@ -20946,6 +20998,7 @@ zoo`.split("\n");
       } catch (e) {
       }
       _minorsLastClear("");
+      _sgClearClear("");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
       _stay.clear();
@@ -23029,6 +23082,9 @@ zoo`.split("\n");
       const isLoaded = () => sawMinors && sawEose;
       const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed();
       const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed();
+      const _sgSeed = _sgClearGet(pub);
+      const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
+      if (_sgSeed) emit();
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -23043,7 +23099,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            emit();
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tApproved) return;
@@ -23058,7 +23114,11 @@ zoo`.split("\n");
             } catch {
               approved = [];
             }
-            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            try {
+              _sgClearSet(pub, approved, expiry);
+            } catch (e2) {
+            }
+            emit();
           } else if (d === NOPHOTO_D + pub) {
             if (!_byChurchOrSteward(e)) return;
             if (e.created_at < tNophoto) return;
@@ -23069,7 +23129,7 @@ zoo`.split("\n");
               nophoto = [];
             }
             _applyNoPhotoList(nophoto);
-            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            emit();
           } else if (d === GUARDIANS_D + pub) {
             if (!_byChurch(e)) return;
             if (e.created_at < tGuardians) return;
@@ -23079,7 +23139,7 @@ zoo`.split("\n");
             } catch {
               guardians = {};
             }
-            onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+            emit();
           }
         },
         // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
@@ -23090,7 +23150,13 @@ zoo`.split("\n");
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
         oneose() {
           sawEose = true;
-          onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors });
+          emit();
+          if (!sawApproved && _isRelayAuthed()) {
+            try {
+              localStorage.removeItem(SGCLEAR_LAST_LS + pub);
+            } catch (e) {
+            }
+          }
         }
       });
       return () => {
@@ -27205,6 +27271,7 @@ zoo`.split("\n");
       } catch (e) {
       }
       _minorsLastClear(actingChurch || pub);
+      _sgClearClear(actingChurch || pub);
       _latestGuardNotice.clear();
       _senvPending.clear();
       window.Steward.pubkey = pub;

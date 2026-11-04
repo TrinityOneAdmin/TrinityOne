@@ -11,7 +11,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, deps } from './test-slice.mjs';
+import { Buffer } from 'node:buffer';
 
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
@@ -358,4 +359,135 @@ test('LEAKS: no request name or steward note lands on disk', () => {
   v.subs[0].handlers.onevent(vpEvent('Psalm 1', 'LEAK-NOTE'));
   v.subs[0].handlers.oneose();
   for (const [, val] of v.localStorage.store) assert.equal(String(val).includes('LEAK-NOTE'), false, 'steward note on disk: ' + val);
+});
+
+// ───────────────────────── SAFEGUARD CLEARANCE (SEALED) ─────────────────────────
+// The clearance record (which adults are cleared + expiry dates) names the congregation's youth workers, so its
+// Overview seed is NIP-44-SEALED under the church key, exactly like the minors list. These tests lift the REAL
+// subscribeSafeguard AND the REAL _sgClearGet/_sgClearSet seal helpers (via deps) from the shipped bundle, with a
+// fake-but-invertible nip44 so "no plaintext on disk" is a genuine assertion. churchSk:null simulates a locked key.
+const SG_KEY = (cp) => 'trinityone.steward.sgclear.' + cp;
+const apprEvent = (cp, pubkeys, expiry, ts = 100) => ({ tags: [['d', 'trinityone/approved:' + cp]], created_at: ts, pubkey: cp, content: JSON.stringify({ pubkeys, expiry }) });
+const minorsEvent = (cp, pubkeys, ts = 90) => ({ tags: [['d', 'trinityone/minors:' + cp]], created_at: ts, pubkey: cp, content: JSON.stringify({ pubkeys }) });
+
+function loadSafeguard(opts = {}) {
+  const body = fnBody(BUNDLE, 'subscribeSafeguard(onLists)');
+  const subs = [];
+  const ls = opts.localStorage || fakeLS();
+  const ctx = {
+    pool: { subscribeMany: (r, f, h) => { subs.push({ filters: f, handlers: h }); return { close() {} }; } },
+    relays: () => [],
+    pub: opts.pub || 'CHURCH_A',
+    churchSk: ('churchSk' in opts) ? opts.churchSk : 'SK',           // null → the console's key is locked/absent
+    // the seal helpers call the BUNDLED crypto names (nip44e/nip44d are bundled as encrypt2/decrypt3); provide
+    // fake-but-invertible versions so deps() does NOT lift the real crypto stack, and "no plaintext on disk" is real.
+    encrypt2: (pt) => 'SEAL:' + Buffer.from(String(pt), 'utf8').toString('base64'),
+    decrypt3: (ct) => Buffer.from(String(ct).replace(/^SEAL:/, ''), 'base64').toString('utf8'),
+    lsGet: (k) => ls.getItem(k), lsSet: (k, v) => ls.setItem(k, v), localStorage: ls,
+    SGCLEAR_LAST_LS: 'trinityone.steward.sgclear.',
+    MINORS_D: 'trinityone/minors:', APPROVED_D: 'trinityone/approved:', NOPHOTO_D: 'trinityone/nophoto:', GUARDIANS_D: 'trinityone/guardians:',
+    NET: 'trinityone',
+    _authFuture: () => false, _byChurch: () => true, _byChurchOrSteward: () => true, _applyNoPhotoList: () => {},
+    _isRelayAuthed: () => (opts.authed !== false),
+  };
+  const depsCode = deps(BUNDLE, body, Object.keys(ctx));
+  // deps() already lifts the bundle's own `_clearedTrail` declaration, so we must NOT declare it again here.
+  const make = new Function(...Object.keys(ctx),
+    depsCode + 'function ' + body + '\nreturn { subscribeSafeguard, getCT: () => _clearedTrail };');
+  const api = make(...Object.values(ctx));
+  return { ...api, subs, localStorage: ls };
+}
+
+// write a sealed seed the way the engine would, for the "paints on open" / "locked" tests
+function seedSafeguard(cp, approved, expiry) {
+  const ls = fakeLS();
+  const w = loadSafeguard({ localStorage: ls, pub: cp });
+  w.subscribeSafeguard(() => {});
+  w.subs[0].handlers.onevent(apprEvent(cp, approved, expiry));
+  w.subs[0].handlers.oneose();
+  return ls;
+}
+
+test('safeguard: the clearance seed on disk is SEALED — no cleared-adult pubkey or date in cleartext', () => {
+  const { subscribeSafeguard, subs, localStorage } = loadSafeguard();
+  subscribeSafeguard(() => {});
+  subs[0].handlers.onevent(apprEvent('CHURCH_A', ['ADULT-CLEARED-PK'], { 'ADULT-CLEARED-PK': 1893456000 }));
+  subs[0].handlers.oneose();
+  const onDisk = localStorage.getItem(SG_KEY('CHURCH_A'));
+  assert.ok(onDisk, 'the clearance seed was not written on a genuine approved doc');
+  assert.equal(onDisk.includes('ADULT-CLEARED-PK'), false, 'a cleared-adult pubkey is in CLEARTEXT on disk — must be sealed');
+  assert.equal(onDisk.includes('1893456000'), false, 'a clearance date is in CLEARTEXT on disk — must be sealed');
+  assert.ok(onDisk.includes('SEAL:'), 'the seed must be the sealed shape');
+});
+
+test('safeguard: the seed paints via approvedSeed/expirySeed and leaves sg.approved FAIL-CLOSED', () => {
+  const ls = seedSafeguard('CHURCH_A', ['ADULT-CLEARED-PK'], { 'ADULT-CLEARED-PK': 1893456000 });
+  const { subscribeSafeguard, getCT } = loadSafeguard({ localStorage: ls });
+  const paints = [];
+  subscribeSafeguard((p) => paints.push(p));
+  assert.ok(paints.length >= 1, 'never painted the cached clearance');
+  // THE CRUCIAL REGRESSION GUARD: sg.approved/sg.expiry (read by the Members toggles + the clearance back-fill)
+  // must stay relay-truth (empty) — a seed must never turn a fail-closed cold start into fail-open stale data.
+  assert.deepEqual(paints[0].approved, [], 'sg.approved was populated from the seed — the toggles/back-fill would act on stale data');
+  assert.deepEqual(paints[0].expiry, {}, 'sg.expiry was populated from the seed');
+  // the banner-only fields carry the cached clearance
+  assert.deepEqual(paints[0].approvedSeed, ['ADULT-CLEARED-PK'], 'approvedSeed must carry the cached approved list');
+  assert.equal(paints[0].expirySeed['ADULT-CLEARED-PK'], 1893456000, 'expirySeed must carry the cached expiry');
+  assert.equal(paints[0].loaded, false, 'the seed paint must NOT claim the relay has answered (loaded)');
+  assert.equal(paints[0].clearedKnown, false, 'the seed paint must NOT claim clearedKnown');
+  // _clearedTrail starts as a {loaded:false} default in the bundle; the carry-forward into a genuine publish is
+  // gated on _clearedTrail.loaded (setApproved), so the invariant is that the seed paint never flips loaded true.
+  assert.ok(!getCT() || getCT().loaded !== true, 'the seed paint must NOT set _clearedTrail to a loaded (carry-forward) state');
+});
+
+test('safeguard: a LOCKED key (no churchSk) reads the seed as ABSENT — the banner waits', () => {
+  const ls = seedSafeguard('CHURCH_A', ['ADULT-CLEARED-PK'], { 'ADULT-CLEARED-PK': 1893456000 });
+  const { subscribeSafeguard } = loadSafeguard({ localStorage: ls, churchSk: null });
+  const paints = [];
+  subscribeSafeguard((p) => paints.push(p));
+  assert.ok(!paints.some(p => (p.approvedSeed || []).includes('ADULT-CLEARED-PK')), 'a locked console read the sealed clearance');
+});
+
+test('safeguard: a genuine relay doc populates sg.approved and flips clearedKnown; the seed stays banner-only', () => {
+  const ls = seedSafeguard('CHURCH_A', ['OLD-ADULT'], { 'OLD-ADULT': 111 });
+  const { subscribeSafeguard, subs } = loadSafeguard({ localStorage: ls, authed: true });
+  const paints = [];
+  subscribeSafeguard((p) => paints.push(p));
+  assert.deepEqual(paints[0].approved, [], 'sg.approved must be fail-closed before a genuine doc');
+  assert.deepEqual(paints[0].approvedSeed, ['OLD-ADULT'], 'the seed is exposed only via approvedSeed');
+  subs[0].handlers.onevent(apprEvent('CHURCH_A', ['NEW-ADULT'], { 'NEW-ADULT': 222 }, 500));
+  const last = paints[paints.length - 1];
+  assert.deepEqual(last.approved, ['NEW-ADULT'], 'a genuine relay list must populate sg.approved');
+  assert.equal(last.clearedKnown, true, 'clearedKnown must be true once a genuine approved doc has landed');
+});
+
+test('safeguard: write is gated on a genuine approved doc, not a bare EOSE', () => {
+  const { subscribeSafeguard, subs, localStorage } = loadSafeguard({ authed: true });
+  subscribeSafeguard(() => {});
+  subs[0].handlers.onevent(minorsEvent('CHURCH_A', ['CHILD-PK']));   // minors arrive, but NO approved doc
+  subs[0].handlers.oneose();
+  assert.equal(localStorage.getItem(SG_KEY('CHURCH_A')), null, 'wrote a clearance seed with no genuine approved doc');
+});
+
+test('safeguard: a transient/OFFLINE EOSE keeps the seed; a genuine authed-empty EOSE clears it', () => {
+  // offline: not authed, no approved doc → the last-known seed must survive
+  const lsOff = seedSafeguard('CHURCH_A', ['ADULT-CLEARED-PK'], { 'ADULT-CLEARED-PK': 1893456000 });
+  const off = loadSafeguard({ localStorage: lsOff, authed: false });
+  off.subscribeSafeguard(() => {});
+  off.subs[0].handlers.oneose();
+  assert.ok(lsOff.getItem(SG_KEY('CHURCH_A')), 'an offline EOSE wrongly cleared the last-known clearance seed');
+  // genuine: authed, EOSE, no approved doc → the church has no clearance record now → drop the stale seed
+  const lsOn = seedSafeguard('CHURCH_A', ['ADULT-CLEARED-PK'], { 'ADULT-CLEARED-PK': 1893456000 });
+  const on = loadSafeguard({ localStorage: lsOn, authed: true });
+  on.subscribeSafeguard(() => {});
+  on.subs[0].handlers.oneose();
+  assert.equal(lsOn.getItem(SG_KEY('CHURCH_A')), null, 'a genuine authed-empty EOSE must drop the stale clearance seed');
+});
+
+test('safeguard LEAKS: a cleared-adult pubkey never appears in cleartext anywhere on disk', () => {
+  const { subscribeSafeguard, subs, localStorage } = loadSafeguard({ authed: true });
+  subscribeSafeguard(() => {});
+  subs[0].handlers.onevent(apprEvent('CHURCH_A', ['LEAK-ADULT-PK'], { 'LEAK-ADULT-PK': 1893456000 }));
+  subs[0].handlers.oneose();
+  for (const [, v] of localStorage.store) assert.equal(String(v).includes('LEAK-ADULT-PK'), false, 'cleared-adult pubkey in cleartext on disk: ' + v);
 });

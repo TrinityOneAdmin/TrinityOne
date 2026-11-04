@@ -3751,7 +3751,12 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // Gated on the Members capability so a delegate without it is not sent to a tab that is locked for them
   // (the scar the stewardReqBanner beside this carries: directions to a door that is not there for a delegate).
   const _sgExpiry = window.useStewardSafeguard ? window.useStewardSafeguard() : { approved: [], expiry: {} };
-  const _sgExpiryCounts = clearanceExpiryCounts((_sgExpiry.approved || []).map(pk => (_sgExpiry.expiry || {})[pk] || null), Math.floor(Date.now() / 1000));
+  // PRELOAD WARMING: until the relay has genuinely answered (clearedKnown), fall back to the sealed last-known
+  // clearance seed (approvedSeed/expirySeed) so the "a clearance needs renewing" nudge paints instantly instead of
+  // waiting. Flag-only; sg.approved / sg.expiry themselves stay relay-truth for every other consumer.
+  const _sgApproved = _sgExpiry.clearedKnown ? (_sgExpiry.approved || []) : (_sgExpiry.approvedSeed || _sgExpiry.approved || []);
+  const _sgExpiryMap = _sgExpiry.clearedKnown ? (_sgExpiry.expiry || {}) : (_sgExpiry.expirySeed || _sgExpiry.expiry || {});
+  const _sgExpiryCounts = clearanceExpiryCounts(_sgApproved.map(pk => _sgExpiryMap[pk] || null), Math.floor(Date.now() / 1000));
   const _sgExpiryParts = [
     _sgExpiryCounts.expired ? (_sgExpiryCounts.expired + ' youth ' + (_sgExpiryCounts.expired === 1 ? 'clearance has expired' : 'clearances have expired')) : '',
     _sgExpiryCounts.expiring ? (_sgExpiryCounts.expiring + ' ' + (_sgExpiryCounts.expiring === 1 ? 'is expiring soon' : 'are expiring soon')) : '',

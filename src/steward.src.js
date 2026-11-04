@@ -3182,6 +3182,38 @@ function _minorsLastClear(keep) {
     for (const k of ks) localStorage.removeItem(k);
   } catch (e) {}
 }
+// THE CLEARANCE RECORD — which adults are cleared to work with children, and when each clearance lapses — is the
+// same sensitivity class as the children list above (owner, 2026-10-10): a plaintext copy on a seized console would
+// name the congregation's youth workers. So the Overview "a clearance needs renewing" seed is SEALED exactly as the
+// children list is: NIP-44 under this console's own church key, the church named inside the seal, reads as ABSENT
+// when the key is locked/absent/wrong (the safe side → the banner simply waits for the relay), and it NEVER outlives
+// the church it is for on this device (cleared beside every _minorsLastClear call). PRELOAD WARMING, 2026-11-04.
+const SGCLEAR_LAST_LS = 'trinityone.steward.sgclear.';
+function _sgClearGet(cp) {
+  if (!cp || !churchSk) return null;
+  const v = lsGet(SGCLEAR_LAST_LS + cp);
+  if (v == null) return null;
+  let o = null; try { o = JSON.parse(v); } catch (e) { o = null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.s !== 'string') { try { localStorage.removeItem(SGCLEAR_LAST_LS + cp); } catch (e) {} return null; }
+  try {
+    const d = JSON.parse(nip44d(o.s, churchSk));
+    if (!d || d.cp !== cp || !Array.isArray(d.approved) || !d.expiry || typeof d.expiry !== 'object') return null;
+    return { approved: d.approved.map(p => String(p)), expiry: d.expiry };
+  } catch (e) { return null; }   // sealed under a key this console no longer holds
+}
+function _sgClearSet(cp, approved, expiry) {
+  if (!cp || !churchSk) return;
+  const a = [...new Set((approved || []).map(p => String(p)))];
+  const ex = {}; if (expiry && typeof expiry === 'object') for (const k of Object.keys(expiry)) { const n = Number(expiry[k]); if (n) ex[String(k)] = n; }
+  try { lsSet(SGCLEAR_LAST_LS + cp, JSON.stringify({ s: nip44e(JSON.stringify({ cp, approved: a, expiry: ex }), churchSk) })); } catch (e) {}
+}
+function _sgClearClear(keep) {
+  try {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(SGCLEAR_LAST_LS) && (!keep || k !== SGCLEAR_LAST_LS + keep)) ks.push(k); }
+    for (const k of ks) localStorage.removeItem(k);
+  } catch (e) {}
+}
 // WHEN THIS DEVICE LEARNED EACH REMEMBERED BLOCK, so a lift can tell a NEWER unblock from an older one. The device copy
 // above is a bare array with no clock, which is why a remembered block could never be lifted: nothing could say an
 // unblock was newer than the block. The stamps live in a SIBLING key ({ "<hex>": created_at }), not inside
@@ -3545,6 +3577,7 @@ function _resetChurchScopedState() {
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
   try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
   _minorsLastClear('');   // the key that sealed every device copy of a children list is gone or replaced
+  _sgClearClear('');      // …and the sealed clearance record goes with it (same key, same church lifecycle)
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -7642,13 +7675,14 @@ window.Steward = {
   // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
   // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
   // with my 12 words" (audit of 83b7a4f).
-  forgetChildrenLists() { _minorsLastClear(''); },
+  forgetChildrenLists() { _minorsLastClear(''); _sgClearClear(''); },
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
     // the care / sermon envelopes kept on this device go with the key (round 3d, LOW 3) — see _resetChurchScopedState —
     // and so do the rotations still waiting to run (round 3e; PENDINGROT_LS): there is no church key left to run them
     try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.indexOf('trinityone.steward.keyenv.') === 0 || k.indexOf('trinityone.steward.pendingrot.') === 0)) localStorage.removeItem(k); } } catch (e) {}
     _minorsLastClear('');   // no church's children list stays on a device whose key was removed
+    _sgClearClear('');      // nor its sealed clearance record
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     _stay.clear();                  // …and so is a stay-open record that would open it
@@ -9652,12 +9686,27 @@ window.Steward = {
     // for them via EOSE-while-authed, so for them it says "the relay finished" and NOT "we know who the children are".
     // A screen that must be SURE (Ready to help) asks this one for such a console.
     // Users of the field: StewReadyToHelp (via readyToHelpCanSeeChildren). No other consumer reads it.
+    // PRELOAD WARMING (overview seed, 2026-11-04): the sealed last-known clearance record (see _sgClearGet) so the
+    // "a clearance needs renewing" banner paints instantly instead of waiting for the relay. It is shown ONLY until
+    // a trustworthy answer is in (clearedKnown): the moment the relay has genuinely answered — which is the only
+    // time the clearance BACK-FILL can run (it gates on loaded+authed ⊇ clearedKnown) — approved/expiry come
+    // straight from the relay (empty if there is no doc), so the back-fill NEVER sees this cached value. The seed
+    // is DISPLAY-ONLY: it touches no saw-flag, no tApproved/tMinors, and never _clearedTrail (which carries the
+    // prior clearance map forward into a genuine publish, setApproved@_clearedTrail) — so AUDIT-2026-07-27 stays shut.
+    // Exposed as SEPARATE *Seed fields, deliberately NOT merged into approved/expiry: those stay exactly as the
+    // relay sets them (fail-closed [] / {} until a genuine doc), because the Members toggles and the clearance
+    // back-fill compute real safeguarding publishes from sg.approved and must never carry a cached list forward.
+    // ONLY the Overview renewal banner reads the *Seed fields, and only until clearedKnown. So AUDIT-2026-07-27
+    // stays shut AND no fail-closed cold-start becomes fail-open.
+    const _sgSeed = _sgClearGet(pub);
+    const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
+    if (_sgSeed) emit();   // paint the last-known clearance instantly via the *Seed fields (approved/expiry stay [])
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } emit(); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; sawApproved = true; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
           // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
           // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped
@@ -9669,10 +9718,15 @@ window.Steward = {
           // so an absent field must keep what we hold rather than blank it. Only an object actually present
           // replaces it (a fresh write from a current console, which carries the dates forward itself).
           if (_a.expiry && typeof _a.expiry === 'object') expiry = _a.expiry;
-          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), expiry, loaded: true }; } catch { approved = []; } onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
-        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+          _clearedTrail = { cp: pub, map: cleared, list: approved.slice(), expiry, loaded: true }; } catch { approved = []; }
+          // PRELOAD WARMING: a GENUINE approved doc just landed (sawApproved) — (re)seal the clearance seed. Gated on
+          // sawApproved, never bare EOSE, so an offline/transient read can't clobber, and an authed-empty read (no
+          // doc) leaves the last-known seed rather than resealing it (cleared instead in oneose below).
+          try { _sgClearSet(pub, approved, expiry); } catch (e) {}
+          emit(); }
+        else if (d === NOPHOTO_D + pub) { if (!_byChurchOrSteward(e)) return; if (e.created_at < tNophoto) return; tNophoto = e.created_at; try { nophoto = (JSON.parse(e.content).pubkeys) || []; } catch { nophoto = []; } _applyNoPhotoList(nophoto); emit(); }
         // OWNER-ONLY, like minors and approved: a steward must not be able to invent a parent link.
-        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); }
+        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } emit(); }
       },
       // EOSE IS NOT EVIDENCE. It fires on a 4.4s client timeout, on a dropped relay, and before NIP-42 auth
       // lands — and the minors doc is served only to an authenticated reader. So "loaded" meant "a
@@ -9680,7 +9734,12 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { sawEose = true; onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors }); },
+      oneose() { sawEose = true; emit();
+        // PRELOAD WARMING: a GENUINE empty — the relay authenticated us and finished with NO approved doc — means the
+        // church has no clearance record now, so drop any stale sealed seed (display already switched to the genuine
+        // empty via clearedKnown). A bare/unauthed EOSE (sawApproved false, not authed) does NOTHING here, so the
+        // last-known seed survives an offline open.
+        if (!sawApproved && _isRelayAuthed()) { try { localStorage.removeItem(SGCLEAR_LAST_LS + pub); } catch (e) {} } },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -13856,6 +13915,7 @@ window.Steward = {
     _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
     try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
     _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
+    _sgClearClear(actingChurch || pub);      // …nor its sealed clearance record
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     _senvPending.clear();        // see _resetChurchScopedState (round 3c, LOW iv)
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
