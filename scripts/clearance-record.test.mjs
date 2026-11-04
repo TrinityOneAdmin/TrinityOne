@@ -202,6 +202,7 @@ function runApprovedHandler(events) {
     _authFuture: () => false,
     _isRelayAuthed: () => true,
     _applyNoPhotoList: () => {},
+    _sgClearGet: () => null, _sgClearSet: () => {},   // the Overview clearance seed (2026-11-04): no device seed in this test
     _clearedTrail: { cp: '', map: {}, list: [], loaded: false },
     MINORS_D: 'trinityone/minors:', APPROVED_D: 'trinityone/approved:',
     NOPHOTO_D: 'trinityone/nophoto:', GUARDIANS_D: 'trinityone/guardians:',

@@ -283,6 +283,7 @@ function runApprovedHandler(events) {
     pool: { subscribeMany: (_r, _f, h) => { for (const e of events) h.onevent(e); h.oneose(); return { close() {} }; } },
     relays: () => ['wss://x'],
     _byChurch: () => true, _authFuture: () => false, _isRelayAuthed: () => true, _applyNoPhotoList: () => {},
+    _sgClearGet: () => null, _sgClearSet: () => {},   // the Overview clearance seed (2026-11-04): no device seed in this test
     _clearedTrail: { cp: '', map: {}, list: [], expiry: {}, loaded: false },
     MINORS_D: 'trinityone/minors:', APPROVED_D: 'trinityone/approved:',
     NOPHOTO_D: 'trinityone/nophoto:', GUARDIANS_D: 'trinityone/guardians:', NET: 'trinityone',
