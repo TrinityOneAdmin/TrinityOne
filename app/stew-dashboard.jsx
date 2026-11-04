@@ -2277,6 +2277,68 @@ function DmHeaderDropdown({ dmConvos, narrow }) {
   );
 }
 
+// ── BACKGROUND-WARM AFTER OVERVIEW (Layer 2 preload) ─────────────────────────────────────────────
+// The member app keeps its key subscriptions at the ROOT (app/app.jsx ~1317), so every screen opens
+// ready. The console does the opposite: each DashX unmounts on leave and makeSub drops its socket when
+// the last listener goes (steward-root.jsx `_subShared` ref-count, :229-232), so every navigation
+// re-opens the stream and waits a tunnel round-trip — the multi-second blank the A/B probe measured.
+// These components mount the makeSub HOOKS for a bounded set of the heavier surfaces in the PERSISTENT
+// shell (StewDashboard stays mounted across tabs; only the inner {tab===… && <DashX/>} unmount), so
+// each stream's `_subShared` socket stays live and `_subCache` stays warm. A later tab mount then JOINS
+// the live entry (steward-root.jsx:221-228) and paints instantly and fresh.
+//
+// CRITICAL (plan-audit): mount the HOOKS, not the engine subscribe* methods. The sharing/dedup lives
+// INSIDE makeSub and is reached ONLY through window.useMealsX / window.useStewardX. Calling
+// StewardMeals.subscribeNeeds(cb) / Steward.subscribeServices(cb) DIRECTLY opens a second socket, writes
+// nothing to `_subCache`, and defeats the whole thing. Each component renders null — its only job is to
+// be a mounted listener.
+//
+// React hooks cannot be called conditionally, so the GATING is done by the parent (StewDashboard)
+// deciding whether to render each child; the hooks inside each child are UNCONDITIONAL. Care is gated on
+// stewCapState('care'); Schedule on stewCapState('content') (the rota/calendar tabs are content-gated,
+// stew-dashboard.jsx:2477-2478); the whole warm is suppressed in the network view and before a church
+// key is loaded.
+//
+// FINANCE IS EXCLUDED ON PURPOSE (plan-audit). DashFinanceBook opens S.encSubscribe('finance/', …)
+// directly — NOT makeSub — so it has no shared socket and no `_subCache` to warm (a root warm would not
+// make it paint instantly) and it is the console's heaviest subscription; warming it would hold a second
+// copy open for the app's life. Finance instant-paint belongs to its own per-page SEED pass, not here.
+function CareWarm() {
+  // Overview already holds these WHILE it is on screen; this keeps them alive once the steward navigates
+  // AWAY from Overview, so returning to the Care tab joins the live entry instead of re-opening blank.
+  window.useMealsNeeds();
+  window.useMealsSlots();
+  window.useMealsSettings();
+  return null;
+}
+function ScheduleWarm() {
+  // None of these are held by Overview, so the warm is the only thing keeping the calendar/rota streams
+  // live before their tab is first opened — the surface the owner flagged slow.
+  window.useStewardServices();
+  window.useStewardEvents();
+  window.useStewardRotas();
+  window.useStewardRosters();
+  window.useStewardRotaSettings();
+  return null;
+}
+function ConsoleWarm({ careOn, scheduleOn }) {
+  // STAGGER so the warm isn't a thundering herd at Overview's first paint: arm a beat after mount, bring
+  // Care up first and Schedule a touch later. This smooths the mount BURST only — the bounded SET (no
+  // Finance) is what protects steady-state, not the stagger (plan §2).
+  const [phase, setPhase] = React.useState(0);
+  React.useEffect(() => {
+    const t1 = setTimeout(() => setPhase(1), 600);   // after Overview's first paint
+    const t2 = setTimeout(() => setPhase(2), 900);   // schedule a beat after care
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+  return (
+    <React.Fragment>
+      {phase >= 1 && careOn ? <CareWarm /> : null}
+      {phase >= 2 && scheduleOn ? <ScheduleWarm /> : null}
+    </React.Fragment>
+  );
+}
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings PAGE (see SETTINGS_GROUPS); the four old tab keys are aliased
@@ -2467,9 +2529,20 @@ function StewDashboard({ initial = 'overview' }) {
     '--clay-deep': `color-mix(in oklab, ${ca} 74%, #000)`,
   } : null;
 
+  // BACKGROUND-WARM GATING (see CareWarm/ScheduleWarm/ConsoleWarm above). The MOUNT decides; the hooks
+  // inside are unconditional. `_warmWho` is the same "which church" the makeSub cache key uses — empty
+  // until a church key is loaded, so the warm never fires on the cold boot path before the key. Suppress
+  // the whole warm in the network view (a different surface). Care needs the `care` capability, Schedule
+  // the `content` capability — a scoped delegate without the cap must not warm a stream the relay refuses.
+  const _warmWho = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
+  const _warmOn = !!_warmWho && !church.isNetwork;
+  const _careWarmOn = _warmOn && stewCapState('care').allowed;
+  const _scheduleWarmOn = _warmOn && stewCapState('content').allowed;
+
   // tab content + topbar actions, shared by both layouts
   const content = (
     <React.Fragment>
+      <ConsoleWarm careOn={_careWarmOn} scheduleOn={_scheduleWarmOn} />
       {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
       {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
