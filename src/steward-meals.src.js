@@ -345,7 +345,10 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     let openedByMember = false;       // from the church-signed meals-settings (same sub — it's church-authored + NET-tagged)
     const delOk = (by, need) => !openedByMember || by === cp || by === S().churchPub || (!!need && need._by === by);
     const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (delOk(by, need)) return true; } return false; };
-    const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (_mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow)); };
+    let eosed = false;   // PRELOAD WARMING: persist the seed only once the stream has SETTLED (and on later
+    // changes), not on every event of the initial replay — a per-event synchronous _writeSeed blocks the
+    // main thread and slows load. cb() still fires per event for liveness.
+    const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (eosed && _mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow)); };
     // paint the last-known PUBLIC SUBSET instantly (sealed cards show "details hidden" until the key lands)
     { const seeded = _readSeed(_needsSeedKey()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
@@ -375,7 +378,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
             emit();
           } catch (err) {}
         },
-        oneose() { emit(); },
+        oneose() { eosed = true; emit(); },
       }
     );
     return () => { try { sub.close(); } catch (e) {} };
@@ -388,7 +391,8 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   function _subscribeChurchTagged(prefix, normalise, cb, seedKeyFn, seedRowFn) {
     if (!S() || !S().subscribeMany || !activeChurch()) { cb([]); return () => {}; }
     const byKey = new Map();   // key = needId|isoDate|pubkey   (one entry per member-per-(need,date))
-    const emit = () => { const list = [...byKey.values()]; cb(list); if (seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn)); };
+    let eosed = false;   // PRELOAD WARMING: write the seed on settle + later changes, not per replay event
+    const emit = () => { const list = [...byKey.values()]; cb(list); if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn)); };
     // paint the last-known STRUCTURAL SUBSET instantly so the slot grid doesn't flash empty
     if (seedKeyFn) { const seeded = _readSeed(seedKeyFn()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
@@ -411,7 +415,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
             emit();
           } catch (err) {}
         },
-        oneose() { emit(); },
+        oneose() { eosed = true; emit(); },
       }
     );
     return () => { try { sub.close(); } catch (e) {} };
@@ -599,7 +603,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const dtag = CAREAVAIL_D + cp;
     const byPub = new Map(), seenTs = new Map(), locked = new Map();
     let eosed = false;   // sticky: do not blank on a transient empty before EOSE
-    const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; try { cb(v); } catch (e) {} if (_mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow)); };
+    const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; try { cb(v); } catch (e) {} if (eosed && _mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow)); };   // PRELOAD WARMING: write on settle + later changes, not per replay event
     // paint the last-known PUBLIC SUBSET instantly (who offered + help tags + window; the sealed note is NOT on disk)
     { const seeded = _readSeed(_availSeedKey()); if (seeded.length) { try { cb(seeded); } catch (e) {} } }
     const handlers = {

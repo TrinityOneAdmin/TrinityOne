@@ -8869,7 +8869,12 @@ window.Steward = {
     const SEED_KEY = 'trinityone.steward.dmconvos.' + (actingChurch || churchPub || '');
     const SEED_CAP = 400;   // rows kept on disk; an unusually chatty church drops the oldest threads from the seed
     const byPeer = new Map();
-    const emit = () => { const arr = [...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(SEED_KEY, JSON.stringify(arr.slice(0, SEED_CAP))); } catch {} onConvos(arr); };
+    let eosed = false;   // PRELOAD WARMING: write the on-disk seed only once the stream has SETTLED (and on
+    // later steady-state changes) — never on every event of the initial kind:4 replay. A chatty church
+    // replays many DMs, and a synchronous JSON.stringify + localStorage.setItem of up to SEED_CAP rows on
+    // EACH one blocks the main thread and made the whole console feel slow on load. onConvos still fires
+    // per event for liveness; only the disk write is deferred.
+    const emit = () => { const arr = [...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); if (eosed) { try { localStorage.setItem(SEED_KEY, JSON.stringify(arr.slice(0, SEED_CAP))); } catch {} } onConvos(arr); };
     // paint the last-known list instantly so the page doesn't flash empty before the relay answers
     try { const cached = JSON.parse(localStorage.getItem(SEED_KEY) || '[]'); if (Array.isArray(cached) && cached.length) { for (const c of cached) { if (c && c.peer) byPeer.set(c.peer, { peer: c.peer, npub: c.npub || '', ts: c.ts || 0 }); } onConvos([...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [4], authors: [pub] }, { kinds: [4], '#p': [pub] }], {
@@ -8879,7 +8884,7 @@ window.Steward = {
         const prev = byPeer.get(peer);
         if (!prev || e.created_at > prev.ts) { byPeer.set(peer, { peer, npub: npubEncode(peer), ts: e.created_at }); emit(); }
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },

@@ -22324,11 +22324,14 @@ zoo`.split("\n");
       const SEED_KEY = "trinityone.steward.dmconvos." + (actingChurch || churchPub || "");
       const SEED_CAP = 400;
       const byPeer = /* @__PURE__ */ new Map();
+      let eosed = false;
       const emit = () => {
         const arr = [...byPeer.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
-        try {
-          localStorage.setItem(SEED_KEY, JSON.stringify(arr.slice(0, SEED_CAP)));
-        } catch {
+        if (eosed) {
+          try {
+            localStorage.setItem(SEED_KEY, JSON.stringify(arr.slice(0, SEED_CAP)));
+          } catch {
+          }
         }
         onConvos(arr);
       };
@@ -22354,6 +22357,7 @@ zoo`.split("\n");
           }
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });

@@ -96,6 +96,7 @@ test('a delivered need persists ONLY the public subset — no recipient / notes 
   let emitted = [];
   api.subscribeNeeds((list) => { emitted = list; });
   subs[subs.length - 1].onevent(finalizeEvent(published[0], churchSk));
+  subs[subs.length - 1].oneose();   // stream settles → seed persisted (not per replay event)
   // the live callback (screen) DOES get the decrypted need — this is a keyed console
   assert.equal(emitted.find(n => n.id === 'c1').displayLabel, SENSITIVE.displayLabel, 'control: the keyed console must still SHOW the decrypted need');
   // but what landed on DISK is the subset only
@@ -155,6 +156,7 @@ test('a delivered slot persists the grid identity but NOT the member free-text n
   const h = subs[subs.length - 1];
   const evt = finalizeEvent({ kind: 30078, created_at: 20, tags: [['d', 'trinityone/careslot:n1:2026-08-01:dinner'], ['church', churchPub], ['t', 'trinityone']], content: JSON.stringify({ note: 'Okonkwo allergy note' }) }, memberSk);
   h.onevent(evt);
+  h.oneose();   // stream settles → seed persisted (not per replay event)
   assert.equal(emitted[0].note, 'Okonkwo allergy note', 'control: the live screen still sees the note');
   const onDisk = localStorage.getItem(slotsKey(churchPub));
   assert.ok(onDisk, 'slot seed not written');
@@ -180,6 +182,7 @@ test('an acting console does not paint, and does not overwrite, another church\'
   // deliver a need while acting as B → it must seed under B's key, leaving A untouched
   await api.publishNeed({ id: 'b1', type: 'rides', dates: ['2026-09-01'] });
   subs[subs.length - 1].onevent(finalizeEvent(published[0], churchSk));
+  subs[subs.length - 1].oneose();   // stream settles → seed persisted (not per replay event)
   assert.equal(JSON.parse(localStorage.getItem(needsKey(churchPub)))[0].id, 'a1', 'church A\'s seed was overwritten by church B');
   assert.ok(JSON.parse(localStorage.getItem(needsKey(otherChurch))).some(r => r.id === 'b1'), 'church B\'s need was not seeded under B\'s own key');
 });
@@ -190,6 +193,7 @@ test('a locked / keyless console does NOT write the sensitive care seed', async 
   await api.publishNeed({ id: 'c7', type: 'meals', dates: ['2026-08-01'], ...SENSITIVE });
   api.subscribeNeeds(() => {});
   subs[subs.length - 1].onevent(finalizeEvent(published[0], churchSk));
+  subs[subs.length - 1].oneose();   // settle: with eosed true, null now proves the LOCK gate blocked the write (not a missing settle)
   assert.equal(localStorage.getItem(needsKey(churchPub)), null, 'a locked console persisted care data to disk — the lock gate is not holding');
 });
 
@@ -198,5 +202,6 @@ test('an unlocked, keyed console DOES write the seed (the lock gate is not stuck
   await api.publishNeed({ id: 'c8', type: 'meals', dates: ['2026-08-01'], ...SENSITIVE });
   api.subscribeNeeds(() => {});
   subs[subs.length - 1].onevent(finalizeEvent(published[0], churchSk));
+  subs[subs.length - 1].oneose();   // stream settles → seed persisted (not per replay event)
   assert.ok(localStorage.getItem(needsKey(churchPub)), 'control: an unlocked console must seed, or test 4 proves nothing');
 });

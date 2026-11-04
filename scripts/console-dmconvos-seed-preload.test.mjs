@@ -55,6 +55,7 @@ test('a delivered DM updates the seed, and the seed is body-free (peer/npub/ts o
   subscribeDMConvos(() => {});
   // an inbound kind-4 from a member — note the ciphertext content is never read into the row
   subs[0].handlers.onevent({ kind: 4, pubkey: 'memberhex', tags: [['p', 'CHURCH_A']], created_at: 200, content: 'BASE64-CIPHERTEXT-SECRET' });
+  subs[0].handlers.oneose();   // the stream settles — the seed is persisted on settle, not per replay event
   const onDisk = localStorage.getItem(KEY('CHURCH_A'));
   assert.ok(onDisk, 'nothing was seeded on delivery');
   assert.equal(onDisk.includes('BASE64-CIPHERTEXT-SECRET'), false, 'message ciphertext/content reached the DM-list seed');
@@ -72,6 +73,7 @@ test('church isolation: the seed is keyed on actingChurch||churchPub, not bare p
   subscribeDMConvos((list) => paints.push(list));
   assert.ok(!paints.some(p => p.some(r => r.peer === 'apeer')), 'church B painted church A\'s DM list');
   subs[0].handlers.onevent({ kind: 4, pubkey: 'bpeer', tags: [['p', 'CHURCH_B']], created_at: 5, content: 'x' });
+  subs[0].handlers.oneose();   // settle — seed persisted on settle, not per replay event
   assert.ok(localStorage.getItem(KEY('CHURCH_B')), 'the new conversation must be seeded under the ACTING church key');
   assert.equal(JSON.parse(localStorage.getItem(KEY('CHURCH_A')))[0].peer, 'apeer', 'church A\'s DM seed was overwritten');
 });

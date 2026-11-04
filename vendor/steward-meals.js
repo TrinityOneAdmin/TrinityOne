@@ -317,10 +317,11 @@
         }
         return false;
       };
+      let eosed = false;
       const emit = () => {
         const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
         cb(list);
-        if (_mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow));
+        if (eosed && _mayCacheSeed()) _writeSeed(_needsSeedKey(), list.map(_needSeedRow));
       };
       {
         const seeded = _readSeed(_needsSeedKey());
@@ -359,6 +360,7 @@
             }
           },
           oneose() {
+            eosed = true;
             emit();
           }
         }
@@ -377,10 +379,11 @@
         };
       }
       const byKey = /* @__PURE__ */ new Map();
+      let eosed = false;
       const emit = () => {
         const list = [...byKey.values()];
         cb(list);
-        if (seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn));
+        if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed()) _writeSeed(seedKeyFn(), list.map(seedRowFn));
       };
       if (seedKeyFn) {
         const seeded = _readSeed(seedKeyFn());
@@ -412,6 +415,7 @@
             }
           },
           oneose() {
+            eosed = true;
             emit();
           }
         }
@@ -639,7 +643,7 @@
           cb(v);
         } catch (e) {
         }
-        if (_mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow));
+        if (eosed && _mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow));
       };
       {
         const seeded = _readSeed(_availSeedKey());
