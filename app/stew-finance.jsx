@@ -2290,12 +2290,14 @@ function DashFinanceBook() {
     let seeded = false;
     lastSigRef.current = null;   // a fresh subscription (mount / church switch / reconnect) always rebuilds on its first delivery
     bookRef.genuine = false;     // …and holds writes until THIS subscription has had a genuine post-EOSE delivery (not just the seed)
+    setBookLoading(true);        // a fresh subscription (mount / church switch) re-shows the preloader until its first delivery; a synchronous seed paint clears it in the same tick (no flicker)
     const unsub = S.encSubscribe('finance/', (items, genuine) => {
       // The seed feeds the DISPLAY, not a write. The shipped encSubscribe passes an EXPLICIT boolean — false for
       // the cache-first seed paint and the pre-EOSE backfill, true once the relay has SETTLED (oneose) — so only
       // an explicit `false` holds the write gate. A delivery that carries no flag is a genuine book (that is all
       // any non-seed caller or test ever delivers), so writes may derive their seq from it.
       if (genuine !== false) bookRef.genuine = true;
+      setBookLoading(false);   // first delivery (seed or relay) has landed — reveal the book
       const docs = items.map(finItemToDoc).filter(Boolean);
       // Receipt blobs ride the same subscription. Pull their data: URIs into the side map BEFORE rebuildBook,
       // which deliberately ignores t:'attachment' (a blob is not part of the double-entry book).
@@ -2352,6 +2354,7 @@ function DashFinanceBook() {
     // [], so it never followed a church switch and never re-issued its REQ after a relay reconnect.
   }, [_bIdv, _bConn]);
   const [bookErrors, setBookErrors] = React.useState([]);
+  const [bookLoading, setBookLoading] = React.useState(true);   // show a preloader until the finance subscription's first delivery (seed OR relay) lands this mount
   const [recording, setRecording] = React.useState(false);   // null|true for a fresh entry, or a {initial} prefill for a correction
   const [paying, setPaying] = React.useState(null);        // bill payment dialog: null closed · {bill, mode:'pay'|'edit', amount0, date0, reverseSeqs}
   const [removing, setRemoving] = React.useState(null);    // bill REMOVE (void) confirm dialog: null closed · {bill}
@@ -3224,6 +3227,16 @@ function DashFinanceBook() {
       border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'var(--clay)' : 'transparent', color: active ? '#fff' : 'var(--ink)' }}>{label}</button>
   );
 
+  if (bookLoading) return (
+    <div style={{ padding: '4px 2px 40px' }}>
+      <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Finance</h2>
+      <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
+      <div style={{ textAlign: 'center', padding: '70px 24px', color: 'var(--ink-3)', animation: 'lumenFade .3s ease both' }}>
+        <div style={{ width: 28, height: 28, margin: '0 auto', borderRadius: 999, border: '3px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
+        <p style={{ marginTop: 16, fontSize: 14 }}>Loading your books…</p>
+      </div>
+    </div>
+  );
   return (
     <div style={{ padding: '4px 2px 40px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
