@@ -3214,6 +3214,62 @@ function _sgClearClear(keep) {
     for (const k of ks) localStorage.removeItem(k);
   } catch (e) {}
 }
+// THE CHURCH'S BOOKS — the sealed FINANCE SEED (SEALED-MONEY-AT-REST). DashFinanceBook rebuilds the whole
+// double-entry book from the relay on every open via encSubscribe('finance/'), so it flashes blank for a
+// tunnel round-trip. This caches the LAST-KNOWN book so the page paints instantly, sealed EXACTLY like the
+// children list / clearance record above: NIP-44 under this console's own church key, the church named inside
+// the seal, reads as ABSENT when the key is locked/absent/wrong (the safe side → Finance simply waits for the
+// relay), and cleared beside every _minorsLastClear/_sgClearClear call so no church's books outlive its key on
+// this device. PRELOAD WARMING, 2026-11-04.
+//
+// FINANCE ONLY, and the gate is the PREFIX, never the `kind` arg (plan-audit 2026-11-04 — MATERIAL safeguarding
+// fix). encSubscribe is generic: check-in (trinityone/checkin:) and Manna BOTH run with kk==='finance', so a
+// kk gate would seal the children's safeguarding register and Manna person-data into this finance cache. The
+// caller gates every read / hydrate / write on prefix === 'finance/', so ONLY the books are ever cached here.
+//
+// THE JOURNAL IS NEVER CAPPED (plan-audit 2026-11-04 — feature-breaking fix). rebuildBook needs a CONTIGUOUS
+// journal from seq 1 (applyEntry throws on a gap/fork), so a seed missing early entries paints an EMPTY/error
+// book — defeating the feature on exactly the large books that need it. So the FULL journal + all
+// settings/account/fund docs are kept; only the receipt-blob and side docs rebuildBook ignores
+// (attachment/donor/invoice/contact/budget/template/reconcile/bill/billapproval) are dropped — the relay
+// re-delivers them and they never feed the book paint. If even the full book exceeds the byte cap it is stored
+// ALL-OR-NOTHING — skipped entirely rather than persisted as a truncated (gap-prone) journal.
+const FINBOOK_LS = 'trinityone.steward.financebook.';
+const FINBOOK_MAX_BYTES = 3 * 1024 * 1024;   // all-or-nothing ceiling on the sealed book (pre-seal JSON length)
+function _finBookKeep(docs) {
+  // The book docs rebuildBook actually replays — the `id` (the d-suffix after 'finance/') classifies them,
+  // exactly as finItemToDoc does (settings / account:/ fund:/ journal:). Everything else is dropped.
+  return (docs || []).filter(d => {
+    const id = (d && d.id) || '';
+    return id === 'settings' || id.indexOf('account:') === 0 || id.indexOf('fund:') === 0 || id.indexOf('journal:') === 0;
+  });
+}
+function _finBookGet(cp) {
+  if (!cp || !churchSk) return null;
+  const v = lsGet(FINBOOK_LS + cp);
+  if (v == null) return null;
+  let o = null; try { o = JSON.parse(v); } catch (e) { o = null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.s !== 'string') { try { localStorage.removeItem(FINBOOK_LS + cp); } catch (e) {} return null; }
+  try {
+    const d = JSON.parse(nip44d(o.s, churchSk));
+    if (!d || d.cp !== cp || !Array.isArray(d.docs)) return null;
+    return d.docs;
+  } catch (e) { return null; }   // sealed under a key this console no longer holds
+}
+function _finBookSet(cp, docs) {
+  if (!cp || !churchSk) return;
+  const keep = _finBookKeep(docs);
+  const pt = JSON.stringify({ cp, docs: keep });
+  if (pt.length > FINBOOK_MAX_BYTES) return;   // all-or-nothing: never persist a truncated (gap-prone) journal
+  try { lsSet(FINBOOK_LS + cp, JSON.stringify({ s: nip44e(pt, churchSk) })); } catch (e) {}
+}
+function _finBookClear(keep) {
+  try {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(FINBOOK_LS) && (!keep || k !== FINBOOK_LS + keep)) ks.push(k); }
+    for (const k of ks) localStorage.removeItem(k);
+  } catch (e) {}
+}
 // WHEN THIS DEVICE LEARNED EACH REMEMBERED BLOCK, so a lift can tell a NEWER unblock from an older one. The device copy
 // above is a bare array with no clock, which is why a remembered block could never be lifted: nothing could say an
 // unblock was newer than the block. The stamps live in a SIBLING key ({ "<hex>": created_at }), not inside
@@ -3578,6 +3634,7 @@ function _resetChurchScopedState() {
   try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
   _minorsLastClear('');   // the key that sealed every device copy of a children list is gone or replaced
   _sgClearClear('');      // …and the sealed clearance record goes with it (same key, same church lifecycle)
+  _finBookClear('');      // …and the sealed finance book (same key, same church lifecycle)
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -7675,7 +7732,7 @@ window.Steward = {
   // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
   // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
   // with my 12 words" (audit of 83b7a4f).
-  forgetChildrenLists() { _minorsLastClear(''); _sgClearClear(''); },
+  forgetChildrenLists() { _minorsLastClear(''); _sgClearClear(''); _finBookClear(''); },
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
     // the care / sermon envelopes kept on this device go with the key (round 3d, LOW 3) — see _resetChurchScopedState —
@@ -7683,6 +7740,7 @@ window.Steward = {
     try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.indexOf('trinityone.steward.keyenv.') === 0 || k.indexOf('trinityone.steward.pendingrot.') === 0)) localStorage.removeItem(k); } } catch (e) {}
     _minorsLastClear('');   // no church's children list stays on a device whose key was removed
     _sgClearClear('');      // nor its sealed clearance record
+    _finBookClear('');      // nor its sealed finance book
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     _stay.clear();                  // …and so is a stay-open record that would open it
@@ -11672,7 +11730,23 @@ window.Steward = {
     const cp = actingChurch || pub;
     if (!cp) { cb([]); return () => {}; }
     const byId = new Map();
-    const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    // THE SEALED FINANCE SEED gates on the PREFIX, never `kk` (plan-audit 2026-11-04): check-in and Manna BOTH
+    // run with kk==='finance', so a kk gate would seal the children's register / Manna person-data into the
+    // finance cache. `genuine` is false until the relay has SETTLED (oneose) — the DISPLAY paints from the seed
+    // immediately, but a WRITE (pubEntry's seq) must wait for the real book, so cb carries it as a 2nd arg.
+    const isFin = prefix === 'finance/';
+    let eosed = false, genuine = false, _finT = null;
+    const emit = () => {
+      cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)), genuine);
+      // Write the sealed seed on SETTLE only (eosed), coalesced so a burst of post-EOSE ring-change emits (a
+      // late delegate key re-opening held docs) folds into ONE seal+write of the whole book — sealing is a
+      // crypto op over a potentially large book (the 4710596e lesson). FINANCE ONLY.
+      if (isFin && eosed && !_finT) _finT = setTimeout(() => { _finT = null; _finBookSet(cp, [...byId.values()]); }, 400);
+    };
+    // CACHE-FIRST PAINT — finance/ ONLY. Hydrate byId from the sealed on-disk book so Finance paints before the
+    // relay answers; a later genuine delivery replaces each doc by id with newest-wins (the prev.ts drop below —
+    // the seed carries each doc's ts). Reads ABSENT when the church key is locked/absent (the safe side → blank).
+    if (isFin) { const seed = _finBookGet(cp); if (seed && seed.length) { for (const d of seed) if (d && d.id != null) byId.set(d.id, d); emit(); } }
     // A HOLDING PEN, not a bin. A document that will not open is usually not corrupt — it is sealed with a
     // key whose envelope is still in flight, and the two subscriptions race. Keep the ciphertext and try
     // again each time the ring changes.
@@ -11781,9 +11855,9 @@ window.Steward = {
         if (!take(id, e.content, e.created_at, e.tags, e.pubkey)) return;   // held for a key that has not arrived yet
         emit();
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; genuine = true; emit(); },
     });
-    return () => { _capWaiters[kk] && _capWaiters[kk].delete(retry); try { sub.close(); } catch {} };
+    return () => { _capWaiters[kk] && _capWaiters[kk].delete(retry); try { clearTimeout(_finT); } catch (e) {} try { sub.close(); } catch {} };
   },
 
   // ---- moderation: pin a message at the top of a group's chat ----
@@ -13916,6 +13990,7 @@ window.Steward = {
     try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
     _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
     _sgClearClear(actingChurch || pub);      // …nor its sealed clearance record
+    _finBookClear(actingChurch || pub);      // …nor its sealed finance book
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     _senvPending.clear();        // see _resetChurchScopedState (round 3c, LOW iv)
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A

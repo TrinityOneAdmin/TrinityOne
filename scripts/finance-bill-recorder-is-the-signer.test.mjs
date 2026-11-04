@@ -45,6 +45,10 @@ function reader() {
     decrypt: (c, k) => nip44.decrypt(c, k),
     churchSkHeld: () => false,
     _encOpenSealedCopy: () => null,
+    // the SEALED finance seed (2026-11-04): encSubscribe('finance/') reads/writes an on-disk cache. Stubbed to
+    // no-op here so this test isolates the dual-control recorder/signer behaviour from the seed (the seed has
+    // its own tests in console-finance-seed-preload.test.mjs).
+    _finBookGet: () => null, _finBookSet: () => {},
     CAP_KEYS: { finance: { d: 'trinityone/financekey:', cap: 'finance', legacy: true } },
     window: { Steward: {} },
   };

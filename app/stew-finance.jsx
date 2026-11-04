@@ -2246,6 +2246,18 @@ function DashFinanceBook() {
   // with nothing written locally either. Await it, and surface a failure instead of silently losing the entry.
   const pubEntry = async (b, e) => {
     if (!useRelay) { booksSave(b); return true; }
+    // THE SEED FEEDS THE DISPLAY, NOT A WRITE (plan-audit 2026-11-04). The finance subscription now paints a
+    // cache-first SEED before the relay answers, so until a GENUINE post-EOSE delivery has landed bookRef.current
+    // may be only the seed, and F.post derived this entry's seq from it — posting against a stale seed makes the
+    // relay's single-writer seq guard refuse the entry. So hold the write until the real book has settled; the
+    // caller rolls back the optimistic row (dropFrom) on the false return, and the treasurer is told to WAIT, not
+    // that the relay refused. The seq guard stays the backstop. The flag lives ON bookRef (a per-mount ref that
+    // already persists and is reset on a fresh subscription) rather than a NEW useRef hook — adding a hook here
+    // shifts the fake-React slot order in the extract-and-re-render finance screen tests.
+    if (!bookRef.genuine) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'journal entry', message: 'Your books are still loading on this device — wait a moment, then enter it again.' } })); } catch (e2) {}
+      return false;
+    }
     try {
       // attachmentRefs IS LOAD-BEARING HERE. This is the LIVE publish path and it hardcodes its own field list
       // (it does NOT call bookToDocs). Drop attachmentRefs from this object and the receipt link is lost on
@@ -2277,7 +2289,13 @@ function DashFinanceBook() {
     if (!useRelay) return;
     let seeded = false;
     lastSigRef.current = null;   // a fresh subscription (mount / church switch / reconnect) always rebuilds on its first delivery
-    const unsub = S.encSubscribe('finance/', items => {
+    bookRef.genuine = false;     // …and holds writes until THIS subscription has had a genuine post-EOSE delivery (not just the seed)
+    const unsub = S.encSubscribe('finance/', (items, genuine) => {
+      // The seed feeds the DISPLAY, not a write. The shipped encSubscribe passes an EXPLICIT boolean — false for
+      // the cache-first seed paint and the pre-EOSE backfill, true once the relay has SETTLED (oneose) — so only
+      // an explicit `false` holds the write gate. A delivery that carries no flag is a genuine book (that is all
+      // any non-seed caller or test ever delivers), so writes may derive their seq from it.
+      if (genuine !== false) bookRef.genuine = true;
       const docs = items.map(finItemToDoc).filter(Boolean);
       // Receipt blobs ride the same subscription. Pull their data: URIs into the side map BEFORE rebuildBook,
       // which deliberately ignores t:'attachment' (a blob is not part of the double-entry book).

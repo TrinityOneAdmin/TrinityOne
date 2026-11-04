@@ -322,6 +322,10 @@ function consoleFinancePage(who) {
     decrypt: (c, k) => nip44.decrypt(c, k),
     churchSkHeld: () => false,          // a DELEGATE console: the ring is all it has
     _encOpenSealedCopy: () => null,     // the check-in fallback, a no-op for 'finance' in the shipped code
+    // the SEALED finance seed (2026-11-04): encSubscribe('finance/') reads/writes an on-disk cache. Stubbed to
+    // no-op so this test isolates the finance/member GATING from the seed (seeded tests live in
+    // console-finance-seed-preload.test.mjs).
+    _finBookGet: () => null, _finBookSet: () => {},
     CAP_KEYS: { finance: { d: D.FINANCEKEY, cap: 'finance', legacy: true } },
     window: { Steward: {} },
   };
