@@ -78,6 +78,9 @@ const settingsEv = (cp) => ({ id: 'set', pubkey: cp, created_at: 10, content: JS
 const accountEv = (cp, code) => ({ id: 'acc' + code, pubkey: cp, created_at: 20, content: JSON.stringify({ code, name: 'Acct ' + code, type: 'asset', archived: false }), tags: [['d', 'finance/account:' + code], ['t', 'trinityone']] });
 const attachmentEv = (cp, id) => ({ id: 'att' + id, pubkey: cp, created_at: 30, content: JSON.stringify({ data: 'data:image/jpeg;base64,RECEIPTBLOB' }), tags: [['d', 'finance/attachment:' + id], ['t', 'trinityone']] });
 const checkinEv = (cp) => ({ id: 'ck', pubkey: cp, created_at: 40, content: JSON.stringify({ child: 'CHILD-NAME-SECRET', room: 'toddlers' }), tags: [['d', 'trinityone/checkin:sess1'], ['t', 'trinityone']] });
+// the side docs the OLD whitelist dropped and the NEW blacklist keeps — DashFinanceBook's encSubscribe split
+// feeds these to setBills/setInvoices/setDonors/setContacts/setBudgets. Generic: id is the d-suffix.
+const sideEv = (cp, id, body, ts = 50) => ({ id: 'x' + id, pubkey: cp, created_at: ts, content: JSON.stringify(body), tags: [['d', 'finance/' + id], ['t', 'trinityone']] });
 const mannaEv = (cp) => ({ id: 'mn', pubkey: cp, created_at: 40, content: JSON.stringify({ person: 'GRANT-PERSON-SECRET', amount: 5000 }), tags: [['d', 'trinityone/manna-1:rec1'], ['t', 'trinityone']] });
 
 // write a sealed seed the way the engine would, for the "paints on open" / "locked" / isolation tests
@@ -138,6 +141,79 @@ test('finance: side docs & receipt blobs are DROPPED from the seed — only book
   assert.ok(ids.includes('settings') && ids.includes('account:bank') && ids.includes('journal:1'), 'a book doc was dropped from the seed');
   assert.ok(!ids.some(i => i.startsWith('attachment:')), 'a receipt blob survived into the seed — side docs must be dropped');
   assert.equal(ls.getItem(KEY('CHURCH_A')).includes('RECEIPTBLOB'), false, 'the receipt blob reached disk');
+});
+
+// ───────────────── BLACKLIST: side docs are now SEEDED (bills/invoices/donors/contacts/budgets) ─────────────────
+test('finance: bills/invoices/donors/contacts/budgets are NOW seeded — a return visit shows them without a relay round-trip', () => {
+  const evs = [
+    settingsEv('CHURCH_A'), accountEv('CHURCH_A', 'bank'), journalEv('CHURCH_A', 1, 'm'),
+    sideEv('CHURCH_A', 'bill:b1', { payee: 'Acme', amount: 100 }),
+    sideEv('CHURCH_A', 'invoice:i1', { client: 'Hall Hire', amount: 200 }),
+    sideEv('CHURCH_A', 'donor:d1', { name: 'A Donor' }),
+    sideEv('CHURCH_A', 'contact:c1', { name: 'A Contact' }),
+    sideEv('CHURCH_A', 'budget:2026', { total: 9000 }),
+    sideEv('CHURCH_A', 'template:t1', { name: 'A Template' }),
+    sideEv('CHURCH_A', 'reconcile:r1', { account: 'bank' }),
+    sideEv('CHURCH_A', 'billapproval:a1', { bill: 'b1' }),
+  ];
+  const ls = seedFinance('CHURCH_A', evs);
+  // round-trip: reload and paint from the seed via _finBookGet — the display really gets them back
+  const { encSubscribe } = loadFinance({ localStorage: ls });
+  const paints = [];
+  encSubscribe('finance/', (items) => paints.push(items));
+  assert.ok(paints.length >= 1, 'never painted the cached book on open');
+  const ids = paints[0].map(i => String(i.id));
+  for (const want of ['bill:b1', 'invoice:i1', 'donor:d1', 'contact:c1', 'budget:2026']) {
+    assert.ok(ids.includes(want), want + ' was not restored from the seed — the blacklist must keep it');
+  }
+  // and the on-disk seed itself carries them (round-trip of _finBookSet)
+  const seed = unseal(ls.getItem(KEY('CHURCH_A')));
+  const sids = seed.docs.map(d => String(d.id));
+  for (const want of ['bill:b1', 'invoice:i1', 'donor:d1', 'contact:c1', 'budget:2026']) {
+    assert.ok(sids.includes(want), want + ' is missing from the sealed seed on disk');
+  }
+});
+
+test('finance: receipt BLOBS are STILL dropped even when other side docs are kept (blacklist keeps all but attachment:)', () => {
+  const ls = seedFinance('CHURCH_A', [
+    settingsEv('CHURCH_A'), journalEv('CHURCH_A', 1, 'm'),
+    sideEv('CHURCH_A', 'donor:d1', { name: 'A Donor' }),
+    attachmentEv('CHURCH_A', 'a1'),
+  ]);
+  const seed = unseal(ls.getItem(KEY('CHURCH_A')));
+  const ids = seed.docs.map(d => String(d.id));
+  assert.ok(ids.includes('donor:d1'), 'a non-attachment side doc was dropped');
+  assert.ok(!ids.some(i => i.startsWith('attachment:')), 'a receipt blob survived into the seed — attachment: must still be dropped');
+  assert.equal(ls.getItem(KEY('CHURCH_A')).includes('RECEIPTBLOB'), false, 'the receipt blob reached disk');
+});
+
+test('finance: side-doc PII is SEALED at rest — a donor name and a bill payee are never in cleartext', () => {
+  const ls = seedFinance('CHURCH_A', [
+    settingsEv('CHURCH_A'),
+    journalEv('CHURCH_A', 1, 'SECRET-JOURNAL-MEMO', 778899),
+    sideEv('CHURCH_A', 'donor:d1', { name: 'SECRET-DONOR-NAME' }),
+    sideEv('CHURCH_A', 'bill:b1', { payee: 'SECRET-BILL-PAYEE', amount: 100 }),
+  ]);
+  const onDisk = ls.getItem(KEY('CHURCH_A'));
+  assert.ok(onDisk && onDisk.includes('SEAL:'), 'the seed must be the sealed shape');
+  assert.equal(onDisk.includes('SECRET-DONOR-NAME'), false, 'a donor name is in CLEARTEXT on disk — must be sealed');
+  assert.equal(onDisk.includes('SECRET-BILL-PAYEE'), false, 'a bill payee is in CLEARTEXT on disk — must be sealed');
+  assert.equal(onDisk.includes('SECRET-JOURNAL-MEMO'), false, 'a journal memo is in CLEARTEXT on disk — must be sealed');
+  assert.equal(onDisk.includes('778899'), false, 'a journal amount is in CLEARTEXT on disk — must be sealed');
+  // round-trips under the key → genuinely sealed, not merely absent
+  const seed = unseal(onDisk);
+  assert.equal(seed.docs.find(d => d.id === 'donor:d1').name, 'SECRET-DONOR-NAME', 'the sealed donor did not round-trip under the key');
+  assert.equal(seed.docs.find(d => d.id === 'bill:b1').payee, 'SECRET-BILL-PAYEE', 'the sealed bill did not round-trip under the key');
+});
+
+test('finance: the journal stays FULL + CONTIGUOUS alongside the newly-seeded side docs', () => {
+  const evs = [settingsEv('CHURCH_A'), sideEv('CHURCH_A', 'donor:d1', { name: 'D' }), sideEv('CHURCH_A', 'bill:b1', { payee: 'P' })];
+  for (let s = 1; s <= 40; s++) evs.push(journalEv('CHURCH_A', s, 'm' + s));
+  const ls = seedFinance('CHURCH_A', evs);
+  const seed = unseal(ls.getItem(KEY('CHURCH_A')));
+  const seqs = seed.docs.filter(d => String(d.id).startsWith('journal:')).map(d => d.seq).sort((a, b) => a - b);
+  assert.equal(seqs.length, 40, 'a journal entry was dropped — the journal must stay complete under the blacklist');
+  assert.deepEqual(seqs, Array.from({ length: 40 }, (_, i) => i + 1), 'the seeded journal is not a contiguous 1..40 — rebuildBook would paint empty');
 });
 
 // ───────────────────────── THE SAFEGUARDING GATE: finance/ ONLY ─────────────────────────

@@ -3237,11 +3237,15 @@ function _sgClearClear(keep) {
 const FINBOOK_LS = 'trinityone.steward.financebook.';
 const FINBOOK_MAX_BYTES = 3 * 1024 * 1024;   // all-or-nothing ceiling on the sealed book (pre-seal JSON length)
 function _finBookKeep(docs) {
-  // The book docs rebuildBook actually replays — the `id` (the d-suffix after 'finance/') classifies them,
-  // exactly as finItemToDoc does (settings / account:/ fund:/ journal:). Everything else is dropped.
+  // Seed every finance doc the console's lists and the book paint from, so a return visit shows bills/
+  // invoices/donors/contacts/budgets instantly — not just the double-entry book. DROP ONLY `attachment:`
+  // blobs (receipt data: URIs): they are large, rebuildBook ignores them, and DashFinanceBook re-fetches a
+  // blob from the relay only when a receipt is actually opened. The all-or-nothing FINBOOK_MAX_BYTES ceiling
+  // in _finBookSet still skips the WHOLE seed (cold load, never a truncated/gap-prone journal) if the
+  // blob-free set is still too large. Journal contiguity is preserved: every `journal:` doc is kept.
   return (docs || []).filter(d => {
     const id = (d && d.id) || '';
-    return id === 'settings' || id.indexOf('account:') === 0 || id.indexOf('fund:') === 0 || id.indexOf('journal:') === 0;
+    return id.indexOf('attachment:') !== 0;
   });
 }
 function _finBookGet(cp) {

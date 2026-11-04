@@ -17716,7 +17716,7 @@ zoo`.split("\n");
   function _finBookKeep(docs) {
     return (docs || []).filter((d) => {
       const id = d && d.id || "";
-      return id === "settings" || id.indexOf("account:") === 0 || id.indexOf("fund:") === 0 || id.indexOf("journal:") === 0;
+      return id.indexOf("attachment:") !== 0;
     });
   }
   function _finBookGet(cp) {
