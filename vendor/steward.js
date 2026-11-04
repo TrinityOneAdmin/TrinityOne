@@ -17711,6 +17711,60 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
+  var FINBOOK_LS = "trinityone.steward.financebook.";
+  var FINBOOK_MAX_BYTES = 3 * 1024 * 1024;
+  function _finBookKeep(docs) {
+    return (docs || []).filter((d) => {
+      const id = d && d.id || "";
+      return id === "settings" || id.indexOf("account:") === 0 || id.indexOf("fund:") === 0 || id.indexOf("journal:") === 0;
+    });
+  }
+  function _finBookGet(cp) {
+    if (!cp || !churchSk) return null;
+    const v = lsGet(FINBOOK_LS + cp);
+    if (v == null) return null;
+    let o = null;
+    try {
+      o = JSON.parse(v);
+    } catch (e) {
+      o = null;
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o) || typeof o.s !== "string") {
+      try {
+        localStorage.removeItem(FINBOOK_LS + cp);
+      } catch (e) {
+      }
+      return null;
+    }
+    try {
+      const d = JSON.parse(decrypt3(o.s, churchSk));
+      if (!d || d.cp !== cp || !Array.isArray(d.docs)) return null;
+      return d.docs;
+    } catch (e) {
+      return null;
+    }
+  }
+  function _finBookSet(cp, docs) {
+    if (!cp || !churchSk) return;
+    const keep = _finBookKeep(docs);
+    const pt = JSON.stringify({ cp, docs: keep });
+    if (pt.length > FINBOOK_MAX_BYTES) return;
+    try {
+      lsSet(FINBOOK_LS + cp, JSON.stringify({ s: encrypt2(pt, churchSk) }));
+    } catch (e) {
+    }
+  }
+  function _finBookClear(keep) {
+    try {
+      const ks = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (k && k.startsWith(FINBOOK_LS) && (!keep || k !== FINBOOK_LS + keep)) ks.push(k);
+      }
+      for (const k of ks) localStorage.removeItem(k);
+    } catch (e) {
+    }
+  }
   var BLOCKED_SINCE_LS = "trinityone.steward.blockedsince.";
   function _blockedSinceGet(cp) {
     try {
@@ -17953,6 +18007,7 @@ zoo`.split("\n");
     }
     _minorsLastClear("");
     _sgClearClear("");
+    _finBookClear("");
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -20984,6 +21039,7 @@ zoo`.split("\n");
     forgetChildrenLists() {
       _minorsLastClear("");
       _sgClearClear("");
+      _finBookClear("");
     },
     removeKey() {
       try {
@@ -20999,6 +21055,7 @@ zoo`.split("\n");
       }
       _minorsLastClear("");
       _sgClearClear("");
+      _finBookClear("");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
       _stay.clear();
@@ -24841,7 +24898,22 @@ zoo`.split("\n");
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      const isFin = prefix === "finance/";
+      let eosed = false, genuine = false, _finT = null;
+      const emit = () => {
+        cb([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)), genuine);
+        if (isFin && eosed && !_finT) _finT = setTimeout(() => {
+          _finT = null;
+          _finBookSet(cp, [...byId.values()]);
+        }, 400);
+      };
+      if (isFin) {
+        const seed = _finBookGet(cp);
+        if (seed && seed.length) {
+          for (const d of seed) if (d && d.id != null) byId.set(d.id, d);
+          emit();
+        }
+      }
       const kk = kind || "finance";
       const held = /* @__PURE__ */ new Map();
       const HELD_CAP = 2e3;
@@ -24894,11 +24966,17 @@ zoo`.split("\n");
           emit();
         },
         oneose() {
+          eosed = true;
+          genuine = true;
           emit();
         }
       });
       return () => {
         _capWaiters[kk] && _capWaiters[kk].delete(retry);
+        try {
+          clearTimeout(_finT);
+        } catch (e) {
+        }
         try {
           sub.close();
         } catch {
@@ -27272,6 +27350,7 @@ zoo`.split("\n");
       }
       _minorsLastClear(actingChurch || pub);
       _sgClearClear(actingChurch || pub);
+      _finBookClear(actingChurch || pub);
       _latestGuardNotice.clear();
       _senvPending.clear();
       window.Steward.pubkey = pub;
