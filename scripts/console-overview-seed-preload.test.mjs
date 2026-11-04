@@ -27,10 +27,12 @@ function load(signature, name, opts = {}) {
   const subs = [];
   const pool = { subscribeMany: (relaysArg, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; } };
   const ls = opts.localStorage || fakeLS();
+  const fresh = [];   // captured _freshDocRead calls; a test fires .onDone() to simulate a GENUINE settle
   const ctx = {
     pool,
     relays: () => [],
     pub: ('pub' in opts) ? opts.pub : 'CHURCH_A',
+    actingChurch: ('actingChurch' in opts) ? opts.actingChurch : '',
     lsGet: (k) => ls.getItem(k),
     lsSet: (k, v) => ls.setItem(k, v),
     setTimeout: SYNC_TIMEOUT,
@@ -39,12 +41,26 @@ function load(signature, name, opts = {}) {
     GROUPKEY_D: 'trinityone/groupkey:',
     FUND_D: 'trinityone/fund:',
     NET: 'trinityone',
+    JOINPOLICY_D: 'trinityone/joinpolicy:',
+    ADMITTED_D: 'trinityone/admitted:',
     npubEncode: (h) => 'npub-' + String(h).slice(0, 8),
     localStorage: ls,
+    // stubs for the shared console plumbing these methods close over (identity/no-op where behaviour is unrelated)
+    _freshDocRead: (cp, filters, onEvent, onDone) => { fresh.push({ cp, filters, onEvent, onDone }); return () => {}; },
+    _freshTok: () => ({}),
+    _listTag: () => ({}),
+    _stampFor: (list) => list,
+    _authFuture: () => false,
+    _byChurchOrSteward: () => true,
+    _byChurch: () => true,
+    _keysReadSignal: () => {},
+    _joinPolicyStates: new Set(),
+    _memberEmitters: new Set(),
+    _lastAdmitted: null,
   };
   const make = new Function(...Object.keys(ctx), 'function ' + body + '\n;return ' + name + ';');
   const fn = make(...Object.values(ctx));
-  return { fn, subs, localStorage: ls };
+  return { fn, subs, localStorage: ls, fresh };
 }
 
 // ───────────────────────── STATS (footprint counts) ─────────────────────────
@@ -143,4 +159,85 @@ test('LEAKS: no message/body content lands on disk from any overview seed', () =
   subs[0].handlers.onevent({ id: 'm1', kind: 1, pubkey: 'memberhex', created_at: 200, content: 'PRIVATE-PLEA-TEXT', tags: [['t', 'g1']] });
   subs[0].handlers.oneose();
   for (const [, v] of localStorage.store) assert.equal(String(v).includes('PRIVATE-PLEA-TEXT'), false, 'plaintext body content found on disk: ' + v);
+});
+
+// ───────────────────────── JOIN POLICY (approval boolean) ─────────────────────────
+const JP_KEY = (cp) => 'trinityone.steward.joinpolicy.' + cp;
+const jpEvent = (cp, approval, ts = 100) => ({ tags: [['d', 'trinityone/joinpolicy:' + cp]], created_at: ts, pubkey: cp, content: JSON.stringify({ approval }) });
+
+test('joinPolicy: paints the last-known flag on first open', () => {
+  const ls = fakeLS();
+  ls.setItem(JP_KEY('CHURCH_A'), '1');
+  const { fn } = load('subscribeJoinPolicy(onPolicy)', 'subscribeJoinPolicy', { localStorage: ls });
+  const paints = [];
+  fn((b) => paints.push(b));
+  assert.equal(paints[0], true, 'first paint must be the cached approval flag (true)');
+});
+
+test('joinPolicy: writes the seed only on a GENUINE settle, not on a bare EOSE', () => {
+  const { fn, subs, fresh, localStorage } = load('subscribeJoinPolicy(onPolicy)', 'subscribeJoinPolicy');
+  fn(() => {});
+  subs[0].handlers.onevent(jpEvent('CHURCH_A', true));
+  subs[0].handlers.oneose();   // bare EOSE — can be a client timeout; must NOT write
+  assert.equal(localStorage.getItem(JP_KEY('CHURCH_A')), null, 'wrote on a bare EOSE — must wait for the genuine read');
+  fresh[0].onDone();           // the _freshDocRead genuine completion
+  assert.equal(localStorage.getItem(JP_KEY('CHURCH_A')), '1', 'the flag must be written once the genuine read settles');
+});
+
+test('joinPolicy: a bare/offline EOSE does NOT flip the shown flag or clobber the seed', () => {
+  const ls = fakeLS();
+  ls.setItem(JP_KEY('CHURCH_A'), '1');
+  const { fn, subs } = load('subscribeJoinPolicy(onPolicy)', 'subscribeJoinPolicy', { localStorage: ls });
+  const paints = [];
+  fn((b) => paints.push(b));
+  subs[0].handlers.oneose();   // relay down — nothing delivered this run
+  assert.ok(!paints.includes(false), 'a bare EOSE flipped the painted flag to false');
+  assert.equal(ls.getItem(JP_KEY('CHURCH_A')), '1', 'a bare EOSE clobbered the stored flag');
+});
+
+// ───────────────────────── ADMITTED (allowlist pubkeys) ─────────────────────────
+const ADM_KEY = (cp) => 'trinityone.steward.admitted.' + cp;
+const admEvent = (cp, pubkeys, ts = 100) => ({ tags: [['d', 'trinityone/admitted:' + cp]], created_at: ts, pubkey: cp, content: JSON.stringify({ pubkeys }) });
+
+test('admitted: paints the last-known allowlist on first open', () => {
+  const ls = fakeLS();
+  ls.setItem(ADM_KEY('CHURCH_A'), JSON.stringify(['pkA', 'pkB']));
+  const { fn } = load('subscribeAdmitted(onList)', 'subscribeAdmitted', { localStorage: ls });
+  const paints = [];
+  fn((list) => paints.push(list));
+  assert.deepEqual(paints[0], ['pkA', 'pkB'], 'first paint must be the cached allowlist');
+});
+
+test('admitted: writes the seed only on a GENUINE settle, not on a bare EOSE', () => {
+  const { fn, subs, fresh, localStorage } = load('subscribeAdmitted(onList)', 'subscribeAdmitted');
+  fn(() => {});
+  subs[0].handlers.onevent(admEvent('CHURCH_A', ['pk1', 'pk2']));
+  subs[0].handlers.oneose();
+  assert.equal(localStorage.getItem(ADM_KEY('CHURCH_A')), null, 'wrote on a bare EOSE — must wait for the genuine read');
+  fresh[0].onDone();
+  assert.deepEqual(JSON.parse(localStorage.getItem(ADM_KEY('CHURCH_A'))), ['pk1', 'pk2'], 'the allowlist must be written once the genuine read settles');
+});
+
+test('admitted: a transient/offline empty EOSE re-delivers the seed and does NOT clobber it', () => {
+  const ls = fakeLS();
+  ls.setItem(ADM_KEY('CHURCH_A'), JSON.stringify(['pkA', 'pkB']));
+  const { fn, subs } = load('subscribeAdmitted(onList)', 'subscribeAdmitted', { localStorage: ls });
+  const paints = [];
+  fn((list) => paints.push(list));
+  subs[0].handlers.oneose();   // relay down — no events this run
+  assert.deepEqual(paints[paints.length - 1], ['pkA', 'pkB'], 'an empty EOSE delivered [] instead of re-delivering the seed');
+  assert.deepEqual(JSON.parse(ls.getItem(ADM_KEY('CHURCH_A'))), ['pkA', 'pkB'], 'an empty EOSE clobbered the good allowlist');
+});
+
+test('admitted: church isolation — church B never paints or overwrites church A', () => {
+  const ls = fakeLS();
+  ls.setItem(ADM_KEY('CHURCH_A'), JSON.stringify(['pkA']));
+  const { fn, subs, fresh } = load('subscribeAdmitted(onList)', 'subscribeAdmitted', { localStorage: ls, pub: 'CHURCH_B' });
+  const paints = [];
+  fn((list) => paints.push(list));
+  assert.ok(!paints.some(p => p.includes('pkA')), 'church B painted church A allowlist');
+  subs[0].handlers.onevent(admEvent('CHURCH_B', ['pkB1']));
+  fresh[0].onDone();
+  assert.deepEqual(JSON.parse(ls.getItem(ADM_KEY('CHURCH_A'))), ['pkA'], 'church A allowlist overwritten');
+  assert.ok(ls.getItem(ADM_KEY('CHURCH_B')), 'church B allowlist must be under its own key');
 });

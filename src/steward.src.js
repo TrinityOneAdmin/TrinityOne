@@ -10504,7 +10504,18 @@ window.Steward = {
     const cp0 = pub, tag = _listTag(), tok = _freshTok(); tag.sub = tok;
     const state = { tag, approval: false };
     _joinPolicyStates.add(state);
-    let approval = false, latest = 0;
+    // PRELOAD WARMING (overview seed): paint the last-known approval flag instantly so the "waiting to join" gate
+    // on the dashboard isn't wrong for the second the relay takes to answer. A boolean; nothing sensitive on disk.
+    // Write only once a GENUINE read has settled (the _freshDocRead completion below), NOT on a bare EOSE — so a
+    // transient/offline empty EOSE can't silently flip a stored `true` back to `false` before the real doc lands.
+    const JP_KEY = 'trinityone.steward.joinpolicy.' + (cp0 || '');
+    let settled = false, _jpSeed = null;
+    try { _jpSeed = lsGet(JP_KEY); } catch {}
+    const push = () => { onPolicy(approval); if (settled) { try { lsSet(JP_KEY, approval ? '1' : '0'); } catch {} } };
+    if (_jpSeed === '1' || _jpSeed === '0') onPolicy(_jpSeed === '1');   // paint last-known instantly
+    // HYDRATE approval from the seed so a bare/offline EOSE (which re-emits `approval`) can't flip the shown flag
+    // back before the genuine doc lands; a real newer event still wins via `latest` below.
+    let approval = (_jpSeed === '1'), latest = 0;
     const take = (e) => {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
       if (d !== JOINPOLICY_D + cp0) return false;
@@ -10516,11 +10527,11 @@ window.Steward = {
       return true;
     };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#t': [NET] }], {
-      onevent(e) { if (take(e)) onPolicy(approval); },
-      oneose() { onPolicy(approval); },
+      onevent(e) { if (take(e)) push(); },
+      oneose() { push(); },
     });
-    const stopRead = _freshDocRead(cp0, [JOINPOLICY_D + cp0], (e) => { if (take(e)) onPolicy(approval); },
-      () => { tok.genuine = true; tok.at = Date.now(); state.approval = approval; onPolicy(approval); _keysReadSignal('joinpolicy'); });
+    const stopRead = _freshDocRead(cp0, [JOINPOLICY_D + cp0], (e) => { if (take(e)) push(); },
+      () => { tok.genuine = true; tok.at = Date.now(); state.approval = approval; settled = true; push(); _keysReadSignal('joinpolicy'); });
     return () => { tok.live = false; _joinPolicyStates.delete(state); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   setJoinPolicy(approval, opts) {   // turn approval-to-join on/off. `opts` is publish()'s (ensureJoinPolicy passes background:true)
@@ -10659,6 +10670,14 @@ window.Steward = {
     { const _tag = _listTag(), _deliver = onList; _tag.sub = tok; onList = (list) => { const l = _stampFor(list, _tag); try { if (cp0 === (actingChurch || pub)) _lastAdmitted = { cp: cp0, list: l }; } catch (e) {} return _deliver(l); }; }   // see _listTag, _freshDocRead; _lastAdmitted: round 3g
     let cur = [];
     const byAuthor = new Map();   // author pubkey -> { at, pubkeys } — newest per author, unioned below
+    // PRELOAD WARMING (overview seed): paint the last-known allowlist instantly so the pending-join count isn't
+    // briefly wrong on a cold open. Pubkeys only — the same tier the console already keeps on disk for the block
+    // list. `cur` is folded from the relay (byAuthor), never from this seed, so write only once a GENUINE read has
+    // settled (the _freshDocRead completion) — a transient/offline empty EOSE then can't wipe a good allowlist.
+    const ADM_KEY = 'trinityone.steward.admitted.' + (cp0 || '');
+    let settled = false;
+    const push = () => { onList(cur); if (settled) { try { lsSet(ADM_KEY, JSON.stringify(cur)); } catch {} } };
+    try { const c = JSON.parse(lsGet(ADM_KEY) || '[]'); if (Array.isArray(c) && c.length) { cur = c.filter(p => typeof p === 'string'); onList(cur); } } catch {}
     // ITEM D (owner 2026-10-13: a steward's approval is the church's, and must not depend on a console being open).
     // Every copy the relay serves counts. The relay now serves an `admitted:` copy only from the church, a current
     // steward, or a steward it accepted that copy from while they were one (gateway.mjs ADMITTED_RECEIPTS) — the set
@@ -10684,13 +10703,13 @@ window.Steward = {
       return true;
     };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#t': [NET] }], {
-      onevent(e) { if (take(e)) onList(cur); },
-      oneose() { onList(cur); },
+      onevent(e) { if (take(e)) push(); },
+      oneose() { push(); },
     });
-    const refold = () => { if (!byAuthor.size) return; const was = cur.slice().sort().join(','); fold(); if (cur.slice().sort().join(',') !== was) onList(cur); };
+    const refold = () => { if (!byAuthor.size) return; const was = cur.slice().sort().join(','); fold(); if (cur.slice().sort().join(',') !== was) push(); };
     _memberEmitters.add(refold);   // the steward roster arrived or changed — see _pokeMemberLists
-    const stopRead = _freshDocRead(cp0, [ADMITTED_D + cp0], (e) => { if (take(e)) onList(cur); },
-      () => { tok.genuine = true; tok.at = Date.now(); cur = [...cur]; onList(cur); _keysReadSignal('admitted'); });
+    const stopRead = _freshDocRead(cp0, [ADMITTED_D + cp0], (e) => { if (take(e)) push(); },
+      () => { tok.genuine = true; tok.at = Date.now(); cur = [...cur]; settled = true; push(); _keysReadSignal('admitted'); });
     return () => { tok.live = false; _memberEmitters.delete(refold); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────

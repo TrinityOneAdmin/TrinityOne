@@ -23708,7 +23708,23 @@ zoo`.split("\n");
       tag.sub = tok;
       const state = { tag, approval: false };
       _joinPolicyStates.add(state);
-      let approval = false, latest = 0;
+      const JP_KEY = "trinityone.steward.joinpolicy." + (cp0 || "");
+      let settled = false, _jpSeed = null;
+      try {
+        _jpSeed = lsGet(JP_KEY);
+      } catch {
+      }
+      const push = () => {
+        onPolicy(approval);
+        if (settled) {
+          try {
+            lsSet(JP_KEY, approval ? "1" : "0");
+          } catch {
+          }
+        }
+      };
+      if (_jpSeed === "1" || _jpSeed === "0") onPolicy(_jpSeed === "1");
+      let approval = _jpSeed === "1", latest = 0;
       const take = (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (d !== JOINPOLICY_D + cp0) return false;
@@ -23728,23 +23744,24 @@ zoo`.split("\n");
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
         onevent(e) {
-          if (take(e)) onPolicy(approval);
+          if (take(e)) push();
         },
         oneose() {
-          onPolicy(approval);
+          push();
         }
       });
       const stopRead = _freshDocRead(
         cp0,
         [JOINPOLICY_D + cp0],
         (e) => {
-          if (take(e)) onPolicy(approval);
+          if (take(e)) push();
         },
         () => {
           tok.genuine = true;
           tok.at = Date.now();
           state.approval = approval;
-          onPolicy(approval);
+          settled = true;
+          push();
           _keysReadSignal("joinpolicy");
         }
       );
@@ -23905,6 +23922,25 @@ zoo`.split("\n");
       }
       let cur = [];
       const byAuthor = /* @__PURE__ */ new Map();
+      const ADM_KEY = "trinityone.steward.admitted." + (cp0 || "");
+      let settled = false;
+      const push = () => {
+        onList(cur);
+        if (settled) {
+          try {
+            lsSet(ADM_KEY, JSON.stringify(cur));
+          } catch {
+          }
+        }
+      };
+      try {
+        const c = JSON.parse(lsGet(ADM_KEY) || "[]");
+        if (Array.isArray(c) && c.length) {
+          cur = c.filter((p) => typeof p === "string");
+          onList(cur);
+        }
+      } catch {
+      }
       const counts = () => true;
       const fold = () => {
         const all = /* @__PURE__ */ new Set();
@@ -23931,30 +23967,31 @@ zoo`.split("\n");
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
         onevent(e) {
-          if (take(e)) onList(cur);
+          if (take(e)) push();
         },
         oneose() {
-          onList(cur);
+          push();
         }
       });
       const refold = () => {
         if (!byAuthor.size) return;
         const was = cur.slice().sort().join(",");
         fold();
-        if (cur.slice().sort().join(",") !== was) onList(cur);
+        if (cur.slice().sort().join(",") !== was) push();
       };
       _memberEmitters.add(refold);
       const stopRead = _freshDocRead(
         cp0,
         [ADMITTED_D + cp0],
         (e) => {
-          if (take(e)) onList(cur);
+          if (take(e)) push();
         },
         () => {
           tok.genuine = true;
           tok.at = Date.now();
           cur = [...cur];
-          onList(cur);
+          settled = true;
+          push();
           _keysReadSignal("admitted");
         }
       );
