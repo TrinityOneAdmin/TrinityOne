@@ -27867,12 +27867,26 @@ zoo`.split("\n");
     // plus how many of those are the church's own announcements (kind-1 it authored)
     subscribeStats(onStats) {
       const ids = /* @__PURE__ */ new Set(), ann = /* @__PURE__ */ new Set();
+      const STATS_KEY = "trinityone.steward.stats." + (pub || "");
+      let eosed = false;
+      try {
+        const c = JSON.parse(lsGet(STATS_KEY) || "null");
+        if (c && typeof c === "object") onStats({ events: c.events | 0, announcements: c.announcements | 0 });
+      } catch {
+      }
       let _statsT = null;
       const emit = () => {
         if (_statsT) return;
         _statsT = setTimeout(() => {
           _statsT = null;
-          onStats({ events: ids.size, announcements: ann.size });
+          const v = { events: ids.size, announcements: ann.size };
+          onStats(v);
+          if (eosed && ids.size) {
+            try {
+              lsSet(STATS_KEY, JSON.stringify(v));
+            } catch {
+            }
+          }
         }, 120);
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 500 }, { kinds: [1, 30078], "#p": [pub], limit: 500 }], {
@@ -27882,6 +27896,7 @@ zoo`.split("\n");
           emit();
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });
@@ -27895,12 +27910,26 @@ zoo`.split("\n");
     // a live, recent activity feed derived from real events (groups, joins, posts) — newest first
     subscribeActivity(onActivity, max2 = 12) {
       const byId = /* @__PURE__ */ new Map();
+      const ACT_KEY = "trinityone.steward.activity." + (pub || "");
+      let eosed = false, sawItem = false;
+      try {
+        const c = JSON.parse(lsGet(ACT_KEY) || "[]");
+        if (Array.isArray(c) && c.length) onActivity(c.slice(0, max2));
+      } catch {
+      }
       let _actT = null;
       const emit = () => {
         if (_actT) return;
         _actT = setTimeout(() => {
           _actT = null;
-          onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max2));
+          const list = [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max2);
+          onActivity(list);
+          if (eosed && (list.length || sawItem)) {
+            try {
+              lsSet(ACT_KEY, JSON.stringify(list));
+            } catch {
+            }
+          }
         }, 120);
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 200 }, { kinds: [1, 30078], "#p": [pub], limit: 200 }], {
@@ -27940,11 +27969,13 @@ zoo`.split("\n");
             else item = { ic: "chat", tint: "clay", text: "New message in a group", gid: g || "" };
           }
           if (item) {
+            sawItem = true;
             byId.set(e.id, { id: e.id, ts: e.created_at, ...item });
             emit();
           }
         },
         oneose() {
+          eosed = true;
           emit();
         }
       });

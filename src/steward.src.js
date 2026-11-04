@@ -14422,11 +14422,18 @@ window.Steward = {
     // kind-less tag filter cannot use an index, so it walks and JSON-parses the WHOLE table (one steward opening
     // a dashboard drove a full-table parse on a shared relay), and it pulled up to 10k events over a member's
     // data plan to display two integers. emit() also ran per arriving event. Narrow, cap, and coalesce.
+    // PRELOAD WARMING (overview seed): paint last-known counts instantly so the dashboard's footprint tiles don't
+    // flash 0 before the relay answers over the tunnel. Counts only — nothing sensitive reaches disk. Write on
+    // SETTLE (eosed), never per replay event (the 4710596e lesson), and only when a real event was seen this run,
+    // so a transient/offline empty EOSE (the relay timed out) can't clobber good counts with 0.
+    const STATS_KEY = 'trinityone.steward.stats.' + (pub || '');
+    let eosed = false;
+    try { const c = JSON.parse(lsGet(STATS_KEY) || 'null'); if (c && typeof c === 'object') onStats({ events: c.events | 0, announcements: c.announcements | 0 }); } catch {}
     let _statsT = null;
-    const emit = () => { if (_statsT) return; _statsT = setTimeout(() => { _statsT = null; onStats({ events: ids.size, announcements: ann.size }); }, 120); };
+    const emit = () => { if (_statsT) return; _statsT = setTimeout(() => { _statsT = null; const v = { events: ids.size, announcements: ann.size }; onStats(v); if (eosed && ids.size) { try { lsSet(STATS_KEY, JSON.stringify(v)); } catch {} } }, 120); };
     const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 500 }, { kinds: [1, 30078], '#p': [pub], limit: 500 }], {
       onevent(e) { ids.add(e.id); if (e.kind === 1 && e.pubkey === pub) ann.add(e.id); emit(); },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -14437,8 +14444,17 @@ window.Steward = {
     // PERF (audit 2026-07-24): unbounded filters feeding a full sort+slice PER ARRIVING EVENT — O(n² log n)
     // across a backfill, ~60M comparisons at 5k events on a phone, to render `max` (12) rows. Cap the pull and
     // coalesce the rebuild to one per tick.
+    // PRELOAD WARMING (overview seed): paint the last-known activity feed instantly so the Recent-activity card
+    // doesn't open empty. BODY-FREE by construction — each row is a derived LABEL ("New message in a group"),
+    // message content is never read (see onevent below); the only free text is group/fund NAMES, already on disk
+    // via groups.v2/funds. Write on SETTLE (eosed), never per replay event. sawItem guards a transient/offline
+    // empty EOSE from clobbering a good non-empty seed to [] (the a367992f lesson; byId is relay-built here, not
+    // hydrated from the seed, so arr can be empty while a good seed exists).
+    const ACT_KEY = 'trinityone.steward.activity.' + (pub || '');
+    let eosed = false, sawItem = false;
+    try { const c = JSON.parse(lsGet(ACT_KEY) || '[]'); if (Array.isArray(c) && c.length) onActivity(c.slice(0, max)); } catch {}
     let _actT = null;
-    const emit = () => { if (_actT) return; _actT = setTimeout(() => { _actT = null; onActivity([...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max)); }, 120); };
+    const emit = () => { if (_actT) return; _actT = setTimeout(() => { _actT = null; const list = [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max); onActivity(list); if (eosed && (list.length || sawItem)) { try { lsSet(ACT_KEY, JSON.stringify(list)); } catch {} } }, 120); };
     const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 200 }, { kinds: [1, 30078], '#p': [pub], limit: 200 }], {
       onevent(e) {
         const own = e.pubkey === pub;
@@ -14455,9 +14471,9 @@ window.Steward = {
           if (own) item = { ic: 'send', tint: 'gold', text: 'You posted an announcement', gid: g || '' };
           else item = { ic: 'chat', tint: 'clay', text: 'New message in a group', gid: g || '' };
         }
-        if (item) { byId.set(e.id, { id: e.id, ts: e.created_at, ...item }); emit(); }
+        if (item) { sawItem = true; byId.set(e.id, { id: e.id, ts: e.created_at, ...item }); emit(); }
       },
-      oneose() { emit(); },
+      oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
