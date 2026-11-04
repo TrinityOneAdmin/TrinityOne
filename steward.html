@@ -259,13 +259,24 @@
        (lumenScale = entrance, lumenFade = staggered text rise, trinitySpin = the continuous "working" ring),
        all gated by the #boot-splash reduced-motion rule. Matches the Relay/Console Suite loader feel
        (relay-app/home.html .brand + .tag, relay-app/control.html spinner). -->
-  <div id="boot-splash" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:0 16px;background:#efece6;font-family:'Sora',system-ui,sans-serif;text-align:center">
-    <div style="position:relative;width:78px;height:78px;display:flex;align-items:center;justify-content:center;animation:lumenScale .55s cubic-bezier(.2,.7,.3,1) both">
-      <div style="position:absolute;inset:0;border-radius:50%;border:3px solid rgba(194,90,56,.16);border-top-color:#C25A38;animation:trinitySpin 1.05s linear infinite"></div>
-      <div style="width:54px;height:54px;border-radius:16px;background:linear-gradient(155deg,#C25A38,#9C4327);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:22px;letter-spacing:.5px;box-shadow:0 8px 22px rgba(34,28,16,.18)">T1</div>
+  <div id="boot-splash" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:0 16px;background:#efece6;font-family:'Sora',system-ui,sans-serif;text-align:center">
+    <!-- The TrinityOne mark: clay tile + aperture ring (cream arcs + gold centre), same as the app logo. -->
+    <div style="width:66px;height:66px;border-radius:18px;background:linear-gradient(155deg,#C25A38,#9C4327);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 26px rgba(34,28,16,.20);animation:lumenScale .55s cubic-bezier(.2,.7,.3,1) both">
+      <svg width="42" height="42" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <circle cx="24" cy="24" r="15" stroke="#F4ECE0" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="16.5 7.06"></circle>
+        <circle cx="24" cy="24" r="3.1" fill="#E7A733"></circle>
+      </svg>
     </div>
-    <div style="font-size:15px;font-weight:700;color:#221C16;animation:lumenFade .5s ease .14s both">Opening your console</div>
-    <div style="font-size:11px;font-weight:600;letter-spacing:3px;text-transform:uppercase;color:#6B6052;animation:lumenFade .5s ease .28s both">Getting your church ready</div>
+    <!-- Wordmark + tagline, grouped tight. Trinity in ink, One in clay — the two-tone wordmark. -->
+    <div style="display:flex;flex-direction:column;align-items:center;gap:7px;animation:lumenFade .5s ease .12s both">
+      <div style="font-size:27px;font-weight:800;letter-spacing:-.5px;line-height:1;color:#221C16">Trinity<span style="color:#C25A38">One</span></div>
+      <div style="font-size:10.5px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#8A7D6C">Read. Gather. Share.</div>
+    </div>
+    <!-- Working indicator + status line, below the logo. -->
+    <div style="display:flex;align-items:center;gap:9px;margin-top:6px;animation:lumenFade .5s ease .3s both">
+      <div style="width:15px;height:15px;border-radius:50%;border:2.4px solid rgba(194,90,56,.2);border-top-color:#C25A38;animation:trinitySpin 1.05s linear infinite"></div>
+      <div style="font-size:13px;font-weight:600;color:#6B6052">Opening your console…</div>
+    </div>
   </div>
 </div>
 

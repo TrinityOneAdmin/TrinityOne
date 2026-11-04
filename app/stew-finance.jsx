@@ -3233,7 +3233,7 @@ function DashFinanceBook() {
       <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
       <div style={{ textAlign: 'center', padding: '70px 24px', color: 'var(--ink-3)', animation: 'lumenFade .3s ease both' }}>
         <div style={{ width: 28, height: 28, margin: '0 auto', borderRadius: 999, border: '3px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
-        <p style={{ marginTop: 16, fontSize: 14 }}>Loading your books…</p>
+        <p style={{ marginTop: 16, fontSize: 14 }}>Loading and decrypting your finances…</p>
       </div>
     </div>
   );
