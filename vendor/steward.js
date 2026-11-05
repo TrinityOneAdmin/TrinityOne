@@ -27054,7 +27054,7 @@ zoo`.split("\n");
     },
     // switch the WHOLE console between the church, an owned network, or a church we steward (delegated) —
     // the active signing+reading identity. Subscriptions are keyed on activePub, so the dashboard re-renders.
-    setActiveIdentity(targetPub) {
+    setActiveIdentity(targetPub, { persist = true } = {}) {
       const tp = toPubHex(targetPub) || targetPub || churchPub;
       if (tp === churchPub) {
         sk = churchSk;
@@ -27076,7 +27076,7 @@ zoo`.split("\n");
         }
       }
       const _isNetwork = !actingChurch && tp !== churchPub;
-      if (!_isNetwork) {
+      if (!_isNetwork && persist) {
         try {
           localStorage.setItem(ACTIVE_ID_KEY, actingChurch || "");
         } catch (e) {
@@ -27229,7 +27229,7 @@ zoo`.split("\n");
           window.Steward.setActiveIdentity(want);
         } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
           const first = [...stewardedChurches.keys()].find((cp) => !_ownedPubs.has(cp));
-          if (first) window.Steward.setActiveIdentity(first);
+          if (first) window.Steward.setActiveIdentity(first, { persist: false });
         }
       } catch (e) {
       }
@@ -27311,7 +27311,11 @@ zoo`.split("\n");
             } else if (!listed && had) {
               stewardedChurches.delete(cp);
               save();
-              if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub);
+              if (actingChurch === cp) {
+                const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find((k) => !_ownedPubs.has(k)) : "";
+                if (other) window.Steward.setActiveIdentity(other, { persist: false });
+                else window.Steward.setActiveIdentity(churchPub);
+              }
               cb([...stewardedChurches.keys()]);
             }
           },

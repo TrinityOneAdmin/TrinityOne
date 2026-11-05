@@ -58,7 +58,7 @@ function world({ stewarded = [ST_AIDANS], stored = null, networks = [] } = {}) {
     set: (t, k, v) => { t[k] = v; return true; },
   });
   // setActiveIdentity, lifted and stripped of the bookkeeping tail we do not model
-  let src = fnBody(V, 'setActiveIdentity(targetPub)', 'setActiveIdentity');
+  let src = fnBody(V, 'setActiveIdentity(targetPub, { persist = true } = {})', 'setActiveIdentity');
   src = src.slice(0, src.indexOf('lastProfile = {}')) + 'return true; }';
   const setActive = new Function('scope', `with (scope) { return ({ ${src} }).setActiveIdentity; }`)(proxy);
   scope.window.Steward.setActiveIdentity = (t) => { state.switched.push(t); return setActive.call(scope.window.Steward, t); };
@@ -199,7 +199,7 @@ test('END TO END: what the switch writes is what the next boot reads', () => {
       const b = String(k).replace(/\d+$/, ''); if (b in o) return o[b];
       throw new ReferenceError('needs a stub for ' + String(k)); },
     set: (o, k, v) => { o[k] = v; return true; } });
-  let wsrc = fnBody(V, 'setActiveIdentity(targetPub)', 'setActiveIdentity');
+  let wsrc = fnBody(V, 'setActiveIdentity(targetPub, { persist = true } = {})', 'setActiveIdentity');
   wsrc = wsrc.slice(0, wsrc.indexOf('lastProfile = {}')) + 'return true; }';
   const setActive = new Function('scope', `with (scope) { return ({ ${wsrc} }).setActiveIdentity; }`)(wrap(wScope));
   setActive.call({}, ST_AIDANS);

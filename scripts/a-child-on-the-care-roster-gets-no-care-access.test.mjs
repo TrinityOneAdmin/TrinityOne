@@ -580,7 +580,7 @@ test('(drop b) setActiveIdentity (shipped): switching church deletes the copy of
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null), _keyReadEpoch: 0, _careKeyVer: 0, _mediaKeyVer: 0, netKeys: () => [] });
   const dev = liftDevice({ store });
   dev.set(A, [CH.pub]); dev.set(B, [KID2.pub]);
-  const setActiveIdentity = liftIn(scope, 'setActiveIdentity(targetPub) {', 'Steward.setActiveIdentity', true);
+  const setActiveIdentity = liftIn(scope, 'setActiveIdentity(targetPub, { persist = true } = {}) {', 'Steward.setActiveIdentity', true);
   setActiveIdentity(B);
   assert.equal(scope.pub, B, 'setup: the switch did not happen');
   assert.deepEqual(copies(store), [B], 'leaving church A left its children list on the device (or the entered church’s was deleted)');

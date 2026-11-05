@@ -13736,7 +13736,14 @@ window.Steward = {
   },
   // switch the WHOLE console between the church, an owned network, or a church we steward (delegated) —
   // the active signing+reading identity. Subscriptions are keyed on activePub, so the dashboard re-renders.
-  setActiveIdentity(targetPub) {
+  setActiveIdentity(targetPub, { persist = true } = {}) {
+    // `persist` (default true, so every existing caller is UNCHANGED) decides whether this choice is
+    // written to ACTIVE_ID_KEY and therefore honoured by the next boot's `want=` restore. A deliberate
+    // switch persists; a NON-persisted call only chooses where this console shows NOW. See the auto-land
+    // in subscribeStewardedChurches, which passes { persist: false } so a device-local "own key looks
+    // blank" guess (a self-hosted own church whose kind-0 has not yet arrived on THIS device) can never
+    // park an owner in a church they merely steward — the switcher self-heals when the profile lands, and
+    // the active identity must self-heal with it rather than stay pinned by a write made on a guess.
     const tp = toPubHex(targetPub) || targetPub || churchPub;
     // REMEMBER WHICH CHURCH THIS CONSOLE IS RUNNING. Nothing persisted this, so every page refresh dropped a
     // delegated steward back into the empty church that "Help run a church" makes for them — with an invite
@@ -13763,7 +13770,7 @@ window.Steward = {
     // one click away. Leave the memory alone when stepping sideways to a network; only a deliberate switch
     // between churches changes where this console comes back to.
     const _isNetwork = !actingChurch && tp !== churchPub;
-    if (!_isNetwork) { try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {} }
+    if (!_isNetwork && persist) { try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {} }
     // DOES THIS BOX HOLD THE CHURCH WE JUST SWITCHED TO? `_boxHostsUs` is cached per church (_boxHostsKey is
     // keyed on `pub`), but only setKey ever reloaded it — so a switch carried the answer for the PREVIOUS key
     // across. For a delegated steward that answer is "no": their own key is not a church anywhere, the box
@@ -13905,8 +13912,16 @@ window.Steward = {
         // church they actually run — round 9's trap. Default into a stewarded church instead. Deterministic:
         // the first stewarded key we hold a grant for. churchPub stays the signer; this only chooses where the
         // console comes back to when nothing was remembered.
+        //
+        // NOT PERSISTED ({ persist: false }). `_ownKeyBlank()` is a DEVICE-LOCAL judgement — the own kind-0
+        // name read on THIS device and SELFREG on THIS device — so on a second device an owner restoring a
+        // self-hosted church X (whose kind-0 lives only on X's momentarily-unreachable box) while also
+        // stewarding a reachable church Y sees X look "blank" and would be landed in Y. Persisting that would
+        // write ACTIVE_ID_KEY=Y, so every later reload honours `want=Y` and the owner stays parked in Y even
+        // after X's profile arrives and the own key stops looking blank. This is a display default only: when
+        // X's kind-0 lands, the next load shows X, because nothing was pinned.
         const first = [...stewardedChurches.keys()].find(cp => !_ownedPubs.has(cp));
-        if (first) window.Steward.setActiveIdentity(first);
+        if (first) window.Steward.setActiveIdentity(first, { persist: false });
       }
     } catch (e) {}
     // WHICH RELAYS TO ASK, AND WHEN. This read used to go over relays() — the publish set, filtered by the
@@ -13972,7 +13987,21 @@ window.Steward = {
           if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { listed = ((JSON.parse(e.content).pubkeys) || []).includes(me); } catch {} }
           const had = stewardedChurches.has(cp);
           if (listed && !had) { stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp); cb([...stewardedChurches.keys()]); }
-          else if (!listed && had) { stewardedChurches.delete(cp); save(); if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub); cb([...stewardedChurches.keys()]); }
+          else if (!listed && had) {
+            stewardedChurches.delete(cp); save();
+            if (actingChurch === cp) {
+              // We were acting as this church and it just revoked us. Landing on churchPub re-shows the OWN
+              // identity — correct for a real own church, and correct when no stewarded church remains (the
+              // Stage-1 behaviour). But when the own key is still BLANK and we steward at least one OTHER
+              // church, churchPub is the hidden "set up your church" row: a blank screen with no selected row
+              // (identities() drops that row while blank-and-stewarding). Land on a remaining stewarded church
+              // instead. Not persisted, for the same device-local-blank reason as the auto-land above.
+              const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find(k => !_ownedPubs.has(k)) : '';
+              if (other) window.Steward.setActiveIdentity(other, { persist: false });
+              else window.Steward.setActiveIdentity(churchPub);
+            }
+            cb([...stewardedChurches.keys()]);
+          }
         },
         oneose() { cb([...stewardedChurches.keys()]); },
       });

@@ -35,14 +35,14 @@ const FIN = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'u
 // ratchet there, this function stops resetting it here, and the behavioural tests at the foot of this file
 // fail — which is the whole point of lifting it rather than restating it.
 const SHIPPED_RESET = (() => {
-  const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub) {', 'setActiveIdentity'));
+  const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity'));
   const line = body.match(/for \(const k of Object\.keys\(CAP_KEYS\)\) _capState\[k\] = \{[^}]*\};/);
   assert.ok(line, 're-anchor: setActiveIdentity no longer resets _capState — the D1 fix is gone');
   return new Function('CAP_KEYS', '_capState', line[0]);
 })();
 
 test('setActiveIdentity clears every capability ring', () => {
-  const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub) {', 'setActiveIdentity'));
+  const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity'));
   assert.match(body, /_capState\[k\] = \{[^}]*ring: \[\]/,
     'switching church leaves the previous church\'s capability rings in place. encSeal will seal the new ' +
     'church\'s check-in records and ledger entries with the OLD church\'s key: unreadable to the church that ' +
@@ -55,7 +55,7 @@ test('setActiveIdentity clears every capability ring', () => {
 test('and it clears the RATCHETS, not just the ring', () => {
   // The subtle half. Clearing `ring` while leaving `rev`/`at` behind is worse than useless: the new church's
   // envelope is then rejected as older, the ring stays empty, and nothing ever fills it.
-  const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub) {', 'setActiveIdentity'));
+  const body = stripComments(fnBody(SRC, 'setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity'));
   assert.match(body, /rev: 1/, 'the rev ratchet is not reset, so the new church\'s envelope is refused as older');
   assert.match(body, /at: 0/, 'the created_at ratchet is not reset, so the new church\'s envelope is refused as older');
   assert.match(body, /checked: false/,

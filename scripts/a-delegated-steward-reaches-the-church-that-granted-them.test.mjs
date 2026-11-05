@@ -141,7 +141,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
   stubs._loadBoxHosts = lift('function _loadBoxHosts() {', '_loadBoxHosts');
   const method = (anchor, name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, anchor, name)} }).${name}; }`)(scope);
   const subscribe = method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches');
-  const switchTo = method('setActiveIdentity(targetPub) {', 'setActiveIdentity');
+  const switchTo = method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
   stubs.window.Steward.setActiveIdentity = (p) => switchTo.call(stubs.window.Steward, p);
   stubs.window.Steward.subscribeStewardedChurches = (cb) => subscribe.call(stubs.window.Steward, cb);
   return {

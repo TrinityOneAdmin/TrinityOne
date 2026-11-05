@@ -412,7 +412,7 @@ test('THE DEFECT, HALF TWO: setActiveIdentity clears the stamp in its own reset 
   // `_resetChurchScopedState` too and a whole-file match would be satisfied by the copy that was already
   // there — reporting the defect as fixed while the block that actually had it was untouched. That is the
   // mis-aimed-sabotage failure this repo has a name for, in assertion form.
-  const block = fnBody(VENDOR, 'setActiveIdentity(targetPub) {', 'setActiveIdentity');
+  const block = fnBody(VENDOR, 'setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
   assert.match(block, /_ckKeysSettled = ""/,
     'setActiveIdentity does not clear the session-key read stamp. It keeps its OWN per-church reset block, ' +
     'separate from _resetChurchScopedState, and a stamp carried across an identity switch says "this ' +
