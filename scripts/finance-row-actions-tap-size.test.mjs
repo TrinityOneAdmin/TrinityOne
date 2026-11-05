@@ -59,7 +59,19 @@ test('invoice row action buttons (PDF / Mark paid / Credit note) are ≥44px', (
 
 test('bill row action buttons (Approve / Mark paid) are ≥44px', () => {
   const h = setup();
-  h.feed([...baseBook(), { id: 'bill:b1', number: 'B1', supplier: 'Gas Co', lines: [{ desc: 'Gas', account: 'other-expense', fund: 'general', amount: 3000 }], received: '2026-01-01', due: '2026-02-01', approved: null, receiveSeq: null, by: '' }]);
+  // A properly RECORDED bill: its receive entry posts an AP credit tagged to the bill (billReceiveEntry), left
+  // UNAPPROVED so the Approve control renders. A bill with no recorded receive is an orphan — our bill-truth fix
+  // hides Approve and Mark paid on it (it can never settle), so the fixture must carry a real receive or there is
+  // nothing to measure. Built through the engine (like seed() in finance-bill-remove) so the ledger is valid.
+  const b = FL.createBook({ baseCurrency: 'GBP', decimals: 2 });
+  FL.addAccount(b, { id: 'bank', code: '1000', name: 'Bank', type: 'asset' });
+  FL.addAccount(b, { id: 'other-expense', code: '5900', name: 'Other costs', type: 'expense' });
+  FL.addAccount(b, { id: FL.AP_ACCT, code: FL.AP_ACCOUNT.code, name: FL.AP_ACCOUNT.name, type: FL.AP_ACCOUNT.type });
+  const bill = { id: 'b1', number: 'B1', supplier: 'Gas Co', received: '2026-01-01', due: '2026-02-01', lines: [{ desc: 'Gas', account: 'other-expense', fund: 'general', amount: 3000 }] };
+  const rcv = FL.post(b, FL.billReceiveEntry(bill));
+  const docs = toItems(FL.bookToDocs(b));
+  docs.push({ t: 'bill', id: 'bill:b1', number: bill.number, supplier: bill.supplier, lines: bill.lines, received: bill.received, due: bill.due, approved: null, receiveSeq: rcv.seq, by: '' });
+  h.feed(docs);
   gotoTab(h, 'bills');
   big(byTitle(h.tree, 'Approve this bill so it can be paid (finance stewards only)'), 'Approve');
 });

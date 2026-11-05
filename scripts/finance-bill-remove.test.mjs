@@ -176,14 +176,19 @@ test('a stale bill (tagged payment, untagged receive) reads negative outstanding
   assert.doesNotMatch(h.bankFigure(), /95/, 'removing the stale bill reverses its tagged payment and restores the bank');
 });
 
-test('openPay never pre-fills a negative amount on a stale bill (Mark paid is not dead-locked)', () => {
+test('a stale orphan bill (no recorded receive) is not offered Mark paid — it badges "no entry" and points to Remove + re-record', () => {
+  // Our bill-truth fix (src/finance-bill.mjs billsNeedingEntry + the stew-finance orphan branch) makes the old
+  // dead-lock UNREACHABLE: a bill with a tagged payment but NO tagged receive has no AP credit, so it can never
+  // net to paid. The screen must not offer "Mark paid" (which would report a success it cannot deliver, CLAUDE.md
+  // #4) — and openPay's negative-prefill branch is now dead, because no non-paid, non-orphan bill reaches it.
   const h = setup(); h.draw();
   h.feedItems(seedStale()); h.goTab('bills');
-  assert.notEqual((h.statusNode() || {}).props['data-bill-status'], 'paid', 'the stale bill reads unpaid, so Mark paid is offered');
-  h.click('Mark paid');
-  const dlg = h.payDialogEl();
-  assert.ok(dlg, 'Mark paid opens the payment dialog');
-  assert.ok(dlg.props.amount0 > 0, 'the pre-filled amount must be POSITIVE (falls back to the bill total), not the negative outstanding');
+  assert.equal((h.statusNode() || {}).props['data-bill-status'], 'no-entry', 'a bill with no recorded receive entry must badge "no entry", never "paid" or any settleable status');
+  assert.ok(!h.button('Mark paid'), 'Mark paid must NOT be offered for an unrecordable orphan bill — there is no button to dead-lock, and none that can falsely report success');
+  assert.ok(!h.button('Approve'), 'Approve must NOT be offered either — an orphan cannot be settled by approving it');
+  const note = h.all().find(n => n.props && n.props['data-bill-unrecorded']);
+  assert.ok(note, 'the row must show the "Remove and re-record" guidance so the steward is pointed at the real path');
+  assert.ok(h.button('Remove'), 'Remove stays available as the real way to clear the stale bill');
 });
 
 // ── the DIALOG CONTENTS ──────────────────────────────────────────────────────────────────────────────────────
