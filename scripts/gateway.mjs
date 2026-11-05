@@ -20,7 +20,7 @@ import { openStore, matchFilter } from './event-store.mjs';
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
 // so an undeclared name throws before this relay serves a request. POLICY stays in accept()/canRead().
 import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, plus the one NARROWING list (see memberDocTypeOk)
-import { buildCalendar, publicEventFields } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
+import { buildCalendar, publicEventFields, PUB_IMG_MAX } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
 import { buildWidgetScript } from './public-widget.mjs';   // the embeddable calendar widget (pure: same script for every church)
 import { buildVersePage } from './public-verse.mjs';       // standalone verse page for public sharing (pure: no I/O, no store)
 import { buildSermonFeed, publicSermonFields, buildPlansFeed, publicPlanFields, buildDevosFeed, publicDevoFields } from './public-media.mjs';   // the church's PUBLIC sermon podcast feed (pure: no I/O, no policy)
@@ -6287,12 +6287,15 @@ function _gzipBuf(body) { try { return gzipSync(body, { level: 6 }); } catch { r
 // cookie of any kind, CORS open (a website builder's script may fetch it cross-origin; that is the use).
 const PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 // The widget's own CSP is the same no-source policy plus 'self' on script-src, so the ONE script tag it is
-// loaded as may run, and nothing else may load — no CDN, no font, no image, matching the file's own promise
-// (public-widget.mjs's module comment, design/widget-mock/README.md's "no-third-party rule").
-const WIDGET_CSP = "default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+// loaded as may run, and nothing else may load — no CDN, no font. img-src is 'self' data: ONLY (calendar-pilot
+// item 3b, owner go-ahead to show event cover images on the public widget): the capped cover photos are
+// same-origin data: URIs, so this admits them WITHOUT opening any external/third-party host — no https:, no CDN.
+// The no-third-party rule is otherwise intact (public-widget.mjs's module comment, design/widget-mock/README.md).
+const WIDGET_CSP = "default-src 'none'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const PUBLIC_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/(?:calendar\.ics|e\/([A-Za-z0-9_-]{1,64})\.ics)$/;
 const WIDGET_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget\.js$/;
 const WIDGET_PREVIEW_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget-preview$/;
+const EVENT_IMAGES_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/event-images\.json$/;
 const SERMON_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/sermons\.xml$/;
 const PLANS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/plans\.json$/;
 const DEVOS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/devotionals\.json$/;
@@ -6348,6 +6351,39 @@ function publicFeed(req, res, route) {
       'Cache-Control': 'no-store', 'X-Frame-Options': 'SAMEORIGIN', ...SEC_HEADERS,
     });
     res.end(req.method === 'HEAD' ? undefined : wpBody);
+    return;
+  }
+  // EVENT IMAGES — /public/<npub>/event-images.json. The embeddable widget's SECOND same-origin fetch
+  // (calendar-pilot-2026-11-05 item 3b, owner go-ahead to show event cover images on the public widget).
+  // The .ics itself stays IMAGE-FREE by design — a data: URI must never bloat a calendar subscription — so the
+  // widget, after it has the events from calendar.ics, reads the cover photo + focal point from HERE instead,
+  // as a small JSON map { <eventId>: { image, imgPos, imgZoom } }. SAME GATE as the calendar feed: the church
+  // must exist, the calendar switch must be on, and an opted-out event is absent (it exposes no image either).
+  // Built from the PUBEVENTS map the relay already holds (publicEventFields already size-caps each image; the
+  // cap is re-checked here as a defensive backstop). No store read, no other machine dialled — CLAUDE.md rule 10.
+  const ef = EVENT_IMAGES_ROUTE.exec(route);
+  if (ef) {
+    const ecp = toHexPub(ef[1]);
+    if (!ecp || !CHURCH_PUBS.has(ecp)) return notFound();
+    const eshare = SHARE_BY.get(ecp);
+    if (!eshare || !eshare.calendar) return notFound();       // same switch as calendar.ics — off reads as 404
+    const emap = PUBEVENTS.get(ecp);
+    const out = {};
+    if (emap) {
+      for (const ev of emap.values()) {
+        if (eshare.optOut && eshare.optOut.has(ev.id)) continue;   // an opted-out event is absent from the feed AND its image
+        const img = (typeof ev.image === 'string' && ev.image.length <= PUB_IMG_MAX && /^data:image\//.test(ev.image)) ? ev.image : '';
+        if (!img) continue;                                   // only events that carry a capped image appear in the map
+        out[ev.id] = { image: img, imgPos: ev.imgPos || null, imgZoom: (typeof ev.imgZoom === 'number' ? ev.imgZoom : 1) };
+      }
+    }
+    const ebody = Buffer.from(JSON.stringify(out), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8', 'Content-Length': ebody.length,
+      'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': PUBLIC_CSP,
+      'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : ebody);
     return;
   }
   // SERMON PODCAST FEED — /public/<npub>/sermons.xml. Same gate as the calendar: the church must exist

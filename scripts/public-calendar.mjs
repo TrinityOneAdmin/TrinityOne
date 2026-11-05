@@ -94,7 +94,7 @@ const NTH_OK = (n) => Number.isInteger(n) && ((n >= 1 && n <= 5) || n === -1);
 // DTSTART/RRULE — it never serialises these, by construction — so a data: URI never bloats a calendar
 // subscription (the decision for item 3: honour the image on the public PAGE, keep the .ics feed lean). A
 // consumer that wants the image reads it from the per-church map the relay already holds, not from the feed.
-const PUB_IMG_MAX = 100000;   // ~100 KB defensive backstop; above the console's own ~60 KB cap, still refuses a big blob
+export const PUB_IMG_MAX = 100000;   // ~100 KB defensive backstop; above the console's own ~60 KB cap, still refuses a big blob
 // PER-OCCURRENCE EXCEPTIONS on a repeating event (calendar-pilot-2026-11-05, items 2+4): a map keyed by an
 // occurrence's canonical ISO date -> { skip:true } (a one-week break) or { date:'<newIso>' } (that week moved).
 // Re-validated and bounded here the way the console's _evExceptions does on the way in, because this module is
