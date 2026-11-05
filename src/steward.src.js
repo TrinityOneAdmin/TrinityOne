@@ -7642,7 +7642,14 @@ window.Steward = {
       // — both while this session watches and on a later reopen (device-found 2026-11-05). Recorded only on a
       // request that actually went out (truthy publish), so a request nobody received leaves nothing pending.
       // subscribeStewardedChurches reads and clears it. A guess never writes this; only this scan/paste action.
-      .then((ok) => { if (ok) { try { localStorage.setItem(PENDING_CHURCH_KEY, cp); } catch (e) {} } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
+      // AND REMEMBER THAT WE ASKED THIS CHURCH — a durable set, scoped to our own key, read in the grant path
+      // (subscribeStewardedChurches) to retract this very request the moment the owner approves it, so the
+      // request cannot resurface on their console after they later remove us (device-found 2026-11-05). Scoped
+      // by churchPub, the signer of this request, which is `me` in that read. Written only on a truthy publish,
+      // the same gate as PENDING_CHURCH_KEY, so a request nobody received records nothing to retract.
+      .then((ok) => { if (ok) { try { localStorage.setItem(PENDING_CHURCH_KEY, cp); } catch (e) {}
+          try { const RK = 'trinityone.steward.requested.' + (churchPub || ''); let a = []; try { a = JSON.parse(localStorage.getItem(RK) || '[]') || []; } catch (e) { a = []; } if (!Array.isArray(a)) a = []; if (!a.includes(cp)) { a.push(cp); localStorage.setItem(RK, JSON.stringify(a)); } } catch (e) {}
+        } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
   },
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
@@ -14011,6 +14018,27 @@ window.Steward = {
           const had = stewardedChurches.has(cp);
           if (listed && !had) {
             stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp);
+            // RETRACT OUR OWN REQUEST so the owner's console can never show it again after they later remove us.
+            // Device-found 2026-11-05 (helper-delegation): a removed helper's STEWARDREQ, never consumed on
+            // approval, resurfaced under "Requests to help" the moment `!stewardSet.has` turned true again. The
+            // request is the requester's OWN replaceable 30078 (gateway.mjs:4847 lets its author replace it), so
+            // when the grant lands we tombstone it: a deleted+empty copy at the SAME d-tag, which
+            // subscribeStewardRequests reads as a retract (its STEWARDREQ_D detection: a `deleted` tag OR empty
+            // content -> byPub.delete). Signed with churchSk, our OWN key — the author of the request the owner
+            // approved is churchPub (= me, listed above), never the acting `sk`, which may be a network key.
+            // Only for a church WE actually asked to join (the requested set written by requestSteward), so no
+            // spurious tombstone is ever published, and cp is dropped from that set so this fires at most once.
+            // The `t`/NET tag is REQUIRED: the owner's request feed filters on `#t`, so a tombstone without it
+            // would never reach them (subscribeStewardRequests: `#t': [NET]`).
+            try {
+              const RK = 'trinityone.steward.requested.' + (me || '');
+              let reqd = [];
+              try { reqd = JSON.parse(localStorage.getItem(RK) || '[]') || []; } catch (e) { reqd = []; }
+              if (Array.isArray(reqd) && reqd.includes(cp)) {
+                publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp], ['deleted']], content: '' }), churchSk));
+                try { localStorage.setItem(RK, JSON.stringify(reqd.filter(x => x !== cp))); } catch (e) {}
+              }
+            } catch (e) {}
             // THE GRANT LANDED WHILE WE WATCH. If this is the church this console asked to join (pending set by
             // requestSteward), OPEN it now instead of leaving the helper to hunt for the switcher (device-found
             // 2026-11-05). PERSISTED, because it is the church the user deliberately joined. Cleared so a later

@@ -10872,6 +10872,17 @@ function DashStewardsPanel({ church }) {
   const [confirmRemove, setConfirmRemove] = React.useState(null);
   const requests = window.usePendingStewards ? window.usePendingStewards() : [];   // would-be stewards awaiting approval
   const [dismissed, setDismissed] = React.useState({});
+  // DURABLE BACKSTOP for a request that the helper never retracts (Part 2, device-found 2026-11-05). A helper's
+  // STEWARDREQ lives on the relay until its author tombstones it; the engine now retracts it when the grant
+  // lands, but if that console never reopens to do so, the stale request reappears here the moment an
+  // approved-then-removed person drops off `stewardSet`. `dismissed` (the manual X) is in-memory and resets on
+  // reload, so it cannot hold the line. This set remembers every pubkey the owner has APPROVED or REMOVED and
+  // keeps it out of `pending` for good — persisted, and SCOPED PER CHURCH (ownerPub) so one church's handled
+  // set never hides another's requests. Read once on mount; a remount re-reads it, which is what makes it
+  // survive a reload. Every read/write is wrapped: a private window or blocked storage must not crash the panel.
+  const handledKey = 'trinityone.steward.handledreqs.' + (ownerPub || '');
+  const [handled, setHandled] = React.useState(() => { try { return JSON.parse(window.localStorage.getItem(handledKey) || '{}') || {}; } catch (e) { return {}; } });
+  const markHandled = (pk) => { if (!pk) return; setHandled(h => { if (h[pk]) return h; const n = { ...h, [pk]: 1 }; try { window.localStorage.setItem(handledKey, JSON.stringify(n)); } catch (e) {} return n; }); };
   const [inviteQR, setInviteQR] = React.useState(false);
   const [copiedInvite, setCopiedInvite] = React.useState(false);
   const [approving, setApproving] = React.useState(null);   // pubkey awaiting PIN confirm
@@ -10935,6 +10946,7 @@ function DashStewardsPanel({ church }) {
   const PRESETS = (window.Steward.stewardPresets && window.Steward.stewardPresets()) || [];
   const hasPin = !!(window.Steward.hasPinLock && window.Steward.hasPinLock());
   const add = (pk, label, grants) => { setAdding(false); setScanning(false); setQ(''); setCode(''); setAddErr(''); setApproving(null);
+    markHandled(pk);   // approved: this request is answered and must never re-surface, even after a later removal
     const nextNames = { ...labels }; if (label && label.trim()) nextNames[pk] = label.trim();
     // An explicit grant, always — including the explicit empty one. Leaving them out of `caps` would mean
     // "unscoped", which is the everything-by-accident this exists to remove.
@@ -10964,7 +10976,7 @@ function DashStewardsPanel({ church }) {
     }
     add(approving, approveName, approveGrants());
   };
-  const pending = requests.filter(r => !dismissed[r.pubkey] && !stewardSet.has(r.pubkey) && r.pubkey !== ownerPub);
+  const pending = requests.filter(r => !dismissed[r.pubkey] && !handled[r.pubkey] && !stewardSet.has(r.pubkey) && r.pubkey !== ownerPub);
   // REMOVING A DELEGATE RE-KEYS THE CHURCH (sim finding 5). This used to write the shorter roster and stop: the
   // relay stopped honouring their writes, but they kept every key already wrapped to them — care, names, sermons
   // and every encrypted room — and the next list refresh could not take them away, because those keys only ever
@@ -10976,6 +10988,7 @@ function DashStewardsPanel({ church }) {
   const spKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
   const remove = (pk) => {
     setConfirmRemove(null); setRemoveNote(null);
+    markHandled(pk);   // removed: keep their (never-consumed) old request out of "Requests to help" for good
     const next = stewards.filter(p => p !== pk);
     const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
     let wrote;

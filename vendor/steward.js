@@ -20882,6 +20882,21 @@ zoo`.split("\n");
             localStorage.setItem(PENDING_CHURCH_KEY, cp);
           } catch (e) {
           }
+          try {
+            const RK = "trinityone.steward.requested." + (churchPub || "");
+            let a = [];
+            try {
+              a = JSON.parse(localStorage.getItem(RK) || "[]") || [];
+            } catch (e) {
+              a = [];
+            }
+            if (!Array.isArray(a)) a = [];
+            if (!a.includes(cp)) {
+              a.push(cp);
+              localStorage.setItem(RK, JSON.stringify(a));
+            }
+          } catch (e) {
+          }
         }
         return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null;
       });
@@ -27320,6 +27335,23 @@ zoo`.split("\n");
               stewardedChurches.set(cp, { name: "Church" });
               save();
               resolveName(cp);
+              try {
+                const RK = "trinityone.steward.requested." + (me || "");
+                let reqd = [];
+                try {
+                  reqd = JSON.parse(localStorage.getItem(RK) || "[]") || [];
+                } catch (e2) {
+                  reqd = [];
+                }
+                if (Array.isArray(reqd) && reqd.includes(cp)) {
+                  publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp], ["deleted"]], content: "" }), churchSk));
+                  try {
+                    localStorage.setItem(RK, JSON.stringify(reqd.filter((x) => x !== cp)));
+                  } catch (e2) {
+                  }
+                }
+              } catch (e2) {
+              }
               try {
                 if ((localStorage.getItem(PENDING_CHURCH_KEY) || "") === cp && cp !== churchPub && !_ownedPubs.has(cp)) {
                   cb([...stewardedChurches.keys()]);
