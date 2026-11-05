@@ -17,7 +17,7 @@ const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), '
 const PUB = 'c'.repeat(64), AUTHOR = 'a'.repeat(64), OTHER = 'b'.repeat(64);
 
 async function post(args, { skeys = {} } = {}) {
-  const body = fnBody(STEWARD, 'publishPost(content, group, replyTo, extraTags = []) {', 'publishPost');
+  const body = fnBody(STEWARD, 'publishPost(content, group, replyTo, opts) {', 'publishPost');
   let published = null;
   const scope = { sk: new Uint8Array(32).fill(1), _skeys: skeys, _sealedGroupIds: new Set(), publish: (e) => { published = e; return Promise.resolve(e); },
     feChurch: (e) => e, now: () => 1000, NET: 'net', pub: PUB, encrypt2: (t) => 'SEALED:' + t, Promise, console };

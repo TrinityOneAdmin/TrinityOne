@@ -54,8 +54,18 @@ function setup() {
   const button = (label) => all().find(n => n.type === 'button' && (n.kids || []).some(k => typeof k === 'string' && k.includes(label)));
   const comp = (name) => all().find(n => typeof n.type === 'function' && n.type.name === name);
   const click = (label) => { const b = button(label); assert.ok(b, 're-anchor: no button labelled "' + label + '"'); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); draw(); };
-  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
   const feed = (docs) => { assert.ok(encSubCb, 'encSubscribe was not wired'); encSubCb(toItems(docs)); draw(); };
+  // DashFinanceBook now shows a preloader (bookLoading) until the finance subscription's FIRST delivery lands
+  // (app/stew-finance.jsx: `if (bookLoading) return (…)`), and only the loaded view renders the FinTabStrip. If a
+  // test reaches for the tab strip before feeding anything, reveal the book with an empty-book delivery (a
+  // settings doc is present, so the loader clears without taking the seed/republish path and `pub` stays clean).
+  const reveal = () => { if (encSubCb) feed(FL.bookToDocs(FL.createBook({ baseCurrency: 'GBP', decimals: 2 }))); };
+  const goTab = (key) => {
+    let s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip');
+    if (!s) { reveal(); s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); }
+    if (!s) throw new Error('re-anchor: FinTabStrip not rendered');
+    s.props.setTab(key); draw();
+  };
   return { fr, pub, mods, draw, all, button, comp, click, goTab, feed, get tree() { return tree; } };
 }
 

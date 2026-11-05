@@ -253,7 +253,7 @@ function overview(list) {
   const globals = {
     React, window: win, console, CustomEvent: class {},
     useStewNarrow: () => false, useRealMemberCount: () => 0, stewCapState: () => ({ allowed: true }),
-    groupLiveSub: () => '', ago: () => '', SK_TINT: {},
+    groupLiveSub: () => '', ago: () => '', SK_TINT: {}, clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
   };
   const scope = new Proxy(globals, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),

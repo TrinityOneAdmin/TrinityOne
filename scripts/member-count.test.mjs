@@ -12,6 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 
@@ -19,7 +20,9 @@ const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url),
 function realRule() {
   const at = DASH.indexOf('function useRealMemberCount()');
   assert.notEqual(at, -1, 'useRealMemberCount is gone — the count rule has no single home again');
-  const m = DASH.slice(at, at + 1400).match(/return members\.filter\(m =>([\s\S]*?)\)\.length;/);
+  // fnBody() reads to the function's real closing brace rather than a fixed window: useRealMemberCount grew
+  // past the old 1400-char slice (now 1432), which truncated the body and defeated the match. (test-windows.)
+  const m = fnBody(DASH, at, 'useRealMemberCount').match(/return members\.filter\(m =>([\s\S]*?)\)\.length;/);
   assert.ok(m, 'could not find the filter expression');
   return new Function('members', 'blockedSet', 'admittedSet', 'joinApproval', 'rosterLoaded',
     `return members.filter(m => ${m[1]}).length;`);

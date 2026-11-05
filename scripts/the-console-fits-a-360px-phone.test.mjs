@@ -283,9 +283,21 @@ test('the same cards are not truncated on a desktop console', { skip: !CHROME ? 
       assert.deepEqual(off, [], `at ${w}px these are laid out past the right edge: ` + JSON.stringify(off));
     }
   } finally {
-    // hand the phone back to whatever runs next
+    // hand the phone back to whatever runs next, and WAIT for the console to register as narrow again — the
+    // phone header (☰, Invite code) only renders when the resize listener's `vw` state has fallen back under
+    // 760. A fixed sleep lost that race here once the dashboard grew heavier; poll for the ☰ instead.
+    // ⚠ CLEAR THE OVERRIDE BEFORE RE-APPLYING IT. Going desktop (mobile:false) → phone (mobile:true) by a
+    // second setDeviceMetricsOverride does NOT reset the layout viewport in this Chromium: the phone metrics
+    // come back as innerWidth 766, so the console stays in its WIDE layout (narrow = vw < 760 is false) and
+    // the ☰ / Invite-code header the rows below reach for is never rendered. Clearing first, then applying the
+    // handset metrics, reproduces the 360px the before() hook established, which this re-asserts.
+    await send('Emulation.clearDeviceMetricsOverride');
+    await sleep(200);
     await send('Emulation.setDeviceMetricsOverride', { width: VW, height: VH, deviceScaleFactor: 2, mobile: true });
-    await sleep(1200);
+    await evalIn(`window.dispatchEvent(new Event('resize'))`);
+    await sleep(1500);
+    const iw = await evalIn('innerWidth');
+    assert.equal(iw, VW, `the phone viewport was not restored after the desktop measurements (innerWidth ${iw}); the rows below would run against the wide layout`);
   }
 });
 
@@ -304,7 +316,7 @@ test('the same cards are not truncated on a desktop console', { skip: !CHROME ? 
 //   3. the dialog's bottom is REACHABLE — either on screen, or brought there by scrolling the backdrop. The
 //      clipped part held Cancel and the save button, so on a phone the steward could not finish the job.
 const OPEN = {
-  'Invite code': `(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('title')||'').startsWith('Show your church’s joining code')); if(!b) return 'miss'; b.click(); return 'ok'; })()`,
+  'Invite code': `(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('title')||'').startsWith("Show your church's joining code")); if(!b) return 'miss'; b.click(); return 'ok'; })()`,
   'New post': `(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('title')||'')==='Write a new post for your church'); if(!b) return 'miss'; b.click(); return 'ok'; })()`,
   'New team': `(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('title')||'')==='Create a new serving team'); if(!b) return 'miss'; b.click(); return 'ok'; })()`,
   'Group categories': `(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim()==='Categories'); if(!b) return 'miss'; b.click(); return 'ok'; })()`,

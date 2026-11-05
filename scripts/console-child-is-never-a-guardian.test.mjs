@@ -64,7 +64,7 @@ const furniture = () => ({
   StewHelpLink: (p) => (p && p.label) || null,
   // useStewNarrow joined DashMembers on 2026-09-20 (P12: the member card is one row on a phone, with its
   // actions behind ⋯). `false` here is the desktop row — the card these tests were written against.
-  useStewNarrow: () => false,
+  useStewNarrow: () => false, clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
   useStewDialog: () => ({ current: null }), todayISO: () => '2026-09-07', stewCapState: () => ({ allowed: true }),
 });
 
@@ -94,7 +94,7 @@ async function membersPanel({ minors, guardians, requests = [], checkinCleared =
       addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
     },
   };
-  const mod = await loadSlices([['function DashMembers()', 'DashMembers']], ['DashMembers'], g);
+  const mod = await loadSlices([['function DashMembers(', 'DashMembers']], ['DashMembers'], g);
   let tree = draw(mod.DashMembers, {});
   const redraw = () => { tree = draw(mod.DashMembers, {}); return tree; };
   const btn = (re) => find(tree, n => n.type === 'button' && n.props && re.test(String(n.props['aria-label'] || '') + ' ' + texts(n).join(' ')));
@@ -187,7 +187,7 @@ async function checkin({ minors, guardians, present }) {
       useStewardIdv: () => 1, useStewardConn: () => 1,
       addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
     },
-    useStewNarrow: () => false,
+    useStewNarrow: () => false, clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
     // The clearances panel is now DashCheckin's sibling on the same page. Stubbed rather than sliced in:
     // this file is about who is printed as a pickup contact, and that panel prints nobody.
     CheckinClearances: () => null,

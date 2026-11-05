@@ -497,10 +497,10 @@ const DIALOGS = [
       await sleep(1000);
     }, close: escape },
   { name: 'JoinModal (Invite your church)', labels: ['Done'],
-    open: async () => { await pressButton(`(x.getAttribute('title')||'').startsWith('Show your church’s joining code')`, 'Invite your church'); }, close: escape },
+    open: async () => { await pressButton(`(x.getAttribute('title')||'').startsWith("Show your church's joining code")`, 'Invite your church'); }, close: escape },
   { name: 'InvitePosterModal (Invite poster)', labels: ['Done', 'Save PDF', 'Print'],
     open: async () => {
-      await pressButton(`(x.getAttribute('title')||'').startsWith('Show your church’s joining code')`, 'Invite your church');
+      await pressButton(`(x.getAttribute('title')||'').startsWith("Show your church's joining code")`, 'Invite your church');
       await pressButton(`(x.getAttribute('title')||'').startsWith('Show the invite poster')`, 'Invite poster');
     }, close: async () => { await escape(); await sleep(600); await escape(); } },
   { name: 'StewBackupModal (Back up your church)', labels: ['Cancel', 'Download encrypted backup'],

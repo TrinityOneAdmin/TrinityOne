@@ -267,7 +267,7 @@ async function membersPage({ delegated, rotateMedia, nameResult = null, engineOp
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
-  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers')
+  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers(', 'DashMembers')
     // + the shared approved-members filter Block rotates to (round 3a, HIGH 1) — compiled in, not stubbed
     + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n')
     + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
@@ -289,7 +289,7 @@ async function membersPage({ delegated, rotateMedia, nameResult = null, engineOp
                sage: { bg: 'var(--sage-soft)', fg: '#345c41' }, ink: { bg: 'var(--surface-2)', fg: 'var(--ink-2)' } },
     DismissibleNote: (p) => (p && p.children) || null,
     StewHelpLink: (p) => (p && p.label) || null,
-    useStewNarrow: () => false,
+    useStewNarrow: () => false, clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
     Icon: (p) => (p && p.children) || null,
     copyText: () => {},
     // DashMembers' siblings in the same classic script. A name it needs and this list does not have is a

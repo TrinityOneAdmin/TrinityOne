@@ -263,6 +263,7 @@ function renderOverview({ needs, slots, careOn = true, allowed = true }) {
       if (s === 'stewCapState') return () => ({ allowed });
       if (s === 'useStewNarrow') return () => true;
       if (s === 'useRealMemberCount') return () => 0;
+      if (s === 'clearanceExpiryCounts') return () => ({ expiring: 0, expired: 0 });
       if (s === 'Icon' || /^[A-Z]/.test(s)) return function Stub() { return null; };
       if (/^use[A-Z]/.test(s)) return () => [];
       throw new ReferenceError('needs a stub for ' + s);

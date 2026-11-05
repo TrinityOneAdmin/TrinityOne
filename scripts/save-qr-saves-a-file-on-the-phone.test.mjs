@@ -31,7 +31,12 @@ const JOIN_URL = 'https://console.example/?follow=npub1abc&relay=' + encodeURICo
 // `filesystem`: 'ok' (writes land) | 'refused' (every write throws) | absent (no Filesystem plugin at all).
 function console_({ native = true, filesystem = 'ok', share = true } = {}) {
   const { React, reset, flush, fresh, unmount } = fakeReact();
-  const Steward = fakeSteward({ npub: 'npub1abc', qrSVG: (t) => '<svg>' + t + '</svg>', joinUrl: () => JOIN_URL, joinLinkIsPrivate: () => false, isSelfHosted: () => false });
+  // DashFinanceBook now holds a preloader (bookLoading) until the finance subscription's first delivery lands,
+  // and only the loaded view renders Export CSV. Give encSubscribe a one-shot empty delivery so the loader
+  // clears on mount (an empty book still shows the Transactions tab, where Export CSV lives); the catch-all
+  // Proxy would otherwise make encSubscribe a no-op and the book would never reveal.
+  const Steward = fakeSteward({ npub: 'npub1abc', qrSVG: (t) => '<svg>' + t + '</svg>', joinUrl: () => JOIN_URL, joinLinkIsPrivate: () => false, isSelfHosted: () => false,
+    relayAuthed: () => true, encSubscribe: (_p, cb) => { cb([], true); return () => {}; } });
   const { window, document } = fakeBrowser({ Steward });
   const writes = [], shares = [], anchors = [];
   if (native) {
@@ -183,7 +188,8 @@ test('on the phone, Finance → "Export CSV" writes one .csv to Documents and sh
   const { DashFinanceBook } = c.mods;
   let tree;
   const draw = () => { c.reset(); tree = DashFinanceBook(); c.flush(); return tree; };
-  draw();
+  draw();   // mount: the subscription effect fires the first delivery, clearing the bookLoading preloader…
+  draw();   // …and this paint is the revealed book
   const btn = c.button(tree, 'Export CSV');
   assert.ok(btn, 're-anchor: no "Export CSV" button on the finance screen');
   btn.props.onClick();
@@ -232,7 +238,8 @@ test('on the phone, the statement dialog’s "Download" (HTML fallback, no jsPDF
 test('in a browser, "Export CSV" is still a download: one anchor with a .csv download name is clicked', async () => {
   const c = console_({ native: false });
   const { DashFinanceBook } = c.mods;
-  c.reset(); const tree = DashFinanceBook(); c.flush();
+  c.reset(); DashFinanceBook(); c.flush();          // mount: first delivery clears the bookLoading preloader…
+  c.reset(); const tree = DashFinanceBook(); c.flush();   // …and this paint is the revealed book
   c.button(tree, 'Export CSV').props.onClick();
   await c.settle(() => c.anchors.some(a => a.clicked));
   const clicked = c.anchors.filter(a => a.clicked);

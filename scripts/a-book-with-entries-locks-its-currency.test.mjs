@@ -43,7 +43,24 @@ async function mountBook() {
   let tree;
   const draw = () => { reset(); tree = mods.DashFinanceBook(); flush(); return tree; };
   const all = () => nodes(tree);
-  const goTab = (key) => { const s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); if (!s) throw new Error('re-anchor: FinTabStrip not rendered'); s.props.setTab(key); draw(); };
+  // DashFinanceBook now shows a preloader (bookLoading) until the finance subscription's FIRST delivery lands
+  // (app/stew-finance.jsx: `if (bookLoading) return (…)`), and only the loaded view renders the FinTabStrip. So
+  // reveal the book with an empty-book delivery (settings doc present → the loader clears without taking the
+  // seed/republish path, so `pubs` stays clean) before reaching for the tab strip. Tests that want entries
+  // deliver them afterwards; this only clears the loader.
+  const reveal = () => {
+    const F = window.FinanceLedger;
+    if (!encSubCb || !F) return;
+    const docs = F.bookToDocs(F.createBook({ baseCurrency: 'GBP', decimals: 2 })).map(d =>
+      d.t === 'settings' ? { ...d, id: 'settings' } : d.t === 'account' ? { ...d, id: 'account:' + d.id } : d.t === 'fund' ? { ...d, id: 'fund:' + d.id } : d);
+    encSubCb(docs); draw();
+  };
+  const goTab = (key) => {
+    let s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip');
+    if (!s) { reveal(); s = all().find(n => typeof n.type === 'function' && n.type.name === 'FinTabStrip'); }
+    if (!s) throw new Error('re-anchor: FinTabStrip not rendered');
+    s.props.setTab(key); draw();
+  };
   const selectByLabel = (label) => all().find(n => n.type === 'select' && n.props && n.props['aria-label'] === label);
   const button = (label) => all().find(n => n.type === 'button' && (n.kids || []).some(k => typeof k === 'string' && k.includes(label)));
   const hasText = (t) => all().some(n => (n.kids || []).some(k => typeof k === 'string' && k.includes(t)));

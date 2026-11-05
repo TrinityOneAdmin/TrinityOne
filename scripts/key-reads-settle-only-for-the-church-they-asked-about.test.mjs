@@ -98,6 +98,7 @@ function engine() {
     _capState: { finance: { ring: [], docKeys: null, rev: 1, at: 0, checked: false } },
     churchSkHeld: () => !!t.churchSk, _capAllows: () => () => true, _warnUnsealed() {}, _sealEachFailed: [], _legacyBookKeyHex: () => '', _capRingChanged() {},
     _checkinMigrated: '', _ckKeysSettled: '', _ckSessionKeys: new Map(), _latestGuardNotice: new Map(), npubEncode: (p) => 'npub' + p, _minorsLastClear: () => {},
+    _sgClearClear: () => {}, _finBookClear: () => {}, _seedSweep: () => {},   // the other sealed device caches _resetChurchScopedState clears beside the children list (2026-11-04); not what this file reads
     _clearedTrail: null, _authedRelays: new Map(), _authAccepted: new Map(),   // …and what _resetChurchScopedState touches
     // …and setKey (a church unlocked, or the console reloaded): the seed words stand for a church here; the bundle's
     // own name for getPublicKey is read off the shipped body, not guessed
@@ -1472,8 +1473,8 @@ test('LOW 3: the kept care/sermon envelopes are cleared by a key restore, and by
   { const e = await seeded(); assert.equal(e.S.setActiveIdentity(A.pub), true); assert.equal(keep(e).length, 1, 'a church SWITCH threw away the kept envelope — round 3c\'s protection gone on every switch'); }
   { const e = await seeded(); e.t.__resetChurchScopedState(); assert.equal(keep(e).length, 0, 'A KEY RESTORE LEFT THE KEPT ENVELOPES (the church\'s recipient list) ON THE DEVICE'); assert.equal(e.t.localStorage.getItem('trinityone.steward.other'), 'x', 'the reset cleared an unrelated entry'); }
   { const e = await seeded();
-    const removeKey = new Function('localStorage', 'KEY_LS', 'encBlobRemove', '_stay', '_minorsLastClear', 'window', 'CustomEvent',
-      'return ({ ' + fnBody(BUNDLE, BUNDLE.indexOf('    removeKey() {') + 4, 'removeKey() {') + ' });')(e.t.localStorage, 'k', async () => true, { clear() {} }, () => {}, { Steward: {}, dispatchEvent() {} }, class {});
+    const removeKey = new Function('localStorage', 'KEY_LS', 'encBlobRemove', '_stay', '_minorsLastClear', '_sgClearClear', '_finBookClear', '_seedSweep', 'window', 'CustomEvent',
+      'return ({ ' + fnBody(BUNDLE, BUNDLE.indexOf('    removeKey() {') + 4, 'removeKey() {') + ' });')(e.t.localStorage, 'k', async () => true, { clear() {} }, () => {}, () => {}, () => {}, () => {}, { Steward: {}, dispatchEvent() {} }, class {});
     await removeKey.removeKey();
     assert.equal(keep(e).length, 0, 'REMOVING THE KEY LEFT THE KEPT ENVELOPES (the church\'s recipient list) ON THE DEVICE');
     assert.equal(e.t.localStorage.getItem('trinityone.steward.other'), 'x', 'removeKey cleared an unrelated entry'); }

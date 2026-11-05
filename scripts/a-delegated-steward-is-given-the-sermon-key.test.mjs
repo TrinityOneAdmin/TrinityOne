@@ -341,7 +341,7 @@ async function blockOnMembersPage() {
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
-  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers')
+  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers(', 'DashMembers')
     + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n') + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared filter Block rotates to (round 3a)
   const tmp = join(tmpdir(), 'dm-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
@@ -358,7 +358,7 @@ async function blockOnMembersPage() {
     SK_TINT: { clay: { bg: '', fg: '' }, gold: { bg: '', fg: '' }, sage: { bg: '', fg: '' }, ink: { bg: '', fg: '' } },
     DismissibleNote: (p) => (p && p.children) || null,
     StewHelpLink: (p) => (p && p.label) || null,
-    useStewNarrow: () => false,
+    useStewNarrow: () => false, clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
     Icon: (p) => (p && p.children) || null,
     copyText: () => {},
     nameHandle: (m) => (m && m.nip05 ? String(m.nip05).split('@')[0] : ''),
