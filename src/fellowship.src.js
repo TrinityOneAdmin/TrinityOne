@@ -2681,6 +2681,26 @@ function _groupEventTrusted(cp, gid, by) {
   return policy === 'everyone';
 }
 
+// PER-OCCURRENCE EXCEPTIONS on a repeating event (calendar-pilot-2026-11-05, items 2+4): the member-side twin of
+// src/steward.src.js _evExceptions. Keyed by an occurrence's canonical ISO date -> { skip:true } (a one-week
+// break) or { date:'<newIso>' } (that week moved), re-validated and sorted on the way through so expandEvents
+// (app/recur.jsx, shared by app/app.jsx ctx.churchEvents) honours it and a hand-edited doc stays bounded. A
+// whole-church series is where this is reached — group events do not recur member-side — but the field is
+// carried on every event reader for a clean round-trip (CLAUDE.md rule 2).
+function _evExceptions(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return {};
+  const out = {};
+  const keys = Object.keys(x).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+  for (const k of keys) {
+    const v = x[k];
+    if (!v || typeof v !== 'object') continue;
+    if (v.skip === true) out[k] = { skip: true };
+    else if (typeof v.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.date)) out[k] = { date: v.date };
+    if (Object.keys(out).length >= 200) break;
+  }
+  return out;
+}
+
 // ── shared per-church subscription hubs (efficiency fix E2) ─────────────────────────────────────────
 // Every church-docs reader used to open its OWN relay subscription carrying the byte-identical broad
 // filter (ALL of the church's kind-30078 docs), then discriminate client-side by d-tag prefix — so
@@ -7011,7 +7031,7 @@ window.Fellowship = {
   subscribeChurchRunsheets(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/runsheet:', (c, id) => ({ service: id, items: Array.isArray(c.items) ? c.items : [] }), cb); },
   subscribeChurchRotas(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/rota:', (c, id) => ({ service: id, published: !!c.published, assign: c.assign || {} }), cb); },
   subscribeChurchRosters(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/roster:', (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [] }), cb); },
-  subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', recur: c.recur || '', day: c.day, nth: c.nth || null }), cb); },
+  subscribeChurchEvents(churchNpub, cb) { return window.Fellowship._subChurchAddr(churchNpub, 'trinityone/event:', (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', recur: c.recur || '', day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions) }), cb); },
 
   // ── Meal trains / Care module (member side) ──
   // Read the church's Care config so the member app knows whether to show the Care card (and, for
@@ -8926,7 +8946,7 @@ window.Fellowship = {
         const id = d.slice('trinityone/event:'.length);
         // AUDIT-2026-07-24 (group events): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); } return; }
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust); emit(); } catch {}
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', imgPos: (c.imgPos && typeof c.imgPos === 'object') ? c.imgPos : null, imgZoom: (typeof c.imgZoom === 'number' && c.imgZoom > 1) ? c.imgZoom : 1, groupId: c.groupId || '', exceptions: _evExceptions(c.exceptions), byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust); emit(); } catch {}
       },
       oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
@@ -8968,7 +8988,7 @@ window.Fellowship = {
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6));
     // imgPos/imgZoom: cover focal point + zoom (see app/recur.jsx eventImgStyle); carried so a member-published
     // group event frames its image the same everywhere it is read. A missing value is centre/scale-1 (unchanged look).
-    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: (ev.imgPos && typeof ev.imgPos === 'object') ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: (typeof ev.imgZoom === 'number' && ev.imgZoom > 1) ? ev.imgZoom : 1, groupId });
+    const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: (ev.imgPos && typeof ev.imgPos === 'object') ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: (typeof ev.imgZoom === 'number' && ev.imgZoom > 1) ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions) });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/event:' + id], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }
     return { id, ...JSON.parse(content) };

@@ -1694,8 +1694,28 @@ function DashCalendar() {
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;   // stack on phones
   const services = window.useStewardServices();
   const rawEvents = window.useStewardEvents();
+  // OPTIMISTIC MOVE OVERLAY (calendar-pilot-2026-11-05, item 2). A drag writes an exception (or, for a one-off,
+  // a new date) to the relay, but the echo takes a round-trip; until it lands, apply the pending move LOCALLY so
+  // the chip jumps the instant the steward drops it. Each entry is pruned the moment rawEvents reflects it — the
+  // series doc now carries exceptions[from].date === to, or a one-off now simply has the new date — so the local
+  // overlay never fights a confirmed relay state. `from` is the occurrence's CANONICAL date (recur.jsx occDate),
+  // which is also the exceptions key, so a second drag of the same week replaces rather than stacks.
+  const [moves, setMoves] = useSch([]);   // { id, from, to, recurring }
+  useSchE(() => {
+    setMoves(ms => ms.filter(m => {
+      const s = rawEvents.find(x => x.id === m.id); if (!s) return true;   // keep until we can see the doc at all
+      return m.recurring ? !(s.exceptions && s.exceptions[m.from] && s.exceptions[m.from].date === m.to) : (s.date !== m.to);
+    }));
+  }, [rawEvents]);   // eslint-disable-line
+  const rawView = (!moves.length) ? rawEvents : rawEvents.map(ev => {
+    const mine = moves.filter(m => m.id === ev.id); if (!mine.length) return ev;
+    if (ev.recur) { const exceptions = { ...(ev.exceptions || {}) }; mine.forEach(m => { exceptions[m.from] = { date: m.to }; }); return { ...ev, exceptions }; }
+    const m = mine.find(x => x.from === ev.date) || mine[mine.length - 1]; return { ...ev, date: m.to };
+  });
+  const dragRef = useSchR(null);                  // the chip being dragged: { id, from, shown, recurring }
+  const [dragOverKey, setDragOverKey] = useSch(null);
   // expand recurring meetings (the church's rhythm) into concrete dated occurrences so they populate the calendar
-  const events = window.expandEvents ? window.expandEvents(rawEvents, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 120) : rawEvents;
+  const events = window.expandEvents ? window.expandEvents(rawView, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 120) : rawView;
   const rotas = window.useStewardRotas();
   const rosters = window.useStewardRosters();
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
@@ -1755,6 +1775,23 @@ function DashCalendar() {
   const monKey = (d) => `${view.y}-${String(view.m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   const upcoming = services.slice().filter(s => (s.date || '') >= schKey(today)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 6);
 
+  // MOVE ONE OCCURRENCE TO ANOTHER DAY (item 2). A ONE-OFF event changes its own date, as the edit dialog does.
+  // A RECURRING occurrence writes exceptions[canonicalDate] = { date:newDate } on the SERIES doc — the anchor is
+  // NEVER moved and no other occurrence is touched; removeEvent is NEVER called (that deletes the whole series).
+  // The overlay above makes the chip move before the relay echoes. Mouse-only drag is acceptable (owner).
+  const onDropDay = (newDate) => {
+    const d = dragRef.current; dragRef.current = null; setDragOverKey(null);
+    if (!d || !newDate || !window.Steward || newDate === (d.shown || d.from)) return;
+    const series = rawEvents.find(x => x.id === d.id); if (!series) return;
+    setMoves(ms => [...ms.filter(m => !(m.id === d.id && m.from === d.from)), { id: d.id, from: d.from, to: newDate, recurring: !!d.recurring }]);
+    if (d.recurring) {
+      const exceptions = { ...(series.exceptions || {}), [d.from]: { date: newDate } };
+      window.Steward.publishEvent({ ...series, exceptions });   // merged exceptions; anchor (series.date) untouched
+    } else {
+      window.Steward.publishEvent({ ...series, date: newDate });   // a one-off: change its own date
+    }
+  };
+
   return (
     <div style={{ position: 'relative', height: narrow ? 'auto' : '100%', display: 'flex', flexDirection: narrow ? 'column' : 'row', gap: 16 }}>
       <div style={{ flex: narrow ? 'none' : 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -1775,11 +1812,19 @@ function DashCalendar() {
             const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today);
             const has = it.services.length || it.events.length;
             return (
-              <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day" style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
-                border: pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
+              <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day"
+                onDragOver={ev => { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (err) {} if (dragOverKey !== key) setDragOverKey(key); }}
+                onDragLeave={() => { if (dragOverKey === key) setDragOverKey(null); }}
+                onDrop={ev => { ev.preventDefault(); onDropDay(key); }}
+                style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
+                border: dragOverKey === key ? '2px dashed var(--clay)' : pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: dragOverKey === key ? 'color-mix(in oklab, var(--clay) 11%, var(--surface))' : isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d}</div>
                 {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
-                {it.events.map(e => <div key={e.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: `color-mix(in oklab, ${e.accent} 13%, var(--surface))`, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>)}
+                {it.events.map(e => <div key={e.id} draggable
+                  onDragStart={ev => { ev.stopPropagation(); dragRef.current = { id: e.id, from: e.occDate || e.date, shown: e.date, recurring: !!e.recur }; try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(e.id)); } catch (err) {} }}
+                  onDragEnd={() => { dragRef.current = null; setDragOverKey(null); }}
+                  title={e.recur ? 'Drag to move just this week — the rest of the series stays' : 'Drag to move this event to another day'}
+                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: `color-mix(in oklab, ${e.accent} 13%, var(--surface))`, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'grab' }}>{e.title}</div>)}
                 {it.bookings.map(b => <div key={b.id} title={(b.title || 'Booking') + ' · ' + roomName(b.roomId) + (b.start ? ' · ' + b.start + (b.end ? '–' + b.end : '') : '')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: '#345c41', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="marker" size={9} color="#345c41" />{b.start ? b.start + ' ' : ''}{roomName(b.roomId)}</div>)}
               </button>
             );
@@ -1936,7 +1981,9 @@ function SchEventEdit({ event, onClose }) {
       r = await Promise.resolve(window.Steward.publishEvent({
         id: e.id, title: title.trim(), date: anchor, time, where: where.trim(), blurb: blurb.trim(),
         accent: e.accent || '', image, imgPub, imgPos, imgZoom, groupId: e.groupId || '',
-        ...(series ? { recur, day, nth } : {}),
+        // CARRY THE PER-OCCURRENCE EXCEPTIONS THROUGH (items 2+4): a plain edit must not wipe the weeks a steward
+        // has moved or skipped. Only a series has them; a one-off never does. (CLAUDE.md rule 2 round-trip.)
+        ...(series ? { recur, day, nth, exceptions: e.exceptions || {} } : {}),
       }));
     } catch (x) { r = null; }
     // ONLY WRITE THE TICK WHEN THE STEWARD ACTUALLY TOUCHED IT IN THIS DIALOG (F1 above) — a Save where
@@ -2218,6 +2265,18 @@ function SchEventDetail({ event, onClose }) {
     return <button key={verdict} onClick={() => setAttendance(verdict)} aria-label={`${n} ${label}, show names`} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 800, color }}>{n} {label}</button>;
   };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  // SKIP JUST THIS WEEK (calendar-pilot-2026-11-05, item 4). A one-week break on a repeating meeting: write
+  // exceptions[canonicalDate] = { skip:true } on the SERIES doc, leaving the anchor and every other occurrence
+  // in place. This is NOT removeEvent — that deletes the whole series (the Remove button below says so). `e` is
+  // an expanded occurrence, so e.occDate is this week's canonical date (the exceptions key) and e.seriesDate is
+  // the anchor the series must keep; the rest of the series fields ride through on { ...e }.
+  const skipWeek = () => {
+    if (!window.Steward || !e.recur) return;
+    const occ = e.occDate || e.date;
+    if (!window.confirm(`Skip “${e.title || 'this meeting'}” on ${e.date} only? The rest of the series stays.`)) return;
+    window.Steward.publishEvent({ ...e, date: e.seriesDate || e.date, exceptions: { ...(e.exceptions || {}), [occ]: { skip: true } } });
+    onClose();
+  };
   // THE EDIT DIALOG REPLACES THIS CARD; IT DOES NOT OPEN INSIDE IT (AUDIT-feeds-round5-2026-09-22 F2).
   // It used to render as the last child of the panel below, and a `position: fixed` overlay does NOT escape
   // an ancestor that has a transform — `animation: lumenScale … both` leaves an identity transform on this
@@ -2260,6 +2319,10 @@ function SchEventDetail({ event, onClose }) {
             {total ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 9 }}>{chip('going', 'going', 'var(--sage)')}{chip('maybe', 'maybe', '#8a6717')}{chip('no', 'can’t make it', 'var(--ink-3)')}</div> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
           </div>
         </div>
+        {/* ONE-WEEK BREAK, for a repeating meeting only: skips THIS occurrence (item 4), not the series. */}
+        {e.recur ? <div style={{ padding: '12px 22px 0', display: 'flex' }}>
+          <button onClick={skipWeek} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 10, fontSize: 12.5 }}><Icon name="x" size={14} color="currentColor" /> Skip just this week ({e.date})</button>
+        </div> : null}
         <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)', display: 'flex', gap: 10 }}>
           <button onClick={() => setEditing(true)} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="pen" size={15} color="var(--on-clay)" /> Edit</button>
           <button onClick={() => setMessaging(true)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="send" size={15} color="currentColor" /> Message</button>

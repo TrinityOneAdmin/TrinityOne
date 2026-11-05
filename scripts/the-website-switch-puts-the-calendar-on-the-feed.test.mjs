@@ -260,7 +260,11 @@ test('Settings → Your website → the switch: the feed appears at the address 
   // `nth` joined the noticeboard fields with dcc11dc (S-7, the owner's "monthly can pick the week"): which week of
   // the month a monthly meeting falls on, so the website can say "3rd Saturday". Same class as `day` and `recur` —
   // when, never who. This list went stale on that commit and the test failed over correct output (found 2026-09-30).
-  assert.deepEqual(Object.keys(body).sort(), ['blurb', 'date', 'day', 'nth', 'recur', 'time', 'title', 'where'], 'the public copy carries fields beyond the noticeboard ones: ' + Object.keys(body));
+  // calendar-pilot-2026-11-05 (items 3 + 2/4, owner-approved): the public copy now ALSO carries the capped cover
+  // image + its focal point (image/imgPos/imgZoom) and the per-occurrence exceptions map (dates only, no who) so a
+  // public PAGE can render the photo and reflect a moved/skipped week. Same class as nth above -- what/when, never
+  // who; the data-URI is still kept OUT of the lean .ics feed (guarded in the-public-calendar-file test).
+  assert.deepEqual(Object.keys(body).sort(), ['blurb', 'date', 'day', 'exceptions', 'image', 'imgPos', 'imgZoom', 'nth', 'recur', 'time', 'title', 'where'], 'the public copy carries fields beyond the allowed set: ' + Object.keys(body));
   assert.equal(body.title, SUPPER);
   // the per-event address works for the public one and is a 404 for the held one
   const supperId = copies[0].dtag.slice('trinityone/pubevent:'.length);

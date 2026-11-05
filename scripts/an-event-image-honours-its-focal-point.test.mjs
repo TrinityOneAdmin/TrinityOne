@@ -68,10 +68,15 @@ test('out-of-range focal point and zoom are clamped, never passed through raw', 
 function realWebCopyBody() {
   const cap = STEWARD.match(/WEB_IMG_MAX\s*=\s*([0-9eExX.+]+)/);   // esbuild rewrites 60000 -> 6e4, so capture the whole literal
   assert.ok(cap, 'WEB_IMG_MAX is gone - re-anchor');
+  // _webCopyBody also calls _evExceptions now (calendar-pilot item 2/4), which reads EV_EXC_MAX — lift both too.
+  const capExc = STEWARD.match(/EV_EXC_MAX\s*=\s*([0-9eExX.+]+)/);
+  assert.ok(capExc, 'EV_EXC_MAX is gone - re-anchor');
   const parts = [
     'const WEB_IMG_MAX = ' + cap[1] + ';',
+    'const EV_EXC_MAX = ' + capExc[1] + ';',
     fnBody(STEWARD, 'function _evImgPos(p) {'),
     fnBody(STEWARD, 'function _evImgZoom(z) {'),
+    fnBody(STEWARD, 'function _evExceptions(x) {'),
     fnBody(STEWARD, 'function _webImg(ev) {'),
     fnBody(STEWARD, 'function _webCopyBody(ev) {'),
     'return { _webCopyBody, WEB_IMG_MAX };',
@@ -107,6 +112,13 @@ function realImgNorms() {
   return new Function(fnBody(STEWARD, 'function _evImgPos(p) {') + '\n' + fnBody(STEWARD, 'function _evImgZoom(z) {') + '\nreturn { _evImgPos, _evImgZoom };')();
 }
 const norms = realImgNorms();
+// publishEvent + subscribeEvents also normalise `exceptions` now (calendar-pilot item 2/4) — lift that helper so
+// the slices run. It reads EV_EXC_MAX; capture the literal the same way WEB_IMG_MAX is.
+const _evExceptions = (() => {
+  const capExc = STEWARD.match(/EV_EXC_MAX\s*=\s*([0-9eExX.+]+)/);
+  assert.ok(capExc, 'EV_EXC_MAX is gone - re-anchor');
+  return new Function('const EV_EXC_MAX = ' + capExc[1] + ';\n' + fnBody(STEWARD, 'function _evExceptions(x) {') + '\nreturn _evExceptions;')();
+})();
 
 async function publishDoc(ev) {
   const body = fnBody(STEWARD, 'async publishEvent(ev, asPub) {', 'publishEvent');
@@ -115,7 +127,7 @@ async function publishDoc(ev) {
     skFor: () => new Uint8Array(32).fill(1), _evtSeq: 0, EVENT_D: 'trinityone/event:', NET: 'net', actingChurch: '',
     _sealChurchDocReady: async (doc) => JSON.stringify(doc),   // identity "seal" so the round-trip is readable
     publish: (e) => { sealed = e.content; return Promise.resolve(true); }, feChurch: (e) => e, now: () => 1000,
-    _evImgPos: norms._evImgPos, _evImgZoom: norms._evImgZoom, Promise, JSON, Math, Date, String, Object, isFinite,
+    _evImgPos: norms._evImgPos, _evImgZoom: norms._evImgZoom, _evExceptions, Promise, JSON, Math, Date, String, Object, isFinite,
   };
   const fn = new Function('scope', 'with (scope) { return ({ ' + body + ' }); }')(scope);
   const result = await fn.publishEvent(ev);
@@ -124,7 +136,7 @@ async function publishDoc(ev) {
 function readMapper() {
   const body = fnBody(STEWARD, 'subscribeEvents(onEvents) {', 'subscribeEvents');
   let mapper = null;
-  const scope = { EVENT_D: 'trinityone/event:', _evImgPos: norms._evImgPos, _evImgZoom: norms._evImgZoom };
+  const scope = { EVENT_D: 'trinityone/event:', _evImgPos: norms._evImgPos, _evImgZoom: norms._evImgZoom, _evExceptions };
   const fn = new Function('scope', 'with (scope) { return ({ ' + body + ' }); }')(scope);
   fn.subscribeEvents.call({ _subAddr: (d, m) => { mapper = m; return () => {}; } }, () => {});
   assert.equal(typeof mapper, 'function', 'subscribeEvents handed no mapper - re-anchor');

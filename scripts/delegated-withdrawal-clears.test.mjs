@@ -289,6 +289,11 @@ function consoleReader({ roster = [GORDON], rosterKnown = true, caps = {} } = {}
     // `_capsOf` is how _consoleChurchVoice reads the capability list — normalised the way the relay does
     // (gateway.mjs:1611) rather than counted raw — so it has to come along with it.
     lift(STEWARD, '_openChurchDoc'), lift(STEWARD, '_capsOf'), lift(STEWARD, '_consoleChurchVoice'),
+    // calendar-pilot-2026-11-05: subscribeGroupEvents' row mapper now normalises image framing + per-occurrence
+    // exceptions through these module-level helpers; lift them (and the EV_EXC_MAX const _evExceptions reads) or
+    // the mapper throws on every row and the reader silently returns an empty list.
+    lift(STEWARD, 'EV_EXC_MAX', 'var'),
+    lift(STEWARD, '_evImgPos'), lift(STEWARD, '_evImgZoom'), lift(STEWARD, '_evExceptions'),
   ].join('\n');
   const args = Object.keys(scope);
   const fn = new Function(...args, `${body}\nreturn ({ ${grabMethod(STEWARD, 'subscribeGroupEvents(groupId, onEvents)')} }).subscribeGroupEvents;`)

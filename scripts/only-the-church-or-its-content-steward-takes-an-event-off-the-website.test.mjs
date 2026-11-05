@@ -196,6 +196,8 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
     stmt(S, 'var WEB_GIVE_UP_S = ', 'WEB_GIVE_UP_S'),
     stmt(S, 'var WEB_RETRY_MS = ', 'WEB_RETRY_MS'),
     stmt(S, 'var WEB_GROUP_MAX = ', 'WEB_GROUP_MAX'),
+    stmt(S, 'var WEB_IMG_MAX = ', 'WEB_IMG_MAX'),   // calendar-pilot item 3: _webCopyBody -> _webImg reads this
+    stmt(S, 'var EV_EXC_MAX = ', 'EV_EXC_MAX'),     // calendar-pilot item 2/4: _webCopyBody -> _evExceptions reads this
     fnBody(S, 'function _nameKeyReady', '_nameKeyReady'),
     fnBody(S, 'function _webGroupKey', '_webGroupKey'),
     fnBody(S, 'function _webGroupLoad', '_webGroupLoad'),
@@ -214,6 +216,10 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
     fnBody(S, 'function _consoleChurchVoice', '_consoleChurchVoice'),
     stmt(S, 'var SEAL_B64 = ', 'SEAL_B64'),
     fnBody(S, 'function _sealIsWhole', '_sealIsWhole'),
+    fnBody(S, 'function _evImgPos', '_evImgPos'),         // calendar-pilot item 3: _webCopyBody calls these
+    fnBody(S, 'function _evImgZoom', '_evImgZoom'),
+    fnBody(S, 'function _evExceptions', '_evExceptions'), // calendar-pilot item 2/4
+    fnBody(S, 'function _webImg', '_webImg'),             // calendar-pilot item 3
     fnBody(S, 'function _webCopyBody', '_webCopyBody'),
     fnBody(S, 'function _webWhyStuck', '_webWhyStuck'),
     fnBody(S, 'function _webSnap', '_webSnap'),

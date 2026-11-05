@@ -57,6 +57,10 @@ function buildSched(events) {
     CustomEvent: class {},
     localStorage: { getItem: () => null, setItem: () => {} },
     document: { createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => '' }) },
+    // calendar-pilot item 3: SchCoverField.applyImage builds a downscaled public variant via `new Image()`, a
+    // browser global this Node render scope must supply; the downscale is async best-effort so a no-op src
+    // setter (onload never fires) is enough — the immediate onChange still sets the picked image.
+    Image: class { set src(v) {} },
   };
   const names = Object.keys(scope);
   const mod = new Function(...names, jsx(SCHED) + '\nreturn { eventHistory, SchEventModal };')(...names.map(n => scope[n]));
@@ -163,8 +167,11 @@ test('picking a past IMAGE sets only the image, not the Name or Where', () => {
   nodes = render();   // re-read live state
   // the cover preview now shows the chosen image (Remove button + preview img present)
   assert.ok(nodes.some(n => n.type === 'button' && n.props.title === 'Remove this photo'), 'the image pick did not set a cover');
-  // the cover preview img (height 130), not a 72x48 picker thumbnail
-  const preview = nodes.find(n => n.type === 'img' && n.props.src === 'data:img,B' && n.props.style && n.props.style.height === 130);
+  // the cover preview img, NOT a 72x48 picker thumbnail. calendar-pilot item 3 (18d5b5cb) rebuilt the cover
+  // field: the preview is now a draggable 150px box whose img carries draggable={false}, where it used to be a
+  // bare height:130 img — so re-anchor the locator to that unique marker (the picker thumbnails carry no
+  // draggable prop), which still excludes the thumbnails without asserting anything new about the image.
+  const preview = nodes.find(n => n.type === 'img' && n.props.src === 'data:img,B' && n.props.draggable === false);
   assert.ok(preview, 'the chosen image is not shown as the cover');
   assert.equal(input(nodes, 'Title').props.value, '', 'the image pick leaked into the Name (fields must be independent)');
   assert.equal(input(nodes, 'Where').props.value, '', 'the image pick leaked into Where (fields must be independent)');

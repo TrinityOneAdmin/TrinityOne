@@ -6434,6 +6434,27 @@ function _evImgPos(p) {
   return { x, y };
 }
 function _evImgZoom(z) { return (typeof z === 'number' && isFinite(z) && z > 1) ? Math.min(6, z) : 1; }
+// PER-OCCURRENCE EXCEPTIONS on a repeating event (calendar-pilot-2026-11-05, items 2+4), normalised once so the
+// sealed doc, the public copy and every reader agree. The map is keyed by an occurrence's CANONICAL ISO date
+// (what app/recur.jsx expandEvents naturally produces for that week) -> { skip:true } (a one-week break, #4) or
+// { date:'<newIso>' } (that week moved to another day, #2 — time unchanged). KEYS ARE SORTED and the object is
+// rebuilt field-by-field so two consoles produce byte-identical content for the same event (the reconciler's
+// equality in _webCopyBody depends on it), and it is BOUNDED so a hand-edited doc cannot grow without limit.
+// A missing/empty map is {} — back-compat is today's behaviour (expandEvents walks every week unchanged).
+const EV_EXC_MAX = 200;   // skips/moves kept per series; a church never hand-edits hundreds of single weeks
+function _evExceptions(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return {};
+  const out = {};
+  const keys = Object.keys(x).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+  for (const k of keys) {
+    const v = x[k];
+    if (!v || typeof v !== 'object') continue;
+    if (v.skip === true) out[k] = { skip: true };
+    else if (typeof v.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.date)) out[k] = { date: v.date };
+    if (Object.keys(out).length >= EV_EXC_MAX) break;
+  }
+  return out;
+}
 // THE SIZE CAP FOR AN EVENT IMAGE ON THE PUBLIC PATH. The in-app `image` is downscaled (max 720px, JPEG q0.72)
 // but can still be ~100-200 KB, which must never ride into a public feed (reference comment above this console's
 // public copy, and scripts/public-calendar.mjs: "a data: URI can be megabytes"). The console generates a SMALLER
@@ -6460,6 +6481,7 @@ function _webCopyBody(ev) {
     recur, day: (recur && typeof ev.day === 'number') ? ev.day : null,
     nth: (recur === 'monthly' && typeof ev.nth === 'number') ? ev.nth : null,
     image: _webImg(ev), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom),
+    exceptions: _evExceptions(ev.exceptions),   // per-occurrence skips/moves (items 2+4); appended + sorted so the bytes stay deterministic
   });
 }
 // WHAT THIS CONSOLE CAN STILL TELL ABOUT AN EVENT IT CAN NO LONGER OPEN — which is almost nothing, and the
@@ -13038,7 +13060,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
-    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST). imgPos/imgZoom: cover focal point + zoom (null/1 = centre, the pre-feature look); imgPub: a size-capped variant for the public copy
+    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions) };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST). imgPos/imgZoom: cover focal point + zoom (null/1 = centre, the pre-feature look); imgPub: a size-capped variant for the public copy. exceptions: per-occurrence skips/moves (items 2+4)
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     const tags = [['d', EVENT_D + id], ['t', NET]];
@@ -13054,7 +13076,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
-  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom) }), onEvents); },
+  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions) }), onEvents); },
 
   // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
   // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -13178,7 +13200,7 @@ window.Steward = {
         // 2026-08-28, where members could see the event perfectly and the steward who created it could not.
         // An event we cannot open is marked _locked rather than dropped, so a key that has not arrived yet
         // leaves a placeholder instead of silently shortening the list.
-        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

@@ -52,12 +52,31 @@
       if (e.date && !(/^\d{4}-\d{2}-\d{2}$/.test(e.date) && !isNaN(new Date(e.date + 'T12:00:00')))) continue;
       const anchor = e.date ? new Date(e.date + 'T12:00:00') : new Date(from);
       const day = (Number.isInteger(e.day) && e.day >= 0 && e.day <= 6) ? e.day : anchor.getDay();
+      // PER-OCCURRENCE EXCEPTIONS (calendar-pilot-2026-11-05, items 2+4). The series doc may carry an
+      // `exceptions` map keyed by an occurrence's CANONICAL ISO date (the date this walk would naturally
+      // produce) -> { skip:true } to drop that single week, or { date:'<newIso>' } to relocate it to another
+      // day (the time is unchanged — it rides on the whole `{ ...e }`). The one function serves both the member
+      // app (app/app.jsx ctx.churchEvents) and the console (DashCalendar), so a moved/skipped week honours
+      // everywhere the moment it lands. BACK-COMPAT: no `exceptions` => `applyOcc` returns the canonical date
+      // untouched, which is byte-for-byte today's behaviour. The entries are re-validated here rather than
+      // trusted — the writers (src/steward.src.js _evExceptions and its twin) normalise on the way in, but a
+      // hand-edited or legacy doc must never spin a loop or relocate to a non-date. `occDate` is stamped on
+      // every occurrence so a SECOND drag keys its new exception by the canonical date, not the moved one.
+      const exmap = (e.exceptions && typeof e.exceptions === 'object' && !Array.isArray(e.exceptions)) ? e.exceptions : null;
+      const applyOcc = (isoD) => {
+        const ex = exmap ? exmap[isoD] : null;
+        if (ex && typeof ex === 'object') {
+          if (ex.skip === true) return null;                                                   // #4 skip this week
+          if (typeof ex.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ex.date)) return ex.date;   // #2 move this week
+        }
+        return isoD;
+      };
       if (e.recur === 'monthly') {
         const nth = (typeof e.nth === 'number' && ((e.nth >= 1 && e.nth <= 5) || e.nth === NTH_LAST)) ? e.nth : 1;
         let m = new Date(from.getFullYear(), from.getMonth(), 1, 12);
         while (m <= to) {
           const occ = nthWeekdayOfMonth(m.getFullYear(), m.getMonth(), day, nth);
-          if (occ && inRange(occ) && occ >= anchor) out.push({ ...e, date: iso(occ), seriesDate: e.date, recurring: true });
+          if (occ && inRange(occ) && occ >= anchor) { const canon = iso(occ); const nd = applyOcc(canon); if (nd) out.push({ ...e, date: nd, occDate: canon, seriesDate: e.date, recurring: true }); }
           m = new Date(m.getFullYear(), m.getMonth() + 1, 1, 12);
         }
       } else {                                          // weekly / fortnightly
@@ -65,7 +84,7 @@
         let cur = new Date(Math.max(from.getTime(), anchor.getTime())); cur.setHours(12, 0, 0, 0);
         while (cur.getDay() !== day) cur.setDate(cur.getDate() + 1);
         if (step === 14) { const weeks = Math.round((cur - anchor) / (7 * 864e5)); if (weeks % 2 !== 0) cur.setDate(cur.getDate() + 7); }   // stay in phase with the anchor
-        for (; cur <= to; cur.setDate(cur.getDate() + step)) if (cur >= anchor) out.push({ ...e, date: iso(cur), seriesDate: e.date, recurring: true });
+        for (; cur <= to; cur.setDate(cur.getDate() + step)) if (cur >= anchor) { const canon = iso(cur); const nd = applyOcc(canon); if (nd) out.push({ ...e, date: nd, occDate: canon, seriesDate: e.date, recurring: true }); }
       }
     }
     return out.sort((a, b) => ((a.date || '') + (a.time || '')).localeCompare((b.date || '') + (b.time || '')));

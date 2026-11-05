@@ -317,10 +317,11 @@ test('F6: what the builder itself puts in the file names nobody — measured thr
   for (const forbidden of [member, 'grpyouth', 'ATTENDEE', 'ORGANIZER', 'data:image', 'imgPos', 'imgZoom', 'https://church.example']) {
     assert.equal(text.includes(forbidden), false, 'the feed carries ' + forbidden);
   }
-  // publicEventFields admits the noticeboard fields PLUS the item-3 image trio (image/imgPos/imgZoom), and
-  // nothing else — groupId, creator and attendees handed in above are still dropped.
+  // publicEventFields admits the noticeboard fields PLUS the item-3 image trio (image/imgPos/imgZoom) PLUS the
+  // item-2/4 `exceptions` map (per-occurrence skips/moves — DATES only, never a name), and nothing else —
+  // groupId, creator and attendees handed in above are still dropped.
   assert.deepEqual(Object.keys(publicEventFields({ id: 'supper', date: '2026-10-03', groupId: 'g', creator: member })).sort(),
-    ['blurb', 'date', 'day', 'id', 'image', 'imgPos', 'imgZoom', 'nth', 'recur', 'time', 'title', 'where'], 'publicEventFields admits a field beyond the noticeboard ones + the item-3 image trio');
+    ['blurb', 'date', 'day', 'exceptions', 'id', 'image', 'imgPos', 'imgZoom', 'nth', 'recur', 'time', 'title', 'where'], 'publicEventFields admits a field beyond the noticeboard ones + the item-3 image trio + the item-2/4 exceptions map');
 });
 
 // ── PHASE 2: the feed settings on Settings → Your website change the FILE ─────────────────────────────────

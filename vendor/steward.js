@@ -19757,6 +19757,20 @@ zoo`.split("\n");
   function _evImgZoom(z) {
     return typeof z === "number" && isFinite(z) && z > 1 ? Math.min(6, z) : 1;
   }
+  var EV_EXC_MAX = 200;
+  function _evExceptions(x) {
+    if (!x || typeof x !== "object" || Array.isArray(x)) return {};
+    const out = {};
+    const keys = Object.keys(x).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+    for (const k of keys) {
+      const v = x[k];
+      if (!v || typeof v !== "object") continue;
+      if (v.skip === true) out[k] = { skip: true };
+      else if (typeof v.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.date)) out[k] = { date: v.date };
+      if (Object.keys(out).length >= EV_EXC_MAX) break;
+    }
+    return out;
+  }
   var WEB_IMG_MAX = 6e4;
   function _webImg(ev) {
     const pub2 = String(ev && ev.imgPub || "");
@@ -19778,7 +19792,9 @@ zoo`.split("\n");
       nth: recur === "monthly" && typeof ev.nth === "number" ? ev.nth : null,
       image: _webImg(ev),
       imgPos: _evImgPos(ev.imgPos),
-      imgZoom: _evImgZoom(ev.imgZoom)
+      imgZoom: _evImgZoom(ev.imgZoom),
+      exceptions: _evExceptions(ev.exceptions)
+      // per-occurrence skips/moves (items 2+4); appended + sorted so the bytes stay deterministic
     });
   }
   function _webGroupKey(cp) {
@@ -26202,7 +26218,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null };
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions) };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
@@ -26215,7 +26231,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", EVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeEvents(onEvents) {
-      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom) }), onEvents);
+      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions) }), onEvents);
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -26367,7 +26383,7 @@ zoo`.split("\n");
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), _by: e.pubkey, ts: e.created_at });
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), _by: e.pubkey, ts: e.created_at });
             emit();
           } catch {
           }
