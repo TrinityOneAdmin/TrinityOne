@@ -606,12 +606,18 @@ function publishErrorMessage(reason, evt, opts) {
 // momentarily look like they were queuing at the door.
 function useRealMemberCount() {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
-  const admittedSet = new Set(window.useStewardAdmitted ? window.useStewardAdmitted() : []);
+  const admittedReal = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const blockedSet = new Set(window.useStewardBlocked ? window.useStewardBlocked() : []);
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const idvNow = window.useStewardIdv ? window.useStewardIdv() : 0;
-  const rosterLoaded = !window.stewardStreamLoaded
-    || (window.stewardStreamLoaded('subscribeAdmitted', idvNow) && window.stewardStreamLoaded('subscribeBlocked', idvNow));
+  const admittedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeAdmitted', idvNow);
+  const blockedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeBlocked', idvNow);
+  // DISPLAY-ONLY seed: the real admitted stream no longer carries the on-disk seed (it must stay relay-truth for
+  // key distribution — see subscribeAdmitted). Read the last-known allowlist straight off disk HERE, ONLY to keep
+  // this count from flashing wrong on a cold open, and ONLY until the real list has loaded. Never used for keys.
+  const seed = (!admittedLoaded && window.Steward && window.Steward.admittedSeed) ? window.Steward.admittedSeed() : null;
+  const admittedSet = new Set(admittedLoaded ? admittedReal : (seed || []));
+  const rosterLoaded = (admittedLoaded || (seed && seed.length > 0)) && blockedLoaded;
   return members.filter(m => !blockedSet.has(m.pubkey)
     && !(joinApproval && rosterLoaded && !admittedSet.has(m.pubkey))).length;
 }
@@ -3700,15 +3706,20 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
   // people waiting for approval (only when the church requires it) — surfaced big on the dashboard
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
-  const admittedSet = new Set(window.useStewardAdmitted ? window.useStewardAdmitted() : []);
+  const admittedReal = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const blockedSet = new Set(window.useStewardBlocked ? window.useStewardBlocked() : []);
   // "Pending" is the ABSENCE of a member from two other streams, so it is only meaningful once both have
   // actually arrived. On a hard reload the members list lands first and those sets are still empty, which
   // briefly makes every member in the church look like they are queuing at the door — an alarming banner,
   // for a second, that was never true. Wait for the evidence before drawing the conclusion.
   const idvNow = window.useStewardIdv ? window.useStewardIdv() : 0;
-  const rosterLoaded = !window.stewardStreamLoaded
-    || (window.stewardStreamLoaded('subscribeAdmitted', idvNow) && window.stewardStreamLoaded('subscribeBlocked', idvNow));
+  const admittedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeAdmitted', idvNow);
+  const blockedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeBlocked', idvNow);
+  // DISPLAY-ONLY seed (see useRealMemberCount): the authoritative admitted stream no longer carries the on-disk
+  // seed. Read it off disk HERE only to paint an accurate pending count on a cold open, until the real list lands.
+  const seed = (!admittedLoaded && window.Steward && window.Steward.admittedSeed) ? window.Steward.admittedSeed() : null;
+  const admittedSet = new Set(admittedLoaded ? admittedReal : (seed || []));
+  const rosterLoaded = (admittedLoaded || (seed && seed.length > 0)) && blockedLoaded;
   const pendingCount = (joinApproval && rosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
   const realCount = useRealMemberCount();   // blocked + still-pending excluded — see useRealMemberCount
   const pendingBanner = pendingCount ? (

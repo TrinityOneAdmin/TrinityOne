@@ -22453,7 +22453,7 @@ zoo`.split("\n");
     },
     // list of members who have a DM thread with the church (most recent first)
     subscribeDMConvos(onConvos) {
-      const SEED_KEY = "trinityone.steward.dmconvos." + (actingChurch || churchPub || "");
+      const SEED_KEY = "trinityone.steward.dmconvos." + (pub || "");
       const SEED_CAP = 400;
       const byPeer = /* @__PURE__ */ new Map();
       let eosed = false;
@@ -23859,8 +23859,10 @@ zoo`.split("\n");
         _jpSeed = lsGet(JP_KEY);
       } catch {
       }
+      const _seedOn = _jpSeed === "1";
+      let approval = false, latest = 0, sawDoc = false;
       const push = () => {
-        onPolicy(approval);
+        onPolicy(sawDoc || settled ? approval : _seedOn);
         if (settled) {
           try {
             lsSet(JP_KEY, approval ? "1" : "0");
@@ -23868,8 +23870,7 @@ zoo`.split("\n");
           }
         }
       };
-      if (_jpSeed === "1" || _jpSeed === "0") onPolicy(_jpSeed === "1");
-      let approval = _jpSeed === "1", latest = 0;
+      if (_jpSeed === "1" || _jpSeed === "0") onPolicy(_seedOn);
       const take = (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (d !== JOINPOLICY_D + cp0) return false;
@@ -23884,6 +23885,7 @@ zoo`.split("\n");
             approval = false;
           }
         }
+        sawDoc = true;
         state.approval = approval;
         return true;
       };
@@ -24051,6 +24053,20 @@ zoo`.split("\n");
     // once it has settled genuinely on every connected relay (_freshDocRead) — the key distributor uses nothing less.
     // Every copy is kept, and the union recomputed whenever the steward roster changes (_memberEmitters), so a steward's
     // copy that arrived before the roster is counted once the roster says who they are.
+    // DISPLAY-ONLY last-known allowlist (overview preload seed). The AUTHORITATIVE admitted list — subscribeAdmitted
+    // → _lastAdmitted, stewKeyRecipients, stewKeyRecipientsOrAdmitted — is NEVER fed from this: it stays relay-folded
+    // and fail-closed, so a stale seed can never reach key distribution. This getter exists ONLY so the pending-join
+    // COUNT (useRealMemberCount / the dashboard pending banner) paints right on a cold open, and only until the real
+    // stream has loaded. Pubkeys only; no freshness stamp; reads straight off disk. Keyed on the ACTIVE identity
+    // (`pub`), exactly as subscribeAdmitted writes it (cp0 = pub).
+    admittedSeed(cp) {
+      try {
+        const a = JSON.parse(lsGet("trinityone.steward.admitted." + (cp || pub || "")) || "[]");
+        return Array.isArray(a) ? a.filter((p) => typeof p === "string") : [];
+      } catch {
+        return [];
+      }
+    },
     subscribeAdmitted(onList) {
       const cp0 = pub, tok = _freshTok();
       {
@@ -24078,14 +24094,6 @@ zoo`.split("\n");
           }
         }
       };
-      try {
-        const c = JSON.parse(lsGet(ADM_KEY) || "[]");
-        if (Array.isArray(c) && c.length) {
-          cur = c.filter((p) => typeof p === "string");
-          onList(cur);
-        }
-      } catch {
-      }
       const counts = () => true;
       const fold = () => {
         const all = /* @__PURE__ */ new Set();
@@ -24134,7 +24142,7 @@ zoo`.split("\n");
         () => {
           tok.genuine = true;
           tok.at = Date.now();
-          cur = [...cur];
+          fold();
           settled = true;
           push();
           _keysReadSignal("admitted");

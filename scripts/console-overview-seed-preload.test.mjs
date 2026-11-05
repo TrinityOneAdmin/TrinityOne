@@ -206,13 +206,28 @@ test('joinPolicy: a bare/offline EOSE does NOT flip the shown flag or clobber th
 const ADM_KEY = (cp) => 'trinityone.steward.admitted.' + cp;
 const admEvent = (cp, pubkeys, ts = 100) => ({ tags: [['d', 'trinityone/admitted:' + cp]], created_at: ts, pubkey: cp, content: JSON.stringify({ pubkeys }) });
 
-test('admitted: paints the last-known allowlist on first open', () => {
+test('admitted: the on-disk seed is DISPLAY-ONLY — never painted through the authoritative onList', () => {
+  // CHANGED 2026-11-05 (fix/seed-authority). The admitted allowlist is the KEY-DISTRIBUTION gate
+  // (stewKeyRecipients / _lastAdmitted), so a stale on-disk seed must NEVER reach it. It used to be painted
+  // straight through onList, which — on a genuine-empty relay — was then stamped fresh and keyed people the
+  // church had dropped. The seed is now read ONLY by the pending-join COUNT, via Steward.admittedSeed(); the
+  // subscribe stream delivers the relay-folded list and nothing else. (The security chain is proven end-to-end
+  // in seed-stays-out-of-key-distribution.test.mjs.)
   const ls = fakeLS();
   ls.setItem(ADM_KEY('CHURCH_A'), JSON.stringify(['pkA', 'pkB']));
   const { fn } = load('subscribeAdmitted(onList)', 'subscribeAdmitted', { localStorage: ls });
   const paints = [];
   fn((list) => paints.push(list));
-  assert.deepEqual(paints[0], ['pkA', 'pkB'], 'first paint must be the cached allowlist');
+  assert.ok(!paints.some(p => Array.isArray(p) && (p.includes('pkA') || p.includes('pkB'))),
+    'the stale seed was painted through onList — it must be display-only (Steward.admittedSeed), never the authoritative list');
+});
+
+test('admitted: the display-only seed getter DOES return the last-known allowlist off disk', () => {
+  const ls = fakeLS();
+  ls.setItem(ADM_KEY('CHURCH_A'), JSON.stringify(['pkA', 'pkB']));
+  const { fn } = load('admittedSeed(cp)', 'admittedSeed', { localStorage: ls });
+  assert.deepEqual(fn('CHURCH_A'), ['pkA', 'pkB'], 'admittedSeed() must read the cached allowlist for the pending-join count');
+  assert.deepEqual(fn('CHURCH_B'), [], 'admittedSeed() for a church with no seed must be []');
 });
 
 test('admitted: writes the seed only on a GENUINE settle, not on a bare EOSE', () => {
@@ -225,15 +240,18 @@ test('admitted: writes the seed only on a GENUINE settle, not on a bare EOSE', (
   assert.deepEqual(JSON.parse(localStorage.getItem(ADM_KEY('CHURCH_A'))), ['pk1', 'pk2'], 'the allowlist must be written once the genuine read settles');
 });
 
-test('admitted: a transient/offline empty EOSE re-delivers the seed and does NOT clobber it', () => {
+test('admitted: a transient/offline empty EOSE delivers [] but does NOT clobber the on-disk seed', () => {
+  // CHANGED 2026-11-05 (fix/seed-authority). The authoritative list is relay-folded (empty here), so a bare EOSE
+  // delivers [] — NOT the seed, which is display-only now. The settled-gate still means a bare EOSE must not
+  // WRITE, so the last-known seed on disk survives for the display getter and a GENUINE later answer can clear it.
   const ls = fakeLS();
   ls.setItem(ADM_KEY('CHURCH_A'), JSON.stringify(['pkA', 'pkB']));
   const { fn, subs } = load('subscribeAdmitted(onList)', 'subscribeAdmitted', { localStorage: ls });
   const paints = [];
   fn((list) => paints.push(list));
-  subs[0].handlers.oneose();   // relay down — no events this run
-  assert.deepEqual(paints[paints.length - 1], ['pkA', 'pkB'], 'an empty EOSE delivered [] instead of re-delivering the seed');
-  assert.deepEqual(JSON.parse(ls.getItem(ADM_KEY('CHURCH_A'))), ['pkA', 'pkB'], 'an empty EOSE clobbered the good allowlist');
+  subs[0].handlers.oneose();   // relay down — no events this run; a bare EOSE is not a genuine settle
+  assert.deepEqual(paints[paints.length - 1], [], 'a bare EOSE must deliver the relay-folded [] (never the seed) to the authoritative path');
+  assert.deepEqual(JSON.parse(ls.getItem(ADM_KEY('CHURCH_A'))), ['pkA', 'pkB'], 'a bare EOSE wrote over the good on-disk seed');
 });
 
 test('admitted: church isolation — church B never paints or overwrites church A', () => {
