@@ -11254,8 +11254,8 @@ function DashBecomeStewardPanel() {
     });
   };
   return (
-    <Panel title="Become a steward">
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Helping run <b style={{ color: 'var(--ink)' }}>another</b> church? Easiest: <b style={{ color: 'var(--ink)' }}>scan its invite</b> and the owner approves you. (Or give the owner your code below.) This shares only your public ID — never a key.</div>
+    <Panel title="Help run a church">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Helping run <b style={{ color: 'var(--ink)' }}>another</b> church? <b style={{ color: 'var(--ink)' }}>Scan or enter its invite</b> and the owner approves you. (No camera at their end? Give the owner your code below instead.) This shares only your public ID — never a key.</div>
       {scanInvite
         ? <div><StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} /><button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 8 }}>Cancel scan</button></div>
         : <div>
@@ -13230,7 +13230,7 @@ const SETTINGS_GROUPS = [
     { k: 'key', n: 'Church key', d: 'Recovery phrase and backup', owner: true },
     { k: 'stewards', n: 'Stewards & handoff', d: 'Hand the church on', owner: true },
     { k: 'delegated', n: 'Helpers', d: 'Let someone help run the church, without the key', owner: true },
-    { k: 'become', n: 'Become a steward', d: 'Help another church', owner: true },
+    { k: 'become', n: 'Help run a church', d: 'Help another church — scan its invite', owner: true },
   ]],
 ];
 

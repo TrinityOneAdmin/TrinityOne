@@ -100,7 +100,7 @@ const ROW = 'Your name as a steward';
 
 test('CONTROL: the Delegated stewards page still renders, and the People group still holds its three older pages', () => {
   const s = settings('delegated');
-  assert.equal(region(s.tree).props['aria-label'], 'Delegated stewards', 're-anchor: the delegated page did not open');
+  assert.equal(region(s.tree).props['aria-label'], 'Helpers', 're-anchor: the delegated page did not open');
   const names = rowNames(s.tree);
   for (const n of ['Congregation features', 'Rules & privacy', 'Chat message tags']) assert.ok(names.includes(n), `re-anchor: "${n}" is not in the list`);
 });
@@ -112,7 +112,7 @@ test('the row "Your name as a steward" is in the list, in the People group, afte
   const grp = s.mod.SETTINGS_GROUPS.find(([, items]) => items.some(p => p.n === ROW));
   assert.equal(grp && grp[0], 'People', 'the row is not in the People group');
   assert.equal(names.indexOf(ROW), names.indexOf('Chat message tags') + 1, 'the row is not the last of People, directly after Chat message tags');
-  assert.ok(names.indexOf(ROW) < names.indexOf('Delegated stewards'), 'the row is not above Delegated stewards');
+  assert.ok(names.indexOf(ROW) < names.indexOf('Helpers'), 'the row is not above Helpers');
 });
 
 test('a delegated steward does not get the row — the by-line is the owner\'s, and its document is church-signed', () => {
@@ -159,8 +159,8 @@ test('the Delegated stewards page no longer carries the field; the "don\'t share
   assert.doesNotMatch(texts(region(d.tree)).join(' '), /don’t share this console/, 'the "don\'t share this console" sentence is still on the Delegated stewards page');
   const v = settings('voice');
   assert.match(texts(region(v.tree)).join(' '), /don’t share this console/, 'the "don\'t share this console" sentence did not move to the by-line page');
-  const link = buttonSaying(region(v.tree), /^Delegated stewards$/);
-  assert.equal(link.length, 1, 'the sentence has no "Delegated stewards" control to take the steward there');
+  const link = buttonSaying(region(v.tree), /^Helpers$/);
+  assert.equal(link.length, 1, 'the sentence has no "Helpers" control to take the steward there');
   link[0].props.onClick();
-  assert.equal(region(v.render()).props['aria-label'], 'Delegated stewards', 'pressing "Delegated stewards" in the sentence did not open that page');
+  assert.equal(region(v.render()).props['aria-label'], 'Helpers', 'pressing "Helpers" in the sentence did not open that page');
 });

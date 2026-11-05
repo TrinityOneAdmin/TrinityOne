@@ -192,7 +192,7 @@ const WAS_ON_A_TAB = [
   // Network & relays tab
   'Network', 'Run your own relay box', 'Relays',
   // Security tab, owner
-  'Church key', 'Stewards & handoff', 'Delegated stewards', 'Become a steward',
+  'Church key', 'Stewards & handoff', 'Helpers', 'Help run a church',
 ];
 // What the Relays card's other seven jobs became. "A relay is refusing our posts" is deliberately NOT here:
 // it is a fault, not a page, and it stays a banner on Relays — see the refusal test in
@@ -352,7 +352,7 @@ test('the page is the container the density rules measure, and the list is a sib
 const LANDS_ON = [
   // what the shipped callers pass, after 2026-09-09
   ['relays', 'Relays', 'Overview’s relay stat card, and the setup wizard’s "Relays & settings"'],
-  ['delegated', 'Delegated stewards', 'Overview’s "N people want to help steward" banner'],
+  ['delegated', 'Helpers', 'Overview’s "N people want to help steward" banner'],
   ['key', 'Church key', 'the sidebar’s "lock with a PIN" link'],
   // the keys that named TABS until 2026-09-09. A saved link, or a screen nobody updated, must still land on
   // a real page. 'features' and 'network' are page keys as well as old tab keys, and the PAGE wins — see the
@@ -360,7 +360,7 @@ const LANDS_ON = [
   ['church', 'Church identity', 'the old Church tab, which is not a page key'],
   ['features', 'Congregation features', 'the old Features tab, which is also a page key'],
   ['network', 'Network', 'the old Network & relays tab, which is also a page key'],
-  ['security', 'Delegated stewards', 'the old Security tab, which is not a page key'],
+  ['security', 'Helpers', 'the old Security tab, which is not a page key'],
 ];
 
 for (const [key, page, who] of LANDS_ON) {

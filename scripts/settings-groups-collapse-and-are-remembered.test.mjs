@@ -314,8 +314,8 @@ test('a deep link into a collapsed group opens that group', () => {
 
   // …and now something deep-links straight into it. Overview's steward-requests banner does exactly this.
   const s = screen('delegated', { store });
-  assert.equal(region(s.tree)[0].props['aria-label'], 'Delegated stewards', 're-anchor: the deep link did not land');
-  assert.ok(rowNames(s.tree).includes('Delegated stewards'),
+  assert.equal(region(s.tree)[0].props['aria-label'], 'Helpers', 're-anchor: the deep link did not land');
+  assert.ok(rowNames(s.tree).includes('Helpers'),
     'the deep link opened a page inside a collapsed group and left its row hidden. The steward is looking at ' +
     'a page with no row in the list leading back to it, no error, and nothing to say the list is partial');
   assert.equal(header(s.tree, 'Security').props['aria-expanded'], true,
