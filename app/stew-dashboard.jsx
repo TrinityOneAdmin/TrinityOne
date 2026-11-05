@@ -11387,16 +11387,33 @@ const WEB_BLOCKED_WHY = {
   shape: ['its details could not be read.', 'their details could not be read.'],
   mixed: ['its details could not be read.', 'they could not be read, for more than one reason.'],
 };
+// Build the two embed snippets a church can paste, off the one /public/<npub> base its calendar.ics feed
+// address carries. Pure (no React, no DOM) so it is lifted and run in a test (CLAUDE.md rule 3 — app/*.jsx
+// ships unbundled, so matching this text would prove nothing; the shape is asserted by CALLING this).
+//   iframe  — works on Google Sites and most website builders (they sandbox a pasted <script>); fixed height,
+//             so the church adjusts the height="600" to fit. Served by the relay's /embed route.
+//   script  — auto-sizes to its content, but only runs on a site that executes pasted page scripts (a raw-HTML
+//             page, a self-hosted site). Google Sites and the hosted builders will NOT run it.
+function widgetEmbedSnippets(url, mode) {
+  const base = url.replace(/\/calendar\.ics$/, '');
+  const iframe = '<iframe src="' + base + '/embed?mode=' + mode + '" width="100%" height="600" style="border:0" loading="lazy"></iframe>';
+  const script = '<script src="' + base + '/widget.js" data-mode="' + mode + '"><\/script>';
+  return { iframe, script };
+}
+
 function WidgetEmbed({ url, modes, descriptions }) {
   const [mode, setMode] = React.useState(modes[0][0]);
-  const [snippetCopied, setSnippetCopied] = React.useState('');
-  const widgetUrl = url.replace(/\/calendar\.ics$/, '/widget.js');
-  const snippet = '<script src="' + widgetUrl + '" data-mode="' + mode + '"><\/script>';
+  const [snippetCopied, setSnippetCopied] = React.useState('');   // '' | '<which>:<message>'
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const previewBase = url.replace(/\/calendar\.ics$/, '');
-  const copySnippet = () => { const ok = copyText(snippet); setSnippetCopied(ok ? 'Copied' : 'Select and copy'); setTimeout(() => setSnippetCopied(''), 2500); };
+  const { iframe: iframeSnippet, script: scriptSnippet } = widgetEmbedSnippets(url, mode);
+  const copySnippet = (which, text) => { const ok = copyText(text); setSnippetCopied(which + ':' + (ok ? 'Copied' : 'Select and copy')); setTimeout(() => setSnippetCopied(''), 2500); };
+  const copiedWhich = snippetCopied ? snippetCopied.split(':')[0] : '';
+  const copiedMsg = snippetCopied ? snippetCopied.slice(snippetCopied.indexOf(':') + 1) : '';
   const desc = descriptions && descriptions[mode];
   const previewH = mode === 'month' ? 420 : mode.startsWith('plans-lg') ? 500 : mode.startsWith('plans') ? 380 : mode === 'sermons-lg' ? 500 : 280;
+  const codeInput = { flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 11 };
+  const status = (which) => (copiedWhich === which ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copiedMsg === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copiedMsg}</div> : null);
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Embed on your website</div>
@@ -11412,12 +11429,24 @@ function WidgetEmbed({ url, modes, descriptions }) {
             ))}
           </div>
         </React.Fragment>
-      ) : <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Paste this into your site:</div>}
+      ) : null}
+      {/* PRIMARY: the iframe. Default because it renders on Google Sites and the hosted site builders, which
+          sandbox a pasted <script>; the script version below is for raw-HTML / self-hosted sites. */}
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>Works on Google Sites &amp; most site builders</div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input readOnly value={snippet} aria-label="Widget embed code" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 11 }} />
-        <button onClick={copySnippet} className="sk-btn sk-btn--clay" aria-label="Copy embed code" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
-        {snippetCopied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: snippetCopied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{snippetCopied}</div> : null}
+        <input readOnly value={iframeSnippet} aria-label="Widget embed code (iframe)" onFocus={e => e.target.select()} style={codeInput} />
+        <button onClick={() => copySnippet('iframe', iframeSnippet)} className="sk-btn sk-btn--clay" aria-label="Copy embed code" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+        {status('iframe')}
       </div>
+      <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Fixed height — change height="600" if it is cut off or leaves a gap.</div>
+      {/* SECONDARY: the auto-sizing script, for sites that run pasted page scripts (not Google Sites). */}
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', margin: '14px 0 4px' }}>Advanced — raw-HTML sites (resizes itself)</div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input readOnly value={scriptSnippet} aria-label="Widget embed code (script)" onFocus={e => e.target.select()} style={codeInput} />
+        <button onClick={() => copySnippet('script', scriptSnippet)} className="sk-btn sk-btn--ghost" aria-label="Copy script embed code" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} /> Copy</button>
+        {status('script')}
+      </div>
+      <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Auto-sizes to its content, but only on a site that runs pasted scripts — Google Sites will not show it.</div>
       {desc ? <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>{desc}</div> : null}
       {!isNative ? (
         <div style={{ marginTop: 14 }}>
