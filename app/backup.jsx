@@ -4,7 +4,19 @@
 // Restore reads the file back (plain <input type=file>) and re-applies. Exposes window.TrinityBackup.
 (function () {
   const TE = new TextEncoder(), TD = new TextDecoder();
-  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  // base64 of a buffer, CHUNKED. The obvious `btoa(String.fromCharCode(...bytes))` spreads EVERY byte as a
+  // call argument, and a multi-hundred-KB payload — a church's finance book swept into its backup — overflows
+  // the engine's argument/stack limit with a RangeError BEFORE any file is written, so the owner could not save
+  // the file that carries their recovery key (Finding 8, 2026-11-05). Encoding in fixed 32 KiB slices keeps the
+  // argument count per call small whatever the payload size. (unb64 below never spreads — `Uint8Array.from`
+  // iterates its string argument — so it is already safe at any size and is left as it is.)
+  const b64 = (buf) => {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    const CH = 0x8000;   // 32 KiB per fromCharCode call — well under the argument limit of every engine we ship to
+    for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    return btoa(bin);
+  };
   const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 
   // WebCrypto is only available in a secure context (https, or localhost). Over plain http on a LAN
@@ -129,12 +141,24 @@
                                 'trinityone.steward.adopted-relays', 'trinityone.steward.declined-relays',
                                 'trinityone.steward.dead-relay-strikes']);
 
+  // THE PRELOAD SEED CACHES ARE REBUILT FROM THE RELAY ON EVERY OPEN, so a backup has no reason to carry them —
+  // and three reasons not to, which is why they are excluded on BOTH sides exactly like ROUTING_KEYS. (1) SIZE:
+  // the sealed finance book is capped at 3 MB and, sealed + base64, lands near 4 MB; swept into the backup it
+  // blew `encryptObj`'s base64 step and the church-key backup threw before any file was written — the owner
+  // could not save their recovery key (Finding 8, 2026-11-05). (2) PRIVACY: these hold a plaintext public-subset
+  // naming who messages the church, who is admitted and who is bringing meals — a backup is cloud-stored, the
+  // one carrier this file's own ROUTING_KEYS note refuses for sensitive data (Finding 6). (3) STALENESS: a
+  // restored seed is overwritten by the relay on first open regardless. The sub-family tails (`.v2.`, the four
+  // `care.` shapes) are matched too; `care\.` on its own would also catch a future non-seed `steward.care…` key,
+  // so the four meal shapes are named. Member backups never match (these are all `trinityone.steward.*`).
+  const SEED_CACHE_RX = /^trinityone\.steward\.(financebook|sgclear|minorslast|dmconvos|admitted|joinpolicy|stewardreqs|stats|activity|versebanner|groups\.v2|plans\.v2|devos\.v2|addr\.v2|members|care\.(needs|slots|skips|avail))\./;
+
   function snapshot(prefixes, exact) {
     const out = {};
     const ex = new Set(exact || []);
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && !ROUTING_KEYS.has(k) && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);
+      if (k && !ROUTING_KEYS.has(k) && !SEED_CACHE_RX.test(k) && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);
     }
     return out;
   }
@@ -161,7 +185,9 @@
       // holding a PIN that cannot work, or pointing at a Keystore slot that was never written here. The
       // previous code wrote it and then deleted it a line later, which also took THIS device's marker with it —
       // finding K1. Excluding it here is the same rule as the seed, and it fixes old backup files too.
-      && !/\.church-key\.enc$/.test(k);
+      && !/\.church-key\.enc$/.test(k)
+      && !SEED_CACHE_RX.test(String(k));            // …and never a disposable preload seed — an OLDER file that
+                                                    // already carries them must not write them back (Finding 6/8)
     let skipped = 0;
     Object.keys(map || {}).forEach(k => {
       if (!ok(k)) { skipped++; return; }

@@ -16079,7 +16079,73 @@ zoo`.split("\n");
   function lsSet(k, v) {
     try {
       localStorage.setItem(k, v);
-    } catch {
+    } catch (e) {
+      if (!_isQuotaError(e)) return;
+      try {
+        if (_evictSeedCaches(k)) localStorage.setItem(k, v);
+      } catch (e2) {
+      }
+    }
+  }
+  function _isQuotaError(e) {
+    return !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014);
+  }
+  var _SEED_PLAINTEXT_PREFIXES = [
+    "trinityone.steward.dmconvos.",
+    "trinityone.steward.admitted.",
+    "trinityone.steward.joinpolicy.",
+    "trinityone.steward.stewardreqs.",
+    "trinityone.steward.stats.",
+    "trinityone.steward.activity.",
+    "trinityone.steward.versebanner.",
+    "trinityone.steward.care.needs.",
+    "trinityone.steward.care.slots.",
+    "trinityone.steward.care.skips.",
+    "trinityone.steward.care.avail."
+  ];
+  var _SEED_EVICTABLE_PREFIXES = [
+    "trinityone.steward.financebook.",
+    "trinityone.steward.sgclear.",
+    "trinityone.steward.minorslast.",
+    "trinityone.steward.groups.v2.",
+    "trinityone.steward.plans.v2.",
+    "trinityone.steward.devos.v2.",
+    "trinityone.steward.addr.v2.",
+    "trinityone.steward.members."
+  ].concat(_SEED_PLAINTEXT_PREFIXES);
+  function _evictSeedCaches(exceptKey) {
+    try {
+      const ks = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (k && k !== exceptKey && _SEED_EVICTABLE_PREFIXES.some((p) => k.startsWith(p))) ks.push(k);
+      }
+      for (const k of ks) {
+        try {
+          localStorage.removeItem(k);
+        } catch (e) {
+        }
+      }
+      return ks.length;
+    } catch (e) {
+      return 0;
+    }
+  }
+  function _seedSweep(keep) {
+    try {
+      const ks = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (!k) continue;
+        if (_SEED_PLAINTEXT_PREFIXES.some((p) => k.startsWith(p) && (!keep || k !== p + keep))) ks.push(k);
+      }
+      for (const k of ks) {
+        try {
+          localStorage.removeItem(k);
+        } catch (e) {
+        }
+      }
+    } catch (e) {
     }
   }
   var OWN_NAME_LS = "trinityone.steward.ownname.";
@@ -18008,6 +18074,7 @@ zoo`.split("\n");
     _minorsLastClear("");
     _sgClearClear("");
     _finBookClear("");
+    _seedSweep("");
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -18210,7 +18277,11 @@ zoo`.split("\n");
       }
     }
     lsSet(ENC_LS, str);
-    return true;
+    try {
+      return lsGet(ENC_LS) === str;
+    } catch (e) {
+      return false;
+    }
   }
   var _encIntent = { have: null };
   var _encConverging = null;
@@ -21040,6 +21111,7 @@ zoo`.split("\n");
       _minorsLastClear("");
       _sgClearClear("");
       _finBookClear("");
+      _seedSweep("");
     },
     removeKey() {
       try {
@@ -21056,6 +21128,7 @@ zoo`.split("\n");
       _minorsLastClear("");
       _sgClearClear("");
       _finBookClear("");
+      _seedSweep("");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
       _stay.clear();
@@ -27351,6 +27424,7 @@ zoo`.split("\n");
       _minorsLastClear(actingChurch || pub);
       _sgClearClear(actingChurch || pub);
       _finBookClear(actingChurch || pub);
+      _seedSweep(actingChurch || pub);
       _latestGuardNotice.clear();
       _senvPending.clear();
       window.Steward.pubkey = pub;

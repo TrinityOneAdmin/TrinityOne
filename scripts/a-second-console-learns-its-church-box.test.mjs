@@ -1319,6 +1319,7 @@ test('none of the three routing stores leaves in a backup, and none can be writt
   const BK = readFileSync(new URL('../app/backup.jsx', import.meta.url), 'utf8');
   const body = [
     stmt(BK, '  const ROUTING_KEYS = new Set(', 'ROUTING_KEYS'),
+    stmt(BK, '  const SEED_CACHE_RX = ', 'SEED_CACHE_RX'),   // snapshot + restoreLocal now also refuse the disposable seed caches (Finding 6/8)
     fnBody(BK, '  function snapshot(prefixes, exact) {', 'snapshot'),
     fnBody(BK, '  function restoreLocal(map, allow, exact) {', 'restoreLocal'),
     stmt(BK, '  const STEWARD_PREFIXES = ', 'STEWARD_PREFIXES'),
