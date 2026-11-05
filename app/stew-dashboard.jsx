@@ -4037,7 +4037,7 @@ function NewGroupModal({ open, onClose }) {
                       {visible.map(m => { const on = sel.has(m.pubkey); return (
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to add this person to the group, untick to leave them out" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
-                          <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
+                          <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Name not set yet'}</span>
                           <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: nameHandle(m) ? 700 : 400, fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
                         </button>
                       ); })}
@@ -4196,7 +4196,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose, seed }) {
               {ql && visible.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members match “{q}”.</div> : visible.map(m => { const on = sel.has(m.pubkey); return (
             <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to keep this person in the group, untick to remove them" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
-              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
+              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Name not set yet'}</span>
               <span style={{ fontSize: 11, color: nameHandle(m) ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', marginLeft: 'auto' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)}</span>
             </button>
           ); })}
@@ -5095,10 +5095,11 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
             : (ql && visible.length === 0) ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No members match “{q}”.</div>
             : visible.map(m => {
               const on = sel.has(m.pubkey);
-              const nm = m.name || ('Anon · ' + (m.npub || m.pubkey).slice(-6));
+              const named = !!m.name;
+              const nm = m.name || 'Name not set yet';
               return (
                 <button key={m.pubkey} onClick={() => toggle(m.pubkey)} title="Tick to make this person a leader, untick to remove them" style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 12, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
-                  <SkBadge initials={(nm.replace(/^Anon · /, '').split(/\s+/).map(w => w[0]).join('').slice(0, 2) || 'AN').toUpperCase()} size={32} radius={9} accent={on ? 'var(--sage)' : undefined} />
+                  <SkBadge initials={(named ? nm.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} size={32} radius={9} accent={on ? 'var(--sage)' : undefined} />
                   <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>{nm}</div><div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)' }}>{(m.npub || '').slice(0, 16)}…</div></div>
                   <div style={{ width: 22, height: 22, borderRadius: 7, flexShrink: 0, border: '1.5px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on ? <Icon name="check" size={14} stroke={3} color="#fff" /> : null}</div>
                 </button>
@@ -7463,7 +7464,7 @@ function GuardianLinkModal({ child, childName, members, guardians, minorsSet, on
         {candidates.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 0' }}>No matching adult members.</div> :
           candidates.slice(0, 60).map(m => (
             <button key={m.pubkey} onClick={() => onLink(child, m.pubkey)} title="Link this person as the child’s parent" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
-              <span style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 13.5 }}>{m.name || ('Anonymous …' + (m.pubkey || '').slice(-6))}</span>
+              <span style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Name not set yet'}</span>
               <Icon name="plus" size={15} color="var(--clay)" />
             </button>
           ))}
@@ -8393,8 +8394,8 @@ function DashMembers() {
   //
   // It still goes through a confirm that NAMES everyone, because only a steward at an unlocked console admits
   // anyone (decided 2026-08-18) and a bulk button that hid the names would keep the letter of that rule while
-  // losing the point of it. Anyone who has not set a name is called out separately — "Anonymous" is exactly
-  // the row a steward would want to look at twice.
+  // losing the point of it. Anyone who has not set a name is called out separately — "Name not set yet" is
+  // exactly the row a steward would want to look at twice.
   const [confirmAdmitAll, setConfirmAdmitAll] = React.useState(false);
   const dmKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1) — Block rotates to it
   const [admitAllBusy, setAdmitAllBusy] = React.useState(false);
@@ -8607,7 +8608,7 @@ function DashMembers() {
   };
   const memberRow = (m, inactive) => {
     const named = !!m.name;
-    const label = named ? m.name : 'Anonymous';
+    const label = named ? m.name : 'Name not set yet';
     const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
     if (narrow) {
       // ONE ROW, ABOUT THE AVATAR'S HEIGHT (P12, owner 2026-09-20 — the sheet's note has the numbers). Avatar ·
@@ -8687,7 +8688,7 @@ function DashMembers() {
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 1, minWidth: 0 }} title={m.nip05 || m.npub}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>@{nameHandle(m)}</span> <Icon name="check" size={11} stroke={3} color="var(--sage)" style={{ flexShrink: 0 }} /></span>
                 : (!named
-                    /* No nicename AND no name: the short npub is the ONLY thing telling two Anonymous rows apart, so it stays. */
+                    /* No nicename AND no name: the short npub is the ONLY thing telling two unnamed rows apart, so it stays. */
                     ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }} title={m.npub}>{shortNpub(m.npub)}</span>
                     : null)}
             </div>
@@ -8824,7 +8825,7 @@ function DashMembers() {
   // (`pendingJoins.map(m => {`), so while this lived inline NOTHING could reach the Approve button - and
   // the join queue is the one screen where admission happens. CLAUDE.md rule 1.
   const joinRow = (m) => {
-              const named = !!m.name; const label = named ? m.name : 'Anonymous';
+              const named = !!m.name; const label = named ? m.name : 'Name not set yet';
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
               return (
                 <div key={m.pubkey} data-join-card="" style={joinNarrow
@@ -9085,7 +9086,7 @@ function DashMembers() {
         const m = members.find(x => x.pubkey === moreFor && !isBlocked(x.pubkey));
         if (!m) return null;
         const named = !!m.name;
-        return <StewMemberSheet label={named ? m.name : 'Anonymous'} initials={(named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} pubkey={m.pubkey} accent={SK_TINT[named ? 'gold' : 'sage'].fg}
+        return <StewMemberSheet label={named ? m.name : 'Name not set yet'} initials={(named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} pubkey={m.pubkey} accent={SK_TINT[named ? 'gold' : 'sage'].fg}
           facts={memberFacts(m)} actions={memberActions(m)} onClose={() => { setMoreFor(null); if (confirmBlock === m.pubkey) setConfirmBlock(null); }} />;
       })() : null}
       {linkChild ? <GuardianLinkModal child={linkChild} childName={nameByPub[linkChild]} members={members} guardians={guardians} minorsSet={minorsSet} onLink={linkParent} onUnlink={unlinkParent} onClose={() => setLinkChild(null)} /> : null}
@@ -10897,7 +10898,7 @@ function DashStewardsPanel({ church }) {
                   <button key={m.pubkey} onClick={() => { if (!newLabel.trim()) { setAddErr('Give them a name first.'); return; } add(m.pubkey, newLabel, newCaps); }} title="Add this member as a steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                     <SkBadge initials={(m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} pubkey={m.pubkey} size={30} radius={9} accent={SK_TINT[m.name ? 'gold' : 'sage'].fg} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || 'Anonymous'}</div>
+                      <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || 'Name not set yet'}</div>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>{shortNpub(m.npub)}</div>
                     </div>
                     <Icon name="plus" size={16} color="var(--clay)" />
@@ -13528,7 +13529,7 @@ function StewDmWindow({ peer, offset, onClose }) {
     : {};
   const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
-  const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+  const initials = (peer.name ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
   return (
     <div style={{ width: '100%', background: 'var(--surface)', borderTop: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: min ? 48 : 420, transition: 'height .18s', pointerEvents: 'auto' }}>
       <div onClick={() => setMin(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', cursor: 'pointer', background: 'var(--surface)', borderBottom: min ? 'none' : '1px solid var(--line)', flexShrink: 0 }}>

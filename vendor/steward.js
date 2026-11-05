@@ -26704,18 +26704,7 @@ zoo`.split("\n");
         { everyRelay: true }
       );
       let stopRead = openRead();
-      const onRelays = () => {
-        try {
-          stopRead();
-        } catch (e) {
-        }
-        stopRead = openRead();
-      };
-      try {
-        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("steward-relays", onRelays);
-      } catch (e) {
-      }
-      const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d === NAME_D + pub) {
@@ -26751,6 +26740,23 @@ zoo`.split("\n");
         oneose() {
         }
       });
+      let reseatSub = openReseat();
+      const onRelays = () => {
+        try {
+          stopRead();
+        } catch (e) {
+        }
+        stopRead = openRead();
+        try {
+          reseatSub.close();
+        } catch (e) {
+        }
+        reseatSub = openReseat();
+      };
+      try {
+        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("steward-relays", onRelays);
+      } catch (e) {
+      }
       return () => {
         tok.live = false;
         try {

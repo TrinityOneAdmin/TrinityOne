@@ -9,6 +9,21 @@ const SCH_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // The toolbar label for each rota-visibility setting. Short enough for the button; the menu carries the
 // explanation, and the caveat that this applies from now on rather than retroactively.
 const ROTA_VIS_LABEL = { church: 'Everyone', team: 'Serving teams', stewards: 'Stewards only' };
+// ONE honest label for a member who has not set a name yet. Owner-approved wording (2026-11-05). The console used
+// to fall back to "Anonymous" / "Anon · <last6 of pubkey>", which reads as a chosen pseudonym rather than "not set
+// yet" — and the owner deliberately removed pseudonyms. It is centralised WITHIN this file on purpose (CLAUDE.md
+// rule 2): the rota/calendar pickers (memDisplay), the RSVP name resolvers (nameFor) and the attendance SORT KEY
+// (schAttendanceOrder) all key on the same fallback, so routing them through PENDING_UNNAMED / isNamed() / memPending()
+// keeps the sort sentinel and the string from drifting apart. app/stew-dashboard.jsx is a SEPARATE babel script
+// (classic <script>, not a module) and cannot see these lexical bindings, nor can the ~57 isolated component-test
+// harnesses that slice its components; it therefore repeats the same literal inline at each of its own sites rather
+// than depend on a cross-file global that those harnesses would have to provide (and whose absence would blank the
+// console on a load-order regression — the silent-blank-app trap). NOTE: the member app's own fallback is 'Member'
+// (UNNAMED in src/fellowship.src.js) and the console's DM peer rows keep that same 'Member' fallback — a different,
+// already-honest fallback that is NOT touched by this; only the "Anonymous"/"Anon ·" fallbacks are.
+const PENDING_UNNAMED = 'Name not set yet';
+function isNamed(m) { return !!(m && m.name && String(m.name).trim()); }
+function memPending(m) { return isNamed(m) ? m.name : PENDING_UNNAMED; }
 const SCH_EVENT_TIME_KEY = 'trinityone.steward.eventTime';
 function schLastEventTime() {
   try { const v = localStorage.getItem(SCH_EVENT_TIME_KEY); return /^\d{2}:\d{2}$/.test(v || '') ? v : '19:30'; } catch (e) { return '19:30'; }
@@ -76,7 +91,7 @@ function useSchBlocked() {
   const list = (window.useStewardBlocked ? window.useStewardBlocked() : []) || [];
   return new Set(list.map(p => String(p || '').toLowerCase()));
 }
-function memDisplay(m) { return (m && m.name && m.name.trim()) || ('Anon · ' + ((m && (m.npub || m.pubkey)) || '').slice(-6)); }
+function memDisplay(m) { return memPending(m); }
 function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x] && o[x].name)).sort().map(x => x + '=' + o[x].name + '/' + (o[x].pub || '')).join('|'); return k(a) === k(b); }
 
 // small date block used across the board
@@ -210,7 +225,7 @@ function teamPeopleForAllowlist(people, added, removed, members) {
   const have = new Set(kept.map(p => p && p.pub).filter(Boolean));
   const fresh = [...new Set((added || []).filter(Boolean))].filter(pk => !have.has(pk)).map(pk => {
     const m = (members || []).find(x => x && x.pubkey === pk);
-    return { id: 'p' + Math.random().toString(36).slice(2, 7), name: m ? memDisplay(m) : ('Anon · ' + String(pk).slice(-6)), pub: pk };
+    return { id: 'p' + Math.random().toString(36).slice(2, 7), name: memDisplay(m), pub: pk };
   });
   return kept.concat(fresh);
 }
@@ -1604,7 +1619,7 @@ function DashCalendar() {
   const bookings = (typeof window.useStewardBookings === 'function') ? window.useStewardBookings() : [];
   const rooms = (typeof window.useStewardRooms === 'function') ? window.useStewardRooms() : [];
   const roomName = (id) => { const r = rooms.find(x => x.id === id); return (r && r.name) || 'Room'; };
-  const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
+  const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return memPending(m); };
   const rsvpSummary = (eventId) => {
     return schRsvpGroups(rsvps, eventId, nameFor);
   };
@@ -1986,7 +2001,7 @@ function SchEventMessage({ event, onClose }) {
   // A clean send says so for a moment, then closes the box. Anything less (failed, or saved-but-waiting) never sets
   // `done`, so the box stays open with the words in it.
   React.useEffect(() => { if (!done) return; const t = setTimeout(() => { if (onClose) onClose(); }, 1800); return () => clearTimeout(t); }, [done]);
-  const nameFor = (pub) => { const m = allMembers.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
+  const nameFor = (pub) => { const m = allMembers.find(x => x.pubkey === pub); return memPending(m); };
   const audience = schEventAudience({ event: e, mode, rsvps, members: pickable, groups, blocked, selfPub: window.Steward && window.Steward.pubkey });
   const target = retry || audience;
   // B6: "Everyone invited" posts into the originating chat group (if any); "Just those going" is an RSVP
@@ -2058,9 +2073,11 @@ function schRsvpGroups(rsvps, eventId, nameFor) {
   for (const pub in map) { if (out[map[pub]]) out[map[pub]].push(nameFor(pub)); }
   return out;
 }
-// Alphabetical, with the people who have no name on file ("Anonymous") last.
+// Alphabetical, with the people who have no name on file last. nameFor() (above) produces PENDING_UNNAMED for
+// those people, so the sentinel MUST be that same constant — not the old "Anonymous" literal — or the unnamed
+// rows would sort in alphabetically among the real names instead of dropping to the bottom (CLAUDE.md rule 2).
 function schAttendanceOrder(names) {
-  const anon = (n) => n === 'Anonymous' ? 1 : 0;
+  const anon = (n) => n === PENDING_UNNAMED ? 1 : 0;
   return (names || []).slice().sort((a, b) => anon(a) - anon(b) || a.localeCompare(b));
 }
 
@@ -2095,7 +2112,7 @@ function SchEventDetail({ event, onClose }) {
   const [messaging, setMessaging] = React.useState(false);
   const rsvps = window.useStewardRsvps ? window.useStewardRsvps() : {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
-  const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || 'Anonymous'; };
+  const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return memPending(m); };
   const [attendance, setAttendance] = React.useState(null);   // 'going' | 'maybe' | 'no' | null: which list is open
   const rs = schRsvpGroups(rsvps, e.id, nameFor);
   const total = rs.going.length + rs.maybe.length + rs.no.length;

@@ -22,7 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody, stripComments } from './test-slice.mjs';
+import { fnBody, stripComments, stmt } from './test-slice.mjs';
 
 const SCHEDULE = readFileSync(new URL('../app/stew-schedule.jsx', import.meta.url), 'utf8');
 const DASH     = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
@@ -32,6 +32,8 @@ const MEALS    = readFileSync(new URL('../app/stew-meals.jsx', import.meta.url),
 // hand-writes the logic it claims to check is the mirror-test shape this repo has shipped twice.
 function loadReconcilers(windowStub) {
   const src = [
+    stmt(SCHEDULE, "const PENDING_UNNAMED = 'Name not set yet';", 'PENDING_UNNAMED'),
+    fnBody(SCHEDULE, 'function isNamed(m) {'), fnBody(SCHEDULE, 'function memPending(m) {'),
     fnBody(SCHEDULE, 'function memDisplay('),
     fnBody(SCHEDULE, 'function teamPeopleForAllowlist('),
     fnBody(SCHEDULE, 'function teamAllowlistForPeople('),

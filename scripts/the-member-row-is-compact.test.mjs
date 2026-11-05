@@ -78,15 +78,15 @@ test('the badges and the joined-ago text are gone from the rendered row', () => 
     const row = rowOf(tree, nm);
     const t = rowText(row);
     assert.ok(!/joined/i.test(t), nm + ': "joined" is still on the row: ' + t);
-    assert.ok(!/anonymous/i.test(t), nm + ': "anonymous" is on a named member row: ' + t);
+    assert.ok(!/name not set yet/i.test(t), nm + ': the un-named label is on a named member row: ' + t);
     assert.ok(!/posted yet/i.test(t), nm + ': "hasn\'t posted yet" is still on the row: ' + t);
     assert.ok(!/ ago/.test(t), nm + ': an "ago" is still on the row: ' + t);
     assert.deepEqual(find(row, n => n.props && n.props['data-pill']).filter(p => /joined|anonymous/i.test(texts(p).join(' '))), []);
   }
-  for (const row of cards(tree).filter(r => /Anonymous/.test(rowText(r)))) {
-    assert.ok(!/(joined|posted yet| ago)/i.test(rowText(row)), 'an anonymous row still carries joined/posted text: ' + rowText(row));
-    // the name reads "Anonymous" once; an ANONYMOUS badge would make it twice
-    assert.equal((rowText(row).match(/anonymous/gi) || []).length, 1, 'ANONYMOUS appears more than once: ' + rowText(row));
+  for (const row of cards(tree).filter(r => /Name not set yet/.test(rowText(r)))) {
+    assert.ok(!/(joined|posted yet| ago)/i.test(rowText(row)), 'an un-named row still carries joined/posted text: ' + rowText(row));
+    // the name reads "Name not set yet" once; a duplicate badge would make it twice
+    assert.equal((rowText(row).match(/name not set yet/gi) || []).length, 1, 'the un-named label appears more than once: ' + rowText(row));
   }
 });
 
@@ -101,12 +101,12 @@ test('a named member shows no raw npub; a member with a nicename shows @nicename
   assert.ok(!/npub1/.test(rowText(handle)), 'the nicename row still prints an npub: ' + rowText(handle));
 });
 
-test('two Anonymous members stay tellable apart: each keeps a SHORT npub fragment, not the whole key', () => {
-  const rows = cards(render()).filter(r => /Anonymous/.test(rowText(r)));
-  assert.equal(rows.length, 2, 'expected two Anonymous rows, got ' + rows.length);
+test('two un-named members stay tellable apart: each keeps a SHORT npub fragment, not the whole key', () => {
+  const rows = cards(render()).filter(r => /Name not set yet/.test(rowText(r)));
+  assert.equal(rows.length, 2, 'expected two un-named rows, got ' + rows.length);
   const frag = rows.map(r => (rowText(r).match(/npub1\S*/) || [''])[0]);
   assert.ok(frag.every(f => f.length > 8 && f.length < 30), 'the fragment is missing or is the full key: ' + JSON.stringify(frag));
-  assert.notEqual(frag[0], frag[1], 'the two Anonymous rows are identical: ' + JSON.stringify(frag));
+  assert.notEqual(frag[0], frag[1], 'the two un-named rows are identical: ' + JSON.stringify(frag));
 });
 
 test('every action is still on the row: Chat, Child, Clear for youth, Reconnect, Photo, copy, Block', () => {
