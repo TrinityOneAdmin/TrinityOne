@@ -303,18 +303,25 @@ test('F6: a 64-hex pubkey inside a long blurb is INVISIBLE to a raw scan and cau
 });
 
 test('F6: what the builder itself puts in the file names nobody — measured through the unfolded text', () => {
-  // The seven noticeboard fields go in. Anything else handed to the builder is dropped rather than trusted,
-  // which is the claim this row measures rather than assumes.
+  // The noticeboard fields go in. Anything else handed to the builder is dropped rather than trusted, which is
+  // the claim this row measures rather than assumes. The IMAGE is a special case since calendar-pilot item 3: a
+  // steward's capped cover image + its focal point (image/imgPos/imgZoom) are now admitted by publicEventFields
+  // so a public PAGE can show them — but they STILL never reach the .ics TEXT (a data: URI would bloat every
+  // subscription), which the `data:image` line in the forbidden loop below keeps guarding. groupId, a member,
+  // ATTENDEE/ORGANIZER and a raw url remain forbidden everywhere.
   const member = 'e'.repeat(64);
   const text = unfoldIcs(buildCalendar([{
     id: 'supper', title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: 'All welcome',
-    groupId: 'grpyouth', creator: member, attendees: [member], image: 'data:image/jpeg;base64,AAAA', url: 'https://church.example/x',
+    groupId: 'grpyouth', creator: member, attendees: [member], image: 'data:image/jpeg;base64,AAAA', imgPos: { x: 10, y: 90 }, imgZoom: 2, url: 'https://church.example/x',
   }], { name: 'Grace Church', uidScope: 'npub1scope' }));
-  for (const forbidden of [member, 'grpyouth', 'ATTENDEE', 'ORGANIZER', 'data:image', 'https://church.example']) {
+  for (const forbidden of [member, 'grpyouth', 'ATTENDEE', 'ORGANIZER', 'data:image', 'imgPos', 'imgZoom', 'https://church.example']) {
     assert.equal(text.includes(forbidden), false, 'the feed carries ' + forbidden);
   }
+  // publicEventFields admits the noticeboard fields PLUS the item-3 image trio (image/imgPos/imgZoom) PLUS the
+  // item-2/4 `exceptions` map (per-occurrence skips/moves — DATES only, never a name), and nothing else —
+  // groupId, creator and attendees handed in above are still dropped.
   assert.deepEqual(Object.keys(publicEventFields({ id: 'supper', date: '2026-10-03', groupId: 'g', creator: member })).sort(),
-    ['blurb', 'date', 'day', 'id', 'nth', 'recur', 'time', 'title', 'where'], 'publicEventFields admits a field beyond the noticeboard ones');
+    ['blurb', 'date', 'day', 'exceptions', 'id', 'image', 'imgPos', 'imgZoom', 'nth', 'recur', 'time', 'title', 'where'], 'publicEventFields admits a field beyond the noticeboard ones + the item-3 image trio + the item-2/4 exceptions map');
 });
 
 // ── PHASE 2: the feed settings on Settings → Your website change the FILE ─────────────────────────────────

@@ -273,10 +273,23 @@ function realSaveMeetings(scope) {
 function realSteward(sealed) {
   const pe = stripComments(fnBody(VENDOR, 'async publishEvent(ev, asPub) {', 'publishEvent'));
   const pm = stripComments(fnBody(VENDOR, 'publishMeeting(m) {', 'publishMeeting'));
+  // publishEvent now normalises image framing + per-occurrence exceptions through module-level helpers
+  // (calendar-pilot items 2/3/4); lift them so the shipped whitelist runs. _evExceptions reads EV_EXC_MAX —
+  // capture the literal the same way the an-event-image / one-occurrence tests do (esbuild rewrites it).
+  const capExc = VENDOR.match(/EV_EXC_MAX\s*=\s*([0-9eExX.+]+)/);
+  assert.ok(capExc, 'EV_EXC_MAX is gone — re-anchor');
+  const evHelpers = new Function([
+    'const EV_EXC_MAX = ' + capExc[1] + ';',
+    fnBody(VENDOR, 'function _evImgPos', '_evImgPos'),
+    fnBody(VENDOR, 'function _evImgZoom', '_evImgZoom'),
+    fnBody(VENDOR, 'function _evExceptions', '_evExceptions'),
+    'return { _evImgPos, _evImgZoom, _evExceptions };',
+  ].join('\n'))();
   const scope = {
     skFor: () => 'sk', _evtSeq: 0, EVENT_D: 'trinityone/event:', NET: 'trinityone', actingChurch: '',
     _sealChurchDocReady: async (doc) => { sealed.push(doc); return JSON.stringify(doc); },
     publish: async () => true, feChurch: (x) => x, now: () => 1, _todayISO: () => '2026-10-01',
+    _evImgPos: evHelpers._evImgPos, _evImgZoom: evHelpers._evImgZoom, _evExceptions: evHelpers._evExceptions,
   };
   const names = Object.keys(scope);
   return new Function(...names, `return { ${pe}, ${pm} };`)(...names.map(n => scope[n]));

@@ -77,6 +77,18 @@ function schGenDates(startIso, cadence, untilIso, nth) {
     const series = { id: 'sch', date: startIso, recur: 'monthly', day: schDate(startIso).getDay(), nth: (typeof nth === 'number') ? nth : schNthOf(startIso) };
     return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= end).slice(0, 400);
   }
+  if (cadence === 'fortnightly') {
+    // FORTNIGHTLY reuses the same expandEvents walk as monthly (DST-safe, phase-aligned on the anchor's
+    // weekday, step 14 — app/recur.jsx), so a one-off series published here lands exactly where a fortnightly
+    // meeting would be painted. Same 400-date ceiling as the weekly walk: cap the end at 400 * 14 days so the
+    // span (and the per-keystroke cost of schPlanned) cannot grow with Until.
+    const cap = schAddDays(startIso, 400 * 14);
+    let end = (untilIso && untilIso > startIso) ? untilIso : startIso;
+    if (end > cap) end = cap;
+    const span = Math.round((schDate(end) - schDate(startIso)) / 864e5);
+    const series = { id: 'sch', date: startIso, recur: 'fortnightly', day: schDate(startIso).getDay() };
+    return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= end).slice(0, 400);
+  }
   const out = [startIso]; let cur = startIso, guard = 0;
   while (guard++ < 400) { cur = schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
   return out;
@@ -137,6 +149,20 @@ function schNoKey() {
 // VEVENT for one it cannot represent — and this `max` is the cheaper half: it stops the date picker offering
 // a year the rest of the product cannot carry, so a steward who fat-fingers 9999 sees it here first.
 const SCH_MAX_DATE = '9999-12-31';
+// DISTINCT PAST VALUES a steward can reuse when composing an event, derived from the church's OWN loaded
+// events (window.useStewardEvents — the same source the clash check reads), so no new store, no relay read,
+// and privacy is inherent (own-church docs only). Three INDEPENDENT lists (owner, 2026-11-05): picking a
+// past name must NOT pull in the where/image it once had — each field reuses only its own history. Pure and
+// module-scope so the point-of-use test can lift and run it.
+function eventHistory(events) {
+  const distinct = (xs) => [...new Set((xs || []).map(x => (x == null ? '' : String(x).trim())).filter(Boolean))];
+  const list = events || [];
+  return {
+    names: distinct(list.map(e => e && e.title)),
+    wheres: distinct(list.map(e => e && e.where)),
+    images: distinct(list.map(e => e && e.image)),
+  };
+}
 function SchNotSaved({ msg }) {
   if (!msg) return null;
   return (
@@ -510,7 +536,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, p
     <React.Fragment>
       <div style={schLbl}>Repeat</div>
       <div style={{ display: 'flex', gap: 7 }}>
-        {[['none', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([v, l]) => (
+        {[['none', 'Once'], ['weekly', 'Weekly'], ['fortnightly', 'Fortnightly'], ['monthly', 'Monthly']].map(([v, l]) => (
           <button key={v} onClick={() => setRepeat(v)} aria-pressed={repeat === v} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
         ))}
       </div>
@@ -800,7 +826,14 @@ function DashRota({ onNewTeam }) {
   // Who may fetch the rota. Defaults to 'church' — the open setting every church had before this existed —
   // both here and in the relay, so a console running against an older relay shows the truth rather than a
   // promise that relay is not keeping.
-  const rotaVis = ((typeof window.useStewardRotaSettings === 'function') ? window.useStewardRotaSettings() : { visibility: 'church' }).visibility || 'church';
+  const rotaSettings = (typeof window.useStewardRotaSettings === 'function') ? window.useStewardRotaSettings() : { visibility: 'church' };
+  const rotaVis = (rotaSettings && rotaSettings.visibility) || 'church';
+  // AUTO-CONFIRM SERVING. When the church turns this on, Publish rosters the assigned people as confirmed
+  // and does NOT send each of them a "Can you serve?" request they must accept — see sendRequestsFor, which
+  // skips the ask when this is set. Default false = today's behaviour (send the requests). A steward cannot
+  // forge a member's accept, so this is "skip the ask + treat assigned as confirmed", not a faked acceptance;
+  // rota coverage already counts an assigned-but-not-asked slot as filled, so the slot still renders covered.
+  const autoConfirm = !!(rotaSettings && rotaSettings.autoConfirm);
   const [visMenu, setVisMenu] = useSch(false);
   // Escape must close this and focus must come back here. Without the ref, choosing an option dropped focus
   // to <body> and a keyboard steward had to Tab from the top of the console to get anywhere.
@@ -975,6 +1008,14 @@ function DashRota({ onNewTeam }) {
   // so an ask that never landed is not there, and pressing Publish again asks exactly the people who were
   // missed and nobody else.
   const sendRequestsFor = async (sId, sDate, sTime, sName, assignMap) => {
+    // AUTO-CONFIRM: the church has turned off the accept step, so the assigned people are rostered as
+    // confirmed and we send NOTHING — no "Can you serve?" request, and no informational DM either (the
+    // simplest honest choice; anything sent here would have to NOT be accept-required, and the rota itself
+    // already carries the assignment). This is the single point of use for all three callers (publish,
+    // autoFillAhead, rotatePods, confirmSwap): gating here cannot be bypassed by one of them. Returning the
+    // same zero-shaped result those callers expect ({tried,failed,held,heldPubs}) makes every flash read as
+    // a clean publish with nothing outstanding. When OFF (default) the behaviour below is unchanged.
+    if (autoConfirm) return { tried: 0, failed: 0, held: 0, heldPubs: [] };
     const jobs = []; const heldPubs = new Set();
     for (const key in assignMap) {
       const a = assignMap[key]; if (!a || !a.pub) continue;
@@ -1143,7 +1184,9 @@ function DashRota({ onNewTeam }) {
     const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
     if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     if (asked.held) { setFlash(heldFlash('Published', asked.held, 'press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
-    setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
+    // Honest confirmation: with auto-confirm on nobody was asked (they are rostered as confirmed), so the
+    // flash must not claim they "have been asked" — that would describe a request this church chose not to send.
+    setFlash(autoConfirm ? 'Published — everyone assigned is rostered' : 'Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 
   // "Publish mine anyway": the steward chose to replace theirs, so from here the draft is based on it.
@@ -1270,7 +1313,7 @@ function DashRota({ onNewTeam }) {
                         'stewards' if it ever meets one, so the two surfaces cannot disagree. */}
                     {[['church', 'Everyone in the church', 'Any member can see who is serving'],
                       ['team', 'People on the serving teams', 'Only members on a team roster — they still see their own slots']].map(([v, t, s]) => (
-                      <button key={v} aria-pressed={v === rotaVis} onClick={() => { closeVisMenu(); if (v !== rotaVis) window.Steward.publishRotaSettings(v); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                      <button key={v} aria-pressed={v === rotaVis} onClick={() => { closeVisMenu(); if (v !== rotaVis) window.Steward.publishRotaSettings({ visibility: v, autoConfirm }); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}{v === rotaVis ? ' ✓' : ''}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
                       </button>
@@ -1280,6 +1323,20 @@ function DashRota({ onNewTeam }) {
                       downloaded the rota keeps that copy, and a relay running an older version will go on
                       serving it to everyone.
                     </div>
+                    {/* AUTO-CONFIRM SERVING. Off by default (today's behaviour: Publish DMs each assigned
+                        person a "Can you serve?" request they accept). On, Publish rosters them as confirmed
+                        and asks nobody. This is consent/availability only — it is NOT the safeguarding
+                        clearance/check-in gate, which is a separate capability-gated subsystem and is
+                        unaffected. Writes the same church-signed settings doc as the visibility choice. */}
+                    <button role="switch" aria-checked={autoConfirm} aria-label="Auto-confirm serving: roster assigned people without asking them to accept" onClick={() => { closeVisMenu(); window.Steward.publishRotaSettings({ visibility: rotaVis, autoConfirm: !autoConfirm }); }} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', marginTop: 4, borderRadius: 9, border: 'none', borderTop: '1px solid var(--line)', background: autoConfirm ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                      <div style={{ flexShrink: 0, width: 34, height: 20, borderRadius: 999, background: autoConfirm ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .15s', marginTop: 1 }}>
+                        <div style={{ position: 'absolute', top: 2, left: autoConfirm ? 16 : 2, width: 16, height: 16, borderRadius: 999, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.25)', transition: 'left .15s' }} />
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>Auto-confirm serving{autoConfirm ? ' ✓' : ''}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>Roster people without asking them to accept. When off, each assigned person gets a "Can you serve?" request to confirm.</div>
+                      </div>
+                    </button>
                   </div>
                 </React.Fragment>
               ) : null}
@@ -1444,10 +1501,104 @@ function SchWebsiteHeldRow({ held, setHeld }) {
   );
 }
 
+// COVER IMAGE FIELD — pick / replace / remove a photo, then DRAG TO REPOSITION and SLIDE TO ZOOM. This is the
+// same gesture as the church banner adjuster (app/stew-dashboard.jsx ImageCropModal, "drag to reposition, slide
+// to zoom"), reused rather than reinvented — but where the banner BAKES its crop into a fixed-size canvas, this
+// STORES the focal point (imgPos {x,y} percents) and zoom (imgZoom scale) on the event and leaves the picture
+// whole, so app/recur.jsx eventImgStyle can frame the one image correctly at every size it appears: the card,
+// the detail sheet, and the church's public page. No pos/zoom = centre + scale 1 = the old objectFit:'cover'.
+//
+// Used by BOTH the New event and Edit event forms (CLAUDE.md rule 2: one field, listed users are these two).
+// `value` is { image, imgPub, imgPos, imgZoom }; onChange is handed the next whole value. `imgPub` is a smaller
+// JPEG variant made here at pick time (360px, q0.6) for the SIZE-CAPPED public copy — the full `image` stays
+// 720px for in-app. `history` (optional) offers the church's own past covers as a one-tap reuse.
+function SchCoverField({ value, onChange, history }) {
+  const v = value || {};
+  const image = v.image || '';
+  const px = (v.imgPos && typeof v.imgPos.x === 'number') ? v.imgPos.x : 50;
+  const py = (v.imgPos && typeof v.imgPos.y === 'number') ? v.imgPos.y : 50;
+  const z = (typeof v.imgZoom === 'number' && v.imgZoom > 1) ? v.imgZoom : 1;
+  const drag = React.useRef(null);
+  const boxRef = React.useRef(null);
+  const setPosZoom = (pos, zoom) => onChange({ image, imgPub: v.imgPub || '', imgPos: pos, imgZoom: zoom });
+  // apply a (new or reused) full image: centre it, then make the small public variant off-thread of the paint
+  const applyImage = (full) => {
+    onChange({ image: full, imgPub: '', imgPos: null, imgZoom: 1 });
+    const im = new Image();
+    im.onload = () => { try { const max = 360, q = 0.6; let w = im.width, h = im.height; if (w > max) { h = Math.round(h * max / w); w = max; } const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(im, 0, 0, w, h); onChange({ image: full, imgPos: null, imgZoom: 1, imgPub: cv.toDataURL('image/jpeg', q) }); } catch (e) {} };
+    im.src = full;
+  };
+  const onFile = (file) => {
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => { const img = new Image(); img.onload = () => {
+      const max = 720; let w = img.width, h = img.height; if (w > max) { h = Math.round(h * max / w); w = max; }
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      let full = ''; try { full = cv.toDataURL('image/jpeg', 0.72); } catch (e) {}
+      if (full) applyImage(full);
+    }; img.src = r.result; };
+    r.readAsDataURL(file);
+  };
+  const onDown = (e) => { const r = boxRef.current ? boxRef.current.getBoundingClientRect() : { width: 1, height: 1 }; drag.current = { x: e.clientX, y: e.clientY, px, py, w: r.width || 1, h: r.height || 1 }; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {} };
+  const onMove = (e) => {
+    if (!drag.current) return;
+    const nx = Math.max(0, Math.min(100, Math.round(drag.current.px - ((e.clientX - drag.current.x) / drag.current.w) * 100)));
+    const ny = Math.max(0, Math.min(100, Math.round(drag.current.py - ((e.clientY - drag.current.y) / drag.current.h) * 100)));
+    setPosZoom({ x: nx, y: ny }, z);
+  };
+  const onUp = () => { drag.current = null; };
+  return (
+    <React.Fragment>
+      <div style={schLbl}>Cover image (optional)</div>
+      {image ? (
+        <React.Fragment>
+          <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 8, border: '1px solid var(--line)' }}>
+            <div ref={boxRef} data-cover-adjust="1" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} style={{ position: 'relative', width: '100%', height: 150, cursor: 'grab', touchAction: 'none', background: 'var(--surface-2)' }}>
+              <img src={image} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', ...(window.eventImgStyle ? window.eventImgStyle({ x: px, y: py }, z) : { objectFit: 'cover' }) }} />
+            </div>
+            <button onClick={() => onChange({ image: '', imgPub: '', imgPos: null, imgZoom: 1 })} title="Remove this photo" style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 999, border: 'none', background: 'rgba(20,15,10,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} color="#fff" /></button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 2px' }}>
+            <Icon name="search" size={15} color="var(--ink-3)" />
+            <input type="range" aria-label="Zoom" min="1" max="4" step="0.01" value={z} onChange={e => setPosZoom({ x: px, y: py }, Math.max(1, parseFloat(e.target.value) || 1))} style={{ flex: 1 }} />
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 2px', lineHeight: 1.4 }}>Drag to reposition, slide to zoom — this is how members and your website will see it.</div>
+          <label className="sk-btn sk-btn--ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', fontSize: 12.5, cursor: 'pointer', marginTop: 2 }}>
+            <Icon name="pen" size={14} color="currentColor" /> Replace photo
+            <input type="file" accept="image/*" onChange={e => onFile(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
+          </label>
+        </React.Fragment>
+      ) : (
+        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 64, borderRadius: 12, border: '1.5px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>
+          <Icon name="plus" size={18} color="var(--ink-3)" /> Add a photo
+          <input type="file" accept="image/*" onChange={e => onFile(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
+        </label>
+      )}
+      {history && history.length ? (
+        <React.Fragment>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '8px 2px 6px', lineHeight: 1.4 }}>Or reuse a past cover</div>
+          <div role="group" aria-label="Past cover images" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {history.map(src => {
+              const on = image === src;
+              return (
+                <button key={src} type="button" aria-label="Use this past cover image" onClick={() => applyImage(src)} style={{ width: 72, height: 48, padding: 0, borderRadius: 9, overflow: 'hidden', cursor: 'pointer', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: 'var(--surface-2)' }}>
+                  <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                </button>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      ) : null}
+    </React.Fragment>
+  );
+}
+
 function SchEventModal({ day, onClose }) {
   const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
   const allGroups = window.useStewardGroups();   // chat groups + teams the event can belong to
   const existingEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // to gently warn on a same-time clash
+  // the church's own past Name/Where/Image values, offered as a pick instead of a retype (see eventHistory)
+  const history = React.useMemo(() => eventHistory(existingEvents), [existingEvents]);
   const [title, setTitle] = useSch('');
   const [date, setDate] = useSch(day || '');
   const [time, setTime] = useSch(schLastEventTime);
@@ -1456,6 +1607,9 @@ function SchEventModal({ day, onClose }) {
   const [accent, setAccent] = useSch('var(--clay)');
   const [group, setGroup] = useSch('');          // '' = whole church; else a group/team id
   const [image, setImage] = useSch('');          // optional cover image (resized data-URL)
+  const [imgPub, setImgPub] = useSch('');        // a smaller variant for the SIZE-CAPPED public copy (SchCoverField makes it)
+  const [imgPos, setImgPos] = useSch(null);      // cover focal point {x,y} percents, null = centre (the old objectFit:cover look)
+  const [imgZoom, setImgZoom] = useSch(1);       // cover zoom (scale >= 1), 1 = no zoom
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
   // "Not on the website" — recorded in the church's share: document, never in the event (the design rejected a
@@ -1467,16 +1621,6 @@ function SchEventModal({ day, onClose }) {
   const ownedNets = React.useMemo(() => (window.NETWORKS_ENABLED === true && window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);   // NETWORKS SWITCH (app/stew-data.jsx)
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
-  const onImage = (file) => {
-    if (!file) return;
-    const r = new FileReader();
-    r.onload = () => { const img = new Image(); img.onload = () => {
-      const max = 720; let w = img.width, h = img.height; if (w > max) { h = Math.round(h * max / w); w = max; }
-      const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h);
-      try { setImage(cv.toDataURL('image/jpeg', 0.72)); } catch (e) {}
-    }; img.src = r.result; };
-    r.readAsDataURL(file);
-  };
   const [err, setErr] = useSch('');
   // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
   const [busy, setBusy] = useSch(false);
@@ -1495,7 +1639,7 @@ function SchEventModal({ day, onClose }) {
     const dates = planned;
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
-    const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
+    const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid }, asPub)));
     // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted. Every date of a repeat gets
     // its own event and so its own opt-out. A church event only: a network-published event has no share: doc.
     // …AND A TICK THAT DID NOT LAND IS SAID, through the console's existing banner (the event itself is saved,
@@ -1544,7 +1688,8 @@ function SchEventModal({ day, onClose }) {
         </React.Fragment>
       ) : null}
       <div style={schLbl}>Title</div>
-      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
+      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" list="sch-event-names" style={schFld} />
+      <datalist id="sch-event-names">{history.names.map(n => <option key={n} value={n} />)}</datalist>
       <div style={{ display: 'flex', gap: 10 }}>
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
@@ -1557,7 +1702,8 @@ function SchEventModal({ day, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
-      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
+      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" list="sch-event-wheres" style={schFld} />
+      <datalist id="sch-event-wheres">{history.wheres.map(w => <option key={w} value={w} />)}</datalist>
       <div style={schLbl}>Type</div>
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
@@ -1582,18 +1728,7 @@ function SchEventModal({ day, onClose }) {
           optional fields to reach the one control that decides whether the event becomes public. "Belongs
           to" is its neighbour because that answer is what decides which of the two ticks is shown at all. */}
       {canHold && !asNetwork ? (group ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
-      <div style={schLbl}>Cover image (optional)</div>
-      {image ? (
-        <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 4, border: '1px solid var(--line)' }}>
-          <img src={image} alt="" style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }} />
-          <button onClick={() => setImage('')} title="Remove this photo" style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 999, border: 'none', background: 'rgba(20,15,10,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} color="#fff" /></button>
-        </div>
-      ) : (
-        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 64, borderRadius: 12, border: '1.5px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>
-          <Icon name="plus" size={18} color="var(--ink-3)" /> Add a photo
-          <input type="file" accept="image/*" onChange={e => onImage(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
-        </label>
-      )}
+      <SchCoverField value={{ image, imgPub, imgPos, imgZoom }} history={history.images} onChange={v => { setImage(v.image); setImgPub(v.imgPub); setImgPos(v.imgPos); setImgZoom(v.imgZoom); }} />
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
@@ -1605,8 +1740,28 @@ function DashCalendar() {
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;   // stack on phones
   const services = window.useStewardServices();
   const rawEvents = window.useStewardEvents();
+  // OPTIMISTIC MOVE OVERLAY (calendar-pilot-2026-11-05, item 2). A drag writes an exception (or, for a one-off,
+  // a new date) to the relay, but the echo takes a round-trip; until it lands, apply the pending move LOCALLY so
+  // the chip jumps the instant the steward drops it. Each entry is pruned the moment rawEvents reflects it — the
+  // series doc now carries exceptions[from].date === to, or a one-off now simply has the new date — so the local
+  // overlay never fights a confirmed relay state. `from` is the occurrence's CANONICAL date (recur.jsx occDate),
+  // which is also the exceptions key, so a second drag of the same week replaces rather than stacks.
+  const [moves, setMoves] = useSch([]);   // { id, from, to, recurring }
+  useSchE(() => {
+    setMoves(ms => ms.filter(m => {
+      const s = rawEvents.find(x => x.id === m.id); if (!s) return true;   // keep until we can see the doc at all
+      return m.recurring ? !(s.exceptions && s.exceptions[m.from] && s.exceptions[m.from].date === m.to) : (s.date !== m.to);
+    }));
+  }, [rawEvents]);   // eslint-disable-line
+  const rawView = (!moves.length) ? rawEvents : rawEvents.map(ev => {
+    const mine = moves.filter(m => m.id === ev.id); if (!mine.length) return ev;
+    if (ev.recur) { const exceptions = { ...(ev.exceptions || {}) }; mine.forEach(m => { exceptions[m.from] = { date: m.to }; }); return { ...ev, exceptions }; }
+    const m = mine.find(x => x.from === ev.date) || mine[mine.length - 1]; return { ...ev, date: m.to };
+  });
+  const dragRef = useSchR(null);                  // the chip being dragged: { id, from, shown, recurring }
+  const [dragOverKey, setDragOverKey] = useSch(null);
   // expand recurring meetings (the church's rhythm) into concrete dated occurrences so they populate the calendar
-  const events = window.expandEvents ? window.expandEvents(rawEvents, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 120) : rawEvents;
+  const events = window.expandEvents ? window.expandEvents(rawView, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 120) : rawView;
   const rotas = window.useStewardRotas();
   const rosters = window.useStewardRosters();
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
@@ -1666,6 +1821,23 @@ function DashCalendar() {
   const monKey = (d) => `${view.y}-${String(view.m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   const upcoming = services.slice().filter(s => (s.date || '') >= schKey(today)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 6);
 
+  // MOVE ONE OCCURRENCE TO ANOTHER DAY (item 2). A ONE-OFF event changes its own date, as the edit dialog does.
+  // A RECURRING occurrence writes exceptions[canonicalDate] = { date:newDate } on the SERIES doc — the anchor is
+  // NEVER moved and no other occurrence is touched; removeEvent is NEVER called (that deletes the whole series).
+  // The overlay above makes the chip move before the relay echoes. Mouse-only drag is acceptable (owner).
+  const onDropDay = (newDate) => {
+    const d = dragRef.current; dragRef.current = null; setDragOverKey(null);
+    if (!d || !newDate || !window.Steward || newDate === (d.shown || d.from)) return;
+    const series = rawEvents.find(x => x.id === d.id); if (!series) return;
+    setMoves(ms => [...ms.filter(m => !(m.id === d.id && m.from === d.from)), { id: d.id, from: d.from, to: newDate, recurring: !!d.recurring }]);
+    if (d.recurring) {
+      const exceptions = { ...(series.exceptions || {}), [d.from]: { date: newDate } };
+      window.Steward.publishEvent({ ...series, exceptions });   // merged exceptions; anchor (series.date) untouched
+    } else {
+      window.Steward.publishEvent({ ...series, date: newDate });   // a one-off: change its own date
+    }
+  };
+
   return (
     <div style={{ position: 'relative', height: narrow ? 'auto' : '100%', display: 'flex', flexDirection: narrow ? 'column' : 'row', gap: 16 }}>
       <div style={{ flex: narrow ? 'none' : 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -1686,11 +1858,19 @@ function DashCalendar() {
             const key = monKey(d); const it = dayItems(key); const isToday = key === schKey(today);
             const has = it.services.length || it.events.length;
             return (
-              <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day" style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
-                border: pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
+              <button key={i} onClick={() => setPickedDay(key)} title="See what’s on this day"
+                onDragOver={ev => { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (err) {} if (dragOverKey !== key) setDragOverKey(key); }}
+                onDragLeave={() => { if (dragOverKey === key) setDragOverKey(null); }}
+                onDrop={ev => { ev.preventDefault(); onDropDay(key); }}
+                style={{ textAlign: 'left', padding: 7, borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', flexDirection: 'column', gap: 4, overflow: 'hidden',
+                border: dragOverKey === key ? '2px dashed var(--clay)' : pickedDay === key ? '2px solid var(--clay)' : '1px solid var(--line)', background: dragOverKey === key ? 'color-mix(in oklab, var(--clay) 11%, var(--surface))' : isToday ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d}</div>
                 {it.services.map(s => { const c = coverageFor(s.id); return <div key={s.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)' }} />{s.name}</div>; })}
-                {it.events.map(e => <div key={e.id} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: `color-mix(in oklab, ${e.accent} 13%, var(--surface))`, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.title}</div>)}
+                {it.events.map(e => <div key={e.id} draggable
+                  onDragStart={ev => { ev.stopPropagation(); dragRef.current = { id: e.id, from: e.occDate || e.date, shown: e.date, recurring: !!e.recur }; try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(e.id)); } catch (err) {} }}
+                  onDragEnd={() => { dragRef.current = null; setDragOverKey(null); }}
+                  title={e.recur ? 'Drag to move just this week — the rest of the series stays' : 'Drag to move this event to another day'}
+                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: `color-mix(in oklab, ${e.accent} 13%, var(--surface))`, color: 'var(--ink-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'grab' }}>{e.title}</div>)}
                 {it.bookings.map(b => <div key={b.id} title={(b.title || 'Booking') + ' · ' + roomName(b.roomId) + (b.start ? ' · ' + b.start + (b.end ? '–' + b.end : '') : '')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 6, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: '#345c41', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="marker" size={9} color="#345c41" />{b.start ? b.start + ' ' : ''}{roomName(b.roomId)}</div>)}
               </button>
             );
@@ -1812,6 +1992,12 @@ function SchEventEdit({ event, onClose }) {
   const [day, setDay] = React.useState(typeof e.day === 'number' ? e.day : 0);
   const [recur, setRecur] = React.useState(e.recur || 'weekly');
   const [nth, setNth] = React.useState(typeof e.nth === 'number' ? e.nth : 1);
+  // COVER IMAGE — this form had NONE: it passed `image: e.image` straight through, so once an event existed its
+  // photo (and framing) could never be changed. A (re)picker + the focal/zoom adjuster now live here too.
+  const [image, setImage] = React.useState(e.image || '');
+  const [imgPub, setImgPub] = React.useState(e.imgPub || '');
+  const [imgPos, setImgPos] = React.useState(e.imgPos || null);
+  const [imgZoom, setImgZoom] = React.useState(typeof e.imgZoom === 'number' ? e.imgZoom : 1);
   // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
@@ -1840,8 +2026,10 @@ function SchEventEdit({ event, onClose }) {
     try {
       r = await Promise.resolve(window.Steward.publishEvent({
         id: e.id, title: title.trim(), date: anchor, time, where: where.trim(), blurb: blurb.trim(),
-        accent: e.accent || '', image: e.image || '', groupId: e.groupId || '',
-        ...(series ? { recur, day, nth } : {}),
+        accent: e.accent || '', image, imgPub, imgPos, imgZoom, groupId: e.groupId || '',
+        // CARRY THE PER-OCCURRENCE EXCEPTIONS THROUGH (items 2+4): a plain edit must not wipe the weeks a steward
+        // has moved or skipped. Only a series has them; a one-off never does. (CLAUDE.md rule 2 round-trip.)
+        ...(series ? { recur, day, nth, exceptions: e.exceptions || {} } : {}),
       }));
     } catch (x) { r = null; }
     // ONLY WRITE THE TICK WHEN THE STEWARD ACTUALLY TOUCHED IT IN THIS DIALOG (F1 above) — a Save where
@@ -1899,6 +2087,7 @@ function SchEventEdit({ event, onClose }) {
           dialog has no "Belongs to" — the scope is fixed once an event exists — so the tick follows Where,
           which is the last field that says what the event IS. */}
       {canHold ? (inGroup ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
+      <SchCoverField value={{ image, imgPub, imgPos, imgZoom }} onChange={v => { setImage(v.image); setImgPub(v.imgPub); setImgPos(v.imgPos); setImgZoom(v.imgZoom); }} />
       <div style={schLbl}>Details</div>
       <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
@@ -2124,6 +2313,18 @@ function SchEventDetail({ event, onClose }) {
     return <button key={verdict} onClick={() => setAttendance(verdict)} aria-label={`${n} ${label}, show names`} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 800, color }}>{n} {label}</button>;
   };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  // SKIP JUST THIS WEEK (calendar-pilot-2026-11-05, item 4). A one-week break on a repeating meeting: write
+  // exceptions[canonicalDate] = { skip:true } on the SERIES doc, leaving the anchor and every other occurrence
+  // in place. This is NOT removeEvent — that deletes the whole series (the Remove button below says so). `e` is
+  // an expanded occurrence, so e.occDate is this week's canonical date (the exceptions key) and e.seriesDate is
+  // the anchor the series must keep; the rest of the series fields ride through on { ...e }.
+  const skipWeek = () => {
+    if (!window.Steward || !e.recur) return;
+    const occ = e.occDate || e.date;
+    if (!window.confirm(`Skip “${e.title || 'this meeting'}” on ${e.date} only? The rest of the series stays.`)) return;
+    window.Steward.publishEvent({ ...e, date: e.seriesDate || e.date, exceptions: { ...(e.exceptions || {}), [occ]: { skip: true } } });
+    onClose();
+  };
   // THE EDIT DIALOG REPLACES THIS CARD; IT DOES NOT OPEN INSIDE IT (AUDIT-feeds-round5-2026-09-22 F2).
   // It used to render as the last child of the panel below, and a `position: fixed` overlay does NOT escape
   // an ancestor that has a transform — `animation: lumenScale … both` leaves an identity transform on this
@@ -2148,7 +2349,7 @@ function SchEventDetail({ event, onClose }) {
           <button onClick={onClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 22px 20px' }}>
-          {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 14, display: 'block', marginBottom: 14 }} /> : null}
+          {e.image ? <div style={{ width: '100%', height: 160, borderRadius: 14, overflow: 'hidden', marginBottom: 14 }}><img src={e.image} alt="" style={{ width: '100%', height: '100%', display: 'block', ...(window.eventImgStyle ? window.eventImgStyle(e.imgPos, e.imgZoom) : { objectFit: 'cover' }) }} /></div> : null}
           <div style={{ display: 'flex', gap: 13, alignItems: 'flex-start' }}>
             <SchDateBlock dateStr={e.date} />
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -2166,6 +2367,10 @@ function SchEventDetail({ event, onClose }) {
             {total ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 9 }}>{chip('going', 'going', 'var(--sage)')}{chip('maybe', 'maybe', '#8a6717')}{chip('no', 'can’t make it', 'var(--ink-3)')}</div> : <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 6 }}>No RSVPs yet.</div>}
           </div>
         </div>
+        {/* ONE-WEEK BREAK, for a repeating meeting only: skips THIS occurrence (item 4), not the series. */}
+        {e.recur ? <div style={{ padding: '12px 22px 0', display: 'flex' }}>
+          <button onClick={skipWeek} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 10, fontSize: 12.5 }}><Icon name="x" size={14} color="currentColor" /> Skip just this week ({e.date})</button>
+        </div> : null}
         <div style={{ padding: '12px 22px 18px', borderTop: '1px solid var(--line)', display: 'flex', gap: 10 }}>
           <button onClick={() => setEditing(true)} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="pen" size={15} color="var(--on-clay)" /> Edit</button>
           <button onClick={() => setMessaging(true)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5 }}><Icon name="send" size={15} color="currentColor" /> Message</button>

@@ -68,8 +68,13 @@ test('turning the calendar switch on serves the widget, with the strict CSP and 
   const r = await get(widgetUrl(NPUB));
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('content-type'), 'text/javascript; charset=utf-8');
-  assert.match(r.headers.get('content-security-policy') || '', /default-src 'none'/, 'no strict CSP on the served script');
-  assert.match(r.headers.get('content-security-policy') || '', /script-src 'self'/, 'the widget cannot run as its own script tag under its own CSP header');
+  const csp = r.headers.get('content-security-policy') || '';
+  assert.match(csp, /default-src 'none'/, 'no strict CSP on the served script');
+  assert.match(csp, /script-src 'self'/, 'the widget cannot run as its own script tag under its own CSP header');
+  // calendar-pilot item 3b: the widget may now render the event cover image, so img-src admits same-origin data:
+  // URIs — and ONLY those. The no-third-party rule holds: no external image host may be named here.
+  assert.match(csp, /img-src 'self' data:/, 'the widget CSP does not admit the same-origin capped cover image');
+  assert.equal(/img-src[^;]*\bhttps?:/.test(csp), false, 'the widget CSP opened img-src to an external host — the no-third-party rule is broken');
   assert.equal(r.headers.get('set-cookie'), null, 'a cookie was set on a public script');
   assert.equal(r.headers.get('access-control-allow-origin'), '*', 'a church’s own site cannot load the script cross-origin');
   const text = await r.text();
@@ -100,6 +105,12 @@ test('the served bytes make no reference to any external host, and only fetch a 
   assert.equal(/https?:\/\//.test(text), false, 'the widget script names an external URL: ' + (text.match(/https?:\/\/\S+/) || [])[0]);
   assert.equal(/\b(cdn|googleapis|gstatic|jsdelivr|unpkg|cloudflare)\b/i.test(text), false, 'the widget script names a third-party host');
   assert.match(text, /['"]\/calendar\.ics['"]/, 'the widget does not fetch a relative, same-origin calendar.ics');
+  // calendar-pilot item 3b WIDENS the allowed fetch set by exactly ONE same-origin path: the event images map.
+  // It carries no host of its own (it is appended to `base`, this script's own /public/<npub>), so the
+  // no-external-host assertions above still hold — this only records that the new same-origin fetch is present.
+  assert.match(text, /['"]\/event-images\.json['"]/, 'the widget does not fetch its images from the same-origin event-images.json');
+  // …and the image it renders is a same-origin data: URI only — never fetched from an external host.
+  assert.match(text, /\^data:image/, 'the widget no longer restricts cover images to same-origin data: URIs');
   assert.equal(/document\.write|eval\(/.test(text), false, 'the widget uses an injection-prone API');
 });
 

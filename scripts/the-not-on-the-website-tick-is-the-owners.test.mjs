@@ -135,8 +135,10 @@ test('the Edit dialog opens with the tick reflecting what the church already rec
 
 test('a tick the engine refused to record is said through the console banner, and the event is still saved', async () => {
   let closed = false;
-  // preset: SchEventModal's state order is title, date, time, where, blurb, accent, group, image, repeat, until, held
-  const m = mount('SchEventModal', { day: '', onClose: () => { closed = true; } }, { steward: owner({ setWebsiteHeld: async () => false }), preset: { 0: 'Vestry meeting', 1: '2026-10-01', 10: true } });
+  // preset: SchEventModal's state order is title, date, time, where, blurb, accent, group, image, imgPub, imgPos,
+  // imgZoom, repeat, until, held — so `held` is index 13 (calendar-pilot item 3 inserted imgPub/imgPos/imgZoom
+  // after `image`, pushing held from 10 to 13; the tick itself still fires, the preset index just moved).
+  const m = mount('SchEventModal', { day: '', onClose: () => { closed = true; } }, { steward: owner({ setWebsiteHeld: async () => false }), preset: { 0: 'Vestry meeting', 1: '2026-10-01', 13: true } });
   const add = m.nodes().find(n => n.props && typeof n.props.onClick === 'function' && n.props.disabled === false);
   assert.ok(add, 'no enabled Add button rendered — re-anchor (the preset state indices may have moved)');
   await add.props.onClick();
@@ -147,7 +149,7 @@ test('a tick the engine refused to record is said through the console banner, an
 });
 
 test('CONTROL: a tick the engine recorded raises no banner', async () => {
-  const m = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), preset: { 0: 'Vestry meeting', 1: '2026-10-01', 10: true } });
+  const m = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), preset: { 0: 'Vestry meeting', 1: '2026-10-01', 13: true } });   // held = index 13 (see note above)
   const add = m.nodes().find(n => n.props && typeof n.props.onClick === 'function' && n.props.disabled === false);
   await add.props.onClick();
   assert.equal(m.dispatched.some(e => e.type === 'steward-write-blocked'), false, 'a recorded tick raised the banner — the message would cry wolf');

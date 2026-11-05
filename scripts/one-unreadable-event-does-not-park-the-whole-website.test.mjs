@@ -52,6 +52,8 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
     stmt(src, 'var WEB_GIVE_UP_S = ', 'WEB_GIVE_UP_S'),
     stmt(src, 'var WEB_RETRY_MS = ', 'WEB_RETRY_MS'),
     stmt(src, 'var WEB_GROUP_MAX = ', 'WEB_GROUP_MAX'),
+    stmt(src, 'var WEB_IMG_MAX = ', 'WEB_IMG_MAX'),   // calendar-pilot item 3: _webCopyBody -> _webImg reads this
+    stmt(src, 'var EV_EXC_MAX = ', 'EV_EXC_MAX'),     // calendar-pilot item 2/4: _webCopyBody -> _evExceptions reads this
     fnBody(src, 'function _nameKeyReady', '_nameKeyReady'),
     fnBody(src, 'function _webGroupKey', '_webGroupKey'),
     fnBody(src, 'function _webGroupLoad', '_webGroupLoad'),
@@ -63,6 +65,10 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
     fnBody(src, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(src, 'function _webWhyStuck', '_webWhyStuck'),
     fnBody(src, 'function _openChurchDoc', '_openChurchDoc'),
+    fnBody(src, 'function _evImgPos', '_evImgPos'),         // calendar-pilot item 3: _webCopyBody calls these
+    fnBody(src, 'function _evImgZoom', '_evImgZoom'),
+    fnBody(src, 'function _evExceptions', '_evExceptions'), // calendar-pilot item 2/4
+    fnBody(src, 'function _webImg', '_webImg'),             // calendar-pilot item 3
     fnBody(src, 'function _webCopyBody', '_webCopyBody'),
     fnBody(src, 'function _webSnap', '_webSnap'),
     fnBody(src, 'function _webEmit', '_webEmit'),

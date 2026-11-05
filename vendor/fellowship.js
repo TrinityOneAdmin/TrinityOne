@@ -8807,6 +8807,19 @@
     if (_groupLeaders.get(gid) && _groupLeaders.get(gid).has(by)) return true;
     return policy === "everyone";
   }
+  function _evExceptions(x) {
+    if (!x || typeof x !== "object" || Array.isArray(x)) return {};
+    const out = {};
+    const keys = Object.keys(x).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+    for (const k of keys) {
+      const v = x[k];
+      if (!v || typeof v !== "object") continue;
+      if (v.skip === true) out[k] = { skip: true };
+      else if (typeof v.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.date)) out[k] = { date: v.date };
+      if (Object.keys(out).length >= 200) break;
+    }
+    return out;
+  }
   var SINCE_SLOP = 3 * 86400;
   var FUTURE_SKEW = 900;
   var FULL_SYNC_S = 86400;
@@ -13356,11 +13369,13 @@
     subscribeChurchRotas(churchNpub, cb) {
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/rota:", (c, id) => ({ service: id, published: !!c.published, assign: c.assign || {} }), cb);
     },
+    // UNION of both lines: rosters keep `pods` (console pod-filter feature, from integration); events take the
+    // calendar branch's richer mapper — imgPos/imgZoom (focal-point + zoom) and exceptions (move/skip one occurrence).
     subscribeChurchRosters(churchNpub, cb) {
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/roster:", (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), cb);
     },
     subscribeChurchEvents(churchNpub, cb) {
-      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null }), cb);
+      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null, exceptions: _evExceptions(c.exceptions) }), cb);
     },
     // ── Meal trains / Care module (member side) ──
     // Read the church's Care config so the member app knows whether to show the Care card (and, for
@@ -15333,7 +15348,7 @@
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust);
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", exceptions: _evExceptions(c.exceptions), byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust);
             emit();
           } catch {
           }
@@ -15382,7 +15397,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !groupId) return null;
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6);
-      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId });
+      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: ev.imgPos && typeof ev.imgPos === "object" ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: typeof ev.imgZoom === "number" && ev.imgZoom > 1 ? ev.imgZoom : 1, groupId, exceptions: _evExceptions(ev.exceptions) });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/event:" + id], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);

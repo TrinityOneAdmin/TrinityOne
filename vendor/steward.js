@@ -15344,6 +15344,7 @@ zoo`.split("\n");
   var RUNSHEET_D = "trinityone/runsheet:";
   var ROTA_D = "trinityone/rota:";
   var ROTA_SETTINGS_D = "trinityone/rota-settings";
+  var _rotaSettingsSnap = { visibility: "church", autoConfirm: false };
   var EVENT_D = "trinityone/event:";
   var ROOM_D = "trinityone/room:";
   var BOOKING_D = "trinityone/booking:";
@@ -19979,6 +19980,38 @@ zoo`.split("\n");
     if (same(next.optOut, w.share.optOut) && same(next.optIn, w.share.optIn || [])) return Promise.resolve(true);
     return st.setWebsiteShare(next);
   }
+  function _evImgPos(p) {
+    if (!p || typeof p !== "object") return null;
+    const n = (v) => typeof v === "number" && isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
+    const x = n(p.x), y = n(p.y);
+    if (x === null || y === null || x === 50 && y === 50) return null;
+    return { x, y };
+  }
+  function _evImgZoom(z) {
+    return typeof z === "number" && isFinite(z) && z > 1 ? Math.min(6, z) : 1;
+  }
+  var EV_EXC_MAX = 200;
+  function _evExceptions(x) {
+    if (!x || typeof x !== "object" || Array.isArray(x)) return {};
+    const out = {};
+    const keys = Object.keys(x).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+    for (const k of keys) {
+      const v = x[k];
+      if (!v || typeof v !== "object") continue;
+      if (v.skip === true) out[k] = { skip: true };
+      else if (typeof v.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.date)) out[k] = { date: v.date };
+      if (Object.keys(out).length >= EV_EXC_MAX) break;
+    }
+    return out;
+  }
+  var WEB_IMG_MAX = 6e4;
+  function _webImg(ev) {
+    const pub2 = String(ev && ev.imgPub || "");
+    if (pub2 && pub2.length <= WEB_IMG_MAX && /^data:image\//.test(pub2)) return pub2;
+    const full = String(ev && ev.image || "");
+    if (full && full.length <= WEB_IMG_MAX && /^data:image\//.test(full)) return full;
+    return "";
+  }
   function _webCopyBody(ev) {
     const recur = ev.recur === "weekly" || ev.recur === "fortnightly" || ev.recur === "monthly" ? ev.recur : "";
     return JSON.stringify({
@@ -19989,7 +20022,12 @@ zoo`.split("\n");
       blurb: String(ev.blurb || "").slice(0, 2e3),
       recur,
       day: recur && typeof ev.day === "number" ? ev.day : null,
-      nth: recur === "monthly" && typeof ev.nth === "number" ? ev.nth : null
+      nth: recur === "monthly" && typeof ev.nth === "number" ? ev.nth : null,
+      image: _webImg(ev),
+      imgPos: _evImgPos(ev.imgPos),
+      imgZoom: _evImgZoom(ev.imgZoom),
+      exceptions: _evExceptions(ev.exceptions)
+      // per-occurrence skips/moves (items 2+4); appended + sorted so the bytes stay deterministic
     });
   }
   function _webGroupKey(cp) {
@@ -26600,19 +26638,32 @@ zoo`.split("\n");
     // a copy they already fetched — and the member app caches them. Narrowing the setting therefore protects
     // the rota from here on; it does not reach back onto phones. Anything the console says about this must be
     // written to that standard.
-    publishRotaSettings(visibility) {
+    // Accepts EITHER a patch object `{ visibility?, autoConfirm? }` or a bare visibility string (back-compat).
+    // Any field the caller omits is carried forward from the last-seen settings (_rotaSettingsSnap), because
+    // the doc is rewritten whole and a missing field would otherwise be dropped. `autoConfirm` on means the
+    // steward's rota rosters assigned people as confirmed WITHOUT sending a "Can you serve?" request they must
+    // accept (the ask is skipped in app/stew-schedule.jsx sendRequestsFor); default false = today's behaviour.
+    // The member side (src/fellowship.src.js subscribeRotaSettings) reads only `visibility` and ignores the
+    // new field, so an older member app is unaffected.
+    publishRotaSettings(patch) {
       if (!sk) return Promise.resolve(null);
-      const v = visibility === "team" || visibility === "stewards" ? visibility : "church";
-      const content = JSON.stringify({ visibility: v, updated: now() });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_SETTINGS_D], ["t", NET]], content })).then((ok) => ok ? { visibility: v } : null);
+      const p = typeof patch === "string" ? { visibility: patch } : patch || {};
+      const visIn = "visibility" in p ? p.visibility : _rotaSettingsSnap.visibility;
+      const v = visIn === "team" || visIn === "stewards" ? visIn : "church";
+      const autoConfirm = "autoConfirm" in p ? !!p.autoConfirm : !!_rotaSettingsSnap.autoConfirm;
+      const content = JSON.stringify({ visibility: v, autoConfirm, updated: now() });
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_SETTINGS_D], ["t", NET]], content })).then((ok) => ok ? { visibility: v, autoConfirm } : null);
     },
     // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
     // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
-    // read as 'church' (the open default) and not as "no answer".
+    // read as 'church' (the open default) and not as "no answer". `autoConfirm` defaults false the same way.
     subscribeRotaSettings(cb) {
-      return this._subAddr(ROTA_SETTINGS_D, (c) => ({ visibility: String(c && c.visibility || "") }), (docs) => {
-        const v = Array.isArray(docs) && docs.length ? docs[0].visibility : "";
-        cb({ visibility: v === "team" || v === "stewards" ? v : "church" });
+      return this._subAddr(ROTA_SETTINGS_D, (c) => ({ visibility: String(c && c.visibility || ""), autoConfirm: !!(c && c.autoConfirm) }), (docs) => {
+        const d = Array.isArray(docs) && docs.length ? docs[0] : null;
+        const v = d ? d.visibility : "";
+        const out = { visibility: v === "team" || v === "stewards" ? v : "church", autoConfirm: d ? !!d.autoConfirm : false };
+        _rotaSettingsSnap = out;
+        cb(out);
       });
     },
     // ---- calendar events (non-serving: workdays, lunches, prayer evenings…) ----
@@ -26623,7 +26674,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null };
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null, exceptions: _evExceptions(ev.exceptions) };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
@@ -26636,7 +26687,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", EVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeEvents(onEvents) {
-      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "" }), onEvents);
+      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions) }), onEvents);
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -26788,7 +26839,7 @@ zoo`.split("\n");
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", _by: e.pubkey, ts: e.created_at });
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), exceptions: _evExceptions(c.exceptions), _by: e.pubkey, ts: e.created_at });
             emit();
           } catch {
           }

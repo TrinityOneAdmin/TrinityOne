@@ -172,6 +172,48 @@ export function paletteFor(title, seen) {
   return seen[title];
 }
 
+// THE EVENT COVER IMAGE (calendar-pilot-2026-11-05 item 3b). This reverses the widget's original "colour only,
+// no images" rule — the owner decided an event's photo is public and should show on the embeddable widget. The
+// .ics feed is still image-free (a data: URI must never bloat a subscription); the widget reads the image from a
+// SECOND same-origin fetch of /public/<npub>/event-images.json (gateway.mjs EVENT_IMAGES_ROUTE) and frames it
+// with the focal point + zoom the steward set. Everything below is same-origin only: no external host is ever
+// fetched, and eventImage() accepts a data: URI ONLY, so the no-third-party rule holds for the image too.
+
+// The focal-point render math, a straight port of app/recur.jsx eventImgStyle so the widget frames a photo the
+// way the app does: default centre cover, focal point clamped to 0..100, zoom clamped to 1..6, and a scale()
+// anchored at the focal point only when zoomed. Returns a plain style object the caller writes onto an <img>.
+export function eventImgStyle(pos, zoom) {
+  const num = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const x = clamp(num(pos && pos.x, 50), 0, 100);
+  const y = clamp(num(pos && pos.y, 50), 0, 100);
+  const z = clamp(num(zoom, 1), 1, 6);
+  const style = { objectFit: 'cover', objectPosition: x + '% ' + y + '%' };
+  if (z !== 1) { style.transform = 'scale(' + z + ')'; style.transformOrigin = x + '% ' + y + '%'; }
+  return style;
+}
+
+// The event id out of a VEVENT UID. buildCalendar() writes `trinityone-<id>@<npub>` for a series/one-off and
+// `trinityone-<id>-ex-<origYYYYMMDD>@<npub>` for a moved single occurrence — both belong to the same event, so
+// a moved week shows the same cover. Returns '' for a UID in any other shape (a future feed must not throw here).
+export function eventIdFromUid(uid) {
+  if (!uid) return '';
+  return String(uid).replace(/@.*$/, '').replace(/^trinityone-/, '').replace(/-ex-\d{8}$/, '');
+}
+
+// Resolve one occurrence to its image record, or null. SAME-ORIGIN DATA URIs ONLY: an `image` that is not a
+// `data:image/...` string is ignored, so a hand-edited or mislabeled map can never make the widget fetch an
+// off-origin URL (the whole point of the no-third-party rule). imgPos/imgZoom are passed through to eventImgStyle.
+export function eventImage(images, uid) {
+  if (!images || typeof images !== 'object') return null;
+  const id = eventIdFromUid(uid);
+  const rec = id && images[id];
+  if (!rec || typeof rec !== 'object') return null;
+  const src = typeof rec.image === 'string' ? rec.image : '';
+  if (!/^data:image\//.test(src)) return null;
+  return { image: src, imgPos: rec.imgPos || null, imgZoom: rec.imgZoom };
+}
+
 function injectWidgetStyle() {
   if (document.getElementById('trinityone-widget-style')) return;
   const css = '.tw-root{--tw-accent:#C25A38;--tw-ink:#221C16;--tw-ink2:#6B6052;--tw-ink3:#736958;'
@@ -191,6 +233,8 @@ function injectWidgetStyle() {
     + '.tw-title{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}'
     + '.tw-meta{font-size:12.5px;color:var(--tw-ink2);margin-top:2px}'
     + '.tw-desc{font-size:12.5px;color:var(--tw-ink2);margin-top:4px}'
+    + '.tw-img-wrap{width:100%;height:132px;border-radius:9px;overflow:hidden;margin:0 0 8px;background:var(--tw-paper)}'
+    + '.tw-img{display:block;width:100%;height:100%;object-fit:cover}'
     + '.tw-badge{font:700 9.5px/1 inherit;letter-spacing:.4px;text-transform:uppercase;background:var(--tw-accent-soft);color:var(--tw-accent);padding:2px 7px;border-radius:999px}'
     + '.tw-empty,.tw-error{color:var(--tw-ink2);font-size:13px;padding:6px 0}'
     + '.tw-month-nav{display:flex;align-items:center;justify-content:center;gap:14px;margin:0 0 10px;font-size:13px;color:var(--tw-ink3)}'
@@ -276,7 +320,10 @@ function el(tag, cls, text) {
   return n;
 }
 
-function renderList(root, occs, calname) {
+// `images` is the { <eventId>: { image, imgPos, imgZoom } } map from event-images.json, or null/{} when the
+// church shows no photos or the second fetch failed. An event with an image gets its cover framed at the focal
+// point; an event without one keeps EXACTLY the old colour-only card, so a missing or failed map never breaks a row.
+export function renderList(root, occs, calname, images) {
   root.appendChild(el('div', 'tw-h', calname || 'What’s on'));
   if (!occs.length) { root.appendChild(el('div', 'tw-empty', 'Nothing on the calendar right now.')); return; }
   const ol = el('ol', 'tw-list');
@@ -286,6 +333,20 @@ function renderList(root, occs, calname) {
     when.appendChild(el('span', 'tw-day', weekdayAbbrev(o.date)));
     when.appendChild(el('span', 'tw-date', String(dayMonthLabel(o.date))));
     const body = el('div');
+    const img = eventImage(images, o.uid);
+    if (img) {
+      const wrap = el('div', 'tw-img-wrap');
+      const im = el('img', 'tw-img');
+      im.src = img.image;
+      im.alt = '';
+      im.loading = 'lazy';
+      const st = eventImgStyle(img.imgPos, img.imgZoom);
+      im.style.objectFit = st.objectFit;
+      im.style.objectPosition = st.objectPosition;
+      if (st.transform) { im.style.transform = st.transform; im.style.transformOrigin = st.transformOrigin; }
+      wrap.appendChild(im);
+      body.appendChild(wrap);
+    }
     const title = el('div', 'tw-title');
     title.appendChild(document.createTextNode(o.summary || 'Event'));
     if (recurLabel(o.recur)) title.appendChild(el('span', 'tw-badge', recurLabel(o.recur)));
@@ -710,6 +771,17 @@ function safeAccent(v) {
   return v && /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)$/.test(v) ? v : '';
 }
 
+// The widget's SECOND same-origin fetch: the per-event cover images (calendar-pilot item 3b). This NEVER
+// rejects — a missing endpoint, a non-200, bad JSON or a network failure all resolve to {}, so the list below
+// simply renders colour-only and the widget is never broken by the images being unavailable. Same-origin only
+// (base is this script's own /public/<npub>), credentials omitted, exactly like the calendar.ics fetch.
+function fetchEventImages(base, cacheBust) {
+  return fetch(base + '/event-images.json' + cacheBust, { credentials: 'omit', mode: 'cors' })
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((d) => (d && typeof d === 'object') ? d : {})
+    .catch(() => ({}));
+}
+
 function initWidget() {
   const script = document.currentScript;
   if (!script || !script.src) return;
@@ -751,15 +823,20 @@ function initWidget() {
       if (!r.ok) throw new Error('bad status');
       return r.text();
     }).then((text) => {
-      root.removeChild(loading);
       const parsed = parseIcs(text);
-      if (mode === 'month') { renderMonth(root, parsed.events, parsed.calname); return; }
+      if (mode === 'month') { root.removeChild(loading); renderMonth(root, parsed.events, parsed.calname); return; }
       const now = new Date();
       const from = utcToIso(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
       const until = utcToIso(Date.UTC(now.getFullYear(), now.getMonth() + 7, now.getDate()));
       const occs = expandOccurrences(parsed.events, { from, until, limit: mode === 'compact' ? 3 : 8 });
-      if (mode === 'compact') renderCompact(root, occs, parsed.calname);
-      else renderList(root, occs, parsed.calname);
+      if (mode === 'compact') { root.removeChild(loading); renderCompact(root, occs, parsed.calname); return; }
+      // LIST mode shows cover images: once we have the events, fetch the per-event images (same origin) and then
+      // render. fetchEventImages never rejects (it resolves to {} on any failure), so a church with no photos or an
+      // unreachable images endpoint renders the identical colour-only list — the card is never broken by it.
+      fetchEventImages(base, cacheBust).then((images) => {
+        root.removeChild(loading);
+        renderList(root, occs, parsed.calname, images);
+      });
     }).catch(() => {
       root.removeChild(loading);
       root.appendChild(el('div', 'tw-error', 'Calendar unavailable right now.'));
@@ -772,11 +849,12 @@ function initWidget() {
 // keeping this list a complete and honest inventory of what ships).
 const WIDGET_FUNCTIONS = [
   unfoldIcsLines, unescapeIcsText, parseIcs, bydayIndex, isoToUtc, utcToIso, firstWeekdayOnOrAfter, occFrom,
-  expandOccurrences, weekdayAbbrev, dayMonthLabel, recurLabel, paletteFor, injectWidgetStyle, el,
+  expandOccurrences, weekdayAbbrev, dayMonthLabel, recurLabel, paletteFor,
+  eventImgStyle, eventIdFromUid, eventImage, injectWidgetStyle, el,
   renderList, formatTime, renderCompact, renderMonth, fmtDuration, attachPlayer,
   renderSermons, renderSermonsSm, renderSermonsLg, renderPlans, renderPlansSm, renderPlansLg,
   mdSkip, renderMd, mdInline, devoCard, renderDevosSm, renderDevos, renderDevosLg,
-  baseFromScriptSrc, safeAccent, initWidget,
+  baseFromScriptSrc, safeAccent, fetchEventImages, initWidget,
 ];
 
 // The file. Identical for every church — see the module comment for why. `'use strict'` and one top-level

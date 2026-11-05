@@ -489,6 +489,7 @@ const BARE_INVENTORY = [
     [2, "background: c.total && c.filled === c.total ? 'var(--sage)' : 'var(--gold)'"],
     [1, "background: gaps ? 'linear-gradient(90deg, var(--sage), var(--gold))' : 'var(--sage)'"],
     [1, "background: isPublished ? 'var(--sage)' : undefined"],
+    [1, "background: autoConfirm ? 'var(--sage)' : 'var(--line)'"],   // a role=switch track pill (34x20, no text on it) -- same non-text --sage fill as isPublished above; item 8
   ]],
   ['steward.html', []],
 ];

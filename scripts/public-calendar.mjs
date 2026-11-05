@@ -84,6 +84,38 @@ const DAY_OK = (day) => Number.isInteger(day) && day >= 0 && day <= 6;
 // decision 2026-10-01). -1 is also RFC 5545's own spelling, so rrule() below writes it straight through.
 const NTH_OK = (n) => Number.isInteger(n) && ((n >= 1 && n <= 5) || n === -1);
 
+// THE COVER IMAGE ON THE PUBLIC PATH (calendar-pilot-2026-11-05, item 3). The console mirrors a SIZE-CAPPED
+// variant into the `pubevent:` copy (src/steward.src.js _webImg, ~60 KB), never the full in-app image; this is
+// the relay-side backstop that re-checks the cap and shape so a hand-edited or mislabeled copy cannot push a
+// megabyte through. imgPos ({x,y} percents) and imgZoom (scale >= 1) are the focal point + zoom a steward set,
+// carried so any public PAGE can frame the image the way the church did (app/recur.jsx eventImgStyle).
+//
+// IT RIDES IN THE FIELD MAP, NOT IN THE .ics. buildCalendar() below writes only SUMMARY/LOCATION/DESCRIPTION/
+// DTSTART/RRULE — it never serialises these, by construction — so a data: URI never bloats a calendar
+// subscription (the decision for item 3: honour the image on the public PAGE, keep the .ics feed lean). A
+// consumer that wants the image reads it from the per-church map the relay already holds, not from the feed.
+export const PUB_IMG_MAX = 100000;   // ~100 KB defensive backstop; above the console's own ~60 KB cap, still refuses a big blob
+// PER-OCCURRENCE EXCEPTIONS on a repeating event (calendar-pilot-2026-11-05, items 2+4): a map keyed by an
+// occurrence's canonical ISO date -> { skip:true } (a one-week break) or { date:'<newIso>' } (that week moved).
+// Re-validated and bounded here the way the console's _evExceptions does on the way in, because this module is
+// written to distrust its caller (a `pubevent:` copy can arrive hand-edited or from /import). buildCalendar()
+// below turns a skip into an EXDATE and a move into an EXDATE on the original plus a standalone VEVENT on the
+// new day — so a subscriber's calendar matches what the app shows, which is the whole point of the feature.
+function pubExceptions(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return {};
+  const out = {};
+  // isoParts, not a bare ISO_DATE match: it RANGE-checks too, so a `2026-13-01` key never reaches an EXDATE or
+  // a moved DTSTART as a string no calendar can read (the same round-trip every date in this module survives).
+  const keys = Object.keys(x).filter(k => isoParts(k)).sort();
+  for (const k of keys) {
+    const v = x[k];
+    if (!v || typeof v !== 'object') continue;
+    if (v.skip === true) out[k] = { skip: true };
+    else if (typeof v.date === 'string' && isoParts(v.date)) out[k] = { date: v.date };
+    if (Object.keys(out).length >= 200) break;
+  }
+  return out;
+}
 // Read one event down to the fields this file may carry. Returns null for anything that cannot be placed on
 // a calendar at all (no id, no valid date), which the builder then skips rather than emitting a broken VEVENT.
 export function publicEventFields(ev) {
@@ -95,12 +127,20 @@ export function publicEventFields(ev) {
   const recur = RECUR.has(ev.recur) ? ev.recur : '';
   const day = (recur && DAY_OK(ev.day)) ? ev.day : null;
   const nth = (recur === 'monthly' && NTH_OK(ev.nth)) ? ev.nth : null;
+  const image = (typeof ev.image === 'string' && ev.image.length <= PUB_IMG_MAX && /^data:image\//.test(ev.image)) ? ev.image : '';
+  const pn = (v) => (typeof v === 'number' && isFinite(v)) ? Math.max(0, Math.min(100, v)) : null;
+  const px = ev.imgPos && typeof ev.imgPos === 'object' ? pn(+ev.imgPos.x) : null;
+  const py = ev.imgPos && typeof ev.imgPos === 'object' ? pn(+ev.imgPos.y) : null;
+  const imgPos = (px === null || py === null || (px === 50 && py === 50)) ? null : { x: px, y: py };
+  const imgZoom = (typeof ev.imgZoom === 'number' && ev.imgZoom > 1) ? Math.min(6, ev.imgZoom) : 1;
   return {
     id, date, time,
     title: String(ev.title || '').slice(0, 200),
     where: String(ev.where || '').slice(0, 200),
     blurb: String(ev.blurb || '').slice(0, 2000),
     recur, day, nth,
+    image, imgPos, imgZoom,
+    exceptions: recur ? pubExceptions(ev.exceptions) : {},   // per-occurrence skips/moves; only a repeating event can have them
   };
 }
 
@@ -238,10 +278,46 @@ export function buildCalendar(events, { name = '', uidScope = 'trinityone', stam
     lines.push('DTSTAMP:' + stamp);
     lines.push(ds);
     const rr = rrule(ev); if (rr) lines.push(rr);
+    // PER-OCCURRENCE EXCEPTIONS (items 2+4). Only a recurring series can carry them; a one-off's own date move
+    // is just a different `date` and needs nothing here. RFC-5545 approach, chosen for the widest rendering in
+    // common calendar clients (Google, Apple, Outlook and lightweight "what's on" parsers all honour it):
+    //   skip (#4): EXDATE the instance — it drops out of the recurrence set, nothing takes its place.
+    //   move (#2): EXDATE the ORIGINAL instance AND emit a standalone single VEVENT (its own UID, no RRULE) on
+    //              the NEW day — so the original day is empty and the new day shows the event once. This is
+    //              preferred over RDATE/RECURRENCE-ID because a plain VEVENT + EXDATE is understood even by
+    //              parsers that ignore RECURRENCE-ID overrides. The instance time is unchanged (owner decision).
+    // EXDATE must match DTSTART's value type: a timed series EXDATEs `YYYYMMDDTHHMMSS`, an all-day one a DATE.
+    const moves = [];
+    if (rr && ev.exceptions) {
+      const exdates = [];
+      for (const k of Object.keys(ev.exceptions)) {
+        const v = ev.exceptions[k];
+        if (v && v.skip === true) exdates.push(k);
+        else if (v && typeof v.date === 'string') { exdates.push(k); moves.push([k, v.date]); }
+      }
+      for (const k of exdates.sort()) {
+        const d = k.replace(/-/g, '');
+        lines.push(ev.time ? 'EXDATE:' + d + 'T' + ev.time.replace(':', '') + '00' : 'EXDATE;VALUE=DATE:' + d);
+      }
+    }
     lines.push('SUMMARY:' + icsEscape(ev.title || 'Event'));
     if (full && ev.where) lines.push('LOCATION:' + icsEscape(ev.where));
     if (full && ev.blurb) lines.push('DESCRIPTION:' + icsEscape(ev.blurb));
     lines.push('END:VEVENT');
+    // The moved weeks, each as its own single VEVENT on the new day (UID derived from the original instance so
+    // it is stable across rebuilds and never collides with the series' own UID).
+    for (const [orig, nd] of moves.sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (!isoParts(nd)) continue;
+      const d2 = nd.replace(/-/g, '');
+      lines.push('BEGIN:VEVENT');
+      lines.push('UID:trinityone-' + ev.id + '-ex-' + orig.replace(/-/g, '') + '@' + uidScope);
+      lines.push('DTSTAMP:' + stamp);
+      lines.push(ev.time ? 'DTSTART:' + d2 + 'T' + ev.time.replace(':', '') + '00' : 'DTSTART;VALUE=DATE:' + d2);
+      lines.push('SUMMARY:' + icsEscape(ev.title || 'Event'));
+      if (full && ev.where) lines.push('LOCATION:' + icsEscape(ev.where));
+      if (full && ev.blurb) lines.push('DESCRIPTION:' + icsEscape(ev.blurb));
+      lines.push('END:VEVENT');
+    }
   }
   lines.push('END:VCALENDAR');
   return lines.map(foldLine).join('\r\n') + '\r\n';
