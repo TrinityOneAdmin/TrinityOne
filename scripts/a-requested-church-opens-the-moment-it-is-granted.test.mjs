@@ -82,6 +82,10 @@ function harness({ pending = '', proven = [BOX, CANON], seedStewarded = [] } = {
     churchSk: new Uint8Array(32).fill(7), churchPub: ME, pub: ME, sk: new Uint8Array(32).fill(7), actingChurch: '',
     stewardedChurches,
     _ownKeyBlank: () => false,   // a NON-blank owner: the pending auto-select must still fire (it is a deliberate request)
+    // setActiveIdentity sweeps a switched-away church's sealed clearance / finance seed / plaintext preload
+    // caches (preload Finding 6). No-op stubs: the test asserts the open + the pending-clear that follows it,
+    // never the sweep — and without these the sweep throws inside setActiveIdentity and the clear is skipped.
+    _sgClearClear: () => {}, _finBookClear: () => {}, _seedSweep: () => {},
     netKeys: () => [],
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
