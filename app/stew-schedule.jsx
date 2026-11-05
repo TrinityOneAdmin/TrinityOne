@@ -62,6 +62,18 @@ function schGenDates(startIso, cadence, untilIso, nth) {
     const series = { id: 'sch', date: startIso, recur: 'monthly', day: schDate(startIso).getDay(), nth: (typeof nth === 'number') ? nth : schNthOf(startIso) };
     return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= end).slice(0, 400);
   }
+  if (cadence === 'fortnightly') {
+    // FORTNIGHTLY reuses the same expandEvents walk as monthly (DST-safe, phase-aligned on the anchor's
+    // weekday, step 14 — app/recur.jsx), so a one-off series published here lands exactly where a fortnightly
+    // meeting would be painted. Same 400-date ceiling as the weekly walk: cap the end at 400 * 14 days so the
+    // span (and the per-keystroke cost of schPlanned) cannot grow with Until.
+    const cap = schAddDays(startIso, 400 * 14);
+    let end = (untilIso && untilIso > startIso) ? untilIso : startIso;
+    if (end > cap) end = cap;
+    const span = Math.round((schDate(end) - schDate(startIso)) / 864e5);
+    const series = { id: 'sch', date: startIso, recur: 'fortnightly', day: schDate(startIso).getDay() };
+    return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= end).slice(0, 400);
+  }
   const out = [startIso]; let cur = startIso, guard = 0;
   while (guard++ < 400) { cur = schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
   return out;
@@ -495,7 +507,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, p
     <React.Fragment>
       <div style={schLbl}>Repeat</div>
       <div style={{ display: 'flex', gap: 7 }}>
-        {[['none', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([v, l]) => (
+        {[['none', 'Once'], ['weekly', 'Weekly'], ['fortnightly', 'Fortnightly'], ['monthly', 'Monthly']].map(([v, l]) => (
           <button key={v} onClick={() => setRepeat(v)} aria-pressed={repeat === v} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
         ))}
       </div>
