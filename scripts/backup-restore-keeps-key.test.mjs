@@ -53,8 +53,13 @@ function harness(store) {
   // one the moment either changed.
   const routing = (SRC.match(/const ROUTING_KEYS = new Set\(\[[^\]]*\]\);/) || [])[0];
   assert.ok(routing, 'ROUTING_KEYS is gone from app/backup.jsx — re-anchor this test');
+  // restoreLocal + snapshot now also refuse the disposable preload-seed caches (Finding 6/8); lift that regex
+  // too, for the same reason ROUTING_KEYS is lifted and not re-declared.
+  const seedRx = (SRC.match(/const SEED_CACHE_RX = [^\n]*;/) || [])[0];
+  assert.ok(seedRx, 'SEED_CACHE_RX is gone from app/backup.jsx — re-anchor this test');
   const body = [
     routing,
+    seedRx,
     grab(SRC, 'function restoreLocal(map, allow, exact)'),
     // S-10 (bd63c2f) made applySteward take a snapshot first and keep it for "Keep my current church". Lifted
     // with it — without them all three tests threw ReferenceError and checked nothing (found 2026-09-30).

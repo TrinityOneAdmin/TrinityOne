@@ -1428,7 +1428,62 @@ function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) retu
 const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
 const NETKEYS_LS = 'trinityone.steward.network-keys';  // networks OWNED on this console: [{ pub, mnemonic|sealedMnemonic, name }]
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
-function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+// A WRITE THAT DOES NOT DIE QUIETLY WHEN THE DISK IS FULL (Finding 7, 2026-11-05). The preload seed caches
+// (the sealed finance book, the care rota, the member/group lists, the DM-convo list, …) are DISPOSABLE — every
+// one is rebuilt from the relay on the next open — so when localStorage refuses a write for want of space the
+// right answer is to DROP those caches and make room, not to silently lose THIS write. The writes that were
+// being lost are the ones that matter: a console setting, the active-church id, the network keys, and — worst —
+// the encrypted church-key marker, whose silent loss let setPin() delete the plaintext seed believing the
+// ciphertext had landed. Only a genuine QuotaExceededError triggers this, and only one retry, so a healthy
+// write is byte-for-byte unchanged. Every lsSet caller inherits the recovery; no caller's success path changes.
+function lsSet(k, v) {
+  try { localStorage.setItem(k, v); }
+  catch (e) {
+    if (!_isQuotaError(e)) return;                 // not a space problem — nothing to free; swallow as before
+    try { if (_evictSeedCaches(k)) localStorage.setItem(k, v); } catch (e2) {}
+  }
+}
+function _isQuotaError(e) {
+  // DOMException shapes across engines: name is the reliable signal; code 22 (most) / 1014 (Firefox legacy).
+  return !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014);
+}
+// The UNENCRYPTED preload seeds — a PLAINTEXT public-subset on disk. Unlike the sealed caches (minors / sgclear
+// / finance) these stay READABLE with no key, so "remove from this device" must delete them too (Finding 6), and
+// they are the first things evicted when the disk fills. `care.*` is spelled out per sub-family so the keep-the-
+// active-church scoping below lands on the real key, not on a `care.` stem that no key equals.
+const _SEED_PLAINTEXT_PREFIXES = [
+  'trinityone.steward.dmconvos.', 'trinityone.steward.admitted.', 'trinityone.steward.joinpolicy.',
+  'trinityone.steward.stewardreqs.', 'trinityone.steward.stats.', 'trinityone.steward.activity.',
+  'trinityone.steward.versebanner.', 'trinityone.steward.care.needs.', 'trinityone.steward.care.slots.',
+  'trinityone.steward.care.skips.', 'trinityone.steward.care.avail.',
+];
+// EVERYTHING DISPOSABLE — the plaintext seeds above PLUS the sealed book / clearance / children caches and the
+// cache-first paint families (groups / plans / devos / address-book / members). All rebuild from the relay, so
+// evicting any of them to make room costs only a one-frame re-paint, never data.
+const _SEED_EVICTABLE_PREFIXES = [
+  'trinityone.steward.financebook.', 'trinityone.steward.sgclear.', 'trinityone.steward.minorslast.',
+  'trinityone.steward.groups.v2.', 'trinityone.steward.plans.v2.', 'trinityone.steward.devos.v2.',
+  'trinityone.steward.addr.v2.', 'trinityone.steward.members.',
+].concat(_SEED_PLAINTEXT_PREFIXES);
+function _evictSeedCaches(exceptKey) {
+  try {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k !== exceptKey && _SEED_EVICTABLE_PREFIXES.some(p => k.startsWith(p))) ks.push(k); }
+    for (const k of ks) { try { localStorage.removeItem(k); } catch (e) {} }
+    return ks.length;
+  } catch (e) { return 0; }
+}
+// "Remove from this device" / leaving a church must leave NO plaintext seed behind (Finding 6, 2026-11-05). The
+// sealed caches already go via _minorsLastClear/_sgClearClear/_finBookClear; these are the UNENCRYPTED ones that
+// those three missed. `keep` (the active church pubkey) spares that one church's seeds — for the leave/switch
+// paths that keep the device acting for it — exactly like the three sealed clears do.
+function _seedSweep(keep) {
+  try {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (!k) continue; if (_SEED_PLAINTEXT_PREFIXES.some(p => k.startsWith(p) && (!keep || k !== p + keep))) ks.push(k); }
+    for (const k of ks) { try { localStorage.removeItem(k); } catch (e) {} }
+  } catch (e) {}
+}
 // THE CONSOLE'S OWN CHURCH NAME, remembered per church key whenever its own kind-0 is read (subscribeProfile), so
 // the identity switcher can name it while the console is acting for a stewarded church or viewing a network —
 // when the profile on screen is the OTHER one's (device round 2026-10-01). A display string, public anyway.
@@ -3639,6 +3694,7 @@ function _resetChurchScopedState() {
   _minorsLastClear('');   // the key that sealed every device copy of a children list is gone or replaced
   _sgClearClear('');      // …and the sealed clearance record goes with it (same key, same church lifecycle)
   _finBookClear('');      // …and the sealed finance book (same key, same church lifecycle)
+  _seedSweep('');         // …and the UNENCRYPTED preload seeds (DM list, admitted, care rota, …) — Finding 6
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -3915,8 +3971,15 @@ async function encBlobWrite(str) {
       console.warn('[steward] device-wrapped blob did not read back — storing unwrapped');
     }
   }
-  lsSet(ENC_LS, str);   // web/desktop fallback, or native when the hardware store is unavailable
-  return true;
+  // FINAL FALLBACK (web/desktop, or native with no reachable hardware store): store the blob in localStorage.
+  // This used to `return true` UNCONDITIONALLY — so when the write was silently refused (a full disk, private
+  // mode) setPin() believed the encrypted key had landed, DELETED THE PLAINTEXT SEED and cleared needsPin, and
+  // the church key was gone on the next boot (Finding 7, 2026-11-05). lsSet now evicts disposable seed caches
+  // and retries on a full disk; we then READ THE VALUE BACK and report the truth. A write that did not land
+  // returns false, so setPin keeps the recoverable plaintext and leaves the forced-PIN modal up. The happy path
+  // (the value is now in localStorage) is unchanged — it returns true exactly as before.
+  lsSet(ENC_LS, str);
+  try { return lsGet(ENC_LS) === str; } catch (e) { return false; }
 }
 // "Remove this church from this device" is a panic button, so its failure must be RECOVERABLE, not silent.
 //
@@ -7736,7 +7799,7 @@ window.Steward = {
   // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
   // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
   // with my 12 words" (audit of 83b7a4f).
-  forgetChildrenLists() { _minorsLastClear(''); _sgClearClear(''); _finBookClear(''); },
+  forgetChildrenLists() { _minorsLastClear(''); _sgClearClear(''); _finBookClear(''); _seedSweep(''); },
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
     // the care / sermon envelopes kept on this device go with the key (round 3d, LOW 3) — see _resetChurchScopedState —
@@ -7745,6 +7808,7 @@ window.Steward = {
     _minorsLastClear('');   // no church's children list stays on a device whose key was removed
     _sgClearClear('');      // nor its sealed clearance record
     _finBookClear('');      // nor its sealed finance book
+    _seedSweep('');         // nor its UNENCRYPTED preload seeds — who messages the church, who is admitted, the care rota (Finding 6)
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     _stay.clear();                  // …and so is a stay-open record that would open it
@@ -14033,6 +14097,7 @@ window.Steward = {
     _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
     _sgClearClear(actingChurch || pub);      // …nor its sealed clearance record
     _finBookClear(actingChurch || pub);      // …nor its sealed finance book
+    _seedSweep(actingChurch || pub);         // …nor its UNENCRYPTED preload seeds (Finding 6); scoped — the active church keeps its own
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     _senvPending.clear();        // see _resetChurchScopedState (round 3c, LOW iv)
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
