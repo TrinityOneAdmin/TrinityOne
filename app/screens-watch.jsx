@@ -34,6 +34,17 @@ function openExternal(url) {
   if (url) window.open(url, '_blank', 'noopener');
 }
 
+// D1 — the YouTube embed src, as a PURE builder so every runtime (web, APK WebView, desktop) carries the
+// same identification params and the point-of-use test can pin it. In the app's WebView the embedding origin
+// is a junk value (https://localhost), so YouTube cannot identify the embed and shows a "confirm you're not a
+// bot" wall. `origin` is YouTube's documented identification substitute for WebViews, `enablejsapi=1` makes
+// `origin` honoured, and `widget_referrer` is analytics attribution. These leak only the app-id string to
+// Google; the cookieless youtube-nocookie host stays, and no cookies are touched.
+function ytEmbedSrc(id) {
+  return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`
+    + `&origin=https://com.trinityone.app&enablejsapi=1&widget_referrer=https://com.trinityone.app`;
+}
+
 // Real YouTube thumbnail when available; warm gradient fallback otherwise.
 function VideoPoster({ v, h = 200, rounded = 20 }) {
   const [err, setErr] = useW(false);
@@ -383,9 +394,18 @@ function VideoPlayer({ video, open, onClose, ctx }) {
                     : <SermonLoading prog={prog} enc={video.enc} onCancel={() => { if (abortRef.current) try { abortRef.current.abort(); } catch {} onClose(); }} />}
                 </div>
           ) : liveId ? (
-            <iframe title="video" width="100%" height="100%" style={{ border: 'none', display: 'block' }}
-              src={`https://www.youtube-nocookie.com/embed/${liveId}?autoplay=1&rel=0&modestbranding=1`}
-              allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />
+            <React.Fragment>
+              <iframe title="video" width="100%" height="100%" style={{ border: 'none', display: 'block' }}
+                src={ytEmbedSrc(liveId)}
+                referrerPolicy="strict-origin-when-cross-origin"
+                allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />
+              {/* Option A: always-present escape hatch to the real YouTube app/site, even if the embed clears
+                  the bot wall. Shown on the liveId branch unconditionally; never for a self-hosted sermon. */}
+              <button onClick={() => openExternal(`https://youtu.be/${video.ytId}`)}
+                style={{ position: 'absolute', bottom: 10, right: 10, border: 'none', background: 'rgba(0,0,0,.66)', color: '#fff', padding: '6px 12px', borderRadius: 999, fontWeight: 700, fontSize: 11.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+                Watch on YouTube
+              </button>
+            </React.Fragment>
           ) : (
             <div onClick={() => setLiveId(video.ytId || null)} style={{ position: 'absolute', inset: 0, cursor: 'pointer' }}>
               <VideoPoster v={video} h={9999} rounded={0} />
@@ -431,4 +451,4 @@ function VideoPlayer({ video, open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { WatchView, VideoPlayer, parseYT });
+Object.assign(window, { WatchView, VideoPlayer, parseYT, ytEmbedSrc });
