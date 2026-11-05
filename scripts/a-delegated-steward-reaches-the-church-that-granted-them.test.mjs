@@ -75,6 +75,10 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
   const stubs = {
     churchSk: new Uint8Array(32).fill(7), churchPub: ME, pub: ME, sk: null, actingChurch: '',
     stewardedChurches,
+    // This fixture is about relay REACHABILITY, not the switcher's blank-helper hiding/auto-land. Stub the
+    // own-key-blank predicate FALSE so identities()/subscribeStewardedChurches behave exactly as they did
+    // before the 2026-11-05 helper-delegation change — the blank-helper behaviour has its own test.
+    _ownKeyBlank: () => false,
     netKeys: () => [],
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),

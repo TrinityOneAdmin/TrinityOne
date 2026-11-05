@@ -1435,6 +1435,21 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const OWN_NAME_LS = 'trinityone.steward.ownname.';
 function _rememberOwnName(n) { const v = String(n || '').trim().slice(0, 80); if (v && churchPub) lsSet(OWN_NAME_LS + churchPub, v); }
 function _ownChurchName() { return (churchPub && lsGet(OWN_NAME_LS + churchPub)) || ''; }
+// Has THIS DEVICE'S OWN key ever been self-registered at any relay? SELFREG_KEY holds a map keyed
+// `<churchPub>@<base>`; any entry whose key starts with our churchPub means the own key is a real,
+// registered church somewhere — not merely a signing key minted by createKeyQuiet() for a helper.
+function _ownKeyRegistered() {
+  if (!churchPub) return false;
+  try {
+    const done = JSON.parse(localStorage.getItem(SELFREG_KEY) || '{}') || {};
+    const pfx = churchPub + '@';
+    return Object.keys(done).some(k => k.indexOf(pfx) === 0);
+  } catch (e) { return false; }
+}
+// The own key is "blank" when it has never been named (no kind-0 read back) AND never registered at any
+// relay. That is exactly the key createKeyQuiet() mints for a pure delegated steward ("helper"): it must
+// stay a valid signer and switch-target, but it is NOT a church and must not be rendered as one.
+function _ownKeyBlank() { return !!churchPub && !_ownChurchName() && !_ownKeyRegistered(); }
 function _netKeysRaw() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
 function netKeys() {
   return _netKeysRaw().map(r => {
@@ -13675,12 +13690,21 @@ window.Steward = {
   // every identity this console can publish as: the church + any owned networks + any church we STEWARD
   identities() {
     const held = new Set([churchPub, ...netKeys().map(r => r.pub)]);   // keys we HOLD — never also list them as "stewarded"
+    const stewarded = [...stewardedChurches.entries()].filter(([cp]) => !held.has(cp));
+    // HIDE THE BLANK OWN KEY WHEN IT IS ONLY A HELPER'S SIGNING KEY. A pure delegated steward's console mints
+    // its own churchPub (createKeyQuiet) purely so the helper can sign; it is never named or registered. Listed
+    // as a church it shows an unnamed "Your church" row beside the real church they steward, and reads as "a
+    // second blank church was created". So drop the own-key church row ONLY while it is blank (unnamed AND
+    // never-registered) AND this console actually stewards a church. A NAMED/registered own church, or a
+    // brand-new owner with no stewarded church yet, is listed exactly as before — and churchPub stays a valid
+    // signer and switch-target either way (this hides it from the LIST, nothing else).
+    const showOwn = !(_ownKeyBlank() && stewarded.length);
     return [
       // `name`: the console's OWN church, as last read from its own kind-0 (_ownChurchName) — so the switcher can
       // name it while the console is acting for somebody else. '' when this device has never read it.
-      { kind: 'church', pub: churchPub, npub: churchPub ? npubEncode(churchPub) : '', name: _ownChurchName() },
+      ...(showOwn ? [{ kind: 'church', pub: churchPub, npub: churchPub ? npubEncode(churchPub) : '', name: _ownChurchName() }] : []),
       ...netKeys().map(r => ({ kind: 'network', pub: r.pub, npub: npubEncode(r.pub), name: r.name || 'Network' })),
-      ...[...stewardedChurches.entries()].filter(([cp]) => !held.has(cp)).map(([cp, m]) => ({ kind: 'steward', pub: cp, npub: npubEncode(cp), name: (m && m.name) || 'Church' })),
+      ...stewarded.map(([cp, m]) => ({ kind: 'steward', pub: cp, npub: npubEncode(cp), name: (m && m.name) || 'Church' })),
     ];
   },
   // switch the WHOLE console between the church, an owned network, or a church we steward (delegated) —
@@ -13848,6 +13872,14 @@ window.Steward = {
       const want = localStorage.getItem(ACTIVE_ID_KEY) || '';
       if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
         window.Steward.setActiveIdentity(want);
+      } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+        // PURE HELPER, NO REMEMBERED CHURCH. The own key is only a signing key (createKeyQuiet) and we steward
+        // at least one church, so landing on the own key would open the empty "your church" setup beside a
+        // church they actually run — round 9's trap. Default into a stewarded church instead. Deterministic:
+        // the first stewarded key we hold a grant for. churchPub stays the signer; this only chooses where the
+        // console comes back to when nothing was remembered.
+        const first = [...stewardedChurches.keys()].find(cp => !_ownedPubs.has(cp));
+        if (first) window.Steward.setActiveIdentity(first);
       }
     } catch (e) {}
     // WHICH RELAYS TO ASK, AND WHEN. This read used to go over relays() — the publish set, filtered by the

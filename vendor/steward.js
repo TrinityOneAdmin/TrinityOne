@@ -16090,6 +16090,19 @@ zoo`.split("\n");
   function _ownChurchName() {
     return churchPub && lsGet(OWN_NAME_LS + churchPub) || "";
   }
+  function _ownKeyRegistered() {
+    if (!churchPub) return false;
+    try {
+      const done = JSON.parse(localStorage.getItem(SELFREG_KEY) || "{}") || {};
+      const pfx = churchPub + "@";
+      return Object.keys(done).some((k) => k.indexOf(pfx) === 0);
+    } catch (e) {
+      return false;
+    }
+  }
+  function _ownKeyBlank() {
+    return !!churchPub && !_ownChurchName() && !_ownKeyRegistered();
+  }
   function _netKeysRaw() {
     try {
       const a = JSON.parse(lsGet(NETKEYS_LS) || "[]");
@@ -27007,12 +27020,14 @@ zoo`.split("\n");
     // every identity this console can publish as: the church + any owned networks + any church we STEWARD
     identities() {
       const held = /* @__PURE__ */ new Set([churchPub, ...netKeys().map((r) => r.pub)]);
+      const stewarded = [...stewardedChurches.entries()].filter(([cp]) => !held.has(cp));
+      const showOwn = !(_ownKeyBlank() && stewarded.length);
       return [
         // `name`: the console's OWN church, as last read from its own kind-0 (_ownChurchName) — so the switcher can
         // name it while the console is acting for somebody else. '' when this device has never read it.
-        { kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "", name: _ownChurchName() },
+        ...showOwn ? [{ kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "", name: _ownChurchName() }] : [],
         ...netKeys().map((r) => ({ kind: "network", pub: r.pub, npub: npubEncode(r.pub), name: r.name || "Network" })),
-        ...[...stewardedChurches.entries()].filter(([cp]) => !held.has(cp)).map(([cp, m]) => ({ kind: "steward", pub: cp, npub: npubEncode(cp), name: m && m.name || "Church" }))
+        ...stewarded.map(([cp, m]) => ({ kind: "steward", pub: cp, npub: npubEncode(cp), name: m && m.name || "Church" }))
       ];
     },
     // switch the WHOLE console between the church, an owned network, or a church we steward (delegated) —
@@ -27190,6 +27205,9 @@ zoo`.split("\n");
         const want = localStorage.getItem(ACTIVE_ID_KEY) || "";
         if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
           window.Steward.setActiveIdentity(want);
+        } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+          const first = [...stewardedChurches.keys()].find((cp) => !_ownedPubs.has(cp));
+          if (first) window.Steward.setActiveIdentity(first);
         }
       } catch (e) {
       }
