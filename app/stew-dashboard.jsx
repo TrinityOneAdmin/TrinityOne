@@ -10882,7 +10882,19 @@ function DashStewardsPanel({ church }) {
   // survive a reload. Every read/write is wrapped: a private window or blocked storage must not crash the panel.
   const handledKey = 'trinityone.steward.handledreqs.' + (ownerPub || '');
   const [handled, setHandled] = React.useState(() => { try { return JSON.parse(window.localStorage.getItem(handledKey) || '{}') || {}; } catch (e) { return {}; } });
-  const markHandled = (pk) => { if (!pk) return; setHandled(h => { if (h[pk]) return h; const n = { ...h, [pk]: 1 }; try { window.localStorage.setItem(handledKey, JSON.stringify(n)); } catch (e) {} return n; }); };
+  // TIME-AWARE dismiss (2026-11-05, helper-delegation). We store the MOMENT the owner last acted on this
+  // pubkey — approved or removed — as a Unix-SECONDS timestamp, the same unit as a STEWARDREQ's created_at
+  // (`r.ts`, see subscribeStewardRequests: `ts: e.created_at`). The seconds clock here is `Math.floor(Date.now()
+  // / 1000)`, which is what the rest of this file uses for created_at comparisons. Storing a timestamp instead
+  // of a bare `true`/`1` is what lets a GENUINELY-NEWER request reappear: a request is kept out of `pending`
+  // only if it is NOT newer than the last time the owner handled that person (see handledAt + the filter). We
+  // always advance to the current time (no early-return), so each new approve/remove resets the hidden window.
+  const markHandled = (pk) => { if (!pk) return; const at = Math.floor(Date.now() / 1000); setHandled(h => { const n = { ...h, [pk]: at }; try { window.localStorage.setItem(handledKey, JSON.stringify(n)); } catch (e) {} return n; }); };
+  // The seconds-timestamp this pubkey was last handled at, or null if never handled. BACKWARD-COMPAT: a value
+  // written by the prior build is the bare `1` (or an old `true`); it carries no time, so we read it as "hide
+  // everything handled up to now" = +Infinity. That keeps an upgraded console from suddenly resurfacing old
+  // stale requests; only handles written AFTER the upgrade (real timestamps) let a newer re-request through.
+  const handledAt = (pk) => { const v = handled[pk]; if (v == null || v === false) return null; const n = Number(v); return (Number.isFinite(n) && n >= 1e9) ? n : Infinity; };
   const [inviteQR, setInviteQR] = React.useState(false);
   const [copiedInvite, setCopiedInvite] = React.useState(false);
   const [approving, setApproving] = React.useState(null);   // pubkey awaiting PIN confirm
@@ -10981,7 +10993,15 @@ function DashStewardsPanel({ church }) {
     }
     add(approving, approveName, approveGrants());
   };
-  const pending = requests.filter(r => !dismissed[r.pubkey] && !handled[r.pubkey] && !stewardSet.has(r.pubkey) && r.pubkey !== ownerPub);
+  // A handled pubkey is hidden ONLY while its request is not newer than the handle moment: `r.ts <= handledAt`
+  // (both Unix seconds). A request created AFTER the owner last approved/removed this person is a genuine
+  // re-request and MUST show. A request with no `ts` is treated as time 0 (oldest) and stays hidden.
+  const pending = requests.filter(r => {
+    if (dismissed[r.pubkey] || stewardSet.has(r.pubkey) || r.pubkey === ownerPub) return false;
+    const hAt = handledAt(r.pubkey);
+    if (hAt != null && (r.ts || 0) <= hAt) return false;
+    return true;
+  });
   // REMOVING A DELEGATE RE-KEYS THE CHURCH (sim finding 5). This used to write the shorter roster and stop: the
   // relay stopped honouring their writes, but they kept every key already wrapped to them — care, names, sermons
   // and every encrypted room — and the next list refresh could not take them away, because those keys only ever

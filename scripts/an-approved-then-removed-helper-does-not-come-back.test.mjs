@@ -10,12 +10,19 @@
 // APPROVED (add) or REMOVED (remove), persisted to localStorage, SCOPED PER CHURCH (ownerPub), and folds it
 // into the `pending` filter. It survives a reload, so an approved-then-removed requester never re-surfaces.
 //
+// TIME-AWARE REFINEMENT (2026-11-05, helper-delegation). The durable set used to store `true`, which hid that
+// person's requests FOR EVER — so if a removed helper GENUINELY asked to help again later, the owner never saw
+// it. It now stores the handle MOMENT as a Unix-SECONDS timestamp (same unit as a STEWARDREQ's created_at,
+// surfaced on the request row as `r.ts`). A request is hidden only if it is NOT newer than that handle time
+// (`r.ts <= handled[pk]`); a request created AFTER the last handle is a genuine re-request and shows. An old
+// boolean value written by the prior build is read as +Infinity (hide everything up to now) for migration.
+//
 // POINT OF USE (CLAUDE.md rules 1 & 3). This MOUNTS the real DashStewardsPanel out of app/stew-dashboard.jsx
 // through console-screens.mjs — the real usePendingStewards hook over Steward.subscribeStewardRequests — and
 // PRESSES the real Approve / Revoke controls. A simulated remount (the hook store is reset while the same
 // window + localStorage persist) is the reload. No text is matched in the .jsx to prove behaviour: the
-// assertions are on which request rows the real filter renders. Delete the filter's `!handled[...]` term, or
-// the markHandled() write in add()/remove(), and these go red.
+// assertions are on which request rows the real filter renders. Delete the markHandled() write in add()/
+// remove(), weaken the `r.ts <= handledAt` comparison, or drop the handled term from the filter, and these go red.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConsole, fakeReact, fakeBrowser, fakeSteward, nodes, texts } from './console-screens.mjs';
@@ -121,6 +128,40 @@ test('REMOVING a steward also writes the durable set, so their old request canno
   h.remount();
   assert.ok(!h.words().includes('Ruth Bexley'),
     'a removed steward\'s old request resurfaced after a reload — remove() must write the durable set too');
+});
+
+test('a genuinely NEWER request from a handled pubkey REAPPEARS — the dismiss is time-aware, not permanent', () => {
+  // T is the seconds-timestamp the owner last handled (approved-then-removed) Ruth on an earlier run. We seed
+  // the durable set with it directly so the assertion does not depend on the wall clock at approve time.
+  const T = 1_700_000_000;
+  const h = setup({ reqList: [] });
+  h.localStorage.setItem(HANDLED_KEY, JSON.stringify({ [HELPER]: T }));
+  h.state.roster = [];
+
+  // (a) her OLD request (created at or before the handle) stays hidden
+  h.state.reqList = [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: T - 5 }];
+  h.remount();
+  assert.ok(!h.words().includes('Ruth Bexley'),
+    'the stale pre-handle request leaked back — a request not newer than the handle must stay hidden');
+
+  // (b) a genuinely NEWER request from the SAME pubkey (created AFTER the handle) must appear
+  h.state.reqList = [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: T + 60 }];
+  h.remount();
+  assert.ok(h.words().includes('Requests to help'), 'the newer re-request did not render the Requests-to-help section');
+  assert.ok(h.words().includes('Ruth Bexley'),
+    'a genuinely newer re-request was hidden — a request created AFTER the handle moment must show through the durable dismiss');
+});
+
+test('backward-compat: an OLD boolean handled marker still hides a stale request (upgrade migration safety)', () => {
+  // A console upgraded from the prior build carries the bare-`true` shape. With no time in it, the stale
+  // request it recorded must stay hidden — the upgrade must not suddenly resurface old handled requests.
+  const h = setup({ reqList: [] });
+  h.localStorage.setItem(HANDLED_KEY, JSON.stringify({ [HELPER]: true }));
+  h.state.roster = [];
+  h.state.reqList = [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: 1_700_000_000 }];
+  h.remount();
+  assert.ok(!h.words().includes('Ruth Bexley'),
+    'an old boolean handled marker resurfaced a previously-handled request after the upgrade');
 });
 
 test('CONTROL: an unhandled request is NOT hidden — the filter suppresses only handled pubkeys', () => {
