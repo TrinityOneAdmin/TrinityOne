@@ -63,7 +63,7 @@ On the real APK with a **fresh test church**:
 - **Relay deploy command** (if master-01 ever needs the latest again):
   `curl -fsSL https://trinityone.tailbeaac0.ts.net/relay-app/install.sh | sudo bash`
 - **Release command** (web + APK, refuses a dirty tree): `bash scripts/release.sh`
-- **Pilot scope** (memory `pilot-scope-2026-06`): delegated stewards shipped; Finance optional/in-pilot;
+- **Pilot scope** (memory `pilot-scope-2026-06`): helpers (delegated stewards) shipped; Finance optional/in-pilot;
   Lightning giving + Keykeeper = roadmap; multi-church custody parked.
 - **Post-pilot, parked on `claude/plugins`:** the add-on/plugin model (Treasury, tax packs, livestream,
   calls, forms, ticketing), the Cornerstone hardware box, entitlement/licensing design. Not for the pilot.

@@ -15636,6 +15636,19 @@ zoo`.split("\n");
   var _stewardNamesCt = "";
   var _stewardSince = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content", "sealedrooms"];
+  var STEWARD_PRESETS = [
+    { id: "general", label: "General helper", hint: "Day-to-day help: care, groups & rotas, members. No money, no safeguarding, no sealed rooms.", caps: ["care", "content", "members"] },
+    { id: "finance", label: "Finance helper", hint: "The church books only \u2014 giving, funds and statements.", caps: ["finance"] },
+    { id: "safeguarding", label: "Safeguarding lead", hint: "Clearances, photo decisions and kids check-in only.", caps: ["safeguarding"] },
+    { id: "all", label: "Full helper (everything except the church key)", hint: "Every capability. They still cannot add stewards, ban people or change relay settings.", caps: ["finance", "care", "safeguarding", "members", "content", "sealedrooms"] },
+    { id: "custom", label: "Choose exactly what they may do\u2026", hint: "Open the full list and tick each one.", caps: null }
+  ];
+  function _presetCaps(id) {
+    const p = STEWARD_PRESETS.find((x) => x.id === id);
+    if (p && p.id === "custom") return null;
+    if (p && Array.isArray(p.caps)) return p.caps.slice();
+    return STEWARD_PRESETS.find((x) => x.id === "general").caps.slice();
+  }
   var CAP_KEYS = {
     finance: { d: "trinityone/financekey:", cap: "finance", legacy: true, explicit: false },
     // the church books
@@ -15751,6 +15764,7 @@ zoo`.split("\n");
   var VOICE_D = "trinityone/voice:";
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
+  var STEWARDREVOKE_D = "trinityone/stewardrevoke:";
   var PIN_D = "trinityone/pin:";
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
@@ -16157,6 +16171,19 @@ zoo`.split("\n");
   function _ownChurchName() {
     return churchPub && lsGet(OWN_NAME_LS + churchPub) || "";
   }
+  function _ownKeyRegistered() {
+    if (!churchPub) return false;
+    try {
+      const done = JSON.parse(localStorage.getItem(SELFREG_KEY) || "{}") || {};
+      const pfx = churchPub + "@";
+      return Object.keys(done).some((k) => k.indexOf(pfx) === 0);
+    } catch (e) {
+      return false;
+    }
+  }
+  function _ownKeyBlank() {
+    return !!churchPub && !_ownChurchName() && !_ownKeyRegistered();
+  }
   function _netKeysRaw() {
     try {
       const a = JSON.parse(lsGet(NETKEYS_LS) || "[]");
@@ -16262,6 +16289,7 @@ zoo`.split("\n");
     }
   }
   var ACTIVE_ID_KEY = "trinityone.steward.active-id";
+  var PENDING_CHURCH_KEY = "trinityone.steward.pending-church";
   var NAMES_LS = "trinityone.steward.relay-names";
   var DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, "http").replace(/\/relay\/?$/i, "");
   function _dirBases() {
@@ -21064,7 +21092,30 @@ zoo`.split("\n");
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }), sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }), sk)).then((ok) => {
+        if (ok) {
+          try {
+            localStorage.setItem(PENDING_CHURCH_KEY, cp);
+          } catch (e) {
+          }
+          try {
+            const RK = "trinityone.steward.requested." + (churchPub || "");
+            let a = [];
+            try {
+              a = JSON.parse(localStorage.getItem(RK) || "[]") || [];
+            } catch (e) {
+              a = [];
+            }
+            if (!Array.isArray(a)) a = [];
+            if (!a.includes(cp)) {
+              a.push(cp);
+              localStorage.setItem(RK, JSON.stringify(a));
+            }
+          } catch (e) {
+          }
+        }
+        return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null;
+      });
     },
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
     subscribeStewardRequests(onReqs) {
@@ -24675,6 +24726,28 @@ zoo`.split("\n");
       }
       return _landed("steward roster", _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk))));
     },
+    // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). When the owner takes a helper off the roster the
+    // relay (correctly) stops serving them the church's documents — INCLUDING the stewards: roster event that would
+    // tell their app it was dropped — so their console kept a dead "ghost" church on screen. This writes a dedicated
+    // church-signed notice at d=stewardrevoke:<pk> that the removed helper CAN still read (canRead serves it to the
+    // subject alone), and which their subscribeStewardedChurches evicts the ghost on.
+    //
+    // CHURCH-SIGNED, with the SAME key that signs the roster (`sk`/`pub` here are the owner's own church, exactly as
+    // setStewards above), so the helper's handler can take `e.pubkey` as the authority and refuse a forgery. CONTENT IS
+    // NON-EMPTY on purpose: the relay-wide convention (and the helper's handler) treats empty content OR a ['deleted']
+    // tag as a tombstone, so a live revoke must carry content or it would read as its own cancellation. Called ONLY from
+    // DashStewardsPanel.remove, and ONLY after the roster removal is confirmed landed (app/stew-dashboard.jsx).
+    publishStewardRevoke(pk) {
+      if (!sk || !pk) return Promise.resolve(null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREVOKE_D + pk], ["t", NET], ["p", pk]], content: JSON.stringify({ revoked: pk }) }), sk));
+    },
+    // CANCEL A REVOKE when the SAME helper is re-added (app/stew-dashboard.jsx add()/addByCode). A tombstone — empty
+    // content + ['deleted'] — at the same d-tag, newest-wins, so a re-added helper's console does not evict on a stale
+    // revoke it only now reads. Church-signed, like the notice it cancels. No `p` tag: it addresses nobody, it retracts.
+    clearStewardRevoke(pk) {
+      if (!sk || !pk) return Promise.resolve(null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREVOKE_D + pk], ["t", NET], ["deleted"]], content: "" }), sk));
+    },
     // DID A REMOVAL LAND? setStewards() answers false when no relay ACKNOWLEDGED the write, and that is not the same as
     // "no relay applied it": the OK can be lost with the socket (the app backgrounded mid-write). So read each relay's
     // newest church-signed roster and say what is TRUE, in three words and never a guess:
@@ -24765,6 +24838,15 @@ zoo`.split("\n");
     },
     stewardCapNames() {
       return STEWARD_CAPS.slice();
+    },
+    // Helper permission presets — the named bundles the owner picks from when approving a helper, and the pure
+    // mapping from a preset id to its capability list. presetCaps('custom') === null (open the granular editor);
+    // an unknown id falls back to the conservative 'general' bundle, never to [] (see _presetCaps).
+    stewardPresets() {
+      return STEWARD_PRESETS.map((p) => ({ ...p, caps: Array.isArray(p.caps) ? p.caps.slice() : null }));
+    },
+    presetCaps(id) {
+      return _presetCaps(id);
     },
     // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
     // not on the roster, so they are unrestricted by construction.
@@ -27400,17 +27482,19 @@ zoo`.split("\n");
     // every identity this console can publish as: the church + any owned networks + any church we STEWARD
     identities() {
       const held = /* @__PURE__ */ new Set([churchPub, ...netKeys().map((r) => r.pub)]);
+      const stewarded = [...stewardedChurches.entries()].filter(([cp]) => !held.has(cp));
+      const showOwn = !(_ownKeyBlank() && stewarded.length);
       return [
         // `name`: the console's OWN church, as last read from its own kind-0 (_ownChurchName) — so the switcher can
         // name it while the console is acting for somebody else. '' when this device has never read it.
-        { kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "", name: _ownChurchName() },
+        ...showOwn ? [{ kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "", name: _ownChurchName() }] : [],
         ...netKeys().map((r) => ({ kind: "network", pub: r.pub, npub: npubEncode(r.pub), name: r.name || "Network" })),
-        ...[...stewardedChurches.entries()].filter(([cp]) => !held.has(cp)).map(([cp, m]) => ({ kind: "steward", pub: cp, npub: npubEncode(cp), name: m && m.name || "Church" }))
+        ...stewarded.map(([cp, m]) => ({ kind: "steward", pub: cp, npub: npubEncode(cp), name: m && m.name || "Church" }))
       ];
     },
     // switch the WHOLE console between the church, an owned network, or a church we steward (delegated) —
     // the active signing+reading identity. Subscriptions are keyed on activePub, so the dashboard re-renders.
-    setActiveIdentity(targetPub) {
+    setActiveIdentity(targetPub, { persist = true } = {}) {
       const tp = toPubHex(targetPub) || targetPub || churchPub;
       if (tp === churchPub) {
         sk = churchSk;
@@ -27432,7 +27516,7 @@ zoo`.split("\n");
         }
       }
       const _isNetwork = !actingChurch && tp !== churchPub;
-      if (!_isNetwork) {
+      if (!_isNetwork && persist) {
         try {
           localStorage.setItem(ACTIVE_ID_KEY, actingChurch || "");
         } catch (e) {
@@ -27584,8 +27668,15 @@ zoo`.split("\n");
       }
       try {
         const want = localStorage.getItem(ACTIVE_ID_KEY) || "";
-        if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+        const pend = localStorage.getItem(PENDING_CHURCH_KEY) || "";
+        if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
+          if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
+          localStorage.removeItem(PENDING_CHURCH_KEY);
+        } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
           window.Steward.setActiveIdentity(want);
+        } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+          const first = [...stewardedChurches.keys()].find((cp) => !_ownedPubs.has(cp));
+          if (first) window.Steward.setActiveIdentity(first, { persist: false });
         }
       } catch (e) {
       }
@@ -27643,9 +27734,24 @@ zoo`.split("\n");
         if (!dialled.length) return;
         [...stewardedChurches.keys()].forEach(resolveName);
         const seenAt = /* @__PURE__ */ new Map();
-        sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }], {
+        sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }, { kinds: [30078], "#d": [STEWARDREVOKE_D + me] }], {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (d.startsWith(STEWARDREVOKE_D)) {
+              const rcp = e.pubkey;
+              const isTomb = e.tags.some((t) => t[0] === "deleted") || !e.content;
+              if (stewardedChurches.has(rcp) && !isTomb && e.created_at > (seenAt.get(rcp) || 0)) {
+                stewardedChurches.delete(rcp);
+                save();
+                if (actingChurch === rcp) {
+                  const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find((k) => !_ownedPubs.has(k)) : "";
+                  if (other) window.Steward.setActiveIdentity(other, { persist: false });
+                  else window.Steward.setActiveIdentity(churchPub);
+                }
+                cb([...stewardedChurches.keys()]);
+              }
+              return;
+            }
             if (!d.startsWith(STEWARDS_D)) return;
             const cp = d.slice(STEWARDS_D.length);
             if (cp === me) return;
@@ -27663,11 +27769,41 @@ zoo`.split("\n");
               stewardedChurches.set(cp, { name: "Church" });
               save();
               resolveName(cp);
+              try {
+                const RK = "trinityone.steward.requested." + (me || "");
+                let reqd = [];
+                try {
+                  reqd = JSON.parse(localStorage.getItem(RK) || "[]") || [];
+                } catch (e2) {
+                  reqd = [];
+                }
+                if (Array.isArray(reqd) && reqd.includes(cp)) {
+                  publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp], ["deleted"]], content: "" }), churchSk));
+                  try {
+                    localStorage.setItem(RK, JSON.stringify(reqd.filter((x) => x !== cp)));
+                  } catch (e2) {
+                  }
+                }
+              } catch (e2) {
+              }
+              try {
+                if ((localStorage.getItem(PENDING_CHURCH_KEY) || "") === cp && cp !== churchPub && !_ownedPubs.has(cp)) {
+                  cb([...stewardedChurches.keys()]);
+                  window.Steward.setActiveIdentity(cp);
+                  localStorage.removeItem(PENDING_CHURCH_KEY);
+                  return;
+                }
+              } catch (e2) {
+              }
               cb([...stewardedChurches.keys()]);
             } else if (!listed && had) {
               stewardedChurches.delete(cp);
               save();
-              if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub);
+              if (actingChurch === cp) {
+                const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find((k) => !_ownedPubs.has(k)) : "";
+                if (other) window.Steward.setActiveIdentity(other, { persist: false });
+                else window.Steward.setActiveIdentity(churchPub);
+              }
               cb([...stewardedChurches.keys()]);
             }
           },

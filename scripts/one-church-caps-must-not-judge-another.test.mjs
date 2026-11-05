@@ -64,7 +64,7 @@ function clears(body, what) {
   return out.join(' ');
 }
 const RESET_RESTORE = clears(fnBody(V, 'function _resetChurchScopedState()'), '_resetChurchScopedState');
-const RESET_SWITCH = clears(fnBody(V, 'setActiveIdentity(targetPub) {'), 'setActiveIdentity');
+const RESET_SWITCH = clears(fnBody(V, 'setActiveIdentity(targetPub, { persist = true } = {}) {'), 'setActiveIdentity');
 
 // ── the console, made runnable ────────────────────────────────────────────────────────────────────────────
 function console_() {

@@ -536,6 +536,21 @@ function StewardWelcome() {
   const [npub, setNpub] = useSt('');
   const [showQR, setShowQR] = useSt(false);
   const [copied, setCopied] = useSt(false);
+  // The helper (delegate) path mirrors a member joining: scan/enter the church's invite -> a request is sent ->
+  // wait to be approved. `invite` is the pasted invite, `reqSent` the calm waiting state, `showCode` the
+  // de-emphasised fallback that still lets a camera-less pair go the other way (give the owner your code).
+  const [invite, setInvite] = useSt('');
+  const [scanInvite, setScanInvite] = useSt(false);
+  const [reqMsg, setReqMsg] = useSt('');
+  const [reqSent, setReqSent] = useSt(false);
+  const [showCode, setShowCode] = useSt(false);
+  const onInvite = (payload) => {
+    setReqMsg('');
+    Promise.resolve(window.Steward.requestSteward(payload)).then(r => {
+      if (r && r.ok) { setScanInvite(false); setReqSent(true); setReqMsg(''); }
+      else setReqMsg((r && r.error) || 'Couldn’t send the request — check your connection and try again.');
+    });
+  };
   const adopt = (payload) => {
     setErr('');
     try {
@@ -572,7 +587,7 @@ function StewardWelcome() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginBottom: 18, textAlign: 'center' }}>
           <Halo size={40} color="var(--ink)" spark="var(--clay)" />
           <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, letterSpacing: '-.3px', margin: 0 }}>Steward console</h1>
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>{mode === 'choose' ? 'Set up a new church, take over an existing one, or help run one.' : (mode === 'steward' || mode === 'steward-pin') ? 'Becoming a steward of an existing church.' : 'Restore a church from another steward.'}</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>{mode === 'choose' ? 'Set up a new church, take over an existing one, or help run one.' : (mode === 'steward' || mode === 'steward-pin') ? 'Helping run an existing church.' : 'Restore a church from another steward.'}</div>
         </div>
 
         {mode === 'choose' ? (
@@ -585,25 +600,56 @@ function StewardWelcome() {
             {isNative ? <button onClick={() => { setErr(''); setMode('scanning'); }} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="qr" size={17} color="currentColor" /> My church is on another device</button> : null}
             <button onClick={() => { setErr(''); setMode('restore'); }} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="refresh" size={17} color="currentColor" /> Restore a church</button>
             <button onClick={becomeSteward} className="sk-btn sk-btn--ghost" style={{ padding: '14px 16px', fontSize: 15, justifyContent: 'center' }}><Icon name="shield" size={17} color="currentColor" /> Help run a church</button>
-            <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.5 }}>“Help run a church” makes your steward code — the church’s owner adds it to make you a steward (no key shared).</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 4, lineHeight: 1.5 }}>“Help run a church” — scan or enter the invite the church’s owner shows you, and they approve you. No key is shared.</div>
           </div>
         ) : mode === 'steward' ? (
-          <div>
-            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Tell the church’s owner your steward name and give them this code. They add it under <b>Delegated stewards</b>, and that church then appears here in your switcher. It shares only your public ID — never a key.</div>
-            <div style={{ padding: '12px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 10 }}>
-              <div title="A memorable name generated from your key — the same key always makes this exact name. The owner compares it when adding you, so it's a quick human cross-check that they've got the right person. It isn't a display name; your npub is the real identifier." style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', cursor: 'help' }}>Your steward name</div>
-              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, color: 'var(--ink)' }}>{(window.Steward.stewardName && window.Steward.stewardName(npub)) || '—'}</div>
+          scanInvite ? (
+            <div>
+              <StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} />
+              <button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, marginTop: 12, width: '100%', justifyContent: 'center' }}>Enter the invite instead</button>
             </div>
-            <SkKey value={npub || '—'} label="your steward code" />
-            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              <button onClick={() => { copyText(code); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="var(--on-clay)" /> {copied ? 'Copied' : 'Copy code'}</button>
-              <button onClick={() => setShowQR(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={14} color="currentColor" /> {showQR ? 'Hide QR' : 'Show QR'}</button>
+          ) : reqSent ? (
+            <div>
+              {/* CALM WAITING STATE. Stage 1 already auto-lands this console in the church the moment the owner
+                  approves (see subscribeStewardedChurches); nothing here yanks them mid-session. */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center', padding: '8px 4px 2px' }}>
+                <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={26} color="currentColor" /></div>
+                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18 }}>Request sent</div>
+                <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Waiting for the church to approve you — it’ll appear here, and the church will show up in your switcher (top-left). You can set a PIN and carry on while you wait.</div>
+              </div>
+              <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 16 }}>Set a PIN & continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
+              <button onClick={() => { try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 8 }}>Start over</button>
             </div>
-            {showQR && window.Steward.qrSVG ? <div role="img" aria-label="Handoff QR code — or use the code shown below" style={{ width: 184, height: 184, margin: '12px auto 0', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(code) }} /> : null}
-            <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 16 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
-            <button onClick={() => { try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 8 }}>Start over</button>
-            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find this code again anytime under Settings → Security → Become a steward.</div>
-          </div>
+          ) : (
+            <div>
+              {/* THE PATH, mirroring a member entering a joining code: scan or paste the church's invite, and the
+                  owner approves you. The reciprocal "give the owner your code" is kept only as a quiet fallback. */}
+              <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Scan or enter the <b>invite</b> the church’s owner shows you. They’ll approve you, and that church then appears here in your switcher. This shares only your public ID — never a key.</div>
+              {isNative ? <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 12 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the church’s invite</button> : null}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>{isNative ? 'OR PASTE THE INVITE' : 'PASTE THE INVITE THE OWNER SENT YOU'}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={invite} onChange={e => { setInvite(e.target.value); setReqMsg(''); }} onKeyDown={e => { if (e.key === 'Enter' && invite.trim()) onInvite(invite); }} aria-label="Church invite code" spellCheck={false} autoCapitalize="none" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
+                <button onClick={() => onInvite(invite)} disabled={!invite.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5, opacity: invite.trim() ? 1 : 0.5, flexShrink: 0 }}>Send</button>
+              </div>
+              {reqMsg ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8, lineHeight: 1.45 }}>{reqMsg}</div> : null}
+              {/* de-emphasised reciprocal path, for a pair with no camera at the owner's end */}
+              <button onClick={() => setShowCode(v => !v)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 12, width: '100%', justifyContent: 'center', marginTop: 14 }}>{showCode ? 'Hide my code' : 'No invite? Give the owner your code instead'}</button>
+              {showCode ? <div style={{ marginTop: 10 }}>
+                <div style={{ padding: '12px 14px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Your steward name</div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, color: 'var(--ink)' }}>{(window.Steward.stewardName && window.Steward.stewardName(npub)) || '—'}</div>
+                </div>
+                <SkKey value={npub || '—'} label="your steward code" />
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                  <button onClick={() => { copyText(code); setCopied(true); setTimeout(() => setCopied(false), 1400); }} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copied ? 'check' : 'receipt'} size={14} color="currentColor" /> {copied ? 'Copied' : 'Copy code'}</button>
+                  <button onClick={() => setShowQR(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={14} color="currentColor" /> {showQR ? 'Hide QR' : 'Show QR'}</button>
+                </div>
+                {showQR && window.Steward.qrSVG ? <div role="img" aria-label="Your steward code QR" style={{ width: 184, height: 184, margin: '12px auto 0', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(code) }} /> : null}
+              </div> : null}
+              <button onClick={() => { setErr(''); setMode('steward-pin'); }} className="sk-btn sk-btn--ghost" style={{ padding: '11px 16px', fontSize: 13.5, width: '100%', justifyContent: 'center', marginTop: 14 }}>Set a PIN & continue <Icon name="chevR" size={15} color="currentColor" /></button>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>You can find the invite box again anytime under Settings → Security → Help run a church.</div>
+            </div>
+          )
         ) : mode === 'steward-pin' ? (
           <div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>Set a PIN to protect this device. Your steward key can act for a church, so it’s <b>encrypted on this device</b> and this unlocks it — a lost or shared phone can’t act as a church without it. Use at least 8 characters: a generated password from a password manager is best, or four random words you can picture together.</div>

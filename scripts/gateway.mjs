@@ -1092,6 +1092,13 @@ const RESEAT_D = D.RESEAT;
 const VOICE_D = D.VOICE;      // the by-line under a church notice — d=voice:<churchpub>, church-signed. Cosmetic, never authority.
 const STEWARDS_D = D.STEWARDS;   // church-signed steward roster — d=stewards:<churchpub>, content {pubkeys:[…]}; delegates day-to-day church powers to those keys (revocable: owner re-signs without them). Owner-only to edit. See STEWARD-ROSTER-DESIGN.md.
 const STEWARDREQ_D = D.STEWARDREQ; // a would-be steward's REQUEST to a church — d=stewardreq:<churchpub>, authored by the requester (openly writable, like a join). The owner reviews + approves it into the roster (owner-only).
+// REVOKED-HELPER NOTICE (2026-11-05, helper-delegation) — d=stewardrevoke:<removed helper pub>, CHURCH-SIGNED. When the
+// owner revokes a helper the relay stops serving them the church's docs (including the stewards: roster that would tell
+// them), so this is a dedicated notice the removed helper can STILL read. PREFIX-DISTINCT from STEWARDS_D
+// ('trinityone/stewards:') and STEWARDREQ_D ('trinityone/stewardreq:') — no existing startsWith branch catches it, so it
+// is gated by its OWN branch in BOTH accept() (church-key write only, before the member catch-all) and canRead()
+// (served to the SUBJECT alone). Declared in scripts/trinity-doc-types.mjs.
+const STEWARDREVOKE_D = 'trinityone/stewardrevoke:';
 // Meal trains / practical-care module (optional, per-church). care: needs are church/steward/care-team-admin authored;
 // careslot: are member-signed offers to help; careskip: are RECIPIENT-only ("I don't need help that day"). See SPINE.md + src/steward-meals.src.js.
 // NOTE: 'trinityone/care:' is NOT a prefix of careslot:/careskip: — the colon makes them distinct, so startsWith() is unambiguous.
@@ -5089,6 +5096,13 @@ function accept(e) {
       // church runs at once -- so there is no unique-d-tag flood to bound.
       return checkinArrivalWindowOpen(cp, sid);
     }
+    // REVOKED-HELPER NOTICE (d=stewardrevoke:<removed helper pub>). CHURCH-KEY ONLY — it tells a removed helper they
+    // were dropped, so a member or a network key must never be able to forge or tombstone one. Placed BEFORE the
+    // member catch-all below (its prefix is distinct from stewards:/stewardreq:, so nothing above caught it, and the
+    // catch-all would otherwise let any member write it under their own id). The read side is canRead's matching
+    // STEWARDREVOKE_D branch (served to the subject alone). Writers of stewardrevoke:, enumerated: the owner console's
+    // publishStewardRevoke / clearStewardRevoke (src/steward.src.js), both church-key-signed; nothing else writes it.
+    if (d.startsWith(STEWARDREVOKE_D)) return CHURCH_PUBS.has(e.pubkey);
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     if (!isMember) return false;
@@ -5429,6 +5443,18 @@ function canRead(e, authed) {
         const subj = toHexPub(d.slice(GUARDNOTICE_D.length)) || '';
         if (authed && subj && authed === subj) return true;
         return !!authed && (authed === cp || stewardCan(authed, cp, 'safeguarding'));
+      }
+      // REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). d=stewardrevoke:<removed helper pub>, church-signed,
+      // content names the dropped key. SUBJECT-ONLY: it tells the removed helper they were revoked, and WHO was revoked
+      // is itself private — a leak that would otherwise let any authenticated member list "who got dropped" by d-tag.
+      // The church reads its own copy via the author's-own-event rule above (authed === e.pubkey), so no church/steward
+      // clause is added here — that would re-open the member-visible leak. RETURNS in every path, never a fall-through
+      // to the member grants below. Readers of stewardrevoke:, enumerated: the removed helper's own console
+      // (src/steward.src.js subscribeStewardedChurches, `#d: [stewardrevoke:<own key>]`); nothing else reads it.
+      if (d.startsWith(STEWARDREVOKE_D)) {
+        const subj = toHexPub(d.slice(STEWARDREVOKE_D.length)) || '';
+        if (authed && subj && authed === subj) return true;
+        return false;
       }
       // GUARDIAN-LINK REQUESTS (owner, 2026-10-10). d=guardreq:<child>, authored by the parent, p-tagged to the
       // church and the child, content {child, parent} in the clear. This branch did not exist, so they fell to

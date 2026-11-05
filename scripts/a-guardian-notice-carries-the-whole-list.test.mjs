@@ -273,7 +273,7 @@ test('both per-church resets forget the pending guardian notices', () => {
   const reset = fnBody(STEWARD, '  function _resetChurchScopedState() {', '_resetChurchScopedState');
   assert.equal(runReset(reset, '_resetChurchScopedState', '_resetChurchScopedState();'), 0,
     '_resetChurchScopedState left another church’s pending guardian notice in place');
-  const sai = fnBody(STEWARD, '    setActiveIdentity(targetPub) {', 'setActiveIdentity');
+  const sai = fnBody(STEWARD, '    setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
   assert.equal(runReset('const o = { ' + sai + ' };', 'setActiveIdentity', "o.setActiveIdentity('cp');"), 0,
     'setActiveIdentity left the previous church’s pending guardian notice in place');
 });

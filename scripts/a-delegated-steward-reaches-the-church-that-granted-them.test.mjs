@@ -75,12 +75,20 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
   const stubs = {
     churchSk: new Uint8Array(32).fill(7), churchPub: ME, pub: ME, sk: null, actingChurch: '',
     stewardedChurches,
+    // This fixture is about relay REACHABILITY, not the switcher's blank-helper hiding/auto-land. Stub the
+    // own-key-blank predicate FALSE so identities()/subscribeStewardedChurches behave exactly as they did
+    // before the 2026-11-05 helper-delegation change — the blank-helper behaviour has its own test.
+    _ownKeyBlank: () => false,
     netKeys: () => [],
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     privateKeyFromSeedWords: () => { throw new Error('not a network key'); }, getPublicKey: () => '',
-    NET: 'trinityone', STEWARDS_D, ACTIVE_ID_KEY: 'active',
-    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v) },
+    NET: 'trinityone', STEWARDS_D, STEWARDREVOKE_D: 'trinityone/stewardrevoke:', ACTIVE_ID_KEY: 'active',
+    // The restore + grant paths gained a pending-church read (2026-11-05, helper-delegation). This fixture sets
+    // no pending, so the read returns null and nothing auto-opens — but the identifier must resolve (the proxy
+    // throws on an unknown one) so the pending check genuinely runs and finds nothing, which is the control.
+    PENDING_CHURCH_KEY: 'pending',
+    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) },
     lsSet: (k, v) => store.set(k, v),
     lsGet: (k) => (store.has(k) ? store.get(k) : null),
     // the relay list, real: ownRelay/relaysRaw/_loadBoxHosts/_boxHostsKey are lifted below and read these
@@ -138,7 +146,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
   stubs._loadBoxHosts = lift('function _loadBoxHosts() {', '_loadBoxHosts');
   const method = (anchor, name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, anchor, name)} }).${name}; }`)(scope);
   const subscribe = method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches');
-  const switchTo = method('setActiveIdentity(targetPub) {', 'setActiveIdentity');
+  const switchTo = method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
   stubs.window.Steward.setActiveIdentity = (p) => switchTo.call(stubs.window.Steward, p);
   stubs.window.Steward.subscribeStewardedChurches = (cb) => subscribe.call(stubs.window.Steward, cb);
   return {
@@ -352,6 +360,13 @@ test('POINT OF USE: the granted church reaches the switcher through the box that
   assert.deepEqual(d[0].urls, [BOX], 'dialled ' + JSON.stringify(d[0].urls));
   h.grant(d[0]);
   s.redraw();
+  // CONTROL (2026-11-05, helper-delegation): a church granted with NO pending request must NOT auto-select —
+  // the console only opens a church the helper EXPLICITLY requested (pending record set by requestSteward).
+  // This guards the MED-SAFETY line: the auto-select is never widened to a generic "a church arrived" guess,
+  // which on a second device could park an owner in a church they merely steward. Here the store has no
+  // pending-church key, so the grant leaves the active identity alone and the user still taps the row.
+  assert.deepEqual(s.picked, [],
+    'a church granted with no pending request auto-switched the console — the generic grant must stay a no-op');
   assert.match(s.words(), /Switch between your church, networks, and churches you steward/,
     'the church arrived and the switcher did not turn into a switcher');
   s.buttons(/Switch between your church/)[0].props.onClick();

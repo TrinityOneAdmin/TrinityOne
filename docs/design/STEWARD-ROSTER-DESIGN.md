@@ -3,6 +3,16 @@
 **Design — v0.1 (2026-06-17)**
 Addresses the standing audit note: *"Steward handoff = shared key (no revocation)."*
 
+> **Updated 2026-11-05 (naming / UX only — the mechanism below is unchanged and still ships):** the
+> feature is now called **Helpers** in the product (Settings -> Security -> **Helpers**), not "delegated
+> stewards", and the separate full-key hand-over page is **Hand over the church**. The add flow is: owner
+> **Add a helper** (shows an invite) -> the helper taps **Help run a church** and scans/enters it -> they
+> appear under **Requests to help** -> owner **Approve** sets the helper's name and a permission **preset**
+> (General helper = care, groups & rotas, members by default; Finance helper; Safeguarding lead; Full
+> helper; or Custom). The per-helper control reads **Permissions · N of 6**. The underlying signed,
+> owner-published, revocable roster described here is exactly what carries it. See
+> [`../guides/STEWARDS-AND-HANDOFF-EXPLAINED.md`](../guides/STEWARDS-AND-HANDOFF-EXPLAINED.md).
+
 ---
 
 ## 1. The problem

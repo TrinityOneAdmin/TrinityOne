@@ -146,7 +146,7 @@ const CARDS = [
   ['DashChatTagsPanel', { church: {} }, ['Chat message tags']],
   ['DashBrandingPanel', { church: {} }, ['Church branding']],
   ['DashNetworksPanel', {}, ['Network']],
-  ['DashBecomeStewardPanel', {}, ['Become a steward']],
+  ['DashBecomeStewardPanel', {}, ['Help run a church']],
   ['DashRelaysCard', {}, ['Relays']],
   // Relays became five pages on 2026-09-09. Its two new siblings are swept here as well — a card split in
   // two without this line would have halved the coverage of every test below that walks CARDS, silently.

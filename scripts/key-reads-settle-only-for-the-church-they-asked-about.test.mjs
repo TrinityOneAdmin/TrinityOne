@@ -168,7 +168,7 @@ function engine() {
     M('    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {'), M('    async rotateMediaKey(memberPubs, stewardPubs) {'),
     M('    async mediaEncryptor(memberPubs) {'),
     M('    async ensureCapKeyFor(kind, stewardPubs, caps) {'), M('    async rotateCapKey(kind, stewardPubs, caps) {'),
-    M('    setActiveIdentity(targetPub) {'),
+    M('    setActiveIdentity(targetPub, { persist = true } = {}) {'),
     M('    async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {'),
     M('    subscribeBlocked(onBlocked) {'), M('    subscribeStewards(onList) {'),
     M('    listIsCurrent(list) {'), M('    keyWaitNote(kind) {'), M('    setBlocked(pubkeys) {'),

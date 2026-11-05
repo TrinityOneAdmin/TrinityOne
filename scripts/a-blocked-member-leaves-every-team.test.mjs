@@ -174,7 +174,10 @@ test('THE STEWARD PICKER: "Add a steward" does not offer a blocked member', asyn
       window: withPickable({ Steward: steward, Capacitor: null, usePendingStewards: () => [], useStewardMembers: () => members, useStewardStewards: () => [],
         useStewardGroups: () => [], useStewardBlocked: () => blocked, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true }) });
     let tree = draw(C, { church: { name: 'St Aidan' } });
-    await press(tree, /Add a steward/);
+    await press(tree, /Add a helper/);
+    // the pick-a-member picker now sits behind Advanced (the owner-initiated invite is the main path)
+    tree = draw(C, { church: { name: 'St Aidan' } });
+    await press(tree, /Advanced/);
     return BLOCKED_LABEL(draw(C, { church: { name: 'St Aidan' } }));
   };
   const control = await open([]);

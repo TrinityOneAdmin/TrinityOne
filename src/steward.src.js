@@ -600,6 +600,28 @@ let _stewardSince = {};
 // It is ADDED, never a rename: the five names before it keep their exact spelling and meaning, so every roster
 // in the field parses unchanged and a relay that has not been updated simply ignores the sixth word.
 const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content', 'sealedrooms'];
+// ── HELPER PERMISSION PRESETS ──────────────────────────────────────────────────────────────────────────────
+// Named bundles of the capabilities above, so the owner picks ONE answer at approval time instead of six. The
+// wording and the scoping here are PLACEHOLDER — the owner will review them — but the default must UNDER-grant,
+// never over-grant: 'general' is the default and deliberately withholds finance, safeguarding and sealedrooms.
+// 'custom' carries no list (caps: null); the caller opens the existing granular six-checkbox editor for it.
+// These sit on TOP of the per-capability system in STEWARD_CAPS; they never replace it.
+const STEWARD_PRESETS = [
+  { id: 'general', label: 'General helper', hint: 'Day-to-day help: care, groups & rotas, members. No money, no safeguarding, no sealed rooms.', caps: ['care', 'content', 'members'] },
+  { id: 'finance', label: 'Finance helper', hint: 'The church books only — giving, funds and statements.', caps: ['finance'] },
+  { id: 'safeguarding', label: 'Safeguarding lead', hint: 'Clearances, photo decisions and kids check-in only.', caps: ['safeguarding'] },
+  { id: 'all', label: 'Full helper (everything except the church key)', hint: 'Every capability. They still cannot add stewards, ban people or change relay settings.', caps: ['finance', 'care', 'safeguarding', 'members', 'content', 'sealedrooms'] },
+  { id: 'custom', label: 'Choose exactly what they may do…', hint: 'Open the full list and tick each one.', caps: null },
+];
+// The capability list a preset id grants. Pure and liftable (point-of-use test). An UNKNOWN id falls back to
+// the conservative 'general' bundle rather than to [] or to everything, so this path can never silently grant
+// nothing OR silently grant everything. 'custom' returns null: the caller must open the granular editor.
+function _presetCaps(id) {
+  const p = STEWARD_PRESETS.find((x) => x.id === id);
+  if (p && p.id === 'custom') return null;
+  if (p && Array.isArray(p.caps)) return p.caps.slice();
+  return (STEWARD_PRESETS.find((x) => x.id === 'general').caps).slice();
+}
 // ── A KEY PER CAPABILITY ──────────────────────────────────────────────────────────────────────────────────
 // One mechanism, not one per feature. The books got their own key on 2026-08-19 and kids check-in needed the
 // same shape the next morning — at which point writing a fourth hand-rolled envelope (after care, name and
@@ -1045,6 +1067,7 @@ const _legacyBookKeyHex = () => { try { return churchSkHeld() ? _hex(nip44ck(chu
 const VOICE_D = 'trinityone/voice:';
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
+const STEWARDREVOKE_D = 'trinityone/stewardrevoke:'; // church->removed-helper revocation notice (church-signed), d=stewardrevoke:<removed helper pub>; the one doc a revoked helper can still read (the roster that would tell them is no longer served). See gateway.mjs STEWARDREVOKE_D branches.
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
 const GROUPKEY_D = 'trinityone/groupkey:'; // church-signed key envelope for an encrypted group
@@ -1496,6 +1519,21 @@ function _seedSweep(keep) {
 const OWN_NAME_LS = 'trinityone.steward.ownname.';
 function _rememberOwnName(n) { const v = String(n || '').trim().slice(0, 80); if (v && churchPub) lsSet(OWN_NAME_LS + churchPub, v); }
 function _ownChurchName() { return (churchPub && lsGet(OWN_NAME_LS + churchPub)) || ''; }
+// Has THIS DEVICE'S OWN key ever been self-registered at any relay? SELFREG_KEY holds a map keyed
+// `<churchPub>@<base>`; any entry whose key starts with our churchPub means the own key is a real,
+// registered church somewhere — not merely a signing key minted by createKeyQuiet() for a helper.
+function _ownKeyRegistered() {
+  if (!churchPub) return false;
+  try {
+    const done = JSON.parse(localStorage.getItem(SELFREG_KEY) || '{}') || {};
+    const pfx = churchPub + '@';
+    return Object.keys(done).some(k => k.indexOf(pfx) === 0);
+  } catch (e) { return false; }
+}
+// The own key is "blank" when it has never been named (no kind-0 read back) AND never registered at any
+// relay. That is exactly the key createKeyQuiet() mints for a pure delegated steward ("helper"): it must
+// stay a valid signer and switch-target, but it is NOT a church and must not be rendered as one.
+function _ownKeyBlank() { return !!churchPub && !_ownChurchName() && !_ownKeyRegistered(); }
 function _netKeysRaw() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
 function netKeys() {
   return _netKeysRaw().map(r => {
@@ -1625,6 +1663,13 @@ function extraRelays() {
 // so the connection just follows the rotating tunnel instead of breaking. (The directory always maps a claimed
 // name → the relay's current url — the relay re-claims it on every go-public/boot.)
 const ACTIVE_ID_KEY = 'trinityone.steward.active-id';   // which church this console is running, across reloads
+// THE CHURCH A WOULD-BE HELPER JUST ASKED TO JOIN, awaiting the owner's approval. Set ONLY by requestSteward
+// (an actual scan/paste of that church's invite — a deliberate action, never a boot-time guess), and consumed
+// + cleared by subscribeStewardedChurches the moment that church is granted. It is why the console opens the
+// church the moment it is granted (device-found 2026-11-05) instead of leaving the helper to find the switcher.
+// It carries a DELIBERATE choice, so unlike the blank-helper auto-land it DOES persist (via setActiveIdentity's
+// default) — returning to that church on the next open is correct. See the restore + grant blocks below.
+const PENDING_CHURCH_KEY = 'trinityone.steward.pending-church';
 const NAMES_LS = 'trinityone.steward.relay-names';
 const DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, 'http').replace(/\/relay\/?$/i, '');   // wss://app…/relay → https://app…
 // The directory is MIRRORED across relays, so resolve/discover against several — this church's own relay first
@@ -7809,7 +7854,18 @@ window.Steward = {
       // owner will approve you" on a truthy result, so discarding publish()'s false left someone waiting
       // indefinitely for an approval that was never asked for. (Audit 2026-09-05, the sweep around the
       // six calendar publishers: these four siblings had the same shape and were missed.)
-      .then((ok) => (ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null));
+      // REMEMBER WHICH CHURCH WE JUST ASKED TO JOIN, so the console can open it the moment the owner grants it
+      // — both while this session watches and on a later reopen (device-found 2026-11-05). Recorded only on a
+      // request that actually went out (truthy publish), so a request nobody received leaves nothing pending.
+      // subscribeStewardedChurches reads and clears it. A guess never writes this; only this scan/paste action.
+      // AND REMEMBER THAT WE ASKED THIS CHURCH — a durable set, scoped to our own key, read in the grant path
+      // (subscribeStewardedChurches) to retract this very request the moment the owner approves it, so the
+      // request cannot resurface on their console after they later remove us (device-found 2026-11-05). Scoped
+      // by churchPub, the signer of this request, which is `me` in that read. Written only on a truthy publish,
+      // the same gate as PENDING_CHURCH_KEY, so a request nobody received records nothing to retract.
+      .then((ok) => { if (ok) { try { localStorage.setItem(PENDING_CHURCH_KEY, cp); } catch (e) {}
+          try { const RK = 'trinityone.steward.requested.' + (churchPub || ''); let a = []; try { a = JSON.parse(localStorage.getItem(RK) || '[]') || []; } catch (e) { a = []; } if (!Array.isArray(a)) a = []; if (!a.includes(cp)) { a.push(cp); localStorage.setItem(RK, JSON.stringify(a)); } } catch (e) {}
+        } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
   },
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
@@ -11526,6 +11582,28 @@ window.Steward = {
 
     return _landed('steward roster', _skewGate(() => publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk))));
   },
+  // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). When the owner takes a helper off the roster the
+  // relay (correctly) stops serving them the church's documents — INCLUDING the stewards: roster event that would
+  // tell their app it was dropped — so their console kept a dead "ghost" church on screen. This writes a dedicated
+  // church-signed notice at d=stewardrevoke:<pk> that the removed helper CAN still read (canRead serves it to the
+  // subject alone), and which their subscribeStewardedChurches evicts the ghost on.
+  //
+  // CHURCH-SIGNED, with the SAME key that signs the roster (`sk`/`pub` here are the owner's own church, exactly as
+  // setStewards above), so the helper's handler can take `e.pubkey` as the authority and refuse a forgery. CONTENT IS
+  // NON-EMPTY on purpose: the relay-wide convention (and the helper's handler) treats empty content OR a ['deleted']
+  // tag as a tombstone, so a live revoke must carry content or it would read as its own cancellation. Called ONLY from
+  // DashStewardsPanel.remove, and ONLY after the roster removal is confirmed landed (app/stew-dashboard.jsx).
+  publishStewardRevoke(pk) {
+    if (!sk || !pk) return Promise.resolve(null);
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREVOKE_D + pk], ['t', NET], ['p', pk]], content: JSON.stringify({ revoked: pk }) }), sk));
+  },
+  // CANCEL A REVOKE when the SAME helper is re-added (app/stew-dashboard.jsx add()/addByCode). A tombstone — empty
+  // content + ['deleted'] — at the same d-tag, newest-wins, so a re-added helper's console does not evict on a stale
+  // revoke it only now reads. Church-signed, like the notice it cancels. No `p` tag: it addresses nobody, it retracts.
+  clearStewardRevoke(pk) {
+    if (!sk || !pk) return Promise.resolve(null);
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREVOKE_D + pk], ['t', NET], ['deleted']], content: '' }), sk));
+  },
   // DID A REMOVAL LAND? setStewards() answers false when no relay ACKNOWLEDGED the write, and that is not the same as
   // "no relay applied it": the OK can be lost with the socket (the app backgrounded mid-write). So read each relay's
   // newest church-signed roster and say what is TRUE, in three words and never a guess:
@@ -11594,6 +11672,11 @@ window.Steward = {
   },
   stewardSince() { return { ..._stewardSince }; },
   stewardCapNames() { return STEWARD_CAPS.slice(); },
+  // Helper permission presets — the named bundles the owner picks from when approving a helper, and the pure
+  // mapping from a preset id to its capability list. presetCaps('custom') === null (open the granular editor);
+  // an unknown id falls back to the conservative 'general' bundle, never to [] (see _presetCaps).
+  stewardPresets() { return STEWARD_PRESETS.map((p) => ({ ...p, caps: Array.isArray(p.caps) ? p.caps.slice() : null })); },
+  presetCaps(id) { return _presetCaps(id); },
   // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
   // not on the roster, so they are unrestricted by construction.
   myStewardCaps() {
@@ -14056,17 +14139,33 @@ window.Steward = {
   // every identity this console can publish as: the church + any owned networks + any church we STEWARD
   identities() {
     const held = new Set([churchPub, ...netKeys().map(r => r.pub)]);   // keys we HOLD — never also list them as "stewarded"
+    const stewarded = [...stewardedChurches.entries()].filter(([cp]) => !held.has(cp));
+    // HIDE THE BLANK OWN KEY WHEN IT IS ONLY A HELPER'S SIGNING KEY. A pure delegated steward's console mints
+    // its own churchPub (createKeyQuiet) purely so the helper can sign; it is never named or registered. Listed
+    // as a church it shows an unnamed "Your church" row beside the real church they steward, and reads as "a
+    // second blank church was created". So drop the own-key church row ONLY while it is blank (unnamed AND
+    // never-registered) AND this console actually stewards a church. A NAMED/registered own church, or a
+    // brand-new owner with no stewarded church yet, is listed exactly as before — and churchPub stays a valid
+    // signer and switch-target either way (this hides it from the LIST, nothing else).
+    const showOwn = !(_ownKeyBlank() && stewarded.length);
     return [
       // `name`: the console's OWN church, as last read from its own kind-0 (_ownChurchName) — so the switcher can
       // name it while the console is acting for somebody else. '' when this device has never read it.
-      { kind: 'church', pub: churchPub, npub: churchPub ? npubEncode(churchPub) : '', name: _ownChurchName() },
+      ...(showOwn ? [{ kind: 'church', pub: churchPub, npub: churchPub ? npubEncode(churchPub) : '', name: _ownChurchName() }] : []),
       ...netKeys().map(r => ({ kind: 'network', pub: r.pub, npub: npubEncode(r.pub), name: r.name || 'Network' })),
-      ...[...stewardedChurches.entries()].filter(([cp]) => !held.has(cp)).map(([cp, m]) => ({ kind: 'steward', pub: cp, npub: npubEncode(cp), name: (m && m.name) || 'Church' })),
+      ...stewarded.map(([cp, m]) => ({ kind: 'steward', pub: cp, npub: npubEncode(cp), name: (m && m.name) || 'Church' })),
     ];
   },
   // switch the WHOLE console between the church, an owned network, or a church we steward (delegated) —
   // the active signing+reading identity. Subscriptions are keyed on activePub, so the dashboard re-renders.
-  setActiveIdentity(targetPub) {
+  setActiveIdentity(targetPub, { persist = true } = {}) {
+    // `persist` (default true, so every existing caller is UNCHANGED) decides whether this choice is
+    // written to ACTIVE_ID_KEY and therefore honoured by the next boot's `want=` restore. A deliberate
+    // switch persists; a NON-persisted call only chooses where this console shows NOW. See the auto-land
+    // in subscribeStewardedChurches, which passes { persist: false } so a device-local "own key looks
+    // blank" guess (a self-hosted own church whose kind-0 has not yet arrived on THIS device) can never
+    // park an owner in a church they merely steward — the switcher self-heals when the profile lands, and
+    // the active identity must self-heal with it rather than stay pinned by a write made on a guess.
     const tp = toPubHex(targetPub) || targetPub || churchPub;
     // REMEMBER WHICH CHURCH THIS CONSOLE IS RUNNING. Nothing persisted this, so every page refresh dropped a
     // delegated steward back into the empty church that "Help run a church" makes for them — with an invite
@@ -14093,7 +14192,7 @@ window.Steward = {
     // one click away. Leave the memory alone when stepping sideways to a network; only a deliberate switch
     // between churches changes where this console comes back to.
     const _isNetwork = !actingChurch && tp !== churchPub;
-    if (!_isNetwork) { try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {} }
+    if (!_isNetwork && persist) { try { localStorage.setItem(ACTIVE_ID_KEY, actingChurch || ''); } catch (e) {} }
     // DOES THIS BOX HOLD THE CHURCH WE JUST SWITCHED TO? `_boxHostsUs` is cached per church (_boxHostsKey is
     // keyed on `pub`), but only setKey ever reloaded it — so a switch carried the answer for the PREVIOUS key
     // across. For a delegated steward that answer is "no": their own key is not a church anywhere, the box
@@ -14230,8 +14329,36 @@ window.Steward = {
     // case, which needs no switching), and only when we are not already there.
     try {
       const want = localStorage.getItem(ACTIVE_ID_KEY) || '';
-      if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+      const pend = localStorage.getItem(PENDING_CHURCH_KEY) || '';
+      // THE CHURCH THEY JUST ASKED TO JOIN WINS, when it is already on the roster at boot — the scan/paste is
+      // the most recent DELIBERATE action, so it takes priority over a stale remembered `want` and over the
+      // blank-helper auto-land below. This covers the reopen path: the owner granted while the app was closed,
+      // the grant is already in the cache above, and we open that church and forget the request. It PERSISTS
+      // (setActiveIdentity's default), so once consumed it simply becomes the remembered `want` for later boots.
+      // The live-arrival path is in the `listed && !had` branch of the discovery read below. The removeItem is
+      // bare, not in its own try: this whole block already runs inside the enclosing try, and lifting-tests
+      // slice this block to the FIRST `} catch` after `const want`, so a nested catch here would truncate them.
+      if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
+        if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
+        localStorage.removeItem(PENDING_CHURCH_KEY);
+      } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
         window.Steward.setActiveIdentity(want);
+      } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
+        // PURE HELPER, NO REMEMBERED CHURCH. The own key is only a signing key (createKeyQuiet) and we steward
+        // at least one church, so landing on the own key would open the empty "your church" setup beside a
+        // church they actually run — round 9's trap. Default into a stewarded church instead. Deterministic:
+        // the first stewarded key we hold a grant for. churchPub stays the signer; this only chooses where the
+        // console comes back to when nothing was remembered.
+        //
+        // NOT PERSISTED ({ persist: false }). `_ownKeyBlank()` is a DEVICE-LOCAL judgement — the own kind-0
+        // name read on THIS device and SELFREG on THIS device — so on a second device an owner restoring a
+        // self-hosted church X (whose kind-0 lives only on X's momentarily-unreachable box) while also
+        // stewarding a reachable church Y sees X look "blank" and would be landed in Y. Persisting that would
+        // write ACTIVE_ID_KEY=Y, so every later reload honours `want=Y` and the owner stays parked in Y even
+        // after X's profile arrives and the own key stops looking blank. This is a display default only: when
+        // X's kind-0 lands, the next load shows X, because nothing was pinned.
+        const first = [...stewardedChurches.keys()].find(cp => !_ownedPubs.has(cp));
+        if (first) window.Steward.setActiveIdentity(first, { persist: false });
       }
     } catch (e) {}
     // WHICH RELAYS TO ASK, AND WHEN. This read used to go over relays() — the publish set, filtered by the
@@ -14286,9 +14413,34 @@ window.Steward = {
       if (!dialled.length) return;            // nothing proved: keep listening for a relay to return
       [...stewardedChurches.keys()].forEach(resolveName);   // refresh names for cached entries
       const seenAt = new Map();
-      sub = pool.subscribeMany(dialled, [{ kinds: [30078], '#t': [NET] }], {
+      // The revoke filter rides the SAME already-NIP-42-authed socket as the roster read, because the relay serves
+      // d=stewardrevoke:<me> to its subject ALONE (canRead STEWARDREVOKE_D branch) — an unauthenticated socket gets
+      // nothing. `me` (= churchPub) is this helper's own key, the subject the owner's console addressed.
+      sub = pool.subscribeMany(dialled, [{ kinds: [30078], '#t': [NET] }, { kinds: [30078], '#d': [STEWARDREVOKE_D + me] }], {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+          // A DEDICATED REVOCATION NOTICE the removed helper can still read (2026-11-05, helper-delegation). The
+          // roster that would tell us we were dropped is no longer served to us once we are off it, so a ghost church
+          // lingered. AUTHORITY IS THE NIP-42-VERIFIED AUTHOR (e.pubkey), never the d-tag subject — that suffix is a
+          // ROUTING ADDRESS ONLY, so a stranger cannot forge an eviction by addressing it to us. Evict ONLY: a church
+          // we actually steward (forgery guard: an author not in stewardedChurches is ignored), a LIVE notice (a
+          // tombstone — empty content or a ['deleted'] tag — is a no-op, so a re-added helper's cancelled revoke does
+          // nothing), and one NEWER than the latest roster we have seen from that church (seenAt holds the roster's
+          // created_at — a readable roster that still lists us must win). Then the same evict+switch as `!listed && had`.
+          if (d.startsWith(STEWARDREVOKE_D)) {
+            const rcp = e.pubkey;
+            const isTomb = (e.tags.some(t => t[0] === 'deleted') || !e.content);
+            if (stewardedChurches.has(rcp) && !isTomb && e.created_at > (seenAt.get(rcp) || 0)) {
+              stewardedChurches.delete(rcp); save();
+              if (actingChurch === rcp) {
+                const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find(k => !_ownedPubs.has(k)) : '';
+                if (other) window.Steward.setActiveIdentity(other, { persist: false });
+                else window.Steward.setActiveIdentity(churchPub);
+              }
+              cb([...stewardedChurches.keys()]);
+            }
+            return;
+          }
           if (!d.startsWith(STEWARDS_D)) return;
           const cp = d.slice(STEWARDS_D.length);
           if (cp === me) return;   // our own roster doesn't make us our own steward
@@ -14296,8 +14448,59 @@ window.Steward = {
           let listed = false;
           if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { listed = ((JSON.parse(e.content).pubkeys) || []).includes(me); } catch {} }
           const had = stewardedChurches.has(cp);
-          if (listed && !had) { stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp); cb([...stewardedChurches.keys()]); }
-          else if (!listed && had) { stewardedChurches.delete(cp); save(); if (actingChurch === cp) window.Steward.setActiveIdentity(churchPub); cb([...stewardedChurches.keys()]); }
+          if (listed && !had) {
+            stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp);
+            // RETRACT OUR OWN REQUEST so the owner's console can never show it again after they later remove us.
+            // Device-found 2026-11-05 (helper-delegation): a removed helper's STEWARDREQ, never consumed on
+            // approval, resurfaced under "Requests to help" the moment `!stewardSet.has` turned true again. The
+            // request is the requester's OWN replaceable 30078 (gateway.mjs:4847 lets its author replace it), so
+            // when the grant lands we tombstone it: a deleted+empty copy at the SAME d-tag, which
+            // subscribeStewardRequests reads as a retract (its STEWARDREQ_D detection: a `deleted` tag OR empty
+            // content -> byPub.delete). Signed with churchSk, our OWN key — the author of the request the owner
+            // approved is churchPub (= me, listed above), never the acting `sk`, which may be a network key.
+            // Only for a church WE actually asked to join (the requested set written by requestSteward), so no
+            // spurious tombstone is ever published, and cp is dropped from that set so this fires at most once.
+            // The `t`/NET tag is REQUIRED: the owner's request feed filters on `#t`, so a tombstone without it
+            // would never reach them (subscribeStewardRequests: `#t': [NET]`).
+            try {
+              const RK = 'trinityone.steward.requested.' + (me || '');
+              let reqd = [];
+              try { reqd = JSON.parse(localStorage.getItem(RK) || '[]') || []; } catch (e) { reqd = []; }
+              if (Array.isArray(reqd) && reqd.includes(cp)) {
+                publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp], ['deleted']], content: '' }), churchSk));
+                try { localStorage.setItem(RK, JSON.stringify(reqd.filter(x => x !== cp))); } catch (e) {}
+              }
+            } catch (e) {}
+            // THE GRANT LANDED WHILE WE WATCH. If this is the church this console asked to join (pending set by
+            // requestSteward), OPEN it now instead of leaving the helper to hunt for the switcher (device-found
+            // 2026-11-05). PERSISTED, because it is the church the user deliberately joined. Cleared so a later
+            // revoke+reopen does not silently re-open it. `cb` first so the switcher has the row before the
+            // identity event re-renders over it. Guarded like the restore above: never our own key or a held one.
+            try {
+              if ((localStorage.getItem(PENDING_CHURCH_KEY) || '') === cp && cp !== churchPub && !_ownedPubs.has(cp)) {
+                cb([...stewardedChurches.keys()]);
+                window.Steward.setActiveIdentity(cp);
+                localStorage.removeItem(PENDING_CHURCH_KEY);
+                return;
+              }
+            } catch (e) {}
+            cb([...stewardedChurches.keys()]);
+          }
+          else if (!listed && had) {
+            stewardedChurches.delete(cp); save();
+            if (actingChurch === cp) {
+              // We were acting as this church and it just revoked us. Landing on churchPub re-shows the OWN
+              // identity — correct for a real own church, and correct when no stewarded church remains (the
+              // Stage-1 behaviour). But when the own key is still BLANK and we steward at least one OTHER
+              // church, churchPub is the hidden "set up your church" row: a blank screen with no selected row
+              // (identities() drops that row while blank-and-stewarding). Land on a remaining stewarded church
+              // instead. Not persisted, for the same device-local-blank reason as the auto-land above.
+              const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find(k => !_ownedPubs.has(k)) : '';
+              if (other) window.Steward.setActiveIdentity(other, { persist: false });
+              else window.Steward.setActiveIdentity(churchPub);
+            }
+            cb([...stewardedChurches.keys()]);
+          }
         },
         oneose() { cb([...stewardedChurches.keys()]); },
       });

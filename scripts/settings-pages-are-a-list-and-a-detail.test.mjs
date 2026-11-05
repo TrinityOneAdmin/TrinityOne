@@ -157,9 +157,10 @@ function catalogue(over = {}) {
 }
 
 test('the list is grouped the way the mockup groups it', () => {
-  assert.deepEqual(catalogue().groups.map(([g]) => g), ['Church', 'People', 'Infrastructure', 'Security'],
-    'the settings groups are not Church / People / Infrastructure / Security. Those four are the grouping the ' +
-    'owner agreed from reference/mockups/settings-list-detail.html');
+  assert.deepEqual(catalogue().groups.map(([g]) => g), ['Church', 'People', 'Infrastructure', 'Master key', 'Helpers'],
+    'the settings groups are not Church / People / Infrastructure / Master key / Helpers. The single Security ' +
+    'group split in two on 2026-11-05 — Master key (Church key + the full-key handover) and Helpers (the ' +
+    'everyday revocable sharing) — so the handover sits a group away from Helpers and cannot be stumbled onto');
 });
 
 for (const p of catalogue().pages) {
@@ -191,8 +192,10 @@ const WAS_ON_A_TAB = [
   'Congregation features', 'Rules & privacy', 'Chat message tags',
   // Network & relays tab
   'Network', 'Run your own relay box', 'Relays',
-  // Security tab, owner
-  'Church key', 'Stewards & handoff', 'Delegated stewards', 'Become a steward',
+  // Master key group, owner (the handover panel's title became "Hand over the church" on 2026-11-05)
+  'Church key', 'Hand over the church',
+  // Helpers group, owner
+  'Helpers', 'Help run a church',
 ];
 // What the Relays card's other seven jobs became. "A relay is refusing our posts" is deliberately NOT here:
 // it is a fault, not a page, and it stays a banner on Relays — see the refusal test in
@@ -238,8 +241,12 @@ test('every panel that was on a tab is now on exactly one page, and nothing is l
 
 test('a delegated steward gets the one page they are allowed, and none of the owner-only ones', () => {
   const cat = catalogue({ delegated: true });
-  assert.deepEqual(cat.groups.find(([g]) => g === 'Security')[1].map(p => p.k), ['access'],
-    'a delegated steward’s Security group is not the single notice page. The church key, the handoff, the ' +
+  // Since 2026-11-05 the delegate's one notice page ('access') lives in the Helpers group (the Master-key group
+  // is entirely owner-only, so a delegate never sees it at all). 'access' stays grouped with 'delegated' on
+  // purpose: a delegate deep-linking 'security' (aliased to 'delegated') falls back through this group to the
+  // one page of it they can see — the notice — rather than onto an unrelated page.
+  assert.deepEqual(cat.groups.find(([g]) => g === 'Helpers')[1].map(p => p.k), ['access'],
+    'a delegated steward’s Helpers group is not the single notice page. The church key, the handoff, the ' +
     'steward roster and the blocklist belong to whoever holds the key, and the relay enforces that — a ' +
     'delegate pressing those controls gets a failed publish and no explanation');
   assert.deepEqual(cardsOn(settings('access', { delegated: true }).tree), ['Security'],
@@ -352,7 +359,7 @@ test('the page is the container the density rules measure, and the list is a sib
 const LANDS_ON = [
   // what the shipped callers pass, after 2026-09-09
   ['relays', 'Relays', 'Overview’s relay stat card, and the setup wizard’s "Relays & settings"'],
-  ['delegated', 'Delegated stewards', 'Overview’s "N people want to help steward" banner'],
+  ['delegated', 'Helpers', 'Overview’s "N people want to help steward" banner'],
   ['key', 'Church key', 'the sidebar’s "lock with a PIN" link'],
   // the keys that named TABS until 2026-09-09. A saved link, or a screen nobody updated, must still land on
   // a real page. 'features' and 'network' are page keys as well as old tab keys, and the PAGE wins — see the
@@ -360,7 +367,7 @@ const LANDS_ON = [
   ['church', 'Church identity', 'the old Church tab, which is not a page key'],
   ['features', 'Congregation features', 'the old Features tab, which is also a page key'],
   ['network', 'Network', 'the old Network & relays tab, which is also a page key'],
-  ['security', 'Delegated stewards', 'the old Security tab, which is not a page key'],
+  ['security', 'Helpers', 'the old Security tab, which is not a page key'],
 ];
 
 for (const [key, page, who] of LANDS_ON) {

@@ -63,7 +63,7 @@ losing the church; a stranger with it can impersonate you.
 - The wizard makes you re-type a few words to prove you saved it. That's on purpose.
 
 (You can hand day-to-day running to other people later without ever sharing this phrase — see
-[Stewards & handoff](STEWARDS-AND-HANDOFF-EXPLAINED.md).)
+[Helpers & handing over a church](STEWARDS-AND-HANDOFF-EXPLAINED.md).)
 
 ---
 

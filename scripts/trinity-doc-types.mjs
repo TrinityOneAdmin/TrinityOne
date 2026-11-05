@@ -148,6 +148,15 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/voice:':        { write: 'church',    read: 'members', scope: 'suffix', note: 'who signs what the church sends — a display by-line only. Church-signed so it cannot be forged; readable by members because it is what they see under a notice. Deliberately NOT part of the steward roster: a name is cosmetic, a roster is authority, and a bug in one must never damage the other.' },
   'trinityone/stewards:':     { write: 'church',    read: 'members', scope: 'suffix', note: 'owner-only — this is what grants steward authority' },
   'trinityone/stewardreq:':   { write: 'member',    read: 'members', scope: 'tag',    note: 'capped: anti-flood' },
+  // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). d=stewardrevoke:<removed helper pub>, CHURCH-SIGNED.
+  // When the owner revokes a helper the relay (correctly) stops serving them the church's documents — including the
+  // stewards: roster that would tell their app it was dropped — so their console kept a dead "ghost" church on screen.
+  // This is a dedicated notice the removed helper can STILL read. WRITE: church key only (accept() STEWARDREVOKE_D
+  // branch, before the member catch-all). READ: the SUBJECT ONLY (canRead() STEWARDREVOKE_D branch — authed===subject;
+  // a church reads its own via the author's-own-event rule). scope:'author' — owningChurch resolves it by the signer
+  // (church-authored, no ['church'] tag), NOT by the d-tag suffix (which is the subject, never the church). A
+  // tombstone (empty content + ['deleted']) cancels it when the same helper is re-added.
+  'trinityone/stewardrevoke:': { write: 'church',   read: 'subject', scope: 'author', note: 'church->removed-helper revocation notice; readable by the subject alone' },
   'trinityone/reseat:':       { write: 'steward',   read: 'members', scope: 'suffix', note: 'moves a member\'s seat onto a new key' },
 
   // ── identity: names sealed to the congregation ───────────────────────────────────────────────────────

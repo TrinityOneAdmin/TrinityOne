@@ -58,7 +58,7 @@ function world({ stewarded = [ST_AIDANS], stored = null, networks = [] } = {}) {
     set: (t, k, v) => { t[k] = v; return true; },
   });
   // setActiveIdentity, lifted and stripped of the bookkeeping tail we do not model
-  let src = fnBody(V, 'setActiveIdentity(targetPub)', 'setActiveIdentity');
+  let src = fnBody(V, 'setActiveIdentity(targetPub, { persist = true } = {})', 'setActiveIdentity');
   src = src.slice(0, src.indexOf('lastProfile = {}')) + 'return true; }';
   const setActive = new Function('scope', `with (scope) { return ({ ${src} }).setActiveIdentity; }`)(proxy);
   scope.window.Steward.setActiveIdentity = (t) => { state.switched.push(t); return setActive.call(scope.window.Steward, t); };
@@ -127,15 +127,33 @@ function restore({ stewarded, stored, ownPubs = [OWN], acting = '' }) {
   // `} catch` that closes this try and run the middle directly.
   const block = body.slice(at, body.indexOf('} catch', at));
   const calls = [];
+  // The restore block's else-if (the pure-helper auto-land added 2026-11-05) now consults _ownKeyBlank().
+  // This whole file models a console that HOLDS its OWN, NAMED church (OWN === churchPub) and also stewards
+  // others, so _ownKeyBlank() must be FALSE and the auto-land must never fire for it — that is exactly what
+  // the three boot cases below assert (a stale/own/empty memory re-enters nothing). We lift the REAL
+  // predicate from the shipped bundle (as a-blank-helper-key-is-not-a-second-church.test.mjs does) and NAME
+  // the own key in storage, so _ownKeyBlank() computes false from real inputs rather than from a stubbed answer.
+  const OWN_NAME_LS = 'trinityone.steward.ownname.';
+  const SELFREG_KEY = 'trinityone.steward.selfreg';
+  const store = new Map();
+  store.set('k', stored);                        // ACTIVE_ID_KEY ('k') is what the restore block reads back
+  store.set(OWN_NAME_LS + OWN, 'Our Parish');    // the own church has been named => _ownKeyBlank() is false
+  const lsGet = (key) => (store.has(key) ? store.get(key) : null);
   const scope = {
-    localStorage: { getItem: () => stored },
+    localStorage: { getItem: lsGet }, lsGet,
     ACTIVE_ID_KEY: 'k', churchPub: OWN, actingChurch: acting,
+    OWN_NAME_LS, SELFREG_KEY,
     _ownedPubs: new Set(ownPubs),
     stewardedChurches: new Map(stewarded.map(c => [c, {}])),
     window: { Steward: { setActiveIdentity: (t) => calls.push(t) } }, console,
   };
   const proxy = new Proxy(scope, { has: (t, k) => (k in t) || !(String(k) in globalThis),
     get: (t, k) => (k === Symbol.unscopables ? undefined : t[k]), set: (t, k, v) => { t[k] = v; return true; } });
+  // the real own-key predicates, lifted from the bundle and run against the storage set up above
+  const lift = (anchor, name) => new Function('scope', `with (scope) { return (${fnBody(V, anchor, name)}); }`)(proxy);
+  scope._ownChurchName = lift('function _ownChurchName() {', '_ownChurchName');
+  scope._ownKeyRegistered = lift('function _ownKeyRegistered() {', '_ownKeyRegistered');
+  scope._ownKeyBlank = lift('function _ownKeyBlank() {', '_ownKeyBlank');
   new Function('scope', `with (scope) { ${block} }`)(proxy);
   return calls;
 }
@@ -199,7 +217,7 @@ test('END TO END: what the switch writes is what the next boot reads', () => {
       const b = String(k).replace(/\d+$/, ''); if (b in o) return o[b];
       throw new ReferenceError('needs a stub for ' + String(k)); },
     set: (o, k, v) => { o[k] = v; return true; } });
-  let wsrc = fnBody(V, 'setActiveIdentity(targetPub)', 'setActiveIdentity');
+  let wsrc = fnBody(V, 'setActiveIdentity(targetPub, { persist = true } = {})', 'setActiveIdentity');
   wsrc = wsrc.slice(0, wsrc.indexOf('lastProfile = {}')) + 'return true; }';
   const setActive = new Function('scope', `with (scope) { return ({ ${wsrc} }).setActiveIdentity; }`)(wrap(wScope));
   setActive.call({}, ST_AIDANS);
@@ -211,7 +229,9 @@ test('END TO END: what the switch writes is what the next boot reads', () => {
   const calls = [];
   const rScope = {
     localStorage: { getItem: (k) => (shared.has(k) ? shared.get(k) : null) },
-    ACTIVE_ID_KEY: 'trinityone.steward.active-id', churchPub: OWN, actingChurch: '',
+    // the restore block also reads a pending-church key (2026-11-05); nothing sets it here, so it resolves to
+    // null and the pending branch is skipped — but the identifier must resolve under this throwing proxy.
+    ACTIVE_ID_KEY: 'trinityone.steward.active-id', PENDING_CHURCH_KEY: 'trinityone.steward.pending-church', churchPub: OWN, actingChurch: '',
     _ownedPubs: new Set([OWN]), stewardedChurches: new Map([[ST_AIDANS, {}]]),
     window: { Steward: { setActiveIdentity: (t) => calls.push(t) } }, console,
   };

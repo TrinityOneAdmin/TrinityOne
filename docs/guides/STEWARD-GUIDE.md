@@ -5,7 +5,7 @@
 This is the map of the **steward console** — the desktop/web app you use to run your church
 (`steward.html`). Members use the phone app; stewards use this. A companion guide goes deeper where the
 stakes are higher: **[SAFEGUARDING.md](../security/SAFEGUARDING.md)** (protecting young people). To share running the
-church with someone else — a revocable delegated steward, or a full handoff — see
+church with someone else — a revocable helper, or handing over the church entirely — see
 **[STEWARDS-AND-HANDOFF-EXPLAINED.md](STEWARDS-AND-HANDOFF-EXPLAINED.md)**.
 
 > **What "self-custodial" means for you:** your church is one **key**, held on your device — there's no
@@ -92,7 +92,7 @@ Everyone who's joined.
   **confirm** a request a parent sent from their own phone. A child with no parent linked shows a quiet
   **"no guardian"** tag — perfectly fine for a youth-club child whose parents don't attend; they're still
   protected (only cleared adults can DM them). These actions are **owner-only**, so they're hidden when
-  you're acting as someone else's delegated steward. See **[SAFEGUARDING.md](../security/SAFEGUARDING.md)**.
+  you're acting as a helper for someone else's church. See **[SAFEGUARDING.md](../security/SAFEGUARDING.md)**.
 - **Requests to join** — if approval-to-join is on (see *Settings → Joining*), new people wait here for
   your **Approve** / **Decline**.
 
@@ -120,8 +120,9 @@ never reach the relay or other members. Run from the **church-key holder's** con
   terminal): what it serves (**web-app mirror**, **module downloads**, **audio/media**), your **church's own
   web address**, **storage caps**, **invite-only** / **offer-to-host**, a whole-relay **Back up & restore**,
   and **Update now** — updates are **signature-verified** with automatic rollback.
-- **Security** — set a **console PIN** (encrypts your key on the device), and manage **delegated stewards**
-  (invite a helper, approve their request, revoke them). See
+- **Security** — set a **console PIN** (encrypts your key on the device), and manage **helpers**
+  (Add a helper, approve their request under Requests to help, set their permissions, revoke them); a
+  separate **Hand over the church** page is where the full-key hand-over lives. See
   **[STEWARDS-AND-HANDOFF-EXPLAINED.md](STEWARDS-AND-HANDOFF-EXPLAINED.md)**.
 - **Church key** — your recovery phrase + full encrypted backup.
 
@@ -173,7 +174,7 @@ no-PII promise.)
 
 ## Where this is heading
 Recently shipped: child safeguarding + parent-linked accounts (parent-led *or* steward-linked), approve-to-join,
-the full-name rule, the shared room calendar, **delegated stewards** (invite a helper to run the church
+the full-name rule, the shared room calendar, **helpers** (invite someone to run the church
 alongside you, without sharing your key), **service run-sheets**, **group polls**,
 **year-end giving statements**, **kids check-in**, and one-click **signed relay updates**. Still on the way (not in the pilot): **Lightning giving** — tithes given from a wallet
 the giver controls, landing straight with the church — and **Keykeeper**, which would hold a steward's key
