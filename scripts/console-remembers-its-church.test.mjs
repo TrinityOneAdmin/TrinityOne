@@ -229,7 +229,9 @@ test('END TO END: what the switch writes is what the next boot reads', () => {
   const calls = [];
   const rScope = {
     localStorage: { getItem: (k) => (shared.has(k) ? shared.get(k) : null) },
-    ACTIVE_ID_KEY: 'trinityone.steward.active-id', churchPub: OWN, actingChurch: '',
+    // the restore block also reads a pending-church key (2026-11-05); nothing sets it here, so it resolves to
+    // null and the pending branch is skipped — but the identifier must resolve under this throwing proxy.
+    ACTIVE_ID_KEY: 'trinityone.steward.active-id', PENDING_CHURCH_KEY: 'trinityone.steward.pending-church', churchPub: OWN, actingChurch: '',
     _ownedPubs: new Set([OWN]), stewardedChurches: new Map([[ST_AIDANS, {}]]),
     window: { Steward: { setActiveIdentity: (t) => calls.push(t) } }, console,
   };

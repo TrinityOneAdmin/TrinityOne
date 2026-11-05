@@ -1601,6 +1601,13 @@ function extraRelays() {
 // so the connection just follows the rotating tunnel instead of breaking. (The directory always maps a claimed
 // name → the relay's current url — the relay re-claims it on every go-public/boot.)
 const ACTIVE_ID_KEY = 'trinityone.steward.active-id';   // which church this console is running, across reloads
+// THE CHURCH A WOULD-BE HELPER JUST ASKED TO JOIN, awaiting the owner's approval. Set ONLY by requestSteward
+// (an actual scan/paste of that church's invite — a deliberate action, never a boot-time guess), and consumed
+// + cleared by subscribeStewardedChurches the moment that church is granted. It is why the console opens the
+// church the moment it is granted (device-found 2026-11-05) instead of leaving the helper to find the switcher.
+// It carries a DELIBERATE choice, so unlike the blank-helper auto-land it DOES persist (via setActiveIdentity's
+// default) — returning to that church on the next open is correct. See the restore + grant blocks below.
+const PENDING_CHURCH_KEY = 'trinityone.steward.pending-church';
 const NAMES_LS = 'trinityone.steward.relay-names';
 const DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, 'http').replace(/\/relay\/?$/i, '');   // wss://app…/relay → https://app…
 // The directory is MIRRORED across relays, so resolve/discover against several — this church's own relay first
@@ -7631,7 +7638,11 @@ window.Steward = {
       // owner will approve you" on a truthy result, so discarding publish()'s false left someone waiting
       // indefinitely for an approval that was never asked for. (Audit 2026-09-05, the sweep around the
       // six calendar publishers: these four siblings had the same shape and were missed.)
-      .then((ok) => (ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null));
+      // REMEMBER WHICH CHURCH WE JUST ASKED TO JOIN, so the console can open it the moment the owner grants it
+      // — both while this session watches and on a later reopen (device-found 2026-11-05). Recorded only on a
+      // request that actually went out (truthy publish), so a request nobody received leaves nothing pending.
+      // subscribeStewardedChurches reads and clears it. A guess never writes this; only this scan/paste action.
+      .then((ok) => { if (ok) { try { localStorage.setItem(PENDING_CHURCH_KEY, cp); } catch (e) {} } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
   },
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
@@ -13904,7 +13915,19 @@ window.Steward = {
     // case, which needs no switching), and only when we are not already there.
     try {
       const want = localStorage.getItem(ACTIVE_ID_KEY) || '';
-      if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+      const pend = localStorage.getItem(PENDING_CHURCH_KEY) || '';
+      // THE CHURCH THEY JUST ASKED TO JOIN WINS, when it is already on the roster at boot — the scan/paste is
+      // the most recent DELIBERATE action, so it takes priority over a stale remembered `want` and over the
+      // blank-helper auto-land below. This covers the reopen path: the owner granted while the app was closed,
+      // the grant is already in the cache above, and we open that church and forget the request. It PERSISTS
+      // (setActiveIdentity's default), so once consumed it simply becomes the remembered `want` for later boots.
+      // The live-arrival path is in the `listed && !had` branch of the discovery read below. The removeItem is
+      // bare, not in its own try: this whole block already runs inside the enclosing try, and lifting-tests
+      // slice this block to the FIRST `} catch` after `const want`, so a nested catch here would truncate them.
+      if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
+        if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
+        localStorage.removeItem(PENDING_CHURCH_KEY);
+      } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
         window.Steward.setActiveIdentity(want);
       } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
         // PURE HELPER, NO REMEMBERED CHURCH. The own key is only a signing key (createKeyQuiet) and we steward
@@ -13986,7 +14009,23 @@ window.Steward = {
           let listed = false;
           if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { listed = ((JSON.parse(e.content).pubkeys) || []).includes(me); } catch {} }
           const had = stewardedChurches.has(cp);
-          if (listed && !had) { stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp); cb([...stewardedChurches.keys()]); }
+          if (listed && !had) {
+            stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp);
+            // THE GRANT LANDED WHILE WE WATCH. If this is the church this console asked to join (pending set by
+            // requestSteward), OPEN it now instead of leaving the helper to hunt for the switcher (device-found
+            // 2026-11-05). PERSISTED, because it is the church the user deliberately joined. Cleared so a later
+            // revoke+reopen does not silently re-open it. `cb` first so the switcher has the row before the
+            // identity event re-renders over it. Guarded like the restore above: never our own key or a held one.
+            try {
+              if ((localStorage.getItem(PENDING_CHURCH_KEY) || '') === cp && cp !== churchPub && !_ownedPubs.has(cp)) {
+                cb([...stewardedChurches.keys()]);
+                window.Steward.setActiveIdentity(cp);
+                localStorage.removeItem(PENDING_CHURCH_KEY);
+                return;
+              }
+            } catch (e) {}
+            cb([...stewardedChurches.keys()]);
+          }
           else if (!listed && had) {
             stewardedChurches.delete(cp); save();
             if (actingChurch === cp) {

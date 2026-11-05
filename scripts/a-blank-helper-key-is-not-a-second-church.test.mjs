@@ -80,7 +80,11 @@ function build({ ownName = '', registered = false, stewarded = [], active = '', 
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     OWN_NAME_LS, SELFREG_KEY, ACTIVE_ID_KEY, NET: 'trinityone', STEWARDS_D: 'trinityone/stewards:',
-    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
+    // The restore block gained a pending-church read (2026-11-05, helper-delegation). No test here sets it, so
+    // the read returns null and the pending branch is skipped — but the identifier must resolve or the whole
+    // restore try throws a ReferenceError that the outer catch swallows, silently killing the auto-land below.
+    PENDING_CHURCH_KEY: 'trinityone.steward.pending-church',
+    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
     lsGet: (k) => (store.has(k) ? store.get(k) : null),
     lsSet: (k, v) => store.set(k, v),
     // relay machinery stubbed flat: the restore block (what tests A–G test) runs synchronously BEFORE any of

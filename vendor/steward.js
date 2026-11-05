@@ -16221,6 +16221,7 @@ zoo`.split("\n");
     }
   }
   var ACTIVE_ID_KEY = "trinityone.steward.active-id";
+  var PENDING_CHURCH_KEY = "trinityone.steward.pending-church";
   var NAMES_LS = "trinityone.steward.relay-names";
   var DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, "http").replace(/\/relay\/?$/i, "");
   function _dirBases() {
@@ -20875,7 +20876,15 @@ zoo`.split("\n");
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }), sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }), sk)).then((ok) => {
+        if (ok) {
+          try {
+            localStorage.setItem(PENDING_CHURCH_KEY, cp);
+          } catch (e) {
+          }
+        }
+        return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null;
+      });
     },
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
     subscribeStewardRequests(onReqs) {
@@ -27225,7 +27234,11 @@ zoo`.split("\n");
       }
       try {
         const want = localStorage.getItem(ACTIVE_ID_KEY) || "";
-        if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
+        const pend = localStorage.getItem(PENDING_CHURCH_KEY) || "";
+        if (pend && pend !== churchPub && !_ownedPubs.has(pend) && stewardedChurches.has(pend)) {
+          if (actingChurch !== pend) window.Steward.setActiveIdentity(pend);
+          localStorage.removeItem(PENDING_CHURCH_KEY);
+        } else if (want && want !== churchPub && !_ownedPubs.has(want) && stewardedChurches.has(want) && actingChurch !== want) {
           window.Steward.setActiveIdentity(want);
         } else if (!actingChurch && _ownKeyBlank() && stewardedChurches.size) {
           const first = [...stewardedChurches.keys()].find((cp) => !_ownedPubs.has(cp));
@@ -27307,6 +27320,15 @@ zoo`.split("\n");
               stewardedChurches.set(cp, { name: "Church" });
               save();
               resolveName(cp);
+              try {
+                if ((localStorage.getItem(PENDING_CHURCH_KEY) || "") === cp && cp !== churchPub && !_ownedPubs.has(cp)) {
+                  cb([...stewardedChurches.keys()]);
+                  window.Steward.setActiveIdentity(cp);
+                  localStorage.removeItem(PENDING_CHURCH_KEY);
+                  return;
+                }
+              } catch (e2) {
+              }
               cb([...stewardedChurches.keys()]);
             } else if (!listed && had) {
               stewardedChurches.delete(cp);
