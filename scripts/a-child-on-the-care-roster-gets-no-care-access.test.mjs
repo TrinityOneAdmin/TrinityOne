@@ -508,8 +508,12 @@ test('(seal c) Steward.removeKey (shipped) deletes every church’s device copy 
   const win = { Steward: {}, dispatchEvent() {} };
   // `_stay` is fix/stay-open-console's stay-open record (removeKey also clears it once both branches are in);
   // an inert stand-in here — this test is about the children lists, the stay-open file tests its own clear.
-  const removeKey = new Function(...DEVICE_NAMES, 'KEY_LS', 'window', 'encBlobRemove', 'sk', 'pub', 'currentMnemonic', '_stay',
-    deviceHelpers() + '\nreturn function ' + body + ';')(...deviceVals(store, church.sk), 'trinityone.steward.key', win, () => Promise.resolve(true), church.sk, cp, 'x', { clear: () => Promise.resolve() });
+  // removeKey also clears the OTHER sealed device caches beside the children list (_sgClearClear = sealed
+  // clearance record, _finBookClear = sealed finance seed, _seedSweep = preload warming) — no-op stubs here, as
+  // this test only asserts the children lists are gone and nothing unrelated is touched; those caches have no
+  // keys in this store and their own clears are tested elsewhere.
+  const removeKey = new Function(...DEVICE_NAMES, 'KEY_LS', 'window', 'encBlobRemove', 'sk', 'pub', 'currentMnemonic', '_stay', '_sgClearClear', '_finBookClear', '_seedSweep',
+    deviceHelpers() + '\nreturn function ' + body + ';')(...deviceVals(store, church.sk), 'trinityone.steward.key', win, () => Promise.resolve(true), church.sk, cp, 'x', { clear: () => Promise.resolve() }, () => {}, () => {}, () => {});
   removeKey();
   assert.deepEqual([...store.keys()].filter(k => k.startsWith('trinityone.steward.minorslast.')), [], 'a children list survived removing the key');
   assert.equal(store.get('trinityone.steward.unrelated'), 'keep', 'CONTROL: removeKey deleted something it should not');

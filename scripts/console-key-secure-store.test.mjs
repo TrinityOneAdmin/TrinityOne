@@ -306,8 +306,10 @@ test('…and removeKey() actually hands back something to await', async () => {
   const win = { Steward: {}, dispatchEvent() {} };
   // _stay: the stay-open record removeKey() also clears (stayopen-is-kept-in-the-keystore.test.mjs) — not this test's question
   // _minorsLastClear: the sealed children lists removeKey() also clears (a-child-on-the-care-roster-gets-no-care-access.test.mjs) — not this test's question either
-  const fn = new Function('localStorage', 'KEY_LS', 'encBlobRemove', 'window', 'CustomEvent', '_stay', '_minorsLastClear', body);
-  const got = fn({ removeItem() {} }, 'k', () => sentinel, win, class { constructor(t, o) { this.type = t; Object.assign(this, o); } }, { clear: async () => {} }, () => {});
+  // _sgClearClear / _finBookClear / _seedSweep: the other sealed device caches removeKey() also clears — no-op
+  // stubs here, as this test's only question is that removeKey() returns the hardware-store removal promise.
+  const fn = new Function('localStorage', 'KEY_LS', 'encBlobRemove', 'window', 'CustomEvent', '_stay', '_minorsLastClear', '_sgClearClear', '_finBookClear', '_seedSweep', body);
+  const got = fn({ removeItem() {} }, 'k', () => sentinel, win, class { constructor(t, o) { this.type = t; Object.assign(this, o); } }, { clear: async () => {} }, () => {}, () => {}, () => {}, () => {});
 
   assert.ok(got && typeof got.then === 'function',
     'removeKey() returned ' + String(got) + ' rather than a promise, so `await window.Steward.removeKey()` in ' +

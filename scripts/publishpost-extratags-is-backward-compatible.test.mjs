@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { fnBody } from './test-slice.mjs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
-const ANCHOR = 'publishPost(content, group, replyTo, extraTags = []) {';
+const ANCHOR = 'publishPost(content, group, replyTo, opts) {';
 
 function makeFn() {
   const body = fnBody(STEWARD, ANCHOR, 'publishPost');

@@ -25,7 +25,7 @@ async function joinQueue() {
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   const blocked = [];
-  const src = fnBody(STEW, 'function DashMembers()', 'DashMembers') + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared filter (round 3a), real
+  const src = fnBody(STEW, 'function DashMembers(', 'DashMembers') + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared filter (round 3a), real
   const tmp = join(tmpdir(), 'decl-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -48,7 +48,7 @@ async function joinQueue() {
     StewHelpLink: (p) => (p && p.label) || null,
     // useStewNarrow joined DashMembers on 2026-09-20 (P12: the member card is one row on a phone, with its
     // actions behind ⋯). `false` here is the desktop row — the card these tests were written against.
-    useStewNarrow: () => false,
+    useStewNarrow: () => false, clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
     window: {
       Steward: {
         setBlocked: (l) => { blocked.push(l); return Promise.resolve(true); },

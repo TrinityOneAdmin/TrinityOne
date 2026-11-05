@@ -44,6 +44,7 @@ async function profile({ safeguard, withEngine = true }) {
     Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), UserAvatar: Stub('UserAvatar'),
     DirectoryToggle: Stub('DirectoryToggle'), BackupCard: Stub('BackupCard'),
     AppVersion: Stub('AppVersion'), FamilySheet: Stub('FamilySheet'), ChildrenAtChurchSheet: Stub('ChildrenAtChurchSheet'),
+    VotdToggle: Stub('VotdToggle'),
     WALLET_ENABLED: false, navigator: { clipboard: null }, setTimeout, clearTimeout, console,
   };
   const key = '__kidacct_' + Math.random().toString(36).slice(2);

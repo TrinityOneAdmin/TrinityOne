@@ -126,6 +126,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     _latestGuardNotice: new Map(),
     _senvPending: new Map(),   // round 3c (LOW iv): room-key envelopes held for an author the roster did not name yet — the switch clears them
     _minorsLastClear: () => {},   // the device copy of the children list (2026-10-10); not what this file tests
+    _sgClearClear: () => {}, _finBookClear: () => {}, _seedSweep: () => {},   // the other sealed device caches the switch clears (sealed clearance / finance seed / preload warming, 2026-11-04); not this file's question either
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
     window: Object.assign(win, { Steward: {} }),
   };

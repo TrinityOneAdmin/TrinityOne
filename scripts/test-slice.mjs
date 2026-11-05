@@ -87,7 +87,14 @@ export function fnBody(src, anchor, what = anchor) {
   let depth = 0, q = '';
   for (let i = open; i < src.length; i++) {
     const c = src[i], prev = src[i - 1];
-    if (q) { if (c === q && prev !== '\\') q = ''; continue; }
+    // A ' or " STRING CANNOT CONTAIN A RAW NEWLINE — the same reset stripComments carries (see its note), and
+    // for the same reason: without it an apostrophe in JSX TEXT ("removes anyone's access") opens a "string"
+    // that runs to the next apostrophe lines later, swallowing every brace between and throwing off the depth
+    // count. (Measured on app/stew-dashboard.jsx's DashMembers, which gained such a line; fnBody then could not
+    // find its end at all.) A backtick is left alone — a template literal spans newlines legitimately. This
+    // only changes slices that were ALREADY mis-balancing on such a quote; a well-formed single-line string
+    // closes before its newline and never reaches this branch, so correctly-sliced functions are untouched.
+    if (q) { if (c === '\n' && q !== '`') { q = ''; continue; } if (c === q && prev !== '\\') q = ''; continue; }
     if (c === '"' || c === "'" || c === '`') { q = c; continue; }
     if (c === '/' && src[i + 1] === '/') { const nl = src.indexOf('\n', i); if (nl === -1) break; i = nl; continue; }
     if (c === '/' && src[i + 1] === '*') { const e = src.indexOf('*/', i); if (e === -1) break; i = e + 1; continue; }

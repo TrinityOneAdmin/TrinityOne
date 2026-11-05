@@ -130,6 +130,7 @@ function fixture(modalOpen, withDialog = 'confirm', expand = false) {
   } else if (withDialog === 'tall') {
     const fin = loadScreen('app/stew-finance.jsx', ['FinanceShareStatement'], {
       React: d.React, window: win, Icon, SkPill: Stub('SkPill'), SkBadge: Stub('SkBadge'),
+      ConsoleFinanceCard: Stub('ConsoleFinanceCard'),
       Panel: ({ children }) => children, DismissibleNote: ({ children }) => children,
       useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
       setTimeout: () => 1, clearTimeout: () => {}, console, todayISO: () => '2026-09-17',

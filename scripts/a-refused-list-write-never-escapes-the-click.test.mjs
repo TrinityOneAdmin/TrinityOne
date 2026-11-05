@@ -87,6 +87,9 @@ function membersGlobals({ steward }) {
     nameHandle: () => '', shortNpub: (np) => String(np || '').slice(0, 12), ago: () => '2 days ago',
     Avatar: () => null, StewMemberSheet: () => null, ReseatModal: () => null, GuardianLinkModal: () => null, BulkInviteModal: () => null,
     stewCapState: () => ({ allowed: true }),
+    // DashMembers gained the clearance-expiry summary (2026-11): a benign count stub — this file measures that
+    // a refused list write throws nothing at the click, not the expiry badge, so its counts do not bite here.
+    clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
     window: {
       Steward: steward,
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({ name: 'St Aidan', features: { childPhotos: false } }),

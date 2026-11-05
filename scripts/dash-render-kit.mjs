@@ -109,6 +109,9 @@ export function membersGlobals({ steward, members, blocked = [], groups = [], st
     nameHandle: () => '', shortNpub: (np) => String(np || '').slice(0, 12), ago: () => '2 days ago',
     Avatar: () => null, StewMemberSheet: () => null, ReseatModal: () => null, GuardianLinkModal: () => null, BulkInviteModal: () => null,
     stewCapState: () => ({ allowed: true }),
+    // DashMembers gained the clearance-expiry summary (2026-11): a benign count stub — these tests measure
+    // block / rota / roster / join-card behaviour, never the expiry badge, so its counts do not bite here.
+    clearanceExpiryCounts: () => ({ expiring: 0, expired: 0 }),
     window: {
       Steward: steward,
       useStewardGroups: () => groups, useStewardStewards: () => stewards, useStewardChurch: () => ({ name: 'St Aidan', features: { childPhotos: false } }),
