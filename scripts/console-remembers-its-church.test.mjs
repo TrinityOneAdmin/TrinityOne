@@ -127,15 +127,33 @@ function restore({ stewarded, stored, ownPubs = [OWN], acting = '' }) {
   // `} catch` that closes this try and run the middle directly.
   const block = body.slice(at, body.indexOf('} catch', at));
   const calls = [];
+  // The restore block's else-if (the pure-helper auto-land added 2026-11-05) now consults _ownKeyBlank().
+  // This whole file models a console that HOLDS its OWN, NAMED church (OWN === churchPub) and also stewards
+  // others, so _ownKeyBlank() must be FALSE and the auto-land must never fire for it — that is exactly what
+  // the three boot cases below assert (a stale/own/empty memory re-enters nothing). We lift the REAL
+  // predicate from the shipped bundle (as a-blank-helper-key-is-not-a-second-church.test.mjs does) and NAME
+  // the own key in storage, so _ownKeyBlank() computes false from real inputs rather than from a stubbed answer.
+  const OWN_NAME_LS = 'trinityone.steward.ownname.';
+  const SELFREG_KEY = 'trinityone.steward.selfreg';
+  const store = new Map();
+  store.set('k', stored);                        // ACTIVE_ID_KEY ('k') is what the restore block reads back
+  store.set(OWN_NAME_LS + OWN, 'Our Parish');    // the own church has been named => _ownKeyBlank() is false
+  const lsGet = (key) => (store.has(key) ? store.get(key) : null);
   const scope = {
-    localStorage: { getItem: () => stored },
+    localStorage: { getItem: lsGet }, lsGet,
     ACTIVE_ID_KEY: 'k', churchPub: OWN, actingChurch: acting,
+    OWN_NAME_LS, SELFREG_KEY,
     _ownedPubs: new Set(ownPubs),
     stewardedChurches: new Map(stewarded.map(c => [c, {}])),
     window: { Steward: { setActiveIdentity: (t) => calls.push(t) } }, console,
   };
   const proxy = new Proxy(scope, { has: (t, k) => (k in t) || !(String(k) in globalThis),
     get: (t, k) => (k === Symbol.unscopables ? undefined : t[k]), set: (t, k, v) => { t[k] = v; return true; } });
+  // the real own-key predicates, lifted from the bundle and run against the storage set up above
+  const lift = (anchor, name) => new Function('scope', `with (scope) { return (${fnBody(V, anchor, name)}); }`)(proxy);
+  scope._ownChurchName = lift('function _ownChurchName() {', '_ownChurchName');
+  scope._ownKeyRegistered = lift('function _ownKeyRegistered() {', '_ownKeyRegistered');
+  scope._ownKeyBlank = lift('function _ownKeyBlank() {', '_ownKeyBlank');
   new Function('scope', `with (scope) { ${block} }`)(proxy);
   return calls;
 }
