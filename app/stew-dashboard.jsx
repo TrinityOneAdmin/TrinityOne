@@ -10952,7 +10952,12 @@ function DashStewardsPanel({ church }) {
     // "unscoped", which is the everything-by-accident this exists to remove.
     const nextCaps = { ...caps, [pk]: Array.isArray(grants) ? grants.slice() : [] };
     setNewLabel(''); setNewCaps([]);
-    try { window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); } catch (e) {} };
+    try { window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); } catch (e) {}
+    // CANCEL ANY PRIOR REVOKE (2026-11-05, helper-delegation). This is the single path every re-add runs through —
+    // addByCode(), approve, and the member picker all call add(pk, …) — so a tombstone here covers them all. Without
+    // it, a helper removed then re-added would still read their old stewardrevoke:<pk> notice and evict the church
+    // their console just rejoined. The tombstone (empty + ['deleted'], newest-wins) retracts it.
+    try { if (window.Steward.clearStewardRevoke) window.Steward.clearStewardRevoke(pk); } catch (e) {} };
   // Approving a request opens a sheet that captures the NAME the owner knows them by and a permission PRESET,
   // then grants the preset's capabilities — never add(pk) with no name and no caps, which left the helper with
   // [] (nothing) and an invented name. `claimedName` prefills from what the requester typed, as a starting
@@ -11008,6 +11013,11 @@ function DashStewardsPanel({ church }) {
       // the relay still honours would only lock out the wrong person. One we cannot confirm rotates nothing either.
       if (outcome === 'not-landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
       if (outcome !== 'landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
+      // TELL THE REMOVED HELPER (2026-11-05, helper-delegation). ONLY here, in the landed branch — never before
+      // `settle` — because the relay stops serving them the stewards: roster the instant they are off it, so a
+      // removal that FAILED to land must not also evict their console. A church-signed notice at stewardrevoke:<pk>
+      // is the one document they can still read; their subscribeStewardedChurches drops the ghost church on it.
+      try { if (window.Steward.publishStewardRevoke) window.Steward.publishStewardRevoke(pk); } catch (e) {}
       const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
       const known = spKr.approved(everyone);
       const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients

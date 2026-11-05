@@ -15763,6 +15763,7 @@ zoo`.split("\n");
   var VOICE_D = "trinityone/voice:";
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
+  var STEWARDREVOKE_D = "trinityone/stewardrevoke:";
   var PIN_D = "trinityone/pin:";
   var HIDE_D = "trinityone/hidden:";
   var GROUPKEY_D = "trinityone/groupkey:";
@@ -24401,6 +24402,28 @@ zoo`.split("\n");
       }
       return _landed("steward roster", _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk))));
     },
+    // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). When the owner takes a helper off the roster the
+    // relay (correctly) stops serving them the church's documents — INCLUDING the stewards: roster event that would
+    // tell their app it was dropped — so their console kept a dead "ghost" church on screen. This writes a dedicated
+    // church-signed notice at d=stewardrevoke:<pk> that the removed helper CAN still read (canRead serves it to the
+    // subject alone), and which their subscribeStewardedChurches evicts the ghost on.
+    //
+    // CHURCH-SIGNED, with the SAME key that signs the roster (`sk`/`pub` here are the owner's own church, exactly as
+    // setStewards above), so the helper's handler can take `e.pubkey` as the authority and refuse a forgery. CONTENT IS
+    // NON-EMPTY on purpose: the relay-wide convention (and the helper's handler) treats empty content OR a ['deleted']
+    // tag as a tombstone, so a live revoke must carry content or it would read as its own cancellation. Called ONLY from
+    // DashStewardsPanel.remove, and ONLY after the roster removal is confirmed landed (app/stew-dashboard.jsx).
+    publishStewardRevoke(pk) {
+      if (!sk || !pk) return Promise.resolve(null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREVOKE_D + pk], ["t", NET], ["p", pk]], content: JSON.stringify({ revoked: pk }) }), sk));
+    },
+    // CANCEL A REVOKE when the SAME helper is re-added (app/stew-dashboard.jsx add()/addByCode). A tombstone — empty
+    // content + ['deleted'] — at the same d-tag, newest-wins, so a re-added helper's console does not evict on a stale
+    // revoke it only now reads. Church-signed, like the notice it cancels. No `p` tag: it addresses nobody, it retracts.
+    clearStewardRevoke(pk) {
+      if (!sk || !pk) return Promise.resolve(null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREVOKE_D + pk], ["t", NET], ["deleted"]], content: "" }), sk));
+    },
     // DID A REMOVAL LAND? setStewards() answers false when no relay ACKNOWLEDGED the write, and that is not the same as
     // "no relay applied it": the OK can be lost with the socket (the app backgrounded mid-write). So read each relay's
     // newest church-signed roster and say what is TRUE, in three words and never a guess:
@@ -27315,9 +27338,24 @@ zoo`.split("\n");
         if (!dialled.length) return;
         [...stewardedChurches.keys()].forEach(resolveName);
         const seenAt = /* @__PURE__ */ new Map();
-        sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }], {
+        sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }, { kinds: [30078], "#d": [STEWARDREVOKE_D + me] }], {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+            if (d.startsWith(STEWARDREVOKE_D)) {
+              const rcp = e.pubkey;
+              const isTomb = e.tags.some((t) => t[0] === "deleted") || !e.content;
+              if (stewardedChurches.has(rcp) && !isTomb && e.created_at > (seenAt.get(rcp) || 0)) {
+                stewardedChurches.delete(rcp);
+                save();
+                if (actingChurch === rcp) {
+                  const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find((k) => !_ownedPubs.has(k)) : "";
+                  if (other) window.Steward.setActiveIdentity(other, { persist: false });
+                  else window.Steward.setActiveIdentity(churchPub);
+                }
+                cb([...stewardedChurches.keys()]);
+              }
+              return;
+            }
             if (!d.startsWith(STEWARDS_D)) return;
             const cp = d.slice(STEWARDS_D.length);
             if (cp === me) return;
