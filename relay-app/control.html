@@ -119,6 +119,10 @@
   .ch { display:flex; align-items:center; gap:9px; padding:9px 12px; border-radius:12px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:8px; }
   .ch .badge { width:30px; height:30px; border-radius:9px; background:color-mix(in oklab, var(--clay) 14%, var(--surface)); color:var(--clay-ink); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; flex-shrink:0; }
   .warn { display:flex; gap:9px; padding:12px 14px; border-radius:12px; background:color-mix(in oklab, var(--clay) 8%, var(--surface)); border:1px solid color-mix(in oklab, var(--clay) 28%, transparent); font-size:13px; color:var(--ink-2); line-height:1.5; }
+  /* prominent (not muted) callout for the keep-awake / stay-on guidance on the public card */
+  .sleepwarn { padding:12px 14px; border-radius:12px; background:color-mix(in oklab, var(--gold) 12%, var(--surface)); border:1px solid color-mix(in oklab, var(--gold) 40%, transparent); border-left:4px solid var(--gold); font-size:13px; color:var(--ink); line-height:1.5; margin-top:12px; }
+  .sleepwarn b { color:var(--gold-ink); }
+  .sleepwarn .sw-sub { color:var(--ink-2); display:block; margin-top:6px; }
   .muted { color:var(--ink-3); font-size:12.5px; }
   input { width:100%; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font-family:var(--font-ui); font-size:13px; outline:none; }
   input:focus { border-color:var(--clay); }
@@ -488,6 +492,18 @@
           <div class="toggle-main"><div class="toggle-t">Stay public</div><div class="toggle-s">Keeps the secure public tunnel open, and reopens it after a restart. Off closes it and keeps it closed.</div></div>
           <span class="wz-meta" id="stayMsg"></span>
           <input type="checkbox" class="sw" id="t-stay" title="On: keep this relay reachable from the internet over a secure tunnel. Off: close it." aria-label="Stay public">
+        </div>
+        <div class="toggle-row" id="keepAwakeRow">
+          <div class="toggle-main"><div class="toggle-t">Keep this computer awake while public</div><div class="toggle-s">Holds off sleep so members can reach your church at any hour. Leave this on unless you have another way to stop this machine sleeping.</div></div>
+          <span class="wz-meta" id="keepAwakeMsg"></span>
+          <input type="checkbox" class="sw" id="t-keepawake" checked title="On: stop this computer sleeping while the relay is public. Off: let it sleep as normal." aria-label="Keep this computer awake while public">
+        </div>
+        <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="openSleepBtn" type="button" title="Open this computer's sleep and power settings">Open sleep settings</button><span class="muted" id="sleepHint" style="display:none"></span></div>
+        <div class="sleepwarn" id="gpSleepWarn" style="display:none">
+          <b>This computer must stay awake for members to reach your church.</b>
+          Keep-awake is on, so it will not sleep while you are public.
+          <span class="sw-sub">If it is a laptop you close: on battery with the lid shut, macOS can still sleep — keep it plugged in.</span>
+          <span class="sw-sub">Reachable 24/7? A free quick tunnel address changes each restart. For a permanent address use a named Cloudflare tunnel, or turn on Tailscale Funnel above.</span>
         </div>
       </section>
 
