@@ -42,7 +42,14 @@ function loadFinance(opts = {}) {
   const subs = [];
   const ls = opts.localStorage || fakeLS();
   const ctx = {
-    pool: { subscribeMany: (r, f, h) => { subs.push({ filters: f, handlers: h }); return { close() {} }; } },
+    // #9 (finance-stale-writes 2026-11-05): encSubscribe's oneose now opens the finance WRITE gate only when a relay
+    // is actually CONNECTED (not on an all-closed timeout). The gate reads pool.listConnectionStatus(); a test that
+    // wants to exercise it passes one, otherwise the method is ABSENT and the oneose falls back to opening the gate
+    // (the prior behaviour) — which is what the pre-existing genuine-flag tests below rely on.
+    pool: {
+      subscribeMany: (r, f, h) => { subs.push({ filters: f, handlers: h }); return { close() {} }; },
+      ...(opts.listConnectionStatus ? { listConnectionStatus: opts.listConnectionStatus } : {}),
+    },
     relays: () => [],
     actingChurch: ('actingChurch' in opts) ? opts.actingChurch : '',
     pub: ('pub' in opts) ? opts.pub : 'CHURCH_A',
@@ -258,6 +265,38 @@ test('finance: the cb genuine flag is false for the seed/backfill and true ONLY 
   assert.ok(!flags.includes(true), 'a pre-EOSE backfill delivery claimed genuine=true — a write would derive its seq from a partial book');
   subs[0].handlers.oneose();
   assert.equal(flags[flags.length - 1], true, 'the post-EOSE delivery must carry genuine=true');
+});
+
+// ───────────────── #9: the write gate opens on a CONNECTED EOSE, not an all-closed timeout ─────────────────
+// A dropped/closed socket counts toward SimplePool's EOSE exactly as a real end-of-stored-events does, so flipping
+// the finance write gate on oneose ALONE let a momentary disconnect say "the book has settled" when no relay answered.
+// A real EOSE leaves its relay OPEN in listConnectionStatus; an all-closed timeout leaves none open.
+test('#9: a finance EOSE opens the write gate ONLY when a relay is actually connected (not an all-closed timeout)', () => {
+  // all relays closed/absent at EOSE (a momentary disconnect) → the gate must STAY shut
+  const closed = loadFinance({ listConnectionStatus: () => new Map() });
+  const cf = [];
+  closed.encSubscribe('finance/', (items, genuine) => cf.push(genuine));
+  closed.subs[0].handlers.onevent(journalEv('CHURCH_A', 1, 'm'));
+  closed.subs[0].handlers.oneose();
+  assert.equal(cf[cf.length - 1], false, 'an all-closed EOSE opened the finance write gate — a stale-seed write would be attempted and the relay would refuse it');
+
+  // a relay still open at EOSE (a genuine end-of-stored-events) → the gate opens
+  const open = loadFinance({ listConnectionStatus: () => new Map([['wss://r', true]]) });
+  const of = [];
+  open.encSubscribe('finance/', (items, genuine) => of.push(genuine));
+  open.subs[0].handlers.onevent(journalEv('CHURCH_A', 1, 'm'));
+  open.subs[0].handlers.oneose();
+  assert.equal(of[of.length - 1], true, 'a genuine EOSE with a connected relay must open the write gate (a brand-new empty church must be able to record its first entry)');
+});
+
+test('#9: the connected-relay gate is FINANCE-ONLY — check-in and Manna still settle on EOSE (they ignore genuine)', () => {
+  for (const [prefix, kind] of [['trinityone/checkin:', undefined], ['trinityone/manna-1:', 'finance']]) {
+    const w = loadFinance({ listConnectionStatus: () => new Map() });   // NO open relay
+    const flags = [];
+    w.encSubscribe(prefix, (items, genuine) => flags.push(genuine), kind);
+    w.subs[0].handlers.oneose();
+    assert.equal(flags[flags.length - 1], true, prefix + ' had its EOSE gated on connection — only finance/ may be, or the safeguarding register / benevolence data is affected');
+  }
 });
 
 // ───────────────────────── locked / isolation / church-in-seal ─────────────────────────

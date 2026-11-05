@@ -11882,7 +11882,22 @@ window.Steward = {
         if (!take(id, e.content, e.created_at, e.tags, e.pubkey)) return;   // held for a key that has not arrived yet
         emit();
       },
-      oneose() { eosed = true; genuine = true; emit(); },
+      oneose() {
+        eosed = true;
+        // #9 (finance-stale-writes 2026-11-05) — DON'T open the finance WRITE gate on an all-closed EOSE. A dropped/
+        // closed socket counts toward SimplePool's EOSE exactly as a real end-of-stored-events does (see the note on
+        // pool.subscribeMany above), so flipping `genuine` on oneose alone let a momentary disconnect say "the book
+        // has SETTLED" when no relay actually answered — a write would then derive its seq from the cache-first seed
+        // and the relay refuses it ("relay refused" on a bad connection). A real EOSE always arrives with its relay
+        // still OPEN (a closed relay is DELETED from listConnectionStatus — see _isRelayAuthed's note), while an
+        // all-closed timeout leaves none open, so require one open relay for the finance gate. FINANCE ONLY (isFin):
+        // check-in and Manna ignore the `genuine` flag entirely and their seed/`eosed` behaviour is unchanged, so
+        // this cannot touch the safeguarding register or benevolence data. If listConnectionStatus is unavailable we
+        // fall back to the prior behaviour (open the gate) — the relay's single-writer seq guard is still the backstop.
+        if (!isFin) genuine = true;
+        else { try { genuine = [...pool.listConnectionStatus().values()].some(Boolean); } catch (e) { genuine = true; } }
+        emit();
+      },
     });
     return () => { _capWaiters[kk] && _capWaiters[kk].delete(retry); try { clearTimeout(_finT); } catch (e) {} try { sub.close(); } catch {} };
   },
