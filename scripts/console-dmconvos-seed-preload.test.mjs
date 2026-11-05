@@ -64,7 +64,11 @@ test('a delivered DM updates the seed, and the seed is body-free (peer/npub/ts o
   assert.deepEqual(Object.keys(row).sort(), ['npub', 'peer', 'ts'], 'the DM-list row must carry ONLY peer/npub/ts');
 });
 
-test('church isolation: the seed is keyed on actingChurch||churchPub, not bare pub', () => {
+test('church isolation: the seed is keyed on the active identity (pub) — delegated writes its own church', () => {
+  // CHANGED 2026-11-05 (fix/seed-authority): SEED_KEY is now the ACTIVE identity `pub`, not actingChurch||churchPub.
+  // In delegated mode pub == the acting church, so this delegation case is unchanged. The reason for the change is
+  // the OWNED-NETWORK case, where pub is the network key while actingChurch||churchPub resolved to the church and
+  // mixed the two DM lists into one — proven separately in seed-stays-out-of-key-distribution.test.mjs.
   const ls = fakeLS();
   // device church is A; acting as church B (delegated). pub is set to B here (delegated mode: pub == actingChurch)
   ls.setItem(KEY('CHURCH_A'), JSON.stringify([{ peer: 'apeer', npub: 'npub-apeer', ts: 9 }]));

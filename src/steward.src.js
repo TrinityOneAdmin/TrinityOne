@@ -8969,11 +8969,16 @@ window.Steward = {
     // private-messages list opened BLANK on first-ever open until the relay answered over the tunnel.
     // This list is BODY-FREE — each row is only { peer, npub, ts }, never any message text — so seeding it
     // to localStorage leaks nothing sensitive, and it may follow the existing unconditional seed pattern
-    // (subscribeGroups/_subAddr). Keyed on `actingChurch || churchPub` (the makeSub key, steward-root.jsx:215),
-    // NOT the bare `pub` the old seeds use, so a delegated/acting console cannot paint another church's list.
+    // (subscribeGroups/_subAddr). KEYED ON THE ACTIVE IDENTITY `pub` — the very key this subscription fetches
+    // DMs for (authors/#p:[pub] below). It must match `pub`, not `actingChurch || churchPub`: when the console
+    // toggles to an OWNED NETWORK, setActiveIdentity sets pub = the network key with actingChurch = '' (so
+    // actingChurch || churchPub resolves to the CHURCH), and the old key filed the network's DM list under the
+    // church — mixing church and network conversations into one stored list that then stuck across reloads.
+    // Keying on `pub` gives the church, each owned network, and each delegated church (pub = that church) their
+    // own list, which is also strictly stronger than the old key against a delegated console painting another's.
     // The cache READ and WRITE live together (read primes first paint; emit() writes) so no test can be
     // satisfied by a dead line.
-    const SEED_KEY = 'trinityone.steward.dmconvos.' + (actingChurch || churchPub || '');
+    const SEED_KEY = 'trinityone.steward.dmconvos.' + (pub || '');
     const SEED_CAP = 400;   // rows kept on disk; an unusually chatty church drops the oldest threads from the seed
     const byPeer = new Map();
     let eosed = false;   // PRELOAD WARMING: write the on-disk seed only once the stream has SETTLED (and on
@@ -10643,11 +10648,15 @@ window.Steward = {
     const JP_KEY = 'trinityone.steward.joinpolicy.' + (cp0 || '');
     let settled = false, _jpSeed = null;
     try { _jpSeed = lsGet(JP_KEY); } catch {}
-    const push = () => { onPolicy(approval); if (settled) { try { lsSet(JP_KEY, approval ? '1' : '0'); } catch {} } };
-    if (_jpSeed === '1' || _jpSeed === '0') onPolicy(_jpSeed === '1');   // paint last-known instantly
-    // HYDRATE approval from the seed so a bare/offline EOSE (which re-emits `approval`) can't flip the shown flag
-    // back before the genuine doc lands; a real newer event still wins via `latest` below.
-    let approval = (_jpSeed === '1'), latest = 0;
+    const _seedOn = (_jpSeed === '1');
+    // DISPLAY vs RELAY-TRUTH (mirrors subscribeSafeguard's *Seed discipline). The seed may PAINT the switch
+    // instantly, but the authoritative `approval` that joinPolicyFresh / the KeyDistributor read must stay
+    // relay-truth — false (fail-closed) until a genuine doc sets it or a genuine read settles. So `approval` is
+    // NOT hydrated from the seed; only the DISPLAYED value falls back to the seed, and only until a real doc has
+    // been seen (sawDoc) or the read has settled — which still keeps a bare/offline EOSE from flashing it back.
+    let approval = false, latest = 0, sawDoc = false;
+    const push = () => { onPolicy((sawDoc || settled) ? approval : _seedOn); if (settled) { try { lsSet(JP_KEY, approval ? '1' : '0'); } catch {} } };
+    if (_jpSeed === '1' || _jpSeed === '0') onPolicy(_seedOn);   // paint last-known instantly (display only)
     const take = (e) => {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
       if (d !== JOINPOLICY_D + cp0) return false;
@@ -10655,6 +10664,7 @@ window.Steward = {
       if (e.created_at < latest) return false; latest = e.created_at;   // newest wins — a stale copy must not silently turn approval back off
       if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false;
       else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } }
+      sawDoc = true;   // a real joinpolicy doc (or deletion) is now authoritative — display follows `approval`, not the seed
       state.approval = approval;
       return true;
     };
@@ -10797,19 +10807,32 @@ window.Steward = {
   // once it has settled genuinely on every connected relay (_freshDocRead) — the key distributor uses nothing less.
   // Every copy is kept, and the union recomputed whenever the steward roster changes (_memberEmitters), so a steward's
   // copy that arrived before the roster is counted once the roster says who they are.
+  // DISPLAY-ONLY last-known allowlist (overview preload seed). The AUTHORITATIVE admitted list — subscribeAdmitted
+  // → _lastAdmitted, stewKeyRecipients, stewKeyRecipientsOrAdmitted — is NEVER fed from this: it stays relay-folded
+  // and fail-closed, so a stale seed can never reach key distribution. This getter exists ONLY so the pending-join
+  // COUNT (useRealMemberCount / the dashboard pending banner) paints right on a cold open, and only until the real
+  // stream has loaded. Pubkeys only; no freshness stamp; reads straight off disk. Keyed on the ACTIVE identity
+  // (`pub`), exactly as subscribeAdmitted writes it (cp0 = pub).
+  admittedSeed(cp) {
+    try { const a = JSON.parse(lsGet('trinityone.steward.admitted.' + (cp || pub || '')) || '[]'); return Array.isArray(a) ? a.filter(p => typeof p === 'string') : []; } catch { return []; }
+  },
   subscribeAdmitted(onList) {   // the approved-members allowlist → [pubkeys]
     const cp0 = pub, tok = _freshTok();
     { const _tag = _listTag(), _deliver = onList; _tag.sub = tok; onList = (list) => { const l = _stampFor(list, _tag); try { if (cp0 === (actingChurch || pub)) _lastAdmitted = { cp: cp0, list: l }; } catch (e) {} return _deliver(l); }; }   // see _listTag, _freshDocRead; _lastAdmitted: round 3g
     let cur = [];
     const byAuthor = new Map();   // author pubkey -> { at, pubkeys } — newest per author, unioned below
-    // PRELOAD WARMING (overview seed): paint the last-known allowlist instantly so the pending-join count isn't
-    // briefly wrong on a cold open. Pubkeys only — the same tier the console already keeps on disk for the block
-    // list. `cur` is folded from the relay (byAuthor), never from this seed, so write only once a GENUINE read has
-    // settled (the _freshDocRead completion) — a transient/offline empty EOSE then can't wipe a good allowlist.
+    // PRELOAD WARMING (overview seed) — DISPLAY ONLY, and deliberately NOT painted through `onList` here.
+    // `cur` (and therefore _lastAdmitted, stewKeyRecipients, orAdmitted — the KEY-DISTRIBUTION path) is folded
+    // from the relay (byAuthor) and NOTHING ELSE: a stale on-disk seed must never be able to reach who-gets-keys.
+    // This mirrors the safeguarding discipline (subscribeSafeguard: the *Seed fields stay OUT of `approved`,
+    // which the key reads use). The last-known allowlist is still read off disk — but only by the pending-join
+    // COUNT, through the Steward.admittedSeed() getter above, and only until this stream has genuinely loaded.
+    // The disk copy is (re)written once a GENUINE read has settled (the _freshDocRead completion) — so a genuine
+    // EMPTY answer (a reset/wiped relay) now CLEARS it and `cur` folds to [] = fail-CLOSED, instead of the old
+    // behaviour where a stale seed survived as `cur`, was stamped fresh, and keyed people the church had dropped.
     const ADM_KEY = 'trinityone.steward.admitted.' + (cp0 || '');
     let settled = false;
     const push = () => { onList(cur); if (settled) { try { lsSet(ADM_KEY, JSON.stringify(cur)); } catch {} } };
-    try { const c = JSON.parse(lsGet(ADM_KEY) || '[]'); if (Array.isArray(c) && c.length) { cur = c.filter(p => typeof p === 'string'); onList(cur); } } catch {}
     // ITEM D (owner 2026-10-13: a steward's approval is the church's, and must not depend on a console being open).
     // Every copy the relay serves counts. The relay now serves an `admitted:` copy only from the church, a current
     // steward, or a steward it accepted that copy from while they were one (gateway.mjs ADMITTED_RECEIPTS) — the set
@@ -10841,7 +10864,7 @@ window.Steward = {
     const refold = () => { if (!byAuthor.size) return; const was = cur.slice().sort().join(','); fold(); if (cur.slice().sort().join(',') !== was) push(); };
     _memberEmitters.add(refold);   // the steward roster arrived or changed — see _pokeMemberLists
     const stopRead = _freshDocRead(cp0, [ADMITTED_D + cp0], (e) => { if (take(e)) push(); },
-      () => { tok.genuine = true; tok.at = Date.now(); cur = [...cur]; settled = true; push(); _keysReadSignal('admitted'); });
+      () => { tok.genuine = true; tok.at = Date.now(); fold(); settled = true; push(); _keysReadSignal('admitted'); });   // fold(), NOT `cur=[...cur]`: an empty genuine answer must recompute cur=[] from the relay, never keep a stale seed
     return () => { tok.live = false; _memberEmitters.delete(refold); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────
