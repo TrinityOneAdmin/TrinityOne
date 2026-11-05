@@ -83,7 +83,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     privateKeyFromSeedWords: () => { throw new Error('not a network key'); }, getPublicKey: () => '',
-    NET: 'trinityone', STEWARDS_D, ACTIVE_ID_KEY: 'active',
+    NET: 'trinityone', STEWARDS_D, STEWARDREVOKE_D: 'trinityone/stewardrevoke:', ACTIVE_ID_KEY: 'active',
     // The restore + grant paths gained a pending-church read (2026-11-05, helper-delegation). This fixture sets
     // no pending, so the read returns null and nothing auto-opens — but the identifier must resolve (the proxy
     // throws on an unknown one) so the pending check genuinely runs and finds nothing, which is the control.

@@ -86,7 +86,7 @@ function harness({ pending = '', proven = [BOX, CANON], seedStewarded = [] } = {
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     privateKeyFromSeedWords: () => { throw new Error('not a network key'); }, getPublicKey: () => '',
-    NET: 'trinityone', STEWARDS_D, STEWARDREQ_D, ACTIVE_ID_KEY, PENDING_CHURCH_KEY: PENDING,
+    NET: 'trinityone', STEWARDS_D, STEWARDREQ_D, STEWARDREVOKE_D: 'trinityone/stewardrevoke:', ACTIVE_ID_KEY, PENDING_CHURCH_KEY: PENDING,
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) },
     lsSet: (k, v) => store.set(k, v),
     lsGet: (k) => (store.has(k) ? store.get(k) : null),

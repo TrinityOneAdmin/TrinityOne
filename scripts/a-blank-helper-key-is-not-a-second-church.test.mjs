@@ -79,7 +79,7 @@ function build({ ownName = '', registered = false, stewarded = [], active = '', 
     netKeys: () => [],
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
-    OWN_NAME_LS, SELFREG_KEY, ACTIVE_ID_KEY, NET: 'trinityone', STEWARDS_D: 'trinityone/stewards:',
+    OWN_NAME_LS, SELFREG_KEY, ACTIVE_ID_KEY, NET: 'trinityone', STEWARDS_D: 'trinityone/stewards:', STEWARDREVOKE_D: 'trinityone/stewardrevoke:',
     // The restore block gained a pending-church read (2026-11-05, helper-delegation). No test here sets it, so
     // the read returns null and the pending branch is skipped — but the identifier must resolve or the whole
     // restore try throws a ReferenceError that the outer catch swallows, silently killing the auto-land below.
