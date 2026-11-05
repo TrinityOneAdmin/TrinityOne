@@ -170,6 +170,40 @@ export function billStatuses(bills, journalEntries, todayLocalISO) {
   return out;
 }
 
+// ── "was this bill ever RECORDED?" — the same `recorded` split billStatus/billStatuses use, exposed PURELY ───
+// A bill's money rides the journal, never the doc. An OLD bill whose RECEIVE entry is absent from the ledger (it
+// was recorded on an earlier build that never posted it) has NO AP credit tagged to it, so `recorded` is false —
+// and such a bill can never derive 'paid' (billStatus splits on exactly this). The screen must not offer Mark
+// paid / Approve for it: a payment would post against nothing. These two expose that same `recorded = crAP > 0`
+// test so the Bills tab can hide those controls and tell the truth. IDENTICAL definition to billStatus's
+// `recorded` — finance-bill.test.mjs asserts billsNeedingEntry(...).has(id) === !billRecorded(b, journal) so they
+// can never drift. Pure, no clock, no I/O; reach window.FinanceLedger via finance-bundle's `export *`.
+export function billRecorded(bill, journalEntries) {
+  let crAP = 0;
+  const id = bill && bill.id;
+  for (const e of (journalEntries || [])) {
+    if (!e || e.bill !== id) continue;
+    for (const p of (e.postings || [])) if (p.account === AP_ACCT && p.dir === 'cr') crAP += p.amount;
+  }
+  return crAP > 0;   // same split as billStatus: an AP credit is the mark that the bill was actually received
+}
+
+// BATCH form for a WHOLE list in ONE journal pass (mirroring billStatuses' aggregation): the Set of bill ids that
+// were NOT recorded (no AP credit tagged to them). For every bill: has(b.id) === !billRecorded(b, journal).
+export function billsNeedingEntry(bills, journalEntries) {
+  const crByBill = new Map();   // billId -> Σ AP credit, from a single journal pass
+  for (const e of (journalEntries || [])) {
+    if (!e || e.bill == null) continue;
+    for (const p of (e.postings || [])) if (p.account === AP_ACCT && p.dir === 'cr') crByBill.set(e.bill, (crByBill.get(e.bill) || 0) + p.amount);
+  }
+  const out = new Set();
+  for (const b of (bills || [])) {
+    if (!b) continue;
+    if (!((crByBill.get(b.id) || 0) > 0)) out.add(b.id);   // not recorded = no AP credit > 0
+  }
+  return out;
+}
+
 // ── approval: the state machine draft → approved → paid, decided PURELY ─────────────────────────────────────
 // WHETHER a bill is approved, in the owner's chosen mode. Shared by the screen (to enable Mark-paid) and by the
 // engine guard (billPaymentEntry takes the boolean this returns). WHO MAY approve is NOT decided here — that is

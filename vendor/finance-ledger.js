@@ -48,9 +48,11 @@ var FinanceLedger = (() => {
     billOutstanding: () => billOutstanding,
     billPaymentEntry: () => billPaymentEntry,
     billReceiveEntry: () => billReceiveEntry,
+    billRecorded: () => billRecorded,
     billStatus: () => billStatus,
     billStatuses: () => billStatuses,
     billTotal: () => billTotal,
+    billsNeedingEntry: () => billsNeedingEntry,
     bookDocSignature: () => bookDocSignature,
     bookToDocs: () => bookToDocs,
     budgetVsActual: () => budgetVsActual,
@@ -1370,6 +1372,28 @@ ${invoice.contact ? `<section><div class="bill">Billed to</div><div>${esc2(invoi
       else if (b.due && todayLocalISO && String(b.due) < String(todayLocalISO)) status = "overdue";
       else status = "unpaid";
       out.set(b.id, status);
+    }
+    return out;
+  }
+  function billRecorded(bill, journalEntries) {
+    let crAP = 0;
+    const id = bill && bill.id;
+    for (const e of journalEntries || []) {
+      if (!e || e.bill !== id) continue;
+      for (const p of e.postings || []) if (p.account === AP_ACCT && p.dir === "cr") crAP += p.amount;
+    }
+    return crAP > 0;
+  }
+  function billsNeedingEntry(bills, journalEntries) {
+    const crByBill = /* @__PURE__ */ new Map();
+    for (const e of journalEntries || []) {
+      if (!e || e.bill == null) continue;
+      for (const p of e.postings || []) if (p.account === AP_ACCT && p.dir === "cr") crByBill.set(e.bill, (crByBill.get(e.bill) || 0) + p.amount);
+    }
+    const out = /* @__PURE__ */ new Set();
+    for (const b of bills || []) {
+      if (!b) continue;
+      if (!((crByBill.get(b.id) || 0) > 0)) out.add(b.id);
     }
     return out;
   }

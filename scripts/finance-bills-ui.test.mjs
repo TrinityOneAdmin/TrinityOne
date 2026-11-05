@@ -246,6 +246,57 @@ test('a paid bill badges PAID and no longer offers Mark paid (derived from the j
   assert.ok(!h.button('Mark paid'), 'a paid bill must not still offer Mark paid');
 });
 
+// ── ORPHAN bills: an OLD bill whose RECEIVE entry is absent from the ledger (no AP credit) can never reach
+// 'paid'. Today the Bills tab still offers Mark paid (and pressing it posts a payment against nothing, flashing
+// "Marked paid." — a control reporting work it did not do, CLAUDE.md). The guard hides Mark paid / Approve and
+// shows the truth. Point of use: delete `unrecorded` from the SCREEN and (a) fails. An orphan is a bill DOC with
+// NO journal entry tagged to it — the book itself (settings + accounts) is valid, so bookErrors stays empty.
+function orphanSeed({ due = '2000-01-01', approved = true } = {}) {
+  const b = FL.createBook({ baseCurrency: 'GBP', decimals: 2 });
+  FL.addAccount(b, { id: 'bank', code: '1000', name: 'Bank', type: 'asset' });
+  FL.addAccount(b, { id: 'utilities', code: '5000', name: 'Utilities', type: 'expense' });
+  FL.addAccount(b, { id: FL.AP_ACCT, code: FL.AP_ACCOUNT.code, name: FL.AP_ACCOUNT.name, type: FL.AP_ACCOUNT.type });
+  // NO billReceiveEntry is posted → the ledger holds NO AP credit tagged to this bill = an orphan (the device bug).
+  const docs = toItems(FL.bookToDocs(b));
+  const billDoc = { t: 'bill', id: 'bill:b1', number: 'INV-4471', supplier: 'British Gas', lines: [{ desc: 'Gas', account: 'utilities', fund: 'general', amount: 9500 }], received: '2026-05-01', due, receiveSeq: null };
+  if (approved) billDoc.approved = { by: 'cd'.repeat(32), ts: 1 };   // approved so TODAY's code WOULD enable Mark paid
+  docs.push(billDoc);
+  return docs;
+}
+
+test('ORPHAN: a bill with NO receive entry offers NO Mark paid and NO Approve — it shows the truth + Remove', () => {
+  const h = setup();
+  h.draw();
+  h.feedItems(orphanSeed({ due: '2000-01-01', approved: true }));
+  h.goTab('bills');
+  // the orphan row IS on the screen (so this is not vacuously passing because the row is absent)
+  assert.ok(/INV-4471/.test(texts(h.tree).join(' ')), 'the orphan bill row must be on the screen');
+  // the controls that lead nowhere are gone — these are the point-of-use assertions (delete `unrecorded` → fail)
+  assert.ok(!h.button('Mark paid'), 'an orphan bill must NOT offer Mark paid (a payment would post against nothing)');
+  assert.ok(!h.button('Approve'), 'an orphan bill must NOT offer Approve (it leads nowhere)');
+  // the truthful note is rendered in their place
+  const note = h.all().find(n => n.props && n.props['data-bill-unrecorded']);
+  assert.ok(note, 'the orphan row must carry the data-bill-unrecorded note (delete the guard from the screen and this fails)');
+  assert.ok(/Remove and re-record/.test(texts(h.tree).join(' ')), 'the note must tell the steward to Remove and re-record');
+  // the status is told truthfully, not as a normal badge
+  assert.equal(h.statusNode().props['data-bill-status'], 'no-entry', 'the orphan row must badge "no entry", not a settleable status');
+  // Remove is still offered, so the steward can clear it
+  assert.ok(h.button('Remove'), 'an orphan bill must still offer Remove');
+  // and this is an ORPHAN, not a GAPPED BOOK: no "books incomplete" banner (bookErrors is empty)
+  assert.ok(!/incomplete/.test(texts(h.tree).join(' ')), 'the orphan guard must not fire via a books-incomplete gate — bookErrors must be empty (this proves the row is an orphan, not a gapped book)');
+});
+
+test('REGRESSION: a properly recorded, approved, unpaid bill STILL offers Mark paid (the orphan guard must not over-fire)', () => {
+  const h = setup();
+  h.draw();
+  h.feedItems(seed({ due: '2000-01-01', approved: true }));   // a real, recorded bill (receive posted → has an AP credit)
+  h.goTab('bills');
+  const pay = h.button('Mark paid');
+  assert.ok(pay, 'a properly recorded, approved bill must STILL offer Mark paid — the orphan guard over-fired on a recorded bill');
+  assert.equal(pay.props.disabled, false, 'and that control must be ENABLED (the bill is approved)');
+  assert.ok(!h.all().find(n => n.props && n.props['data-bill-unrecorded']), 'a properly recorded bill must NOT show the orphan note');
+});
+
 test('the New-bill editor is a real dialog with a description, an EXPENSE category, an amount and a Record control', () => {
   const h = setup();
   const dialog = h.drawComp('BooksBillEdit', { book: editorBook(), contacts: [], onSave() {}, onClose() {} });

@@ -13,6 +13,7 @@ import { createBook, addAccount, post, check, fundBalances, trialBalance } from 
 import {
   AP_ACCT, AP_ACCOUNT, assertApAccount, billTotal, billReceiveEntry, billPaymentEntry,
   billOutstanding, billStatus, billStatuses, isBillApproved, billApprovers, openBills,
+  billRecorded, billsNeedingEntry,
 } from '../src/finance-bill.mjs';
 
 // A book with a bank asset, an expense account, a fund, and the reserved AP liability account.
@@ -190,4 +191,40 @@ test('billStatuses(batch) === billStatus(per-bill) for every bill over a seeded 
   assert.equal(map.get('bo'), 'overdue');
   assert.equal(map.get('bu'), 'unpaid');
   assert.equal(map.get('bx'), 'unpaid', 'a never-recorded bill (no AP credit) must not read as paid on a zero net');
+});
+
+// ── billRecorded / billsNeedingEntry: "was this bill's RECEIVE entry ever posted?" ───────────────────────────
+// An OLD bill whose receive entry is absent from the ledger has NO AP credit tagged to it. It can never reach
+// 'paid' (billStatus splits on exactly this), so the screen must not offer Mark paid / Approve. These expose the
+// same `recorded = crAP > 0` test the status uses.
+test('billRecorded is true for a recorded bill, false for an orphan (payment but no receive) and for no entries', () => {
+  const b = book();
+  post(b, billReceiveEntry(bill()));   // the RECEIVE entry credits AP → recorded
+  assert.equal(billRecorded(bill(), b.journal), true, 'a normally recorded bill (receive posted) is recorded');
+
+  // an ORPHAN: a payment DEBITS AP tagged to the bill, but there is NO receive CREDIT — crAP stays 0
+  const orphan = book();
+  post(orphan, billPaymentEntry(bill(), { date: '2026-05-20', approved: true }));   // dr AP / cr bank, tagged bill b1
+  assert.equal(billRecorded(bill(), orphan.journal), false, 'a bill with only a payment debit (no receive credit) is NOT recorded');
+
+  // a bill with no journal entries at all is not recorded
+  assert.equal(billRecorded(bill(), []), false, 'a bill with no entries at all is not recorded');
+});
+
+test('billsNeedingEntry over a MIXED book returns only the orphan id, and has(id) === !billRecorded for every bill', () => {
+  const b = book();
+  const good = bill({ id: 'good', lines: [{ desc: 'Gas', account: 'utilities', fund: 'general', amount: 9500 }] });
+  const orphan = bill({ id: 'orphan', lines: [{ desc: 'Gas', account: 'utilities', fund: 'general', amount: 4200 }] });
+  post(b, billReceiveEntry(good));                                           // good: receive posted → recorded
+  post(b, billPaymentEntry(orphan, { date: '2026-05-20', approved: true })); // orphan: only a payment debit, no receive
+  const bills = [good, orphan];
+  const need = billsNeedingEntry(bills, b.journal);
+  assert.ok(need instanceof Set, 'billsNeedingEntry returns a Set');
+  assert.equal(need.has('orphan'), true, 'the orphan (no AP credit) needs an entry');
+  assert.equal(need.has('good'), false, 'the properly recorded bill does not need an entry');
+  assert.equal(need.size, 1, 'only the orphan is in the Set');
+  // the consistency identity with the single-item fn, for every bill
+  for (const x of bills) {
+    assert.equal(need.has(x.id), !billRecorded(x, b.journal), 'billsNeedingEntry drifted from billRecorded for ' + x.id);
+  }
 });
