@@ -6476,6 +6476,14 @@ const WIDGET_CSP = "default-src 'none'; script-src 'self'; frame-ancestors 'none
 const PUBLIC_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/(?:calendar\.ics|e\/([A-Za-z0-9_-]{1,64})\.ics)$/;
 const WIDGET_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget\.js$/;
 const WIDGET_PREVIEW_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget-preview$/;
+// THE ONE FRAMABLE SURFACE on this relay — /public/<npub>/embed?mode=<mode>. It is the HTML a church pastes
+// (as an <iframe src>) into a site builder that sandboxes a pasted <script> (Google Sites, Wix, Squarespace),
+// where the widget.js snippet never runs. See the route in publicFeed() for why loosening framing HERE is safe.
+const WIDGET_EMBED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/embed$/;
+// The embed page's CSP is WIDGET_CSP byte-for-byte EXCEPT frame-ancestors, which is open (*) so a church's own
+// site may frame it cross-origin — the single place in this file that may be framed off-origin. Every other
+// directive stays as tight as the served script's own: no source of anything but the one same-origin widget.js.
+const WIDGET_EMBED_CSP = "default-src 'none'; script-src 'self'; frame-ancestors *; base-uri 'none'; form-action 'none'";
 const SERMON_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/sermons\.xml$/;
 const PLANS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/plans\.json$/;
 const DEVOS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/devotionals\.json$/;
@@ -6531,6 +6539,43 @@ function publicFeed(req, res, route) {
       'Cache-Control': 'no-store', 'X-Frame-Options': 'SAMEORIGIN', ...SEC_HEADERS,
     });
     res.end(req.method === 'HEAD' ? undefined : wpBody);
+    return;
+  }
+  // PUBLIC EMBED PAGE — /public/<npub>/embed?mode=<mode>. The ONE route on this relay that may be framed by
+  // any origin. A church pastes `<iframe src=".../embed?mode=list">` into its site; a site builder that
+  // sandboxes a pasted <script> (Google Sites, Wix, Squarespace) renders the iframe where the widget.js
+  // snippet silently fails to run. The page it serves is the IDENTICAL public, no-auth, no-cookie widget the
+  // widget-preview route above serves — nothing here is privileged, secret, or acts on a click, so framing it
+  // cross-origin has no clickjacking value and is the deliberate exception to the frame lock.
+  //
+  // CLAUDE.md rule 10 / SEC_HEADERS: this block builds its OWN header object and MUST NOT spread SEC_HEADERS,
+  // because SEC_HEADERS carries X-Frame-Options: SAMEORIGIN — the very header that would stop a cross-origin
+  // site from framing this page. So it sends NO X-Frame-Options and a CSP (WIDGET_EMBED_CSP) whose
+  // frame-ancestors is open while every other directive is as tight as the widget's own (default-src 'none';
+  // script-src 'self' for the one widget.js tag). It keeps the harmless half of SEC_HEADERS — nosniff and the
+  // no-referrer policy — by hand. The framing loosening does not reach any other route.
+  //
+  // Validation is byte-for-byte the widget-preview gate above: npub shape by the route regex, mode allow-list,
+  // church exists on this relay, and the per-mode share flag is on. Switching sharing off 404s it at once.
+  const we = WIDGET_EMBED_ROUTE.exec(route);
+  if (we) {
+    const wecp = toHexPub(we[1]);
+    if (!wecp || !CHURCH_PUBS.has(wecp)) return notFound();
+    const weshare = SHARE_BY.get(wecp);
+    const weModeRaw = req.url && new URL('http://x' + req.url).searchParams.get('mode');
+    const weMode = ['list', 'compact', 'month', 'sermons', 'sermons-sm', 'sermons-lg', 'plans', 'plans-sm', 'plans-lg', 'devos', 'devos-sm', 'devos-lg'].includes(weModeRaw) ? weModeRaw : 'list';
+    const weNeedsFlag = weMode.startsWith('sermons') ? 'sermons' : weMode.startsWith('plans') ? 'plans' : weMode.startsWith('devos') ? 'devos' : 'calendar';
+    if (!weshare || !weshare[weNeedsFlag]) return notFound();
+    const weHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;background:transparent}body{font-family:system-ui,-apple-system,sans-serif}</style></head><body><script src="/public/${we[1]}/widget.js?v=${BUILD.short}" data-mode="${weMode}"><\/script></body></html>`;
+    const weBody = Buffer.from(weHtml, 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8', 'Content-Length': weBody.length,
+      'Cache-Control': 'public, max-age=300',
+      'Content-Security-Policy': WIDGET_EMBED_CSP,
+      'Access-Control-Allow-Origin': '*',
+      'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+    });
+    res.end(req.method === 'HEAD' ? undefined : weBody);
     return;
   }
   // SERMON PODCAST FEED — /public/<npub>/sermons.xml. Same gate as the calendar: the church must exist
