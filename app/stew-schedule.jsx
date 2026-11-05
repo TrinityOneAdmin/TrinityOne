@@ -811,7 +811,14 @@ function DashRota({ onNewTeam }) {
   // Who may fetch the rota. Defaults to 'church' — the open setting every church had before this existed —
   // both here and in the relay, so a console running against an older relay shows the truth rather than a
   // promise that relay is not keeping.
-  const rotaVis = ((typeof window.useStewardRotaSettings === 'function') ? window.useStewardRotaSettings() : { visibility: 'church' }).visibility || 'church';
+  const rotaSettings = (typeof window.useStewardRotaSettings === 'function') ? window.useStewardRotaSettings() : { visibility: 'church' };
+  const rotaVis = (rotaSettings && rotaSettings.visibility) || 'church';
+  // AUTO-CONFIRM SERVING. When the church turns this on, Publish rosters the assigned people as confirmed
+  // and does NOT send each of them a "Can you serve?" request they must accept — see sendRequestsFor, which
+  // skips the ask when this is set. Default false = today's behaviour (send the requests). A steward cannot
+  // forge a member's accept, so this is "skip the ask + treat assigned as confirmed", not a faked acceptance;
+  // rota coverage already counts an assigned-but-not-asked slot as filled, so the slot still renders covered.
+  const autoConfirm = !!(rotaSettings && rotaSettings.autoConfirm);
   const [visMenu, setVisMenu] = useSch(false);
   // Escape must close this and focus must come back here. Without the ref, choosing an option dropped focus
   // to <body> and a keyboard steward had to Tab from the top of the console to get anywhere.
@@ -986,6 +993,14 @@ function DashRota({ onNewTeam }) {
   // so an ask that never landed is not there, and pressing Publish again asks exactly the people who were
   // missed and nobody else.
   const sendRequestsFor = async (sId, sDate, sTime, sName, assignMap) => {
+    // AUTO-CONFIRM: the church has turned off the accept step, so the assigned people are rostered as
+    // confirmed and we send NOTHING — no "Can you serve?" request, and no informational DM either (the
+    // simplest honest choice; anything sent here would have to NOT be accept-required, and the rota itself
+    // already carries the assignment). This is the single point of use for all three callers (publish,
+    // autoFillAhead, rotatePods, confirmSwap): gating here cannot be bypassed by one of them. Returning the
+    // same zero-shaped result those callers expect ({tried,failed,held,heldPubs}) makes every flash read as
+    // a clean publish with nothing outstanding. When OFF (default) the behaviour below is unchanged.
+    if (autoConfirm) return { tried: 0, failed: 0, held: 0, heldPubs: [] };
     const jobs = []; const heldPubs = new Set();
     for (const key in assignMap) {
       const a = assignMap[key]; if (!a || !a.pub) continue;
@@ -1154,7 +1169,9 @@ function DashRota({ onNewTeam }) {
     const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
     if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     if (asked.held) { setFlash(heldFlash('Published', asked.held, 'press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
-    setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
+    // Honest confirmation: with auto-confirm on nobody was asked (they are rostered as confirmed), so the
+    // flash must not claim they "have been asked" — that would describe a request this church chose not to send.
+    setFlash(autoConfirm ? 'Published — everyone assigned is rostered' : 'Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 
   // "Publish mine anyway": the steward chose to replace theirs, so from here the draft is based on it.
@@ -1281,7 +1298,7 @@ function DashRota({ onNewTeam }) {
                         'stewards' if it ever meets one, so the two surfaces cannot disagree. */}
                     {[['church', 'Everyone in the church', 'Any member can see who is serving'],
                       ['team', 'People on the serving teams', 'Only members on a team roster — they still see their own slots']].map(([v, t, s]) => (
-                      <button key={v} aria-pressed={v === rotaVis} onClick={() => { closeVisMenu(); if (v !== rotaVis) window.Steward.publishRotaSettings(v); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                      <button key={v} aria-pressed={v === rotaVis} onClick={() => { closeVisMenu(); if (v !== rotaVis) window.Steward.publishRotaSettings({ visibility: v, autoConfirm }); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}{v === rotaVis ? ' ✓' : ''}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
                       </button>
@@ -1291,6 +1308,20 @@ function DashRota({ onNewTeam }) {
                       downloaded the rota keeps that copy, and a relay running an older version will go on
                       serving it to everyone.
                     </div>
+                    {/* AUTO-CONFIRM SERVING. Off by default (today's behaviour: Publish DMs each assigned
+                        person a "Can you serve?" request they accept). On, Publish rosters them as confirmed
+                        and asks nobody. This is consent/availability only — it is NOT the safeguarding
+                        clearance/check-in gate, which is a separate capability-gated subsystem and is
+                        unaffected. Writes the same church-signed settings doc as the visibility choice. */}
+                    <button role="switch" aria-checked={autoConfirm} aria-label="Auto-confirm serving: roster assigned people without asking them to accept" onClick={() => { closeVisMenu(); window.Steward.publishRotaSettings({ visibility: rotaVis, autoConfirm: !autoConfirm }); }} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', marginTop: 4, borderRadius: 9, border: 'none', borderTop: '1px solid var(--line)', background: autoConfirm ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                      <div style={{ flexShrink: 0, width: 34, height: 20, borderRadius: 999, background: autoConfirm ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .15s', marginTop: 1 }}>
+                        <div style={{ position: 'absolute', top: 2, left: autoConfirm ? 16 : 2, width: 16, height: 16, borderRadius: 999, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.25)', transition: 'left .15s' }} />
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>Auto-confirm serving{autoConfirm ? ' ✓' : ''}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>Roster people without asking them to accept. When off, each assigned person gets a "Can you serve?" request to confirm.</div>
+                      </div>
+                    </button>
                   </div>
                 </React.Fragment>
               ) : null}

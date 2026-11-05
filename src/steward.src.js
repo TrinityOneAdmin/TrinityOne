@@ -148,7 +148,13 @@ const ROSTER_D = 'trinityone/roster:';      // per-team roles + people (church)
 const SERVICE_D = 'trinityone/service:';    // a dated gathering (church)
 const RUNSHEET_D = 'trinityone/runsheet:';  // a service's order-of-service + songs (church) — d=runsheet:<serviceId>
 const ROTA_D = 'trinityone/rota:';          // per-service assignments (church)
-const ROTA_SETTINGS_D = 'trinityone/rota-settings'; // single church-signed doc — who may FETCH rota:/runsheet:
+const ROTA_SETTINGS_D = 'trinityone/rota-settings'; // single church-signed doc — who may FETCH rota:/runsheet:, AND whether serving is auto-confirmed
+// Last-seen rota settings, kept current by subscribeRotaSettings. The settings doc is ONE replaceable
+// document rewritten whole on each write, so a partial write (change visibility OR autoConfirm) must carry
+// the OTHER field forward or it would be lost. publishRotaSettings merges its patch over this snapshot — the
+// same read-modify-write pattern setWebsiteShare uses over w.share. The console always has this subscription
+// live (app/steward-root.jsx: useStewardRotaSettings), so the snapshot is current whenever a write is made.
+let _rotaSettingsSnap = { visibility: 'church', autoConfirm: false };
 const EVENT_D = 'trinityone/event:';        // calendar event (church)
 const ROOM_D = 'trinityone/room:';          // a bookable room/space (church)
 const BOOKING_D = 'trinityone/booking:';    // a dated room booking (church)
@@ -13037,19 +13043,32 @@ window.Steward = {
   // a copy they already fetched — and the member app caches them. Narrowing the setting therefore protects
   // the rota from here on; it does not reach back onto phones. Anything the console says about this must be
   // written to that standard.
-  publishRotaSettings(visibility) {
+  // Accepts EITHER a patch object `{ visibility?, autoConfirm? }` or a bare visibility string (back-compat).
+  // Any field the caller omits is carried forward from the last-seen settings (_rotaSettingsSnap), because
+  // the doc is rewritten whole and a missing field would otherwise be dropped. `autoConfirm` on means the
+  // steward's rota rosters assigned people as confirmed WITHOUT sending a "Can you serve?" request they must
+  // accept (the ask is skipped in app/stew-schedule.jsx sendRequestsFor); default false = today's behaviour.
+  // The member side (src/fellowship.src.js subscribeRotaSettings) reads only `visibility` and ignores the
+  // new field, so an older member app is unaffected.
+  publishRotaSettings(patch) {
     if (!sk) return Promise.resolve(null);
-    const v = (visibility === 'team' || visibility === 'stewards') ? visibility : 'church';
-    const content = JSON.stringify({ visibility: v, updated: now() });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_SETTINGS_D], ['t', NET]], content })).then((ok) => (ok ? { visibility: v } : null));   // publish() returns FALSE when no relay accepted
+    const p = (typeof patch === 'string') ? { visibility: patch } : (patch || {});
+    const visIn = ('visibility' in p) ? p.visibility : _rotaSettingsSnap.visibility;
+    const v = (visIn === 'team' || visIn === 'stewards') ? visIn : 'church';
+    const autoConfirm = ('autoConfirm' in p) ? !!p.autoConfirm : !!_rotaSettingsSnap.autoConfirm;
+    const content = JSON.stringify({ visibility: v, autoConfirm, updated: now() });
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_SETTINGS_D], ['t', NET]], content })).then((ok) => (ok ? { visibility: v, autoConfirm } : null));   // publish() returns FALSE when no relay accepted
   },
   // _subAddr hands back every doc under the prefix, newest first. This one has no suffix, so there is exactly
   // one — and an EMPTY array is the answer for every church that has never touched the setting, which must
-  // read as 'church' (the open default) and not as "no answer".
+  // read as 'church' (the open default) and not as "no answer". `autoConfirm` defaults false the same way.
   subscribeRotaSettings(cb) {
-    return this._subAddr(ROTA_SETTINGS_D, (c) => ({ visibility: String((c && c.visibility) || '') }), (docs) => {
-      const v = (Array.isArray(docs) && docs.length) ? docs[0].visibility : '';
-      cb({ visibility: (v === 'team' || v === 'stewards') ? v : 'church' });
+    return this._subAddr(ROTA_SETTINGS_D, (c) => ({ visibility: String((c && c.visibility) || ''), autoConfirm: !!(c && c.autoConfirm) }), (docs) => {
+      const d = (Array.isArray(docs) && docs.length) ? docs[0] : null;
+      const v = d ? d.visibility : '';
+      const out = { visibility: (v === 'team' || v === 'stewards') ? v : 'church', autoConfirm: d ? !!d.autoConfirm : false };
+      _rotaSettingsSnap = out;   // keep the snapshot current so a later partial write preserves the other field
+      cb(out);
     });
   },
 

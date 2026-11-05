@@ -215,8 +215,11 @@ function board(requests) {
     return { slotVerdict, sendRequestsFor, requestsRef, heldFlash };`;
   const replies = [];
   const window = { Steward: { sendServingRequest: async (r) => { sent.push(r); return { id: 'new' }; } } };
-  const b = new Function('requests', 'replies', 'teams', 'teamMeta', 'rosterFor', 'window', 'useSchR', body)(
-    requests, replies, [{ id: 'kids', name: 'Kids' }], () => ({ name: 'Kids' }), () => ({ roles: [{ id: 'r1', name: 'Worker' }], people: [] }), window, (v) => ({ current: v }));
+  // `autoConfirm` false is today's behaviour: Publish sends the "Can you serve?" request. This whole file is
+  // about that ask path (locked rings, re-asks, "opening"), so it drives the feature OFF; the gate itself is
+  // proved in scripts/auto-confirm-serving-skips-the-ask.test.mjs.
+  const b = new Function('requests', 'replies', 'teams', 'teamMeta', 'rosterFor', 'window', 'useSchR', 'autoConfirm', body)(
+    requests, replies, [{ id: 'kids', name: 'Kids' }], () => ({ name: 'Kids' }), () => ({ roles: [{ id: 'r1', name: 'Worker' }], people: [] }), window, (v) => ({ current: v }), false);
   return { ...b, sent };
 }
 const ASSIGN = { 'kids::r1': { name: 'Me', pub: ME } };
