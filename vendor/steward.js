@@ -24967,7 +24967,14 @@ zoo`.split("\n");
         },
         oneose() {
           eosed = true;
-          genuine = true;
+          if (!isFin) genuine = true;
+          else {
+            try {
+              genuine = [...pool.listConnectionStatus().values()].some(Boolean);
+            } catch (e) {
+              genuine = true;
+            }
+          }
           emit();
         }
       });

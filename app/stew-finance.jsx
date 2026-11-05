@@ -2240,6 +2240,19 @@ function DashFinanceBook() {
   // namespace, so a delivery that changed only a SIDE doc (donor/contact/invoice/bill/budget/attachment — all
   // ignored by rebuildBook) still arrives; when the book docs are unchanged we skip the O(N) replay + check().
   const lastSigRef = React.useRef(null);
+  // FIRST-PAINT GATE for the full-page preloader (#5, finance-stale-writes 2026-11-05). The finance subscription
+  // effect re-runs on every [idv, conn] change — including a bare relay reconnect — and used to blank the whole
+  // page back to the "Loading…" preloader each time, which UNMOUNTS any open dialog and loses what the treasurer
+  // had typed. Only blank before the FIRST paint, or when the acting church/identity actually changed (a different
+  // book); a bare reconnect refreshes in place. `paintedRef` survives effect re-runs (per-mount ref); `idvSeenRef`
+  // tells a church switch (idv moved) from a reconnect (idv unchanged) so a switch still shows the preloader rather
+  // than the previous church's figures. A seed paints synchronously and sets paintedRef in the same tick (no flicker).
+  const paintedRef = React.useRef(false);
+  const idvSeenRef = React.useRef(_bIdv);
+  // Should a fresh subscription blank the page to the full preloader? Factored out so it is lifted + unit-tested at
+  // the point of use (console-finance-stale-writes.test.mjs); deleting the gate (always-true) reverts the dialog-
+  // killing reconnect flap and the test goes red.
+  const _shouldPreload = (painted, prevIdv, idv) => { return !painted || prevIdv !== idv; };
   // A journal entry is the church's money record — it must not be published fire-and-forget. This wasn't
   // awaited and the promise rejection escaped the try, so a write the relay refused (its seq rule rejects
   // whenever this console's view of the journal was incomplete) left the entry on screen and GONE on reload,
@@ -2283,6 +2296,23 @@ function DashFinanceBook() {
       return false;
     }
   };
+  // SHARED STALE-SEED WRITE GATE (#2, finance-stale-writes 2026-11-05). pubEntry (above) already holds every JOURNAL
+  // write until a genuine post-EOSE delivery has arrived (bookRef.genuine) so the cache-first SEED cannot be used to
+  // overwrite the authoritative record. The REPLACEABLE side docs (bill / donor / contact / account / fund / budget /
+  // template / reconcile / book-settings) had no such hold: each is re-published WHOLESALE by id, so approving a bill
+  // another steward VOIDED re-published the stale seed's {voided:false} doc and resurrected it on screen while the
+  // void's append-only journal reversal stayed — the doc then disagreeing with the ledger (a split-brain that a later
+  // Mark-paid turns into a double payment). Same gate, same per-mount `bookRef.genuine` ref (NOT a new hook — see the
+  // note on it in the effect below), same 'steward-write-blocked' UX. Call it AFTER each handler's `!useRelay`
+  // short-circuit: in localStorage mode the subscription never runs, so bookRef.genuine is always false and the gate
+  // must not apply there.
+  const guardWrite = (what) => {
+    if (!bookRef.genuine) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: 'Your books are still loading on this device — wait a moment, then try again.' } })); } catch (e2) {}
+      return false;
+    }
+    return true;
+  };
   // relay-backed persistence: subscribe to the church's encrypted finance docs → rebuild the book; seed the
   // default chart on first use. Journal entries publish through the relay's single-writer seq guard.
   React.useEffect(() => {
@@ -2290,7 +2320,12 @@ function DashFinanceBook() {
     let seeded = false;
     lastSigRef.current = null;   // a fresh subscription (mount / church switch / reconnect) always rebuilds on its first delivery
     bookRef.genuine = false;     // …and holds writes until THIS subscription has had a genuine post-EOSE delivery (not just the seed)
-    setBookLoading(true);        // a fresh subscription (mount / church switch) re-shows the preloader until its first delivery; a synchronous seed paint clears it in the same tick (no flicker)
+    // #5: only blank to the full-page preloader before the FIRST paint, or on a real church/identity switch (a
+    // different book). A bare relay reconnect (idv unchanged, already painted) refreshes in place so an open dialog
+    // + typed input survive. A synchronous seed paint clears it in the same tick (no flicker).
+    const _blankToPreloader = _shouldPreload(paintedRef.current, idvSeenRef.current, _bIdv);
+    idvSeenRef.current = _bIdv;
+    if (_blankToPreloader) { paintedRef.current = false; setBookLoading(true); }
     const unsub = S.encSubscribe('finance/', (items, genuine) => {
       // The seed feeds the DISPLAY, not a write. The shipped encSubscribe passes an EXPLICIT boolean — false for
       // the cache-first seed paint and the pre-EOSE backfill, true once the relay has SETTLED (oneose) — so only
@@ -2298,6 +2333,7 @@ function DashFinanceBook() {
       // any non-seed caller or test ever delivers), so writes may derive their seq from it.
       if (genuine !== false) bookRef.genuine = true;
       setBookLoading(false);   // first delivery (seed or relay) has landed — reveal the book
+      paintedRef.current = true;   // #5: once painted, a later reconnect must NOT drop back to the full-page preloader (it unmounts open dialogs)
       const docs = items.map(finItemToDoc).filter(Boolean);
       // Receipt blobs ride the same subscription. Pull their data: URIs into the side map BEFORE rebuildBook,
       // which deliberately ignores t:'attachment' (a blob is not part of the double-entry book).
@@ -2650,6 +2686,7 @@ function DashFinanceBook() {
     if (existing) b.accounts.set(id, { id, ...doc });
     else F.addAccount(b, { id, ...doc });
     if (!useRelay) { booksSave(b); bump(); return true; }
+    if (!guardWrite('account')) return false;   // #2: don't re-publish the account doc from a stale cache-first seed
     const ok = await S.encPublish('finance/account:' + id, doc);
     bump();
     return !(ok === false || ok == null);
@@ -2664,6 +2701,7 @@ function DashFinanceBook() {
     if (b.funds.has(id)) b.funds.set(id, { id, name: name || id, kind });
     else F.addFund(b, { id, name, kind });
     if (!useRelay) { booksSave(b); bump(); return true; }
+    if (!guardWrite('fund')) return false;   // #2: don't re-publish the fund doc from a stale cache-first seed
     const ok = await S.encPublish('finance/fund:' + id, { name: name || id, kind });
     bump();
     return !(ok === false || ok == null);
@@ -2677,6 +2715,7 @@ function DashFinanceBook() {
     const b = bookRef.current;
     b.multiCurrency = !!on;
     if (!useRelay) { booksSave(b); bump(); return true; }
+    if (!guardWrite('currency setting')) return false;   // #2: the settings doc is replaceable (whole-doc overwrite) — see saveBookSettings
     const body = { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart, ...(b.multiCurrency ? { multiCurrency: true } : {}) };
     const ok = await S.encPublish('finance/settings', body);
     bump();
@@ -2700,6 +2739,7 @@ function DashFinanceBook() {
     if (p.decimals != null) b.decimals = p.decimals;
     if (p.fiscalYearStart != null) b.fiscalYearStart = p.fiscalYearStart;
     if (!useRelay) { booksSave(b); bump(); return true; }
+    if (!guardWrite('book settings')) return false;   // #2: the settings doc is replaceable — a stale-seed re-publish clobbers a concurrent change
     const body = { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart, ...(b.multiCurrency ? { multiCurrency: true } : {}) };
     const ok = await S.encPublish('finance/settings', body);
     bump();
@@ -2771,6 +2811,7 @@ function DashFinanceBook() {
     const theId = id || opaqueId();
     const body = { name: name || '', account, fund: fund || 'general', dir, amount, dayOfMonth };
     if (!useRelay) { setTemplates(ts => [...ts.filter(t => t.id !== theId), { t: 'template', id: theId, ...body }]); bump(); return true; }
+    if (!guardWrite('recurring payment')) return false;   // #2: don't re-publish the template doc from a stale cache-first seed
     const ok = await S.encPublish('finance/template:' + theId, body);
     bump();
     return !(ok === false || ok == null);
@@ -2790,6 +2831,7 @@ function DashFinanceBook() {
     const theId = id || opaqueId();
     const body = { label: label || '', lines: lines || [], reconciled: reconciled || [], closing: closing == null ? null : closing, asOf: asOf || '' };
     if (!useRelay) { setReconciles(rs => [...rs.filter(r => r.id !== theId), { t: 'reconcile', id: theId, ...body }]); bump(); return true; }
+    if (!guardWrite('reconciliation')) return false;   // #2: don't re-publish the reconcile doc from a stale cache-first seed
     const ok = await S.encPublish('finance/reconcile:' + theId, body);
     bump();
     return !(ok === false || ok == null);
@@ -2813,6 +2855,7 @@ function DashFinanceBook() {
     const g = (k) => merged[k] || '';
     const body = { name: g('name'), eligible: merged.eligible === true, address: g('address'), postcode: g('postcode'), giftAidDeclaredAt: g('giftAidDeclaredAt'), title: g('title'), firstName: g('firstName'), lastName: g('lastName'), house: g('house'), certType: g('certType'), certDeclaredAt: g('certDeclaredAt'), natureOfPerson: g('natureOfPerson'), idType: g('idType'), idNumber: g('idNumber'), taxRef: g('taxRef'), contactNumber: g('contactNumber'), email: g('email'), tradingName: g('tradingName') };
     if (!useRelay) { setDonors(ds => [...ds.filter(d => d.id !== theId), { t: 'donor', id: theId, ...body }]); bump(); return true; }
+    if (!guardWrite('donor')) return false;   // #2: a stale-seed re-publish (merged over the SEED's `prev`) clobbers a concurrent donor edit
     const ok = await S.encPublish('finance/donor:' + theId, body);
     bump();
     return !(ok === false || ok == null);
@@ -2823,6 +2866,7 @@ function DashFinanceBook() {
     const theId = id || opaqueId();
     const body = { name: name || '', email: email || '', address: address || '' };
     if (!useRelay) { setContacts(cs => [...cs.filter(c => c.id !== theId), { t: 'contact', id: theId, ...body }]); bump(); return true; }
+    if (!guardWrite('contact')) return false;   // #2: don't re-publish the contact doc from a stale cache-first seed
     const ok = await S.encPublish('finance/contact:' + theId, body);
     bump();
     return !(ok === false || ok == null);
@@ -2976,6 +3020,7 @@ function DashFinanceBook() {
       // would never count. A church with one finance steward simply cannot reach approved in dual mode (intended).
       if (me === (bill.by || '').toLowerCase()) { setBillFlash('You recorded this bill, so another finance steward must approve it — that is what dual control means.'); return false; }
       if (!useRelay) { setBillApprovals(xs => [...xs.filter(x => x.id !== bill.id + ':' + me), { t: 'billapproval', id: bill.id + ':' + me, bill: bill.id, approver: me, ts: Math.floor(Date.now() / 1000) }]); bump(); return true; }
+      if (!guardWrite('bill approval')) return false;   // #2: hold until a genuine book — approving a bill read from a stale seed
       const ok = await S.encPublish('finance/billapproval:' + bill.id + ':' + me, { bill: bill.id, ts: Math.floor(Date.now() / 1000) });
       bump();
       return !(ok === false || ok == null);
@@ -2984,6 +3029,7 @@ function DashFinanceBook() {
     // doc is overwritten wholesale, so dropping it here would wipe who recorded the bill.
     const body = { number: bill.number || '', supplier: bill.supplier || '', lines: bill.lines || [], received: bill.received || '', due: bill.due || '', by: bill.by || '', receiveSeq: bill.receiveSeq ?? null, approved: { by: me, ts: Math.floor(Date.now() / 1000) }, voided: !!bill.voided };
     if (!useRelay) { setBills(xs => xs.map(x => x.id === bill.id ? { ...x, approved: body.approved } : x)); bump(); return true; }
+    if (!guardWrite('bill approval')) return false;   // #2: a stale-seed re-publish resurrects a bill another steward VOIDED (voided:!!bill.voided from the seed)
     const ok = await S.encPublish('finance/bill:' + bill.id, body);
     bump();
     return !(ok === false || ok == null);
@@ -3077,6 +3123,7 @@ function DashFinanceBook() {
     // or `approved` here would rewrite who recorded/approved it).
     const body = { number: bill.number || '', supplier: bill.supplier || '', lines: bill.lines || [], received: bill.received || '', due: bill.due || '', by: bill.by || '', receiveSeq: bill.receiveSeq ?? null, approved: bill.approved || null, voided: true };
     if (!useRelay) { setBills(xs => xs.map(x => x.id === bill.id ? { ...x, voided: true } : x)); bump(); return true; }
+    if (!guardWrite('bill removal')) return false;   // #2: covers the no-live-entries edge (empty reversal loop above skips the gated pubEntry) — don't void from a stale seed
     const ok = await S.encPublish('finance/bill:' + bill.id, body);
     if (ok === false || ok == null) { setBillFlash('That didn’t remove — your church’s relay refused or did not answer.'); bump(); return false; }
     setBills(xs => xs.map(x => x.id === bill.id ? { ...x, voided: true } : x));   // optimistic; the round-trip confirms it
@@ -3093,6 +3140,7 @@ function DashFinanceBook() {
     const theId = id || opaqueId();
     const body = { year: year || '', lines: (Array.isArray(lines) ? lines : []).map(l => ({ account: l.account, fund: l.fund || '', amount: Math.round(l.amount || 0) })) };
     if (!useRelay) { setBudgets(bs => [...bs.filter(b => b.id !== theId), { t: 'budget', id: theId, ...body }]); bump(); return true; }
+    if (!guardWrite('budget')) return false;   // #2: don't re-publish the budget doc from a stale cache-first seed
     const ok = await S.encPublish('finance/budget:' + theId, body);
     bump();
     return !(ok === false || ok == null);
