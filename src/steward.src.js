@@ -13867,12 +13867,17 @@ window.Steward = {
       // is down. With a relay down this list is never fresh, so Block and Remove keep the floor (round 3c) and drop nobody.
       { everyRelay: true });
     let stopRead = openRead();
-    // …AND READ AGAIN WHEN THE CHURCH'S RELAY SET CHANGES (round 3f, P4): until the new set has answered, the list is not fresh
-    const onRelays = () => { try { stopRead(); } catch (e) {} stopRead = openRead(); };
-    try { if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('steward-relays', onRelays); } catch (e) {}
-    // the church's own signed re-seat map (same doc the Reconnect button writes). Its own small subscription:
-    // the roster sub above is keyed on ['p',<church>], which a re-seat doc does not carry.
-    const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    // the church's own signed re-seat map (same doc the Reconnect button writes) AND each member's sealed name for
+    // this church. Its own small subscription: the roster sub above is keyed on ['p',<church>], which neither a
+    // re-seat doc nor a name doc carries.
+    // IT RE-OPENS ON A RELAY-SET CHANGE, for the same reason openRead does (below): a member's sealed name may live
+    // ONLY on a relay this console learns about AFTER this list opened — a second console adopting the church's own
+    // box from its signed relay-net document on unlock (adoptNetDocAddresses / steward-relays). Without the re-open
+    // the name doc on that newly-adopted relay was never read and the member showed as "Name not set yet"
+    // (DOMAIN.md "same member Anonymous on one console, named on another", 2026-10-13). RULE 10 / RELAY-ADMISSION
+    // SAFE: relays() is the same proof-gated publish set it always was; this widens nothing and changes no admission
+    // decision — it only re-reads the church's OWN relays once the gate has admitted one more of them.
+    const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         // a member's own sealed name for this church — authorised by AUTHORSHIP (it is their own name), so the
@@ -13899,6 +13904,13 @@ window.Steward = {
       },
       oneose() {},
     });
+    let reseatSub = openReseat();
+    // …AND READ AGAIN WHEN THE CHURCH'S RELAY SET CHANGES (round 3f, P4): the member-doc read (openRead) and the
+    // sealed-name / re-seat read (openReseat) BOTH re-open, so a name that only landed on a relay adopted after this
+    // list opened is read instead of the member showing as "Name not set yet". Until the new set has answered the
+    // list is not fresh.
+    const onRelays = () => { try { stopRead(); } catch (e) {} stopRead = openRead(); try { reseatSub.close(); } catch (e) {} reseatSub = openReseat(); };
+    try { if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('steward-relays', onRelays); } catch (e) {}
     return () => { tok.live = false; try { stopRead(); } catch {} try { window.removeEventListener('steward-relays', onRelays); } catch {} _memberEmitters.delete(emit); _membersReask.delete(reask); try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
   },
 

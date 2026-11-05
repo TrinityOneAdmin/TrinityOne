@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 import { find } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -46,12 +46,17 @@ function miniReact() {
 const texts = (n, out = []) => { if (n == null || n === false) return out; if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return out; } if (Array.isArray(n)) { n.forEach(c => texts(c, out)); return out; } (n.kids || []).forEach(c => texts(c, out)); return out; };
 const flat = (n) => texts(n).join(' ').replace(/\s+/g, ' ').trim();
 
-const SRC = ['function schRsvpGroups(', 'function schAttendanceOrder(', 'function SchAttendance(', 'function SchEventDetail(']
-  .map(a => fnBody(SCH, a, a)).join('\n');
+// The shared label helper the schedule components now route an un-named member through (memPending / isNamed /
+// PENDING_UNNAMED). Lifted from the real source so the components exercise the shipped logic, not a stub.
+const SRC = [
+  stmt(SCH, "const PENDING_UNNAMED = 'Name not set yet';", 'PENDING_UNNAMED'),
+  fnBody(SCH, 'function isNamed(m) {'), fnBody(SCH, 'function memPending(m) {'),
+  'function schRsvpGroups(', 'function schAttendanceOrder(', 'function SchAttendance(', 'function SchEventDetail(',
+].map(a => (a.startsWith('function ') ? fnBody(SCH, a, a) : a)).join('\n');
 
 const pk = (n) => String(n).padStart(2, '0').repeat(32);
 const EVENT = { id: 'ev-1', title: 'Harvest supper', date: '2026-11-01' };
-// 12 going + 1 going with no member record (shown as Anonymous) = 13 going.
+// 12 going + 1 going with no member record (shown as "Name not set yet") = 13 going.
 function fixture({ going = 12, maybe = 2, no = 1, anon = true } = {}) {
   const members = []; const map = {};
   let n = 1;
@@ -92,7 +97,7 @@ test('DETAIL: no attendee name is printed inline, only the three counts', async 
   const m = await mount(fixture());
   const t = m.draw(); const all = flat(t);
   assert.deepEqual(m.chips(t).map(c => flat(c)), ['13 going', '2 maybe', '1 can’t make it']);
-  assert.doesNotMatch(all, /Going\d|Maybe\d|Nope\d|Anonymous/);
+  assert.doesNotMatch(all, /Going\d|Maybe\d|Nope\d|Name not set yet/);
   assert.equal(m.dialog(t).length, 0, 'the names dialog must be closed until a chip is pressed');
 });
 
@@ -105,18 +110,18 @@ for (const [word, prefix, expected] of [['going', 'Going', 13], ['maybe', 'Maybe
     const items = find(m.open(t), n => n.type === 'li').map(li => flat(li));
     assert.equal(items.length, expected);
     for (const it of items) {
-      assert.ok(it.startsWith(prefix) || (prefix === 'Going' && it === 'Anonymous'), 'foreign name in the ' + word + ' list: ' + it);
+      assert.ok(it.startsWith(prefix) || (prefix === 'Going' && it === 'Name not set yet'), 'foreign name in the ' + word + ' list: ' + it);
     }
-    assert.equal(items.includes('Anonymous'), prefix === 'Going');
+    assert.equal(items.includes('Name not set yet'), prefix === 'Going');
   });
 }
 
-test('ATTENDANCE: alphabetical with Anonymous last', async () => {
+test('ATTENDANCE: alphabetical with the un-named person last', async () => {
   const fx = { members: [{ pubkey: pk(1), name: 'Zed' }, { pubkey: pk(2), name: 'Alice' }, { pubkey: pk(4), name: 'bob' }],
     rsvps: { 'ev-1': { [pk(1)]: 'going', [pk(2)]: 'going', [pk(3)]: 'going', [pk(4)]: 'going' } } };   // pk(3): no record
   const m = await mount(fx);
   chipFor(m, m.draw(), 'going').props.onClick();
-  assert.deepEqual(find(m.open(m.draw()), n => n.type === 'li').map(li => flat(li)), ['Alice', 'bob', 'Zed', 'Anonymous']);
+  assert.deepEqual(find(m.open(m.draw()), n => n.type === 'li').map(li => flat(li)), ['Alice', 'bob', 'Zed', 'Name not set yet']);
 });
 
 test('ATTENDANCE: Close returns to the detail', async () => {

@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 import { loadScreen, miniReact as hMiniReact, texts as hTexts, find as hFind, reads } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -111,8 +111,13 @@ const find = hFind;
 const texts = (n, out = []) => { if (n == null || n === false) return out; if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return out; } if (Array.isArray(n)) { n.forEach(c => texts(c, out)); return out; } (n.kids || []).forEach(c => texts(c, out)); return out; };   // children only: the harness texts() also yields string props like className
 
 // Lift just the composer and its three helpers out of the 3,000-line schedule file.
-const SLICE = ['function schEventAudience(', 'async function schSendEventMessage(', 'function schSendSummary(', 'function schEventPostGroup(', 'function SchEventMessage(']
-  .map(a => fnBody(SCH, a, a)).join('\n');
+// The shared label helper SchEventMessage's nameFor (and, appended below, SchEventDetail/schAttendanceOrder) now
+// routes an un-named member through. Lifted from the real source so the composer exercises shipped logic.
+const SLICE = [
+  stmt(SCH, "const PENDING_UNNAMED = 'Name not set yet';", 'PENDING_UNNAMED'),
+  fnBody(SCH, 'function isNamed(m) {'), fnBody(SCH, 'function memPending(m) {'),
+  'function schEventAudience(', 'async function schSendEventMessage(', 'function schSendSummary(', 'function schEventPostGroup(', 'function SchEventMessage(',
+].map(a => (a.startsWith('function ') || a.startsWith('async function ') ? fnBody(SCH, a, a) : a)).join('\n');
 
 const P = (c) => c.repeat(64);
 const GOING1 = P('1'), GOING2 = P('2'), MAYBE = P('3'), NO = P('4'), NORSVP = P('5'), BLOCKED = P('6');
