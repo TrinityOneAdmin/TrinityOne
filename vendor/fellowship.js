@@ -13358,7 +13358,7 @@
       return window.Fellowship._subChurchAddr(churchNpub, "trinityone/roster:", (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [] }), cb);
     },
     subscribeChurchEvents(churchNpub, cb) {
-      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null }), cb);
+      return window.Fellowship._subChurchAddr(churchNpub, "trinityone/event:", (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", recur: c.recur || "", day: c.day, nth: c.nth || null }), cb);
     },
     // ── Meal trains / Care module (member side) ──
     // Read the church's Care config so the member app knows whether to show the Care card (and, for
@@ -15331,7 +15331,7 @@
           }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", groupId: c.groupId || "", byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust);
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || "", imgPos: c.imgPos && typeof c.imgPos === "object" ? c.imgPos : null, imgZoom: typeof c.imgZoom === "number" && c.imgZoom > 1 ? c.imgZoom : 1, groupId: c.groupId || "", byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust);
             emit();
           } catch {
           }
@@ -15380,7 +15380,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !groupId) return null;
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6);
-      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId });
+      const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: ev.imgPos && typeof ev.imgPos === "object" ? { x: +ev.imgPos.x || 0, y: +ev.imgPos.y || 0 } : null, imgZoom: typeof ev.imgZoom === "number" && ev.imgZoom > 1 ? ev.imgZoom : 1, groupId });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/event:" + id], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);

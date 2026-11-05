@@ -84,6 +84,17 @@ const DAY_OK = (day) => Number.isInteger(day) && day >= 0 && day <= 6;
 // decision 2026-10-01). -1 is also RFC 5545's own spelling, so rrule() below writes it straight through.
 const NTH_OK = (n) => Number.isInteger(n) && ((n >= 1 && n <= 5) || n === -1);
 
+// THE COVER IMAGE ON THE PUBLIC PATH (calendar-pilot-2026-11-05, item 3). The console mirrors a SIZE-CAPPED
+// variant into the `pubevent:` copy (src/steward.src.js _webImg, ~60 KB), never the full in-app image; this is
+// the relay-side backstop that re-checks the cap and shape so a hand-edited or mislabeled copy cannot push a
+// megabyte through. imgPos ({x,y} percents) and imgZoom (scale >= 1) are the focal point + zoom a steward set,
+// carried so any public PAGE can frame the image the way the church did (app/recur.jsx eventImgStyle).
+//
+// IT RIDES IN THE FIELD MAP, NOT IN THE .ics. buildCalendar() below writes only SUMMARY/LOCATION/DESCRIPTION/
+// DTSTART/RRULE — it never serialises these, by construction — so a data: URI never bloats a calendar
+// subscription (the decision for item 3: honour the image on the public PAGE, keep the .ics feed lean). A
+// consumer that wants the image reads it from the per-church map the relay already holds, not from the feed.
+const PUB_IMG_MAX = 100000;   // ~100 KB defensive backstop; above the console's own ~60 KB cap, still refuses a big blob
 // Read one event down to the fields this file may carry. Returns null for anything that cannot be placed on
 // a calendar at all (no id, no valid date), which the builder then skips rather than emitting a broken VEVENT.
 export function publicEventFields(ev) {
@@ -95,12 +106,19 @@ export function publicEventFields(ev) {
   const recur = RECUR.has(ev.recur) ? ev.recur : '';
   const day = (recur && DAY_OK(ev.day)) ? ev.day : null;
   const nth = (recur === 'monthly' && NTH_OK(ev.nth)) ? ev.nth : null;
+  const image = (typeof ev.image === 'string' && ev.image.length <= PUB_IMG_MAX && /^data:image\//.test(ev.image)) ? ev.image : '';
+  const pn = (v) => (typeof v === 'number' && isFinite(v)) ? Math.max(0, Math.min(100, v)) : null;
+  const px = ev.imgPos && typeof ev.imgPos === 'object' ? pn(+ev.imgPos.x) : null;
+  const py = ev.imgPos && typeof ev.imgPos === 'object' ? pn(+ev.imgPos.y) : null;
+  const imgPos = (px === null || py === null || (px === 50 && py === 50)) ? null : { x: px, y: py };
+  const imgZoom = (typeof ev.imgZoom === 'number' && ev.imgZoom > 1) ? Math.min(6, ev.imgZoom) : 1;
   return {
     id, date, time,
     title: String(ev.title || '').slice(0, 200),
     where: String(ev.where || '').slice(0, 200),
     blurb: String(ev.blurb || '').slice(0, 2000),
     recur, day, nth,
+    image, imgPos, imgZoom,
   };
 }
 

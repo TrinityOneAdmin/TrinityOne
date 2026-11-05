@@ -501,7 +501,7 @@ function EventDetail({ event, open, onClose, ctx }) {
     <BottomSheet open={open} onClose={onClose} z={70}>
       {event ? (
         <div style={{ paddingBottom: 8 }}>
-          {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 170, objectFit: 'cover', borderRadius: 16, display: 'block', marginBottom: 14 }} /> : null}
+          {e.image ? <div style={{ width: '100%', height: 170, borderRadius: 16, overflow: 'hidden', marginBottom: 14 }}><img src={e.image} alt="" style={{ width: '100%', height: '100%', display: 'block', ...(window.eventImgStyle ? window.eventImgStyle(e.imgPos, e.imgZoom) : { objectFit: 'cover' }) }} /></div> : null}
           <div style={{ display: 'flex', gap: 13 }}>
             <ServDateBlock iso={e.date} accent={e.accent || 'var(--clay)'} />
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1873,7 +1873,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               ) : null}
               {events.slice().filter(e => !(e && e._locked)).sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => (
                 <div key={(e._networkPub || '') + e.id} style={{ borderRadius: 20, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
-                  {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 150, objectFit: 'cover', display: 'block' }} /> : null}
+                  {e.image ? <div style={{ width: '100%', height: 150, overflow: 'hidden' }}><img src={e.image} alt="" style={{ width: '100%', height: '100%', display: 'block', ...(window.eventImgStyle ? window.eventImgStyle(e.imgPos, e.imgZoom) : { objectFit: 'cover' }) }} /></div> : null}
                   <div onClick={() => ctx.openEvent && ctx.openEvent(e)} style={{ display: 'flex', gap: 13, padding: 16, cursor: 'pointer' }}>
                     <ServDateBlock iso={e.date} accent={e._network ? 'var(--clay)' : (e.accent || 'var(--clay)')} />
                     <div style={{ flex: 1, minWidth: 0 }}>

@@ -19747,6 +19747,24 @@ zoo`.split("\n");
     if (same(next.optOut, w.share.optOut) && same(next.optIn, w.share.optIn || [])) return Promise.resolve(true);
     return st.setWebsiteShare(next);
   }
+  function _evImgPos(p) {
+    if (!p || typeof p !== "object") return null;
+    const n = (v) => typeof v === "number" && isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
+    const x = n(p.x), y = n(p.y);
+    if (x === null || y === null || x === 50 && y === 50) return null;
+    return { x, y };
+  }
+  function _evImgZoom(z) {
+    return typeof z === "number" && isFinite(z) && z > 1 ? Math.min(6, z) : 1;
+  }
+  var WEB_IMG_MAX = 6e4;
+  function _webImg(ev) {
+    const pub2 = String(ev && ev.imgPub || "");
+    if (pub2 && pub2.length <= WEB_IMG_MAX && /^data:image\//.test(pub2)) return pub2;
+    const full = String(ev && ev.image || "");
+    if (full && full.length <= WEB_IMG_MAX && /^data:image\//.test(full)) return full;
+    return "";
+  }
   function _webCopyBody(ev) {
     const recur = ev.recur === "weekly" || ev.recur === "fortnightly" || ev.recur === "monthly" ? ev.recur : "";
     return JSON.stringify({
@@ -19757,7 +19775,10 @@ zoo`.split("\n");
       blurb: String(ev.blurb || "").slice(0, 2e3),
       recur,
       day: recur && typeof ev.day === "number" ? ev.day : null,
-      nth: recur === "monthly" && typeof ev.nth === "number" ? ev.nth : null
+      nth: recur === "monthly" && typeof ev.nth === "number" ? ev.nth : null,
+      image: _webImg(ev),
+      imgPos: _evImgPos(ev.imgPos),
+      imgZoom: _evImgZoom(ev.imgZoom)
     });
   }
   function _webGroupKey(cp) {
@@ -26181,7 +26202,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null };
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", imgPub: String(ev.imgPub || ""), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
@@ -26194,7 +26215,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", EVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeEvents(onEvents) {
-      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "" }), onEvents);
+      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom) }), onEvents);
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -26346,7 +26367,7 @@ zoo`.split("\n");
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", _by: e.pubkey, ts: e.created_at });
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", imgPub: c.imgPub || "", imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), _by: e.pubkey, ts: e.created_at });
             emit();
           } catch {
           }

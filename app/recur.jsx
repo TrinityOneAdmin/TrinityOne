@@ -73,6 +73,26 @@
 
   window.expandEvents = expandEvents;
   window.RECUR_DOW = DOW;
+
+  // EVENT COVER FOCAL POINT + ZOOM — the pure render math, shared by every surface an event image shows on
+  // (steward console, member app, and — through its own copy — the public widget). An event doc may carry an
+  // `imgPos` ({x,y} as PERCENTS 0-100) and an `imgZoom` (a scale >= 1); a steward sets them with the same
+  // drag-to-reposition / slide-to-zoom gesture the church banner uses. BACK-COMPAT IS THE DEFAULT: no imgPos
+  // and no imgZoom (every event created before this feature) resolves to centre + scale 1, which is byte-for-
+  // byte the `objectFit:'cover'` look every event image had before — objectPosition defaults to '50% 50%' in
+  // CSS, so the returned style with no transform is identical to a bare `objectFit:'cover'`. Lifted and run by
+  // scripts/an-event-image-honours-its-focal-point.test.mjs (CLAUDE.md rule 1/3: no text-matching this file).
+  function eventImgStyle(pos, zoom) {
+    const num = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const x = clamp(num(pos && pos.x, 50), 0, 100);
+    const y = clamp(num(pos && pos.y, 50), 0, 100);
+    const z = clamp(num(zoom, 1), 1, 6);
+    const style = { objectFit: 'cover', objectPosition: x + '% ' + y + '%' };
+    if (z !== 1) { style.transform = 'scale(' + z + ')'; style.transformOrigin = x + '% ' + y + '%'; }
+    return style;
+  }
+  window.eventImgStyle = eventImgStyle;
   // THE canonical "what calendar day is it here?" for both shells (this file loads in each).
   // `new Date().toISOString().slice(0,10)` is the UTC day and is WRONG for a calendar date: east of Greenwich
   // it is yesterday for part of every evening, west of it, tomorrow. That shipped real bugs — a care need

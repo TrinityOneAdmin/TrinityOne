@@ -6421,8 +6421,37 @@ function _webOneList(st, w, next) {
   if (same(next.optOut, w.share.optOut) && same(next.optIn, w.share.optIn || [])) return Promise.resolve(true);
   return st.setWebsiteShare(next);
 }
+// EVENT COVER FOCAL POINT / ZOOM, normalised once so the sealed doc, the public copy and every reader agree.
+// imgPos is {x,y} as PERCENTS (0-100) or null = centre; imgZoom is a scale 1..6 (1 = no zoom). A missing value
+// is the back-compat default (centre, scale 1), which app/recur.jsx eventImgStyle renders as a plain
+// objectFit:'cover' — byte-for-byte the look every event image had before this feature. CENTRE IS STORED AS
+// null (not {x:50,y:50}) so an image a steward never repositioned keeps producing the same bytes it always did.
+function _evImgPos(p) {
+  if (!p || typeof p !== 'object') return null;
+  const n = (v) => (typeof v === 'number' && isFinite(v)) ? Math.max(0, Math.min(100, v)) : null;
+  const x = n(p.x), y = n(p.y);
+  if (x === null || y === null || (x === 50 && y === 50)) return null;
+  return { x, y };
+}
+function _evImgZoom(z) { return (typeof z === 'number' && isFinite(z) && z > 1) ? Math.min(6, z) : 1; }
+// THE SIZE CAP FOR AN EVENT IMAGE ON THE PUBLIC PATH. The in-app `image` is downscaled (max 720px, JPEG q0.72)
+// but can still be ~100-200 KB, which must never ride into a public feed (reference comment above this console's
+// public copy, and scripts/public-calendar.mjs: "a data: URI can be megabytes"). The console generates a SMALLER
+// `imgPub` variant at pick time (SchEventModal/SchEventEdit onImage) and the public copy carries THAT. This is a
+// backstop, not the cap itself: it REFUSES anything over the limit outright rather than slicing a data: URI into
+// something unreadable — a public copy with no image is the fail-safe, never a corrupt one.
+const WEB_IMG_MAX = 60000;   // ~60 KB of data: URI; a 360px JPEG q0.6 sits well under this
+function _webImg(ev) {
+  const pub = String((ev && ev.imgPub) || '');
+  if (pub && pub.length <= WEB_IMG_MAX && /^data:image\//.test(pub)) return pub;
+  const full = String((ev && ev.image) || '');
+  if (full && full.length <= WEB_IMG_MAX && /^data:image\//.test(full)) return full;   // already small enough
+  return '';
+}
 // The copy's body, with a FIXED key order so two consoles produce byte-identical content for the same event —
-// that equality is what stops the reconciler republishing on every boot.
+// that equality is what stops the reconciler republishing on every boot. The image/focal keys are APPENDED (so
+// an older console's shorter body differs and is republished ONCE), always present in this fixed order, and
+// default to ''/null/1 for an event with no (public-safe) image — never omitted, so the bytes stay deterministic.
 function _webCopyBody(ev) {
   const recur = (ev.recur === 'weekly' || ev.recur === 'fortnightly' || ev.recur === 'monthly') ? ev.recur : '';
   return JSON.stringify({
@@ -6430,6 +6459,7 @@ function _webCopyBody(ev) {
     where: String(ev.where || '').slice(0, 200), blurb: String(ev.blurb || '').slice(0, 2000),
     recur, day: (recur && typeof ev.day === 'number') ? ev.day : null,
     nth: (recur === 'monthly' && typeof ev.nth === 'number') ? ev.nth : null,
+    image: _webImg(ev), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom),
   });
 }
 // WHAT THIS CONSOLE CAN STILL TELL ABOUT AN EVENT IT CAN NO LONGER OPEN — which is almost nothing, and the
@@ -13008,7 +13038,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
-    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST)
+    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', imgPub: String(ev.imgPub || ''), imgPos: _evImgPos(ev.imgPos), imgZoom: _evImgZoom(ev.imgZoom), groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ((ev.nth >= 1 && ev.nth <= 5) || ev.nth === -1)) ? ev.nth : null };   // -1 = the LAST <day> of the month (app/recur.jsx NTH_LAST). imgPos/imgZoom: cover focal point + zoom (null/1 = centre, the pre-feature look); imgPub: a size-capped variant for the public copy
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     const tags = [['d', EVENT_D + id], ['t', NET]];
@@ -13024,7 +13054,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
-  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '' }), onEvents); },
+  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom) }), onEvents); },
 
   // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
   // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -13148,7 +13178,7 @@ window.Steward = {
         // 2026-08-28, where members could see the event perfectly and the steward who created it could not.
         // An event we cannot open is marked _locked rather than dropped, so a key that has not arrived yet
         // leaves a placeholder instead of silently shortening the list.
-        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || '', imgPub: c.imgPub || '', imgPos: _evImgPos(c.imgPos), imgZoom: _evImgZoom(c.imgZoom), _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

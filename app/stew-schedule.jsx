@@ -1455,6 +1455,98 @@ function SchWebsiteHeldRow({ held, setHeld }) {
   );
 }
 
+// COVER IMAGE FIELD — pick / replace / remove a photo, then DRAG TO REPOSITION and SLIDE TO ZOOM. This is the
+// same gesture as the church banner adjuster (app/stew-dashboard.jsx ImageCropModal, "drag to reposition, slide
+// to zoom"), reused rather than reinvented — but where the banner BAKES its crop into a fixed-size canvas, this
+// STORES the focal point (imgPos {x,y} percents) and zoom (imgZoom scale) on the event and leaves the picture
+// whole, so app/recur.jsx eventImgStyle can frame the one image correctly at every size it appears: the card,
+// the detail sheet, and the church's public page. No pos/zoom = centre + scale 1 = the old objectFit:'cover'.
+//
+// Used by BOTH the New event and Edit event forms (CLAUDE.md rule 2: one field, listed users are these two).
+// `value` is { image, imgPub, imgPos, imgZoom }; onChange is handed the next whole value. `imgPub` is a smaller
+// JPEG variant made here at pick time (360px, q0.6) for the SIZE-CAPPED public copy — the full `image` stays
+// 720px for in-app. `history` (optional) offers the church's own past covers as a one-tap reuse.
+function SchCoverField({ value, onChange, history }) {
+  const v = value || {};
+  const image = v.image || '';
+  const px = (v.imgPos && typeof v.imgPos.x === 'number') ? v.imgPos.x : 50;
+  const py = (v.imgPos && typeof v.imgPos.y === 'number') ? v.imgPos.y : 50;
+  const z = (typeof v.imgZoom === 'number' && v.imgZoom > 1) ? v.imgZoom : 1;
+  const drag = React.useRef(null);
+  const boxRef = React.useRef(null);
+  const setPosZoom = (pos, zoom) => onChange({ image, imgPub: v.imgPub || '', imgPos: pos, imgZoom: zoom });
+  // apply a (new or reused) full image: centre it, then make the small public variant off-thread of the paint
+  const applyImage = (full) => {
+    onChange({ image: full, imgPub: '', imgPos: null, imgZoom: 1 });
+    const im = new Image();
+    im.onload = () => { try { const max = 360, q = 0.6; let w = im.width, h = im.height; if (w > max) { h = Math.round(h * max / w); w = max; } const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(im, 0, 0, w, h); onChange({ image: full, imgPos: null, imgZoom: 1, imgPub: cv.toDataURL('image/jpeg', q) }); } catch (e) {} };
+    im.src = full;
+  };
+  const onFile = (file) => {
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => { const img = new Image(); img.onload = () => {
+      const max = 720; let w = img.width, h = img.height; if (w > max) { h = Math.round(h * max / w); w = max; }
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      let full = ''; try { full = cv.toDataURL('image/jpeg', 0.72); } catch (e) {}
+      if (full) applyImage(full);
+    }; img.src = r.result; };
+    r.readAsDataURL(file);
+  };
+  const onDown = (e) => { const r = boxRef.current ? boxRef.current.getBoundingClientRect() : { width: 1, height: 1 }; drag.current = { x: e.clientX, y: e.clientY, px, py, w: r.width || 1, h: r.height || 1 }; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {} };
+  const onMove = (e) => {
+    if (!drag.current) return;
+    const nx = Math.max(0, Math.min(100, Math.round(drag.current.px - ((e.clientX - drag.current.x) / drag.current.w) * 100)));
+    const ny = Math.max(0, Math.min(100, Math.round(drag.current.py - ((e.clientY - drag.current.y) / drag.current.h) * 100)));
+    setPosZoom({ x: nx, y: ny }, z);
+  };
+  const onUp = () => { drag.current = null; };
+  return (
+    <React.Fragment>
+      <div style={schLbl}>Cover image (optional)</div>
+      {image ? (
+        <React.Fragment>
+          <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 8, border: '1px solid var(--line)' }}>
+            <div ref={boxRef} data-cover-adjust="1" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} style={{ position: 'relative', width: '100%', height: 150, cursor: 'grab', touchAction: 'none', background: 'var(--surface-2)' }}>
+              <img src={image} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none', ...(window.eventImgStyle ? window.eventImgStyle({ x: px, y: py }, z) : { objectFit: 'cover' }) }} />
+            </div>
+            <button onClick={() => onChange({ image: '', imgPub: '', imgPos: null, imgZoom: 1 })} title="Remove this photo" style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 999, border: 'none', background: 'rgba(20,15,10,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} color="#fff" /></button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 2px' }}>
+            <Icon name="search" size={15} color="var(--ink-3)" />
+            <input type="range" aria-label="Zoom" min="1" max="4" step="0.01" value={z} onChange={e => setPosZoom({ x: px, y: py }, Math.max(1, parseFloat(e.target.value) || 1))} style={{ flex: 1 }} />
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 2px', lineHeight: 1.4 }}>Drag to reposition, slide to zoom — this is how members and your website will see it.</div>
+          <label className="sk-btn sk-btn--ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', fontSize: 12.5, cursor: 'pointer', marginTop: 2 }}>
+            <Icon name="pen" size={14} color="currentColor" /> Replace photo
+            <input type="file" accept="image/*" onChange={e => onFile(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
+          </label>
+        </React.Fragment>
+      ) : (
+        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 64, borderRadius: 12, border: '1.5px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>
+          <Icon name="plus" size={18} color="var(--ink-3)" /> Add a photo
+          <input type="file" accept="image/*" onChange={e => onFile(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
+        </label>
+      )}
+      {history && history.length ? (
+        <React.Fragment>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '8px 2px 6px', lineHeight: 1.4 }}>Or reuse a past cover</div>
+          <div role="group" aria-label="Past cover images" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {history.map(src => {
+              const on = image === src;
+              return (
+                <button key={src} type="button" aria-label="Use this past cover image" onClick={() => applyImage(src)} style={{ width: 72, height: 48, padding: 0, borderRadius: 9, overflow: 'hidden', cursor: 'pointer', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: 'var(--surface-2)' }}>
+                  <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                </button>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      ) : null}
+    </React.Fragment>
+  );
+}
+
 function SchEventModal({ day, onClose }) {
   const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
   const allGroups = window.useStewardGroups();   // chat groups + teams the event can belong to
@@ -1469,6 +1561,9 @@ function SchEventModal({ day, onClose }) {
   const [accent, setAccent] = useSch('var(--clay)');
   const [group, setGroup] = useSch('');          // '' = whole church; else a group/team id
   const [image, setImage] = useSch('');          // optional cover image (resized data-URL)
+  const [imgPub, setImgPub] = useSch('');        // a smaller variant for the SIZE-CAPPED public copy (SchCoverField makes it)
+  const [imgPos, setImgPos] = useSch(null);      // cover focal point {x,y} percents, null = centre (the old objectFit:cover look)
+  const [imgZoom, setImgZoom] = useSch(1);       // cover zoom (scale >= 1), 1 = no zoom
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
   // "Not on the website" — recorded in the church's share: document, never in the event (the design rejected a
@@ -1480,16 +1575,6 @@ function SchEventModal({ day, onClose }) {
   const ownedNets = React.useMemo(() => (window.NETWORKS_ENABLED === true && window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);   // NETWORKS SWITCH (app/stew-data.jsx)
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
-  const onImage = (file) => {
-    if (!file) return;
-    const r = new FileReader();
-    r.onload = () => { const img = new Image(); img.onload = () => {
-      const max = 720; let w = img.width, h = img.height; if (w > max) { h = Math.round(h * max / w); w = max; }
-      const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h);
-      try { setImage(cv.toDataURL('image/jpeg', 0.72)); } catch (e) {}
-    }; img.src = r.result; };
-    r.readAsDataURL(file);
-  };
   const [err, setErr] = useSch('');
   // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
   const [busy, setBusy] = useSch(false);
@@ -1508,7 +1593,7 @@ function SchEventModal({ day, onClose }) {
     const dates = planned;
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
-    const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
+    const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, imgPub, imgPos, imgZoom, groupId: gid }, asPub)));
     // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted. Every date of a repeat gets
     // its own event and so its own opt-out. A church event only: a network-published event has no share: doc.
     // …AND A TICK THAT DID NOT LAND IS SAID, through the console's existing banner (the event itself is saved,
@@ -1597,36 +1682,7 @@ function SchEventModal({ day, onClose }) {
           optional fields to reach the one control that decides whether the event becomes public. "Belongs
           to" is its neighbour because that answer is what decides which of the two ticks is shown at all. */}
       {canHold && !asNetwork ? (group ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
-      <div style={schLbl}>Cover image (optional)</div>
-      {image ? (
-        <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 4, border: '1px solid var(--line)' }}>
-          <img src={image} alt="" style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }} />
-          <button onClick={() => setImage('')} title="Remove this photo" style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 999, border: 'none', background: 'rgba(20,15,10,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={16} color="#fff" /></button>
-        </div>
-      ) : (
-        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 64, borderRadius: 12, border: '1.5px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer', color: 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>
-          <Icon name="plus" size={18} color="var(--ink-3)" /> Add a photo
-          <input type="file" accept="image/*" onChange={e => onImage(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
-        </label>
-      )}
-      {/* REUSE A PAST COVER — a datalist cannot preview images, so a modest thumbnail row of the church's own
-          distinct past covers; tapping one sets this event's image and nothing else (independent of Name/Where).
-          The upload path above is untouched; this only offers an alternative. */}
-      {history.images.length ? (
-        <React.Fragment>
-          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '8px 2px 6px', lineHeight: 1.4 }}>Or reuse a past cover</div>
-          <div role="group" aria-label="Past cover images" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-            {history.images.map(src => {
-              const on = image === src;
-              return (
-                <button key={src} type="button" aria-label="Use this past cover image" onClick={() => setImage(src)} style={{ width: 72, height: 48, padding: 0, borderRadius: 9, overflow: 'hidden', cursor: 'pointer', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: 'var(--surface-2)' }}>
-                  <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-                </button>
-              );
-            })}
-          </div>
-        </React.Fragment>
-      ) : null}
+      <SchCoverField value={{ image, imgPub, imgPos, imgZoom }} history={history.images} onChange={v => { setImage(v.image); setImgPub(v.imgPub); setImgPos(v.imgPos); setImgZoom(v.imgZoom); }} />
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
@@ -1845,6 +1901,12 @@ function SchEventEdit({ event, onClose }) {
   const [day, setDay] = React.useState(typeof e.day === 'number' ? e.day : 0);
   const [recur, setRecur] = React.useState(e.recur || 'weekly');
   const [nth, setNth] = React.useState(typeof e.nth === 'number' ? e.nth : 1);
+  // COVER IMAGE — this form had NONE: it passed `image: e.image` straight through, so once an event existed its
+  // photo (and framing) could never be changed. A (re)picker + the focal/zoom adjuster now live here too.
+  const [image, setImage] = React.useState(e.image || '');
+  const [imgPub, setImgPub] = React.useState(e.imgPub || '');
+  const [imgPos, setImgPos] = React.useState(e.imgPos || null);
+  const [imgZoom, setImgZoom] = React.useState(typeof e.imgZoom === 'number' ? e.imgZoom : 1);
   // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
@@ -1873,7 +1935,7 @@ function SchEventEdit({ event, onClose }) {
     try {
       r = await Promise.resolve(window.Steward.publishEvent({
         id: e.id, title: title.trim(), date: anchor, time, where: where.trim(), blurb: blurb.trim(),
-        accent: e.accent || '', image: e.image || '', groupId: e.groupId || '',
+        accent: e.accent || '', image, imgPub, imgPos, imgZoom, groupId: e.groupId || '',
         ...(series ? { recur, day, nth } : {}),
       }));
     } catch (x) { r = null; }
@@ -1932,6 +1994,7 @@ function SchEventEdit({ event, onClose }) {
           dialog has no "Belongs to" — the scope is fixed once an event exists — so the tick follows Where,
           which is the last field that says what the event IS. */}
       {canHold ? (inGroup ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
+      <SchCoverField value={{ image, imgPub, imgPos, imgZoom }} onChange={v => { setImage(v.image); setImgPub(v.imgPub); setImgPos(v.imgPos); setImgZoom(v.imgZoom); }} />
       <div style={schLbl}>Details</div>
       <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
@@ -2179,7 +2242,7 @@ function SchEventDetail({ event, onClose }) {
           <button onClick={onClose} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', display: 'flex' }}><Icon name="x" size={14} /></button>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 22px 20px' }}>
-          {e.image ? <img src={e.image} alt="" style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 14, display: 'block', marginBottom: 14 }} /> : null}
+          {e.image ? <div style={{ width: '100%', height: 160, borderRadius: 14, overflow: 'hidden', marginBottom: 14 }}><img src={e.image} alt="" style={{ width: '100%', height: '100%', display: 'block', ...(window.eventImgStyle ? window.eventImgStyle(e.imgPos, e.imgZoom) : { objectFit: 'cover' }) }} /></div> : null}
           <div style={{ display: 'flex', gap: 13, alignItems: 'flex-start' }}>
             <SchDateBlock dateStr={e.date} />
             <div style={{ flex: 1, minWidth: 0 }}>
