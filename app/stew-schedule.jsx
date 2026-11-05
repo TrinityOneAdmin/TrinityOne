@@ -134,6 +134,20 @@ function schNoKey() {
 // VEVENT for one it cannot represent — and this `max` is the cheaper half: it stops the date picker offering
 // a year the rest of the product cannot carry, so a steward who fat-fingers 9999 sees it here first.
 const SCH_MAX_DATE = '9999-12-31';
+// DISTINCT PAST VALUES a steward can reuse when composing an event, derived from the church's OWN loaded
+// events (window.useStewardEvents — the same source the clash check reads), so no new store, no relay read,
+// and privacy is inherent (own-church docs only). Three INDEPENDENT lists (owner, 2026-11-05): picking a
+// past name must NOT pull in the where/image it once had — each field reuses only its own history. Pure and
+// module-scope so the point-of-use test can lift and run it.
+function eventHistory(events) {
+  const distinct = (xs) => [...new Set((xs || []).map(x => (x == null ? '' : String(x).trim())).filter(Boolean))];
+  const list = events || [];
+  return {
+    names: distinct(list.map(e => e && e.title)),
+    wheres: distinct(list.map(e => e && e.where)),
+    images: distinct(list.map(e => e && e.image)),
+  };
+}
 function SchNotSaved({ msg }) {
   if (!msg) return null;
   return (
@@ -1445,6 +1459,8 @@ function SchEventModal({ day, onClose }) {
   const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
   const allGroups = window.useStewardGroups();   // chat groups + teams the event can belong to
   const existingEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // to gently warn on a same-time clash
+  // the church's own past Name/Where/Image values, offered as a pick instead of a retype (see eventHistory)
+  const history = React.useMemo(() => eventHistory(existingEvents), [existingEvents]);
   const [title, setTitle] = useSch('');
   const [date, setDate] = useSch(day || '');
   const [time, setTime] = useSch(schLastEventTime);
@@ -1541,7 +1557,8 @@ function SchEventModal({ day, onClose }) {
         </React.Fragment>
       ) : null}
       <div style={schLbl}>Title</div>
-      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
+      <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" list="sch-event-names" style={schFld} />
+      <datalist id="sch-event-names">{history.names.map(n => <option key={n} value={n} />)}</datalist>
       <div style={{ display: 'flex', gap: 10 }}>
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
@@ -1554,7 +1571,8 @@ function SchEventModal({ day, onClose }) {
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
-      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" style={schFld} />
+      <input aria-label="Where" value={where} onChange={e => setWhere(e.target.value)} placeholder="e.g. Prayer chapel" list="sch-event-wheres" style={schFld} />
+      <datalist id="sch-event-wheres">{history.wheres.map(w => <option key={w} value={w} />)}</datalist>
       <div style={schLbl}>Type</div>
       <div style={{ display: 'flex', gap: 8 }}>
         {ACCENTS.map(([c, lbl]) => <button key={c} onClick={() => setAccent(c)} style={{ flex: 1, padding: '9px 0', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, border: accent === c ? `2px solid ${c}` : '1px solid var(--line)', background: accent === c ? `color-mix(in oklab, ${c} 12%, var(--surface))` : 'var(--surface)', color: 'var(--ink)' }}>{lbl}</button>)}
@@ -1591,6 +1609,24 @@ function SchEventModal({ day, onClose }) {
           <input type="file" accept="image/*" onChange={e => onImage(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
         </label>
       )}
+      {/* REUSE A PAST COVER — a datalist cannot preview images, so a modest thumbnail row of the church's own
+          distinct past covers; tapping one sets this event's image and nothing else (independent of Name/Where).
+          The upload path above is untouched; this only offers an alternative. */}
+      {history.images.length ? (
+        <React.Fragment>
+          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '8px 2px 6px', lineHeight: 1.4 }}>Or reuse a past cover</div>
+          <div role="group" aria-label="Past cover images" style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {history.images.map(src => {
+              const on = image === src;
+              return (
+                <button key={src} type="button" aria-label="Use this past cover image" onClick={() => setImage(src)} style={{ width: 72, height: 48, padding: 0, borderRadius: 9, overflow: 'hidden', cursor: 'pointer', border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: 'var(--surface-2)' }}>
+                  <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                </button>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      ) : null}
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
