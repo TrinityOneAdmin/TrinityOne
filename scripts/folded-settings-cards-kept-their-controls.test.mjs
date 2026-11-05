@@ -231,8 +231,9 @@ test('the Church key page has no separate card for the console lock', () => {
   assert.deepEqual(cardTitles(settings('key').tree), ['Church key'],
     'the console lock is a card again. It and "Church key" are the same subject — whether the one key on ' +
     'this device is protected — and two boxes made them read as two decisions');
-  // and the other three Security cards each have a page to themselves, so none of them came back here
-  for (const [page, title] of [['stewards', 'Stewards & handoff'], ['delegated', 'Helpers'],
+  // and the other three master-key/helper cards each have a page to themselves, so none of them came back here
+  // (the handover panel's title became "Hand over the church" on 2026-11-05, when it moved into the Master key group)
+  for (const [page, title] of [['stewards', 'Hand over the church'], ['delegated', 'Helpers'],
                                ['become', 'Help run a church']]) {
     assert.deepEqual(cardTitles(settings(page).tree), [title],
       `the ${page} page is not exactly the "${title}" card`);

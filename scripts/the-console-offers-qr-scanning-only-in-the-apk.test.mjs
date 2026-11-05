@@ -99,11 +99,12 @@ test('DashBecomeStewardPanel offers "Scan a church’s invite" only in the APK',
     'the web/Suite console still shows "Scan a church’s invite" — the camera trigger leaked outside the APK');
 });
 
-test('DashSettings Stewards-&-handoff page offers "Scan a handoff QR" only in the APK (and keeps "Show handoff QR" everywhere)', () => {
+test('DashSettings Hand-over-the-church page offers "Scan a handoff QR" only in the APK (and keeps "Show handoff QR" everywhere)', () => {
   const church = { name: 'Grace Chapel', nip05: '', isNetwork: false };
-  // A minimal, shape-correct settings list so the Stewards page is the open page. settingsPageFor /
-  // settingsGroupOf are inert navigation plumbing — stubbed to open 'stewards' — NOT the gate under test.
-  const SETTINGS_GROUPS = [['Security', [{ k: 'stewards', n: 'Stewards & handoff', d: 'Hand the church on' }]]];
+  // A minimal, shape-correct settings list so the handover (k:'stewards') page is the open page. settingsPageFor /
+  // settingsGroupOf are inert navigation plumbing — stubbed to open 'stewards' — NOT the gate under test. (The
+  // key stays 'stewards'; its label became "Hand over the church" and its group "Master key" on 2026-11-05.)
+  const SETTINGS_GROUPS = [['Master key', [{ k: 'stewards', n: 'Hand over the church', d: 'Give someone full control with the recovery phrase' }]]];
   const makeSettings = (native) => {
     const { React, draw } = miniReact();
     const { DashSettings } = liftFromJsx(
@@ -114,7 +115,7 @@ test('DashSettings Stewards-&-handoff page offers "Scan a handoff QR" only in th
         window: win(native, { useStewardChurch: () => church, Steward: { isDelegated: () => false } }),
         SETTINGS_GROUPS,
         settingsPageFor: () => 'stewards',
-        settingsGroupOf: () => 'Security',
+        settingsGroupOf: () => 'Master key',
         readCollapsedGroups: () => null,
         writeCollapsedGroups: () => {},
         useStewNarrow: () => false,

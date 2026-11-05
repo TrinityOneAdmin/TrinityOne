@@ -13225,10 +13225,23 @@ const SETTINGS_GROUPS = [
     { k: 'ownbox', n: 'Run your own box', d: 'Self-host with the Suite' },
     { k: 'network', n: 'Network', d: 'Belong to a group of churches' },
   ]],
-  ['Security', [
-    { k: 'access', n: 'Security', d: 'What you may do here', delegate: true },
+  // THE MASTER KEY — the two items that share, or give away, the WHOLE church identity: the recovery
+  // phrase itself and the handover that copies it. Their OWN group, deliberately apart from Helpers
+  // below, so someone adding a helper cannot drift one row up into giving the entire church away. The
+  // handover keeps k:'stewards' (deep links and SETTINGS_PAGE_ALIASES resolve by key), only its label and
+  // framing change. Owner decision 2026-11-05.
+  ['Master key', [
     { k: 'key', n: 'Church key', d: 'Recovery phrase and backup', owner: true },
-    { k: 'stewards', n: 'Stewards & handoff', d: 'Hand the church on', owner: true },
+    { k: 'stewards', n: 'Hand over the church', d: 'Give someone full control with the recovery phrase', owner: true },
+  ]],
+  // HELPERS — the everyday steward-sharing: revocable access that NEVER copies the key, and its mirror,
+  // helping another church. `access` (the one notice a delegated steward sees in place of these owner-only
+  // pages) stays in THIS group ON PURPOSE: a delegate deep-linking 'security' resolves through
+  // SETTINGS_PAGE_ALIASES to 'delegated', and settingsPageFor's group fallback lands them on the one page
+  // of 'delegated's group they can see. Move `access` to the Master-key group and that fallback would drop
+  // them on 'identity' instead — the very breakage the alias note below warns about.
+  ['Helpers', [
+    { k: 'access', n: 'Security', d: 'What you may do here', delegate: true },
     { k: 'delegated', n: 'Helpers', d: 'Let someone help run the church, without the key', owner: true },
     { k: 'become', n: 'Help run a church', d: 'Help another church — scan its invite', owner: true },
   ]],
@@ -13726,7 +13739,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       ) : null}
 
       {open === 'stewards' ? (
-      <Panel title="Stewards & handoff">
+      <Panel title="Hand over the church">
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>A church is one key. To <b style={{ color: 'var(--ink)' }}>add another steward</b> or <b style={{ color: 'var(--ink)' }}>hand the church over</b>, share its recovery phrase — they enter it on their device under <b>Church key → Restore from a recovery phrase</b> (or in the Steward app). Then they can manage {church.name || 'the church'} too.</div>
         <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
           <li><b>Show the handoff QR</b> below (or reveal the phrase above) — in person is safest.</li>

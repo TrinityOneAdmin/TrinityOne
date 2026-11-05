@@ -207,7 +207,7 @@ const CARDS_ON = {
   ownbox: ['DashRunRelayCard'],
   network: ['DashNetworksPanel'],
   key: ['Panel:Church key'],
-  stewards: ['Panel:Stewards & handoff'],
+  stewards: ['Panel:Hand over the church'],   // the full-key handover panel, retitled from "Stewards & handoff" on 2026-11-05
   delegated: ['DashStewardsPanel'],
   become: ['DashBecomeStewardPanel'],
 };

@@ -142,10 +142,13 @@ const header = (tree, name) => headers(tree).find(b => grpName(b) === name);
 const rows = (tree) => find(tree, n => n.type === 'button' && /(^| )set-item( |$)/.test(String((n.props || {}).className || '')));
 const rowNames = (tree) => rows(tree).map(b => shownIn(b, 'set-item-n'));
 const region = (tree) => find(tree, n => n.type === 'section' && n.props['aria-label']);
-const GROUPS = ['Church', 'People', 'Infrastructure', 'Security'];
+// 2026-11-05: the old single 'Security' group split into two — 'Master key' (Church key + the full-key
+// handover) and 'Helpers' (the everyday, revocable steward-sharing), so the full-key handover sits a group
+// away from Helpers and cannot be stumbled onto while adding a helper. Five groups now, not four.
+const GROUPS = ['Church', 'People', 'Infrastructure', 'Master key', 'Helpers'];
 const expanded = (tree) => headers(tree).map(b => b.props['aria-expanded']);
 const counts = (tree) => headers(tree).map(b => shownIn(b, 'set-grp-c'));
-const PAGES = 18;   // owner's pages across the four groups (16 + voice + website, 2026-09-22); a delegate has fewer
+const PAGES = 18;   // owner's pages across the FIVE groups (16 + voice + website, 2026-09-22); a regroup moves no page, so the total is unchanged; a delegate has fewer
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // CONTROL — if this fails, every assertion below is meaningless.
@@ -167,17 +170,18 @@ test('a steward who has never chosen gets every group SHUT with its count — ex
   // What survives of the old reasoning is the render-time rule below: in a browser a page is always open, so
   // its group is always open, and a steward is never looking at four words and nothing else.
   const s = screen(null, { innerWidth: 1200 });                       // a browser: the first page, Church identity, is open
-  assert.deepEqual(expanded(s.tree), [true, false, false, false],
+  assert.deepEqual(expanded(s.tree), [true, false, false, false, false],
     'in a browser, a steward who has never chosen does not get exactly the current page\'s group open and the rest shut');
-  assert.deepEqual(counts(s.tree), ['', '4', '5', '4'],
+  // Church open (''), then People 4, Infrastructure 5, Master key 2 (key + handover), Helpers 2 (Helpers + Help run a church)
+  assert.deepEqual(counts(s.tree), ['', '4', '5', '2', '2'],
     'the shut groups do not each say how many pages are behind them (and the open one must not)');
   assert.ok(rowNames(s.tree).includes('Church identity') && !rowNames(s.tree).includes('Relays'),
     'the rows on screen are not exactly the open group\'s');
   // on a phone the list is the whole first screen and no page is open, so nothing holds a group open
   const ph = screen(null, { innerWidth: 500 });
-  assert.deepEqual(expanded(ph.tree), [false, false, false, false],
-    'on a phone, a steward who has never chosen does not get all four groups shut');
-  assert.deepEqual(counts(ph.tree), ['5', '4', '5', '4'], 'the phone\'s shut groups do not each say their count');
+  assert.deepEqual(expanded(ph.tree), [false, false, false, false, false],
+    'on a phone, a steward who has never chosen does not get all five groups shut');
+  assert.deepEqual(counts(ph.tree), ['5', '4', '5', '2', '2'], 'the phone\'s shut groups do not each say their count');
   // …and "never chosen" is still stored as nothing at all, so the default can tell a fresh console from a
   // deliberate one — a stored [] is now the one way to say "all open".
   assert.equal(s.store.size, 0,
@@ -186,28 +190,29 @@ test('a steward who has never chosen gets every group SHUT with its count — ex
 });
 
 test('moving to a page in another group moves the open group; a group the steward opened by hand stays open', () => {
-  // The fresh console, walked: Church open (it holds Church identity). Press Security's header — that OPENS it
-  // and is remembered. Open a Security page: Security is open twice over, and Church, which now holds nothing
-  // and was never opened by hand, shuts. Reload on that page: the remembered Security stays open.
+  // The fresh console, walked: Church open (it holds Church identity). Press Master key's header — that OPENS
+  // it and is remembered. Open a Master-key page (Church key): Master key is open twice over, and Church, which
+  // now holds nothing and was never opened by hand, shuts. Reload on that page: the remembered Master key stays
+  // open. ('key' lives in Master key since the 2026-11-05 regroup — see the GROUPS note above.)
   const store = new Map();
   const s = screen('identity', { store });
-  assert.deepEqual(expanded(s.tree), [true, false, false, false], 're-anchor: a fresh console did not start Church-open');
-  header(s.tree, 'Security').props.onClick();
-  assert.deepEqual(expanded(s.render()), [true, false, false, true], 'pressing a shut group\'s header did not open it');
-  assert.deepEqual(JSON.parse(store.get([...store.keys()][0])).sort(), ['Church', 'Infrastructure', 'People'],
-    'opening one group from the shut-by-default start did not record the other three as the steward\'s shut groups');
-  // now open a page inside Security, the way a steward does — its row
+  assert.deepEqual(expanded(s.tree), [true, false, false, false, false], 're-anchor: a fresh console did not start Church-open');
+  header(s.tree, 'Master key').props.onClick();
+  assert.deepEqual(expanded(s.render()), [true, false, false, true, false], 'pressing a shut group\'s header did not open it');
+  assert.deepEqual(JSON.parse(store.get([...store.keys()][0])).sort(), ['Church', 'Helpers', 'Infrastructure', 'People'],
+    'opening one group from the shut-by-default start did not record the other four as the steward\'s shut groups');
+  // now open a page inside Master key, the way a steward does — its row
   rows(s.render()).find(b => shownIn(b, 'set-item-n') === 'Church key').props.onClick();
   assert.equal(region(s.render())[0].props['aria-label'], 'Church key', 're-anchor: the Church key page did not open');
-  assert.deepEqual(expanded(s.render()), [false, false, false, true],
-    'with a Security page open, Church (which the steward never opened by hand) did not shut and/or Security is not open');
-  // a reload onto that page, sharing only the storage: Security open because the steward opened it, and it holds the page
+  assert.deepEqual(expanded(s.render()), [false, false, false, true, false],
+    'with a Master-key page open, Church (which the steward never opened by hand) did not shut and/or Master key is not open');
+  // a reload onto that page, sharing only the storage: Master key open because the steward opened it, and it holds the page
   const again = screen('key', { store });
-  assert.deepEqual(expanded(again.tree), [false, false, false, true], 'after a reload the remembered choice did not win');
-  // and a reload back onto a Church page: Church open because it holds the page, Security still open because it was chosen
+  assert.deepEqual(expanded(again.tree), [false, false, false, true, false], 'after a reload the remembered choice did not win');
+  // and a reload back onto a Church page: Church open because it holds the page, Master key still open because it was chosen
   const back = screen('identity', { store });
-  assert.deepEqual(expanded(back.tree), [true, false, false, true],
-    'after a reload onto a Church page, the remembered Security-open did not survive alongside the forced-open Church');
+  assert.deepEqual(expanded(back.tree), [true, false, false, true, false],
+    'after a reload onto a Church page, the remembered Master-key-open did not survive alongside the forced-open Church');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -259,7 +264,8 @@ test('the choice survives a remount, read back from storage and not from a compo
   assert.equal(names.includes('Relays'), false, 'Infrastructure came back open — the choice was not remembered');
   assert.equal(names.includes('Chat message tags'), false, 'People came back open — the choice was not remembered');
   assert.ok(names.includes('Church identity'), 'a group nobody collapsed came back shut');
-  assert.deepEqual(headers(second.tree).map(b => b.props['aria-expanded']), [true, false, false, true],
+  // Church open (holds the open page), People + Infrastructure stored shut, Master key + Helpers never touched so open
+  assert.deepEqual(headers(second.tree).map(b => b.props['aria-expanded']), [true, false, false, true, true],
     'the restored headers do not say which groups are shut');
 });
 
@@ -273,8 +279,9 @@ test('the key names the church AND the identity, so neither can read the other�
   const otherChurch = key({ churchPub: 'otherchurch000000000000000000000000000000000000000000000000000000' });
   assert.notEqual(ours, otherChurch, 'a second church reads the first church’s collapsed groups');
 
-  // a delegated steward of the SAME church has a genuinely different list — the four owner-only Security
-  // pages are not theirs — so "Security collapsed" does not mean the same thing to both.
+  // a delegated steward of the SAME church has a genuinely different list — the owner-only Master-key pages
+  // (Church key, Hand over the church) and the owner-only Helpers pages are not theirs — so a collapsed group
+  // does not mean the same thing to both.
   const asDelegate = key({ delegated: true, actingChurch: CHURCH, pubkey: DELEGATE });
   assert.notEqual(ours, asDelegate, 'a delegated steward and the owner share one collapsed-groups preference');
   assert.ok(asDelegate.includes(CHURCH), 'a delegate’s key does not name the church they are acting for');
@@ -310,7 +317,7 @@ test('storage that throws, or holds rubbish, gives the fresh-console default rat
 test('a deep link into a collapsed group opens that group', () => {
   const store = new Map();
   const seed = screen('identity', { store, allOpen: true });
-  header(seed.tree, 'Security').props.onClick();               // Security is shut, and stored shut
+  header(seed.tree, 'Helpers').props.onClick();                // Helpers (which holds 'delegated') is shut, and stored shut
 
   // …and now something deep-links straight into it. Overview's steward-requests banner does exactly this.
   const s = screen('delegated', { store });
@@ -318,10 +325,10 @@ test('a deep link into a collapsed group opens that group', () => {
   assert.ok(rowNames(s.tree).includes('Helpers'),
     'the deep link opened a page inside a collapsed group and left its row hidden. The steward is looking at ' +
     'a page with no row in the list leading back to it, no error, and nothing to say the list is partial');
-  assert.equal(header(s.tree, 'Security').props['aria-expanded'], true,
+  assert.equal(header(s.tree, 'Helpers').props['aria-expanded'], true,
     'the group holding the open page says it is shut while its pages are on screen');
   // the OTHER groups the steward shut stay shut — opening one is not a reason to forget the rest
-  assert.equal(JSON.parse(store.get([...store.keys()][0])).includes('Security'), true,
+  assert.equal(JSON.parse(store.get([...store.keys()][0])).includes('Helpers'), true,
     'landing on a page inside a collapsed group erased the steward’s stored choice as a side effect');
 });
 
@@ -331,7 +338,7 @@ test('a reload while a page in a collapsed group is open shows that group, howev
   const store = new Map();
   const probe = consoleWith(miniReact().React, { store });
   store.set(probe.mod.settingsGroupsLsKey(), JSON.stringify(GROUPS));   // every group shut
-  for (const [page, group] of [['identity', 'Church'], ['rules', 'People'], ['relays', 'Infrastructure'], ['key', 'Security']]) {
+  for (const [page, group] of [['identity', 'Church'], ['rules', 'People'], ['relays', 'Infrastructure'], ['key', 'Master key'], ['delegated', 'Helpers']]) {
     const s = screen(page, { store });
     assert.equal(header(s.tree, group).props['aria-expanded'], true,
       `every group is stored shut and the console reopened on ${page}; ${group} did not open to show it`);
@@ -505,18 +512,18 @@ test('every page is still reachable once its group is opened — collapsing hide
 // A steward's OWN stored choice still wins on both — the default only decides what "never chosen" means.
 test('on the console APK a steward who has never chosen gets every group OPEN with its rows; in the Suite window they start shut', () => {
   const ph = screen(null, { phoneApp: true, innerWidth: 360 });
-  assert.deepEqual(expanded(ph.tree), [true, true, true, true],
-    'ON THE PHONE A FRESH CONSOLE OPENS SETTINGS TO FOUR HEADERS AND NOTHING ELSE (owner, 2026-09-22: the groups start open on the APK). Headers read: ' + JSON.stringify(expanded(ph.tree)));
+  assert.deepEqual(expanded(ph.tree), [true, true, true, true, true],
+    'ON THE PHONE A FRESH CONSOLE OPENS SETTINGS TO FIVE HEADERS AND NOTHING ELSE (owner, 2026-09-22: the groups start open on the APK). Headers read: ' + JSON.stringify(expanded(ph.tree)));
   assert.equal(rows(ph.tree).length, PAGES, `the phone's open groups show ${rows(ph.tree).length} of the ${PAGES} page rows`);
   assert.ok(rowNames(ph.tree).includes('Church identity') && rowNames(ph.tree).includes('Church key'),
     'a group\'s rows are missing from the phone\'s Settings list: ' + JSON.stringify(rowNames(ph.tree)));
-  assert.deepEqual(counts(ph.tree), ['', '', '', ''], 'an open group is still showing a count');
+  assert.deepEqual(counts(ph.tree), ['', '', '', '', ''], 'an open group is still showing a count');
   // the same console at the same width WITHOUT the APK bridge — a narrow Suite window — keeps the shut start
   const suiteNarrow = screen(null, { innerWidth: 360 });
-  assert.deepEqual(expanded(suiteNarrow.tree), [false, false, false, false],
+  assert.deepEqual(expanded(suiteNarrow.tree), [false, false, false, false, false],
     'the shut-by-default start was decided by WIDTH, not by the console APK — a Suite window dragged narrow lost it');
   const suite = screen(null, { innerWidth: 900 });
-  assert.deepEqual(expanded(suite.tree), [true, false, false, false],
+  assert.deepEqual(expanded(suite.tree), [true, false, false, false, false],
     'in the Suite window a fresh console no longer starts with only the open page\'s group expanded');
   // neither default is written down: "never chosen" stays unchosen on both
   assert.equal(ph.store.size, 0, 'the phone default was written to storage as if the steward had chosen it');
@@ -529,12 +536,12 @@ test('a steward\'s own choice still wins on the phone: a stored shut group stays
   const probe = consoleWith(miniReact().React, { store });
   store.set(probe.mod.settingsGroupsLsKey(), JSON.stringify(['People']));
   const ph = screen(null, { store, phoneApp: true, innerWidth: 360 });
-  assert.deepEqual(expanded(ph.tree), [true, false, true, true],
+  assert.deepEqual(expanded(ph.tree), [true, false, true, true, true],
     'THE PHONE DEFAULT OVERRULED THE STEWARD\'S OWN STORED CHOICE. Headers read: ' + JSON.stringify(expanded(ph.tree)));
   assert.ok(rowNames(ph.tree).includes('Church identity') && !rowNames(ph.tree).includes('Members'),
     'the stored-shut group\'s rows are on screen (or another group\'s are missing): ' + JSON.stringify(rowNames(ph.tree)));
   // and the stored "all open" still means all open in the Suite window
   const store2 = new Map();
   const s = screen(null, { store: store2, allOpen: true, innerWidth: 900 });
-  assert.deepEqual(expanded(s.tree), [true, true, true, true], 'a stored [] no longer means "all open" in the Suite window');
+  assert.deepEqual(expanded(s.tree), [true, true, true, true, true], 'a stored [] no longer means "all open" in the Suite window');
 });
