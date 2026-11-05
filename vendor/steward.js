@@ -15635,6 +15635,19 @@ zoo`.split("\n");
   var _stewardNamesCt = "";
   var _stewardSince = {};
   var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content", "sealedrooms"];
+  var STEWARD_PRESETS = [
+    { id: "general", label: "General helper", hint: "Day-to-day help: care, groups & rotas, members. No money, no safeguarding, no sealed rooms.", caps: ["care", "content", "members"] },
+    { id: "finance", label: "Finance helper", hint: "The church books only \u2014 giving, funds and statements.", caps: ["finance"] },
+    { id: "safeguarding", label: "Safeguarding lead", hint: "Clearances, photo decisions and kids check-in only.", caps: ["safeguarding"] },
+    { id: "all", label: "Full helper (everything except the church key)", hint: "Every capability. They still cannot add stewards, ban people or change relay settings.", caps: ["finance", "care", "safeguarding", "members", "content", "sealedrooms"] },
+    { id: "custom", label: "Choose exactly what they may do\u2026", hint: "Open the full list and tick each one.", caps: null }
+  ];
+  function _presetCaps(id) {
+    const p = STEWARD_PRESETS.find((x) => x.id === id);
+    if (p && p.id === "custom") return null;
+    if (p && Array.isArray(p.caps)) return p.caps.slice();
+    return STEWARD_PRESETS.find((x) => x.id === "general").caps.slice();
+  }
   var CAP_KEYS = {
     finance: { d: "trinityone/financekey:", cap: "finance", legacy: true, explicit: false },
     // the church books
@@ -24454,6 +24467,15 @@ zoo`.split("\n");
     },
     stewardCapNames() {
       return STEWARD_CAPS.slice();
+    },
+    // Helper permission presets — the named bundles the owner picks from when approving a helper, and the pure
+    // mapping from a preset id to its capability list. presetCaps('custom') === null (open the granular editor);
+    // an unknown id falls back to the conservative 'general' bundle, never to [] (see _presetCaps).
+    stewardPresets() {
+      return STEWARD_PRESETS.map((p) => ({ ...p, caps: Array.isArray(p.caps) ? p.caps.slice() : null }));
+    },
+    presetCaps(id) {
+      return _presetCaps(id);
     },
     // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
     // not on the roster, so they are unrestricted by construction.

@@ -3739,7 +3739,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{_ovDelegated
           ? 'Only whoever holds the church key can approve them.'
-          : 'Approve them under Settings → Security → Delegated stewards.'}</div>
+          : 'Approve them under Settings → Security → Helpers.'}</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
@@ -9080,7 +9080,7 @@ function DashMembers({ dmConvos: dmConvosProp }) {
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
         They sign in with their own keys, not yours. {delegated
           ? 'Only whoever holds the church key can change what they may do, or remove them.'
-          : 'Change what they may do, or remove them, under Settings → Security → Delegated stewards.'}
+          : 'Change what they may do, or remove them, under Settings → Security → Helpers.'}
       </div>
     </div>
   ) : null;
@@ -10764,8 +10764,8 @@ function VoiceSetup({ onDelegated }) {
         Members see this under every notice and message sent from this console. <b>If someone else helps run
         the church, don’t share this console</b> — add them under{' '}
         {onDelegated
-          ? <button onClick={onDelegated} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5 }}>Delegated stewards</button>
-          : <b>Delegated stewards</b>}
+          ? <button onClick={onDelegated} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5 }}>Helpers</button>
+          : <b>Helpers</b>}
         {' '}and they’ll write under their own name.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 9 }}>
@@ -10924,6 +10924,15 @@ function DashStewardsPanel({ church }) {
   };
   const [approvePin, setApprovePin] = React.useState('');
   const [approveErr, setApproveErr] = React.useState('');
+  // The approve SHEET (delegation redesign, 2026-11-05). Approving a request is where the owner sets the name
+  // they know the helper by and the permission PRESET — NOT a bare add(pk), which granted [] (nothing) and left
+  // the row unnamed. `approvePreset` defaults to the conservative 'general'; 'custom' reveals the granular
+  // six-checkbox editor and the ticks live in `approveCaps`.
+  const [approveName, setApproveName] = React.useState('');
+  const [approvePreset, setApprovePreset] = React.useState('general');
+  const [approveCaps, setApproveCaps] = React.useState([]);
+  const [showAdvanced, setShowAdvanced] = React.useState(false);   // owner-initiated invite is THE path; paste/pick are tucked behind this
+  const PRESETS = (window.Steward.stewardPresets && window.Steward.stewardPresets()) || [];
   const hasPin = !!(window.Steward.hasPinLock && window.Steward.hasPinLock());
   const add = (pk, label, grants) => { setAdding(false); setScanning(false); setQ(''); setCode(''); setAddErr(''); setApproving(null);
     const nextNames = { ...labels }; if (label && label.trim()) nextNames[pk] = label.trim();
@@ -10932,12 +10941,28 @@ function DashStewardsPanel({ church }) {
     const nextCaps = { ...caps, [pk]: Array.isArray(grants) ? grants.slice() : [] };
     setNewLabel(''); setNewCaps([]);
     try { window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); } catch (e) {} };
-  // approving a steward request is a sensitive action → step up with the console PIN when one is set
-  const startApprove = (pk) => { if (hasPin) { setApproving(pk); setApprovePin(''); setApproveErr(''); } else { add(pk); } };
+  // Approving a request opens a sheet that captures the NAME the owner knows them by and a permission PRESET,
+  // then grants the preset's capabilities — never add(pk) with no name and no caps, which left the helper with
+  // [] (nothing) and an invented name. `claimedName` prefills from what the requester typed, as a starting
+  // point the owner can correct. The default preset is the conservative 'general'.
+  const startApprove = (pk, claimedName) => {
+    setApproving(pk); setApprovePin(''); setApproveErr('');
+    setApproveName((claimedName || '').trim());
+    setApprovePreset('general');
+    setApproveCaps((window.Steward.presetCaps && window.Steward.presetCaps('general')) || ['care', 'content', 'members']);
+  };
+  // The caps the chosen preset grants: a fixed bundle, or — for 'custom' — whatever is ticked in approveCaps.
+  // presetCaps() never returns [] for a known preset and falls back to 'general' for an unknown id, so this
+  // path cannot grant nothing by accident.
+  const approveGrants = () => (approvePreset === 'custom'
+    ? approveCaps.slice()
+    : ((window.Steward.presetCaps && window.Steward.presetCaps(approvePreset)) || ['care', 'content', 'members']));
   const confirmApprove = async () => {
-    const ok = await window.Steward.verifyPin(approvePin);
-    if (!ok) { setApproveErr('That PIN isn’t right.'); return; }
-    add(approving);
+    if (hasPin) {
+      const ok = await window.Steward.verifyPin(approvePin);
+      if (!ok) { setApproveErr('That PIN isn’t right.'); return; }
+    }
+    add(approving, approveName, approveGrants());
   };
   const pending = requests.filter(r => !dismissed[r.pubkey] && !stewardSet.has(r.pubkey) && r.pubkey !== ownerPub);
   // REMOVING A DELEGATE RE-KEYS THE CHURCH (sim finding 5). This used to write the shorter roster and stop: the
@@ -11052,21 +11077,21 @@ function DashStewardsPanel({ church }) {
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.npub || ''}>{m.npub ? shortNpub(m.npub) : (pk.slice(0, 10) + '…' + pk.slice(-4))}</div>
           {sinceText(pk) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>helping since {sinceText(pk)}</div> : null}
         </div>
-        {confirmRemove === pk ? null : <button onClick={() => setScoping(scoping === pk ? null : pk)} title="What this steward may do" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginRight: 6, whiteSpace: 'nowrap' }}>{Array.isArray(caps[pk]) ? (caps[pk].length ? caps[pk].length + ' of ' + capNames.length : 'nothing') : 'everything'}</button>}
+        {confirmRemove === pk ? null : <button onClick={() => setScoping(scoping === pk ? null : pk)} title="What this helper may do" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginRight: 6, whiteSpace: 'nowrap' }}>{Array.isArray(caps[pk]) ? (caps[pk].length ? caps[pk].length + ' of ' + capNames.length : 'nothing') : 'everything'}</button>}
         {confirmRemove === pk
           ? <React.Fragment>
-              <button onClick={() => remove(pk)} title="Confirm — revoke this steward immediately" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
+              <button onClick={() => remove(pk)} title="Confirm — revoke this helper immediately" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Revoke</button>
               <button onClick={() => setConfirmRemove(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>
             </React.Fragment>
-          : <button onClick={() => setConfirmRemove(pk)} title="Revoke this steward" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>}
+          : <button onClick={() => setConfirmRemove(pk)} title="Revoke this helper" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={15} color="currentColor" /></button>}
       </div>
     );
   };
   return (
-    <Panel title="Delegated stewards">
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Give a trusted member steward powers <b style={{ color: 'var(--ink)' }}>without sharing the church key</b>. They help run {church.name || 'the church'} — post, create groups, manage members — under their own key. You stay the owner: stewards can’t add other stewards, ban people, or change relay settings. <b style={{ color: 'var(--ink)' }}>Remove anyone anytime</b> and it takes effect immediately.</div>
+    <Panel title="Helpers">
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Let a trusted person help run {church.name || 'the church'} <b style={{ color: 'var(--ink)' }}>without sharing the church key</b> — they post, create groups and manage members under their own key. Show them an invite, they ask to help, and you approve them with a name and what they may do. You stay the owner: helpers can’t add other helpers, ban people, or change relay settings. <b style={{ color: 'var(--ink)' }}>Remove anyone anytime</b> and it takes effect immediately.</div>
       {pending.length ? <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', marginBottom: 7 }}>Requests to steward · {pending.length}</div>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', marginBottom: 7 }}>Requests to help · {pending.length}</div>
         {pending.map(r => (
           <div key={r.pubkey} style={{ padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 7 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 11 }}>
@@ -11074,19 +11099,49 @@ function DashStewardsPanel({ church }) {
               <div style={{ flex: '1 1 150px', minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 13.5, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{niceName(r.pubkey)}</div>
                 {r.name ? <div style={{ fontSize: 11.5, color: 'var(--ink-2)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>claims to be “{r.name}”</div> : null}
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to steward</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to help</div>
               </div>
               {approving === r.pubkey ? null : <React.Fragment>
-                <button onClick={() => startApprove(r.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>{hasPin ? 'Approve…' : 'Approve'}</button>
+                <button onClick={() => startApprove(r.pubkey, r.name)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>Approve…</button>
                 <button onClick={() => setDismissed(d => ({ ...d, [r.pubkey]: 1 }))} title="Dismiss" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
               </React.Fragment>}
             </div>
-            {approving === r.pubkey ? <div style={{ marginTop: 9 }}>
-              <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 6 }}>Enter your PIN to approve <b>{niceName(r.pubkey)}</b>{r.name ? ' (claims to be “' + r.name + '”)' : ''} — check the npub above is who you expect.</div>
+            {/* THE APPROVE SHEET. Captures the name the owner knows them by AND a permission preset, then grants
+                the preset's capabilities. This replaced a bare add(pk) that granted [] and left the row unnamed. */}
+            {approving === r.pubkey ? <div style={{ marginTop: 11, paddingTop: 11, borderTop: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))' }}>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 9, lineHeight: 1.45 }}>Check the npub above is who you expect, then set what you call them and what they may do.</div>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 5 }}>Their name, as you know them</div>
+              <input value={approveName} aria-label="The helper’s name, as you know them" onChange={e => { setApproveName(e.target.value); setApproveErr(''); }} placeholder="e.g. Ruth from the welcome team" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', background: 'var(--surface)', color: 'var(--ink)', marginBottom: 11 }} />
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 5 }}>What may they do?</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 9 }}>
+                {PRESETS.map(p => (
+                  <label key={p.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 10px', borderRadius: 11, cursor: 'pointer', background: approvePreset === p.id ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', border: '1px solid ' + (approvePreset === p.id ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)') }}>
+                    <input type="radio" name={'approve-preset-' + r.pubkey} aria-label={p.label} checked={approvePreset === p.id} onChange={() => { setApproveErr(''); setApprovePreset(p.id); if (p.id !== 'custom' && window.Steward.presetCaps) setApproveCaps(window.Steward.presetCaps(p.id) || []); }} style={{ marginTop: 3 }} />
+                    <span>
+                      <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.label}</span>
+                      <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.4 }}>{p.hint || ''}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {approvePreset === 'custom' ? <div style={{ marginBottom: 9, padding: '2px 4px' }}>
+                {capNames.map(c => (
+                  <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '5px 2px', cursor: 'pointer' }}>
+                    <input type="checkbox" aria-label={CAP_LABEL[c] || c} checked={approveCaps.indexOf(c) >= 0} onChange={() => { setApproveErr(''); setApproveCaps(v => v.indexOf(c) >= 0 ? v.filter(x => x !== c) : [...v, c]); }} style={{ marginTop: 3 }} />
+                    <span>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{CAP_LABEL[c] || c}</span>
+                      <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.4 }}>{CAP_SUB[c] || ''}</span>
+                    </span>
+                  </label>
+                ))}
+              </div> : null}
+              {hasPin ? <React.Fragment>
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 5 }}>Your console PIN</div>
+                <input type="password" aria-label="Your console PIN, to confirm this" autoComplete="off" value={approvePin} onChange={e => { setApprovePin(e.target.value); setApproveErr(''); }} onKeyDown={e => { if (e.key === 'Enter') confirmApprove(); }} placeholder="PIN" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px', marginBottom: 9 }} />
+              </React.Fragment> : null}
               <div style={{ display: 'flex', gap: 8 }}>
-                <input type="password" aria-label="Your console PIN, to confirm this" autoComplete="off" autoFocus value={approvePin} onChange={e => { setApprovePin(e.target.value); setApproveErr(''); }} onKeyDown={e => { if (e.key === 'Enter') confirmApprove(); }} placeholder="PIN" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '9px 11px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' }} />
-                <button onClick={confirmApprove} className="sk-btn sk-btn--clay" style={{ padding: '8px 12px', fontSize: 12.5 }}>Approve</button>
-                <button onClick={() => setApproving(null)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 10px', fontSize: 12.5 }}>Cancel</button>
+                <button onClick={confirmApprove} className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13 }}>Approve as helper</button>
+                <button onClick={() => setApproving(null)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 12px', fontSize: 13 }}>Cancel</button>
               </div>
               {approveErr ? <div style={{ fontSize: 12, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 6 }}>{approveErr}</div> : null}
             </div> : null}
@@ -11101,28 +11156,34 @@ function DashStewardsPanel({ church }) {
         </div>
       ) : null}
       {stewards.length === 0
-        ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No delegated stewards yet.</div>
+        ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No helpers yet.</div>
         : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{stewards.map(pk => <React.Fragment key={pk}>{row(pk)}{scoping === pk ? scopeEditor(pk) : null}</React.Fragment>)}</div>}
       {!adding
-        ? <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add a steward</button>
+        ? <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add a helper</button>
         : scanning
           ? <div>
               <StewQRScanner onResult={(payload) => { setScanning(false); addByCode(payload); }} onCancel={() => setScanning(false)} />
               <button onClick={() => setScanning(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 8 }}>Cancel scan</button>
             </div>
           : <div>
-            {/* primary, easiest path: show an invite QR; they scan it → appear under "Requests to steward" */}
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Show this invite to the would-be steward — in their Steward app they tap <b>Become a steward → Scan an invite</b>. They’ll then appear above under <b>Requests to steward</b> for you to approve.</div>
+            {/* THE PATH: show an invite (QR + copyable code), like the church's joining code. They scan/enter
+                it → appear above under "Requests to help" → you approve with a name and a permission preset. */}
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Show this invite to the person you want to help — in their app they tap <b>Help run a church → Scan or enter the invite</b>. They’ll then appear above under <b>Requests to help</b> for you to approve.</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button onClick={() => setInviteQR(v => !v)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="qr" size={15} color="var(--on-clay)" /> {inviteQR ? 'Hide invite QR' : 'Show invite QR'}</button>
               <button onClick={() => { copyText(window.Steward.stewardInvitePayload ? window.Steward.stewardInvitePayload() : ''); setCopiedInvite(true); setTimeout(() => setCopiedInvite(false), 1400); }} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name={copiedInvite ? 'check' : 'receipt'} size={14} color="currentColor" /> {copiedInvite ? 'Copied' : 'Copy invite'}</button>
             </div>
             {inviteQR ? <div style={{ textAlign: 'center', padding: 12, borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', marginTop: 10 }}>
-              {window.Steward.stewardInvitePayload && window.Steward.qrSVG ? <div role="img" aria-label="Steward invite QR code" style={{ width: 180, height: 180, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(window.Steward.stewardInvitePayload()) }} /> : null}
+              {window.Steward.stewardInvitePayload && window.Steward.qrSVG ? <div role="img" aria-label="Helper invite QR code" style={{ width: 180, height: 180, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: window.Steward.qrSVG(window.Steward.stewardInvitePayload()) }} /> : null}
             </div> : null}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 8px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>or add by their code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
-            {/* alternative: add by the steward's OWN code (from their Steward app) */}
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Or ask them to open the <b>Steward app</b> → <b>Become a steward</b> and read you their code (or show its QR).</div>
+            {/* The invite is THE way to add a helper. Add-by-code and pick-a-member are kept for the rare cases
+                that need them (no camera at either end; a member already on this same key), but tucked behind
+                Advanced so the main flow is one path, not a fork. */}
+            <button onClick={() => setShowAdvanced(v => !v)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12, marginTop: 12 }}>{showAdvanced ? 'Hide advanced' : 'Advanced: add by code, or pick a member'}</button>
+            {showAdvanced ? <React.Fragment>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 8px' }}><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /><span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700 }}>add by their code</span><div style={{ flex: 1, height: 1, background: 'var(--line)' }} /></div>
+            {/* alternative: add by the helper's OWN code (from their app) */}
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>Ask them to open their app → <b>Help run a church</b> and read you their code (or show its QR).</div>
             <input value={newLabel} onChange={e => { setNewLabel(e.target.value); setAddErr(''); }} placeholder="Their name, as you know them…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 10, padding: '9px 11px', fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 8 }} />
             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink-3)', letterSpacing: '.4px', margin: '4px 0 6px' }}>WHAT MAY THEY DO?</div>
             <div style={{ marginBottom: 8 }}>
@@ -11155,7 +11216,7 @@ function DashStewardsPanel({ church }) {
               <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search members…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '9px 12px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 8 }} />
               <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {candidates.slice(0, 40).map(m => (
-                  <button key={m.pubkey} onClick={() => { if (!newLabel.trim()) { setAddErr('Give them a name first.'); return; } add(m.pubkey, newLabel, newCaps); }} title="Add this member as a steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
+                  <button key={m.pubkey} onClick={() => { if (!newLabel.trim()) { setAddErr('Give them a name first.'); return; } add(m.pubkey, newLabel, newCaps); }} title="Add this member as a helper" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                     <SkBadge initials={(m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} pubkey={m.pubkey} size={30} radius={9} accent={SK_TINT[m.name ? 'gold' : 'sage'].fg} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || 'Anonymous'}</div>
@@ -11166,7 +11227,8 @@ function DashStewardsPanel({ church }) {
                 ))}
               </div>
             </React.Fragment> : null}
-            <button onClick={() => { setAdding(false); setQ(''); setCode(''); setAddErr(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 10 }}>Done</button>
+            </React.Fragment> : null}
+            <button onClick={() => { setAdding(false); setQ(''); setCode(''); setAddErr(''); setShowAdvanced(false); }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 10 }}>Done</button>
           </div>}
     </Panel>
   );
@@ -13167,7 +13229,7 @@ const SETTINGS_GROUPS = [
     { k: 'access', n: 'Security', d: 'What you may do here', delegate: true },
     { k: 'key', n: 'Church key', d: 'Recovery phrase and backup', owner: true },
     { k: 'stewards', n: 'Stewards & handoff', d: 'Hand the church on', owner: true },
-    { k: 'delegated', n: 'Delegated stewards', d: 'Helpers, without the key', owner: true },
+    { k: 'delegated', n: 'Helpers', d: 'Let someone help run the church, without the key', owner: true },
     { k: 'become', n: 'Become a steward', d: 'Help another church', owner: true },
   ]],
 ];
@@ -13673,7 +13735,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         </ol>
         <div style={{ display: 'flex', gap: 9, padding: 11, borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, transparent)', marginBottom: 14 }}>
           <Icon name="shield" size={16} color="var(--gold)" style={{ flexShrink: 0, marginTop: 1 }} />
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Anyone with this phrase can fully manage the church</b> — it hands over the whole identity, so only share it with someone you fully trust. To add a helper <b>without</b> giving away the key, use <b>Delegated stewards</b> below: they get their own revocable access.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Anyone with this phrase can fully manage the church</b> — it hands over the whole identity, so only share it with someone you fully trust. To add a helper <b>without</b> giving away the key, use <b>Helpers</b> below: they get their own revocable access.</div>
         </div>
         {/* handoff QR — the new steward scans this to adopt the church */}
         <div style={{ marginBottom: 14 }}>
@@ -13689,7 +13751,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
               <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '0 0 10px' }}>
                 Scanning this puts <b>this church</b> on another device — your own phone, or another leader’s.
                 That device then holds the full church key, so a lost or seized phone gives up everything this
-                one does. To let someone help <i>without</i> copying the key, use <b>Delegated stewards</b>.
+                one does. To let someone help <i>without</i> copying the key, use <b>Helpers</b>.
               </div>
               {handoffSvg
                 ? <div style={{ width: 184, height: 184, margin: '0 auto', background: '#fff', borderRadius: 12, padding: 8, boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: handoffSvg }} />

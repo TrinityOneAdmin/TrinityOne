@@ -594,6 +594,28 @@ let _stewardSince = {};
 // It is ADDED, never a rename: the five names before it keep their exact spelling and meaning, so every roster
 // in the field parses unchanged and a relay that has not been updated simply ignores the sixth word.
 const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content', 'sealedrooms'];
+// ── HELPER PERMISSION PRESETS ──────────────────────────────────────────────────────────────────────────────
+// Named bundles of the capabilities above, so the owner picks ONE answer at approval time instead of six. The
+// wording and the scoping here are PLACEHOLDER — the owner will review them — but the default must UNDER-grant,
+// never over-grant: 'general' is the default and deliberately withholds finance, safeguarding and sealedrooms.
+// 'custom' carries no list (caps: null); the caller opens the existing granular six-checkbox editor for it.
+// These sit on TOP of the per-capability system in STEWARD_CAPS; they never replace it.
+const STEWARD_PRESETS = [
+  { id: 'general', label: 'General helper', hint: 'Day-to-day help: care, groups & rotas, members. No money, no safeguarding, no sealed rooms.', caps: ['care', 'content', 'members'] },
+  { id: 'finance', label: 'Finance helper', hint: 'The church books only — giving, funds and statements.', caps: ['finance'] },
+  { id: 'safeguarding', label: 'Safeguarding lead', hint: 'Clearances, photo decisions and kids check-in only.', caps: ['safeguarding'] },
+  { id: 'all', label: 'Full helper (everything except the church key)', hint: 'Every capability. They still cannot add stewards, ban people or change relay settings.', caps: ['finance', 'care', 'safeguarding', 'members', 'content', 'sealedrooms'] },
+  { id: 'custom', label: 'Choose exactly what they may do…', hint: 'Open the full list and tick each one.', caps: null },
+];
+// The capability list a preset id grants. Pure and liftable (point-of-use test). An UNKNOWN id falls back to
+// the conservative 'general' bundle rather than to [] or to everything, so this path can never silently grant
+// nothing OR silently grant everything. 'custom' returns null: the caller must open the granular editor.
+function _presetCaps(id) {
+  const p = STEWARD_PRESETS.find((x) => x.id === id);
+  if (p && p.id === 'custom') return null;
+  if (p && Array.isArray(p.caps)) return p.caps.slice();
+  return (STEWARD_PRESETS.find((x) => x.id === 'general').caps).slice();
+}
 // ── A KEY PER CAPABILITY ──────────────────────────────────────────────────────────────────────────────────
 // One mechanism, not one per feature. The books got their own key on 2026-08-19 and kids check-in needed the
 // same shape the next morning — at which point writing a fourth hand-rolled envelope (after care, name and
@@ -11293,6 +11315,11 @@ window.Steward = {
   },
   stewardSince() { return { ..._stewardSince }; },
   stewardCapNames() { return STEWARD_CAPS.slice(); },
+  // Helper permission presets — the named bundles the owner picks from when approving a helper, and the pure
+  // mapping from a preset id to its capability list. presetCaps('custom') === null (open the granular editor);
+  // an unknown id falls back to the conservative 'general' bundle, never to [] (see _presetCaps).
+  stewardPresets() { return STEWARD_PRESETS.map((p) => ({ ...p, caps: Array.isArray(p.caps) ? p.caps.slice() : null })); },
+  presetCaps(id) { return _presetCaps(id); },
   // What THIS console may do when acting as a delegated steward. Owner consoles hold the church key and are
   // not on the roster, so they are unrestricted by construction.
   myStewardCaps() {
