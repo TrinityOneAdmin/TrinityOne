@@ -116,11 +116,16 @@
     const _slotsSeedKey = () => "trinityone.steward.care.slots." + activeChurch();
     const _skipsSeedKey = () => "trinityone.steward.care.skips." + activeChurch();
     const _availSeedKey = () => "trinityone.steward.care.avail." + activeChurch();
-    const _needSeedRow = (n) => ({ id: n.id, _by: n._by, type: n.type, dates: n.dates, meals: n.meals, dayMeals: n.dayMeals, startDate: n.startDate, endDate: n.endDate, ts: n.ts, _sealed: true });
+    const _needSeedRow = (n) => ({ id: n.id, _by: n._by, type: n.type, dates: n.dates, meals: n.meals, dayMeals: n.dayMeals, startDate: n.startDate, endDate: n.endDate, ts: n.ts, _sealed: true, _seed: true });
     const _slotSeedRow = (s) => ({ needId: s.needId, isoDate: s.isoDate, meal: s.meal, pubkey: s.pubkey, ts: s.ts });
     const _skipSeedRow = (s) => ({ needId: s.needId, isoDate: s.isoDate, meal: s.meal, pubkey: s.pubkey, ts: s.ts });
     const TAG_MAX = 40, TAG_N = 8;
     const _availSeedRow = (a) => ({ pubkey: a.pubkey, tags: (Array.isArray(a.tags) ? a.tags : []).filter((t) => typeof t === "string").slice(0, TAG_N).map((t) => t.slice(0, TAG_MAX)), dates: a.dates, ts: a.ts });
+    function careSealState(need, hasCareKey) {
+      if (!need || !need._sealed) return "open";
+      if (need._seed) return "syncing";
+      return hasCareKey ? "unrecoverable" : "needs-key";
+    }
     const DEFAULTS = { enabled: false, visibility: "all", openedBy: "steward", adminGroupId: "" };
     let _careTeamSeen = "";
     function subscribeSettings(cb) {
@@ -321,7 +326,7 @@
       const emit = () => {
         const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0));
         cb(list);
-        if (eosed && _mayCacheSeed() && (list.length || sawNeed)) _writeSeed(_needsSeedKey(), list.map(_needSeedRow));
+        if (eosed && _mayCacheSeed() && (list.length || sawNeed)) _writeSeed(_needsSeedKey(), list.slice().sort((a, b) => (b.startDate || "").localeCompare(a.startDate || "") || (b.ts || 0) - (a.ts || 0)).map(_needSeedRow));
       };
       {
         const seeded = _readSeed(_needsSeedKey());
@@ -384,7 +389,7 @@
       const emit = () => {
         const list = [...byKey.values()];
         cb(list);
-        if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed() && (list.length || sawRow)) _writeSeed(seedKeyFn(), list.map(seedRowFn));
+        if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed() && (list.length || sawRow)) _writeSeed(seedKeyFn(), list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(seedRowFn));
       };
       if (seedKeyFn) {
         const seeded = _readSeed(seedKeyFn());
@@ -645,7 +650,7 @@
           cb(v);
         } catch (e) {
         }
-        if (eosed && _mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow));
+        if (eosed && _mayCacheSeed()) _writeSeed(_availSeedKey(), v.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(_availSeedRow));
       };
       {
         const seeded = _readSeed(_availSeedKey());
@@ -900,6 +905,8 @@
       subscribeNeeds,
       openNeed,
       // openNeed exported so it is testable against the SHIPPED bundle
+      careSealState,
+      // sealed-need display state — exported so the console JSX branch is DRIVEN by a test (rule 1/3)
       // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)
       subscribeSlots,
       subscribeSkips,

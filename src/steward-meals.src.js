@@ -110,7 +110,14 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   const _availSeedKey = () => 'trinityone.steward.care.avail.' + activeChurch();
   // PUBLIC-SUBSET projections — the ONLY shapes that touch disk.
   // needs: exact mirror of app.jsx:1397. Drops displayLabel / recipient / notes / dietary (sealed), marks _sealed.
-  const _needSeedRow = (n) => ({ id: n.id, _by: n._by, type: n.type, dates: n.dates, meals: n.meals, dayMeals: n.dayMeals, startDate: n.startDate, endDate: n.endDate, ts: n.ts, _sealed: true });
+  // ALSO marks `_seed`: a seed row is sealed because it is a PUBLIC SUBSET that never carried the sealed fields,
+  // NOT because a delivered event failed to decrypt. The console UI must tell the two apart — a `_seed` row is
+  // still loading (the real event, which this keyed device WILL open, has not arrived), so it must never show the
+  // "unrecoverable — recreate this need" copy (see careSealState + stew-meals.jsx). The flag lives only on the
+  // on-disk/painted seed; the live path (subscribeNeeds.onevent -> _absorbById) never sets it, so the first real
+  // event replaces the seed row with one that is either not-sealed (decrypted) or _sealed WITHOUT _seed (genuinely
+  // unrecoverable). audit 2026-11-05 finding 4.
+  const _needSeedRow = (n) => ({ id: n.id, _by: n._by, type: n.type, dates: n.dates, meals: n.meals, dayMeals: n.dayMeals, startDate: n.startDate, endDate: n.endDate, ts: n.ts, _sealed: true, _seed: true });
   // slots/skips: STRUCTURAL ONLY. The console reads these cleartext-on-relay, but `note` (member free text) and
   // `reason` (recipient free text) are dropped from disk — the grid paints from needId/isoDate/meal/pubkey and
   // the note/reason refresh when the live sub answers. (More conservative than the member app, which caches
@@ -123,6 +130,21 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   // (audit 2026-11-03). (Diverges from app.jsx:1402, which caches avail whole.)
   const TAG_MAX = 40, TAG_N = 8;
   const _availSeedRow = (a) => ({ pubkey: a.pubkey, tags: (Array.isArray(a.tags) ? a.tags : []).filter(t => typeof t === 'string').slice(0, TAG_N).map(t => t.slice(0, TAG_MAX)), dates: a.dates, ts: a.ts });
+
+  // The display state of a care need's name/notes, lifted out of the console JSX so it is DRIVEN by a test
+  // against the shipped bundle (rule 1/3) instead of matched as JSX text. Four states:
+  //   'open'          — not sealed: show the real details + Edit.
+  //   'syncing'       — a _seed placeholder (public subset); the real event has not arrived yet. Neutral copy,
+  //                     NO "recreate" advice, NO Edit — it would blank the real data (editNeed refuses _sealed anyway).
+  //   'unrecoverable' — sealed, this device HOLDS the care key, and it is NOT a seed: a delivered event we still
+  //                     cannot open — the key generation is gone. This is the only state that earns "recreate".
+  //   'needs-key'     — sealed, no care key on this device: a sync problem that fixes itself (open Members).
+  // audit 2026-11-05 finding 4.
+  function careSealState(need, hasCareKey) {
+    if (!need || !need._sealed) return 'open';
+    if (need._seed) return 'syncing';
+    return hasCareKey ? 'unrecoverable' : 'needs-key';
+  }
 
   const DEFAULTS = { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
   // THE CARE TEAM AS LAST READ, for publishCareTeam's locked-roster refusal when a caller does not name it.
@@ -350,7 +372,12 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // blocks the main thread and slows load. cb() still fires per event for liveness. sawNeed tells a GENUINE
     // empty (a need was seen then all were closed) from a TRANSIENT/offline empty EOSE — so the latter never
     // clobbers a good non-empty seed to [] (the device would then open blank until the relay answered).
-    const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (eosed && _mayCacheSeed() && (list.length || sawNeed)) _writeSeed(_needsSeedKey(), list.map(_needSeedRow)); };
+    // SEED ORDER (audit 2026-11-05 finding 10): _writeSeed keeps the FIRST SEED_ROW_CAP rows, so when a church
+    // has more needs than the cap the seed must hand it the CURRENT ones first, not the oldest. `list` paints
+    // ascending by startDate (oldest first) — correct for the screen — so for the seed input ONLY we reverse to
+    // most-recent-first (startDate DESC, ts DESC) so the cap drops the oldest, not the live meal trains. cb(list)
+    // paint order is unchanged.
+    const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (eosed && _mayCacheSeed() && (list.length || sawNeed)) _writeSeed(_needsSeedKey(), list.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '') || (b.ts || 0) - (a.ts || 0)).map(_needSeedRow)); };
     // paint the last-known PUBLIC SUBSET instantly (sealed cards show "details hidden" until the key lands)
     { const seeded = _readSeed(_needsSeedKey()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
@@ -396,7 +423,10 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const byKey = new Map();   // key = needId|isoDate|pubkey   (one entry per member-per-(need,date))
     let eosed = false, sawRow = false;   // PRELOAD WARMING: write the seed on settle + later changes, not per
     // replay event; sawRow guards a transient/offline empty EOSE from clobbering a good non-empty seed to []
-    const emit = () => { const list = [...byKey.values()]; cb(list); if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed() && (list.length || sawRow)) _writeSeed(seedKeyFn(), list.map(seedRowFn)); };
+    // SEED ORDER (audit 2026-11-05 finding 10): hand _writeSeed the most RECENT sign-ups first (ts DESC) so the
+    // SEED_ROW_CAP drops the oldest, not the current ones. `list` (byKey insertion = arrival order) is unchanged
+    // for the cb() paint; only the seed input is reordered.
+    const emit = () => { const list = [...byKey.values()]; cb(list); if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed() && (list.length || sawRow)) _writeSeed(seedKeyFn(), list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(seedRowFn)); };
     // paint the last-known STRUCTURAL SUBSET instantly so the slot grid doesn't flash empty
     if (seedKeyFn) { const seeded = _readSeed(seedKeyFn()); if (seeded.length) cb(seeded); }
     const sub = S().subscribeMany(
@@ -608,7 +638,9 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const dtag = CAREAVAIL_D + cp;
     const byPub = new Map(), seenTs = new Map(), locked = new Map();
     let eosed = false;   // sticky: do not blank on a transient empty before EOSE
-    const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; try { cb(v); } catch (e) {} if (eosed && _mayCacheSeed()) _writeSeed(_availSeedKey(), v.map(_availSeedRow)); };   // PRELOAD WARMING: write on settle + later changes, not per replay event
+    // SEED ORDER (audit 2026-11-05 finding 10): seed the most RECENT offers first (ts DESC) so the SEED_ROW_CAP
+    // drops the oldest, not the current availability. cb(v) paint order is unchanged — only the seed input is sorted.
+    const emit = () => { const v = [...byPub.values()]; if (!eosed && !v.length) return; try { cb(v); } catch (e) {} if (eosed && _mayCacheSeed()) _writeSeed(_availSeedKey(), v.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(_availSeedRow)); };   // PRELOAD WARMING: write on settle + later changes, not per replay event
     // paint the last-known PUBLIC SUBSET instantly (who offered + help tags + window; the sealed note is NOT on disk)
     { const seeded = _readSeed(_availSeedKey()); if (seeded.length) { try { cb(seeded); } catch (e) {} } }
     const handlers = {
@@ -753,6 +785,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     subscribeCareRequests, subscribeCareAvail, setCareRequestStatus, declineCareRequest, approveCareRequest, subscribeCareChat, sendCareChat,
     // needs
     publishNeed, removeNeed, subscribeNeeds, openNeed,   // openNeed exported so it is testable against the SHIPPED bundle
+    careSealState,   // sealed-need display state — exported so the console JSX branch is DRIVEN by a test (rule 1/3)
     // slots + skips (read slots; the steward can now WRITE skips to block a day for the recipient)
     subscribeSlots, subscribeSkips, skipDay, unskipDay,
     // care-team admin helper (client-side check)

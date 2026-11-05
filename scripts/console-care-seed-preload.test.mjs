@@ -243,3 +243,78 @@ test('a transient / offline empty EOSE does NOT clobber a non-empty slots seed',
   assert.equal(onDisk.length, 1, 'the good slots seed was clobbered to [] by an empty EOSE');
   assert.equal(onDisk[0].needId, 'n1', 'the preserved slots seed must be the original row');
 });
+
+// ── 6. FINDING 4 — the sealed-state copy must tell a still-loading seed from a dead-key need ───────────────
+// The console used to show a care-key holder "Can't be opened — recreate this need" for EVERY sealed row while
+// the warm seed was painting — including healthy needs whose real (openable) event simply had not arrived yet.
+// Following that advice recreates a live meal train under a new id and orphans its sign-ups. careSealState is the
+// SHIPPED decision the console JSX renders from, so these drive the exact distinction (rule 1/3), not JSX text.
+test('careSealState: a _seed placeholder is "syncing", a delivered dead-key need is "unrecoverable" (finding 4)', () => {
+  const { api } = loadMeals();
+  // the misleading screen: a keyed console, a seed row → MUST NOT be unrecoverable
+  assert.equal(api.careSealState({ _sealed: true, _seed: true }, true), 'syncing', 'a seed row on a keyed console must read as still-loading, NOT "recreate this need"');
+  assert.equal(api.careSealState({ _sealed: true, _seed: true }, false), 'syncing', 'a seed row is still-loading regardless of whether the key is here');
+  // the genuinely unrecoverable case still earns the recreate advice
+  assert.equal(api.careSealState({ _sealed: true }, true), 'unrecoverable', 'a delivered sealed need a keyed device still cannot open IS unrecoverable');
+  assert.equal(api.careSealState({ _sealed: true }, false), 'needs-key', 'a sealed need with no key on this device is a self-healing sync problem');
+  assert.equal(api.careSealState({ _sealed: false }, true), 'open');
+  assert.equal(api.careSealState(null, true), 'open');
+});
+
+test('a delivered need\'s seed row carries _seed, so a keyed console classifies it "syncing" not "recreate" (finding 4)', async () => {
+  const { api, published, subs, localStorage } = loadMeals();   // keyed, unlocked console
+  await api.publishNeed({ id: 'c1', type: 'meals', dates: ['2026-08-01'], ...SENSITIVE });
+  api.subscribeNeeds(() => {});
+  subs[subs.length - 1].onevent(finalizeEvent(published[0], churchSk));
+  subs[subs.length - 1].oneose();
+  const row = JSON.parse(localStorage.getItem(needsKey(churchPub))).find(r => r.id === 'c1');
+  assert.equal(row._seed, true, 'the on-disk seed row must be marked _seed (it is a public subset, not a decrypt failure)');
+  assert.equal(api.careSealState(row, true), 'syncing', 'the finding-4 bug: a keyed console must NOT be told to recreate a healthy warm-seed need');
+});
+
+test('a delivered need a keyed console cannot decrypt is _sealed WITHOUT _seed → "unrecoverable" (finding 4 control)', () => {
+  const { api, subs } = loadMeals();   // keyed console
+  let emitted = [];
+  api.subscribeNeeds((list) => { emitted = list; });
+  const h = subs[subs.length - 1];
+  // a sealed body encrypted under a key this device does NOT hold → careOpen returns null → _sealed, never _seed
+  const evt = finalizeEvent({ kind: 30078, created_at: 50, tags: [['d', api.NEED_D + 'u1'], ['t', 'trinityone']], content: JSON.stringify({ type: 'meals', dates: ['2026-08-01'], meals: ['dinner'], enc: 'not-a-decryptable-ciphertext' }) }, churchSk);
+  h.onevent(evt); h.oneose();
+  const row = emitted.find(n => n.id === 'u1');
+  assert.ok(row && row._sealed === true && !row._seed, 'a delivered unopenable need must be _sealed and NOT a _seed placeholder');
+  assert.equal(api.careSealState(row, true), 'unrecoverable', 'this — and only this — state earns the recreate advice');
+});
+
+// ── 7. FINDING 10 — over the cap the seed must keep the CURRENT rows, not the oldest ─────────────────────────
+// _writeSeed keeps the first SEED_ROW_CAP (500) rows. The needs list paints ascending by startDate (oldest first),
+// so before the fix slice(0,500) kept the 500 oldest needs and silently dropped the current/upcoming meal trains.
+test('over the 500-row cap the needs seed keeps the CURRENT needs and drops the OLDEST (finding 10)', () => {
+  const { api, subs, localStorage } = loadMeals();   // keyed, unlocked → the seed is written
+  api.subscribeNeeds(() => {});
+  const h = subs[subs.length - 1];
+  const iso = (i) => { const d = new Date(Date.UTC(2020, 0, 1)); d.setUTCDate(d.getUTCDate() + i); return d.toISOString().slice(0, 10); };
+  const N = 520;   // > SEED_ROW_CAP (500); n0 = oldest startDate, n519 = newest
+  for (let i = 0; i < N; i++) h.onevent(finalizeEvent({ kind: 30078, created_at: 1000 + i, tags: [['d', api.NEED_D + 'n' + i], ['t', 'trinityone']], content: JSON.stringify({ type: 'meals', dates: [iso(i)], meals: ['dinner'] }) }, churchSk));
+  h.oneose();
+  const onDisk = JSON.parse(localStorage.getItem(needsKey(churchPub)));
+  assert.equal(onDisk.length, 500, 'the seed must be capped at 500 rows');
+  const ids = new Set(onDisk.map(r => r.id));
+  assert.ok(ids.has('n' + (N - 1)), 'the NEWEST need (current meal train) must survive the cap');
+  assert.ok(ids.has('n' + (N - 500)), 'the 500th-newest need must survive');
+  assert.ok(!ids.has('n0'), 'the OLDEST need must be dropped, not a current one (the finding-10 bug kept this and dropped the newest)');
+  assert.ok(!ids.has('n' + (N - 501)), 'every need older than the newest 500 must be dropped');
+});
+
+test('the slots seed is written most-recent-first so the cap keeps current sign-ups (finding 10)', () => {
+  const { api, subs, localStorage } = loadMeals();
+  api.subscribeSlots(() => {});
+  const h = subs[subs.length - 1];
+  const mk = (needId, ts, date) => finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', 'trinityone/careslot:' + needId + ':' + date + ':dinner'], ['church', churchPub], ['t', 'trinityone']], content: JSON.stringify({}) }, memberSk);
+  h.onevent(mk('old', 2, '2026-01-01'));
+  h.onevent(mk('new', 9, '2026-09-01'));
+  h.oneose();
+  const onDisk = JSON.parse(localStorage.getItem(slotsKey(churchPub)));
+  assert.equal(onDisk.length, 2, 'both sign-ups seeded');
+  assert.equal(onDisk[0].ts, 9, 'the newest sign-up must be written FIRST so it survives the cap');
+  assert.equal(onDisk[onDisk.length - 1].ts, 2, 'the oldest sign-up must be last (dropped first at the cap)');
+});
