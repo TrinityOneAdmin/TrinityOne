@@ -14,14 +14,14 @@ Documentation, organised. For the codebase map, start with [`ARCHITECTURE.md`](.
 - [`guides/RELAY-WALKTHROUGH.md`](guides/RELAY-WALKTHROUGH.md) — the follow-along tutorial for standing up your own relay end to end
 - [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — common problems and their fixes
 - [`guides/STEWARD-GUIDE.md`](guides/STEWARD-GUIDE.md) — running a church from the steward console (the full reference)
-- [`guides/STEWARDS-AND-HANDOFF-EXPLAINED.md`](guides/STEWARDS-AND-HANDOFF-EXPLAINED.md) — delegated stewards + handing off a church without handing over the key
+- [`guides/STEWARDS-AND-HANDOFF-EXPLAINED.md`](guides/STEWARDS-AND-HANDOFF-EXPLAINED.md) — helpers + handing over a church without handing over the key
 
 ## Design — product & module specs
 - [`design/ROADMAP.md`](design/ROADMAP.md) — product roadmap
 - [`design/FINANCE-MODULE.md`](design/FINANCE-MODULE.md) — the Finance module (double-entry ledger, donation nudge, CSV import)
 - [`design/TREASURY.md`](design/TREASURY.md) — the giving-records / treasury design
 - [`design/MANNA-MODULE.md`](design/MANNA-MODULE.md) — the Manna module (money-out / disbursements)
-- [`design/STEWARD-ROSTER-DESIGN.md`](design/STEWARD-ROSTER-DESIGN.md) — the owner-signed, revocable delegated-steward roster
+- [`design/STEWARD-ROSTER-DESIGN.md`](design/STEWARD-ROSTER-DESIGN.md) — the owner-signed, revocable helper roster (the "Helpers" feature)
 - [`design/CHURCH-BOX.md`](design/CHURCH-BOX.md) — the self-host appliance ("church box") design
 - [`design/CORNERSTONE-DESIGN-BRIEF.md`](design/CORNERSTONE-DESIGN-BRIEF.md) — the visual / product design brief
 - [`design/PITCH-DECK-BRIEF.md`](design/PITCH-DECK-BRIEF.md) — pitch-deck brief

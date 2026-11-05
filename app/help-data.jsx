@@ -462,13 +462,13 @@ window.HelpData = {
           { lead: 'Your website', text: 'Settings → Church → Your website can share your calendar with the outside world — off until you switch it on. Turn it on and your church’s events publish to a link you can paste into your own website’s calendar, or subscribe to from a calendar app; a group’s events only join it if a steward ticks them in one by one. You choose how far ahead it looks, what the calendar is called, and whether each event shows full details or just the title and time. Only the events you choose to share ever leave the app — nothing about your members does. One honest note: the feed’s own web address shows which relay serves your church, the same way any website address names the server it lives on.' },
         ] },
         { type: 'callout', tone: 'sage', text: 'Practical care — meal trains, lifts and errands — switches on under Settings → People → Congregation features when your church wants it. Church finances, a treasurer’s ledger, is already there in the console’s own list (see the next guide).' },
-        { type: 'note', text: 'Being a steward is delegated and revocable: a steward gets their own key and can be added or removed at any time, so leadership can change hands without anyone losing access to the church.' },
+        { type: 'note', text: 'Being a helper is delegated and revocable: a helper gets their own key and can be added or removed at any time, so leadership can change hands without anyone losing access to the church.' },
         // MARKETING-AUDIT-2026-08-05: from stewards-guide.html, now deleted (940 words, zero inbound links —
         // it had no href pointing at it from anywhere on the site). This distinction is the useful part, and
         // it is genuinely load-bearing: one of the two options cannot be undone.
         { type: 'p', text: 'There are two ways to share control of a church, and the difference is mostly about whether you can undo it:' },
         { type: 'list', items: [
-          { lead: 'A delegated steward (recommended)', text: 'Nothing secret changes hands — you send an invite, they request, you approve, and they act under their own key. The church key is never copied to their device. Revoke them and they lose access instantly. Use this for volunteers and for a second leader you might change.' },
+          { lead: 'A helper (recommended)', text: 'Nothing secret changes hands — you send an invite, they request, you approve, and they act under their own key. The church key is never copied to their device. Revoke them and they lose access instantly. Use this for volunteers and for a second leader you might change.' },
           { lead: 'A full handoff', text: 'You give someone the church’s 12-word recovery phrase, making them a co-owner with exactly your powers. This cannot be undone — once they have the phrase they have it for good, and the only way back is to move the church to a new key. Share it only with someone you would trust to be the church permanently.' },
         ] },
         // D4. stewards-guide.html listed "Manage who joins (approve / admit)" for a delegate with no caveat.
@@ -476,7 +476,7 @@ window.HelpData = {
         // (scripts/gateway.mjs: `if (d.startsWith(BLOCKED_D)) return isLeader;  // OWNER-ONLY: banning is not
         // delegated to stewards`), so the half of "managing who joins" that keeps somebody OUT is not
         // delegated. A church that hands moderation to a volunteer needs to know that before it matters.
-        { type: 'note', text: 'One limit worth knowing: a delegated steward can let people in, but only the owner can block or remove someone. If you are handing over the welcoming, keep the owner reachable for the times it has to go the other way.' },
+        { type: 'note', text: 'One limit worth knowing: a helper can let people in, but only the owner can block or remove someone. If you are handing over the welcoming, keep the owner reachable for the times it has to go the other way.' },
         { type: 'tech', text: 'The console is the same app pointed at the church’s relay with owner/steward privileges. The relay’s write-policy is the real gatekeeper — membership, approvals, invite-only groups and the safeguarding rules are all enforced server-side, so they hold even against a modified client.' },
       ],
     },
@@ -626,18 +626,19 @@ window.HelpData = {
     {
       id: 'console-steward',
       illo: 'qr',
-      title: 'Sharing the load — adding a steward',
+      title: 'Sharing the load — adding a helper',
       summary: 'Give someone their own key and exactly the powers they need — and know what each one lets them see.',
       minutes: 3,
       blocks: [
-        { type: 'p', text: 'You do not have to run everything, and you do not have to hand over the church to get help. A delegated steward signs in with their own key and does only what you have given them. Take it back and it stops immediately.' },
-        { type: 'steps', label: 'Add a steward', items: [
-          'Settings → Security → Delegated stewards.',
-          '“Add a steward” — scan their code, or paste it in. It is a public code: no key of yours or theirs changes hands.',
-          'Give them a name in your own words first — the console won’t let you add someone without one. You’ll need it to tell your stewards apart, especially the day a code gets pasted wrong.',
-          'Tick what they may do. Leave everything unticked and they can sign in and see the church, nothing more.',
+        { type: 'p', text: 'You do not have to run everything, and you do not have to hand over the church to get help. A helper signs in with their own key and does only what you have given them. Take it back and it stops immediately.' },
+        { type: 'steps', label: 'Add a helper', items: [
+          'Settings → Security → Helpers, then “Add a helper”. This shows an invite — a QR, or “Copy invite” to send as a short code.',
+          'They open their own app and tap “Help run a church”, then scan or enter the invite. It is a public invite: no key of yours or theirs changes hands, and the app makes them their own key.',
+          'They appear under “Requests to help”. Check the code is who you expect, then tap “Approve…”.',
+          'Give them a name in your own words — the console won’t let you approve someone without one — and pick what they may do: a preset, or Custom to tick each capability. The default, General helper, covers care, groups & rotas and members, with no money, safeguarding or sealed rooms.',
         ] },
-        { type: 'p', text: 'Each tick says what they will SEE, not only what they may do — which is the part worth reading slowly, because you are deciding who may read something about a person in your congregation:' },
+        { type: 'note', text: 'No camera at either end, or the person is already a member on this same device? “Advanced” on the Add-a-helper screen keeps the older ways — add by their own code, or pick a member — but the invite is the main path.' },
+        { type: 'p', text: 'The presets bundle these capabilities for you — General helper, Finance helper, Safeguarding lead, or Full helper (everything except the church key) — and Custom opens the full list. Each capability says what they will SEE, not only what they may do, which is the part worth reading slowly, because you are deciding who may read something about a person in your congregation:' },
         { type: 'list', items: [
           { lead: 'Finance', text: 'The church books, funds and statements. They can see every entry the church has ever recorded — giving, salaries, benevolence — and add more.' },
           { lead: 'Care', text: 'Care needs, the care team, safety checks. They can see who has asked for help and what they asked for — often health, money or family trouble — and who is bringing meals.' },
@@ -646,10 +647,10 @@ window.HelpData = {
           { lead: 'Groups & rotas', text: 'Groups, rotas, services, events, posts. They can see every group including private ones, read what is said in them, and post to the whole church in its name.' },
           { lead: 'Sealed rooms', text: 'Locking a room so only its members can read it. Whoever locks a room holds its key — so they can see everything said inside it from then on. That is why it is its own separate tick rather than folded into Groups & rotas.' },
         ] },
-        { type: 'note', text: 'A steward is not a second you. They cannot add other stewards, block or remove anyone, or change your relay settings — those stay with the key. So if you hand the welcoming to a volunteer, keep yourself reachable for the times it has to go the other way.' },
-        { type: 'note', text: 'These limits are enforced by your church’s relay, each time it is asked — not by the app on a steward’s phone. That is what makes them hold even against a tampered app, but it also means they need a relay that knows how to check them. A relay running very old software may not check capabilities at all, and would quietly hand a steward everything regardless of what you ticked. The shared TrinityOne relay is always kept current; if your church runs its own, keeping it updated is what keeps these limits real.' },
-        { type: 'callout', tone: 'clay', text: 'Handing over the recovery phrase is the other thing entirely, and it cannot be undone. It does not add a helper — it makes a second owner with exactly your powers, permanently. Settings → Security → Stewards & handoff is where that lives, and it says so at the moment you would do it.' },
-        { type: 'rule', text: 'If you might ever want it back, it is a delegated steward. The phrase is for someone you would trust to be the church.' },
+        { type: 'note', text: 'A helper is not a second you. They cannot add other helpers, block or remove anyone, or change your relay settings — those stay with the key. So if you hand the welcoming to a volunteer, keep yourself reachable for the times it has to go the other way.' },
+        { type: 'note', text: 'These limits are enforced by your church’s relay, each time it is asked — not by the app on a steward’s phone. That is what makes them hold even against a tampered app, but it also means they need a relay that knows how to check them. A relay running very old software may not check capabilities at all, and would quietly hand a helper everything regardless of what you ticked. The shared TrinityOne relay is always kept current; if your church runs its own, keeping it updated is what keeps these limits real.' },
+        { type: 'callout', tone: 'clay', text: 'Handing over the recovery phrase is the other thing entirely, and it cannot be undone. It does not add a helper — it makes a second owner with exactly your powers, permanently. Settings → Security → Hand over the church is where that lives, and it says so at the moment you would do it.' },
+        { type: 'rule', text: 'If you might ever want it back, it is a helper. The phrase is for someone you would trust to be the church.' },
       ],
     },
     {
@@ -707,7 +708,7 @@ window.HelpData = {
         { type: 'list', items: [
           { lead: 'Nobody legitimate ever asks for it remotely.', text: 'Not TrinityOne, not support, not a relay operator, not the diocese, not an email signed by the archdeacon. A handoff happens in person, to someone you already know, because you decided to do it — never because a message arrived asking for it.' },
           { lead: 'Urgency is the tell.', text: 'Every version of this comes with a deadline: an account closing, a migration tonight, a service that won’t run on Sunday. Nothing here has a deadline. A church that waits until Monday loses nothing.' },
-          { lead: 'A helper does not need the key.', text: 'If someone genuinely needs to help you run the church, Settings → Security → Delegated stewards gives them their own access that you can take back. Anyone who tells you that won’t do, and it has to be the phrase, has just told you what they are after.' },
+          { lead: 'A helper does not need the key.', text: 'If someone genuinely needs to help you run the church, Settings → Security → Helpers gives them their own access that you can take back. Anyone who tells you that won’t do, and it has to be the phrase, has just told you what they are after.' },
           { lead: 'Check on a channel they did not choose.', text: 'Ring the person back on the number you already had for them. A reply to the message, or a number printed inside it, proves nothing.' },
         ] },
         { type: 'rule', text: 'The phrase leaves this room one way only: on paper, to a person standing in front of you, because you decided to hand over the church.' },
@@ -731,7 +732,7 @@ window.HelpData = {
           { lead: 'Export for your accountant', text: 'Export the full ledger as a CSV whenever you need it.' },
         ] },
         { type: 'callout', tone: 'gold', text: 'The books are your church’s private bookkeeping, encrypted to a key of their own — the relay only ever holds unreadable ciphertext. The people who can open them are you and anyone you have given <b>Finance</b> to; nobody else, including whoever runs the relay. A statement you choose to share carries totals only, never member names, so it’s safe to hand out or post.' },
-        { type: 'note', text: 'Finance is one of the grants under Settings → Security → Delegated stewards. Whoever holds it can see every entry the church has ever recorded — giving, salaries, benevolence — and add more. That is the right grant for a treasurer and a heavy one for anybody else.' },
+        { type: 'note', text: 'Finance is one of the grants under Settings → Security → Helpers. Whoever holds it can see every entry the church has ever recorded — giving, salaries, benevolence — and add more. That is the right grant for a treasurer and a heavy one for anybody else.' },
         { type: 'note', text: 'More is on the way, all free: a balance sheet and trustees’ report, budgets, and regional giving-relief packs (like UK Gift Aid). Giving straight from a member’s own phone wallet is a separate idea we’re still building — nothing to set up for it yet.' },
       ],
     },
@@ -776,7 +777,7 @@ window.HelpData = {
         { type: 'p', text: 'A clearance is your church’s own sign-off for children’s work — the DBS or its local equivalent, the training, your safeguarding lead’s decision. The app does not check any of that and does not pretend to; it records the decision you have already made. The relay then re-checks the clearance on every single request, so withdrawing one ends that person’s access to every session at once, with nothing to un-send.' },
         { type: 'note', text: 'A clearance is not by itself a key on somebody’s phone. It says the church trusts them; the key is what actually opens a record, and it is issued separately by the console that holds the church key.' },
         { type: 'p', text: 'Each session gets its own key, wrapped to the people you have cleared and to your safeguarding stewards. This console issues them for the next fortnight whenever you open the Check-in page, and again whenever a clearance changes. If nobody opens it for a month, the Sundays in that month have no helper keys and the desk falls back to you and your safeguarding stewards — which is inconvenient and never blocks a check-in.' },
-        { type: 'callout', tone: 'gold', text: 'Only the console holding the church key can issue a session key, because the key is wrapped by the church’s own key. A delegated steward’s console can run the register perfectly well and cannot mint one. If a church is only ever opened by delegates, no session keys are issued at all and its cleared helpers are handed records their phone cannot open — the page says so when that is the case.' },
+        { type: 'callout', tone: 'gold', text: 'Only the console holding the church key can issue a session key, because the key is wrapped by the church’s own key. A helper’s console can run the register perfectly well and cannot mint one. If a church is only ever opened by delegates, no session keys are issued at all and its cleared helpers are handed records their phone cannot open — the page says so when that is the case.' },
         { type: 'note', text: 'If this console cannot open a key that was already issued for a session, re-issuing gives that session a new one. Every check-in already written for it then stops being readable to cleared helpers for good — there is no re-wrap, because the old key is precisely the thing this console could not open. You and the church can still read those records in the register.' },
         { type: 'note', text: 'A church with no service in today’s calendar still checks children in. The records simply carry no session, so no HELPER can open them — you, your safeguarding stewards and the child’s own guardians still can, and the parent still gets their pickup code. Nothing about how your church runs its children’s work is assumed here, and nothing blocks a child being checked in.' },
         { type: 'tech', text: 'A check-in record is a relay-side gated document sealed THREE times: to the safeguarding capability ring (the church plus every steward holding Safeguarding) in its content, under the session key in a [\'ck\'] tag, and to each guardian the record names in one [\'gk\'] tag apiece. The relay admits a reader who is the church, a safeguarding steward, a guardian named in the record’s [\'p\'] tags, or an in-window cleared helper of the session in its [\'session\'] tag — checked at request time, never cached. A guardian copy, once published, cannot be withdrawn from that guardian: removing the link stops FUTURE records naming them, and the records they were already named on stay readable to them.' },
