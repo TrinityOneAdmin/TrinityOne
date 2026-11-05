@@ -2251,7 +2251,7 @@ function DmHeaderDropdown({ dmConvos, narrow }) {
       <button onClick={() => setOpen(v => !v)} title="Private messages" aria-label={narrow ? 'Messages' : undefined} className="sk-btn sk-btn--ghost" style={{ ..._tap, fontSize: 13 }}>
         <Icon name="chat" size={15} color="currentColor" />
         {!narrow ? ' Messages' : null}
-        {unread > 0 ? <span style={{ position: 'absolute', top: narrow ? 4 : 2, right: narrow ? 4 : 6, minWidth: 17, height: 17, borderRadius: 999, background: 'var(--clay)', color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', lineHeight: 1, pointerEvents: 'none' }}>{unread}</span> : null}
+        {unread > 0 ? <span style={{ position: 'absolute', top: narrow ? 4 : 2, right: narrow ? 4 : 6, minWidth: 17, height: 17, borderRadius: 999, background: 'var(--clay-ink)', color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px', lineHeight: 1, pointerEvents: 'none' }}>{unread}</span> : null}
       </button>
       {open && hasAny ? (
         <div style={{ ...(narrow ? { position: 'fixed', top: 56, left: 16, right: 16, maxWidth: 320, marginLeft: 'auto', marginRight: 'auto' } : { position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: 320, maxWidth: '90vw' }), maxHeight: 340, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', boxShadow: 'var(--shadow-lg)', zIndex: 200, padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -4714,9 +4714,9 @@ function GroupChatModal({ group, onClose }) {
         })() : null}
         {group.kind === 'team' && teamPods.length > 0 ? (
           <div style={{ display: 'flex', gap: 6, padding: '7px 14px', borderBottom: '1px solid var(--line)', overflowX: 'auto' }}>
-            <button onClick={() => setPodFilter(null)} style={{ padding: '4px 11px', borderRadius: 999, border: podFilter === null ? 'none' : '1px solid var(--line)', background: podFilter === null ? 'var(--clay)' : 'var(--surface-2)', color: podFilter === null ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>All</button>
+            <button onClick={() => setPodFilter(null)} style={{ padding: '4px 11px', borderRadius: 999, border: podFilter === null ? 'none' : '1px solid var(--line)', background: podFilter === null ? 'var(--clay-ink)' : 'var(--surface-2)', color: podFilter === null ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>All</button>
             {teamPods.map(p => (
-              <button key={p.id} onClick={() => setPodFilter(podFilter === p.id ? null : p.id)} style={{ padding: '4px 11px', borderRadius: 999, border: podFilter === p.id ? 'none' : '1px solid var(--line)', background: podFilter === p.id ? 'var(--clay)' : 'var(--surface-2)', color: podFilter === p.id ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{p.name}</button>
+              <button key={p.id} onClick={() => setPodFilter(podFilter === p.id ? null : p.id)} style={{ padding: '4px 11px', borderRadius: 999, border: podFilter === p.id ? 'none' : '1px solid var(--line)', background: podFilter === p.id ? 'var(--clay-ink)' : 'var(--surface-2)', color: podFilter === p.id ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{p.name}</button>
             ))}
           </div>
         ) : null}
@@ -6187,7 +6187,7 @@ function DashAddRelayCard() {
                       {/* "One of yours" (SPEC item 4b): a box this church has already signed, so the steward
                           can tell their own boxes from the shared pilot pool. Clarity only — the row is
                           connected the same way whether or not it is badged. */}
-                      {o.mine ? <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: 'var(--on-sage)', background: 'var(--sage)', borderRadius: 7, padding: '1px 6px' }}>One of yours</span> : null}
+                      {o.mine ? <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: 'var(--on-sage)', background: 'var(--sage-ink)', borderRadius: 7, padding: '1px 6px' }}>One of yours</span> : null}
                       {o.name ? <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.url}</span> : null}
                     </span>
                     {Number.isFinite(o.ms) ? <span style={{ fontSize: 11, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{o.ms} ms</span> : null}

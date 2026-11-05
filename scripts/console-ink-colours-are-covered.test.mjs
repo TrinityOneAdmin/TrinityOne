@@ -406,7 +406,12 @@ test('LINT: no file loses a --clay-ink / --sage-ink colour it has today', () => 
 const BARE_INVENTORY = [
   ['app/stew-custody.jsx', []],
   ['app/stew-dashboard.jsx', [
-    [3, "background: 'var(--clay)'"],
+    // 2026-11-05: 5 now — the pod-filter feature + preload/overview landed two more NON-TEXT bare-clay fills
+    // (an unread-indicator dot and a 20px icon tile / badge glyph in --on-clay) plus the standard primary-button
+    // pattern (background:var(--clay)/color:var(--on-clay)), same as every other primary action in the console.
+    // The genuine TEXT chips the pod-filter feature added — the pod-filter pills and the unread COUNT badge — were
+    // moved to --clay-ink in this same change (owner decision 2026-11-05), so they are not among these five.
+    [5, "background: 'var(--clay)'"],
     [4, "background: 'var(--sage)'"],
     [1, "background: allUp ? 'var(--sage)' : 'var(--clay)'"],
     [1, "background: approval ? 'var(--clay)' : 'var(--line)'"],
@@ -435,6 +440,12 @@ const BARE_INVENTORY = [
     // from every other switch in the console. Covers these two tracks only; any --sage behind TEXT still fails.
     [2, "background: on(k) ? 'var(--sage)' : 'var(--line)'"],
     [1, "background: onOpt(k) ? 'var(--sage)' : 'var(--line)'"],
+    // 2026-11-05: the Tax-tools enable switch TRACK (feat/finance-taxtools). A role="switch" pill carrying no
+    // text — WCAG 1.4.11's 3:1 governs (--sage is 4.36:1), not 1.4.3's 4.5:1 — exactly like the switch tracks
+    // above. --sage-ink would make this one toggle a different colour from every other switch in the console, so
+    // it is registered here (not recoloured), the same decision the owner's 2026-11-05 recolour pass applied to
+    // the pod-filter chips (recoloured, because those carry text) but not to switch tracks.
+    [1, "background: taxOn ? 'var(--sage)' : 'var(--line)'"],
     [1, "background: photosOn ? 'var(--clay)' : 'var(--line)'"],
     [1, "background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)'"],
     [1, "background: restoreTarget === k ? 'var(--clay)' : 'transparent'"],
