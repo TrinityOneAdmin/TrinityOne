@@ -269,7 +269,7 @@ async function removeDelegate(w) {
   const { mod, draw } = load(w);
   const props = { church: { name: 'St Aidan', features: {} } };
   let tree = draw(mod.DashStewardsPanel, props);
-  const ask = find(tree, n => n.type === 'button' && /^Revoke this steward/.test(texts(n).join(' ').trim()))[0];
+  const ask = find(tree, n => n.type === 'button' && /^Revoke this helper/.test(texts(n).join(' ').trim()))[0];
   assert.ok(ask, 're-anchor: no Revoke control for the delegate');
   ask.props.onClick();
   tree = draw(mod.DashStewardsPanel, props);
@@ -601,7 +601,7 @@ test('3e MED 1: removing a delegate whose keys are WAITING says so truthfully â€
   const { mod, draw } = load(w);
   const props = { church: { name: 'St Aidan', features: {} } };
   let tree = draw(mod.DashStewardsPanel, props);
-  find(tree, n => n.type === 'button' && /^Revoke this steward/.test(texts(n).join(' ').trim()))[0].props.onClick();
+  find(tree, n => n.type === 'button' && /^Revoke this helper/.test(texts(n).join(' ').trim()))[0].props.onClick();
   tree = draw(mod.DashStewardsPanel, props);
   find(tree, n => n.type === 'button' && /^Confirm â€” revoke/.test(texts(n).join(' ').trim()))[0].props.onClick();
   for (let i = 0; i < 10; i++) await tick();

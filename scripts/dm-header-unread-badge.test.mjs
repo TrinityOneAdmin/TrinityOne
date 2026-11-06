@@ -147,7 +147,7 @@ async function rig({ convos = [], members = [], store = {} } = {}) {
 // ── badge helpers ───────────────────────────────────────────────────────────────────────────────
 function badgeCount(tree) {
   const badges = find(tree, n => n.type === 'span' && n.props && n.props.style &&
-    n.props.style.background === 'var(--clay)' && n.props.style.minWidth === 17);
+    n.props.style.background === 'var(--clay-ink)' && n.props.style.minWidth === 17);
   if (!badges.length) return 0;
   const t = texts(badges[0]).join('');
   return parseInt(t, 10) || 0;

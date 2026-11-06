@@ -156,11 +156,15 @@ test('DashStewardsPanel: somebody waiting to join is not offered as a steward ca
   let tree;
   try { tree = draw(C, { church: {} }); }
   catch (e) { assert.fail('re-anchor DashStewardsPanel harness: ' + e.message); }
-  // the candidate list only opens from the "add a steward" control; open every button until names show up
+  // the candidate list is now two clicks deep (helper-delegation regroup): "Add a helper" opens the add panel,
+  // then "Advanced: add by code, or pick a member" reveals the member picker. Each click re-renders, so re-find
+  // on every step and press the next control in the flow until the candidate names show up.
   const names = () => offered(tree);
-  for (const b of find(tree, n => n.type === 'button' && typeof n.props.onClick === 'function' && /Add|steward/i.test(texts(n).join(' ')))) {
+  for (let step = 0; step < 4 && !names().length; step++) {
+    const b = find(tree, n => n.type === 'button' && typeof n.props.onClick === 'function'
+      && /Add a helper|Advanced: add by code|or pick a member/i.test(texts(n).join(' ')))[0];
+    if (!b) break;
     b.props.onClick(); tree = draw(C, { church: {} });
-    if (names().length) break;
   }
   assert.ok(names().includes('Alice Adult'), 're-anchor: the steward candidates never appeared. Screen read: ' + said(tree));
   assert.ok(!names().includes('Pending Pat'), 'DashStewardsPanel OFFERS SOMEBODY STILL WAITING TO JOIN AS A STEWARD. Screen read: ' + said(tree));
