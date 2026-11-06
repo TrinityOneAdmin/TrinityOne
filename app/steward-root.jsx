@@ -698,6 +698,23 @@ window.StewardWelcome = StewardWelcome;
 // (see src/steward.src.js — it reads the SAME pending-church key the grant clears, so it can never fake approval).
 function StewardAwaitingApproval({ church }) {
   const name = (church && church.name) || '';
+  const cp = (church && church.church) || '';
+  const [withdrawing, setWithdrawing] = React.useState(false);
+  const [withdrawErr, setWithdrawErr] = React.useState('');
+  // Retract the helper's OWN STEWARDREQ via the engine, which publishes the SAME tombstone the on-grant path does
+  // and clears PENDING_CHURCH_KEY ONLY on a truthy publish (see src/steward.src.js withdrawStewardRequest). We exit
+  // the waiting screen (reload -> pendingStewardRequest() now null -> entry screen) ONLY when the retract actually
+  // landed; a failed publish keeps the request and shows the error, so nothing ever reports a false "withdrawn".
+  const withdraw = () => {
+    setWithdrawErr(''); setWithdrawing(true);
+    return Promise.resolve(window.Steward.withdrawStewardRequest && window.Steward.withdrawStewardRequest(cp))
+      .then((r) => {
+        if (r && r.ok) { try { location.reload(); } catch (e) {} return; }
+        setWithdrawing(false);
+        setWithdrawErr((r && r.error) || 'Could not withdraw your request. Please try again.');
+      })
+      .catch(() => { setWithdrawing(false); setWithdrawErr('Could not withdraw your request. Please try again.'); });
+  };
   const card = { width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28 };
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
@@ -708,6 +725,8 @@ function StewardAwaitingApproval({ church }) {
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your request to help has been sent. The moment the church’s owner approves you, this console opens on that church — it’ll also appear in your switcher (top-left). You can close the app and come back; nothing is lost.</div>
         </div>
         <button onClick={() => { try { if (window.Steward.selfRegister) window.Steward.selfRegister(''); } catch (e) {} try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 16 }}><Icon name="refresh" size={15} color="currentColor" /> Check again</button>
+        <button onClick={withdraw} disabled={withdrawing} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 10, color: 'var(--danger, #b4232a)' }}><Icon name="x" size={15} color="currentColor" /> {withdrawing ? 'Withdrawing…' : 'Withdraw request'}</button>
+        {withdrawErr ? <div style={{ fontSize: 12.5, color: 'var(--danger, #b4232a)', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>{withdrawErr}</div> : null}
       </div>
     </div>
   );

@@ -7886,6 +7886,49 @@ window.Steward = {
       return { church: cp, name: (stewardedChurches.get(cp) && stewardedChurches.get(cp).name) || '' };
     } catch (e) { return null; }
   },
+  // HELPER SIDE: withdraw a request to help a church that is still AWAITING approval (the "Waiting for <church> to
+  // approve you" screen's "Withdraw request" button). The request is the helper's OWN replaceable kind-30078
+  // (gateway.mjs:4847 lets its author replace it), so we retract it with the SAME tombstone the on-grant path
+  // already publishes — subscribeStewardedChurches, the `listed && !had` branch (search "RETRACT OUR OWN REQUEST"):
+  // a deleted+empty copy at the SAME d-tag (STEWARDREQ_D + cp), ['t', NET] so the owner's #t-filtered request feed
+  // (subscribeStewardRequests) receives it, ['p', cp], ['deleted'], signed with churchSk — the author the owner's
+  // console saw as this request (churchPub), never the acting `sk`. subscribeStewardRequests reads a deleted/empty
+  // STEWARDREQ as a retract (byPub.delete), so this is the ONE dismissal path, not a second parallel one. Keep this
+  // shape IN STEP with that on-grant block; the test an-approved-helper-retracts-its-own-request pins the shape there.
+  //
+  // NO FALSE SUCCESS (CLAUDE.md / two-controls-that-report-false-success): unlike the on-grant block (fire-and-forget,
+  // because the grant has already landed), this AWAITS the publish and clears the local pending state ONLY on a truthy
+  // result. A request still live on relays must not look withdrawn: on a failed/empty publish we leave PENDING_CHURCH_KEY
+  // and the requested-set intact and return { ok: false, error } so the screen keeps the request and shows the error.
+  //
+  // DISCARD THE DISPOSABLE HELP-REQUEST IDENTITY on success, so the app returns to the START screen rather than the PIN
+  // gate (device-found 2026-11-06: location.reload() after a withdraw landed on StewardUnlock, because the key blob was
+  // still present-but-locked and StewardRoot renders `ks.locked ? StewardUnlock : !ks.has ? StewardWelcome`). A console
+  // on the awaiting screen holds ONLY a bare signing key minted by createKeyQuiet ("Help run a church"): _ownKeyBlank()
+  // — never named, never registered, guarding no church and nothing sealed at rest (its only purpose was to sign this
+  // request). So on a confirmed withdraw we remove it through the PROPER removal path removeKey() — the same one
+  // "Remove this church from this device" uses — which wipes KEY_LS, the encrypted Keystore blob (encBlobRemove) and the
+  // sealed/plaintext device caches (_seedSweep/_finBookClear/_sgClearClear/_minorsLastClear), NOT a raw localStorage
+  // wipe, so there is no at-rest exposure. With no key blob StewardRoot renders StewardWelcome (!ks.has). GUARDED on
+  // _ownKeyBlank(): a real/registered church key is NEVER discarded by a withdraw (an owner who also asked to help
+  // elsewhere keeps their console); such a console just drops the pending state. Only ever on a truthy publish.
+  withdrawStewardRequest(churchKey) {
+    const cp = toPubHex(churchKey) || (() => { try { return localStorage.getItem(PENDING_CHURCH_KEY) || ''; } catch (e) { return ''; } })();
+    if (!cp) return Promise.resolve({ ok: false, error: 'There’s no pending request to withdraw.' });
+    return Promise.resolve(publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp], ['deleted']], content: '' }), churchSk)))
+      .then((ok) => {
+        if (!ok) return { ok: false, error: 'Could not withdraw — no relay accepted the change, so your request still stands. Please try again.' };
+        // The grant path clears PENDING_CHURCH_KEY; so do we, so the waiting screen exits back to the entry screen.
+        try { if ((localStorage.getItem(PENDING_CHURCH_KEY) || '') === cp) localStorage.removeItem(PENDING_CHURCH_KEY); } catch (e) {}
+        // Drop cp from the durable requested-set (written by requestSteward) so the on-grant retract can never
+        // fire a redundant tombstone for a request we have already withdrawn. Scoped by churchPub, as it was written.
+        try { const RK = 'trinityone.steward.requested.' + (churchPub || ''); let a = []; try { a = JSON.parse(localStorage.getItem(RK) || '[]') || []; } catch (e) { a = []; } if (Array.isArray(a)) localStorage.setItem(RK, JSON.stringify(a.filter(x => x !== cp))); } catch (e) {}
+        // Return to the START screen, not the PIN gate: discard the disposable help-request identity via removeKey().
+        try { if (_ownKeyBlank()) { const done = window.Steward.removeKey(); if (done && typeof done.then === 'function') done.catch(() => {}); } } catch (e) {}
+        return { ok: true, church: cp };
+      })
+      .catch(() => ({ ok: false, error: 'Could not withdraw — your request still stands. Please try again.' }));
+  },
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
     const byPub = new Map();
