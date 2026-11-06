@@ -378,7 +378,7 @@ test('F2: the answer does not depend on which base64 decoder the browser happens
 //   * group-scoped, in the only sense the console can know it: an id it has OPENED and found a `groupId` on,
 //     remembered per church in localStorage. That is the migration case R5 is about — the console published
 //     the copy, so it could read the document then.
-//   * UNLESS the owner ticked it "On the website", the one positive statement a church has made about a
+//   * UNLESS the owner ticked it "Show publicly", the one positive statement a church has made about a
 //     group event being public.
 //   * anything else — a whole-church event, or an id this console has never been able to open at all —
 //     STAYS, and the Settings page says how many are still out there. The first version withdrew those too,
@@ -404,7 +404,7 @@ test('R5: a stuck copy of a GROUP event comes off the website once the console h
   assert.deepEqual(m.dtags().filter(d => !m.tombstoned().includes(d)), ['trinityone/pubevent:evtsupper'], 'the readable event stopped being published');
 });
 
-test('R5: …but a stuck copy the owner DID tick "On the website" is left alone, however long it stays shut', async () => {
+test('R5: …but a stuck copy the owner DID tick "Show publicly" is left alone, however long it stays shut', async () => {
   const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
   const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
   await m._webSync();
@@ -506,7 +506,7 @@ test('F1: an event edited from a GROUP back to whole-church is forgotten, so a l
 
 // ── F2: `held` is the number of copies that are STILL BEING SERVED, and nothing else ─────────────────────
 // AUDIT-feeds-round4-2026-09-22 F2. This number is what the second Settings sentence counts — "N of them are
-// still on your website" — and no row constrained it: a scoped sabotage that changed it left this file
+// still on your public feed" — and no row constrained it: a scoped sabotage that changed it left this file
 // 26/26/0. It also understated in the state that matters most. A copy this console KNOWS is group-scoped is
 // deliberately left up for the whole give-up budget, and it was counted into neither half, so the page said
 // "1 event could not be published" and stayed silent about the adults-only copy that was still public —
@@ -530,7 +530,7 @@ test('F2: a group copy still up while the budget runs is COUNTED as still on the
   assert.equal(m.emitted[m.emitted.length - 1].held, 0, 'the page claims a copy that was withdrawn is still on the website');
 });
 
-test('F2: a copy the owner ticked "Not on the website" is NOT counted as still on the website', async () => {
+test('F2: a copy the owner ticked "Keep private" is NOT counted as still on the website', async () => {
   // The relay drops an opted-out copy at serve time — scripts/gateway.mjs publicFeed filters the church's
   // copies by share.optOut before it builds anything — so a copy with the tick on is NOT on the website,
   // whatever the relay still holds. This is also the number the control beside the sentence acts on, so a
@@ -767,7 +767,7 @@ test('F1: the engine NAMES the copies still out there, so a control can act with
 test('F1: a console that CAN read the event acts on the tick — the copy comes off, and goes back when it is lifted', async () => {
   // WHAT THE TICK MEANS ON A HEALTHY CONSOLE, which is the half the control's own console cannot show. The
   // copy is withdrawn from the relay as soon as a console that can open the event syncs — the same thing the
-  // per-event "Not on the website" tick has always done. So "nothing is destroyed" is true of the console
+  // per-event "Keep private" tick has always done. So "nothing is destroyed" is true of the console
   // that pressed the button and NOT of the church. The reversal is the load-bearing half: lift the tick and
   // the copy is republished, which is what makes the control safe to press.
   const live = JSON.stringify({ title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
@@ -809,7 +809,7 @@ test('F1: setWebsiteHeldMany ticks every id off in ONE share: write, and keeps t
 
 // ── ROUND 5 F1: THE CONTROL IS REVERSIBLE FROM THE EVENT ITSELF, FOR BOTH EVENT SCOPES ───────────────────
 // AUDIT-feeds-round5-2026-09-22 F1, measured on the shipped engine five steps deep: after the Settings
-// control was pressed, ticking "On the website" again in a GROUP event's own editor never brought the copy
+// control was pressed, ticking "Show publicly" again in a GROUP event's own editor never brought the copy
 // back. `setWebsiteShown` wrote `optIn` alone, `_webDesired` tests `optOut` first, so `optOut` won for ever
 // and the steward was left looking at a ticked box on an event the website did not show. A WHOLE-CHURCH
 // event came back, which is why two internal audits and two commit messages said the door swung both ways.
@@ -840,13 +840,13 @@ test('R5F1: the control is REVERSIBLE from the event itself — for a GROUP even
   const g = mirror({ events: [GROUP_READABLE], copies: {}, share: share({ optIn: ['evtyouth'] }) });
   Object.assign(g, { lostVersion: GROUP_LOST, readableVersion: GROUP_READABLE, liveBody: REVERSE_LIVE });
   const gp = await pressed(g, 'evtyouth');
-  assert.equal(gp.wasLive, true, 're-anchor: a group event ticked "On the website" was never published in the first place');
+  assert.equal(gp.wasLive, true, 're-anchor: a group event ticked "Show publicly" was never published in the first place');
   assert.deepEqual(gp.heldIds, ['evtyouth'], 're-anchor: the control was offered nothing to act on');
   assert.equal(gp.pressedOk, true, 'the control was refused');
   assert.ok(g.tombstoned().includes('trinityone/pubevent:evtyouth'), 're-anchor: the control did not take the copy off at all');
   // THE SCREEN'S HALF: the editor must not open a ticked box over an event the website no longer shows.
   assert.equal(g.steward.isWebsiteShown('evtyouth'), false,
-    'THE EVENT EDITOR STILL SHOWS "On the website ✓" FOR AN EVENT THE CONTROL TOOK OFF — the two lists contradict each other and nothing on any screen says why');
+    'THE EVENT EDITOR STILL SHOWS "Show publicly ✓" FOR AN EVENT THE CONTROL TOOK OFF — the two lists contradict each other and nothing on any screen says why');
   // …and the tick puts it back.
   const before = g.live().length;
   assert.equal(await g.steward.setWebsiteShown('evtyouth', true), true, 'the editor tick was refused');
@@ -948,12 +948,12 @@ test('R5F1 THE SCREEN: a group event the control took off goes back on the websi
   // The steward opens the event that is back in the calendar grid now the key has returned.
   const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
   const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
-  const tick = d.tick('On the website');
-  assert.ok(tick, 'THE EDIT DIALOG DRAWS NO "On the website" TICK for a group event — there is nothing on the screen that could undo the control');
+  const tick = d.tick('Show publicly');
+  assert.ok(tick, 'THE EDIT DIALOG DRAWS NO "Show publicly" TICK for a group event — there is nothing on the screen that could undo the control');
   assert.equal(tick.props.checked, false,
     'THE DIALOG OPENS WITH THE TICK SET over an event the website no longer shows — the screen contradicts the site and says nothing about it');
   tick.props.onChange({ target: { checked: true } });
-  assert.equal(d.tick('On the website').props.checked, true, 're-anchor: the tick does not follow its own onChange');
+  assert.equal(d.tick('Show publicly').props.checked, true, 're-anchor: the tick does not follow its own onChange');
   const before = m.live().length;
   const btn = d.save();
   assert.ok(btn && typeof btn.props.onClick === 'function', 're-anchor: the Edit dialog has no Save changes button');
@@ -969,8 +969,8 @@ test('R5F1 THE SCREEN CONTROL: the same dialog can take it off again — the doo
   await m._webSync();
   const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
   const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
-  assert.equal(d.tick('On the website').props.checked, true, 're-anchor: the dialog does not open ticked for an event that IS on the website');
-  d.tick('On the website').props.onChange({ target: { checked: false } });
+  assert.equal(d.tick('Show publicly').props.checked, true, 're-anchor: the dialog does not open ticked for an event that IS on the website');
+  d.tick('Show publicly').props.onChange({ target: { checked: false } });
   await d.save().props.onClick();
   await m._webSync();
   assert.ok(m.tombstoned().includes('trinityone/pubevent:evtyouth'), 'UNTICKING THE EVENT LEFT IT ON THE WEBSITE');
@@ -995,11 +995,11 @@ test('R5F1: a share: document from an OLDER console cannot make the editor contr
   m.w.share = loaded;
   const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
   const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
-  assert.equal(d.tick('On the website').props.checked, false,
+  assert.equal(d.tick('Show publicly').props.checked, false,
     'THE EDITOR OPENED WITH THE TICK SET over an event this church has opted out of — the state the F1 fix exists to make impossible, arriving from another console');
   // …and one tick still puts it back, so the repair costs the church nothing
   const before = m.live().length;
-  d.tick('On the website').props.onChange({ target: { checked: true } });
+  d.tick('Show publicly').props.onChange({ target: { checked: true } });
   await d.save().props.onClick();
   await m._webSync();
   assert.ok(m.live().slice(before).includes('trinityone/pubevent:evtyouth'), 'the tick no longer puts the event back after the document was repaired');
@@ -1013,7 +1013,7 @@ test('R5F1: a share: document from an OLDER console cannot make the editor contr
 // ticks it) — so a dialog that opened before the id was taken off the website, and is Saved afterwards
 // WITHOUT the steward looking at the tick again, republished the event: reachable with two consoles, one
 // with the Edit dialog open and one pressing the Settings control.
-test('R6F1: an Edit dialog already open does not undo "Take it off our website" pressed while it sat open', async () => {
+test('R6F1: an Edit dialog already open does not undo "Take it off the feed" pressed while it sat open', async () => {
   const m = mirror({ events: [GROUP_READABLE], copies: {}, share: share({ optIn: ['evtyouth'] }) });
   Object.assign(m, { lostVersion: GROUP_LOST, readableVersion: GROUP_READABLE, liveBody: REVERSE_LIVE });
   await m._webSync();
@@ -1022,7 +1022,7 @@ test('R6F1: an Edit dialog already open does not undo "Take it off our website" 
   // The steward opens the Edit dialog WHILE the event is still on the website — the tick reads ON.
   const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
   const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
-  assert.equal(d.tick('On the website').props.checked, true, 're-anchor: the dialog did not open ticked on');
+  assert.equal(d.tick('Show publicly').props.checked, true, 're-anchor: the dialog did not open ticked on');
 
   // The Settings control is pressed — by this console or another — WHILE the dialog sits open.
   await pressed(m, 'evtyouth');
@@ -1046,8 +1046,8 @@ test('R6F1 CONTROL: the steward DOES look at the tick again and unticks it — t
   await m._webSync();
   const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
   const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
-  assert.equal(d.tick('On the website').props.checked, true, 're-anchor');
-  d.tick('On the website').props.onChange({ target: { checked: false } });
+  assert.equal(d.tick('Show publicly').props.checked, true, 're-anchor');
+  d.tick('Show publicly').props.onChange({ target: { checked: false } });
   await d.save().props.onClick();
   await m._webSync();
   assert.ok(m.tombstoned().includes('trinityone/pubevent:evtyouth'), 'A DELIBERATE UNTICK NO LONGER WRITES — the fix over-applied and silenced every Save');
@@ -1219,21 +1219,21 @@ test('THE SCREEN (F1): the page says which of them are STILL on the website', ()
   // defensible if the church is told, and this sentence is the only place it is told. Delete the `held`
   // block from app/stew-dashboard.jsx and this row goes red.
   const one = panel({ ...share(), known: true, blocked: 1, blockedWhy: 'key', held: 1 });
-  assert.match(one, /1 of them is still on your website/,
+  assert.match(one, /1 of them is still on your public feed/,
     'THE PAGE DOES NOT SAY THE EVENT IS STILL PUBLISHED — the console left an event it cannot read on a public website and the Settings page shows only "could not be published"');
   assert.match(one, /could not open it to check/, 'the page does not say why it was left there');
   const many = panel({ ...share(), known: true, blocked: 5, blockedWhy: 'key', held: 5 });
-  assert.match(many, /5 of them are still on your website/, 'the count is not the engine\'s');
+  assert.match(many, /5 of them are still on your public feed/, 'the count is not the engine\'s');
   assert.match(many, /could not open them to check/, 'the plural sentence is not plural');
   // CONTROL: blocked events that were all withdrawn say nothing of the kind.
   const none = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'key', held: 0 });
   assert.match(none, /2 events could not be published/, 're-anchor: the blocked line stopped rendering');
-  assert.doesNotMatch(none, /still on your website/, 'the page claims events are still published when the engine withdrew them');
+  assert.doesNotMatch(none, /still on your public feed/, 'the page claims events are still published when the engine withdrew them');
 });
 
 // ── F1: a church can ACT on the sentence, without opening anything ───────────────────────────────────────
-// AUDIT-feeds-round4-2026-09-22 F1. The page told a church "1 of them is still on your website" and offered
-// nothing that would take it off. The intended escape — tick the event "Not on the website", which the relay
+// AUDIT-feeds-round4-2026-09-22 F1. The page told a church "1 of them is still on your public feed" and offered
+// nothing that would take it off. The intended escape — tick the event "Keep private", which the relay
 // honours at serve time — is unreachable for exactly these events: a locked event is absorbed with no date
 // (`_subAddr`), the console calendar buckets by date, and `grep -c "_locked" app/stew-schedule.jsx` is 0, so
 // the event is on no day of the grid and its editor cannot be opened. The only lever left was the master
@@ -1252,19 +1252,19 @@ const btnIn = (sink, label) => allNodes(sink.tree).find(n => n && n.type === 'bu
 test('THE SCREEN (F1): the held sentence carries a control that takes those copies off the website', async () => {
   const sink = {};
   const said = panel(HELD_SNAP(), sink);
-  assert.match(said, /Take it off our website/,
+  assert.match(said, /Take it off the feed/,
     'THE PAGE TELLS A CHURCH A COPY IS STILL PUBLIC AND OFFERS NOTHING THAT WOULD TAKE IT OFF — the only lever is the master switch, which removes the whole calendar');
-  const btn = btnIn(sink, 'Take off our website');
+  const btn = btnIn(sink, 'Take off the public feed');
   assert.ok(btn && typeof btn.props.onClick === 'function', 'the control is not a button that does anything');
   await btn.props.onClick({ stopPropagation() {} });
   assert.deepEqual(sink.calls, [['evtstuck']],
     'THE CONTROL DID NOT TICK THE HELD IDS OFF THE WEBSITE — it called the engine with ' + JSON.stringify(sink.calls));
-  assert.match(sink.render(), /your website no longer shows it/, 'the page does not say what just happened');
+  assert.match(sink.render(), /no longer on your public feed/, 'the page does not say what just happened');
   // the plural reads as a plural, and carries every id the engine named
   const many = {};
   const saidMany = panel(HELD_SNAP({ blocked: 3, held: 3, heldIds: ['evta', 'evtb', 'evtc'] }), many);
-  assert.match(saidMany, /Take them off our website/, 'the control is singular for three events');
-  await btnIn(many, 'Take off our website').props.onClick({ stopPropagation() {} });
+  assert.match(saidMany, /Take them off the feed/, 'the control is singular for three events');
+  await btnIn(many, 'Take off the public feed').props.onClick({ stopPropagation() {} });
   assert.deepEqual(many.calls, [['evta', 'evtb', 'evtc']], 'the control took only some of the copies off');
 });
 
@@ -1274,33 +1274,33 @@ test('THE SCREEN (F1): the control does not claim success over a write the relay
   // told nothing, because it will stop looking.
   const sink = { ok: false };
   panel(HELD_SNAP(), sink);
-  await btnIn(sink, 'Take off our website').props.onClick({ stopPropagation() {} });
+  await btnIn(sink, 'Take off the public feed').props.onClick({ stopPropagation() {} });
   const after = sink.render();
   assert.match(after, /Not saved/, 'A REFUSED WRITE IS REPORTED AS SUCCESS: ' + after.slice(0, 200));
-  assert.doesNotMatch(after, /no longer shows it/, 'the page celebrated a write that never landed');
+  assert.doesNotMatch(after, /no longer on your public feed/, 'the page celebrated a write that never landed');
 });
 
 test('THE SCREEN (F1) CONTROL: nothing held, no control — and nothing to press when the engine named no ids', () => {
   const none = {};
   const said = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'key', held: 0 }, none);
-  assert.doesNotMatch(said, /off our website/, 'the page offers to take copies off when none are up');
-  assert.equal(btnIn(none, 'Take off our website'), undefined, 're-anchor: the control renders with nothing held');
+  assert.doesNotMatch(said, /Take (it|them) off the feed/, 'the page offers to take copies off when none are up');
+  assert.equal(btnIn(none, 'Take off the public feed'), undefined, 're-anchor: the control renders with nothing held');
   // a snapshot from an older engine carries no ids: no control at all, rather than a dead one
   const stale = {};
   panel(HELD_SNAP({ heldIds: undefined }), stale);
-  assert.equal(btnIn(stale, 'Take off our website'), undefined,
+  assert.equal(btnIn(stale, 'Take off the public feed'), undefined,
     'THE PAGE DRAWS A CONTROL WITH NOTHING TO ACT ON — a greyed-out button a steward cannot press and is never told why');
   // …and a snapshot the engine really did fill renders a control that can be PRESSED. Without this the whole
   // round passes over `disabled={true}` (measured: an always-disabled button left this file 33/33, green).
   const live = {};
   panel(HELD_SNAP(), live);
-  const btn = btnIn(live, 'Take off our website');
+  const btn = btnIn(live, 'Take off the public feed');
   assert.ok(btn, 're-anchor: the control is gone');
   assert.equal(!!btn.props.disabled, false,
     'THE CONTROL IS GREYED OUT WHEN THERE IS SOMETHING TO ACT ON — a church is shown the answer to its problem and cannot press it');
   // the two reasons it IS allowed to be dead, both of which the engine sets
   const notyet = {}; panel(HELD_SNAP({ known: false }), notyet);
-  const b2 = btnIn(notyet, 'Take off our website');
+  const b2 = btnIn(notyet, 'Take off the public feed');
   assert.ok(!b2 || b2.props.disabled, 'the control is live before the relay has answered, when the write would rebuild share: from the defaults');
 });
 
@@ -1331,13 +1331,13 @@ test('THE SCREEN (F1): the page a steward comes BACK to says it too', async () =
   const sink = {};
   const said = panel(snap, sink);
   assert.match(said, /3 events could not be published/, 'THE PAGE IS SILENT ON EVERY VISIT AFTER THE FIRST');
-  assert.match(said, /3 of them are still on your website/, 'the second visit does not say the copies are still public');
-  assert.ok(btnIn(sink, 'Take off our website'), 'THE CONTROL IS GONE ON EVERY VISIT AFTER THE FIRST');
+  assert.match(said, /3 of them are still on your public feed/, 'the second visit does not say the copies are still public');
+  assert.ok(btnIn(sink, 'Take off the public feed'), 'THE CONTROL IS GONE ON EVERY VISIT AFTER THE FIRST');
 });
 
 test('CONTROL: with nothing blocked the page says nothing of the kind', () => {
   const said = panel({ ...share(), known: true, blocked: 0, blockedWhy: '', held: 0 });
   assert.doesNotMatch(said, /could not be published/, 'the page cries wolf on a healthy church');
-  assert.doesNotMatch(said, /still on your website/, 'the page cries wolf on a healthy church');
-  assert.match(said, /Share our calendar/, 're-anchor: the panel did not render at all');
+  assert.doesNotMatch(said, /still on your public feed/, 'the page cries wolf on a healthy church');
+  assert.match(said, /Share our calendar publicly/, 're-anchor: the panel did not render at all');
 });

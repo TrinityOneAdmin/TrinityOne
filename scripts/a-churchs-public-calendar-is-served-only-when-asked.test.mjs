@@ -51,7 +51,7 @@ const ap = grace.pub, bp = stmarks.pub;
 const NPUB = npubEncode(ap), NPUB_B = npubEncode(bp), NPUB_UNKNOWN = npubEncode(K().pub);
 
 // Three events, as the console would copy them: a timed one-off, an all-day one-off, and a weekly meeting.
-// EV_HELD is the one the church ticks "Not on the website". EV_SECRET has an event: document and NO copy.
+// EV_HELD is the one the church ticks "Keep private". EV_SECRET has an event: document and NO copy.
 const EV_SUPPER = 'evtsupper', EV_HELD = 'evtheld', EV_FAIR = 'evtfair', EV_SUNDAY = 'evtsunday', EV_SECRET = 'evtsecret';
 const COPY = {
   [EV_SUPPER]: { title: 'Harvest supper, all welcome', date: '2026-10-03', time: '19:30', where: 'The church hall', blurb: 'Bring a dish; drinks provided.' },

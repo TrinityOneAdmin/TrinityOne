@@ -180,7 +180,7 @@ test('/import onto a FRESH relay reaches the same answers — the steward roster
 // BEHAVIOUR is unchanged and right: a group leader cannot withdraw a church-authored event ANYWHERE in this
 // product — not from the console, not from a member's phone, since _forgetById is shared — so what this
 // branch changed is that the feed now AGREES with the app instead of diverging from it, which was the
-// finding. The owner unticks "On the website" to take such an event off.
+// finding. The owner unticks "Show publicly" to take such an event off.
 
 test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the church\'s event stays and the mirror publishes nothing', async () => {
   // The real chain out of the shipped bundle: _tombstoneTargets -> _forgetById (with the console's own

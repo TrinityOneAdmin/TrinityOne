@@ -45,12 +45,12 @@ function mount(componentName, props, { steward = {}, preset = {}, events = [], g
   };
   return { render, states, nodes: () => nodes(render()), dispatched };
 }
-const tickOf = (m) => m.nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Not on the website');
-const onTickOf = (m) => m.nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'On the website');
+const tickOf = (m) => m.nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Keep private');
+const onTickOf = (m) => m.nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Show publicly');
 const owner = (over = {}) => ({ isDelegated: () => false, setWebsiteHeld: async () => true, isWebsiteHeld: () => false, setWebsiteShown: async () => true, isWebsiteShown: () => false, publishEvent: async (ev) => ({ id: 'evt1', ...ev }), ownedNetworks: () => [], ...over });
 
 test('an owner console draws the tick in both dialogs', () => {
-  assert.ok(tickOf(mount('SchEventModal', { day: '', onClose() {} }, { steward: owner() })), 'the New event dialog has no "Not on the website" tick for the church key');
+  assert.ok(tickOf(mount('SchEventModal', { day: '', onClose() {} }, { steward: owner() })), 'the New event dialog has no "Keep private" tick for the church key');
   assert.ok(tickOf(mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }, { steward: owner() })), 'the Edit event dialog has no tick for the church key');
 });
 
@@ -74,7 +74,7 @@ const YOUTH_GROUP = [{ id: 'grpyouth', name: 'Youth', kind: 'group' }];
 
 test('the website tick sits between "Belongs to" and the optional fields in the New event dialog — both ticks', () => {
   const whole = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), groups: YOUTH_GROUP });
-  const [tick, belongs, chip, cover, note] = orderIn(whole, isTick('Not on the website'), isBelongs, isChip, isCover, isNote);
+  const [tick, belongs, chip, cover, note] = orderIn(whole, isTick('Keep private'), isBelongs, isChip, isCover, isNote);
   assert.ok(tick >= 0 && belongs >= 0 && chip >= 0 && cover >= 0 && note >= 0,
     're-anchor: one of these controls is not in the New event dialog at all — ' + JSON.stringify({ tick, belongs, chip, cover, note }));
   assert.ok(tick > belongs, 'the website tick is ABOVE "Belongs to", which is what decides which tick is shown');
@@ -84,8 +84,8 @@ test('the website tick sits between "Belongs to" and the optional fields in the 
   assert.ok(tick < note, 'THE WEBSITE TICK IS BELOW THE NOTE BOX — same scroll, same control');
   // the group event's opposite tick, in the same place
   const grp = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), groups: YOUTH_GROUP, preset: { 6: 'grpyouth' } });
-  const [on, belongs2, chip2, cover2, note2] = orderIn(grp, isTick('On the website'), isBelongs, isChip, isCover, isNote);
-  assert.ok(on >= 0 && chip2 >= 0, 're-anchor: a group event draws no "On the website" tick in the New event dialog');
+  const [on, belongs2, chip2, cover2, note2] = orderIn(grp, isTick('Show publicly'), isBelongs, isChip, isCover, isNote);
+  assert.ok(on >= 0 && chip2 >= 0, 're-anchor: a group event draws no "Show publicly" tick in the New event dialog');
   assert.ok(on > belongs2, 'the group tick is above "Belongs to"');
   assert.ok(on > chip2, 'the group tick sits inside the "Belongs to" block rather than after it');
   assert.ok(on < cover2 && on < note2,
@@ -97,13 +97,13 @@ test('…and the Edit dialog puts it above the details box — both ticks', () =
   // "Name", and both this file and the headless-browser file stayed green: only `tick < Details` was ever
   // asserted. The four cases are meant to sit in the SAME place, so the lower bound is pinned too.
   const whole = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }, { steward: owner() });
-  const [tick, where, note] = orderIn(whole, isTick('Not on the website'), isWhere, isNote);
+  const [tick, where, note] = orderIn(whole, isTick('Keep private'), isWhere, isNote);
   assert.ok(tick >= 0 && where >= 0 && note >= 0, 're-anchor: ' + JSON.stringify({ tick, where, note }));
   assert.ok(tick < note, 'THE WEBSITE TICK IS BELOW THE DETAILS BOX IN THE EDIT DIALOG — the same scroll as the New event dialog had');
   assert.ok(tick > where, 'THE WEBSITE TICK IS ABOVE "WHERE" IN THE EDIT DIALOG — it is meant to follow the fields that say what the event IS, in the same place as the New event dialog');
   const grp = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner() });
-  const [on, where2, note2] = orderIn(grp, isTick('On the website'), isWhere, isNote);
-  assert.ok(on >= 0 && where2 >= 0, 're-anchor: a group event draws no "On the website" tick in the Edit dialog');
+  const [on, where2, note2] = orderIn(grp, isTick('Show publicly'), isWhere, isNote);
+  assert.ok(on >= 0 && where2 >= 0, 're-anchor: a group event draws no "Show publicly" tick in the Edit dialog');
   assert.ok(on < note2, 'THE GROUP EVENT\'S TICK IS BELOW THE DETAILS BOX — the four cases must agree');
   assert.ok(on > where2, 'the group event\'s tick is above "Where" — the four cases must agree');
 });
@@ -113,13 +113,13 @@ test('a delegated steward\'s console draws NO tick — the relay would refuse th
   assert.equal(tickOf(mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }, { steward: owner({ isDelegated: () => true }) })), undefined, 'THE TICK IS SHOWN TO A DELEGATE in the Edit event dialog');
 });
 
-test('a GROUP event is offered the OPPOSITE tick — "On the website", off by default — and never the opt-out one', () => {
+test('a GROUP event is offered the OPPOSITE tick — "Show publicly", off by default — and never the opt-out one', () => {
   // Audit F2, owner 2026-09-22: a group's event is withheld from the church's own minors by the relay's read
   // gate, so it does not go on the public feed unless a steward puts it there, per item.
   const m = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner() });
-  assert.equal(tickOf(m), undefined, 'a GROUP event is offered "Not on the website" — its default is already off, so that tick would do nothing');
+  assert.equal(tickOf(m), undefined, 'a GROUP event is offered "Keep private" — its default is already off, so that tick would do nothing');
   const on = onTickOf(m);
-  assert.ok(on, 'the Edit dialog has no "On the website" tick for a group event');
+  assert.ok(on, 'the Edit dialog has no "Show publicly" tick for a group event');
   assert.equal(on.props.checked, false, 'a group event opens already ticked on to the website');
   const shown = onTickOf(mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner({ isWebsiteShown: (id) => id === 'evt1' }) }));
   assert.equal(shown.props.checked, true, 'a group event the church already put on the website opens unticked');
@@ -145,7 +145,7 @@ test('a tick the engine refused to record is said through the console banner, an
   assert.equal(closed, true, 'the event WAS saved, so the dialog must close as usual');
   const banner = m.dispatched.find(e => e.type === 'steward-write-blocked');
   assert.ok(banner, 'the opt-out was refused and nothing told the steward — the tick silently did nothing');
-  assert.match(String(banner.detail && banner.detail.message), /Not on the website/, 'the banner does not name the tick that was lost');
+  assert.match(String(banner.detail && banner.detail.message), /Keep private/, 'the banner does not name the tick that was lost');
 });
 
 test('CONTROL: a tick the engine recorded raises no banner', async () => {

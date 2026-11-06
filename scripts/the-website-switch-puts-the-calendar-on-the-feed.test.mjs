@@ -4,7 +4,7 @@
 // reference/DESIGN-embeddable-church-info.md, phase 1 — the point of USE (CLAUDE.md rule 1). The relay half
 // is proved by scripts/a-churchs-public-calendar-is-served-only-when-asked.test.mjs with hand-made documents.
 // This file proves the SCREENS write those documents: delete the switch from Settings → Your website, or the
-// "Not on the website" tick from the New event dialog, or the reconciler that writes the public copies, and
+// "Keep private" tick from the New event dialog, or the reconciler that writes the public copies, and
 // this file goes red while the relay test stays green.
 //
 // A real scripts/gateway.mjs on a fresh private box (no churches: the wizard's first registration is the
@@ -188,7 +188,7 @@ const COVER = `[...document.querySelectorAll('label')].find(l => /Add a photo/.t
 const NOTE = `document.querySelector('textarea[aria-label="Note (optional)"]')`;
 const DETAILS = `document.querySelector('textarea[aria-label="Details"]')`;
 
-test('two events are added on the Calendar page — one with "Not on the website" ticked', { skip: SKIP, timeout: 240000 }, async () => {
+test('two events are added on the Calendar page — one with "Keep private" ticked', { skip: SKIP, timeout: 240000 }, async () => {
   // The church name key, which seals every event. The dashboard mints it on mount for a new church; an event
   // saved before it lands is refused ("not saved") rather than written in the clear, so wait for it as a
   // steward who paused to read the screen would.
@@ -200,13 +200,13 @@ test('two events are added on the Calendar page — one with "Not on the website
     assert.equal(await evalIn(typeInto('input[aria-label="Title"]', title)), 'ok');
     assert.equal(await evalIn(typeInto('input[aria-label="Date"]', date)), 'ok');
     assert.equal(await evalIn(typeInto('input[aria-label="Where"]', 'The church hall')), 'ok');
-    const tickPresent = await evalIn(`!!document.querySelector('input[aria-label="Not on the website"]')`);
+    const tickPresent = await evalIn(`!!document.querySelector('input[aria-label="Keep private"]')`);
     assert.equal(tickPresent, true, 'THE "NOT ON THE WEBSITE" TICK IS NOT IN THE NEW EVENT DIALOG');
-    assert.equal(await evalIn(aboveIn('Not on the website', COVER)), 'above',
+    assert.equal(await evalIn(aboveIn('Keep private', COVER)), 'above',
       'THE WEBSITE TICK IS BELOW THE COVER IMAGE PICKER on a real screen — a steward has to scroll past the photo and the note to reach the control that decides whether the event is public');
-    assert.equal(await evalIn(aboveIn('Not on the website', NOTE)), 'above', 'THE WEBSITE TICK IS BELOW THE NOTE BOX on a real screen');
-    if (tick) assert.equal(await evalIn(clickSel('input[aria-label="Not on the website"]')), 'ok');
-    assert.equal(await evalIn(`document.querySelector('input[aria-label="Not on the website"]').checked`), !!tick, 'the tick did not take');
+    assert.equal(await evalIn(aboveIn('Keep private', NOTE)), 'above', 'THE WEBSITE TICK IS BELOW THE NOTE BOX on a real screen');
+    if (tick) assert.equal(await evalIn(clickSel('input[aria-label="Keep private"]')), 'ok');
+    assert.equal(await evalIn(`document.querySelector('input[aria-label="Keep private"]').checked`), !!tick, 'the tick did not take');
     await sleep(200);
     await press('/^Add event$/', 'Add event');
     await waitFor(`!document.querySelector('input[aria-label="Title"]')`, 30000, 'the dialog to close after saving');
@@ -218,7 +218,7 @@ test('two events are added on the Calendar page — one with "Not on the website
     assert.equal(ev.length, 2, 'the box holds ' + ev.length + ' event documents');
     for (const e of ev) { assert.ok(/^\{"e":"/.test(e.content), 'an event reached the box in the clear: ' + e.content.slice(0, 60)); } }
   { const t0 = Date.now(); let sh = []; while (Date.now() - t0 < 20000) { sh = heldBy(churchPub, 'trinityone/share:'); if (sh.length) break; await sleep(400); }
-    assert.equal(sh.length, 1, 'ticking "Not on the website" wrote no share: document');
+    assert.equal(sh.length, 1, 'ticking "Keep private" wrote no share: document');
     const c = JSON.parse(sh[0].content);
     assert.equal(c.calendar, false, 'the tick switched the calendar ON');
     assert.equal(c.optOut.length, 1, 'the tick recorded ' + c.optOut.length + ' opt-outs, not 1'); }
@@ -230,12 +230,12 @@ test('Settings → Your website → the switch: the feed appears at the address 
   await press('/^Settings$/', 'the Settings section');
   await waitFor(`[...document.querySelectorAll('button.set-item')].some(b => /Your website/.test(b.textContent||''))`, 20000, 'the Your website row');
   assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('button.set-item')].find(b => /Your website/.test(b.textContent||'')); b.click(); return 'ok'; })()`), 'ok');
-  await waitFor(`!!document.querySelector('button[aria-label="Share our calendar"]')`, 20000, 'the switch');
-  assert.equal(await evalIn(`document.querySelector('button[aria-label="Share our calendar"]').getAttribute('aria-checked')`), 'false', 'the switch is already on');
+  await waitFor(`!!document.querySelector('button[aria-label="Share our calendar publicly"]')`, 20000, 'the switch');
+  assert.equal(await evalIn(`document.querySelector('button[aria-label="Share our calendar publicly"]').getAttribute('aria-checked')`), 'false', 'the switch is already on');
   assert.equal(await evalIn(`!!document.querySelector('input[aria-label="Feed address"]')`), false, 'the feed address is shown while sharing is off');
-  await waitFor(`!document.querySelector('button[aria-label="Share our calendar"]').disabled`, 20000, 'the switch to be enabled (the engine has answered)');
-  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar"]')), 'ok');
-  await waitFor(`document.querySelector('button[aria-label="Share our calendar"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch to read on');
+  await waitFor(`!document.querySelector('button[aria-label="Share our calendar publicly"]').disabled`, 20000, 'the switch to be enabled (the engine has answered)');
+  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar publicly"]')), 'ok');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar publicly"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch to read on');
   const shown = await evalIn(`(document.querySelector('input[aria-label="Feed address"]') || {}).value || ''`);
   assert.equal(shown, feedUrl(), 'the address on screen is not the address the box serves');
   const r = await pollFeed(x => x.status === 200 && x.text.includes('SUMMARY'));
@@ -302,7 +302,7 @@ test('after a fresh boot, an event added with Settings never opened joins the fe
   assert.equal(r.text.includes(HELD), false, 'THE HELD EVENT LEAKED');
 });
 
-test('a GROUP\'s event stays OFF the feed until "On the website" is ticked for it — adults-only rooms are withheld from the church\'s own children, so they never reach the website by default', { skip: SKIP, timeout: 240000 }, async () => {
+test('a GROUP\'s event stays OFF the feed until "Show publicly" is ticked for it — adults-only rooms are withheld from the church\'s own children, so they never reach the website by default', { skip: SKIP, timeout: 240000 }, async () => {
   // Audit of 02b6cf3, F2; owner decision 2026-09-22. The relay's read gate withholds an adults-only group's
   // event from the church's minors; the first mirror put every event on the public feed regardless. Now an
   // event scoped to a group is mirrored only when the steward ticks it on, per item, in the event's dialog.
@@ -320,12 +320,12 @@ test('a GROUP\'s event stays OFF the feed until "On the website" is ticked for i
   assert.equal(await evalIn(typeInto('input[aria-label="Where"]', 'The vicarage')), 'ok');
   // scope it to the group — the chip carries the group's name
   await press('/^Youth leaders$/', 'the Youth leaders chip');
-  assert.equal(await evalIn(`!!document.querySelector('input[aria-label="Not on the website"]')`), false, 'a GROUP event still offers "Not on the website" — the default for a group event is off, so the tick must be the inverse');
-  assert.equal(await evalIn(`!!document.querySelector('input[aria-label="On the website"]')`), true, 'THE "ON THE WEBSITE" TICK IS NOT IN THE NEW EVENT DIALOG for a group event');
-  assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), false, 'the tick is on by default');
-  assert.equal(await evalIn(aboveIn('On the website', COVER)), 'above',
+  assert.equal(await evalIn(`!!document.querySelector('input[aria-label="Keep private"]')`), false, 'a GROUP event still offers "Keep private" — the default for a group event is off, so the tick must be the inverse');
+  assert.equal(await evalIn(`!!document.querySelector('input[aria-label="Show publicly"]')`), true, 'THE "ON THE WEBSITE" TICK IS NOT IN THE NEW EVENT DIALOG for a group event');
+  assert.equal(await evalIn(`document.querySelector('input[aria-label="Show publicly"]').checked`), false, 'the tick is on by default');
+  assert.equal(await evalIn(aboveIn('Show publicly', COVER)), 'above',
     'A GROUP EVENT\'S TICK IS BELOW THE COVER IMAGE PICKER on a real screen — the two ticks are the same control in two states and must sit in the same place');
-  assert.equal(await evalIn(aboveIn('On the website', NOTE)), 'above', 'a group event\'s tick is below the note box on a real screen');
+  assert.equal(await evalIn(aboveIn('Show publicly', NOTE)), 'above', 'a group event\'s tick is below the note box on a real screen');
   await press('/^Add event$/', 'Add event');
   await waitFor(`!document.querySelector('input[aria-label="Title"]')`, 30000, 'the dialog to close after saving');
   // the event reached the box, sealed and group-tagged; then give the mirror its window and read the feed
@@ -342,12 +342,12 @@ test('a GROUP\'s event stays OFF the feed until "On the website" is ticked for i
   await sleep(500);
   assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('[role="button"]')].find(x=>(x.textContent||'').includes(${JSON.stringify(YOUTH)})); if(b){b.click();return 'ok';} return 'miss'; })()`), 'ok', 'the event card did not open');
   await press('/^Edit$/', 'Edit');
-  await waitFor(`!!document.querySelector('input[aria-label="On the website"]')`, 20000, 'the "On the website" tick in the Edit dialog');
-  assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), false, 'Edit opened with the tick on');
-  assert.equal(await evalIn(aboveIn('On the website', DETAILS)), 'above',
+  await waitFor(`!!document.querySelector('input[aria-label="Show publicly"]')`, 20000, 'the "Show publicly" tick in the Edit dialog');
+  assert.equal(await evalIn(`document.querySelector('input[aria-label="Show publicly"]').checked`), false, 'Edit opened with the tick on');
+  assert.equal(await evalIn(aboveIn('Show publicly', DETAILS)), 'above',
     'THE WEBSITE TICK IS BELOW THE DETAILS BOX IN THE EDIT DIALOG on a real screen');
-  assert.equal(await evalIn(clickSel('input[aria-label="On the website"]')), 'ok');
-  assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), true, 'the tick did not take');
+  assert.equal(await evalIn(clickSel('input[aria-label="Show publicly"]')), 'ok');
+  assert.equal(await evalIn(`document.querySelector('input[aria-label="Show publicly"]').checked`), true, 'the tick did not take');
   await press('/^Save changes$/', 'Save changes');
   const on = await pollFeed(x => x.status === 200 && x.text.includes(YOUTH));
   assert.equal(on.text.includes(YOUTH), true, 'THE STEWARD TICKED THE GROUP EVENT ON AND IT IS STILL NOT ON THE FEED');
@@ -378,15 +378,15 @@ test('a tick saved in the seconds after a reconnect keeps the switch on and ever
   await press('/^Settings$/', 'the Settings section');
   await waitFor(`[...document.querySelectorAll('button.set-item')].some(b => /Your website/.test(b.textContent||''))`, 20000, 'the Your website row');
   assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('button.set-item')].find(b => /Your website/.test(b.textContent||'')); b.click(); return 'ok'; })()`), 'ok');
-  await waitFor(`document.querySelector('button[aria-label="Share our calendar"]') && !document.querySelector('button[aria-label="Share our calendar"]').disabled`, 20000, 'the switch');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar publicly"]') && !document.querySelector('button[aria-label="Share our calendar publicly"]').disabled`, 20000, 'the switch');
   await evalIn(`window.Steward.subscribeWebsiteShare(() => {}, { restart: true }); 'ok'`);
-  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar"]')), 'ok');
-  await waitFor(`document.querySelector('button[aria-label="Share our calendar"]').getAttribute('aria-checked') === 'false'`, 20000, 'the switch to read off');
+  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar publicly"]')), 'ok');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar publicly"]').getAttribute('aria-checked') === 'false'`, 20000, 'the switch to read off');
   const off = JSON.parse(heldBy(churchPub, 'trinityone/share:')[0].content);
   assert.equal(off.calendar, false);
   assert.ok(off.optOut.includes(before.optOut[0]), 'SWITCHING OFF IN THE RESTART WINDOW DROPPED THE OPT-OUT: ' + JSON.stringify(off.optOut));
-  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar"]')), 'ok');
-  await waitFor(`document.querySelector('button[aria-label="Share our calendar"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch to read on');
+  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar publicly"]')), 'ok');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar publicly"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch to read on');
   const back = await pollFeed(x => x.status === 200 && x.text.includes('SUMMARY'));
   assert.equal(back.text.includes(HELD), false, 'THE HELD EVENT LEAKED after off-then-on in the restart window');
 });
@@ -448,7 +448,7 @@ test('F2: the website tick is ON SCREEN without scrolling in the EDIT dialog, at
     await sleep(600);
   };
   try {
-    for (const [title, label] of [[SUPPER, 'Not on the website'], [YOUTH, 'On the website']]) {
+    for (const [title, label] of [[SUPPER, 'Keep private'], [YOUTH, 'Show publicly']]) {
       await viewport(1280, 1000);
       await openEditOn(title);
       for (const [w, h] of CONSOLE_SIZES) {
@@ -480,13 +480,13 @@ test('F2: …and in the NEW event dialog at a console size, with the short-windo
     await press('/^New event$/', 'New event');
     await waitFor(`!!document.querySelector('input[aria-label="Title"]')`, 20000, 'the New event dialog');
     await viewport(1280, 1000);
-    const big = await evalIn(TICK_GEOM('Not on the website'));
+    const big = await evalIn(TICK_GEOM('Keep private'));
     assert.ok(!big.err, 'the New event dialog draws no tick at 1280x1000: ' + JSON.stringify(big));
     assert.ok(big.scrollNeeded <= 0,
       `THE NEW EVENT DIALOG'S TICK IS ${big.scrollNeeded}px BELOW THE FOLD at 1280x1000 — the size the owner's request was measured at: ` + JSON.stringify(big));
     assert.equal(big.hitIsTheTick, true, 'the New dialog tick is not what is at its own centre at 1280x1000: ' + JSON.stringify(big));
     await viewport(1100, 657);
-    const small = await evalIn(TICK_GEOM('Not on the website'));
+    const small = await evalIn(TICK_GEOM('Keep private'));
     assert.ok(small.scrollNeeded < 120,
       `THE NEW EVENT DIALOG'S TICK IS ${small.scrollNeeded}px BELOW THE FOLD at 1100x657 — it has gone back below the optional fields (the original complaint was ~300px): ` + JSON.stringify(small));
   } finally { await cdpSend('Emulation.clearDeviceMetricsOverride', {}); await sleep(500); }
@@ -499,9 +499,9 @@ test('the switch off: the feed is a 404 again and every public copy is tombstone
   await press('/^Settings$/', 'the Settings section');
   await waitFor(`[...document.querySelectorAll('button.set-item')].some(b => /Your website/.test(b.textContent||''))`, 20000, 'the Your website row');
   assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('button.set-item')].find(b => /Your website/.test(b.textContent||'')); b.click(); return 'ok'; })()`), 'ok');
-  await waitFor(`document.querySelector('button[aria-label="Share our calendar"]') && document.querySelector('button[aria-label="Share our calendar"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch, reading on');
-  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar"]')), 'ok');
-  await waitFor(`document.querySelector('button[aria-label="Share our calendar"]').getAttribute('aria-checked') === 'false'`, 20000, 'the switch to read off');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar publicly"]') && document.querySelector('button[aria-label="Share our calendar publicly"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch, reading on');
+  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar publicly"]')), 'ok');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar publicly"]').getAttribute('aria-checked') === 'false'`, 20000, 'the switch to read off');
   const r = await pollFeed(x => x.status === 404);
   assert.equal(r.status, 404, 'THE SWITCH IS OFF AND THE FEED IS STILL SERVED');
   const t0 = Date.now(); let live = null;
