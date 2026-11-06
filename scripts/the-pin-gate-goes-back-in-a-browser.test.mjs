@@ -211,8 +211,8 @@ test('Restore over an existing church → the gate → "Keep my current church" 
   await sleep(2000);
   await unlock();
   assert.equal(await js(`window.Steward.npub`), npub, 'the PIN opened a different church than the one just created');
-  await waitFor(`[...document.querySelectorAll('button')].some(b => /^(Church key|SECURITY)/.test((b.innerText||'').trim()))`, 30000, 'the Settings index (its Church key row, or the Security group that holds it)');
-  await openSettingsGroup('SECURITY');
+  await waitFor(`[...document.querySelectorAll('button')].some(b => /^(Church key|MASTER KEY)/.test((b.innerText||'').trim()))`, 30000, 'the Settings index (its Church key row, or the Master key group that holds it)');
+  await openSettingsGroup('MASTER KEY');
   await waitFor(`[...document.querySelectorAll('button')].some(b => /^Church key/.test((b.innerText||'').trim()))`, 30000, 'the Settings index with its Church key row');
   await js(`(() => { const b = [...document.querySelectorAll('button')].find(e => /^Church key/.test((e.innerText||'').trim())); b.click(); return 1; })()`);
   await sleep(800);

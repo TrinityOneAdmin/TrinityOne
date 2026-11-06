@@ -166,7 +166,7 @@ test('the steward roster with its write refused: no click throws', async () => {
       addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
   });
   const r = await pressEverything(draw, C, 4, { church: { name: 'St Aidan' } });
-  for (const want of [/^Approve$/, /^Confirm — revoke this steward/])   // add (approve a request) and remove, each pressed
+  for (const want of [/^Approve/, /^Confirm — revoke this helper/])   // add (approve a request, now "Approve…") and remove, each pressed
     assert.ok([...r.pressed].some(l => want.test(l)), 'CONTROL: never pressed ' + want + ' — ' + [...r.pressed].join(' | '));
   assert.deepEqual(r.threw, [], 'these steward-roster controls threw out of their click with the roster write refused');
 });

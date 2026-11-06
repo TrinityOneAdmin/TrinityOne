@@ -66,11 +66,11 @@ async function removeDelegate(s) {
   const { C, draw } = await compiled('DashStewardsPanel', s.globals, ['rotateChurchKeys']);
   let tree = draw(C, { church: { name: 'St Aidan' } });
   // two taps, as the owner makes them: Revoke (asks to confirm), then the confirm
-  const revokes = find(tree, n => n && n.type === 'button' && n.props.title === 'Revoke this steward');
+  const revokes = find(tree, n => n && n.type === 'button' && n.props.title === 'Revoke this helper');
   assert.ok(revokes.length >= 1, 're-anchor: no Revoke control on the steward rows');
   await revokes[0].props.onClick();   // the first row is the delegate: stewards = [DELEGATE, OTHER_STEW]
   tree = draw(C, { church: { name: 'St Aidan' } });
-  await press(tree, /Confirm — revoke this steward/);
+  await press(tree, /Confirm — revoke this helper/);
   tree = draw(C, { church: { name: 'St Aidan' } });
   return { tree, said: reads(tree) };
 }

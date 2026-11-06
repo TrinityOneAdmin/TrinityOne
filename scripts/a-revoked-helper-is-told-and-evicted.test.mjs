@@ -260,6 +260,9 @@ function ownerStubs(over = {}) {
   };
   const stubs = {
     setConfirmRemove: () => {}, setRemoveNote: () => {}, markHandled: () => {},
+    // optimistic-revoke console-UI (stew-dashboard.jsx DashStewardsPanel, pendingRemoval state): the board hides the row while the write settles.
+    // UI-only — no-ops here — but remove() guards on pendingRemoval.has(pk) and calls drop/restoreOptimistic.
+    pendingRemoval: new Set(), dropOptimistic: () => {}, restoreOptimistic: () => {},
     setAdding: () => {}, setScanning: () => {}, setQ: () => {}, setCode: () => {}, setAddErr: () => {}, setApproving: () => {},
     setNewLabel: () => {}, setNewCaps: () => {},
     stewards: [PK, 'other-steward'], labels: {}, caps: {}, byPub: new Map(), niceName: () => 'A helper',

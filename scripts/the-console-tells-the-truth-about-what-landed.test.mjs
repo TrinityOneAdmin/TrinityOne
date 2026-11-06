@@ -95,11 +95,11 @@ async function revokeWhenOkIsLost(w, urls, { roster: rosterNow = [STEW, OTHER], 
   const { C, draw } = await compiled('DashStewardsPanel', globals, ['rotateChurchKeys']);
   let tree = draw(C, { church: { name: 'St Aidan' } });
   // THE REVOKE CONTROL IS RENDERED PER ROSTER ROW, which is why the roster is a parameter: count them.
-  const revokes = () => find(tree, n => n && n.type === 'button' && n.props.title === 'Revoke this steward');
+  const revokes = () => find(tree, n => n && n.type === 'button' && n.props.title === 'Revoke this helper');
   if (revoke) {
     await revokes()[0].props.onClick();
     tree = draw(C, { church: { name: 'St Aidan' } });
-    await press(tree, /Confirm — revoke this steward/);
+    await press(tree, /Confirm — revoke this helper/);
     tree = draw(C, { church: { name: 'St Aidan' } });
   }
   return { calls, said: reads(tree), revokeControls: revokes().length };
