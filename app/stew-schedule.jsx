@@ -1500,18 +1500,18 @@ window.DashRota = DashRota;
 // console holds the church key (the relay accepts the opt-out from that key alone). One label and one
 // sentence; the switch itself is in Settings → Your website.
 // What the banner says when the opt-out could not be recorded. The event is saved; only the tick is not.
-const SCH_HELD_MISSED = 'The event is saved, but “Not on the website” wasn’t recorded — open the event and tick it again.';
+const SCH_HELD_MISSED = 'The event is saved, but “Keep private” wasn’t recorded — open the event and tick it again.';
 // …and its inverse, for an event scoped to a GROUP: those are OFF the website unless a steward puts one on
 // (audit F2, owner 2026-09-22 — the relay withholds an adults-only room's event from the church's own
 // children, so it must not reach the website by default). Same row, opposite default and opposite label.
-const SCH_SHOWN_MISSED = 'The event is saved, but “On the website” wasn’t recorded — open the event and tick it again.';
+const SCH_SHOWN_MISSED = 'The event is saved, but “Show publicly” wasn’t recorded — open the event and tick it again.';
 function SchWebsiteShownRow({ shown, setShown }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: shown ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
-      <input type="checkbox" title="Tick to show this on your church website" aria-label="On the website" checked={!!shown} onChange={ev => setShown(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <input type="checkbox" title="Tick to add this to your public calendar feed" aria-label="Show publicly" checked={!!shown} onChange={ev => setShown(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5 }}>On the website</div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>A group’s event stays off the public calendar feed unless you put it there.</div>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Show publicly</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Adds this to your public calendar feed, which your website can display.</div>
       </div>
     </label>
   );
@@ -1519,10 +1519,10 @@ function SchWebsiteShownRow({ shown, setShown }) {
 function SchWebsiteHeldRow({ held, setHeld }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: held ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
-      <input type="checkbox" title="Tick to keep this off your church website" aria-label="Not on the website" checked={!!held} onChange={ev => setHeld(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <input type="checkbox" title="Tick to keep this off your public calendar feed" aria-label="Keep private" checked={!!held} onChange={ev => setHeld(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Not on the website</div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Members still see it; it stays off the public calendar feed.</div>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Keep private</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Members still see it; it stays off your public calendar feed.</div>
       </div>
     </label>
   );

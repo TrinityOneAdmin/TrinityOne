@@ -7091,7 +7091,7 @@ function DashPlans() {
                 : <button onClick={() => unshare(p)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 10px', fontSize: 12.5 }} title="Unshare — members and your website stop seeing it; it moves to drafts" aria-label={'Unshare ' + p.title}><Icon name="eyeOff" size={14} color="currentColor" /></button>}
             </div>
           : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }} title="Publish this plan so members (and your website) can see and follow it"><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
-        {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
+        {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Share publicly" title={p.public === false ? 'Hidden from your public feed' : 'Visible on your public feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
       </div>
     </div>
   );
@@ -7359,7 +7359,7 @@ function DashDevotionals() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0, justifyContent: narrow ? 'flex-end' : 'initial' }}>
                 {d.draft ? <button onClick={() => republish(d, { draft: false })} title="Publish this one now" style={{ border: 'none', background: 'var(--clay-ink)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
-                {!d.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}><span style={{ fontSize: 11, fontWeight: 700, color: d.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{d.public !== false ? 'Website' : 'Hidden'}</span><button onClick={(e) => { e.stopPropagation(); republish(d, { public: d.public === false }); }} role="switch" aria-checked={d.public !== false} aria-label="Show on website" title={d.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: d.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: d.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
+                {!d.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}><span style={{ fontSize: 11, fontWeight: 700, color: d.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{d.public !== false ? 'Website' : 'Hidden'}</span><button onClick={(e) => { e.stopPropagation(); republish(d, { public: d.public === false }); }} role="switch" aria-checked={d.public !== false} aria-label="Share publicly" title={d.public === false ? 'Hidden from your public feed' : 'Visible on your public feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: d.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: d.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
                 <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
                 </div>
@@ -11997,7 +11997,7 @@ function DashWebsitePanel({ church }) {
     try { ok = await Promise.resolve(window.Steward.setWebsiteHeldMany(heldIds)); } catch (e) { ok = false; }
     setBusy(false);
     // memory: fix-the-control-not-the-label — never celebrate on the line after a call that can refuse.
-    setMsg(ok ? (heldIds.length === 1 ? 'Taken off — your website no longer shows it.' : 'Taken off — your website no longer shows them.')
+    setMsg(ok ? (heldIds.length === 1 ? 'Taken off — it is no longer on your public feed.' : 'Taken off — they are no longer on your public feed.')
       : 'Not saved — the relay didn’t accept the change.');
   };
   const copy = (val) => { setCopied(copyText(val || url) ? 'Copied' : 'Couldn’t copy — select the address and copy it'); setTimeout(() => setCopied(''), 2500); };
@@ -12020,17 +12020,17 @@ function DashWebsitePanel({ church }) {
         <React.Fragment>
           <div onClick={toggle} className="set-row" style={{ ...row(on), opacity: known ? 1 : .6 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar</div>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar publicly</div>
               <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On — whole-church events are on a public feed.' : 'Off — nothing about your calendar leaves the app.'}</div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar" role="switch" aria-checked={on} title="Put your events on a feed your website can show" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar publicly" role="switch" aria-checked={on} title="Publishes your events as a public feed — embed it on your website using the code below" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
           {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
           {blocked ? <div role="status" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} {'—'} {whyBlocked}</div> : null}
-          {held ? <div role="status" style={{ marginTop: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>{held === 1 ? '1 of them is still on your website — this console could not open it to check.' : held + ' of them are still on your website — this console could not open them to check.'}</div> : null}
-          {held && heldIds.length ? <button onClick={takeOff} disabled={busy || !known} aria-label="Take off our website" title="Your website stops showing them." className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known) ? .5 : 1 }}>{held === 1 ? 'Take it off our website' : 'Take them off our website'}</button> : null}
+          {held ? <div role="status" style={{ marginTop: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>{held === 1 ? '1 of them is still on your public feed — this console could not open it to check.' : held + ' of them are still on your public feed — this console could not open them to check.'}</div> : null}
+          {held && heldIds.length ? <button onClick={takeOff} disabled={busy || !known} aria-label="Take off the public feed" title="It stays off your public calendar feed." className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known) ? .5 : 1 }}>{held === 1 ? 'Take it off the feed' : 'Take them off the feed'}</button> : null}
           {on ? (
             <div style={{ padding: '6px 0 10px' }}>
               <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How far ahead</div>
@@ -12078,10 +12078,10 @@ function DashWebsitePanel({ church }) {
         <React.Fragment>
           <div onClick={() => patchShare({ sermons: !sermonsOn })} className="set-row" style={{ ...row(sermonsOn), opacity: known ? 1 : .6 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our sermons</div>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our sermons publicly</div>
               <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{sermonsOn ? 'On — sermons are on a public podcast feed.' : 'Off — sermon audio stays inside the app.'}</div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); patchShare({ sermons: !sermonsOn }); }} disabled={busy || !known} aria-label="Share our sermons" role="switch" aria-checked={sermonsOn} title="Put your sermons on a public podcast feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: sermonsOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ sermons: !sermonsOn }); }} disabled={busy || !known} aria-label="Share our sermons publicly" role="switch" aria-checked={sermonsOn} title="Publishes your sermons as a public podcast feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: sermonsOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: sermonsOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
@@ -12118,17 +12118,17 @@ function DashWebsitePanel({ church }) {
         <React.Fragment>
           <div onClick={() => patchShare({ plans: !plansOn })} className="set-row" style={{ ...row(plansOn), opacity: known ? 1 : .6 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share reading plans</div>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share reading plans publicly</div>
               <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{plansOn ? 'On — your reading plans are on a public feed.' : 'Off — reading plans stay inside the app.'}</div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); patchShare({ plans: !plansOn }); }} disabled={busy || !known} aria-label="Share reading plans" role="switch" aria-checked={plansOn} title="Put your reading plans on a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: plansOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ plans: !plansOn }); }} disabled={busy || !known} aria-label="Share reading plans publicly" role="switch" aria-checked={plansOn} title="Publishes your reading plans as a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: plansOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: plansOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
           {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
           {plansOn ? (
             <div style={{ padding: '6px 0 10px' }}>
-              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Use the toggle on each plan (in the Reading Plans tab) to choose which ones appear on your website.</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Use the toggle on each plan (in the Reading Plans tab) to choose which ones are shared publicly.</div>
               <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How many on the feed</div>
               <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Limit how many plans appear on the public feed. 0 means all.</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -12156,17 +12156,17 @@ function DashWebsitePanel({ church }) {
         <React.Fragment>
           <div onClick={() => patchShare({ devos: !devosOn })} className="set-row" style={{ ...row(devosOn), opacity: known ? 1 : .6 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share devotionals</div>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share devotionals publicly</div>
               <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{devosOn ? 'On — your devotionals are on a public feed.' : 'Off — devotionals stay inside the app.'}</div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); patchShare({ devos: !devosOn }); }} disabled={busy || !known} aria-label="Share devotionals" role="switch" aria-checked={devosOn} title="Put your devotionals on a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: devosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ devos: !devosOn }); }} disabled={busy || !known} aria-label="Share devotionals publicly" role="switch" aria-checked={devosOn} title="Publishes your devotionals as a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: devosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
               <span style={{ position: 'absolute', top: 3, left: devosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
             </button>
           </div>
           {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
           {devosOn ? (
             <div style={{ padding: '6px 0 10px' }}>
-              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Use the toggle on each devotional (in the Devotionals tab) to choose which ones appear on your website.</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Use the toggle on each devotional (in the Devotionals tab) to choose which ones are shared publicly.</div>
               <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How many on the feed</div>
               <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Limit how many devotionals appear on the public feed. 0 means all.</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
