@@ -1098,7 +1098,7 @@ const STEWARDREQ_D = D.STEWARDREQ; // a would-be steward's REQUEST to a church �
 // ('trinityone/stewards:') and STEWARDREQ_D ('trinityone/stewardreq:') — no existing startsWith branch catches it, so it
 // is gated by its OWN branch in BOTH accept() (church-key write only, before the member catch-all) and canRead()
 // (served to the SUBJECT alone). Declared in scripts/trinity-doc-types.mjs.
-const STEWARDREVOKE_D = 'trinityone/stewardrevoke:';
+const STEWARDREVOKE_D = D.STEWARDREVOKE;
 // Meal trains / practical-care module (optional, per-church). care: needs are church/steward/care-team-admin authored;
 // careslot: are member-signed offers to help; careskip: are RECIPIENT-only ("I don't need help that day"). See SPINE.md + src/steward-meals.src.js.
 // NOTE: 'trinityone/care:' is NOT a prefix of careslot:/careskip: — the colon makes them distinct, so startsWith() is unambiguous.

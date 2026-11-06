@@ -533,6 +533,7 @@ export const D = Object.freeze({
   VOICE:          k('trinityone/voice:'),
   STEWARDS:       k('trinityone/stewards:'),
   STEWARDREQ:     k('trinityone/stewardreq:'),
+  STEWARDREVOKE:  k('trinityone/stewardrevoke:'),
   MEALS_SETTINGS: k('trinityone/meals-settings'),
   ROTA_SETTINGS:  k('trinityone/rota-settings'),
   NEED:           k('trinityone/care:'),
