@@ -95,6 +95,20 @@ test('turning the calendar switch on serves a framable embed page', async () => 
   assert.match(csp, /script-src 'self'/, 'the embed page CSP does not allow its one same-origin script');
   assert.doesNotMatch(csp, /frame-ancestors 'none'|frame-ancestors 'self'/, 'the embed page CSP still locks framing');
 
+  // (3b) THE EMBED MUST ACTUALLY WORK, not just frame (added 2026-11-06). widget.js's whole job is a SAME-ORIGIN
+  //      fetch (calendar.ics / event-images.json / sermons.xml / plans.json / devotionals.json). Under
+  //      default-src 'none' with NO connect-src, every one of those is CSP-blocked and the page shows "Calendar
+  //      unavailable right now" — the embed route was dead by its own CSP. img-src is needed for the event cover
+  //      photos (same-origin data: URIs), and style-src for BOTH the embed HTML's own inline <style> AND the one
+  //      <style> block widget.js injects — without it the widget renders completely unstyled (verified in a
+  //      headless browser: default-src 'none' blocks a dynamically-inserted <style>). Deleting any of these three
+  //      directives fails HERE.
+  assert.match(csp, /connect-src 'self'/, 'the embed CSP has no connect-src — widget.js\'s same-origin fetch of calendar.ics is CSP-blocked and the embed is dead');
+  assert.match(csp, /img-src 'self' data:/, 'the embed CSP has no img-src self data: — event cover photos (data: URIs) are blocked');
+  assert.match(csp, /style-src [^;]*'unsafe-inline'/, 'the embed CSP has no style-src unsafe-inline — the embed + widget inline <style> blocks are blocked and the widget renders unstyled');
+  // minimal: no third-party host anywhere in the policy (same-origin, data:, and keywords only).
+  assert.doesNotMatch(csp.replace(/frame-ancestors \*/, ''), /https?:\/\//, 'the embed CSP admits a third-party host — it must stay same-origin only');
+
   // (4) still CORS-open and cookieless, like every other public route.
   assert.equal(r.headers.get('access-control-allow-origin'), '*', 'the embed page is not CORS-open');
   assert.equal(r.headers.get('set-cookie'), null, 'a cookie was set on a public page');
