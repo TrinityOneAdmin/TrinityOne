@@ -1,6 +1,14 @@
 // identity.jsx — onboarding, profile sheet, member card
 const { useState: useId, useEffect: useIdE } = React;
 
+// Bring a focused field above the iOS keyboard. The onboarding wizard is a fixed, full-height sheet
+// (app.jsx root is position:fixed inset:0 on native) and WKWebView does not resize it when the keyboard
+// opens — no @capacitor/keyboard plugin is configured — so on a short viewport (small iPhone) a bottom-ward
+// input (the 3rd recovery-word box, the PIN confirm box) sits behind the keyboard with no cue and the member
+// can't see what they type. This is the SAME proven handler already inline on the step-0 name field below;
+// the 350ms delay waits out the iOS keyboard-open animation before scrolling. Pilot report, small iPhone, 2026-11.
+const scrollFocusCenter = e => { const t = e.target; setTimeout(() => { try { t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {} }, 350); };
+
 // ════════ First-run identity moment ════════
 // `initialRestore` opens straight into the restore route, so the SAME flow can be reached from settings rather
 // than existing only inside first-run onboarding. AUDIT-2026-07-30 U1: "Skip setup for now" writes
@@ -1007,7 +1015,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
                 "type it here", so without this a screen reader announces the same name three times and
                 cannot say which word is wanted. Measured on the shipping APK, 2026-09-04. */}
             <label htmlFor={'recovery-word-' + idx} style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 7px' }}>WORD #{idx + 1}</label>
-            <input id={'recovery-word-' + idx} value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoFocus={i === 0} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="type it here" style={{ width: '100%', height: 50, boxSizing: 'border-box', border: '1px solid ' + (checkErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 16, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
+            <input id={'recovery-word-' + idx} value={answers[i] || ''} onChange={e => { const a = [...answers]; a[i] = e.target.value; setAnswers(a); setCheckErr(''); }} autoFocus={i === 0} onFocus={scrollFocusCenter} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="type it here" style={{ width: '100%', height: 50, boxSizing: 'border-box', border: '1px solid ' + (checkErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 16, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
           </div>
         ))}
         {checkErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '2px 2px 8px', lineHeight: 1.4 }}>{checkErr}</div> : null}
@@ -1025,9 +1033,9 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
             The honest sentence already existed at app/identity-extras.jsx:283; this is it, on the screen with
             reach. Say what it does AND what it does not — not less. */}
         <p style={{ textAlign: 'center', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>It is not invisibility: someone who examines this phone properly can still tell you use TrinityOne, and which church you follow. What the PIN protects is your account, and the church side of the app.</p>
-        <input type="password" aria-label="Choose a PIN" autoComplete="new-password" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} autoFocus placeholder={((window.TrinityIdentity && window.TrinityIdentity.pinRuleError) ? window.TrinityIdentity.pinRuleError('123456') : '') ? 'At least 6 — letters, or 8+ digits' : 'At least 6 — digits are fine'}
+        <input type="password" aria-label="Choose a PIN" autoComplete="new-password" value={pin} onChange={e => { setPinVal(e.target.value); setPinErr(''); }} onFocus={scrollFocusCenter} autoFocus placeholder={((window.TrinityIdentity && window.TrinityIdentity.pinRuleError) ? window.TrinityIdentity.pinRuleError('123456') : '') ? 'At least 6 — letters, or 8+ digits' : 'At least 6 — digits are fine'}
           style={{ width: '100%', boxSizing: 'border-box', height: 52, marginBottom: 12, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
-        <input type="password" aria-label="Confirm your PIN" autoComplete="new-password" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} placeholder="Type it again to confirm"
+        <input type="password" aria-label="Confirm your PIN" autoComplete="new-password" value={pin2} onChange={e => { setPin2(e.target.value); setPinErr(''); }} onFocus={scrollFocusCenter} placeholder="Type it again to confirm"
           style={{ width: '100%', boxSizing: 'border-box', height: 52, border: '1px solid ' + (pinErr ? 'var(--clay)' : 'var(--line)'), borderRadius: 14, background: 'var(--surface)', padding: '0 16px', fontSize: 17, fontFamily: 'var(--font-ui)', fontWeight: 600, color: 'var(--ink)', outline: 'none' }} />
         {pinErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', margin: '10px 2px 0', lineHeight: 1.4 }}>{pinErr}</div> : null}
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '12px 2px 0' }}>You’ll enter this each time you open the app. It never leaves your phone, and no one — not even us — can reset it. {skippedWords ? 'If you forget it, your 12 words are the only way back — and you have not written those down yet.' : 'If you forget it, your 12 words will open this account again.'}</div>
