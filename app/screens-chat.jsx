@@ -2751,10 +2751,11 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                 church-key-signed roster/voice doc (displayFor), never from the peer's own kind-0, so this cannot
                 be forged by an ordinary member and shows nothing a member could not already see in a group room.
                 Dedup when signedBy === handle (displayFor sets both from voice.name for a church/steward key) so
-                the name is not printed twice — the header already shows it as the handle. */}
-            {(d.signedBy || d.signedRole) ? (
+                the name is not printed twice — the header already shows it as the handle, so a by-line that
+                would only repeat the name (a steward with a name but NO office) renders nothing at all. */}
+            {((d.signedBy && d.signedBy !== d.handle) || d.signedRole) ? (
               <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {d.signedBy && d.signedBy !== d.handle ? d.signedBy + (d.signedRole ? ', ' + d.signedRole : '') : (d.signedRole || d.signedBy)}
+                {d.signedBy && d.signedBy !== d.handle ? d.signedBy + (d.signedRole ? ', ' + d.signedRole : '') : d.signedRole}
               </div>
             ) : null}
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="lock" size={12} color="var(--sage)" /> Direct message · encrypted</div>

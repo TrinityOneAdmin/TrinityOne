@@ -91,3 +91,12 @@ test('an ordinary member DM header shows NO steward title line', () => {
   assert.match(words, /Sam/, 'the peer name is missing from the private-thread header');
   assert.doesNotMatch(words, /Vicar/, 'a title line appeared for a member who has no church-signed by-line');
 });
+
+test('a steward with a NAME but NO role does not print the name twice', () => {
+  // The dedup nit: signedBy === handle and signedRole is '', so the by-line would only repeat the name. It must
+  // render NOTHING — the handle already shows the name — rather than a second identical subline.
+  const words = reads(thread({ handle: 'Rev Ada', signedBy: 'Rev Ada', signedRole: '', av: AV }).redraw());
+  const hits = (words.match(/Rev Ada/g) || []).length;
+  assert.equal(hits, 1,
+    'the steward name is printed ' + hits + ' times — the no-role by-line is repeating the handle. Header read: ' + words);
+});
