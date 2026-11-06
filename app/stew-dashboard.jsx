@@ -10960,6 +10960,18 @@ function DashStewardsPanel({ church }) {
   const [scanning, setScanning] = React.useState(false);
   const [addErr, setAddErr] = React.useState('');
   const [confirmRemove, setConfirmRemove] = React.useState(null);
+  // OPTIMISTIC REVOKE, NEVER A FALSE SUCCESS. The row disappears the instant Revoke is confirmed (so there is no
+  // laggy target to miss-click through several relay round-trips), but it is RESTORED if the write did not land or
+  // could not be confirmed — the real relay ack (setStewards + stewardRemovalOutcome) decides, and the EXISTING
+  // fail note is shown. Reconciled (entry dropped) once the relay-confirmed roster no longer lists them. A pk that
+  // is already dropping is a no-op, which also disables the control while its write is in flight.
+  const [pendingRemoval, setPendingRemoval] = React.useState(() => new Set());
+  const dropOptimistic = (pk) => setPendingRemoval(s => { const n = new Set(s); n.add(pk); return n; });
+  const restoreOptimistic = (pk) => setPendingRemoval(s => { if (!s.has(pk)) return s; const n = new Set(s); n.delete(pk); return n; });
+  React.useEffect(() => {   // reconcile: a landed removal drops the pk from the roster, which spends its optimistic entry
+    setPendingRemoval(s => { if (!s.size) return s; let ch = false; const n = new Set(s); for (const pk of n) if (!stewardSet.has(pk)) { n.delete(pk); ch = true; } return ch ? n : s; });
+  }, [stewards]);
+  const visibleStewards = stewards.filter(pk => !pendingRemoval.has(pk));   // the board hides a row the moment its Revoke is confirmed
   const requests = window.usePendingStewards ? window.usePendingStewards() : [];   // would-be stewards awaiting approval
   const [dismissed, setDismissed] = React.useState({});
   // DURABLE BACKSTOP for a request that the helper never retracts (Part 2, device-found 2026-11-05). A helper's
@@ -11102,12 +11114,14 @@ function DashStewardsPanel({ church }) {
   // who is ALSO a member keeps member-level keys (to put someone out of the church, block them). The note says both.
   const spKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
   const remove = (pk) => {
+    if (pendingRemoval.has(pk)) return;   // already revoking this one — the control is spent until the write settles
     setConfirmRemove(null); setRemoveNote(null);
     markHandled(pk);   // removed: keep their (never-consumed) old request out of "Requests to help" for good
+    dropOptimistic(pk);   // the row leaves the board at once; restored below if the write did not land (no false "removed")
     const next = stewards.filter(p => p !== pk);
     const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
     let wrote;
-    try { wrote = Promise.resolve(window.Steward.setStewards(next)); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
+    try { wrote = Promise.resolve(window.Steward.setStewards(next)); } catch (e) { restoreOptimistic(pk); return; }   // a refusal is on the banner (_requireTrustedView)
     const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
     const isBlocked = (p) => blockedSet.has(String(p || '').toLowerCase());
     const alsoMember = !!(byPub.get(pk) && byPub.get(pk).joined);
@@ -11118,11 +11132,14 @@ function DashStewardsPanel({ church }) {
       if (ok) return Promise.resolve('landed');
       return Promise.resolve().then(() => window.Steward.stewardRemovalOutcome(pk)).catch(() => 'unknown');
     };
+    let landed = false;
     wrote.then(settle).then((outcome) => {
       // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
       // the relay still honours would only lock out the wrong person. One we cannot confirm rotates nothing either.
-      if (outcome === 'not-landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
-      if (outcome !== 'landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
+      // Either way the optimistic row must come BACK — the relay refused, so the UI must not keep claiming "removed".
+      if (outcome === 'not-landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
+      if (outcome !== 'landed') { restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list — if they’ve gone, add them back and revoke again to change the keys.' }); return null; }
+      landed = true;
       // TELL THE REMOVED HELPER (2026-11-05, helper-delegation). ONLY here, in the landed branch — never before
       // `settle` — because the relay stops serving them the stewards: roster the instant they are off it, so a
       // removal that FAILED to land must not also evict their console. A church-signed notice at stewardrevoke:<pk>
@@ -11141,7 +11158,7 @@ function DashStewardsPanel({ church }) {
         if (failed.length || pend.length) setRemoveNote({ pk, who, verb: 'remove', post: tail, failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });   // words from the engine's records (round 3g) — see removeNoteView
         else setRemoveNote({ tone: 'ok', text: who + ' is no longer a steward, and the church’s keys have been changed so they can’t open anything sealed from now on. What they could already open stays open.' + tail }); setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok' && !n.pending) ? null : n), 8000);   // a confirmation is a moment; a failure — or a wait — stays
       });
-    }).catch(() => { setRemoveNote({ tone: 'fail', text: 'Couldn’t finish removing ' + who + ' — the relay could not be reached. Check whether they are still listed, and try again.' }); });
+    }).catch(() => { if (!landed) restoreOptimistic(pk); setRemoveNote({ tone: 'fail', text: 'Couldn’t finish removing ' + who + ' — the relay could not be reached. Check whether they are still listed, and try again.' }); });
   };
   // add by the steward's own code/npub (from their Steward app → "Become a steward"). The correct path:
   // it names the exact key they'll act with, with no dependency on them being a member here.
@@ -11288,9 +11305,9 @@ function DashStewardsPanel({ church }) {
           <button onClick={() => setRemoveNote(null)} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
         </div>
       ) : null}
-      {stewards.length === 0
+      {visibleStewards.length === 0
         ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No helpers yet.</div>
-        : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{stewards.map(pk => <React.Fragment key={pk}>{row(pk)}{scoping === pk ? scopeEditor(pk) : null}</React.Fragment>)}</div>}
+        : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{visibleStewards.map(pk => <React.Fragment key={pk}>{row(pk)}{scoping === pk ? scopeEditor(pk) : null}</React.Fragment>)}</div>}
       {!adding
         ? <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Add a helper</button>
         : scanning

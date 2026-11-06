@@ -7867,6 +7867,25 @@ window.Steward = {
           try { const RK = 'trinityone.steward.requested.' + (churchPub || ''); let a = []; try { a = JSON.parse(localStorage.getItem(RK) || '[]') || []; } catch (e) { a = []; } if (!Array.isArray(a)) a = []; if (!a.includes(cp)) { a.push(cp); localStorage.setItem(RK, JSON.stringify(a)); } } catch (e) {}
         } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
   },
+  // THE "WAITING TO BE APPROVED AS A HELPER" STATE, for the console's onboarding screen. A console that minted a
+  // bare signing key (createKeyQuiet, "Help run a church") and asked a church to let it help — requestSteward wrote
+  // PENDING_CHURCH_KEY on a truthy publish — but holds no granted church yet has nothing to show. This returns
+  // { church, name } while that is true, so the UI can render "Waiting for <church> to approve you" instead of an
+  // empty console, and null the moment the grant lands. It reads the SAME persisted pending-church key that
+  // subscribeStewardedChurches CLEARS on the real grant, so it reports waiting ONLY while the request is genuinely
+  // outstanding — it can never fake an approval (the grant is what makes it stop, not anything the UI does). Guards:
+  // the console must be a pure helper (_ownKeyBlank — an owner who ALSO asked to help elsewhere keeps their own
+  // console), and must hold no stewarded church yet (a helper already running a church is shown that church).
+  // `name` is '' until the grant lands (the invite carries only the pubkey), so the screen falls back to "the church".
+  pendingStewardRequest() {
+    try {
+      const cp = localStorage.getItem(PENDING_CHURCH_KEY) || '';
+      if (!cp || cp === churchPub) return null;
+      if (!_ownKeyBlank()) return null;
+      if (stewardedChurches.size) return null;
+      return { church: cp, name: (stewardedChurches.get(cp) && stewardedChurches.get(cp).name) || '' };
+    } catch (e) { return null; }
+  },
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
     const byPub = new Map();
