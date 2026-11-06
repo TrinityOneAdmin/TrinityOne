@@ -827,13 +827,21 @@ function DashRota({ onNewTeam }) {
   // both here and in the relay, so a console running against an older relay shows the truth rather than a
   // promise that relay is not keeping.
   const rotaSettings = (typeof window.useStewardRotaSettings === 'function') ? window.useStewardRotaSettings() : { visibility: 'church' };
-  const rotaVis = (rotaSettings && rotaSettings.visibility) || 'church';
+  // OPTIMISTIC, NEVER A FALSE SUCCESS. A tap flips the visibility / auto-confirm state AT ONCE through this local
+  // override so the control does not wait on a relay round-trip — but the WRITE's real result still decides.
+  // publishRotaSettings resolves the settings object only when a relay accepted the write, and null when none did
+  // (src/steward.src.js). So on a refused write we DROP the override and fall back to what the relay actually holds
+  // (the truth) and show the error; the override is also cleared once the subscription catches up. See CLAUDE.md
+  // and memory/two-controls-that-report-false-success: a control must not say "saved" when the relay refused.
+  const [visOverride, setVisOverride] = useSch(null);   // { visibility, autoConfirm } | null — responsiveness only
+  const rotaEff = visOverride || rotaSettings || { visibility: 'church' };
+  const rotaVis = (rotaEff && rotaEff.visibility) || 'church';
   // AUTO-CONFIRM SERVING. When the church turns this on, Publish rosters the assigned people as confirmed
   // and does NOT send each of them a "Can you serve?" request they must accept — see sendRequestsFor, which
   // skips the ask when this is set. Default false = today's behaviour (send the requests). A steward cannot
   // forge a member's accept, so this is "skip the ask + treat assigned as confirmed", not a faked acceptance;
   // rota coverage already counts an assigned-but-not-asked slot as filled, so the slot still renders covered.
-  const autoConfirm = !!(rotaSettings && rotaSettings.autoConfirm);
+  const autoConfirm = !!(rotaEff && rotaEff.autoConfirm);
   const [visMenu, setVisMenu] = useSch(false);
   // Escape must close this and focus must come back here. Without the ref, choosing an option dropped focus
   // to <body> and a keyboard steward had to Tab from the top of the console to get anywhere.
@@ -891,6 +899,25 @@ function DashRota({ onNewTeam }) {
   const [adding, setAdding] = useSch(false);
   const [fillMenu, setFillMenu] = useSch(false);
   const [flash, setFlash] = useSch('');
+
+  // Flip the visibility / auto-confirm immediately (visOverride), then let the real publish decide. On a write no
+  // relay accepted (publishRotaSettings resolves null) the override is dropped so the control snaps back to the
+  // relay's truth and an error is shown — no control reports "saved" on a refused write. The menu is NOT closed
+  // here: the ✓ / switch shows the new state in place, which the previous synchronous closeVisMenu() hid.
+  const applyRotaSettings = (patch) => {
+    const nextVis = ('visibility' in patch) ? patch.visibility : rotaVis;
+    const nextAuto = ('autoConfirm' in patch) ? !!patch.autoConfirm : autoConfirm;
+    setVisOverride({ visibility: nextVis, autoConfirm: nextAuto });
+    Promise.resolve(window.Steward.publishRotaSettings({ visibility: nextVis, autoConfirm: nextAuto }))
+      .then(res => { if (!res) { setVisOverride(null); setFlash('Couldn’t save that setting — check your connection and try again.'); } })
+      .catch(() => { setVisOverride(null); setFlash('Couldn’t save that setting — check your connection and try again.'); });
+  };
+  // Reconcile: once the relay-backed settings catch up to the optimistic override, clear it so the subscription
+  // is the single source of truth again.
+  useSchE(() => {
+    if (!visOverride) return;
+    if (rotaSettings && rotaSettings.visibility === visOverride.visibility && !!rotaSettings.autoConfirm === !!visOverride.autoConfirm) setVisOverride(null);
+  }, [rotaSettings && rotaSettings.visibility, rotaSettings && rotaSettings.autoConfirm, visOverride]);
 
   // Seed each service's draft from its published rota the first time we see it, and follow the published rota
   // afterwards while the draft holds nothing of the steward's own. A newer published copy meeting an EDITED draft
@@ -1313,7 +1340,7 @@ function DashRota({ onNewTeam }) {
                         'stewards' if it ever meets one, so the two surfaces cannot disagree. */}
                     {[['church', 'Everyone in the church', 'Any member can see who is serving'],
                       ['team', 'People on the serving teams', 'Only members on a team roster — they still see their own slots']].map(([v, t, s]) => (
-                      <button key={v} aria-pressed={v === rotaVis} onClick={() => { closeVisMenu(); if (v !== rotaVis) window.Steward.publishRotaSettings({ visibility: v, autoConfirm }); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                      <button key={v} aria-pressed={v === rotaVis} onClick={() => { if (v !== rotaVis) applyRotaSettings({ visibility: v }); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: v === rotaVis ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}{v === rotaVis ? ' ✓' : ''}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
                       </button>
@@ -1328,7 +1355,7 @@ function DashRota({ onNewTeam }) {
                         and asks nobody. This is consent/availability only — it is NOT the safeguarding
                         clearance/check-in gate, which is a separate capability-gated subsystem and is
                         unaffected. Writes the same church-signed settings doc as the visibility choice. */}
-                    <button role="switch" aria-checked={autoConfirm} aria-label="Auto-confirm serving: roster assigned people without asking them to accept" onClick={() => { closeVisMenu(); window.Steward.publishRotaSettings({ visibility: rotaVis, autoConfirm: !autoConfirm }); }} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', marginTop: 4, borderRadius: 9, border: 'none', borderTop: '1px solid var(--line)', background: autoConfirm ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
+                    <button role="switch" aria-checked={autoConfirm} aria-label="Auto-confirm serving: roster assigned people without asking them to accept" onClick={() => applyRotaSettings({ autoConfirm: !autoConfirm })} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', marginTop: 4, borderRadius: 9, border: 'none', borderTop: '1px solid var(--line)', background: autoConfirm ? 'color-mix(in oklab, var(--clay) 10%, transparent)' : 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                       <div style={{ flexShrink: 0, width: 34, height: 20, borderRadius: 999, background: autoConfirm ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .15s', marginTop: 1 }}>
                         <div style={{ position: 'absolute', top: 2, left: autoConfirm ? 16 : 2, width: 16, height: 16, borderRadius: 999, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.25)', transition: 'left .15s' }} />
                       </div>

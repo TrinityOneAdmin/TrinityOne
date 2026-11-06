@@ -691,6 +691,29 @@ function StewardWelcome() {
 }
 window.StewardWelcome = StewardWelcome;
 
+// THE PERSISTENT "WAITING FOR APPROVAL" SCREEN for a helper (delegate). StewardWelcome's reqSent card is only the
+// moment right after sending; once this console holds a key it goes to the dashboard, so a helper who had sent a
+// request and not yet been approved used to land on an empty console with no sign they were waiting. StewardRoot
+// shows THIS instead whenever Steward.pendingStewardRequest() reports an outstanding request with no granted church
+// (see src/steward.src.js — it reads the SAME pending-church key the grant clears, so it can never fake approval).
+function StewardAwaitingApproval({ church }) {
+  const name = (church && church.name) || '';
+  const card = { width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28 };
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
+      <div style={card}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
+          <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={26} color="currentColor" /></div>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, margin: 0, letterSpacing: '-.3px' }}>{'Waiting for ' + (name || 'the church') + ' to approve you'}</h1>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your request to help has been sent. The moment the church’s owner approves you, this console opens on that church — it’ll also appear in your switcher (top-left). You can close the app and come back; nothing is lost.</div>
+        </div>
+        <button onClick={() => { try { if (window.Steward.selfRegister) window.Steward.selfRegister(''); } catch (e) {} try { location.reload(); } catch (e) {} }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 16 }}><Icon name="refresh" size={15} color="currentColor" /> Check again</button>
+      </div>
+    </div>
+  );
+}
+window.StewardAwaitingApproval = StewardAwaitingApproval;
+
 const SURFACES = [
   { key: 'console',   label: 'Console',     ic: 'sliders' },
   { key: 'relay',     label: 'Suite',       ic: 'globe' },
@@ -1086,6 +1109,14 @@ function StewardRoot() {
     return () => window.removeEventListener('steward-key-resumed', f);
   }, []);
 
+  // A HELPER STILL WAITING TO BE APPROVED. Driven by the stewarded-churches subscription (so the screen gives way
+  // to the console the instant the grant lands) and Steward.pendingStewardRequest(), which reports an outstanding
+  // request with no granted church. Null for an owner and for an approved helper, so this only ever replaces the
+  // empty console a pure, not-yet-approved helper would otherwise see.
+  const stewardedChurches = window.useStewardStewardedChurches ? window.useStewardStewardedChurches() : [];
+  const awaitingReq = (ks.has && !ks.locked && !needsPin && !stewardedChurches.length && window.Steward.pendingStewardRequest)
+    ? window.Steward.pendingStewardRequest() : null;
+
   // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
   useStE(() => {
     if (!ks.has || !window.Steward.hasPinLock || !window.Steward.hasPinLock()) return;
@@ -1113,6 +1144,7 @@ function StewardRoot() {
         {ks.locked ? <StewardUnlock />
           : !ks.has ? <StewardWelcome />
           : needsPin ? <StewardForcedPin />
+          : awaitingReq ? <StewardAwaitingApproval church={awaitingReq} />
           : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
     );
