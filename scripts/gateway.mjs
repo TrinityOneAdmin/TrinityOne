@@ -6373,7 +6373,11 @@ const CSP = [
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: https:",
   "connect-src 'self' https: wss: ws:",
-  "object-src 'none'", "base-uri 'self'", "frame-src 'self'", "frame-ancestors 'self'",
+  // frame-src admits the cookieless YouTube embed host (app/screens-watch.jsx ytEmbedSrc → the ONE cross-origin
+  // iframe on the Watch screen). Without it the iframe is blocked and the player is a black box in the browser.
+  // Only youtube-nocookie.com is listed: no app iframe loads from www.youtube.com (a nested frame the YT player
+  // may open lives inside the youtube-nocookie document and is governed by THAT document's CSP, not ours).
+  "object-src 'none'", "base-uri 'self'", "frame-src 'self' https://www.youtube-nocookie.com", "frame-ancestors 'self'",
 ].join('; ');
 
 // ── L1: throttle the unauthenticated /audiozip proxy (memory/bandwidth amplification) ──────────
@@ -6508,10 +6512,25 @@ const WIDGET_PREVIEW_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget-preview$/;
 // (as an <iframe src>) into a site builder that sandboxes a pasted <script> (Google Sites, Wix, Squarespace),
 // where the widget.js snippet never runs. See the route in publicFeed() for why loosening framing HERE is safe.
 const WIDGET_EMBED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/embed$/;
-// The embed page's CSP is WIDGET_CSP byte-for-byte EXCEPT frame-ancestors, which is open (*) so a church's own
-// site may frame it cross-origin — the single place in this file that may be framed off-origin. Every other
-// directive stays as tight as the served script's own: no source of anything but the one same-origin widget.js.
-const WIDGET_EMBED_CSP = "default-src 'none'; script-src 'self'; frame-ancestors *; base-uri 'none'; form-action 'none'";
+// The embed page is the ONLY surface where widget.js actually RUNS under an enforced CSP: the widget.js
+// *response* carries WIDGET_CSP but a CSP on a script response governs nothing, and the widget-preview page
+// (steward console) serves NO CSP at all. So this policy must admit EVERYTHING the widget legitimately does,
+// or the embed renders broken — proven empirically 2026-11-06 (headless Chromium, default-src 'none'):
+//   - script-src 'self'        — the one <script src=".../widget.js"> tag.
+//   - connect-src 'self'       — widget.js's SAME-ORIGIN fetches (calendar.ics, event-images.json, sermons.xml,
+//                                plans.json, devotionals.json). Without it these fall back to default-src 'none'
+//                                and are blocked → "Calendar unavailable right now". No third-party host.
+//   - img-src 'self' data:     — event cover photos are same-origin data: URIs (same basis as WIDGET_CSP). No https:.
+//   - style-src 'self' 'unsafe-inline' — the embed HTML's own inline <style> AND the single <style> block
+//                                widget.js injects (public-widget.mjs ~L310) are BOTH blocked without it (verified
+//                                rgb(0,0,0) vs the intended colours). All widget CSS is fixed same-origin content
+//                                written via textContent, never from steward free text, so 'unsafe-inline' here
+//                                opens no injection vector; it matches the main app CSP's style-src and touches
+//                                style only (never script-src). No external stylesheet is ever loaded.
+// This is therefore NOT WIDGET_CSP byte-for-byte: it adds connect-src + style-src (which WIDGET_CSP never needed,
+// as nothing ever enforced WIDGET_CSP) and opens frame-ancestors to * so a church's own site may frame it
+// cross-origin — the single place in this file that may be framed off-origin. No source is third-party.
+const WIDGET_EMBED_CSP = "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors *; base-uri 'none'; form-action 'none'";
 const EVENT_IMAGES_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/event-images\.json$/;
 const SERMON_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/sermons\.xml$/;
 const PLANS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/plans\.json$/;
