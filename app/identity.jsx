@@ -1915,9 +1915,6 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
     const next = !brings;
     setBrings(!!(F && F.setBringsChildren && F.setBringsChildren(np, next)));
   };
-  const Grp = ({ children }) => (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)', marginBottom: 14 }}>{children}</div>
-  );
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0 }}>
@@ -1927,15 +1924,15 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
         </div>
       </div>
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
-        <Grp>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)', marginBottom: 14 }}>
           <NotifToggleRow icon="child" accent="var(--sage)" label="I bring children to church"
             sub="Shows a “We’re here” button when your church’s children’s work is on"
             on={brings} onFlip={flip} />
-        </Grp>
+        </div>
         {brings ? (
           <React.Fragment>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '4px 4px 9px' }}>WHO YOU BRING</div>
-            <Grp>
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, overflow: 'hidden', boxShadow: 'var(--shadow)', marginBottom: 14 }}>
               {names.map(n => (
                 <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderTop: '1px solid var(--line-2)' }}>
                   <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n}</div>
@@ -1949,7 +1946,7 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
                 <button onClick={add} disabled={!draft.trim()}
                   style={{ flexShrink: 0, padding: '9px 14px', borderRadius: 11, border: 'none', cursor: draft.trim() ? 'pointer' : 'default', opacity: draft.trim() ? 1 : 0.5, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13 }}>Add</button>
               </div>
-            </Grp>
+            </div>
             {err ? <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', margin: '0 6px 12px', lineHeight: 1.45 }}>{err}</div> : null}
           </React.Fragment>
         ) : null}
