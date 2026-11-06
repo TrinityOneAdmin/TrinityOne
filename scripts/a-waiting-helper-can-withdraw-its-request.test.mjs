@@ -53,24 +53,27 @@ function proxyOf(stubs) {
   });
 }
 
-function engine({ publishResult = true, pending = CHURCH, requested = [CHURCH] } = {}) {
+function engine({ publishResult = true, pending = CHURCH, requested = [CHURCH], blank = true } = {}) {
   const store = new Map();
   if (pending) store.set(PEND_KEY, pending);
   if (requested) store.set(REQ_KEY(ME), JSON.stringify(requested));
   const published = [];
+  const removed = [];   // every removeKey() call — the proper disposal of the help-request identity
   const stubs = {
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     PENDING_CHURCH_KEY: PEND_KEY, STEWARDREQ_D, NET: 'trinityone',
     churchSk: SK, churchPub: ME,
+    _ownKeyBlank: () => blank,     // the awaiting-approval console holds only a disposable createKeyQuiet key
     now: () => 1762400000,
     _monotonic: (tmpl) => tmpl,
     finalizeEvent: (tmpl, key) => ({ ...tmpl, _signedWith: key, pubkey: ME, sig: 'sig' }),
     publish: (evt) => { published.push(evt); return Promise.resolve(publishResult); },
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
+    window: { Steward: { removeKey: () => { removed.push(1); return Promise.resolve(true); } } },
   };
   const scope = proxyOf(stubs);
   const fn = new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, 'withdrawStewardRequest(churchKey) {', 'withdrawStewardRequest')} }).withdrawStewardRequest; }`)(scope);
-  return { withdraw: (k) => fn.call(scope, k), store, published, PEND_KEY };
+  return { withdraw: (k) => fn.call(scope, k), store, published, removed, PEND_KEY };
 }
 
 test('A1: a successful withdraw publishes the retract tombstone AND clears the pending state', async () => {
@@ -88,9 +91,10 @@ test('A1: a successful withdraw publishes the retract tombstone AND clears the p
   assert.deepEqual(r, { ok: true, church: CHURCH }, 'withdraw did not report success');
   assert.equal(e.store.get(e.PEND_KEY), undefined, 'PENDING_CHURCH_KEY was not cleared — the waiting screen would not exit');
   assert.deepEqual(JSON.parse(e.store.get(REQ_KEY(ME))), [], 'the church was not dropped from the requested-set');
+  assert.equal(e.removed.length, 1, 'the disposable help-request identity was not removed on success — the reload would land on the PIN gate, not the start screen');
 });
 
-test('A2: NO FALSE SUCCESS — a failed publish keeps the request and reports { ok:false }', async () => {
+test('A2: NO FALSE SUCCESS — a failed publish keeps the request, removes no key, reports { ok:false }', async () => {
   const e = engine({ publishResult: false });
   const r = await e.withdraw(CHURCH);
   assert.equal(e.published.length, 1, 'staging: withdraw should still attempt the publish');
@@ -98,13 +102,23 @@ test('A2: NO FALSE SUCCESS — a failed publish keeps the request and reports { 
   assert.ok(r.error, 'a failed withdraw returned no error for the screen to show');
   assert.equal(e.store.get(e.PEND_KEY), CHURCH, 'PENDING_CHURCH_KEY was cleared on a FAILED publish — the request is still live but the screen would exit (false success)');
   assert.deepEqual(JSON.parse(e.store.get(REQ_KEY(ME))), [CHURCH], 'the requested-set was mutated on a failed publish');
+  assert.equal(e.removed.length, 0, 'the device key was discarded on a FAILED withdraw — a failed withdraw must change nothing');
 });
 
-test('A3: with nothing pending, withdraw publishes nothing and reports { ok:false }', async () => {
+test('A3: with nothing pending, withdraw publishes nothing, removes no key, reports { ok:false }', async () => {
   const e = engine({ pending: '', requested: null });
   const r = await e.withdraw('');     // no argument, no pending key
   assert.equal(e.published.length, 0, 'a tombstone was published though there was no pending request');
   assert.equal(r.ok, false, 'withdraw claimed success with nothing to withdraw');
+  assert.equal(e.removed.length, 0, 'a key was removed with nothing to withdraw');
+});
+
+test('A4: GUARD — a non-blank (real/registered) key is NEVER discarded by a withdraw', async () => {
+  const e = engine({ publishResult: true, blank: false });
+  const r = await e.withdraw(CHURCH);
+  assert.equal(r.ok, true, 'staging: the retract itself should still succeed');
+  assert.equal(e.published.length, 1, 'staging: the tombstone should still be published');
+  assert.equal(e.removed.length, 0, 'a withdraw wiped a NON-blank church key — an owner who also asked to help elsewhere would lose their console');
 });
 
 // ── B. THE SCREEN (real StewardAwaitingApproval, mounted) ─────────────────────────────────────────────────────
@@ -144,4 +158,35 @@ test('B3: a FAILED withdraw does NOT reload and shows the error (no false succes
   m.draw();   // re-render so the error state is reflected
   assert.equal(reloaded, false, 'a FAILED withdraw reloaded away from the waiting screen (false success)');
   assert.match(m.texts().join(' '), /still stands/, 'the failed-withdraw error was not shown to the helper');
+});
+
+// ── C. WHERE STEWARDROOT LANDS (the nav fix) ──────────────────────────────────────────────────────────────────
+// After a successful withdraw the engine discards the disposable help-request identity (A1), so there is no key
+// blob. These mount the REAL StewardRoot and assert the decision the fix depends on: no key -> the START screen
+// (StewardWelcome), NEVER the PIN gate (StewardUnlock). C2 pins the pre-fix state the bug produced.
+function rootAt({ hasKey, locked }) {
+  const fr = fakeReact();
+  const Steward = fakeSteward({
+    hasKey, locked, needsPin: false, keyResumedUnknown: false,
+    pendingStewardRequest: () => null, hasPinLock: () => false, selfRegister: () => Promise.resolve(),
+  });
+  const { window } = fakeBrowser({ Steward });
+  const mods = loadConsole({ React: fr.React, window, expr: '{ StewardRoot, StewardWelcome, StewardUnlock, StewardAwaitingApproval, StewDashboard }' });
+  window.useStewardStewardedChurches = () => [];
+  let tree = null;
+  const draw = () => { fr.reset(); tree = mods.StewardRoot(); fr.flush(); return tree; };
+  draw(); draw();
+  return { mods, has: (comp) => nodes(tree).some(n => n && n.type === comp) };
+}
+
+test('C1: with the help-request identity discarded (no key blob), StewardRoot lands on the START screen, not the PIN', () => {
+  const r = rootAt({ hasKey: false, locked: false });
+  assert.ok(r.has(r.mods.StewardWelcome), 'with no key blob StewardRoot did not show the welcome/start screen');
+  assert.ok(!r.has(r.mods.StewardUnlock), 'StewardRoot showed the PIN unlock screen though no key is present');
+});
+
+test('C2: the pre-fix state (key present but locked) is exactly the PIN gate the fix avoids', () => {
+  const r = rootAt({ hasKey: true, locked: true });
+  assert.ok(r.has(r.mods.StewardUnlock), 'staging: a present-but-locked key should gate on the PIN (this is the on-device bug the fix removes)');
+  assert.ok(!r.has(r.mods.StewardWelcome), 'staging: a present-but-locked key is not the welcome screen');
 });
