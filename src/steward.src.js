@@ -9598,11 +9598,28 @@ window.Steward = {
     // THE SAME ID publishGroup would mint (namespaced by the acting church), minted here because the key goes first.
     const id = group.id || ((String(pub || '').slice(0, 16) || 'grp') + '-' + Date.now().toString(36));
     let k = null;
-    try { k = await window.Steward.publishGroupKey(id, memberPubs || []); } catch (e) { k = null; }
+    try { k = await window.Steward.publishGroupKey(id, memberPubs || []); } catch (e) { k = null; console.warn('[steward] createEncryptedGroup: publishGroupKey threw for group ' + id, e); }
     if (k === null || k === false) return { ok: false, reason: k === null ? 'cannot-key' : 'relay-refused' };
+    // _madeAt BEFORE the write, so the partial-landing check below reads THIS write's spread and never a stale one
+    // from an earlier publish of the same id (mirrors sealGroup's _sealAt, audit F7 2026-09-17).
+    const _madeAt = Date.now();
     let made = null;
-    try { made = await window.Steward.publishGroup({ ...group, id, encrypted: true }); } catch (e) { made = null; }
-    if (!made || !made.id) return { ok: false, reason: 'group-not-saved' };
+    try { made = await window.Steward.publishGroup({ ...group, id, encrypted: true }); } catch (e) { made = null; console.warn('[steward] createEncryptedGroup: publishGroup threw for group ' + id, e); }
+    if (!made || !made.id) {
+      // A PARTIAL LANDING IS A CREATED ROOM, NOT A FAILURE (pilot 2026-11-06, Safari/Apple #1). publishGroup answers
+      // null for a write that reached NO relay AND for one that reached SOME — _publishToRelays requires EVERY
+      // connected relay to ack (a safeguarding rule we do NOT weaken here). On Safari/WKWebView a late OK ack makes a
+      // write that DID land read as null, so the room exists on the relay WITH its key (the k-guard above proves the
+      // key reached ≥1 relay) yet the dialog refused to close and a retry minted a DUPLICATE group. The room is usable
+      // the moment it is on ANY relay, so a partial landing CLOSES the dialog. This mirrors sealGroup's
+      // flag-partial / _spreadOf decision exactly. try/catch: tests LIFT this function out of the bundle, where
+      // _spreadOf / GROUP_D are undefined, and "we don't know" must fall to the honest failure, not invent a spread.
+      let spread = null;
+      try { const _s = _spreadOf(GROUP_D + id); if (_s && _s.at >= _madeAt) spread = _s; } catch (x) { spread = null; }
+      spread = spread || { landed: [], missed: [] };
+      if (spread.landed.length) return { ok: true, group: { ...group, id, encrypted: true }, skipped: (k && k.skipped) ? k.skipped.slice() : [], partial: true, missed: spread.missed };
+      return { ok: false, reason: 'group-not-saved' };
+    }
     return { ok: true, group: made, skipped: (k && k.skipped) ? k.skipped.slice() : [] };
   },
   // ---- seal a group interactively: key FIRST, flag SECOND, both awaited, every result honoured. ----

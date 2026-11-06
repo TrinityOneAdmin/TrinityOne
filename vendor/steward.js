@@ -23029,15 +23029,29 @@ zoo`.split("\n");
         k = await window.Steward.publishGroupKey(id, memberPubs || []);
       } catch (e) {
         k = null;
+        console.warn("[steward] createEncryptedGroup: publishGroupKey threw for group " + id, e);
       }
       if (k === null || k === false) return { ok: false, reason: k === null ? "cannot-key" : "relay-refused" };
+      const _madeAt = Date.now();
       let made = null;
       try {
         made = await window.Steward.publishGroup({ ...group, id, encrypted: true });
       } catch (e) {
         made = null;
+        console.warn("[steward] createEncryptedGroup: publishGroup threw for group " + id, e);
       }
-      if (!made || !made.id) return { ok: false, reason: "group-not-saved" };
+      if (!made || !made.id) {
+        let spread = null;
+        try {
+          const _s = _spreadOf(GROUP_D + id);
+          if (_s && _s.at >= _madeAt) spread = _s;
+        } catch (x) {
+          spread = null;
+        }
+        spread = spread || { landed: [], missed: [] };
+        if (spread.landed.length) return { ok: true, group: { ...group, id, encrypted: true }, skipped: k && k.skipped ? k.skipped.slice() : [], partial: true, missed: spread.missed };
+        return { ok: false, reason: "group-not-saved" };
+      }
       return { ok: true, group: made, skipped: k && k.skipped ? k.skipped.slice() : [] };
     },
     // ---- seal a group interactively: key FIRST, flag SECOND, both awaited, every result honoured. ----

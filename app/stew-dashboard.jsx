@@ -4193,7 +4193,7 @@ function NewGroupModal({ open, onClose }) {
       setBusy(true); setNote('');
       try { if (window.Steward.keysSettingUp && window.Steward.keysSettingUp('name')) setNote('Setting up your church’s keys…'); } catch (e) {}
       let r = null;
-      try { r = window.Steward.createEncryptedGroup ? await window.Steward.createEncryptedGroup(g, recips) : null; } catch (e) { r = null; }
+      try { r = window.Steward.createEncryptedGroup ? await window.Steward.createEncryptedGroup(g, recips) : null; } catch (e) { r = null; console.warn('[steward] New group: createEncryptedGroup threw for "' + (g && g.name) + '"', e); }
       setBusy(false);
       if (!r || !r.ok) {
         setNote(r && r.reason === 'group-not-saved'
@@ -4202,6 +4202,15 @@ function NewGroupModal({ open, onClose }) {
         return;
       }
       setNote('');
+      // PARTIAL = CREATED, NOT FAILED (pilot 2026-11-06, Safari/Apple #1). The room landed on some but not every relay;
+      // it exists and is usable, so the dialog CLOSES (below) rather than falsely reporting a failure and inviting a
+      // duplicate. We only tell the steward, non-blocking, that one relay is behind and will catch up.
+      if (r.partial) {
+        try {
+          window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group',
+            message: '“' + g.name + '” was created, but one of your relays hasn’t confirmed it yet — it will catch up on its own. Nothing to do.' } }));
+        } catch (e) {}
+      }
       if (r.skipped && r.skipped.length) {
         try {
           window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
