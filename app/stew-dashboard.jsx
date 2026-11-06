@@ -5080,9 +5080,9 @@ function DashGroups() {
             {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
             {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
             {/* READ-ONLY child-safe status — both states shown and named; "which rooms are adults-only" is itself safety-relevant. No onClick; the toggle is in the panel. */}
-            <span role="img" aria-label={(it.name || 'This group') + (it.childsafe ? ' — child-safe: members marked as a child can join' : ' — adults only: hidden from children')} title={it.childsafe ? 'Child-safe — members marked as a child can join' : 'Adults only — hidden from children'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 30%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface-2)', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={13} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Adults only'}</span>
+            <span role="img" aria-label={(it.name || 'This group') + (it.childsafe ? ' — child-safe: members marked as a child can join' : ' — adults only: hidden from children')} title={it.childsafe ? 'Child-safe — members marked as a child can join' : 'Adults only — hidden from children'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 0', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 11.5 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={13} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Adults only'}</span>
             {/* READ-ONLY sealed status — shown only when encrypted. No onClick; sealing is toggled in the panel. */}
-            {it.encrypted ? <span role="img" aria-label={(it.name || 'This group') + ' — sealed end-to-end'} title="Sealed end-to-end" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 999, border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5 }}><Icon name="lock" size={13} color="currentColor" /> Sealed</span> : null}
+            {it.encrypted ? <span role="img" aria-label={(it.name || 'This group') + ' — sealed end-to-end'} title="Sealed end-to-end" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 0', color: 'var(--clay-ink)', fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 11.5 }}><Icon name="lock" size={13} color="currentColor" /> Sealed</span> : null}
             {it.visibility === 'invite' ? <button onClick={() => { setEditMembersSeed(null); setEditMembersFor(raw(it)); }} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> People · {(it.members || []).length}</button> : null}
             <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders{(it.leaders || []).length ? ' · ' + it.leaders.length : ''}</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
@@ -12985,6 +12985,8 @@ function DashBrandingPanel({ church }) {
   const swatches = ['#C25A38', '#3B6FB0', '#5E8C6A', '#7A4FA3', '#B0853B', '#1F2A37'];
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
+  const feats = (church && church.features) || {};
+  const hideName = !!feats.hideChurchName;
   return (
     <Panel title="Church branding">
       {cropFile ? <ImageCropModal file={cropFile} outW={768} outH={256} title="Position your banner" onSave={saveBanner} onClose={() => setCropFile(null)} /> : null}
@@ -12995,7 +12997,7 @@ function DashBrandingPanel({ church }) {
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
         <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
           <SkBadge initials={initials} picture={church.picture} accent={acc} size={36} radius={999} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: titleCol || '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div>
+          {!hideName ? <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: titleCol || '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div> : null}
         </div>
       </div>
       <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
@@ -13031,6 +13033,14 @@ function DashBrandingPanel({ church }) {
             </label>
             {titleCol ? <button onClick={resetTitleCol} title="Reset to white" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : null}
           </div>
+        </div>
+      ) : null}
+
+      {church.banner ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={lbl}>Church name</div>
+          <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>If your banner image already shows your church name, hide the text version so it isn’t shown twice over the top. Members still see your name everywhere else.</div>
+          <SkToggle value={hideName ? 'hide' : 'show'} onChange={(v) => window.Steward.publishProfile({ features: { ...feats, hideChurchName: v === 'hide' } })} options={[{ value: 'show', label: 'Show name' }, { value: 'hide', label: 'Hide name' }]} />
         </div>
       ) : null}
 

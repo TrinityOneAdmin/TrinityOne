@@ -121,7 +121,7 @@ function ChurchPill({ ctx }) {
         </span>
         <span data-banner-name="1" style={{ position: 'absolute', left: 14, top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 156, display: 'flex', alignItems: 'center', gap: 11 }}>
           <ChurchBadge church={c} size={40} radius={12} />
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: c.titleColor || '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+          {!(c.features && c.features.hideChurchName) ? <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: c.titleColor || '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span> : null}
         </span>
       </div>
     );
