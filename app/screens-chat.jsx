@@ -2746,6 +2746,17 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
           <UserAvatar av={avOf(d)} name={d.handle} size={38} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{d.handle}</div>
+            {/* A PARISH LETTER, in a private thread: the church-signed steward title under the name — the group
+                bubble has shown this all along, a DM never did. `signedBy`/`signedRole` come only from the
+                church-key-signed roster/voice doc (displayFor), never from the peer's own kind-0, so this cannot
+                be forged by an ordinary member and shows nothing a member could not already see in a group room.
+                Dedup when signedBy === handle (displayFor sets both from voice.name for a church/steward key) so
+                the name is not printed twice — the header already shows it as the handle. */}
+            {(d.signedBy || d.signedRole) ? (
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {d.signedBy && d.signedBy !== d.handle ? d.signedBy + (d.signedRole ? ', ' + d.signedRole : '') : (d.signedRole || d.signedBy)}
+              </div>
+            ) : null}
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="lock" size={12} color="var(--sage)" /> Direct message · encrypted</div>
           </div>
         </div>
