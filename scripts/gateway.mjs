@@ -1009,7 +1009,9 @@ const FIN_BILL_D = D.FIN_BILL;
 // finance steward cannot forge an approval attributed to another — the check-in-arrival house pattern
 // (arrivalIdOk), applied to the payables approval. REPLACEABLE, no seq. The authority to approve is UNCHANGED
 // from every other finance/ doc (church key OR a finance steward); this branch ADDS the signer==approver bind
-// and widens NOTHING. READ falls to the generic finance/ rule (it is an attestation, not PII).
+// and widens NOTHING. READ is NARROWED (owner's decision 2026-11-07): canRead() gives it an EXPLICIT branch
+// ABOVE the generic finance/ read that DROPS networkOf, like donor/contact/invoice/bill — the approver↔bill
+// pubkey linkage must not reach a network-peer church (church key OR a finance steward only). See that branch.
 const FIN_BILLAPPROVAL_D = D.FIN_BILLAPPROVAL;
 // Receipt image attached to a journal entry — d=finance/attachment:<id>, a REPLACEABLE finance/ doc (same
 // church-OR-finance-steward gate as settings/account/fund). It carries an inline ENCRYPTED image, so unlike
@@ -5626,11 +5628,17 @@ function canRead(e, authed) {
     // finance/donor + finance/contact: these branches sit ABOVE the generic finance/ read and DROP networkOf, so
     // a network-peer church served aggregate finance (journal/account/fund) is NOT served an invoice or a bill.
     // Each MUST return (a branch that narrows then falls through serves it to everyone — the 2026-09-16 finance
-    // defect). WRITE is unchanged (the generic finance/ write prefix already covers both). finance/billapproval:
-    // is deliberately NOT narrowed — it is an approval attestation {bill, ts}, not PII, so it stays on the
-    // generic finance/ read below.
+    // defect). WRITE is unchanged (the generic finance/ write prefix already covers both).
+    // finance/billapproval:<billId>:<approverhex> is now narrowed the SAME way, reversing the earlier
+    // "not PII, stays generic" note. OWNER'S DECISION 2026-11-07: the doc links an APPROVER's finance-steward
+    // pubkey to a specific bill, and that approver↔bill linkage must NOT reach a network-peer church served
+    // aggregate finance — only the church key or a finance steward may read it. So its branch sits ABOVE the
+    // generic finance/ read and DROPS networkOf, exactly like donor/contact/invoice/bill. It MUST return (a
+    // branch that narrows then falls through serves it to everyone — the 2026-09-16 finance defect). WRITE is
+    // unchanged: the generic finance/ write prefix + the signer==approver bind in accept() already cover it.
     if (d.startsWith(FIN_INVOICE_D)) return authed === cp || stewardCan(authed, cp, 'finance');
     if (d.startsWith(FIN_BILL_D)) return authed === cp || stewardCan(authed, cp, 'finance');
+    if (d.startsWith(FIN_BILLAPPROVAL_D)) return authed === cp || stewardCan(authed, cp, 'finance');
     if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
     // ══ THE CHECK-IN DOCUMENTS DECIDE THEIR OWN READERS, AND THEY DECIDE THEM *FIRST* ═════════════════════
     //
