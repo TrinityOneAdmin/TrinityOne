@@ -667,7 +667,10 @@ function BooksInvoiceEdit({ book, contacts, onIssue, onClose }) {
     setBusy(true); setErr('');
     try {
       const ok = await onIssue({ number: number.trim(), contact: contact.trim(), lines, issued, due });
-      if (ok) onClose(); else { setBusy(false); setErr('That didn’t issue — your church’s relay refused or did not answer. Nothing was recorded.'); }
+      // 'recorded-no-details' = the journal entry LANDED but its metadata doc failed. Close the form (re-issuing
+      // would double-count) — the recorded-but-details-missing banner is already up from the handler. Do NOT fall
+      // into the "nothing recorded" message that invites re-entry.
+      if (ok === true || ok === 'recorded-no-details') onClose(); else { setBusy(false); setErr('That didn’t issue — your church’s relay refused or did not answer. Nothing was recorded.'); }
     } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not issue that invoice.'); }
   };
   return (
@@ -741,7 +744,9 @@ function BooksBillEdit({ book, contacts, onSave, onClose }) {
     setBusy(true); setErr('');
     try {
       const ok = await onSave({ number: number.trim(), supplier: supplier.trim(), lines, received, due });
-      if (ok) onClose(); else { setBusy(false); setErr('That didn’t record — your church’s relay refused or did not answer. Nothing was recorded.'); }
+      // 'recorded-no-details' = the accrual entry LANDED but its metadata doc failed. Close the form (re-recording
+      // would double-count) — the recorded-but-details-missing banner is already up. Do NOT show "nothing recorded".
+      if (ok === true || ok === 'recorded-no-details') onClose(); else { setBusy(false); setErr('That didn’t record — your church’s relay refused or did not answer. Nothing was recorded.'); }
     } catch (e) { setBusy(false); setErr((e && e.message) || 'Could not record that bill.'); }
   };
   return (
@@ -2911,7 +2916,15 @@ function DashFinanceBook() {
     if (!useRelay) { setInvoices(xs => [...xs.filter(x => x.id !== id), { t: 'invoice', id, ...body }]); bump(); return true; }
     const okDoc = await S.encPublish('finance/invoice:' + id, body);
     bump();
-    return !(okDoc === false || okDoc == null);
+    if (okDoc === false || okDoc == null) {
+      // NON-ATOMIC: the journal entry ALREADY landed (pubEntry above returned ok) — only the REPLACEABLE
+      // metadata doc failed. A flat `false` here makes the form say "nothing recorded", which invites a re-issue
+      // → a SECOND journal entry → income+AR double-counted. Say the money WAS recorded, and return a DISTINCT
+      // sentinel so the form closes (no re-entry prompt) WITHOUT claiming success (no false success).
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'invoice', message: 'The invoice was recorded, but its details didn\'t save — don\'t re-enter it; open Recent transactions to retry the details or reverse it.' } })); } catch (e2) {}
+      return 'recorded-no-details';
+    }
+    return true;
   };
   // MARK PAID — manual settlement: dr bank / cr AR, tagged with the invoice id. Works STANDALONE (no Phase 3);
   // auto-match of a bank line to an open invoice is the only part that would ride reconcile. `amount` optional
@@ -2941,7 +2954,14 @@ function DashFinanceBook() {
     if (!useRelay) { setInvoices(xs => [...xs, { t: 'invoice', id: cnId, ...body }]); bump(); return true; }
     const okDoc = await S.encPublish('finance/invoice:' + cnId, body);
     bump();
-    return !(okDoc === false || okDoc == null);
+    if (okDoc === false || okDoc == null) {
+      // NON-ATOMIC: the reversing journal entry ALREADY landed — only its REPLACEABLE metadata doc failed. A flat
+      // `false` would invite raising the credit note again → a SECOND reversing entry. Say it WAS recorded and
+      // return the DISTINCT sentinel instead (no re-entry prompt, no false success).
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'credit note', message: 'The credit note was recorded, but its details didn\'t save — don\'t raise it again; open Recent transactions to retry the details or reverse it.' } })); } catch (e2) {}
+      return 'recorded-no-details';
+    }
+    return true;
   };
   // Printable invoice/credit-note — the SAME saveConsoleFile path the statement HTML export uses. The status
   // stamped on it is DERIVED (F.invoiceStatus), never the stored cache.
@@ -3001,7 +3021,15 @@ function DashFinanceBook() {
     if (!useRelay) { setBills(xs => [...xs.filter(x => x.id !== id), { t: 'bill', id, ...body }]); bump(); return true; }
     const okDoc = await S.encPublish('finance/bill:' + id, body);
     bump();
-    return !(okDoc === false || okDoc == null);
+    if (okDoc === false || okDoc == null) {
+      // NON-ATOMIC: the accrual journal entry ALREADY landed (pubEntry above returned ok) — only the REPLACEABLE
+      // metadata doc failed. A flat `false` makes the form say "nothing recorded", which invites re-recording →
+      // a SECOND journal entry → expense+AP double-counted. Say it WAS recorded, and return the DISTINCT sentinel
+      // so the form closes without a re-entry prompt and without claiming success.
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'bill', message: 'The bill was recorded, but its details didn\'t save — don\'t re-enter it; open Recent transactions to retry the details or reverse it.' } })); } catch (e2) {}
+      return 'recorded-no-details';
+    }
+    return true;
   };
   // APPROVE a bill. BOTH owner-chosen modes (OWNER DECISION 2026-10-30):
   //  · LIGHT (default): set an `approved` field on the REPLACEABLE finance/bill:<id> doc — any finance steward
@@ -3706,7 +3734,7 @@ function DashFinanceBook() {
                   </div>
                   <button onClick={() => exportInvoicePdf(inv)} title="Download this as a printable PDF" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)' }}>PDF</button>
                   {!inv.credit && status !== 'paid' && <button onClick={() => { settleInvoice(inv).then(ok => setInvFlash(ok ? 'Marked paid.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Record payment in full (dr bank / cr receivables)" style={{ ...bkRowBtn, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', borderRadius: 8, padding: '0 12px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 12, opacity: bookErrors.length ? 0.5 : 1 }}>Mark paid</button>}
-                  {!inv.credit && <button onClick={() => { creditInvoice(inv).then(ok => setInvFlash(ok ? 'Credit note raised.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Raise a credit note that reverses this invoice (its own entry; the original is untouched)" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Credit note</button>}
+                  {!inv.credit && <button onClick={() => { creditInvoice(inv).then(ok => setInvFlash(ok === true ? 'Credit note raised.' : ok === 'recorded-no-details' ? 'The credit note was recorded — but its details didn’t save. Don’t raise it again; open Recent transactions to retry the details or reverse it.' : 'That didn’t post — nothing was recorded.')); }} disabled={bookErrors.length > 0} title="Raise a credit note that reverses this invoice (its own entry; the original is untouched)" style={{ ...bkRowBtn, border: '1px solid var(--line)', background: 'transparent', borderRadius: 8, padding: '0 10px', cursor: bookErrors.length ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}>Credit note</button>}
                 </div>
               );
             })}
