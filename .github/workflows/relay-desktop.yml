@@ -87,7 +87,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bundles: deb,appimage
             stable: linux-x86_64
-          - os: macos-14          # Apple Silicon
+          - os: macos-latest      # Apple Silicon (the `macos-14` label stopped resolving — "config not supported" — 2026-11-08; macos-latest tracks the current supported Apple-silicon image)
             target: aarch64-apple-darwin
             bundles: app,dmg
             stable: macos-arm64
