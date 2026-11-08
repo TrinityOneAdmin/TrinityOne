@@ -360,6 +360,7 @@
       document.getElementById('t-churchcap').value = gb(s.churchCap);
       const io = document.getElementById('t-inviteonly'); if (io) io.checked = s.inviteOnly === true;   // access mode lives with the church list card
       const lan = document.getElementById('t-lan'); if (lan) lan.checked = s.lanAccess === true;   // desktop app only; read at launch from the lan-access marker
+      const ka = document.getElementById('t-keepawake'); if (ka) ka.checked = keepAwakeChecked(s);   // default ON; the Tauri controller reads the keep-awake-off marker, not this value
       const of = document.getElementById('t-offer'); if (of) of.checked = s.offerHosting === true;
       const sn = document.getElementById('t-shownames'); if (sn) sn.checked = s.showChurchNames === true;
       const krc = document.getElementById('keepRelayCurrent'); if (krc) krc.checked = s.keepRelayCurrent === true;
@@ -651,6 +652,16 @@
     return !cfUp && tsFunnel;
   }
   // STAY-PUBLIC-END
+  // KEEP-AWAKE-BEGIN (lifted and run by scripts/keep-awake-switch.test.mjs — keep the markers)
+  // Keep-awake stops this computer sleeping while the relay is public, so members can reach the church at any
+  // hour. DEFAULT ON (owner decision): the toggle reflects SETTINGS.keepAwake, treating ONLY an explicit false
+  // as off and an unreachable relay (null settings) as on. Pure: no DOM, no fetch.
+  function keepAwakeChecked(settings) { return settings ? settings.keepAwake !== false : true; }
+  // The /settings POST body the toggle sends on change. keepAwake:true => the gateway REMOVES the
+  // keep-awake-off marker (sleep inhibited); keepAwake:false => it WRITES the marker (sleep allowed). The
+  // marker sense is inverted on disk — see the keepAwake block in scripts/gateway.mjs.
+  function keepAwakeBody(on) { return { keepAwake: !!on }; }
+  // KEEP-AWAKE-END
   function renderCfPublic(cf) {
     const body = document.getElementById('gpBody');
     publicBase = cf.url; try { refreshReach(); } catch (e) {}
@@ -1070,6 +1081,8 @@
     if (_gpWasPublic === null) { _gpWasPublic = pubNow; return; }
     if (pubNow !== _gpWasPublic) { _gpWasPublic = pubNow; loadApkStatus(); }
   }
+  // The prominent keep-awake / stay-on callout only matters once the box is actually public, so show it then.
+  function setSleepWarn(pub) { const w = document.getElementById('gpSleepWarn'); if (w) w.style.display = pub ? 'block' : 'none'; }
   async function gpTick() {
     if (tsBusy || cfHold) return;
     try {
@@ -1077,13 +1090,14 @@
       let cf = null; try { cf = await (await fetch('/tunnel/state', { headers: authHeaders(), cache: 'no-store' })).json(); } catch (e) {}
       const _sp = stayPublicChecked(cf), _spEl = document.getElementById('t-stay');
       if (_spEl && _sp !== null) _spEl.checked = _sp;   // the switch mirrors the real tunnel state (skipped while cfHold freezes us)
-      if (cf && cf.running && cf.url) { if (_spEl) _spEl.disabled = false; renderCfPublic(cf); gpNotePublic(true); return; }
+      if (cf && cf.running && cf.url) { if (_spEl) _spEl.disabled = false; renderCfPublic(cf); gpNotePublic(true); setSleepWarn(true); return; }
       const r = await fetch('/tailscale/state', { headers: authHeaders(), cache:'no-store' });
       if (r.status === 401) { renderGoPublic({ locked:true }); return; }
       const s = await r.json();
       if (s.loggedIn) lastAuthUrl = '';
       renderGoPublic(s);
-      gpNotePublic(!!(s.funnelOn && s.publicUrl));
+      const _pub = !!(s.funnelOn && s.publicUrl);
+      gpNotePublic(_pub); setSleepWarn(_pub);
       // Tailscale funnel is the public path here → this cloudflared switch doesn't govern it; disable + say so.
       if (_spEl) { const _dis = stayPublicDisabled(cf, s); _spEl.disabled = _dis; const _sm = document.getElementById('stayMsg'); if (_sm) _sm.textContent = _dis ? '· public via Tailscale — managed there' : ''; }
     } catch (e) { /* relay unreachable — the hero card already says so */ }
@@ -1131,6 +1145,35 @@
     };
   }
   wireStayPublic();
+  // "Keep this computer awake" switch + "Open sleep settings" button (public card). Instant-apply like the
+  // other access toggles. The switch POSTs keepAwakeBody() to /settings; the button asks the gateway to open
+  // this OS's power settings (no url from the client) and, if that OS can't be deep-linked, shows a text hint.
+  function wireKeepAwake() {
+    const t = document.getElementById('t-keepawake');
+    if (t && !t._wired) { t._wired = true;
+      t.onchange = async () => {
+        const on = t.checked, msg = document.getElementById('keepAwakeMsg');
+        if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…'; }
+        try {
+          const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(keepAwakeBody(on)) });
+          if (!r.ok) throw new Error('save failed');
+          if (msg) { msg.style.color = 'var(--sage-ink)'; msg.textContent = on ? '· ✓ staying awake while public' : '· ✓ allowed to sleep'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+        } catch (err) { t.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
+      };
+    }
+    const b = document.getElementById('openSleepBtn');
+    if (b && !b._wired) { b._wired = true;
+      const fallback = () => { const h = document.getElementById('sleepHint'); b.style.display = 'none'; if (h) { h.style.display = 'inline'; h.textContent = 'Open your system power settings to stop this computer sleeping.'; } };
+      b.onclick = async () => {
+        try {
+          const r = await fetch('/open-sleep-settings', { method: 'POST', headers: authHeaders() });
+          let j = {}; try { j = await r.json(); } catch (e) {}
+          if (!r.ok || !j.ok) fallback();
+        } catch (e) { fallback(); }
+      };
+    }
+  }
+  wireKeepAwake();
   gpTick(); setInterval(gpTick, 4000);
 
   // ── Dashboard / Settings tabs ──────────────────────────────────────────────────────────────────
@@ -1583,13 +1626,13 @@
       card.innerHTML = rswDots()
         + '<div class="rsw-ic">' + RSW_IC.globe + '</div>'
         + '<h2 class="rsw-h">Can you leave this computer on?</h2>'
-        + '<p class="rsw-sub">Your church is only reachable while this computer is running. A machine that sleeps at night, or a laptop you close, means members can\u2019t open your church until it wakes.</p>'
+        + '<div class="sleepwarn"><b>Your church is only reachable while this computer is awake.</b> A machine that sleeps at night, or a laptop you close, means members can\u2019t open your church until it wakes.</div>'
         // ⚠ RECORD-ONLY, AND IT SAYS SO, because today the answer changes nothing. Its only consumer was
         // `_registerOnOwnBox`, reverted 2026-09-12 — and an audit had already shown that guard was inert
         // anyway (written at 127.0.0.1, read at localhost: separate storage partitions). A screen that
         // offers a consequential-sounding "No" and then does nothing has asked a question the app ignores,
         // which is worse than not asking. When chunk 4 gives the answer somewhere to act, delete this line.
-        + '<p class="rsw-sub" style="opacity:.8">We\u2019re noting this for later — it doesn\u2019t change anything yet.</p>'
+        + '<p class="rsw-sub" style="opacity:.8">While you stay public, this computer is kept awake automatically so members can always reach you. You can change that on the Settings page.</p>'
         + '<div class="rsw-msg" id="rswOnMsg"></div>'
         + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswBack" title="Go back one step">Back</button><div style="flex:1"></div><button class="btn btn-ghost" id="rswOnNo" title="Leave this switched off">No \u2014 it gets switched off</button><button class="btn btn-clay" id="rswOnYes">Yes, it stays on</button></div>';
       const answer = (on) => {

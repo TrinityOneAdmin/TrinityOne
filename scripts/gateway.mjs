@@ -121,7 +121,7 @@ const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // keepApkCurrent: refresh the APKs this box hands out whenever the update source has different ones.
 // DEFAULT OFF on purpose — see the "KEEPING IT CURRENT WITHOUT A HUMAN" note below. A church on a metered
 // or thin pipe must not be given two 40 MB downloads it never asked for; it gets the warning instead.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false, keepRelayCurrent: false, showChurchNames: false };
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false, keepRelayCurrent: false, showChurchNames: false, keepAwake: true };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -140,6 +140,10 @@ function loadSettings() {
       // restart — the control panel says so. AUDIT-2026-07-27: the launcher used to leave RELAY_HOST unset,
       // so it silently took the server default of 0.0.0.0 while two comments claimed it bound loopback.
       SETTINGS.lanAccess = s.lanAccess === true;
+      // Keep-awake: hold an OS sleep-inhibitor while this box is public so the church stays reachable. ON by
+      // default (owner decision) — only an explicit false disables it. The Tauri Rust controller does not read
+      // this SETTINGS value; it reads the `keep-awake-off` marker the /settings handler maintains (see below).
+      SETTINGS.keepAwake = s.keepAwake !== false;
     }
   } catch {}
 }
@@ -7807,6 +7811,14 @@ function serveStatic(req, res) {
             // a marker file, because the Tauri launcher decides the bind address before the gateway exists
             try { const mk = join(DATA_DIR, 'lan-access'); if (SETTINGS.lanAccess) writeFileSync(mk, '1\n'); else rmSync(mk, { force: true }); } catch {}
           }
+          if ('keepAwake' in s) {
+            SETTINGS.keepAwake = !!s.keepAwake;
+            // A marker file — same reason lanAccess is one: the Tauri Rust keep-awake controller reads it
+            // DIRECTLY from the data dir (it runs in the shell process, not through this gateway's HTTP). The
+            // sense is INVERTED on disk: the marker's PRESENCE means keep-awake is OFF, its ABSENCE means ON
+            // (the default). So keepAwake=true removes the marker; keepAwake=false writes it.
+            try { const mk = join(DATA_DIR, 'keep-awake-off'); if (SETTINGS.keepAwake) rmSync(mk, { force: true }); else writeFileSync(mk, '1\n'); } catch {}
+          }
           if ('serveApp' in s) SETTINGS.serveApp = !!s.serveApp;
           if ('serveModules' in s) SETTINGS.serveModules = !!s.serveModules;
           if ('serveAudio' in s) SETTINGS.serveAudio = !!s.serveAudio;
@@ -7864,6 +7876,31 @@ function serveStatic(req, res) {
       let parsed = null; try { parsed = new URL(u); } catch {}
       if (!parsed || parsed.protocol !== 'https:' || parsed.host.toLowerCase() !== 'github.com') { res.writeHead(400, H); res.end('{"error":"only https://github.com links"}'); return; }
       const ok = openExternal(parsed.href);   // canonical, re-serialised — never the raw request string
+      res.writeHead(ok ? 200 : 500, H); res.end(JSON.stringify({ ok }));
+    });
+    return;
+  }
+  // Open the OS sleep/power settings so the operator can stop this computer sleeping. A DEDICATED route rather
+  // than widening /open-external: it takes NO url from the client (that route is pinned to github.com on
+  // purpose). It picks the per-OS deep link itself and hands only that fixed string to openExternal. Gated
+  // EXACTLY like /open-external — local socket, not proxied, admin token.
+  if (route === '/open-sleep-settings' && req.method === 'POST') {
+    const ra = (req.socket && req.socket.remoteAddress) || '';
+    const loopbackSock = ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
+    const proxied = req.headers['x-forwarded-for'] != null || req.headers['forwarded'] != null;
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    let body = ''; req.on('data', c => { body += c; if (body.length > 2000) req.destroy(); });
+    req.on('end', () => {
+      if (!loopbackSock || proxied || !adminOK(req)) { res.writeHead(403, H); res.end('{"error":"local admin only"}'); return; }
+      const p = process.platform;
+      // darwin: macOS 13+ Battery pane (older macs fall back to opening System Settings generally — acceptable).
+      // win32: the Power & sleep settings page. linux: gnome-control-center wants a plain arg, not a URL, so
+      // openExternal/xdg-open can't launch it — report unsupported and let the UI show a text hint instead.
+      const link = p === 'darwin' ? 'x-apple.systempreferences:com.apple.Battery-Settings.extension'
+        : p === 'win32' ? 'ms-settings:powersleep'
+        : '';
+      if (!link) { res.writeHead(200, H); res.end(JSON.stringify({ ok: false, unsupported: true })); return; }
+      const ok = openExternal(link);
       res.writeHead(ok ? 200 : 500, H); res.end(JSON.stringify({ ok }));
     });
     return;
