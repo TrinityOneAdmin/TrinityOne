@@ -1161,18 +1161,35 @@
         } catch (err) { t.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
       };
     }
-    const b = document.getElementById('openSleepBtn');
-    if (b && !b._wired) { b._wired = true;
-      const fallback = () => { const h = document.getElementById('sleepHint'); b.style.display = 'none'; if (h) { h.style.display = 'inline'; h.textContent = 'Open your system power settings to stop this computer sleeping.'; } };
-      b.onclick = async () => {
-        try {
-          const r = await fetch('/open-sleep-settings', { method: 'POST', headers: authHeaders() });
-          let j = {}; try { j = await r.json(); } catch (e) {}
-          if (!r.ok || !j.ok) fallback();
-        } catch (e) { fallback(); }
-      };
-    }
+    wireOpenSleepButton(document, (...a) => fetch(...a), authHeaders);
   }
+  // Wire the "Open sleep settings" button. On a failed/unsupported open we show a text hint beside the button,
+  // but we NEVER hide the button — hiding it was the bug that made a second press impossible (Linux returns
+  // {ok:false,unsupported:true} on a box whose desktop has no settings binary, which fired the old hide every
+  // single time, so the button vanished and could not be retried). Deps (document/fetch/authHeaders) are
+  // injected so the exact behaviour runs headless in scripts/open-sleep-button.test.mjs with a fake DOM.
+  // OPEN-SLEEP-BTN-BEGIN — lifted & run by scripts/open-sleep-button.test.mjs (CLAUDE.md rule 1/3)
+  function wireOpenSleepButton(doc, fetchFn, authFn) {
+    const b = doc.getElementById('openSleepBtn');
+    if (!b || b._wired) return;
+    b._wired = true;
+    const react = (ok) => {
+      const h = doc.getElementById('sleepHint');
+      if (h) {
+        h.style.display = ok ? 'none' : 'inline';
+        h.textContent = ok ? '' : 'Couldn’t open it automatically — open your system power settings to stop this computer sleeping.';
+      }
+      // The button is intentionally left visible either way, so the operator can press it again.
+    };
+    b.onclick = async () => {
+      try {
+        const r = await fetchFn('/open-sleep-settings', { method: 'POST', headers: authFn() });
+        let j = {}; try { j = await r.json(); } catch (e) {}
+        react(!!(r.ok && j.ok));
+      } catch (e) { react(false); }
+    };
+  }
+  // OPEN-SLEEP-BTN-END
   wireKeepAwake();
   gpTick(); setInterval(gpTick, 4000);
 

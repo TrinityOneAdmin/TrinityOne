@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync, accessSync, constants as fsConstants } from 'fs';
 import { Transform } from 'stream';
 import { gzipSync } from 'node:zlib';
 import { extname, normalize, join, sep } from 'path';
@@ -1836,6 +1836,59 @@ function openExternal(url) {
     c.on('error', () => {}); c.unref(); return true;
   } catch { return false; }
 }
+// Resolve a bare command name against PATH to an executable regular file, WITHOUT running anything. Needed by
+// openLinuxPowerSettings(): spawn reports a missing binary only on an async 'error' event, so we cannot tell
+// from spawn alone whether a candidate launched — we must check the binary exists+is executable FIRST, then
+// return a definite ok/unsupported to the UI. A command containing '/' is taken as a literal path.
+// OPEN-SLEEP-LINUX-BEGIN — lifted & run by scripts/open-sleep-settings-linux.test.mjs (CLAUDE.md rule 1/3)
+function whichExec(cmd) {
+  try {
+    if (cmd.includes('/')) { accessSync(cmd, fsConstants.X_OK); return cmd; }
+    const dirs = String(process.env.PATH || '').split(':').filter(Boolean);
+    for (const d of dirs) {
+      const full = join(d, cmd);
+      try { accessSync(full, fsConstants.X_OK); return full; } catch {}
+    }
+  } catch {}
+  return null;
+}
+// Open the Linux desktop's power/sleep settings panel. There is NO cross-desktop URL scheme (xdg-open can't do
+// it), so we launch the running desktop's own settings binary. We prefer the panel for $XDG_CURRENT_DESKTOP,
+// then fall through a generic list across GNOME / KDE / XFCE / Cinnamon / MATE / LXQt, spawning the FIRST whose
+// binary actually resolves on PATH. Returns true if one was launched, false if none are installed (UI then
+// shows a text hint). The spawn mirrors openExternal: detached, stdio ignored, unref'd, errors swallowed.
+function linuxPowerSettingsCandidates(desk) {
+  const d = String(desk || '').toLowerCase();
+  const gnome = ['gnome-control-center', ['power']];
+  const kde = [['systemsettings', ['kcm_powerdevilprofilesconfig']], ['systemsettings5', ['kcm_powerdevilprofilesconfig']], ['kcmshell5', ['powerdevilprofilesconfig']]];
+  const xfce = ['xfce4-power-manager-settings', []];
+  const cinnamon = ['cinnamon-settings', ['power']];
+  const mate = ['mate-power-preferences', []];
+  const lxqt = ['lxqt-config-powermanagement', []];
+  const preferred = [];
+  if (d.includes('gnome') || d.includes('unity') || d.includes('ubuntu')) preferred.push(gnome);
+  if (d.includes('kde') || d.includes('plasma')) preferred.push(...kde);
+  if (d.includes('xfce')) preferred.push(xfce);
+  if (d.includes('cinnamon')) preferred.push(cinnamon);
+  if (d.includes('mate')) preferred.push(mate);
+  if (d.includes('lxqt')) preferred.push(lxqt);
+  const generic = [gnome, ...kde, xfce, cinnamon, mate, lxqt];
+  return [...preferred, ...generic];
+}
+function openLinuxPowerSettings() {
+  const candidates = linuxPowerSettingsCandidates(process.env.XDG_CURRENT_DESKTOP || process.env.DESKTOP_SESSION);
+  for (const [cmd, args] of candidates) {
+    const bin = whichExec(cmd);
+    if (!bin) continue;
+    try {
+      const c = spawn(bin, args, { detached: true, stdio: 'ignore' });
+      c.on('error', () => {}); c.unref();
+      return true;
+    } catch {}
+  }
+  return false;
+}
+// OPEN-SLEEP-LINUX-END
 // HEADER-ONLY by default (audit 2026-07-24). Every admin route used to accept the relay's master secret as
 // ?token=, and these relays sit behind a Cloudflare tunnel — so the token landed in edge logs, proxy logs and
 // browser history for /config, /settings, /stats, /update, /relay-restore, /sync-now. The one place a bare URL
@@ -7893,9 +7946,16 @@ function serveStatic(req, res) {
     req.on('end', () => {
       if (!loopbackSock || proxied || !adminOK(req)) { res.writeHead(403, H); res.end('{"error":"local admin only"}'); return; }
       const p = process.platform;
+      // linux: there is no URL scheme xdg-open can use for the power panel, so launch the running desktop's
+      // own settings binary directly (GNOME/KDE/XFCE/Cinnamon/MATE/LXQt). If none is installed, report
+      // unsupported and let the UI show a text hint — but the button stays visible so a retry is possible.
+      if (p === 'linux') {
+        const ok = openLinuxPowerSettings();
+        res.writeHead(200, H); res.end(JSON.stringify(ok ? { ok: true } : { ok: false, unsupported: true }));
+        return;
+      }
       // darwin: macOS 13+ Battery pane (older macs fall back to opening System Settings generally — acceptable).
-      // win32: the Power & sleep settings page. linux: gnome-control-center wants a plain arg, not a URL, so
-      // openExternal/xdg-open can't launch it — report unsupported and let the UI show a text hint instead.
+      // win32: the Power & sleep settings page.
       const link = p === 'darwin' ? 'x-apple.systempreferences:com.apple.Battery-Settings.extension'
         : p === 'win32' ? 'ms-settings:powersleep'
         : '';
