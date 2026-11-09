@@ -35,8 +35,13 @@ const SYNC_DOC = { pubkey: PUB, content: JSON.stringify([{ pubkey: 'b'.repeat(64
 // Build backupState with injected module-scope deps. `_one` is injected too and returns EMPTY on purpose: the
 // fixed read must NOT consult it. `_oneComplete` is the authenticated/complete read; it asserts the private-doc
 // flag is set and returns whatever `authedDoc` the case supplies.
-function makeBackupState({ authedDoc, onPrivArg }) {
+function makeBackupState({ authedDoc, onPrivArg, answered = true }) {
   const body = lift('async backupState()');
+  // _oneComplete is the authenticated/complete read. It now also reports WHICH relays were asked and which
+  // actually answered, so backupState's tri-state can tell "every relay answered, no doc = genuinely OFF" apart
+  // from "a relay is still login-pending = UNKNOWN". With answered:false we leave one asked relay out of
+  // answeredUrls — its NIP-42 login had not finished, so the read is inconclusive.
+  const ASKED = ['wss://x/relay', 'wss://y/relay'];
   const obj = new Function('window', '_one', '_oneComplete', 'pub', 'JSON',
     'return ({ ' + body + ' })')(
     { Steward: { relayIdentities: async () => ([
@@ -44,7 +49,7 @@ function makeBackupState({ authedDoc, onPrivArg }) {
         { url: 'wss://y/relay', pubkey: 'c'.repeat(64), online: true },
       ]) } },
     async () => null,                                  // _one: the UNAUTH path — always empty for a gated doc
-    async (_filters, _ms, priv) => { if (onPrivArg) onPrivArg(priv); return { ev: authedDoc }; },
+    async (_filters, _ms, priv) => { if (onPrivArg) onPrivArg(priv); return { ev: authedDoc, complete: answered, asked: ASKED.length, askedUrls: ASKED.slice(), answeredUrls: answered ? ASKED.slice() : ASKED.slice(0, 1) }; },
     PUB, JSON,
   );
   return obj.backupState;
@@ -67,9 +72,18 @@ test('syncOn PERSISTS across a refresh — two reads of the same persisted doc b
   assert.equal((await bs()).syncOn, true, 'a second mount (a refresh) read back false — the state did not persist');
 });
 
-test('CONTROL: a relay withholding the gated doc (empty authed answer) reads back false, not a crash', async () => {
-  const st = await makeBackupState({ authedDoc: null })();
-  assert.equal(st.syncOn, false, 'no doc came back → sync is not known to be on → false');
+test('every relay answered and NO doc came back → sync is genuinely OFF (false)', async () => {
+  const st = await makeBackupState({ authedDoc: null, answered: true })();
+  assert.equal(st.syncOn, false,
+    'all asked relays answered (nobody still login-pending) and none held the doc → sync is off, a definite false');
+});
+
+test('an AUTH-PENDING read is UNKNOWN (null), not OFF — the flaky-switch fix', async () => {
+  const st = await makeBackupState({ authedDoc: null, answered: false })();
+  assert.equal(st.syncOn, null,
+    'a relay that was asked never answered (its NIP-42 login was still in flight), so the read is inconclusive: ' +
+    'syncOn must be null ("Checking…"), NOT a confident false that renders the "Keep your relays in sync" toggle ' +
+    'OFF though sync is on — the exact non-determinism a live drive caught on the Living Word console');
 });
 
 test('a doc signed by SOMEONE ELSE is not trusted (author re-check)', async () => {

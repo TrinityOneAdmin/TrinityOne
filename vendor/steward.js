@@ -20826,12 +20826,26 @@ zoo`.split("\n");
       const ids = await window.Steward.relayIdentities();
       const boxes = new Set(ids.filter((r) => r.pubkey).map((r) => r.pubkey));
       const online = new Set(ids.filter((r) => r.pubkey && r.online).map((r) => r.pubkey));
-      let syncOn = false;
+      let syncOn = null;
       try {
-        const { ev } = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
-        const arr = ev && ev.pubkey === pub ? JSON.parse(ev.content || "[]") : [];
-        syncOn = Array.isArray(arr) && arr.length >= 2;
+        const r = await _oneComplete([{ kinds: [30078], authors: [pub], "#d": ["trinityone/relays"] }], 6e3, true);
+        const ev = r && r.ev;
+        if (ev && ev.pubkey === pub) {
+          let arr = [];
+          try {
+            arr = JSON.parse(ev.content || "[]");
+          } catch {
+            arr = [];
+          }
+          syncOn = Array.isArray(arr) && arr.length >= 2;
+        } else {
+          const asked = r && r.askedUrls || [];
+          const said = new Set(r && r.answeredUrls || []);
+          const fullyAnswered = asked.length > 0 && asked.every((u) => said.has(u));
+          syncOn = fullyAnswered ? false : null;
+        }
       } catch {
+        syncOn = null;
       }
       return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn };
     },

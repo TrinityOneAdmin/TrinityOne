@@ -5522,9 +5522,25 @@ function DashRunRelayCard() {
 // a change to what counts as a backup reaches both pages.
 function useRelayBackupState() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
-  const [backup, setBackup] = React.useState(null);   // D2: { boxes, online, syncOn } — distinct relay BOXES (redundancy)
-  React.useEffect(() => { let ok = true; (async () => { try { const b = await window.Steward.backupState(); if (ok) setBackup(b); } catch {} })(); return () => { ok = false; }; }, [status.length]);
-  return { status, backup };
+  const [backup, setBackup] = React.useState(null);   // D2: { boxes, online, syncOn:true|false|null } — distinct relay BOXES
+  // backupState().syncOn is THREE-valued: null = "the gated read hasn't completed yet" (the NIP-42 login to the
+  // box that holds trinityone/relays may still be in flight). We never paint null as OFF — instead re-read a few
+  // times a couple of seconds apart, by which point the pool's lazy auth has normally landed and the answer
+  // settles to true/false. A relay-set change (status.length) restarts the cycle. setBackup is returned so the
+  // toggle can set the switch straight from a successful enable/disable (see doSync) rather than wait on a read.
+  React.useEffect(() => {
+    let ok = true; let tries = 0; let timer = null;
+    const run = async () => {
+      let b = null;
+      try { b = await window.Steward.backupState(); } catch {}
+      if (!ok) return;
+      if (b) setBackup(b);
+      if (b && b.syncOn == null && tries < 4) { tries++; timer = setTimeout(run, 2000); }
+    };
+    run();
+    return () => { ok = false; if (timer) clearTimeout(timer); };
+  }, [status.length]);
+  return { status, backup, setBackup };
 }
 
 // ── RELAYS, the everyday page: which relays, are they answering, remove one — plus the one fault that
@@ -6267,7 +6283,7 @@ const SYNC_OWNER_ONLY = 'Only the church’s own console can turn relay sync on 
 //    everything onto a relay that is starting empty, and switch on continuous mirroring between its own
 //    boxes. Two cards, because they are two jobs; one page, because a steward reaches for them together.
 function DashRelayHistoryCard() {
-  const { backup } = useRelayBackupState();
+  const { backup, setBackup } = useRelayBackupState();
   const [syncBusy, setSyncBusy] = React.useState(false);
   const [syncMsg, setSyncMsg] = React.useState(null);
   // ── A DELEGATED CONSOLE LEARNS IT MAY NOT BEFORE IT ASKS ──────────────────────────────────────────────
@@ -6293,7 +6309,14 @@ function DashRelayHistoryCard() {
     // a future caller (a keyboard path, a retry, a second button) cannot reach the engine around them.
     if (_churchOnly) { setSyncMsg({ ok: false, text: SYNC_OWNER_ONLY }); return; }
     setSyncBusy(true); setSyncMsg(null);
-    try { const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable(); setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' }); }
+    try {
+      const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable();
+      // The call SUCCEEDED, so the new state is known — set the switch from it directly. Do not wait on a fresh
+      // backupState() read, which may come back null (auth-pending) and leave the switch "Checking…" or, worse,
+      // out of step with the "✓ Sync on" line. This is the other half of the flaky-switch fix.
+      setBackup((b) => (b ? { ...b, syncOn: on } : b));
+      setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' });
+    }
     catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
     setSyncBusy(false);
   };
@@ -6345,7 +6368,7 @@ function DashRelayHistoryCard() {
       </Panel>
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
       <Panel title="Keep your relays in sync">
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn === true ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
         {/* MARKED, NOT HIDDEN — the same choice DashSermons, the nav and the header's "New post" make: a
             button that vanishes reads as a broken console, a locked one that says why reads as a church
             that has scoped you. `aria-disabled`, not `disabled`, so the press still lands and can answer
@@ -6358,22 +6381,30 @@ function DashRelayHistoryCard() {
             owner-only lock is unchanged (aria-disabled, not disabled, so the press still lands and answers on
             screen for a delegate — there is no hover on a phone). The separate "Re-sync now" nudge is kept for
             when sync is already on but a steward wants to force a pass. */}
-        {backup != null && backup.boxes >= 2 ? (
+        {backup != null && backup.boxes >= 2 ? (() => {
+          // THREE states, not two: on / off / checking. syncOn == null = the authenticated read of
+          // trinityone/relays has not settled yet (see backupState + useRelayBackupState). While checking, the
+          // switch is DISABLED and labelled "Checking…" — never a confident OFF — and converges as the re-reads
+          // land or the owner toggles it.
+          const on = backup.syncOn === true;
+          const checking = backup.syncOn == null;
+          return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button
-              onClick={() => doSync(!backup.syncOn)} disabled={syncBusy}
-              role="switch" aria-checked={!!backup.syncOn}
+              onClick={() => { if (!checking) doSync(!on); }} disabled={syncBusy || checking}
+              role="switch" aria-checked={on}
               aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined}
               aria-label="Keep your relays in sync"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 9, border: 'none', background: 'transparent', padding: 0, cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.6 : 1, fontFamily: 'var(--font-ui)' }}>
-              <span aria-hidden="true" style={{ position: 'relative', width: 42, height: 24, borderRadius: 999, flexShrink: 0, background: backup.syncOn ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
-                <span style={{ position: 'absolute', top: 3, left: backup.syncOn ? 21 : 3, width: 18, height: 18, borderRadius: 999, background: 'var(--surface)', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 9, border: 'none', background: 'transparent', padding: 0, cursor: (_churchOnly || checking) ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.6 : (checking ? 0.7 : 1), fontFamily: 'var(--font-ui)' }}>
+              <span aria-hidden="true" style={{ position: 'relative', width: 42, height: 24, borderRadius: 999, flexShrink: 0, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+                <span style={{ position: 'absolute', top: 3, left: on ? 21 : 3, width: 18, height: 18, borderRadius: 999, background: 'var(--surface)', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
               </span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{_churchOnly ? <Icon name="lock" size={13} color="currentColor" /> : null}{syncBusy ? 'Saving…' : (backup.syncOn ? 'Sync is on' : 'Sync is off')}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{_churchOnly ? <Icon name="lock" size={13} color="currentColor" /> : null}{syncBusy ? 'Saving…' : checking ? 'Checking…' : (on ? 'Sync is on' : 'Sync is off')}</span>
             </button>
-            {backup.syncOn ? <button onClick={() => doSync(true)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>Re-sync now</button> : null}
+            {on ? <button onClick={() => doSync(true)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>Re-sync now</button> : null}
           </div>
-        ) : null}
+          );
+        })() : null}
         {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
       </Panel>
     </React.Fragment>

@@ -7587,23 +7587,42 @@ window.Steward = {
     const ids = await window.Steward.relayIdentities();
     const boxes = new Set(ids.filter((r) => r.pubkey).map((r) => r.pubkey));
     const online = new Set(ids.filter((r) => r.pubkey && r.online).map((r) => r.pubkey));
-    let syncOn = false;
-    // READ-BACK MUST BE AUTHENTICATED. `trinityone/relays` is NIP-42 auth-gated at the relay
-    // (scripts/gateway.mjs: `if (d === RELAYS_D && CHURCH_PUBS.has(e.pubkey))` — church-key-only). A plain
-    // `_one()` finishes on the FIRST relay's EOSE — typically an empty or ungated box — before the gated
-    // box has signed our lazy NIP-42 challenge, so it resolved EMPTY and `syncOn` read back false even with
-    // sync ON. That is why the "Keep your relays in sync" toggle showed OFF and "reverted on refresh", and
-    // why autoSyncIfRedundant() (the default-on boot path) tripped on the same false read so default-on
-    // never stuck. Read it the SAME authenticated/complete way syncEnable's one-time seed does
-    // (_oneComplete([...], 6000, true) at the seed above): one subscription per RAW relay, wait for every
-    // relay to finish (or `ms`), let pool.automaticallyAuth complete the login, and take the NEWEST signed
-    // copy — then the state reflects what is persisted and survives a refresh. Re-check the author, because a
-    // relay is not obliged to honour the #d/author filter and this field decides a durability claim.
+    // READ-BACK MUST BE AUTHENTICATED, AND HAS THREE OUTCOMES, NOT TWO: true / false / null(unknown).
+    // `trinityone/relays` is NIP-42 auth-gated at the relay (scripts/gateway.mjs:
+    // `if (d === RELAYS_D && CHURCH_PUBS.has(e.pubkey))` — church-key-only). The FIRST version of this fix
+    // read it authenticated but still collapsed the answer to a boolean: `arr.length >= 2`, so an UNFINISHED
+    // login (the gated box had not signed our lazy NIP-42 challenge within the window) read back as a
+    // confident `false` — indistinguishable from "sync is genuinely off". That is what made the "Keep your
+    // relays in sync" toggle flip to OFF on some refreshes though sync was on, contradicting the "✓ Sync on —
+    // your N relays" line next to it (that line comes from a real syncEnable() call, whose write forces the
+    // login, so IT is reliable). An unfinished read must say "I don't know", not "off".
+    //
+    // Read it the same authenticated/complete way syncEnable's seed does (_oneComplete([...], 6000, true)):
+    // one subscription per RAW relay, wait for every relay to finish (or `ms`), let pool.automaticallyAuth
+    // complete the login, take the NEWEST signed copy. Then:
+    //   - a signed copy from OUR key arrived  -> trust it: on iff the list has >= 2 boxes (re-check the author,
+    //     a relay need not honour the #d/author filter and this decides a durability claim);
+    //   - no copy, but EVERY relay asked actually answered -> the gated box authed and confirmed no doc = OFF;
+    //   - no copy and some relay did NOT answer (still login-pending, or did not finish) -> UNKNOWN (null),
+    //     and the UI shows "Checking…", never OFF. `complete` from _oneComplete is too weak here: it is true
+    //     when ANY relay answered, but the box that holds the doc may be the one still authing — so require the
+    //     FULL asked set to have answered (askedUrls ⊆ answeredUrls), the same "nobody is login-pending" test
+    //     syncEnable's nothingAnywhere() rests on.
+    let syncOn = null;
     try {
-      const { ev } = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true);
-      const arr = (ev && ev.pubkey === pub) ? JSON.parse(ev.content || '[]') : [];
-      syncOn = Array.isArray(arr) && arr.length >= 2;
-    } catch {}
+      const r = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true);
+      const ev = r && r.ev;
+      if (ev && ev.pubkey === pub) {
+        let arr = [];
+        try { arr = JSON.parse(ev.content || '[]'); } catch { arr = []; }
+        syncOn = Array.isArray(arr) && arr.length >= 2;
+      } else {
+        const asked = (r && r.askedUrls) || [];
+        const said = new Set((r && r.answeredUrls) || []);
+        const fullyAnswered = asked.length > 0 && asked.every((u) => said.has(u));
+        syncOn = fullyAnswered ? false : null;
+      }
+    } catch { syncOn = null; }
     return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn };
   },
   // PER-RELAY SYNC INDICATOR (plan §3, work item A). Classify a relay's PUBLIC /status.sync block into a

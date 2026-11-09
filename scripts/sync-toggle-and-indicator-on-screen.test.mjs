@@ -94,7 +94,7 @@ async function toggleCard({ syncOn, owner = true }) {
   const globals = {
     React,
     window: { Steward, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => {} },
-    useRelayBackupState: () => ({ backup: { boxes: 2, online: 2, syncOn } }),
+    useRelayBackupState: () => ({ backup: { boxes: 2, online: 2, syncOn }, setBackup: () => {} }),
     stewCapState: () => ({ owner }),
     SYNC_OWNER_ONLY: 'owner only',
     Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
@@ -127,6 +127,45 @@ test('the sync control reads OFF when sync is persisted off (fails if the toggle
 test('a delegated (non-owner) console sees the toggle locked, not vanished', async () => {
   const sw = theSwitch(await toggleCard({ syncOn: false, owner: false }));
   assert.equal(sw.props['aria-disabled'], true, 'a delegate must see a locked control that says why, not a missing one');
+});
+
+test('an INCONCLUSIVE read (syncOn null) shows "Checking…" and is disabled — never a confident OFF', async () => {
+  const sw = theSwitch(await toggleCard({ syncOn: null }));
+  assert.equal(sw.props['aria-checked'], false, 'unknown is not "on"');
+  assert.equal(sw.props.disabled, true,
+    'while the authenticated read is still in flight the switch must be disabled, not invite a toggle on a guess');
+  const label = texts(sw).join(' ');
+  assert.ok(label.includes('Checking'),
+    'the label must read "Checking…" on an auth-pending read — rendering "Sync is off" there IS the flaky-switch bug');
+  assert.ok(!/Sync is off/.test(label), 'must NOT read "Sync is off" while the state is still unknown');
+});
+
+test('flipping the switch sets it straight from the result, so it cannot contradict the "✓ Sync on" line', async () => {
+  const { React, reset, flush } = mini();
+  let backupArg = 'unset';
+  const Steward = {
+    syncEnable: async () => ({ relays: 2 }), syncDisable: async () => ({ relays: 0 }),
+    ownRelay: () => '', resolveRelayName: async () => null, cloneFromRelay: async () => ({ imported: 0 }),
+  };
+  // setBackup is the hook's real setter; the card must call it with the KNOWN new state after a successful
+  // enable, rather than leave the switch on its (possibly stale/auth-pending) read.
+  const setBackup = (u) => { backupArg = typeof u === 'function' ? u({ boxes: 2, online: 2, syncOn: null }) : u; };
+  const globals = {
+    React,
+    window: { Steward, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => {} },
+    useRelayBackupState: () => ({ backup: { boxes: 2, online: 2, syncOn: false }, setBackup }),
+    stewCapState: () => ({ owner: true }),
+    SYNC_OWNER_ONLY: 'owner only',
+    Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
+    Icon: () => null,
+  };
+  const Comp = await compileComponent('function DashRelayHistoryCard()', 'DashRelayHistoryCard', globals);
+  reset(); const tree = Comp({}); flush();
+  theSwitch(tree).props.onClick();                 // the owner flips sync ON
+  await new Promise(r => setTimeout(r, 0));          // let syncEnable() resolve and setBackup run
+  assert.deepEqual(backupArg, { boxes: 2, online: 2, syncOn: true },
+    'after syncEnable() succeeded the card must set syncOn from the known result (true); leaving the switch on its ' +
+    'stale read is what made it read "Sync is off" beside the "✓ Sync on — your 2 relays" success line');
 });
 
 // ── PER-RELAY INDICATOR: DashRelaysCard ──────────────────────────────────────────────────────────────────────
