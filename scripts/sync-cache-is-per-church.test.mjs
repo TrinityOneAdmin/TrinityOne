@@ -1,13 +1,16 @@
-// THE PER-DEVICE SYNC CACHE MUST BE KEYED PER ACTIVE CHURCH.
+// THE PER-DEVICE SYNC CACHE MUST BE KEYED PER ACTIVE SIGNING IDENTITY.
 // Run: node --test scripts/sync-cache-is-per-church.test.mjs
 //
 // e03fa8f3 remembers the last definite syncOn in localStorage so a flaky multi-relay read can't lose a known
-// state. The audit (Finding 1) caught that a GLOBAL key contaminates churches: one browser represents its own
-// church AND any it is a delegate for (window.Steward.actingChurch), so a global key would show church A's
-// remembered "sync on" while viewing church B the moment B's live read is inconclusive — a confident WRONG
-// state, the exact thing this fix exists to kill. This lifts the REAL cache helpers from app/stew-dashboard.jsx
-// (module-scope, shipped) and proves they isolate per church. Sabotage: drop the per-church key and church B
-// reads back church A's value → the isolation assertion fails.
+// state. The first re-audit (Finding 1) caught that a GLOBAL key contaminates churches; e03fa8f3 keyed it per
+// church. The FINAL audit (AUDIT-032b4fa2 Finding 1) caught that `actingChurch || churchPub` still diverges in
+// NETWORK view: setActiveIdentity sets the active signer `pub` = the network key but leaves actingChurch='' and
+// churchPub = the device's OWN church, so a network's remembered sync state would read back under the own church
+// on an inconclusive read — the same confident-wrong cross-identity state this fix exists to kill, across the
+// church/network boundary. The cache must key on `window.Steward.activePub`, the SAME `pub` backupState reads the
+// gated doc under (`authors:[pub]`). This lifts the REAL cache helpers from app/stew-dashboard.jsx and proves
+// they isolate per identity — own church, delegated church, AND owned network. Sabotage: drop activePub from the
+// key (revert to actingChurch||churchPub) and the NETWORK case reads back the own church's value → test 3 fails.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -50,32 +53,62 @@ async function loadHelpers(steward, store) {
 
 const A = 'a'.repeat(64);   // the device's own church
 const B = 'b'.repeat(64);   // a church this console is a delegate for
+const N = 'e'.repeat(64);   // an owned NETWORK this console views (activePub = network key, churchPub stays A)
 
-test('one church never reads back another church\'s remembered sync state (per-church key)', async () => {
+// The three identity shapes setActiveIdentity produces (steward.src.js:9285-9288, 14332-14336, :14439):
+const ownA = { activePub: A, actingChurch: '', churchPub: A };     // own church:   pub = own,     actingChurch=''
+const delegB = { activePub: B, actingChurch: B, churchPub: A };    // delegate:     pub = church,  actingChurch=church
+const netN = { activePub: N, actingChurch: '', churchPub: A };     // network view: pub = network, actingChurch='' , churchPub=own
+
+test('one church never reads back another church\'s remembered sync state (per-identity key)', async () => {
   const store = {};
   // Own church A remembers sync ON.
-  let h = await loadHelpers({ actingChurch: '', churchPub: A }, store);
+  let h = await loadHelpers(ownA, store);
   h.writeSyncCache(true);
   assert.equal(h.readSyncCache(), true, 'A must read back its own ON');
 
   // Switch to delegated church B. Its live read is inconclusive, so the fallback reads the cache — which must
   // be EMPTY for B, not inherit A's ON.
-  h = await loadHelpers({ actingChurch: B, churchPub: A }, store);
+  h = await loadHelpers(delegB, store);
   assert.equal(h.readSyncCache(), null,
-    'church B read back church A\'s cached sync state — the cache key is not per-church (audit Finding 1): a ' +
-    'delegate console would show a confident wrong on/off for the church it is viewing');
+    'church B read back church A\'s cached sync state — the cache key is not per-identity: a delegate console ' +
+    'would show a confident wrong on/off for the church it is viewing');
 
   // B remembers OFF; that must not touch A.
   h.writeSyncCache(false);
   assert.equal(h.readSyncCache(), false, 'B must read back its own OFF');
-  h = await loadHelpers({ actingChurch: '', churchPub: A }, store);
+  h = await loadHelpers(ownA, store);
   assert.equal(h.readSyncCache(), true, 'back on A, its ON must be intact — B did not overwrite it');
 });
 
-test('the key actually varies by active church (fails if the church id is dropped)', async () => {
+test('a NETWORK view never reads back the OWN church\'s remembered sync state (AUDIT-032b4fa2 finding 1)', async () => {
   const store = {};
-  const a = (await loadHelpers({ actingChurch: '', churchPub: A }, store)).syncCacheKey();
-  const b = (await loadHelpers({ actingChurch: B, churchPub: A }, store)).syncCacheKey();
+  // Own church A remembers sync ON.
+  let h = await loadHelpers(ownA, store);
+  h.writeSyncCache(true);
+  assert.equal(h.readSyncCache(), true, 'A must read back its own ON');
+
+  // View an owned NETWORK: setActiveIdentity sets the signer pub = the network key, actingChurch='', but leaves
+  // churchPub = the own church A. backupState now reads the NETWORK's trinityone/relays doc. The OLD key
+  // (actingChurch || churchPub) collapses to churchPub = A and would read back A's ON for the network — the leak.
+  h = await loadHelpers(netN, store);
+  assert.equal(h.readSyncCache(), null,
+    'the network view read back the OWN church\'s cached sync state — the key collapses a network onto churchPub ' +
+    '(finding 1): backupState reads the network\'s doc but the cache is stamped under the own church');
+
+  // The network's own OFF must not touch A.
+  h.writeSyncCache(false);
+  assert.equal(h.readSyncCache(), false, 'the network must read back its own OFF');
+  h = await loadHelpers(ownA, store);
+  assert.equal(h.readSyncCache(), true, 'back on the own church, its ON must be intact — the network did not overwrite it');
+});
+
+test('the key varies by active identity, including a network (fails if the signer pub is dropped)', async () => {
+  const store = {};
+  const a = (await loadHelpers(ownA, store)).syncCacheKey();
+  const b = (await loadHelpers(delegB, store)).syncCacheKey();
+  const n = (await loadHelpers(netN, store)).syncCacheKey();
   assert.notEqual(a, b, 'the cache key must differ between the own church and a delegated church');
-  assert.ok(a.includes(A) && b.includes(B), 'the key must carry the active church id');
+  assert.notEqual(a, n, 'the cache key must differ between the own church and an owned network it is viewing');
+  assert.ok(a.includes(A) && b.includes(B) && n.includes(N), 'the key must carry the ACTIVE signer id, not the own-church fallback');
 });

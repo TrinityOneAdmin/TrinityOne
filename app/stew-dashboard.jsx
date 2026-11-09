@@ -5528,13 +5528,18 @@ function DashRunRelayCard() {
 // "Sync is on" instantly and is never stuck. A later definite read still corrects it. localStorage is wrapped
 // (private windows / blocked storage throw) and only ever holds 'on'/'off' for display; it is not authority.
 const SYNC_CACHE_KEY = 'trinityone.steward.syncOn';
-// KEYED PER ACTIVE CHURCH. One browser represents several churches over its life — its own church plus any it
-// is a delegate/steward for (window.Steward.actingChurch) — and setActiveIdentity clears the other per-church
-// caches on a switch. A GLOBAL key would show church A's remembered sync state while viewing church B the
-// moment B's live read is inconclusive (and vice-versa) — the "confident wrong state" this whole fix exists to
-// kill, re-entering across churches. The active church is `actingChurch || churchPub`, the same identity the
-// rest of the UI keys by.
-function syncCacheKey() { try { const cp = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || ''; return SYNC_CACHE_KEY + ':' + cp; } catch { return SYNC_CACHE_KEY + ':'; } }
+// KEYED PER ACTIVE SIGNING IDENTITY — `window.Steward.activePub`, the SAME `pub` backupState reads the gated
+// doc under (`authors:[pub]`, src/steward.src.js). One browser is several identities over its life: its own
+// church, any church it is a delegate/steward for, AND any owned NETWORK it views — setActiveIdentity sets
+// `pub` = that identity's key (steward.src.js:9285-9288, 14332-14336) and mirrors it to activePub (:14439).
+// An earlier cut keyed on `actingChurch || churchPub`, which equals activePub for own-church and delegate but
+// COLLAPSES a network view onto the own church (a network sets actingChurch='' and leaves churchPub = the own
+// church). backupState would then read the NETWORK's trinityone/relays doc while the cache was stamped under
+// the own church, so switching back showed the network's remembered on/off as the own church's state on an
+// inconclusive read — the "confident wrong state" this whole fix exists to kill, re-entering across the
+// church/network boundary (AUDIT-032b4fa2 finding 1). Keying on the read identity itself closes that. A
+// definite read still corrects any stale value; storage is wrapped (private windows / blocked storage throw).
+function syncCacheKey() { try { const cp = (window.Steward && (window.Steward.activePub || window.Steward.actingChurch || window.Steward.churchPub)) || ''; return SYNC_CACHE_KEY + ':' + cp; } catch { return SYNC_CACHE_KEY + ':'; } }
 function readSyncCache() { try { const v = localStorage.getItem(syncCacheKey()); return v === 'on' ? true : v === 'off' ? false : null; } catch { return null; } }
 function writeSyncCache(v) { try { const k = syncCacheKey(); if (v === true) localStorage.setItem(k, 'on'); else if (v === false) localStorage.setItem(k, 'off'); } catch {} }
 
