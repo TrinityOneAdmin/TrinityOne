@@ -5528,8 +5528,15 @@ function DashRunRelayCard() {
 // "Sync is on" instantly and is never stuck. A later definite read still corrects it. localStorage is wrapped
 // (private windows / blocked storage throw) and only ever holds 'on'/'off' for display; it is not authority.
 const SYNC_CACHE_KEY = 'trinityone.steward.syncOn';
-function readSyncCache() { try { const v = localStorage.getItem(SYNC_CACHE_KEY); return v === 'on' ? true : v === 'off' ? false : null; } catch { return null; } }
-function writeSyncCache(v) { try { if (v === true) localStorage.setItem(SYNC_CACHE_KEY, 'on'); else if (v === false) localStorage.setItem(SYNC_CACHE_KEY, 'off'); } catch {} }
+// KEYED PER ACTIVE CHURCH. One browser represents several churches over its life — its own church plus any it
+// is a delegate/steward for (window.Steward.actingChurch) — and setActiveIdentity clears the other per-church
+// caches on a switch. A GLOBAL key would show church A's remembered sync state while viewing church B the
+// moment B's live read is inconclusive (and vice-versa) — the "confident wrong state" this whole fix exists to
+// kill, re-entering across churches. The active church is `actingChurch || churchPub`, the same identity the
+// rest of the UI keys by.
+function syncCacheKey() { try { const cp = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || ''; return SYNC_CACHE_KEY + ':' + cp; } catch { return SYNC_CACHE_KEY + ':'; } }
+function readSyncCache() { try { const v = localStorage.getItem(syncCacheKey()); return v === 'on' ? true : v === 'off' ? false : null; } catch { return null; } }
+function writeSyncCache(v) { try { const k = syncCacheKey(); if (v === true) localStorage.setItem(k, 'on'); else if (v === false) localStorage.setItem(k, 'off'); } catch {} }
 
 function useRelayBackupState() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
@@ -5543,12 +5550,15 @@ function useRelayBackupState() {
       let b = null;
       try { b = await window.Steward.backupState(); } catch {}
       if (!ok) return;
+      let liveNull = false;
       if (b) {
         if (b.syncOn === true || b.syncOn === false) writeSyncCache(b.syncOn);
-        else b = { ...b, syncOn: readSyncCache() };   // inconclusive → show last-known (may still be null if cold)
+        else { liveNull = true; b = { ...b, syncOn: readSyncCache() }; }   // show last-known (may still be null if cold)
         setBackup(b);
       }
-      if (b && b.syncOn == null && tries < 4) { tries++; timer = setTimeout(run, 2000); }
+      // Keep re-reading while the LIVE read is inconclusive — even when a cached value is on screen — so a
+      // definite answer can land and correct a stale remembered value within this mount, not only on re-mount.
+      if (liveNull && tries < 4) { tries++; timer = setTimeout(run, 2000); }
     };
     run();
     return () => { ok = false; if (timer) clearTimeout(timer); };
