@@ -5533,6 +5533,23 @@ function useRelayBackupState() {
 //    is its own page now; SETTINGS_GROUPS in DashSettings is the list of where each of them went.
 function DashRelaysCard() {
   const { status, backup } = useRelayBackupState();
+  // PER-RELAY SYNC INDICATOR (plan §3, work item A — the visible half). Each relay's PUBLIC /status.sync
+  // block, classified by window.Steward.relaySyncState into "Synced" / "Catching up…" / "Not syncing". It is
+  // advisory and display-only (see relaySyncStates in src/steward.src.js): it rests on values a relay reports
+  // about itself over an unauthenticated GET and admits nothing. Guarded so tests that render this card
+  // without the engine method (and an older bundle) simply show no chip rather than throwing. Re-read when
+  // the relay set changes.
+  const [syncStates, setSyncStates] = React.useState(null);
+  React.useEffect(() => {
+    let ok = true;
+    (async () => { try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates() : null; if (ok) setSyncStates(m); } catch {} })();
+    return () => { ok = false; };
+  }, [status.length]);
+  const syncByUrl = React.useMemo(() => {
+    const m = new Map();
+    for (const s of (syncStates || [])) m.set(String(s.url || '').trim().toLowerCase().replace(/\/+$/, ''), s);
+    return m;
+  }, [syncStates]);
   // THE CONSOLE'S CLOCK, measured against the relays that store what it writes. Stage 1 of
   // reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md: measured and SHOWN, corrected nowhere. It belongs on
   // this card because the relays are the thing it is measured against and the thing a wrong clock breaks.
@@ -5766,6 +5783,10 @@ function DashRelaysCard() {
               ? window.Steward.classifyRelay({ pub: proven, isLoopbackOrigin, canonicalKeys, churchEntryPubs })
               : (self ? 'self' : 'shared');
             const up = r.status === 'on';
+            // Per-relay sync chip from this box's PUBLIC /status.sync (syncByUrl). Shown only for a relay that
+            // is ANSWERING (an offline box's last-known sync is not news) and only once we actually have a
+            // reading with a label. Advisory — see the note on syncStates above.
+            const relaySync = up ? syncByUrl.get(String(r.url || '').trim().toLowerCase().replace(/\/+$/, '')) : null;
             const refused = refusedSet.has(String(r.url || '').trim().toLowerCase().replace(/\/+$/, ''));
             const refusedWhy = refused ? refusedSet.get(String(r.url || '').trim().toLowerCase().replace(/\/+$/, '')) : '';
             return (
@@ -5802,6 +5823,11 @@ function DashRelaysCard() {
                       either. This pill carries the relay's OWN words in its tooltip. */}
                   {refused ? <SkPill tint="clay">Refused our last change</SkPill> : null}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Answering' : 'Offline'}</span>
+                  {/* PER-RELAY SYNC INDICATOR (plan §3): "Synced ✓" when this box reports a clean sync pass with
+                      peers, "Catching up…" / "Not syncing" when it is behind or has no peer to pull from.
+                      Advisory and display-only — classified by window.Steward.relaySyncState from the box's own
+                      unauthenticated /status.sync; it admits nothing and changes no relay list. */}
+                  {relaySync && relaySync.label ? <span data-sync={relaySync.state} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: relaySync.state === 'synced' ? 'var(--sage-ink)' : 'var(--ink-3)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)' }} /> {relaySync.state === 'synced' ? 'Synced ✓' : relaySync.label}</span> : null}
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
                   {dropping.includes(r.url) ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Removing…</span> : null}
                   {!self && r.url !== own && !dropping.includes(r.url) && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
@@ -6324,10 +6350,28 @@ function DashRelayHistoryCard() {
             button that vanishes reads as a broken console, a locked one that says why reads as a church
             that has scoped you. `aria-disabled`, not `disabled`, so the press still lands and can answer
             on screen — on a phone there is no hover, so a tooltip nobody can reach says nothing. */}
+        {/* A REAL TOGGLE BOUND TO THE PERSISTED STATE, not two buttons + a vanishing message (plan §3, work
+            item A). Until backupState's read-back was fixed, syncOn read back false even with sync ON, so this
+            card always offered "Turn on sync" and the ✓ message disappeared on refresh — a working feature
+            that read as "didn't stick". `aria-checked` IS backup.syncOn, so the control now shows the true
+            on/off state and survives a refresh. The switch flips to the OPPOSITE of the current state; the
+            owner-only lock is unchanged (aria-disabled, not disabled, so the press still lands and answers on
+            screen for a delegate — there is no hover on a phone). The separate "Re-sync now" nudge is kept for
+            when sync is already on but a steward wants to force a pass. */}
         {backup != null && backup.boxes >= 2 ? (
-          <div style={{ display: 'flex', gap: 9 }}>
-            <button onClick={() => doSync(true)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className={'sk-btn ' + (_churchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '9px 15px', fontSize: 13, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>{_churchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
-            <button onClick={() => doSync(false)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>{_churchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}Turn off</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => doSync(!backup.syncOn)} disabled={syncBusy}
+              role="switch" aria-checked={!!backup.syncOn}
+              aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined}
+              aria-label="Keep your relays in sync"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 9, border: 'none', background: 'transparent', padding: 0, cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.6 : 1, fontFamily: 'var(--font-ui)' }}>
+              <span aria-hidden="true" style={{ position: 'relative', width: 42, height: 24, borderRadius: 999, flexShrink: 0, background: backup.syncOn ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
+                <span style={{ position: 'absolute', top: 3, left: backup.syncOn ? 21 : 3, width: 18, height: 18, borderRadius: 999, background: 'var(--surface)', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{_churchOnly ? <Icon name="lock" size={13} color="currentColor" /> : null}{syncBusy ? 'Saving…' : (backup.syncOn ? 'Sync is on' : 'Sync is off')}</span>
+            </button>
+            {backup.syncOn ? <button onClick={() => doSync(true)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>Re-sync now</button> : null}
           </div>
         ) : null}
         {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}

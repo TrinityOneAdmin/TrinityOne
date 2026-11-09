@@ -7588,8 +7588,60 @@ window.Steward = {
     const boxes = new Set(ids.filter((r) => r.pubkey).map((r) => r.pubkey));
     const online = new Set(ids.filter((r) => r.pubkey && r.online).map((r) => r.pubkey));
     let syncOn = false;
-    try { const doc = await _one([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }]); const arr = doc ? JSON.parse(doc.content || '[]') : []; syncOn = Array.isArray(arr) && arr.length >= 2; } catch {}
+    // READ-BACK MUST BE AUTHENTICATED. `trinityone/relays` is NIP-42 auth-gated at the relay
+    // (scripts/gateway.mjs: `if (d === RELAYS_D && CHURCH_PUBS.has(e.pubkey))` — church-key-only). A plain
+    // `_one()` finishes on the FIRST relay's EOSE — typically an empty or ungated box — before the gated
+    // box has signed our lazy NIP-42 challenge, so it resolved EMPTY and `syncOn` read back false even with
+    // sync ON. That is why the "Keep your relays in sync" toggle showed OFF and "reverted on refresh", and
+    // why autoSyncIfRedundant() (the default-on boot path) tripped on the same false read so default-on
+    // never stuck. Read it the SAME authenticated/complete way syncEnable's one-time seed does
+    // (_oneComplete([...], 6000, true) at the seed above): one subscription per RAW relay, wait for every
+    // relay to finish (or `ms`), let pool.automaticallyAuth complete the login, and take the NEWEST signed
+    // copy — then the state reflects what is persisted and survives a refresh. Re-check the author, because a
+    // relay is not obliged to honour the #d/author filter and this field decides a durability claim.
+    try {
+      const { ev } = await _oneComplete([{ kinds: [30078], authors: [pub], '#d': ['trinityone/relays'] }], 6000, true);
+      const arr = (ev && ev.pubkey === pub) ? JSON.parse(ev.content || '[]') : [];
+      syncOn = Array.isArray(arr) && arr.length >= 2;
+    } catch {}
     return { boxes: boxes.size, online: online.size, entries: ids.length, syncOn };
+  },
+  // PER-RELAY SYNC INDICATOR (plan §3, work item A). Classify a relay's PUBLIC /status.sync block into a
+  // "synced ✓ / catching up…" label for the Relays list — the visible half, where a steward actually looks.
+  //
+  // PURE and DISPLAY ONLY. The /status.sync block is { at, imported, ok, error, running, peers }
+  // (scripts/gateway.mjs ~6927) served over an UNAUTHENTICATED GET — it says nothing about any church, so no
+  // auth is needed and none is implied. This NEVER admits a relay, never opens a socket, never changes which
+  // relays the church talks to (CLAUDE.md rule 10). It is ADVISORY: every value rests on what the relay
+  // reports about itself over an unauthenticated GET, exactly like /status.relayPub (steward.src.js note at
+  // relayIdentities) — so a box can under- or over-state its own sync and this cannot tell.
+  //   · running         → still importing            → "Catching up…"
+  //   · peers === 0      → no peer to pull from, an island a stale view can win on → "Not syncing"
+  //   · ok === false     → last pass failed/refused   → "Catching up…"
+  //   · ok && at > 0     → a clean pass landed         → "Synced"
+  //   · anything else    → unknown, show nothing.
+  relaySyncState(sync) {
+    if (!sync || typeof sync !== 'object') return { state: 'unknown', label: '' };
+    if (sync.running) return { state: 'syncing', label: 'Catching up…' };
+    if (!(Number(sync.peers) > 0)) return { state: 'island', label: 'Not syncing' };
+    if (sync.ok === false) return { state: 'behind', label: 'Catching up…' };
+    if (sync.ok === true && Number(sync.at) > 0) return { state: 'synced', label: 'Synced' };
+    return { state: 'unknown', label: '' };
+  },
+  // Fetch each relay's PUBLIC /status.sync and classify it (relaySyncState). Returns [{ url, sync, state,
+  // label }] for the Relays list. Read-only: a GET to /status per relay, the SAME endpoint relayIdentities
+  // already reads for `online`; nothing here changes the relay list or admits anything. relays() (the gated
+  // publish list) is the right source — these are the addresses the console actually uses.
+  async relaySyncStates() {
+    const out = [];
+    for (const u of relays()) {
+      let base = String(u).replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
+      base = base.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+      let s = null; try { s = await (await fetch(base + '/status', { cache: 'no-store' })).json(); } catch {}
+      const sync = (s && s.sync) ? s.sync : null;
+      out.push({ url: u, sync, ...window.Steward.relaySyncState(sync) });
+    }
+    return out;
   },
   // D2: make redundancy automatic. If the church already runs >=2 separate relay boxes and sync isn't already on,
   // switch it on — so a church that has taken the step of adding a real second relay gets live cross-relay backup
