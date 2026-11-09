@@ -99,6 +99,7 @@ async function toggleCard({ syncOn, owner = true }) {
     SYNC_OWNER_ONLY: 'owner only',
     Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
     Icon: () => null,
+    writeSyncCache: () => {}, readSyncCache: () => null,
   };
   const Comp = await compileComponent('function DashRelayHistoryCard()', 'DashRelayHistoryCard', globals);
   const draw = () => { reset(); const t = Comp({}); flush(); return t; };
@@ -129,15 +130,42 @@ test('a delegated (non-owner) console sees the toggle locked, not vanished', asy
   assert.equal(sw.props['aria-disabled'], true, 'a delegate must see a locked control that says why, not a missing one');
 });
 
-test('an INCONCLUSIVE read (syncOn null) shows "Checking…" and is disabled — never a confident OFF', async () => {
+test('an INCONCLUSIVE read (syncOn null) shows "Checking…" but stays OPERABLE — never a confident OFF, never locked out', async () => {
   const sw = theSwitch(await toggleCard({ syncOn: null }));
   assert.equal(sw.props['aria-checked'], false, 'unknown is not "on"');
-  assert.equal(sw.props.disabled, true,
-    'while the authenticated read is still in flight the switch must be disabled, not invite a toggle on a guess');
+  assert.ok(!sw.props.disabled,
+    'the switch must stay operable while checking so the owner can still turn sync on — a disabled switch that ' +
+    'cannot read its own state across several relays is the "stuck Checking…" trap a live drive hit');
   const label = texts(sw).join(' ');
   assert.ok(label.includes('Checking'),
-    'the label must read "Checking…" on an auth-pending read — rendering "Sync is off" there IS the flaky-switch bug');
+    'the label must read "Checking…" on an inconclusive read — rendering "Sync is off" there IS the flaky-switch bug');
   assert.ok(!/Sync is off/.test(label), 'must NOT read "Sync is off" while the state is still unknown');
+});
+
+test('tapping the switch while "Checking…" turns sync ON (the reliable write path), never off', async () => {
+  const { React, reset, flush } = mini();
+  let enabled = 0, disabled = 0;
+  const Steward = {
+    syncEnable: async () => { enabled++; return { relays: 2 }; },
+    syncDisable: async () => { disabled++; return { relays: 0 }; },
+    ownRelay: () => '', resolveRelayName: async () => null, cloneFromRelay: async () => ({ imported: 0 }),
+  };
+  const globals = {
+    React,
+    window: { Steward, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => {} },
+    useRelayBackupState: () => ({ backup: { boxes: 2, online: 2, syncOn: null }, setBackup: () => {} }),
+    stewCapState: () => ({ owner: true }),
+    SYNC_OWNER_ONLY: 'owner only',
+    Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
+    Icon: () => null,
+    writeSyncCache: () => {}, readSyncCache: () => null,
+  };
+  const Comp = await compileComponent('function DashRelayHistoryCard()', 'DashRelayHistoryCard', globals);
+  reset(); const tree = Comp({}); flush();
+  theSwitch(tree).props.onClick();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(enabled, 1, 'a tap on the "Checking…" switch must ENABLE sync (the owner wants it on), using the reliable write path');
+  assert.equal(disabled, 0, 'it must not DISABLE sync off a guessed-off reading');
 });
 
 test('flipping the switch sets it straight from the result, so it cannot contradict the "✓ Sync on" line', async () => {
@@ -158,6 +186,7 @@ test('flipping the switch sets it straight from the result, so it cannot contrad
     SYNC_OWNER_ONLY: 'owner only',
     Panel: ({ title, children }) => ({ type: 'section', props: { title }, kids: [children] }),
     Icon: () => null,
+    writeSyncCache: () => {}, readSyncCache: () => null,
   };
   const Comp = await compileComponent('function DashRelayHistoryCard()', 'DashRelayHistoryCard', globals);
   reset(); const tree = Comp({}); flush();
@@ -187,6 +216,7 @@ async function relaysCard(STATUS, SYNCSTATES) {
     React,
     window: { Steward, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => {} },
     Icon: () => null,
+    writeSyncCache: () => {}, readSyncCache: () => null,
     SkPill: ({ children }) => ({ type: 'span', props: {}, kids: [children] }),
     SkCard: ({ children }) => ({ type: 'div', props: {}, kids: [children] }),
     relayRejectionActive: false, noteRelayRejection: () => {}, clearRelayRejection: () => {}, shortNpub: () => '',

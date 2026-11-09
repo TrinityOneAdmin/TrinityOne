@@ -5520,21 +5520,34 @@ function DashRunRelayCard() {
 // one card and are now two pages, so this is a hook rather than the same effect written out twice — rule 4
 // of reference/DECISION-SETTINGS-LIST-AND-DETAIL-2026-09-09.md, shared primitives and not copied ones, so
 // a change to what counts as a backup reaches both pages.
+// LAST-KNOWN sync state, remembered on THIS device. The authenticated read of trinityone/relays is not reliable
+// across several gated relays — the NIP-42 lazy login to all of them may not land inside the window, so a live
+// read comes back null even when sync is plainly ON (the relays are "Catching up" = actively syncing). Measured
+// on the Living Word console with 6 relays: the switch stuck on "Checking…" though the doc existed. So we
+// remember the last DEFINITE answer and show it while a fresh read is inconclusive — the switch settles on
+// "Sync is on" instantly and is never stuck. A later definite read still corrects it. localStorage is wrapped
+// (private windows / blocked storage throw) and only ever holds 'on'/'off' for display; it is not authority.
+const SYNC_CACHE_KEY = 'trinityone.steward.syncOn';
+function readSyncCache() { try { const v = localStorage.getItem(SYNC_CACHE_KEY); return v === 'on' ? true : v === 'off' ? false : null; } catch { return null; } }
+function writeSyncCache(v) { try { if (v === true) localStorage.setItem(SYNC_CACHE_KEY, 'on'); else if (v === false) localStorage.setItem(SYNC_CACHE_KEY, 'off'); } catch {} }
+
 function useRelayBackupState() {
   const status = window.useStewardRelays();   // [{ url, status:'on'|'off', ms }]
   const [backup, setBackup] = React.useState(null);   // D2: { boxes, online, syncOn:true|false|null } — distinct relay BOXES
-  // backupState().syncOn is THREE-valued: null = "the gated read hasn't completed yet" (the NIP-42 login to the
-  // box that holds trinityone/relays may still be in flight). We never paint null as OFF — instead re-read a few
-  // times a couple of seconds apart, by which point the pool's lazy auth has normally landed and the answer
-  // settles to true/false. A relay-set change (status.length) restarts the cycle. setBackup is returned so the
-  // toggle can set the switch straight from a successful enable/disable (see doSync) rather than wait on a read.
+  // syncOn is THREE-valued: true / false / null(unknown). A definite answer is remembered; an inconclusive read
+  // falls back to the remembered value (not "Checking…") so a flaky multi-relay read can't lose a known state.
+  // Still re-read a few times while genuinely unknown, so a cold console with no memory converges once auth lands.
   React.useEffect(() => {
     let ok = true; let tries = 0; let timer = null;
     const run = async () => {
       let b = null;
       try { b = await window.Steward.backupState(); } catch {}
       if (!ok) return;
-      if (b) setBackup(b);
+      if (b) {
+        if (b.syncOn === true || b.syncOn === false) writeSyncCache(b.syncOn);
+        else b = { ...b, syncOn: readSyncCache() };   // inconclusive → show last-known (may still be null if cold)
+        setBackup(b);
+      }
       if (b && b.syncOn == null && tries < 4) { tries++; timer = setTimeout(run, 2000); }
     };
     run();
@@ -6311,9 +6324,10 @@ function DashRelayHistoryCard() {
     setSyncBusy(true); setSyncMsg(null);
     try {
       const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable();
-      // The call SUCCEEDED, so the new state is known — set the switch from it directly. Do not wait on a fresh
-      // backupState() read, which may come back null (auth-pending) and leave the switch "Checking…" or, worse,
-      // out of step with the "✓ Sync on" line. This is the other half of the flaky-switch fix.
+      // The call SUCCEEDED, so the new state is known — set the switch from it directly AND remember it, rather
+      // than wait on a fresh backupState() read that may come back null (auth-pending) and leave the switch
+      // "Checking…" or out of step with the "✓ Sync on" line.
+      writeSyncCache(on);
       setBackup((b) => (b ? { ...b, syncOn: on } : b));
       setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' });
     }
@@ -6382,20 +6396,21 @@ function DashRelayHistoryCard() {
             screen for a delegate — there is no hover on a phone). The separate "Re-sync now" nudge is kept for
             when sync is already on but a steward wants to force a pass. */}
         {backup != null && backup.boxes >= 2 ? (() => {
-          // THREE states, not two: on / off / checking. syncOn == null = the authenticated read of
-          // trinityone/relays has not settled yet (see backupState + useRelayBackupState). While checking, the
-          // switch is DISABLED and labelled "Checking…" — never a confident OFF — and converges as the re-reads
-          // land or the owner toggles it.
+          // THREE states: on / off / checking. syncOn == null = no definite read yet AND nothing remembered
+          // (a cold console) — see backupState + useRelayBackupState. "Checking…" is shown but the control stays
+          // OPERABLE: a tap turns sync ON (the write path authenticates reliably, unlike the multi-relay read),
+          // so the owner is NEVER locked out of a switch that cannot read its own state. It is never a confident
+          // OFF. Only "Saving…" disables it.
           const on = backup.syncOn === true;
           const checking = backup.syncOn == null;
           return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button
-              onClick={() => { if (!checking) doSync(!on); }} disabled={syncBusy || checking}
+              onClick={() => doSync(checking ? true : !on)} disabled={syncBusy}
               role="switch" aria-checked={on}
               aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined}
               aria-label="Keep your relays in sync"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 9, border: 'none', background: 'transparent', padding: 0, cursor: (_churchOnly || checking) ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.6 : (checking ? 0.7 : 1), fontFamily: 'var(--font-ui)' }}>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 9, border: 'none', background: 'transparent', padding: 0, cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.6 : (checking ? 0.7 : 1), fontFamily: 'var(--font-ui)' }}>
               <span aria-hidden="true" style={{ position: 'relative', width: 42, height: 24, borderRadius: 999, flexShrink: 0, background: on ? 'var(--sage)' : 'var(--line)', transition: 'background .15s' }}>
                 <span style={{ position: 'absolute', top: 3, left: on ? 21 : 3, width: 18, height: 18, borderRadius: 999, background: 'var(--surface)', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
               </span>
