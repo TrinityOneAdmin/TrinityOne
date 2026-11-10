@@ -359,8 +359,38 @@ EOF
   log "all $n declared public address(es) proved this relay"
   return 0
 }
+# RETRY THE PROOF — the tunnel is not up yet, and that is NOT a failure. (DEPLOY-ROBUSTNESS 2026-11-10)
+# `systemctl restart "$SVC"` above restarts whatever fronts this relay too. Our own shared boxes (a8) sit
+# behind a cloudflared tunnel that gateway.mjs SPAWNS as a child of the relay process, so the restart drops
+# the tunnel and it takes ~90s+ to dial back out to Cloudflare's edge. For that whole window the PUBLIC
+# address answers HTTP 530 ("Cloudflare can't reach the origin") or nothing at all — while the relay is
+# perfectly healthy on loopback, which the health check above already proved. A SINGLE-SHOT proof here reads
+# that 530 as "members cannot reach it" and rolls a good build back. That is not theory: a8's first 7 updates
+# squeaked in under the window, then the tunnel got slower and 2 consecutive updates rolled back a healthy
+# build; a hand-patched retry loop unblocked the deploy.
+#
+# So PROVE IT, BUT GIVE THE TUNNEL TIME: retry the WHOLE proof — nothing about its correctness changes, the
+# nonce and address-match checks are exactly as strict as before — until it passes or the budget runs out
+# (~4 min by default: PROOF_TRIES attempts spaced PROOF_SLEEP seconds apart, both env-overridable for a box
+# on a faster/slower tunnel or to let a test wait seconds instead of minutes). A relay that is genuinely
+# never reachable still fails every attempt and still rolls back. A loopback-only / LAN box (RELAY_LOOPBACK_ONLY
+# or {"loopbackOnly":true}) still passes on the FIRST attempt — it proves itself with no tunnel involved — so
+# the retry never delays it. The ROOT fix is to run cloudflared as its own persistent systemd service so a
+# relay restart never drops the tunnel and the first attempt passes; until that ships, this is the band-aid.
+PROOF_TRIES="${PROOF_TRIES:-8}"     # × PROOF_SLEEP seconds ≈ the window the tunnel needs to reconnect
+PROOF_SLEEP="${PROOF_SLEEP:-30}"
 if [ "$ok" = 1 ]; then
-  probe_declared_addresses || ok=0
+  proof_ok=0
+  for proof_try in $(seq 1 "$PROOF_TRIES"); do
+    if probe_declared_addresses; then proof_ok=1; break; fi
+    if [ "$proof_try" -lt "$PROOF_TRIES" ]; then
+      log "address proof not passing yet (attempt $proof_try/$PROOF_TRIES) — the tunnel may still be reconnecting after the restart; retrying in ${PROOF_SLEEP}s"
+      sleep "$PROOF_SLEEP"
+    fi
+  done
+  # The verdict must reach `ok`, because `ok` is what the rollback below reads. Only after EVERY attempt has
+  # failed do we give up on the proof and let the rollback fire.
+  [ "$proof_ok" = 1 ] || ok=0
 fi
 # ── end declared-address probe ──
 

@@ -44,8 +44,13 @@ function probeBlock() {
   const block = SCRIPT.slice(from, to);
   // The verdict has to reach `ok`, because `ok` is what the rollback below it reads. A probe that decides
   // correctly and tells nobody is the same as no probe, and is how this shipped the first time.
-  assert.match(block, /probe_declared_addresses \|\| ok=0/,
-    'the lifted block no longer feeds its verdict into `ok`, so nothing it decides can reach the rollback');
+  // (2026-11-10: the single-shot `probe_declared_addresses || ok=0` became a retry loop so a reconnecting
+  // tunnel's transient 530 no longer rolls a healthy build back — see 'the proof RETRIES' below. The verdict
+  // now reaches `ok` through the loop's `|| ok=0`, and the proof must still actually run.)
+  assert.match(block, /probe_declared_addresses/,
+    'the lifted block no longer runs the possession proof at all');
+  assert.match(block, /\|\| ok=0/,
+    'the lifted block no longer feeds a failing verdict into `ok`, so nothing it decides can reach the rollback');
   return block;
 }
 
@@ -56,13 +61,18 @@ function probeBlock() {
 // process's event loop for as long as bash runs — and the tunnels below are HTTP servers living in this
 // process. Every probe through one therefore timed out at the full `--max-time`, two cases went red, and the
 // output said "HTTP 000" as though the address were dead. A blocked test looks exactly like a broken relay.
-function runProbe(port) {
+// `tries`/`sleepSecs` drive the retry loop the probe block now wraps around the proof (2026-11-10): the
+// defaults keep every FAILURE case here fast (2 attempts, no wait) instead of burning the shipped ~4-minute
+// budget, and a case that wants to prove the loop actually retries raises `tries` and counts the attempts.
+function runProbe(port, { tries = 2, sleepSecs = 0 } = {}) {
   const w = mkdtempSync(join(tmpdir(), 'trin-declared-probe-'));
   const runner = join(w, 'run.sh');
   writeFileSync(runner, `#!/usr/bin/env bash
 set -uo pipefail
 PORT=${Number(port)}
 DIR=${JSON.stringify(w)}
+PROOF_TRIES=${Number(tries)}
+PROOF_SLEEP=${Number(sleepSecs)}
 ok=1
 log() { printf 'LOG %s\\n' "$*"; }
 ${probeBlock()}
@@ -323,5 +333,46 @@ test('a declared bracketed IPv6 address is DIALLED, not swallowed by the shell',
       'the probe block dials without -g, so a declared bracketed IPv6 address exits 3 before any request ' +
       'is made. /relay-addresses was made line-oriented text precisely to carry that address shape.');
     void sh;
+  } finally { box.stop(); }
+});
+
+// ── THE PROOF RETRIES — A RECONNECTING TUNNEL IS NOT A ROLLBACK ─────────────────────────
+//
+// DEPLOY-ROBUSTNESS 2026-11-10, verified live on a8. `systemctl restart` restarts the cloudflared tunnel
+// gateway.mjs spawns, and it takes ~90s+ to dial back out. For that window the public address answers HTTP
+// 530 / nothing, while the relay is healthy on loopback. The probe used to run ONCE, right after the restart,
+// so it caught the box mid-reconnect and rolled a good build back — twice in a row on a8 once the tunnel got
+// slower. The fix retries the WHOLE proof (unchanged correctness) until it passes or the budget runs out.
+//
+// This asserts the loop actually RETRIES rather than giving up on the first non-200: a box that declares a
+// public address nothing answers (the reconnecting-tunnel shape — the proof fails every attempt) must see the
+// proof attempted PROOF_TRIES times, not once. Counted at the source: /local-token is read once per attempt,
+// so the number of times it is hit IS the number of attempts. Reverting the loop back to the single-shot
+// `probe_declared_addresses || ok=0` drops that count to 1 and reddens this case — which is the control.
+test('the proof RETRIES a relay not yet reachable, instead of rolling back on the first failure', async () => {
+  const dead = await H.freePort('a public address nothing answers — the tunnel is still reconnecting');
+  let tokenHits = 0;
+  const box = await H.startImpostor({
+    name: 'up-on-loopback-tunnel-still-reconnecting',
+    handler: (req, res, u) => {
+      if (u.pathname === '/local-token') { tokenHits++; return H.sendJson(res, { token: 'local-admin-token' }); }
+      // Declares a real public address — but it is the dead port, so the possession proof gets no answer
+      // there, exactly as it would while cloudflared is still dialling back out after the restart.
+      if (u.pathname === '/relay-addresses') { return H.sendJson(res, `public ws://127.0.0.1:${dead}/relay\n`); }
+      return H.sendJson(res, {}, 404);
+    },
+  });
+  try {
+    const TRIES = 3;
+    const r = await runProbe(box.port, { tries: TRIES, sleepSecs: 0 });
+    assert.equal(tokenHits, TRIES,
+      `the proof was attempted ${tokenHits} time(s), not ${TRIES}. A single-shot proof caught a8 mid tunnel-` +
+      'reconnect and rolled a healthy build back; the retry is what lets the deploy ride out the reconnect.\n' + r.out);
+    assert.equal(r.ok, false,
+      'a relay that answered NONE of its retries was still called healthy — a genuinely unreachable box must ' +
+      'still fail after the budget runs out, or the retry has turned the proof into a no-op.\n' + r.out);
+    assert.match(r.out, /retrying in/,
+      'the proof gave up without logging a retry, so an operator reading update.log cannot tell a slow tunnel ' +
+      'from a dead one.\n' + r.out);
   } finally { box.stop(); }
 });
