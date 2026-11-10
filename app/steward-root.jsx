@@ -96,6 +96,25 @@ function _connLater(ms) {
 function _connKick() { _connMisses = 0; if (_connFg()) _maybeBumpConn(); }
 async function _maybeBumpConn() {
   if (_connBusy) return;
+  // SELF-HEAL A STALLED LOGIN FIRST (2026-11-10). relaysHealthy() only asks "is the socket up?", so a socket
+  // that is up but never completed NIP-42 (key locked when challenged, or a refused/timed-out login nostr-tools
+  // then caches for the connection's life) passes the grew/healthy early-return below and is NEVER recovered —
+  // the console sits logged out, serving empty private reads, until a manual reload. The engine knows whether a
+  // login FAILED (vs is merely in flight) and applies the clock-vs-ban guard; mirror the member app's beat order
+  // (app/app.jsx: retryIfRefused before the health check).
+  try {
+    const St = window.Steward;
+    if (St && St.healStuckLogin) {
+      const heal = await St.healStuckLogin();
+      if (heal === 'closed') {   // the stale sockets were torn down → re-subscribe so they reopen and re-challenge
+        _connNoteRelays();
+        _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
+        try { St.markResubscribed(); } catch (e) {}
+        _connMisses = 0; return;
+      }
+      if (heal === 'held') { _connMisses = 0; return; }   // a login failure, handled this tick — do not also probe
+    }
+  } catch (e) {}
   const grew = _connRelayGrew();                                  // a relay admitted since the streams opened — see _connSeen
   if (!grew && _stewardHealthy()) { _connMisses = 0; return; }    // nothing we depend on is missing
   // A SOCKET IS ALREADY BACK (REPLACED, below): re-subscribing fixes it and then stops, so the 20-second floor —
@@ -152,6 +171,11 @@ function _wireStewardConn() {
   const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _connKick(); };
   document.addEventListener('visibilitychange', onVis);
   window.addEventListener('online', _connKick);
+  // A KEY JUST ARRIVED (unlock). Sockets opened while the key was locked never signed in; _loginCheck forgot
+  // them (it deletes a locked socket from _loginWatched) and ensureRelay will not re-run for an already-open
+  // socket — so nothing re-challenges them on its own. Kick the ticker: healStuckLogin() now sees sk present and
+  // closes those stale sockets so a fresh one logs in. Harmless on lock (sk null → healStuckLogin returns 'ok').
+  window.addEventListener('steward-key', () => setTimeout(_connKick, 300));
   window.addEventListener('focus', onVis);
   // A FROZEN PAGE THAT RESUMES (Page Lifecycle), a page restored from the back-forward cache, and the native
   // foreground signal — the WebView's visibilitychange is not reliable on Android (app.jsx says the same and

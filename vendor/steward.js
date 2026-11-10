@@ -17104,8 +17104,15 @@ zoo`.split("\n");
   var pub = null;
   var _authedRelays = /* @__PURE__ */ new Map();
   var _authAccepted = /* @__PURE__ */ new Map();
+  var _authFailed = /* @__PURE__ */ new Map();
   pool.automaticallyAuth = (url) => async (authEvent) => {
-    if (!sk) throw new Error("no key");
+    if (!sk) {
+      try {
+        _authFailed.set(normalizeURL2(url), { at: Date.now(), kind: "locked" });
+      } catch (e) {
+      }
+      throw new Error("no key");
+    }
     const signed = finalizeEvent2(authEvent, sk);
     let k = url;
     try {
@@ -17130,12 +17137,17 @@ zoo`.split("\n");
             p.then(() => {
               try {
                 _authAccepted.set(k, r);
+                _authFailed.delete(k);
                 _runKeyReadAuthWaiters();
               } catch (e) {
               }
             }, (err2) => {
               try {
                 if (_authAccepted.get(k) === r) _authAccepted.delete(k);
+              } catch (e) {
+              }
+              try {
+                _authFailed.set(k, { at: Date.now(), kind: /timed out/i.test(String(err2 && err2.message || err2 || "")) ? "timeout" : "refused" });
               } catch (e) {
               }
               try {
@@ -17187,6 +17199,77 @@ zoo`.split("\n");
     } catch (e) {
       return false;
     }
+  }
+  function _authState() {
+    const anyAccepted = relays().some((u) => _keyReadAuthedOn(u));
+    let failed = false, allRefused = true, failAt = 0;
+    for (const u of relays()) {
+      let k = u;
+      try {
+        k = normalizeURL2(u);
+      } catch (e) {
+      }
+      const f = _authFailed.get(k);
+      if (!f) continue;
+      const r = pool.relays.get(k);
+      if (!r || r.connected !== true) continue;
+      if (_keyReadAuthedOn(u)) continue;
+      failed = true;
+      failAt = Math.max(failAt, f.at || 0);
+      if (f.kind !== "refused") allRefused = false;
+    }
+    return { failed: failed && !anyAccepted, allRefused, failAt, anyAccepted };
+  }
+  function _reconnectStale() {
+    let closed = 0;
+    for (const u of relays()) {
+      let k = u;
+      try {
+        k = normalizeURL2(u);
+      } catch (e) {
+      }
+      const r = pool.relays.get(k);
+      if (!r || r.connected !== true) continue;
+      if (_keyReadAuthedOn(u)) continue;
+      try {
+        pool.close([u]);
+      } catch (e) {
+      }
+      _authFailed.delete(k);
+      _authedRelays.delete(k);
+      closed++;
+    }
+    return closed > 0;
+  }
+  var _healAt = 0;
+  var _mono = () => {
+    try {
+      return performance.now();
+    } catch (e) {
+      return Date.now();
+    }
+  };
+  async function _healStuckLogin() {
+    if (!sk) return "ok";
+    const st = _authState();
+    if (!st.failed) return "ok";
+    if (st.allRefused) {
+      if (!_skewMeasuredAt) {
+        try {
+          measureRelaySkew();
+        } catch (e) {
+        }
+        return "held";
+      }
+      if (!clockLooksWrong()) return "held";
+    }
+    if (_healAt && _mono() - _healAt < 6e4) return "held";
+    _healAt = _mono();
+    try {
+      measureRelaySkew();
+    } catch (e) {
+    }
+    return _reconnectStale() ? "closed" : "held";
   }
   var _keyReadEpoch = 0;
   var _keyReadAuthWaiters = /* @__PURE__ */ new Set();
@@ -22242,6 +22325,14 @@ zoo`.split("\n");
     // Opening a socket is cheap; re-querying the whole church is not. So probe first and re-subscribe only on
     // success. A relay that is never coming back costs one failed connect attempt per heartbeat and nothing
     // else; a relay that returns is picked up on the next tick.
+    // SELF-HEAL a stalled NIP-42 login (see _healStuckLogin). authState() mirrors the member app's; the ticker in
+    // app/steward-root.jsx calls healStuckLogin() before its health probe and re-subscribes on 'closed'.
+    authState() {
+      return _authState();
+    },
+    async healStuckLogin() {
+      return _healStuckLogin();
+    },
     async reconnectDownRelays() {
       let back = false;
       try {

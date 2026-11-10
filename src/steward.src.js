@@ -2672,8 +2672,13 @@ const _authedRelays = new Map();   // normalised url -> the AbstractRelay instan
 // reads need the relay's OK, because a relay that refuses the login still answers the read — with the private
 // envelope withheld — and that empty answer must not open a mint gate. See _keyReadAuthedOn.
 const _authAccepted = new Map();   // normalised url -> the AbstractRelay instance whose AUTH the relay accepted
+// SELF-HEAL (2026-11-10): a per-relay record of a login that FAILED — refused, timed out, or thrown because the
+// key was locked — so authState() can tell "login failed" from "login still IN FLIGHT" (normal for up to ~12 s,
+// and recurring on every reconnect). Without it the only recovery from a stalled login was a manual reload.
+// Cleared the moment that relay's AUTH is accepted.
+const _authFailed = new Map();     // normalised url -> { at, kind: 'refused'|'timeout'|'locked' }
 pool.automaticallyAuth = (url) => async (authEvent) => {
-  if (!sk) throw new Error('no key');
+  if (!sk) { try { _authFailed.set(normalizeURL(url), { at: Date.now(), kind: 'locked' }); } catch (e) {} throw new Error('no key'); }
   // SIGN FIRST, RECORD SECOND. Recording before signing means recording "this relay challenged us", not "we
   // answered" — and if signing throws, nostr-tools logs `subscribe auth function failed`, never sends the AUTH
   // frame, and the socket stays anonymous while the console reports itself authenticated. Not hypothetical:
@@ -2704,8 +2709,9 @@ pool.automaticallyAuth = (url) => async (authEvent) => {
           // not one AUTH sent, and the name key never came back. (Why that one OK never came was not pinned down.) So a
           // failed login is cleared, and a TIMED-OUT one is tried again at once, once per challenge — a refusal (OK false)
           // is not retried until the relay challenges again.
-          p.then(() => { try { _authAccepted.set(k, r); _runKeyReadAuthWaiters(); } catch (e) {} }, (err) => {
+          p.then(() => { try { _authAccepted.set(k, r); _authFailed.delete(k); _runKeyReadAuthWaiters(); } catch (e) {} }, (err) => {
             try { if (_authAccepted.get(k) === r) _authAccepted.delete(k); } catch (e) {}
+            try { _authFailed.set(k, { at: Date.now(), kind: /timed out/i.test(String((err && err.message) || err || '')) ? 'timeout' : 'refused' }); } catch (e) {}
             try {
               if (r.authPromise !== p) return;
               r.authPromise = undefined;
@@ -2747,6 +2753,66 @@ function _keyReadAuthedOn(url) {
     const r = pool.relays.get(k);
     return !!r && r.connected === true && _authAccepted.get(k) === r;
   } catch (e) { return false; }
+}
+// ── SELF-HEAL A STALLED LOGIN (2026-11-10) ───────────────────────────────────────────────────────────────
+// The reconnect ticker (app/steward-root.jsx) judges health by "is the socket up?", never "am I logged in?",
+// so a socket that is UP but never completed NIP-42 — the key was locked when it was challenged, or the login
+// was refused/timed-out and nostr-tools then caches the failed authPromise for the connection's life — reads as
+// healthy and is left alone for ever, serving empty private reads. The member app recovers from the same state
+// (app/app.jsx retryIfRefused + Fellowship.reconnectAll); the console had no equivalent. These are it.
+// authState() reports a RECORDED failure with NOTHING ACCEPTED (not merely "not yet authed" — which is normal
+// during a login), and healStuckLogin() closes those sockets so a fresh one re-challenges, with the member
+// app's two guards: a login merely in flight is never torn down, and a bare refusal (a clock skew and a BAN are
+// byte-identical) is re-challenged only when the clock looks wrong, so a removed console cannot become a
+// standing 60 s teardown loop. _isRelayAuthed() itself stays strict and untouched.
+function _authState() {
+  const anyAccepted = relays().some(u => _keyReadAuthedOn(u));
+  let failed = false, allRefused = true, failAt = 0;
+  for (const u of relays()) {
+    let k = u; try { k = normalizeURL(u); } catch (e) {}
+    const f = _authFailed.get(k);
+    if (!f) continue;
+    const r = pool.relays.get(k);
+    if (!r || r.connected !== true) continue;      // a DOWN relay is the ticker's job, not this one
+    if (_keyReadAuthedOn(u)) continue;             // it recovered since the failure
+    failed = true; failAt = Math.max(failAt, f.at || 0);
+    if (f.kind !== 'refused') allRefused = false;
+  }
+  return { failed: failed && !anyAccepted, allRefused, failAt, anyAccepted };
+}
+// Close every socket connected but whose login the relay never ACCEPTED, so ensureRelay opens a fresh one (a new
+// AbstractRelay = a fresh authPromise) and _loginSoon re-challenges it. Only the stale sockets — never a relay we
+// are genuinely logged in on, so no successful publish is interrupted. Returns true if it closed any.
+function _reconnectStale() {
+  let closed = 0;
+  for (const u of relays()) {
+    let k = u; try { k = normalizeURL(u); } catch (e) {}
+    const r = pool.relays.get(k);
+    if (!r || r.connected !== true) continue;
+    if (_keyReadAuthedOn(u)) continue;
+    try { pool.close([u]); } catch (e) {}
+    _authFailed.delete(k); _authedRelays.delete(k);
+    closed++;
+  }
+  return closed > 0;
+}
+let _healAt = 0;
+const _mono = () => { try { return performance.now(); } catch (e) { return Date.now(); } };
+// 'closed' = sockets torn down (the caller must re-subscribe); 'held' = a login failure, not re-challenged this
+// tick; 'ok' = no login failure (let the ordinary health probe run). Bounded to one teardown a minute on a
+// MONOTONIC clock — the wall clock is the very thing a skew fault corrupts (the member app learned this).
+async function _healStuckLogin() {
+  if (!sk) return 'ok';                            // locked: nothing to sign with; the unlock event retriggers us
+  const st = _authState();
+  if (!st.failed) return 'ok';
+  if (st.allRefused) {                             // refused (ban or clock — identical) — do not loop blindly
+    if (!_skewMeasuredAt) { try { measureRelaySkew(); } catch (e) {} return 'held'; }   // measure, decide next tick
+    if (!clockLooksWrong()) return 'held';         // refused, not by the clock → surface it, do not re-challenge
+  }
+  if (_healAt && _mono() - _healAt < 60000) return 'held';   // _healAt starts 0 (falsy): the FIRST heal is never blocked (performance.now() is small early in a session)
+  _healAt = _mono();
+  try { measureRelaySkew(); } catch (e) {}         // the clock may have been corrected since
+  return _reconnectStale() ? 'closed' : 'held';
 }
 // ── HAS THIS CONSOLE ACTUALLY READ THIS CHURCH'S KEY ENVELOPE? — the care, name and media mint gates ─────────
 //
@@ -8943,6 +9009,10 @@ window.Steward = {
   // Opening a socket is cheap; re-querying the whole church is not. So probe first and re-subscribe only on
   // success. A relay that is never coming back costs one failed connect attempt per heartbeat and nothing
   // else; a relay that returns is picked up on the next tick.
+  // SELF-HEAL a stalled NIP-42 login (see _healStuckLogin). authState() mirrors the member app's; the ticker in
+  // app/steward-root.jsx calls healStuckLogin() before its health probe and re-subscribes on 'closed'.
+  authState() { return _authState(); },
+  async healStuckLogin() { return _healStuckLogin(); },
   async reconnectDownRelays() {
     let back = false;
     try {
