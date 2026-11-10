@@ -9664,6 +9664,10 @@ window.Steward = {
   // IS THIS LIST FRESH — the current church's, from a subscription open now, settled by a genuine per-relay read, and
   // (with `since`) re-read after that moment? See _freshDocRead. Read by KeyDistributor (app/stew-dashboard.jsx).
   listIsFresh(list, since) { return _listIsFresh(list, since); },
+  // COMPLETE = the authenticated settle heard from EVERY relay, not a FLOORED one (one relay answered, others
+  // merely disconnected — the data-relay-down case). The display uses this so a relay-down EMPTY read is never
+  // shown as "0 members / everyone waiting" (2026-11-10, decision 2b-A). True only for a genuine (fresh) list.
+  listComplete(list) { return _listIsFresh(list) && !(list && list._for && list._for.sub && list._for.sub.floored); },
   // the same, for one ROOM of a group list: its document and key envelope have been read genuinely (subscribeGroups)
   groupFresh(list, groupId, since) {
     const t = list && list._for;
@@ -9858,7 +9862,7 @@ window.Steward = {
     // what lets the distributor tell "blocked" from "dropped by a rotation run from a partial list".
     const stopRead = _freshDocRead(cp0, [BLOCKED_D + cp0],
       (e) => { if (take(e)) onBlocked(cur); },
-      (how) => { genuine = true; floored = !!(how && how.without && how.without.length); tok.genuine = true; tok.at = Date.now(); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur); onBlocked(cur); _keysReadSignal('blocked'); });
+      (how) => { genuine = true; floored = !!(how && how.without && how.without.length); tok.genuine = true; tok.floored = floored; tok.at = Date.now(); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur); onBlocked(cur); _keysReadSignal('blocked'); });
     return () => { tok.live = false; try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
@@ -11159,8 +11163,12 @@ window.Steward = {
     // EMPTY answer (a reset/wiped relay) now CLEARS it and `cur` folds to [] = fail-CLOSED, instead of the old
     // behaviour where a stale seed survived as `cur`, was stamped fresh, and keyed people the church had dropped.
     const ADM_KEY = 'trinityone.steward.admitted.' + (cp0 || '');
-    let settled = false;
-    const push = () => { onList(cur); if (settled) { try { lsSet(ADM_KEY, JSON.stringify(cur)); } catch {} } };
+    let settled = false, settledFloored = false;
+    // SEED-WIPE GUARD (2026-11-10, decision 2b-A): a FLOORED (relay-down) EMPTY settle must not overwrite the
+    // last-known on-disk allowlist the pending-join COUNT falls back on. Write the disk copy on a COMPLETE
+    // settle, or on a floored one only when it is non-empty — never replace a known roster with an empty answer
+    // that a down relay produced. A complete settle still clears it (a genuinely wiped relay), as before.
+    const push = () => { onList(cur); if (settled && (!settledFloored || cur.length)) { try { lsSet(ADM_KEY, JSON.stringify(cur)); } catch {} } };
     // ITEM D (owner 2026-10-13: a steward's approval is the church's, and must not depend on a console being open).
     // Every copy the relay serves counts. The relay now serves an `admitted:` copy only from the church, a current
     // steward, or a steward it accepted that copy from while they were one (gateway.mjs ADMITTED_RECEIPTS) — the set
@@ -11192,7 +11200,7 @@ window.Steward = {
     const refold = () => { if (!byAuthor.size) return; const was = cur.slice().sort().join(','); fold(); if (cur.slice().sort().join(',') !== was) push(); };
     _memberEmitters.add(refold);   // the steward roster arrived or changed — see _pokeMemberLists
     const stopRead = _freshDocRead(cp0, [ADMITTED_D + cp0], (e) => { if (take(e)) push(); },
-      () => { tok.genuine = true; tok.at = Date.now(); fold(); settled = true; push(); _keysReadSignal('admitted'); });   // fold(), NOT `cur=[...cur]`: an empty genuine answer must recompute cur=[] from the relay, never keep a stale seed
+      (how) => { tok.genuine = true; tok.floored = !!(how && how.without && how.without.length); tok.at = Date.now(); fold(); settled = true; settledFloored = tok.floored; push(); _keysReadSignal('admitted'); });   // fold(), NOT `cur=[...cur]`: an empty genuine answer must recompute cur=[] from the relay, never keep a stale seed. `tok.floored`: a relay-down settle (Steward.listComplete)
     return () => { tok.live = false; _memberEmitters.delete(refold); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────

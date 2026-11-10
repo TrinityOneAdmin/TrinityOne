@@ -23070,6 +23070,12 @@ zoo`.split("\n");
     listIsFresh(list, since) {
       return _listIsFresh(list, since);
     },
+    // COMPLETE = the authenticated settle heard from EVERY relay, not a FLOORED one (one relay answered, others
+    // merely disconnected — the data-relay-down case). The display uses this so a relay-down EMPTY read is never
+    // shown as "0 members / everyone waiting" (2026-11-10, decision 2b-A). True only for a genuine (fresh) list.
+    listComplete(list) {
+      return _listIsFresh(list) && !(list && list._for && list._for.sub && list._for.sub.floored);
+    },
     // the same, for one ROOM of a group list: its document and key envelope have been read genuinely (subscribeGroups)
     groupFresh(list, groupId, since) {
       const t = list && list._for;
@@ -23243,6 +23249,7 @@ zoo`.split("\n");
           genuine = true;
           floored = !!(how && how.without && how.without.length);
           tok.genuine = true;
+          tok.floored = floored;
           tok.at = Date.now();
           cur = [...cur];
           _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
@@ -24376,10 +24383,10 @@ zoo`.split("\n");
       let cur = [];
       const byAuthor = /* @__PURE__ */ new Map();
       const ADM_KEY = "trinityone.steward.admitted." + (cp0 || "");
-      let settled = false;
+      let settled = false, settledFloored = false;
       const push = () => {
         onList(cur);
-        if (settled) {
+        if (settled && (!settledFloored || cur.length)) {
           try {
             lsSet(ADM_KEY, JSON.stringify(cur));
           } catch {
@@ -24431,11 +24438,13 @@ zoo`.split("\n");
         (e) => {
           if (take(e)) push();
         },
-        () => {
+        (how) => {
           tok.genuine = true;
+          tok.floored = !!(how && how.without && how.without.length);
           tok.at = Date.now();
           fold();
           settled = true;
+          settledFloored = tok.floored;
           push();
           _keysReadSignal("admitted");
         }

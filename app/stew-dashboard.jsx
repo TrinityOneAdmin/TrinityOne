@@ -607,19 +607,18 @@ function publishErrorMessage(reason, evt, opts) {
 function useRealMemberCount() {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const admittedReal = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
-  const blockedSet = new Set(window.useStewardBlocked ? window.useStewardBlocked() : []);
+  const blockedReal = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const blockedSet = new Set(blockedReal);
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
-  const idvNow = window.useStewardIdv ? window.useStewardIdv() : 0;
-  const admittedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeAdmitted', idvNow);
-  const blockedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeBlocked', idvNow);
-  // DISPLAY-ONLY seed: the real admitted stream no longer carries the on-disk seed (it must stay relay-truth for
-  // key distribution — see subscribeAdmitted). Read the last-known allowlist straight off disk HERE, ONLY to keep
-  // this count from flashing wrong on a cold open, and ONLY until the real list has loaded. Never used for keys.
-  const seed = (!admittedLoaded && window.Steward && window.Steward.admittedSeed) ? window.Steward.admittedSeed() : null;
-  const admittedSet = new Set(admittedLoaded ? admittedReal : (seed || []));
-  const rosterLoaded = (admittedLoaded || (seed && seed.length > 0)) && blockedLoaded;
+  // AUTHENTICATED-SETTLE GATE (2026-11-10): show a number only once the admitted + blocked lists have genuinely
+  // loaded under a LOGGED-IN read (window.rosterReadyFrom / Steward.listIsFresh). The old stewardStreamLoaded flag
+  // flipped true on the EMPTY answer a logged-out console is served, so this returned 0 and the tile read "—"
+  // while the data was fine. `null` (distinct from a genuine 0) tells the tile to show "Checking…".
+  const ready = window.rosterReadyFrom ? window.rosterReadyFrom(admittedReal, blockedReal) : true;
+  if (!ready) return null;
+  const admittedSet = new Set(admittedReal);
   return members.filter(m => !blockedSet.has(m.pubkey)
-    && !(joinApproval && rosterLoaded && !admittedSet.has(m.pubkey))).length;
+    && !(joinApproval && !admittedSet.has(m.pubkey))).length;
 }
 
 function PublishErrorBanner() {
@@ -3707,20 +3706,18 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // people waiting for approval (only when the church requires it) — surfaced big on the dashboard
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
   const admittedReal = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
-  const blockedSet = new Set(window.useStewardBlocked ? window.useStewardBlocked() : []);
+  const blockedReal = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const blockedSet = new Set(blockedReal);
   // "Pending" is the ABSENCE of a member from two other streams, so it is only meaningful once both have
   // actually arrived. On a hard reload the members list lands first and those sets are still empty, which
   // briefly makes every member in the church look like they are queuing at the door — an alarming banner,
   // for a second, that was never true. Wait for the evidence before drawing the conclusion.
-  const idvNow = window.useStewardIdv ? window.useStewardIdv() : 0;
-  const admittedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeAdmitted', idvNow);
-  const blockedLoaded = !window.stewardStreamLoaded || window.stewardStreamLoaded('subscribeBlocked', idvNow);
-  // DISPLAY-ONLY seed (see useRealMemberCount): the authoritative admitted stream no longer carries the on-disk
-  // seed. Read it off disk HERE only to paint an accurate pending count on a cold open, until the real list lands.
-  const seed = (!admittedLoaded && window.Steward && window.Steward.admittedSeed) ? window.Steward.admittedSeed() : null;
-  const admittedSet = new Set(admittedLoaded ? admittedReal : (seed || []));
-  const rosterLoaded = (admittedLoaded || (seed && seed.length > 0)) && blockedLoaded;
-  const pendingCount = (joinApproval && rosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
+  // AUTHENTICATED-SETTLE GATE (2026-11-10): see window.rosterReadyFrom — replaces the loose stewardStreamLoaded
+  // flag that flipped true on a logged-out console's EMPTY read and painted the whole church as "waiting to join".
+  // A relay-down (floored) empty read cannot collapse a known roster either (decision 2b-A: corroborate).
+  const rosterReady = window.rosterReadyFrom ? window.rosterReadyFrom(admittedReal, blockedReal) : true;
+  const admittedSet = new Set(admittedReal);
+  const pendingCount = (joinApproval && rosterReady) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
   const realCount = useRealMemberCount();   // blocked + still-pending excluded — see useRealMemberCount
   const pendingBanner = pendingCount ? (
     <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
@@ -3903,7 +3900,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // stays for wider windows, where it was never the problem, and for the 760–849px band, where four cannot fit.
   const stat = (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : fourUp ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : snug ? 12 : 14 }}>
-      <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} onClick={() => onTab('members')} />
+      <StatCard label="Members" value={realCount == null ? 'Checking…' : realCount ? String(realCount) : '—'} sub={realCount == null ? 'reading your church…' : realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" snug={snug} onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" snug={snug} onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
       <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} snug={snug} onClick={() => goSettings('relays')} />
@@ -8790,9 +8787,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   // same reasoning as the dashboard banner: pending is an absence, so it can only be read once the
   // streams that would fill it have landed. Otherwise a hard reload shows the whole church "wanting to
   // join" for a second, each with an Approve button next to them.
-  const mIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
-  const mRosterLoaded = !window.stewardStreamLoaded
-    || (window.stewardStreamLoaded('subscribeAdmitted', mIdv) && window.stewardStreamLoaded('subscribeBlocked', mIdv));
+  // AUTHENTICATED-SETTLE GATE (2026-11-10): see window.rosterReadyFrom — replaces the loose stewardStreamLoaded
+  // flag that flipped true on a logged-out console's EMPTY read and showed the whole church as "waiting to join"
+  // with Approve and "mark as a child" active against an unsettled roster (the safeguarding-adjacent reader).
+  const mRosterLoaded = window.rosterReadyFrom ? window.rosterReadyFrom(admittedList, blockedList) : true;
   const pendingJoins = (joinApproval && mRosterLoaded) ? members.filter(m => !admittedSet.has(m.pubkey) && !isBlocked(m.pubkey)) : [];
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
   // Its bulk sibling admitAll already checks its result; this one did not, so a single Approve that the relay

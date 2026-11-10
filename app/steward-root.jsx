@@ -253,6 +253,25 @@ window.stewardStreamLoaded = function (method, idv) {
   const who = (S0 && (S0.actingChurch || S0.churchPub)) || '';
   return (method + '|' + idv + '|' + who) in _subCache;
 };
+// AUTHENTICATED-SETTLE GATE for the admitted + blocked roster (2026-11-10 — the console showed plausible-but-
+// WRONG counts while LOGGED OUT). stewardStreamLoaded (above) flips true on ANY delivery, including the empty
+// answer a logged-out console is served, so screens painted "0 members / everyone waiting" as truth. This is the
+// honest gate: pass the admitted + blocked LISTS as the hooks return them (each carries its freshness stamp),
+// and it is true only once BOTH have settled on a GENUINE authenticated read (Steward.listIsFresh). A FLOORED
+// settle (a relay is down — one answered, others merely disconnected) is trusted UNLESS its EMPTY admitted read
+// would collapse a roster the on-disk seed says is non-empty (decision 2b-A: corroborate). True under tests / no
+// engine, preserving the old permissive behaviour where there is no Steward to ask.
+window.rosterReadyFrom = function (admittedList, blockedList) {
+  const S = window.Steward;
+  if (!S || !S.listIsFresh) return true;
+  if (!(S.listIsFresh(admittedList) && S.listIsFresh(blockedList))) return false;
+  const complete = !S.listComplete || (S.listComplete(admittedList) && S.listComplete(blockedList));
+  if (!complete && !(admittedList && admittedList.length)) {
+    let seedLen = 0; try { seedLen = S.admittedSeed ? (S.admittedSeed() || []).length : 0; } catch (e) {}
+    if (seedLen > 0) return false;   // a relay-down empty read collapsing a KNOWN-non-empty roster → not ready
+  }
+  return true;
+};
 
 const S = () => window.Steward, MA = () => window.StewardManna, ME = () => window.StewardMeals;
 
@@ -379,12 +398,15 @@ window.useStewardMembers = useStewardMembers;
 // DashMealsPanel); RecipientPicker (stew-meals.jsx). Nothing else: the other useStewardMembers readers are not pickers.
 function useStewardPickableMembers(from, keep) {
   const all = from || (window.useStewardMembers ? window.useStewardMembers() : []);
-  const admitted = new Set(window.useStewardAdmitted ? window.useStewardAdmitted() : []);
-  const blocked = new Set((window.useStewardBlocked ? window.useStewardBlocked() : []).map(p => String(p || '').toLowerCase()));
+  const admittedList = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
+  const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const admitted = new Set(admittedList);
+  const blocked = new Set(blockedList.map(p => String(p || '').toLowerCase()));
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
-  const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
-  const rosterLoaded = !window.stewardStreamLoaded
-    || (window.stewardStreamLoaded('subscribeAdmitted', idv) && window.stewardStreamLoaded('subscribeBlocked', idv));
+  // AUTHENTICATED-SETTLE GATE (2026-11-10): see window.rosterReadyFrom — replaces the loose stewardStreamLoaded
+  // flag that flipped true on a logged-out console's empty read (which hid every pickable member, or showed
+  // still-pending people as pickable).
+  const rosterLoaded = window.rosterReadyFrom ? window.rosterReadyFrom(admittedList, blockedList) : true;
   const keepSet = new Set(keep || []);
   return (all || []).filter(m => m && m.pubkey && (keepSet.has(m.pubkey)
     || (!blocked.has(String(m.pubkey).toLowerCase()) && !(joinApproval && rosterLoaded && !admitted.has(m.pubkey)))));
