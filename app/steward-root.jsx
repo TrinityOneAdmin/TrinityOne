@@ -112,7 +112,12 @@ async function _maybeBumpConn() {
         try { St.markResubscribed(); } catch (e) {}
         _connMisses = 0; return;
       }
-      if (heal === 'held') { _connMisses = 0; return; }   // a login failure, handled this tick — do not also probe
+      // heal === 'held' — a login failure we are deliberately NOT re-challenging this tick (a clock-fine refusal,
+      // or the 60s teardown bound). healStuckLogin acts on the connected-but-REFUSING socket; it must NOT return
+      // here, because reconnectDownRelays() below acts on the DISJOINT set of relays that are DOWN. A different
+      // relay that would authenticate can be down while this one merely refuses — returning would never reopen it,
+      // leaving the console stuck at "Checking…". So 'held' falls through to the grew/_stewardHealthy/down-probe
+      // path; only 'closed' early-returns (it has already re-subscribed above).
     }
   } catch (e) {}
   const grew = _connRelayGrew();                                  // a relay admitted since the streams opened — see _connSeen

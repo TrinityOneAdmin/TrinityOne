@@ -396,6 +396,27 @@ test('rapid foreground churn cannot hammer the probe', async () => {
   assert.ok(probes <= 2, `${probes} connect attempts in five seconds of foreground churn`);
 });
 
+test("a HELD login must NOT block the down-relay probe (the two sets are disjoint)", async () => {
+  // F1, audit 2026-11-10. healStuckLogin() returns 'held' when a CONNECTED relay is refusing our login and we
+  // are deliberately not re-challenging it this tick (clock fine, or the 60s teardown bound). That socket is a
+  // DIFFERENT relay from one that is DOWN — reconnectDownRelays() acts on the disjoint "down" set. If 'held'
+  // early-returns, a down relay that WOULD authenticate is never reopened and the console sits at "Checking…".
+  // So 'held' must fall through to the down-relay probe. (Only 'closed', which already re-subscribed, returns.)
+  let probes = 0;
+  const stub = {
+    clock: 1000000,
+    healStuckLogin: async () => 'held',               // one relay is connected but refusing; we hold it this tick
+    relaysHealthy: () => false,                        // a DIFFERENT relay is down
+    relaysReplaced: () => false, markResubscribed: () => {},
+    reconnectDownRelays: async () => { probes++; return false; },   // the down relay is probed (nothing back yet)
+  };
+  const t = ticker(stub);
+  await t.bump();
+  assert.equal(probes, 1,
+    `'held' returned early and skipped reconnectDownRelays() (${probes} probes) — a down relay that would ` +
+    'authenticate is never reopened, so the console stays stuck at "Checking…"');
+});
+
 test('RECONNECTING A DEAD RELAY REALLY IS CHEAP — it does not re-query', async () => {
   // The claim the whole design rests on, measured against a real relay rather than asserted. Killing the relay
   // and probing must not produce EVENT traffic; only a successful re-subscribe should.
