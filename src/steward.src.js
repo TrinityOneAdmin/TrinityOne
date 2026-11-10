@@ -2767,7 +2767,7 @@ function _keyReadAuthedOn(url) {
 // standing 60 s teardown loop. _isRelayAuthed() itself stays strict and untouched.
 function _authState() {
   const anyAccepted = relays().some(u => _keyReadAuthedOn(u));
-  let failed = false, allRefused = true, failAt = 0;
+  let provokable = false, refusedStale = false, failAt = 0;
   for (const u of relays()) {
     let k = u; try { k = normalizeURL(u); } catch (e) {}
     const f = _authFailed.get(k);
@@ -2775,21 +2775,26 @@ function _authState() {
     const r = pool.relays.get(k);
     if (!r || r.connected !== true) continue;      // a DOWN relay is the ticker's job, not this one
     if (_keyReadAuthedOn(u)) continue;             // it recovered since the failure
-    failed = true; failAt = Math.max(failAt, f.at || 0);
-    if (f.kind !== 'refused') allRefused = false;
+    failAt = Math.max(failAt, f.at || 0);
+    if (f.kind === 'refused') refusedStale = true; else provokable = true;   // timeout / locked = re-provokable
   }
-  return { failed: failed && !anyAccepted, allRefused, failAt, anyAccepted };
+  // `provokable` (a timed-out login or a socket opened while locked) is healed even when ANOTHER relay is
+  // accepted — reconnectStale is surgical, so a working relay is never disturbed. Only a bare `refused` (a ban,
+  // indistinguishable from a clock skew) keeps the member app's `nothing accepted` + clock guard, so a per-relay
+  // ban can never become a teardown loop. `failed` = any stale login at all (for authState() consumers).
+  return { failed: provokable || refusedStale, provokable, refusedStale, anyAccepted, failAt };
 }
 // Close every socket connected but whose login the relay never ACCEPTED, so ensureRelay opens a fresh one (a new
 // AbstractRelay = a fresh authPromise) and _loginSoon re-challenges it. Only the stale sockets — never a relay we
 // are genuinely logged in on, so no successful publish is interrupted. Returns true if it closed any.
-function _reconnectStale() {
+function _reconnectStale(kinds) {
   let closed = 0;
   for (const u of relays()) {
     let k = u; try { k = normalizeURL(u); } catch (e) {}
     const r = pool.relays.get(k);
     if (!r || r.connected !== true) continue;
     if (_keyReadAuthedOn(u)) continue;
+    if (kinds) { const f = _authFailed.get(k); if (!f || kinds.indexOf(f.kind) < 0) continue; }   // close only the kind we are healing
     try { pool.close([u]); } catch (e) {}
     _authFailed.delete(k); _authedRelays.delete(k);
     closed++;
@@ -2804,15 +2809,26 @@ const _mono = () => { try { return performance.now(); } catch (e) { return Date.
 async function _healStuckLogin() {
   if (!sk) return 'ok';                            // locked: nothing to sign with; the unlock event retriggers us
   const st = _authState();
-  if (!st.failed) return 'ok';
-  if (st.allRefused) {                             // refused (ban or clock — identical) — do not loop blindly
-    if (!_skewMeasuredAt) { try { measureRelaySkew(); } catch (e) {} return 'held'; }   // measure, decide next tick
-    if (!clockLooksWrong()) return 'held';         // refused, not by the clock → surface it, do not re-challenge
+  // A RE-PROVOKABLE stall (timed-out login, or a socket opened while the key was locked) on a CONNECTED relay:
+  // heal it even if ANOTHER relay is logged in. reconnectStale closes only that socket, never a relay carrying a
+  // good login — so, unlike the member app (which closes ALL sockets, hence its `nothing accepted` guard), the
+  // console recovers one stalled relay without disturbing a working one. The self-hoster case: a flaky box stalls
+  // while a built-in relay is authed, and the roster must not wedge at "Checking…" with no way back but a reload.
+  if (st.provokable) {
+    if (_healAt && _mono() - _healAt < 60000) return 'held';   // bounded; _healAt starts 0 so the FIRST heal is never blocked
+    _healAt = _mono();
+    return _reconnectStale(['timeout', 'locked']) ? 'closed' : 'held';
   }
-  if (_healAt && _mono() - _healAt < 60000) return 'held';   // _healAt starts 0 (falsy): the FIRST heal is never blocked (performance.now() is small early in a session)
+  // Only BARE REFUSALS remain, and a clock skew and a BAN are byte-identical. Do not loop blindly: if something
+  // accepted us elsewhere this is not ours, and otherwise re-challenge ONLY when the clock looks wrong — else a
+  // removed console becomes a standing 60 s teardown loop against the relay that removed it.
+  if (!st.refusedStale || st.anyAccepted) return 'ok';
+  if (!_skewMeasuredAt) { try { measureRelaySkew(); } catch (e) {} return 'held'; }
+  if (!clockLooksWrong()) return 'held';
+  if (_healAt && _mono() - _healAt < 60000) return 'held';
   _healAt = _mono();
-  try { measureRelaySkew(); } catch (e) {}         // the clock may have been corrected since
-  return _reconnectStale() ? 'closed' : 'held';
+  try { measureRelaySkew(); } catch (e) {}
+  return _reconnectStale(['refused']) ? 'closed' : 'held';
 }
 // ── HAS THIS CONSOLE ACTUALLY READ THIS CHURCH'S KEY ENVELOPE? — the care, name and media mint gates ─────────
 //

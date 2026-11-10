@@ -31,6 +31,7 @@ import { finalizeEvent, getPublicKey, verifyEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 
+let clockWrong = false;   // the harness's mutable clock state (clockLooksWrong reads it) — for the ban-vs-clock tests
 const ROOT = new URL('../', import.meta.url).pathname;
 const STEWARD = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -78,7 +79,7 @@ function makeConsole({ locked }) {
     pool, relays: () => URLS, actingChurch: '', normalizeURL, normalizeURL2: normalizeURL, finalizeEvent, finalizeEvent2: finalizeEvent,
     _clearanceSent: new Map(), _returnAnnounced: new Map(), _runKeyReadAuthWaiters: () => {}, CHURCH_SK: CH_SK, CHURCH_PUB: CH_PUB, LOCKED: !!locked,
     // stubbed ONLY to resolve the lifted slice; the 'locked'-kind path under test never reads the clock.
-    measureRelaySkew: async () => {}, clockLooksWrong: () => false, _skewMeasuredAt: 0, _relaySkewSec: 0, performance,
+    measureRelaySkew: async () => {}, clockLooksWrong: () => clockWrong, _skewMeasuredAt: Date.now(), _relaySkewSec: 0, performance,
     window: { Steward: {}, dispatchEvent() { return true; } }, CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
     atob: (s) => Buffer.from(s, 'base64').toString('binary'), console: { warn() {}, log() {} },
     setTimeout, clearTimeout, Promise, Map, Set, WeakSet, Object, String, Number, JSON, Uint8Array, Array, Date, Math,
@@ -93,6 +94,8 @@ function makeConsole({ locked }) {
       healStuckLogin() { return _healStuckLogin(); },
       setSk(v) { sk = v ? CHURCH_SK : null; },
       live(u) { let k=u; try{k=normalizeURL2(u);}catch(e){} const r=pool.relays.get(k); return r ? (r.connected===true?'connected':'present') : 'absent'; },
+      injectFail(u, kind) { try { _authFailed.set(normalizeURL2(u), { at: Date.now(), kind }); } catch (e) {} },   // simulate a relay refusing/timing out
+      dropAccept(u) { try { _authAccepted.delete(normalizeURL2(u)); } catch (e) {} },                               // simulate the relay no longer accepting us
     };
     return _api;`;
   const api = new Function(...names, body)(...names.map(n => scope[n]));
@@ -153,4 +156,50 @@ test('a healthy, logged-in console is left alone — healStuckLogin returns "ok"
   assert.equal(c.relayAuthed(), true);
   assert.equal(await c.healStuckLogin(), 'ok', 'nothing to heal when logged in');
   try { s.close(); } catch {} c.close();
+});
+
+async function authedConsole() {
+  const c = makeConsole({ locked: false });
+  const s = sub(c);
+  for (let i = 0; i < 8; i++) { await sleep(1000); if (c.relayAuthed()) break; }
+  assert.equal(c.relayAuthed(), true, 'fixture: logged in first');
+  return { c, s };
+}
+
+test('a REFUSED login with a healthy clock is HELD, not torn down (no removed-delegate loop)', async () => {
+  clockWrong = false;
+  const { c, s } = await authedConsole();
+  // the relay now refuses us (a ban): no acceptance, a recorded refusal, and the clock is fine
+  c.dropAccept(WS_URL); c.injectFail(WS_URL, 'refused');
+  assert.equal(c.authState().failed, true, 'authState sees a refusal with nothing accepted');
+  assert.equal(await c.healStuckLogin(), 'held', 'a ban (clock fine) must be HELD — not re-challenged in a loop');
+  assert.equal(c.live(WS_URL), 'connected', 'the socket is left open; nothing was torn down');
+  try { s.close(); } catch {} c.close();
+});
+
+test('a REFUSED login WITH a wrong clock IS re-challenged (a clock fault self-heals)', async () => {
+  clockWrong = true;
+  const { c, s } = await authedConsole();
+  c.dropAccept(WS_URL); c.injectFail(WS_URL, 'refused');
+  assert.equal(await c.healStuckLogin(), 'closed', 'a clock-skew refusal is re-challenged (closed)');
+  assert.equal(c.live(WS_URL), 'absent', 'the stale socket was torn down to re-challenge');
+  clockWrong = false;
+  try { s.close(); } catch {} c.close();
+});
+
+test('the self-heal is BOUNDED — no second teardown within the minute', async () => {
+  clockWrong = false;
+  const { c, s } = await authedConsole();
+  c.dropAccept(WS_URL); c.injectFail(WS_URL, 'timeout');
+  assert.equal(await c.healStuckLogin(), 'closed', 'first heal tears down the stalled socket');
+  // reopen the way test 2 does (close the dead sub, settle, provoke with a read), wait for it to CONNECT
+  try { s.close(); } catch {}
+  await sleep(500);
+  const s2 = sub(c);
+  await gated(c.pool);
+  for (let i = 0; i < 15; i++) { await sleep(1000); if (c.live(WS_URL) === 'connected') break; }
+  assert.equal(c.live(WS_URL), 'connected', 'fixture: the socket reopened');
+  c.dropAccept(WS_URL); c.injectFail(WS_URL, 'timeout');   // stale again, on a connected socket
+  assert.equal(await c.healStuckLogin(), 'held', 'a second teardown within 60s is bounded to "held"');
+  try { s.close(); s2.close(); } catch {} c.close();
 });

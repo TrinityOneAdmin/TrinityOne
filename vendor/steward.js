@@ -17202,7 +17202,7 @@ zoo`.split("\n");
   }
   function _authState() {
     const anyAccepted = relays().some((u) => _keyReadAuthedOn(u));
-    let failed = false, allRefused = true, failAt = 0;
+    let provokable = false, refusedStale = false, failAt = 0;
     for (const u of relays()) {
       let k = u;
       try {
@@ -17214,13 +17214,13 @@ zoo`.split("\n");
       const r = pool.relays.get(k);
       if (!r || r.connected !== true) continue;
       if (_keyReadAuthedOn(u)) continue;
-      failed = true;
       failAt = Math.max(failAt, f.at || 0);
-      if (f.kind !== "refused") allRefused = false;
+      if (f.kind === "refused") refusedStale = true;
+      else provokable = true;
     }
-    return { failed: failed && !anyAccepted, allRefused, failAt, anyAccepted };
+    return { failed: provokable || refusedStale, provokable, refusedStale, anyAccepted, failAt };
   }
-  function _reconnectStale() {
+  function _reconnectStale(kinds) {
     let closed = 0;
     for (const u of relays()) {
       let k = u;
@@ -17231,6 +17231,10 @@ zoo`.split("\n");
       const r = pool.relays.get(k);
       if (!r || r.connected !== true) continue;
       if (_keyReadAuthedOn(u)) continue;
+      if (kinds) {
+        const f = _authFailed.get(k);
+        if (!f || kinds.indexOf(f.kind) < 0) continue;
+      }
       try {
         pool.close([u]);
       } catch (e) {
@@ -17252,24 +17256,27 @@ zoo`.split("\n");
   async function _healStuckLogin() {
     if (!sk) return "ok";
     const st = _authState();
-    if (!st.failed) return "ok";
-    if (st.allRefused) {
-      if (!_skewMeasuredAt) {
-        try {
-          measureRelaySkew();
-        } catch (e) {
-        }
-        return "held";
-      }
-      if (!clockLooksWrong()) return "held";
+    if (st.provokable) {
+      if (_healAt && _mono() - _healAt < 6e4) return "held";
+      _healAt = _mono();
+      return _reconnectStale(["timeout", "locked"]) ? "closed" : "held";
     }
+    if (!st.refusedStale || st.anyAccepted) return "ok";
+    if (!_skewMeasuredAt) {
+      try {
+        measureRelaySkew();
+      } catch (e) {
+      }
+      return "held";
+    }
+    if (!clockLooksWrong()) return "held";
     if (_healAt && _mono() - _healAt < 6e4) return "held";
     _healAt = _mono();
     try {
       measureRelaySkew();
     } catch (e) {
     }
-    return _reconnectStale() ? "closed" : "held";
+    return _reconnectStale(["refused"]) ? "closed" : "held";
   }
   var _keyReadEpoch = 0;
   var _keyReadAuthWaiters = /* @__PURE__ */ new Set();
