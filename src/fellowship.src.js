@@ -1013,7 +1013,10 @@ const DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];   // native / static 
 // the pool — these relays don't sync to each other, so clients write to all of them.
 const CANONICAL_RELAYS = [
   'wss://app.trinityone.church/relay',                    // a8 / master-01 via Cloudflare — primary (own domain)
-  'wss://trinityone-master-01.tailbeaac0.ts.net/relay',   // same box via Tailscale Funnel — independent network path, fallback
+  // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
+  // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
+  // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
+  // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
   // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
   // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
 ];

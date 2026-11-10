@@ -6532,8 +6532,11 @@
     "6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"
   ]);
   var SHARED_RELAY_HINTS = Object.freeze([
-    "wss://app.trinityone.church/relay",
-    "wss://trinityone-master-01.tailbeaac0.ts.net/relay"
+    "wss://app.trinityone.church/relay"
+    // 2026-11-10 (D0): the ts.net path to this same box is a RETIRED, permanently-dead Tailscale route.
+    // Removed as a default ADDRESS only — the box's identity key stays in SHARED_RELAY_KEYS below, so a8
+    // (and the box at any address) is still admitted on proof, and root-3 matches by KEY not URL. Keeping a
+    // dead default address made the relay-list read permanently "uncovered" and deadlocked every removal.
   ]);
   var CANONICAL_RELAY_PUBS = Object.freeze(
     Object.fromEntries(SHARED_RELAY_HINTS.map((u) => [u, SHARED_RELAY_KEYS]))
@@ -16239,7 +16242,7 @@ zoo`.split("\n");
     });
     if (changed) lsSet(NETKEYS_LS, JSON.stringify(out));
   }
-  var CANONICAL_RELAYS = ["wss://app.trinityone.church/relay", "wss://trinityone-master-01.tailbeaac0.ts.net/relay"];
+  var CANONICAL_RELAYS = ["wss://app.trinityone.church/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
   function ownRelay() {
     if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return CANONICAL_RELAY;

@@ -1576,7 +1576,7 @@ function _migrateNetKeysToSealed() {
 }
 // The TrinityOne shared-relay pool — relays we operate that every church can use. On a static host
 // the steward publishes across all of them (they don't sync to each other). Add a URL here per host.
-const CANONICAL_RELAYS = ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay'];   // primary: own domain (Cloudflare); fallback: same box via ts.net. dev-box relay dropped 2026-06-25; NAS removed 2026-06-17
+const CANONICAL_RELAYS = ['wss://app.trinityone.church/relay'];   // own domain (Cloudflare). ts.net fallback (same box) removed 2026-11-10 (D0): retired/dead Tailscale path; its dead default address deadlocked every relay removal. dev-box relay dropped 2026-06-25; NAS removed 2026-06-17
 const CANONICAL_RELAY = CANONICAL_RELAYS[0];   // back-compat: the primary shared relay
 function ownRelay() {
   // native (Capacitor APK): location.host is just "localhost", which has no relay — use the shared pool

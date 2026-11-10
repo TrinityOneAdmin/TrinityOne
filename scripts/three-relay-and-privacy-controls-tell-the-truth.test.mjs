@@ -156,7 +156,9 @@ const shippedCanRemove = () => {
     if (c === '{') d++;
     else if (c === '}') { d--; if (!d) { end = j + 1; break; } }
   }
-  const CANONICAL_RELAYS = ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay'];
+  // The shipped default set. The retired ts.net path (trinityone-master-01.tailbeaac0.ts.net) was dropped
+  // from the defaults on 2026-11-10 (D0) — it is one address now, not two. Its KEY stays in SHARED_RELAY_KEYS.
+  const CANONICAL_RELAYS = ['wss://app.trinityone.church/relay'];
   // eslint-disable-next-line no-new-func
   return new Function('CANONICAL_RELAYS', 'ownRelay', 'return ({ ' + STEWARD.slice(i, end) + ' }).canRemoveRelay;')(
     CANONICAL_RELAYS, () => 'wss://ourbox.ts.net/relay');
@@ -164,17 +166,20 @@ const shippedCanRemove = () => {
 
 test('a relay that cannot be removed is not offered a bin', () => {
   const can = shippedCanRemove();
-  // The two shipped addresses: removeRelay only filters extraRelays() and these are appended unconditionally, so a
-  // bin would remove nothing, return true and still forget any name→url binding.
-  for (const url of ['wss://app.trinityone.church/relay', 'wss://trinityone-master-01.tailbeaac0.ts.net/relay']) {
+  // The shipped shared address: removeRelay only filters extraRelays() and it is appended unconditionally, so a
+  // bin would remove nothing, return true and still forget any name→url binding. (The retired master-01 ts.net
+  // address is no longer canonical after D0, so it is now removable — asserted in the removable loop below.)
+  for (const url of ['wss://app.trinityone.church/relay']) {
     assert.equal(can(url), false,
-      url + ' is offered for removal. removeRelay only filters extraRelays(), and the canonical addresses ' +
-      'are appended unconditionally — so the click removes nothing, returns true, and still forgets any ' +
+      url + ' is offered for removal. removeRelay only filters extraRelays(), and the canonical address ' +
+      'is appended unconditionally — so the click removes nothing, returns true, and still forgets any ' +
       'name→url binding, while the row stays put and nothing explains why.');
   }
   // CHANGED round 9 (ninth audit): another SPELLING of a shared relay is a row the console ADDED (it is in
   // extraRelays, and removeRelay does take it out). Such rows are now refused at Add; one an older install already
   // holds must be removable, or a dead spelling (ws://…) freezes the church's list. So these get a bin.
+  // The master-01 ts.net address joined this list on 2026-11-10 (D0): once the retired path left the defaults it
+  // became an ordinary added row like any other, and must be removable.
   for (const url of ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'wss://app.trinityone.church/relay/',
     'ws://trinityone-master-01.tailbeaac0.ts.net/relay', 'wss://app.trinityone.church//relay']) {
     assert.equal(can(url), true, url + ': A ROW THE CONSOLE ADDED HAS NO REMOVE — a dead spelling stays and holds the church\'s list');

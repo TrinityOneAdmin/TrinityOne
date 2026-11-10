@@ -865,9 +865,12 @@ function shippedAdd() {
     normalizeURL);
   return { api, stored };
 }
+// Spellings of the ONE live shared relay (a8 / app.trinityone.church). The retired ts.net address
+// (trinityone-master-01.tailbeaac0.ts.net) was dropped from the shipped defaults on 2026-11-10 (D0):
+// it is no longer one of TrinityOne's relays, so Add no longer refuses it as a shared spelling — it is
+// an ordinary address now, covered by the CONTROL below. Its KEY is still in SHARED_RELAY_KEYS.
 const SHARED_SPELLINGS = ['wss://APP.TrinityOne.church/relay', 'wss://app.trinityone.church:443/relay', 'ws://app.trinityone.church/relay',
-  'wss://app.trinityone.church//relay', 'wss://app.trinityone.church/relay/', 'wss://app.trinityone.church/relay',
-  'ws://trinityone-master-01.tailbeaac0.ts.net/relay'];
+  'wss://app.trinityone.church//relay', 'wss://app.trinityone.church/relay/', 'wss://app.trinityone.church/relay'];
 
 test('Add refuses every spelling of a TrinityOne relay, on the card and in the wizard, and says why (ninth audit)', async () => {
   const ALREADY = /That’s already one of TrinityOne’s relays\./;

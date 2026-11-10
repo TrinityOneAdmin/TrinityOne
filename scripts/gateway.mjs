@@ -1682,7 +1682,7 @@ const DIRECTORY = (process.env.RELAY_DIRECTORY || 'https://app.trinityone.church
 // Directory peers this relay mirrors with — the shared hosts plus any RELAY_DIRECTORY_PEERS override. Each relay
 // pulls every peer's records and merges them, so the whole name/offer directory lives on ALL of them, not one.
 const DIRECTORY_PEERS = [...new Set([
-  DIRECTORY, 'https://app.trinityone.church', 'https://trinityone-master-01.tailbeaac0.ts.net',
+  DIRECTORY, 'https://app.trinityone.church',   // ts.net peer removed 2026-11-10 (D0): retired/dead Tailscale path to the same box
   ...(process.env.RELAY_DIRECTORY_PEERS || '').split(',').map(s => s.trim()).filter(Boolean),
 ].map(u => u.replace(/\/+$/, '')))];
 const MYNAME_FILE = join(DATA_DIR, 'relay-myname.json');

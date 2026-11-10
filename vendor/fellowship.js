@@ -3765,8 +3765,11 @@
     "6a4267558c9990d0391b3472bac9735d33a5e99b5c7cb0e49bdece7ea6b770f2"
   ]);
   var SHARED_RELAY_HINTS = Object.freeze([
-    "wss://app.trinityone.church/relay",
-    "wss://trinityone-master-01.tailbeaac0.ts.net/relay"
+    "wss://app.trinityone.church/relay"
+    // 2026-11-10 (D0): the ts.net path to this same box is a RETIRED, permanently-dead Tailscale route.
+    // Removed as a default ADDRESS only — the box's identity key stays in SHARED_RELAY_KEYS below, so a8
+    // (and the box at any address) is still admitted on proof, and root-3 matches by KEY not URL. Keeping a
+    // dead default address made the relay-list read permanently "uncovered" and deadlocked every removal.
   ]);
   var CANONICAL_RELAY_PUBS = Object.freeze(
     Object.fromEntries(SHARED_RELAY_HINTS.map((u) => [u, SHARED_RELAY_KEYS]))
@@ -7492,10 +7495,12 @@
   var _originRelay = !_native && !_staticHost && _loc && _loc.host ? (_loc.protocol === "https:" ? "wss://" : "ws://") + RELAY_BASE + "/relay" : null;
   var DEFAULT_RELAYS = _originRelay ? [_originRelay] : [];
   var CANONICAL_RELAYS = [
-    "wss://app.trinityone.church/relay",
+    "wss://app.trinityone.church/relay"
     // a8 / master-01 via Cloudflare — primary (own domain)
-    "wss://trinityone-master-01.tailbeaac0.ts.net/relay"
-    // same box via Tailscale Funnel — independent network path, fallback
+    // ts.net path to the same box (trinityone-master-01.tailbeaac0.ts.net) removed 2026-11-10 (D0): a
+    // RETIRED, permanently-dead Tailscale route. The box's identity key is unchanged, so a8 still proves it
+    // and root-3 matches by KEY not URL — no church is stranded. Keeping the dead default address made the
+    // relay-list read permanently "uncovered" and deadlocked every relay removal in the console.
     // dev-box relay (trinityone.tailbeaac0.ts.net) dropped 2026-06-25 on the trinityone.church go-live: not a
     // production node. NAS node removed 2026-06-17 (offline + non-enforcing). Add an always-on second box here later.
   ];

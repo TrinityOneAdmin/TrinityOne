@@ -106,7 +106,10 @@ export const SHARED_RELAY_KEYS = Object.freeze([
 ]);
 export const SHARED_RELAY_HINTS = Object.freeze([
   'wss://app.trinityone.church/relay',
-  'wss://trinityone-master-01.tailbeaac0.ts.net/relay',
+  // 2026-11-10 (D0): the ts.net path to this same box is a RETIRED, permanently-dead Tailscale route.
+  // Removed as a default ADDRESS only — the box's identity key stays in SHARED_RELAY_KEYS below, so a8
+  // (and the box at any address) is still admitted on proof, and root-3 matches by KEY not URL. Keeping a
+  // dead default address made the relay-list read permanently "uncovered" and deadlocked every removal.
 ]);
 // Derived, and kept because `proveRelay`'s diagnostics and every existing caller and test read this shape.
 // It is a VIEW of the two declarations above, never a second source of truth.
