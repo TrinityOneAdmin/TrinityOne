@@ -6886,6 +6886,8 @@ function serveStatic(req, res) {
       // endpoint costs nothing to use — the panel already sends the token for its activity chart.
       connections: wss ? wss.clients.size : 0,
       traffic: { bytesIn: _wsBytesIn, bytesOut: _wsBytesOut },
+      // the relay-wide charge of paused backlog streams (unsent JSON bytes; see SEND BACKPRESSURE) and how many sockets hold one
+      backlog: { heldBytes: _heldBytesAll, heldSockets: _heldSockets.size },
     }));
     return;
   }
@@ -9077,98 +9079,169 @@ const MAX_REQ_EVENTS = 5000;
 // SEND BACKPRESSURE for a REQ's stored backlog (and the post-AUTH replay). Audit II (e63cc348) closed the slow-loris /
 // OOM lever — "a client that isn't reading must not make us buffer unbounded" — by CLOSING the socket (1009) the moment
 // ws.bufferedAmount passed 16 MB. Measured live 2026-11-11, that also killed every real steward console on a tunnel: it
-// opens ~12 overlapping subscriptions that each return the church's whole ~1 MB corpus, ~17 MB lands in the buffer at
+// opens ~12-17 overlapping subscriptions that each return the church's whole ~1 MB corpus, ~17 MB lands in the buffer at
 // once, the Funnel/Cloudflare/mobile link cannot drain it, the relay closes 1009, the console reconnects and asks again
 // — every ~16 s, for ever. Now the stream PAUSES instead of closing: past the high-water mark it waits (polling — the
 // `ws` WebSocket has no 'drain' event) until the buffer falls below the low-water mark, then carries on in order and
-// ends with the same EOSE. The DoS bound is kept, three ways — each closes 1009 'too slow' exactly as before:
-//   • STALL: paused for WS_PAUSE_MS without draining below low-water. 30 s: far longer than any real link needs to move
-//     768 KB (that is 25 KB/s), short enough that a reader who never reads holds nothing for long.
-//   • HARD CAP: the buffer ever passes 16 MB (the old figure, unchanged) — only live broadcasts, which this does not
-//     pace, could push it there, and a client that far behind is the case audit II was written for.
-//   • HELD EVENTS: the paused streams of ONE socket keep their matched arrays alive. MAX_SUBS_PER_CONN is 256, so
-//     without a bound one connection could park 256 × MAX_REQ_EVENTS parsed events. Past WS_MAX_HELD (4 ×
-//     MAX_REQ_EVENTS; the measured console needs ~4,300) the socket is closed instead.
-//   • HELD BYTES, per socket (audit 2026-11-11 F1): an event can be ~1 MB (maxPayload), so an event COUNT bounds
-//     nothing in bytes. A paused stream keeps its WHOLE items array referenced until it ends, so when a stream first
-//     pauses it charges the serialized JSON length of every item in that array (a proxy: parsed objects cost more
-//     heap than their JSON, and this is the same proxy for every socket). Past WS_MAX_HELD_BYTES (32 MB: ~2× the
-//     measured console's ~17 MB, so the console that motivated this pauses with room to spare) the socket is closed.
-//   • HELD BYTES, relay-wide: MAX_CONNS is 5000 and there is deliberately no per-IP cap, so a per-socket bound alone
-//     still lets many sockets park ~5000 × 32 MB. Past WS_MAX_HELD_BYTES_ALL (128 MB — about seven measured consoles
-//     paused at once; a self-hosting church's 1 GB Raspberry Pi cannot spare much more heap than that, and the parsed
-//     objects behind 128 MB of JSON already cost several times that) the socket whose pause would cross it is closed;
-//     sockets already paused are never touched. A stream's charge is released exactly once: when it finishes, is
-//     abandoned (socket gone, stalled, or closed for a bound), whichever comes first.
-//   • TOTAL STALL, per stream: the 30 s STALL bound re-arms every time the buffer dips under low-water, so a reader
-//     that trickles (~26 KB/s) was never closed. A stream still paused WS_STALL_TOTAL_MS (300 s) after it FIRST paused
-//     is closed at its next pause. 300 s: the measured 17 MB console finishes inside it on any link sustaining ~60 KB/s;
-//     the bound is what returns a trickler's held bytes, not what stops a fast reader. A stream can therefore live at
-//     most WS_STALL_TOTAL_MS + WS_PAUSE_MS after its first pause.
-// Per-socket memory while paused is therefore ≤ high-water + one event in the buffer (every send re-checks first, and
-// paused streams share the ONE socket buffer — a resumed stream that pushes it back over high-water makes the next one
-// wait again), plus ≤ WS_MAX_HELD events and ≤ WS_MAX_HELD_BYTES of JSON, for ≤ WS_STALL_TOTAL_MS + WS_PAUSE_MS per
-// stream, and ≤ WS_MAX_HELD_BYTES_ALL across the relay. Only WHEN is changed: what is sent, its order, the gates and
-// the EOSE are not. The env overrides (RELAY_WS_*) exist for scripts/a-slow-reader-is-paused-not-dropped.test.mjs and
-// scripts/a-slow-reader-cannot-hold-unbounded-memory.test.mjs; production uses the defaults.
+// ends with the same EOSE.
+//
+// WHAT A PAUSED STREAM COSTS, AND HOW IT IS CHARGED. A paused stream keeps the items it has NOT yet sent alive. It is
+// charged exactly those: the serialized JSON length of every unsent item (a proxy — parsed objects cost more heap than
+// their JSON, the same proxy for every socket). The charge FALLS as items are sent (each sent item is also dropped from
+// the array, so the charge is what is really held), and whatever is left is returned on every exit — finished,
+// CLOSEd/replaced, socket gone, closed for a bound, or a throw (try/finally). Only bytes not yet sent are ever charged.
+//
+// THE GUARDS. Churches are DESIGNED to run on small pipes — a self-hosted box on home broadband, members on weak mobile
+// links (owner, 2026-11-11). So a slow-but-honest reader is NEVER closed for taking a long time; what is closed is a
+// reader that makes no meaningful PROGRESS. Progress is bytes that actually left this process for the kernel (the
+// socket's bytesWritten minus what is still queued in it — wire bytes, after compression).
+// MEASURED (scripts/a-slow-reader-cannot-hold-unbounded-memory.test.mjs, a 400 KB/s rate-limited link on loopback): the
+// kernel and anything downstream of it (a tunnel daemon, a proxy) first swallow several MB at once, then this process
+// sees NO drain at all until that has gone down the link — 12 s of silence on a link moving 400 KB/s. Progress seen here
+// is bursty, by the size of the buffers downstream divided by the link rate, so a short per-pause window closes honest
+// readers. Hence both guards below look at a whole backlog EPISODE (from the moment a socket with no backlog in flight
+// starts one, so the burst the kernel swallowed counts), and the no-movement bound is long. Each closes 1009 'too slow':
+//   • PROGRESS FLOOR: once an episode is WS_PROGRESS_WINDOW_MS (60 s) old, its average drain since it began is below
+//     WS_PROGRESS_FLOOR (2 KB/s). 2 KB/s is an eighth of a 128 kbps link (16 KB/s) and under a poor 2G/EDGE connection,
+//     so a reader moving at any rate a church plausibly has stays above it for ever, however long the backlog; a reader
+//     that drains a little to look alive, below it, is closed. This REPLACES 46b198c3's 300 s cumulative-pause close,
+//     which closed an honest slow church for being slow.
+//   • NO MOVEMENT: a pause during which nothing at all reaches the kernel for WS_PAUSE_MS (120 s). Movement, not
+//     reaching low-water (the old 30 s form — "not back under 256 KB within 30 s" — closed a 10 KB/s reader, which needs
+//     ~77 s to drain 768 KB). It is long because of the burstiness above: it tolerates ~240 KB of downstream buffer at
+//     the 2 KB/s floor, ~2 MB at 128 kbps. A socket buffered deeper than that on a link that slow CAN still be closed —
+//     the relay cannot tell it from a reader that stopped; that is the one honest case this does not cover.
+//   • HEARTBEAT: the 25 s ping is queued BEHIND the backlog, so a slow reader cannot answer it in time, and the
+//     heartbeat used to terminate it. A socket that misses a pong is now kept if it has drained anything within
+//     WS_PAUSE_MS — the same no-movement bound; a socket that has moved nothing for that long is terminated as before
+//     (so an idle dead peer still goes at the first missed pong, a dead peer that was just sent data within 120 s).
+//   • HARD CAP: ws.bufferedAmount ever past 16 MB (audit II's figure, unchanged). That is real socket memory, and it can
+//     only pass high-water via live broadcasts, which this does not pace.
+//   • PER SOCKET, while not draining: a socket whose unsent charge is over WS_MAX_HELD_BYTES (128 MB) or WS_MAX_HELD
+//     events, AND which has drained nothing for WS_HELD_GRACE_MS (5 s), is closed. A DRAINING socket is never closed for
+//     how much it asked for: a console's ~17 REQs arrive in one tick, and once the buffer passes high-water every later
+//     stream pauses at its first item, so the instantaneous charge is the whole volume requested, whatever the read
+//     speed (audit 2026-11-11 re-audit, HIGH: 46b198c3 closed a church ~2× Living Word on every connect for exactly
+//     that). 128 MB is ~7.5× the largest measured console (~17 MB) and ~3.7× a church twice that size.
+//   • RELAY-WIDE: MAX_CONNS is 5000 and there is deliberately no per-IP cap, so per-socket bounds alone let many
+//     sockets hold memory. When a new charge takes the relay-wide total past WS_MAX_HELD_BYTES_ALL (256 MB — two
+//     sockets at the per-socket cap, or ~15 measured consoles paused at once), sockets are EVICTED (closed 1009) in
+//     order of LEAST RECENT DRAIN PROGRESS until the total fits — never the socket whose charge crossed it, unless it is
+//     the only one holding anything. Eviction rather than "count only sockets paused past a grace": under a grace rule
+//     an attacker parks non-reading sockets past the grace, fills the budget, and the next honest console that pauses
+//     — on a slow tunnel it will pause past the grace — is the one refused. Under eviction a parker that is not reading
+//     is the oldest-progress socket on the relay and goes first; to avoid that it must actually drain at the progress
+//     floor, which costs it the bandwidth and still leaves the per-socket bound. Ordering by drain progress rather than
+//     by how long a socket has been paused keeps an honest slow church, paused a long time but moving, off the list.
+// Per-socket memory while paused is therefore ≤ the 16 MB hard cap in the buffer plus the unsent items it asked for —
+// bounded by MAX_SUBS_PER_CONN × MAX_REQ_EVENTS and the scan allowance, held past WS_HELD_GRACE_MS only while draining,
+// and ≤ WS_MAX_HELD_BYTES_ALL across the relay at every charge. Only WHEN is changed: what is sent, its order, the
+// gates and the EOSE are not. The env overrides (RELAY_WS_*) exist for scripts/a-slow-reader-is-paused-not-dropped.test.mjs
+// and scripts/a-slow-reader-cannot-hold-unbounded-memory.test.mjs; production uses the defaults. The admin-only /stats
+// reports the relay-wide charge as backlog.heldBytes.
 const _envInt = (k, d) => { const n = parseInt(process.env[k], 10); return n > 0 ? n : d; };
 const WS_HIGH_WATER = _envInt('RELAY_WS_HIGH_WATER', 1024 * 1024);        // pause a backlog stream past 1 MB queued
 const WS_LOW_WATER = Math.min(_envInt('RELAY_WS_LOW_WATER', 256 * 1024), WS_HIGH_WATER);   // resume below 256 KB
 const MAX_WS_BUFFER = _envInt('RELAY_WS_HARD_CAP', 16 * 1024 * 1024);    // hard cap: past this, close (audit II's bound)
-const WS_PAUSE_MS = _envInt('RELAY_WS_PAUSE_MS', 30000);                 // stall bound: paused this long without draining → close
-const WS_MAX_HELD = _envInt('RELAY_WS_MAX_HELD', 4 * MAX_REQ_EVENTS);    // events one socket's paused streams may hold
-const WS_MAX_HELD_BYTES = _envInt('RELAY_WS_MAX_HELD_BYTES', 32 * 1024 * 1024);          // JSON bytes one socket's paused streams may hold
-const WS_MAX_HELD_BYTES_ALL = _envInt('RELAY_WS_MAX_HELD_BYTES_ALL', 128 * 1024 * 1024);  // …and every socket's together
-const WS_STALL_TOTAL_MS = _envInt('RELAY_WS_STALL_TOTAL_MS', 300000);     // a stream paused this long after its FIRST pause → close
-let _heldBytesAll = 0;                                                      // relay-wide sum of every paused stream's charge
+const WS_PAUSE_MS = _envInt('RELAY_WS_PAUSE_MS', 120000);                // paused this long with NOTHING drained → close
+const WS_PROGRESS_WINDOW_MS = _envInt('RELAY_WS_PROGRESS_WINDOW_MS', 60000);   // a backlog episode this old or older…
+const WS_PROGRESS_FLOOR = _envInt('RELAY_WS_PROGRESS_FLOOR', 2048);      // …must have averaged at least this many bytes/s
+const WS_HEARTBEAT_MS = _envInt('RELAY_WS_HEARTBEAT_MS', 25000);         // ping interval (a missed pong → terminate, see HEARTBEAT)
+const WS_HELD_GRACE_MS = _envInt('RELAY_WS_HELD_GRACE_MS', 5000);        // over the per-socket bound AND undrained this long → close
+const WS_MAX_HELD = _envInt('RELAY_WS_MAX_HELD', 4 * MAX_REQ_EVENTS);    // unsent events one socket may hold while not draining
+const WS_MAX_HELD_BYTES = _envInt('RELAY_WS_MAX_HELD_BYTES', 128 * 1024 * 1024);         // unsent JSON bytes, ditto
+const WS_MAX_HELD_BYTES_ALL = _envInt('RELAY_WS_MAX_HELD_BYTES_ALL', 256 * 1024 * 1024); // every socket's together → evict
+let _heldBytesAll = 0;                                                      // relay-wide sum of every paused stream's unsent charge
+const _heldSockets = new Set();                                             // sockets whose charge is > 0 (eviction candidates)
 const WS_DRAIN_POLL_MS = 25;
 function _tooSlow(ws) { try { ws.close(1009, 'too slow'); } catch {} }
+// Bytes this socket has handed to the kernel: monotonic, and wire bytes (after permessage-deflate).
+function _drained(ws) { const s = ws._socket; return s ? Math.max(0, (s.bytesWritten || 0) - (s.writableLength || 0)) : 0; }
+function _noteProgress(ws, now) { const d = _drained(ws); if (d > (ws._lastDrained || 0)) { ws._lastDrained = d; ws._progressAt = now; ws._pauseDrainAt = now; } return d; }
+// The relay-wide total has passed its budget because `newcomer` just added a charge: close the sockets with the least
+// recent drain progress (never the newcomer) until it fits. Their charges are counted as freed here; the poller returns
+// them to the counters on its next tick, when it sees the socket is no longer open.
+function _evictForRoom(newcomer) {
+  let over = _heldBytesAll - WS_MAX_HELD_BYTES_ALL;
+  if (over <= 0) return;
+  const now = Date.now();
+  for (const s of _heldSockets) if (s.readyState === 1 && s._drainTimer) _noteProgress(s, now);
+  const victims = [..._heldSockets].filter(s => s !== newcomer && s.readyState === 1 && !s._evicted && s._heldBytes > 0)
+    .sort((a, b) => (a._progressAt || 0) - (b._progressAt || 0));
+  for (const v of victims) { if (over <= 0) break; v._evicted = true; over -= v._heldBytes; _tooSlow(v); }
+  if (over > 0) _tooSlow(newcomer);   // it alone holds more than the whole relay may: nobody else to make room
+}
 // One poller per socket, shared by all of its paused streams. Resolves each waiter true (drained) or false (socket gone,
-// stalled, or over the hard cap — the socket has been closed). Cleared on drain, on close, and by the 'close' handler.
+// or closed by a guard above). Cleared on drain, on close, and by the 'close' handler.
 function _drainPoll(ws) {
   const done = ok => { clearInterval(ws._drainTimer); ws._drainTimer = null; const w = ws._drainWaiters || []; ws._drainWaiters = []; for (const r of w) r(ok); };
   if (ws.readyState !== 1) return done(false);
-  if (ws.bufferedAmount > MAX_WS_BUFFER || Date.now() - ws._pausedSince > WS_PAUSE_MS) { _tooSlow(ws); return done(false); }
+  const now = Date.now(), d = _noteProgress(ws, now);
+  if (ws.bufferedAmount > MAX_WS_BUFFER || now - ws._pauseDrainAt > WS_PAUSE_MS) { _tooSlow(ws); return done(false); }
+  const ep = now - ws._epT;
+  if (ep >= WS_PROGRESS_WINDOW_MS && d - ws._epD < WS_PROGRESS_FLOOR * ep / 1000) { _tooSlow(ws); return done(false); }
+  if ((ws._heldBytes > WS_MAX_HELD_BYTES || ws._held > WS_MAX_HELD) && now - ws._pauseDrainAt > WS_HELD_GRACE_MS) { _tooSlow(ws); return done(false); }
   if (ws.bufferedAmount <= WS_LOW_WATER) return done(true);
 }
 function _waitDrain(ws) {
   return new Promise(res => {
     (ws._drainWaiters || (ws._drainWaiters = [])).push(res);
-    if (!ws._drainTimer) { ws._pausedSince = Date.now(); ws._drainTimer = setInterval(() => _drainPoll(ws), WS_DRAIN_POLL_MS); }
+    if (!ws._drainTimer) {
+      const now = Date.now();
+      ws._pausedSince = now; ws._pauseDrainAt = now; ws._lastDrained = Math.max(ws._lastDrained || 0, _drained(ws));
+      ws._drainTimer = setInterval(() => _drainPoll(ws), WS_DRAIN_POLL_MS);
+    }
   });
 }
 // Send items[i] with send(item) in order, pausing when the socket is backed up. wanted(item) is re-asked after every
 // pause, so a stream whose subscription was CLOSEd or replaced while it waited stops instead of sending to it. Calls
 // onDone() when every item has been offered — SYNCHRONOUSLY when no pause was needed, so a client that reads promptly
 // sees exactly the old timing. onDone is never called if the socket closed or the stream was abandoned.
-// size(item) is the item's serialized JSON length — what it costs to hold (see HELD BYTES above).
+// size(item) is the item's serialized JSON length — what it costs to hold an unsent item (see above).
 function pumpBacklog(ws, items, send, wanted, onDone, size) {
-  let i = 0, held = 0, bytes = 0, firstPause = 0;
-  // Idempotent: the counters are zeroed as they are returned, so a second call returns nothing.
+  let i = 0, held = 0, bytes = 0, sizes = null, base = 0, ended = false;
+  // A backlog EPISODE starts when a socket with no stream in flight starts one: the progress floor averages from here.
+  if (!ws._streams) { ws._epT = Date.now(); ws._epD = _drained(ws); }
+  ws._streams = (ws._streams || 0) + 1;
+  // Returns whatever is still charged. Idempotent: the counters are zeroed as they are returned.
   const release = () => {
-    if (held) { ws._held = Math.max(0, (ws._held || 0) - held); held = 0; }
+    if (!ended) { ended = true; ws._streams--; }
+    if (held) { ws._held = (ws._held || 0) - held; held = 0; }
     if (bytes) { ws._heldBytes -= bytes; _heldBytesAll -= bytes; bytes = 0; }
+    if (!(ws._heldBytes > 0)) _heldSockets.delete(ws);
+  };
+  // items[k] has been sent or skipped: drop it and stop charging for it.
+  const settle = k => {
+    if (sizes) { const s = sizes[k - base]; bytes -= s; ws._heldBytes -= s; _heldBytesAll -= s; held--; ws._held--; }
+    items[k] = undefined;
   };
   const run = () => {
-    for (; i < items.length; i++) {
-      if (ws.readyState !== 1) { release(); return; }
-      if (ws.bufferedAmount > MAX_WS_BUFFER) { release(); _tooSlow(ws); return; }
-      if (ws.bufferedAmount > WS_HIGH_WATER) {
-        if (!firstPause) {
-          firstPause = Date.now();
-          held = items.length - i; ws._held = (ws._held || 0) + held;
-          for (const it of items) bytes += size(it);   // the WHOLE array: it stays referenced until the stream ends
-          ws._heldBytes = (ws._heldBytes || 0) + bytes; _heldBytesAll += bytes;
-          if (ws._held > WS_MAX_HELD || ws._heldBytes > WS_MAX_HELD_BYTES || _heldBytesAll > WS_MAX_HELD_BYTES_ALL) { release(); _tooSlow(ws); return; }
-        } else if (Date.now() - firstPause > WS_STALL_TOTAL_MS) { release(); _tooSlow(ws); return; }
-        _waitDrain(ws).then(ok => { if (!ok) { release(); return; } run(); });
-        return;
+    let parked = false, finished = false;
+    try {
+      for (; i < items.length; i++) {
+        if (ws.readyState !== 1) return;
+        if (ws.bufferedAmount > MAX_WS_BUFFER) { _tooSlow(ws); return; }
+        if (ws.bufferedAmount > WS_HIGH_WATER) {
+          if (!sizes) {   // first pause: charge every item not yet sent
+            base = i; sizes = new Array(items.length - i);
+            for (let k = i; k < items.length; k++) bytes += (sizes[k - i] = size(items[k]));
+            held = items.length - i;
+            ws._held = (ws._held || 0) + held; ws._heldBytes = (ws._heldBytes || 0) + bytes; _heldBytesAll += bytes;
+            _heldSockets.add(ws);
+            if (_heldBytesAll > WS_MAX_HELD_BYTES_ALL) { _evictForRoom(ws); if (ws.readyState !== 1) return; }
+          }
+          parked = true;
+          _waitDrain(ws).then(ok => { if (ok) run(); else release(); })
+            .catch(e => { release(); try { console.error('[pumpBacklog]', (e && e.stack) || e); } catch {} });
+          return;
+        }
+        const it = items[i];
+        if (wanted(it)) send(it);
+        settle(i);
       }
-      if (!wanted(items[i])) continue;
-      send(items[i]);
-    }
-    release();
-    onDone();
+      finished = true;
+    } finally { if (!parked) release(); }
+    if (finished) onDone();
   };
   run();
 }
@@ -9181,6 +9254,7 @@ server.on('upgrade', (req, socket, head) => {
 wss.on('connection', (ws, req) => {
   subs.set(ws, new Map());
   ws.isAlive = true;
+  ws._progressAt = Date.now();   // backpressure eviction order: a fresh socket counts as having just made progress
   const _origSend = ws.send.bind(ws);
   ws.send = (data, ...a) => { _wsBytesOut += (typeof data === 'string') ? Buffer.byteLength(data) : (data && data.length) || 0; return _origSend(data, ...a); };
   // The host this client actually dialled, for the NIP-42 relay-binding check below. Cloudflare/Tailscale
@@ -9528,23 +9602,18 @@ wss.on('connection', (ws, req) => {
           // Collected first (same scan, same gates, same order), then sent through pumpBacklog so a large replay
           // pauses for a slow reader instead of closing it. Each item remembers the filters it was found for, so a
           // subscription CLOSEd or replaced while the replay is paused is skipped rather than sent to.
-          // HELD BYTES applies here BEFORE anything is sent (audit 2026-11-11 F1, LOW): the whole replay is built in
-          // memory first, so a replay larger than one socket's byte budget is refused while it is being collected —
-          // closed 1009 like any other over-budget stream — rather than built in full and refused at its first pause.
-          const _replay = []; let _replayBytes = 0;
-          if (mine) collect: for (const [subId, filters] of mine) {
+          // The collection is bounded by _replayBudget (the scan allowance above), like any REQ. It is NOT refused for
+          // its size before sending (46b198c3 did that, and so refused a member who was reading normally — re-audit
+          // 2026-11-11): it is charged, like any backlog, only for what is still unsent while it is paused.
+          const _replay = [];
+          if (mine) for (const [subId, filters] of mine) {
             const seen = new Set();
             for (const f of filters) for (const e of store.query(f, _replayBudget)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
               if (blockedBy(e.pubkey, owningChurch(e, (e.tags.find(t => t[0] === 'd') || [])[1] || '')) || !canRead(e, ws._auth)) continue;
-              if (!canRead(e, null)) {
-                const len = JSON.stringify(e).length;
-                if ((_replayBytes += len) + (ws._heldBytes || 0) > WS_MAX_HELD_BYTES) { _replay.length = 0; break collect; }
-                _replay.push([subId, filters, e, len]);
-              }
+              if (!canRead(e, null)) _replay.push([subId, filters, e]);
             }
           }
-          if (_replayBytes + (ws._heldBytes || 0) > WS_MAX_HELD_BYTES) { _tooSlow(ws); return; }
           // The deferred EOSEs wait for the replay, not for their 2.5 s grace timer: if the replay has to pause, a
           // timer firing mid-replay would tell the client "that is everything" before the withheld docs arrive —
           // the premature EOSE AUDIT-2026-07-24 exists to prevent. Disarm them (the subIds stay listed) until it ends.
@@ -9558,7 +9627,7 @@ wss.on('connection', (ws, req) => {
               for (const [sid, t] of ws._pendingEose) { if (t) clearTimeout(t); try { ws.send(JSON.stringify(['EOSE', sid])); } catch {} }
               ws._pendingEose.clear();
             }
-          }, it => it[3]);
+          }, it => JSON.stringify(it[2]).length);
         } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, boundToUs ? 'auth-failed: bad challenge or signature' : 'auth-failed: this auth is not addressed to this relay']));
       } catch { ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed'])); }
     } else if (type === 'CLOSE') { subs.get(ws)?.delete(rest[0]); }
@@ -9567,12 +9636,17 @@ wss.on('connection', (ws, req) => {
 });
 // keepalive: ping every 25s so idle relay sockets stay open through the Tailscale Funnel / mobile NAT
 // (otherwise live pushes silently stop until the client reconnects). Terminate sockets that miss a pong.
+// A missed pong is NOT death while the socket has pushed data into the kernel within WS_PAUSE_MS: the ping sits behind
+// that data, so a slow reader cannot answer in time (see HEARTBEAT under SEND BACKPRESSURE). It is pinged again. A socket
+// that has moved nothing for WS_PAUSE_MS and misses a pong is terminated, as every missed pong was before.
 const wsHeartbeat = setInterval(() => {
+  const now = Date.now();
   for (const ws of wss.clients) {
-    if (ws.isAlive === false) { try { ws.terminate(); } catch {} continue; }
+    _noteProgress(ws, now);   // every tick, so "drained recently" is known to within one interval
+    if (ws.isAlive === false && now - (ws._progressAt || 0) > WS_PAUSE_MS) { try { ws.terminate(); } catch {} continue; }
     ws.isAlive = false; try { ws.ping(); } catch {}
   }
-}, 25000);
+}, WS_HEARTBEAT_MS);
 wss.on('close', () => clearInterval(wsHeartbeat));
 const BIND_HOST = process.env.RELAY_HOST || '0.0.0.0';   // servers keep 0.0.0.0; the desktop app sets this explicitly (loopback unless the operator opts into LAN access — see relay-app/desktop/src-tauri/src/main.rs)
 server.listen(PORT, BIND_HOST, () =>
