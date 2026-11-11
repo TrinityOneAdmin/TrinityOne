@@ -10250,7 +10250,7 @@ window.Steward = {
     // IT. Bare EOSE is not enough and this file says so elsewhere: it also fires on a 4.4s client timeout and
     // on a dropped socket, and believing it then would stamp today's date onto people cleared years ago.
     // Wrong in this direction costs a missing date; wrong in the other direction rewrites history.
-    const clearedKnown = () => sawApproved || (sawEose && _isRelayAuthed());
+    const clearedKnown = () => sawApproved || (sawEose && _isRelayAuthed()) || lateAuthed();   // lateAuthed: see minorsKnown below
     // DO WE KNOW WHO THE CHILDREN ARE? A THIRD QUESTION, and it is not `loaded`.
     //
     // `loaded` is sawMinors && sawEose, and it exists for the clearance back-fill, where being wrong
@@ -10264,7 +10264,32 @@ window.Steward = {
     // for ever — which is not caution, it is the care module switched off with nothing saying so.
     // Same shape as clearedKnown, for the same reason: bare EOSE also fires on a 4.4s client timeout and on a
     // dropped socket, so it is evidence only WHILE AUTHENTICATED. Audit 2026-09-02 #3.
-    const minorsKnown = () => sawMinors || (sawEose && _isRelayAuthed());
+    const minorsKnown = () => sawMinors || (sawEose && _isRelayAuthed()) || lateAuthed();
+    // …AND WHEN THE LOGIN COMES AFTER THE ANSWER (2026-11-11, audit F1). With this REQ narrowed to its own four
+    // documents it is often the FIRST on a fresh socket, and when none of the gated documents exists the relay
+    // answers EOSE at once, with no login challenge — so both questions above were asked at a moment no login had
+    // been accepted, and stayed false until the next re-subscribe: young people's care requests read "CHECKING…
+    // HELD CONFIDENTIAL", and a church's first youth-volunteer clearance could be written with no date.
+    // So the answer is remembered PER SOCKET, and only if it was genuine — not our close, not the relay dropping
+    // the socket in the same turn (nostr-tools fires oneose then onclose), not nostr-tools' own timer (the key
+    // reads' rule, _keyReadOk), and not on a socket that had been challenged and not yet logged in (the relay
+    // withholds behind a challenge, so that answer may be missing the very document — _oneComplete's rule). When a
+    // login is then ACCEPTED (_authAccepted, the relay's OK) on that SAME socket, still connected, the answer is
+    // both genuine and authenticated, and the flags are re-asked. Nothing else turns them true: a dropped socket's
+    // EOSE followed by a login on a NEW socket records nothing and changes nothing (fail-closed, as before).
+    const eoseOn = new Map();   // normalised url -> the AbstractRelay instance that gave a genuine, unchallenged EOSE
+    const lateAuthed = () => {
+      try {
+        for (const [k, r] of eoseOn) if (pool.relays.get(k) === r && r.connected === true && _authAccepted.get(k) === r) return true;
+      } catch (e) {}
+      return false;
+    };
+    let stopped = false, subClosed = false, waiting = null;
+    const reaskOnLogin = () => {
+      if (stopped || waiting || !eoseOn.size || (minorsKnown() && clearedKnown())) return;
+      waiting = () => { waiting = null; if (stopped) return; emit(); reaskOnLogin(); };
+      _keyReadAfterAuth(waiting);
+    };
     // `minorsDocSeen`: the minors DOCUMENT itself arrived (sawMinors), exposed on its own. ADDITIVE; `minorsKnown`
     // keeps its meaning. A SCOPED DELEGATE without Safeguarding is never served minors:, yet minorsKnown turns true
     // for them via EOSE-while-authed, so for them it says "the relay finished" and NOT "we know who the children are".
@@ -10285,7 +10310,9 @@ window.Steward = {
     const _sgSeed = _sgClearGet(pub);
     const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
     if (_sgSeed) emit();   // paint the last-known clearance instantly via the *Seed fields (approved/expiry stay [])
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }], {
+    const sgUrls = relays(), sgAt = Date.now();
+    const sub = pool.subscribeMany(sgUrls, [{ kinds: [30078], authors: [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }], {
+      onclose() { subClosed = true; },
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
@@ -10323,9 +10350,23 @@ window.Steward = {
         // church has no clearance record now, so drop any stale sealed seed (display already switched to the genuine
         // empty via clearedKnown). A bare/unauthed EOSE (sawApproved false, not authed) does NOTHING here, so the
         // last-known seed survives an offline open.
-        if (!sawApproved && _isRelayAuthed()) { try { localStorage.removeItem(SGCLEAR_LAST_LS + pub); } catch (e) {} } },
+        if (!sawApproved && _isRelayAuthed()) { try { localStorage.removeItem(SGCLEAR_LAST_LS + pub); } catch (e) {} }
+        // see `lateAuthed` above: a microtask later, so a close's onclose (same turn) has been seen
+        try {
+          queueMicrotask(() => {
+            try {
+              if (stopped || subClosed || Date.now() - sgAt >= 4400 - 100) return;   // our close / every socket dropped / nostr-tools' 4.4 s timer
+              for (const u of sgUrls) {
+                let k = u; try { k = normalizeURL(u); } catch (e) {}
+                const r = pool.relays.get(k);
+                if (r && r.connected === true && !(r.challenge && _authAccepted.get(k) !== r)) eoseOn.set(k, r);
+              }
+              reaskOnLogin();
+            } catch (e) {}
+          });
+        } catch (e) {} },
     });
-    return () => { try { sub.close(); } catch {} };
+    return () => { stopped = true; if (waiting) { try { _keyReadAuthWaiters.delete(waiting); } catch (e) {} waiting = null; } try { sub.close(); } catch {} };
   },
   setNoPhoto(pubkeys) {   // replace the whole photo-suppression list (church key, or a Safeguarding steward)
     _requireTrustedView('photo settings');

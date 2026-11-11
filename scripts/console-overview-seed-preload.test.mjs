@@ -407,6 +407,9 @@ function loadSafeguard(opts = {}) {
     NET: 'trinityone',
     _authFuture: () => false, _byChurch: () => true, _byChurchOrSteward: () => true, _applyNoPhotoList: () => {},
     _isRelayAuthed: () => (opts.authed !== false),
+    // the late-login re-ask (2026-11-11, audit F1) reads these; stubbed so deps() does not lift the engine's own
+    normalizeURL: (u) => u, _authAccepted: new Map(), _keyReadAfterAuth: () => {}, _keyReadAuthWaiters: new Set(),
+    challenge: undefined,   // deps() reads the property name in `r.challenge` as an identifier and would lift nostr-tools' challenge()
   };
   const depsCode = deps(BUNDLE, body, Object.keys(ctx));
   // deps() already lifts the bundle's own `_clearedTrail` declaration, so we must NOT declare it again here.

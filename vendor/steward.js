@@ -23644,12 +23644,35 @@ zoo`.split("\n");
       let cleared = {};
       let expiry = {};
       const isLoaded = () => sawMinors && sawEose;
-      const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed();
-      const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed();
+      const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed() || lateAuthed();
+      const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed() || lateAuthed();
+      const eoseOn = /* @__PURE__ */ new Map();
+      const lateAuthed = () => {
+        try {
+          for (const [k, r] of eoseOn) if (pool.relays.get(k) === r && r.connected === true && _authAccepted.get(k) === r) return true;
+        } catch (e) {
+        }
+        return false;
+      };
+      let stopped = false, subClosed = false, waiting = null;
+      const reaskOnLogin = () => {
+        if (stopped || waiting || !eoseOn.size || minorsKnown() && clearedKnown()) return;
+        waiting = () => {
+          waiting = null;
+          if (stopped) return;
+          emit();
+          reaskOnLogin();
+        };
+        _keyReadAfterAuth(waiting);
+      };
       const _sgSeed = _sgClearGet(pub);
       const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
       if (_sgSeed) emit();
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }], {
+      const sgUrls = relays(), sgAt = Date.now();
+      const sub = pool.subscribeMany(sgUrls, [{ kinds: [30078], authors: [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }], {
+        onclose() {
+          subClosed = true;
+        },
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (_authFuture(e)) return;
@@ -23721,9 +23744,36 @@ zoo`.split("\n");
             } catch (e) {
             }
           }
+          try {
+            queueMicrotask(() => {
+              try {
+                if (stopped || subClosed || Date.now() - sgAt >= 4400 - 100) return;
+                for (const u of sgUrls) {
+                  let k = u;
+                  try {
+                    k = normalizeURL2(u);
+                  } catch (e) {
+                  }
+                  const r = pool.relays.get(k);
+                  if (r && r.connected === true && !(r.challenge && _authAccepted.get(k) !== r)) eoseOn.set(k, r);
+                }
+                reaskOnLogin();
+              } catch (e) {
+              }
+            });
+          } catch (e) {
+          }
         }
       });
       return () => {
+        stopped = true;
+        if (waiting) {
+          try {
+            _keyReadAuthWaiters.delete(waiting);
+          } catch (e) {
+          }
+          waiting = null;
+        }
         try {
           sub.close();
         } catch {
