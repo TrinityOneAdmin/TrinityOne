@@ -9940,7 +9940,7 @@ window.Steward = {
       if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
       return true;
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [BLOCKED_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [BLOCKED_D + pub], '#t': [NET] }], {
       onevent(e) { if (take(e)) onBlocked(cur); },
       oneose() { onBlocked(cur); },
     });
@@ -10186,7 +10186,7 @@ window.Steward = {
     const _sgSeed = _sgClearGet(pub);
     const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
     if (_sgSeed) emit();   // paint the last-known clearance instantly via the *Seed fields (approved/expiry stay [])
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
@@ -10952,7 +10952,7 @@ window.Steward = {
   subscribeGuardians(onData) {   // delivers { links: { childPub: [parentPub, …] }, closed: { "child|parent": unixTs } }
     let cur = {}, curClosed = {}, latest = 0;
     const _emit = () => onData({ links: cur, closed: curClosed });
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [GUARDIANS_D + pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDIANS_D + pub) return;

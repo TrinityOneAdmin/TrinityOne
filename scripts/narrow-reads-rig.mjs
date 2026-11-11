@@ -63,7 +63,7 @@ function parseFrames(frames, since) {
 
 // Let the console go quiet, then run `startExpr` (in the page; must return a stop function or nothing), wait for the
 // subscription to settle, and report the one REQ it sent. `since` is measured on the same clock the frames use.
-export async function probe(A, startExpr, { settleMs = 4000 } = {}) {
+export async function probe(A, startExpr, { settleMs = 4000, pick = null } = {}) {
   let n = -1, stable = 0;
   for (let i = 0; i < 40 && stable < 3; i++) { await sleep(800); if (A.frames.length === n) stable++; else { stable = 0; n = A.frames.length; } }
   const since = Date.now() - A.t0;
@@ -72,7 +72,28 @@ export async function probe(A, startExpr, { settleMs = 4000 } = {}) {
   const seen = parseFrames(A.frames, since);
   const out = await A.ev(`JSON.stringify(window.__probe.out)`);
   await A.ev(`(() => { try { typeof window.__probe.stop === 'function' && window.__probe.stop(); } catch (e) {} return 1; })()`);
-  if (seen.reqs.length !== 1) throw new Error('expected exactly ONE REQ from the probed subscription, saw ' + seen.reqs.length + ': ' + JSON.stringify(seen.reqs));
-  const req = seen.reqs[0];
+  // `pick` names the subscription under test when the function also opens others (a narrow fresh-read, say)
+  const cands = pick ? seen.reqs.filter(r => pick(r.filters)) : seen.reqs;
+  if (cands.length !== 1) throw new Error('expected exactly ONE REQ from the probed subscription, saw ' + cands.length + ' of ' + seen.reqs.length + ': ' + JSON.stringify(seen.reqs));
+  const req = cands[0];
   return { req, filters: req.filters, events: seen.events[req.sid] || [], out: JSON.parse(out || '[]') };
+}
+
+// Documents of A's OWN that none of the reads under test want (what a '#t' + authors:[A] read drags in).
+export function ownNoise(A, n = 20) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(doc(A.church, ['trinityone/post:', 'trinityone/event:', 'trinityone/note:'][i % 3] + 'a' + i, { n: i, text: 'church A filler ' + i }));
+  return out;
+}
+
+// The shared assertions for a read that must be narrowed to `want` d-tags and keep its two scoping filters.
+export function narrowed(assert, r, A, want, { authorsKey = 'authors' } = {}) {
+  assert.equal(r.filters.length, 2, 'expected the two scoping filters, got ' + JSON.stringify(r.filters));
+  const [fa, fc] = r.filters;
+  assert.deepEqual(fa.authors, [A.church.pub], 'the authors filter lost its authors:[church]: ' + JSON.stringify(fa));
+  assert.deepEqual(fc['#church'], [A.church.pub], 'the second filter lost its #church scope: ' + JSON.stringify(fc));
+  for (const f of r.filters) {
+    assert.ok(Array.isArray(f['#d']), 'a filter has NO #d — it pulls the whole church corpus: ' + JSON.stringify(f));
+    assert.deepEqual([...f['#d']].sort(), [...want].sort(), 'wrong #d on ' + JSON.stringify(f));
+  }
 }
