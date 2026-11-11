@@ -308,7 +308,8 @@ test('a slow relay delivering the corpus over far longer than 15 s, with steady 
   await c.settle();                                 // the share answer is taken (a microtask) before any clock moves
   const first = c.live('corpus');
   const evs = [EV('evta', 'One', 60), EV('evtbb', 'Two', 61), EV('evtccc', 'Three', 62), EV('evtdddd', 'Four', 63), EV('evteeeee', 'Five', 64)];
-  for (const e of evs) { c.advance(12000); c.send('corpus', [e]); }   // 60 s in all, an event every 12 s
+  // 60 s in all, an event every 12 s; each step lets microtasks run, so an end the library reported would be taken
+  for (const e of evs) { c.advance(12000); c.send('corpus', [e]); await c.settle(); }
   assert.equal(c.live('corpus'), first, 'THE READ WAS CUT OFF AND ASKED AGAIN while it was still making progress');
   assert.equal(c.api.web().eventsKnown, false, 'the corpus was taken as known before the relay said it had finished');
   c.eose('corpus');
@@ -359,4 +360,17 @@ test('a restart with its flags carried asks only for what changed since (less th
   c.cut('corpus'); c.reconnect();
   c.advance(120000);
   assert.equal(c.corpusOn().filter(s => !s.closed).length, 0, 'a stream already known kept retrying');
+});
+
+test('LOW: a watch from an earlier epoch (acting for another church and back) is re-opened by the next plain _webEnsure()', async () => {
+  const c = consoleWith();
+  c.start();
+  const before = c.subs.length;
+  c.api.bumpEpoch();                                // a church switch and back: same pub, new epoch
+  const w = c.api._webEnsure();                     // a Settings read, not a restart
+  assert.equal(w.epoch, c.api.web().epoch, 'staging');
+  assert.ok(c.subs.length > before, 'THE OLD EPOCH\'S STREAMS WERE KEPT: every answer they get is refused, and the mirror stays dead until a connection bump');
+  c.send('share', [SHARE_ON()]); c.eoseAll();
+  await c.settle();
+  assert.equal(c.api.web().shareKnown, true, 'the re-opened watch did not take its answer');
 });
