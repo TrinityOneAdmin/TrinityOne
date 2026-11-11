@@ -29219,7 +29219,7 @@ zoo`.split("\n");
           }
         }, 120);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 500 }, { kinds: [1, 30078], "#p": [pub], limit: 500 }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [1], authors: [pub], limit: 500 }], {
         onevent(e) {
           ids.add(e.id);
           if (e.kind === 1 && e.pubkey === pub) ann.add(e.id);
@@ -29262,7 +29262,7 @@ zoo`.split("\n");
           }
         }, 120);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 200 }, { kinds: [1, 30078], "#p": [pub], limit: 200 }], {
+      const handlers = {
         onevent(e) {
           const own = e.pubkey === pub;
           let item = null;
@@ -29308,10 +29308,22 @@ zoo`.split("\n");
           eosed = true;
           emit();
         }
-      });
+      };
+      const sub = pool.subscribeMany(relays(), [
+        { kinds: [1], authors: [pub], limit: max2 },
+        { kinds: [1], "#p": [pub], limit: max2 },
+        { kinds: [30078], "#p": [pub], "#d": ["trinityone/member:" + pub], limit: 200 }
+      ], handlers);
+      const docs = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }], { onevent: (e) => handlers.onevent(e), oneose() {
+        emit();
+      } });
       return () => {
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          docs.close();
         } catch {
         }
       };

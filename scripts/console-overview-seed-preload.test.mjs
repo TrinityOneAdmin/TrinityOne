@@ -32,6 +32,7 @@ function load(signature, name, opts = {}) {
   const ctx = {
     pool,
     relays: () => [],
+    _corpusSub: () => ({ close() {} }),   // the church feed (activity's group/fund rows) is not under test here; its seeds ride the pool read
     pub: ('pub' in opts) ? opts.pub : 'CHURCH_A',
     actingChurch: ('actingChurch' in opts) ? opts.actingChurch : '',
     lsGet: (k) => ls.getItem(k),

@@ -140,6 +140,7 @@ test('subscribeActivity skips a heartbeat (hb:1) member document', async () => {
   let items = [], handler = null;
   const scope = {
     pool: { subscribeMany: (_u, _f, h) => { handler = h; return { close() {} }; } },
+    _corpusSub: () => ({ close() {} }),   // the church feed (groups/funds rows) is not under test here; the member documents come on the pool read
     relays: () => ['wss://r'],
     pub: 'churchpub',
     NET: 'trinityone',

@@ -15758,7 +15758,12 @@ window.Steward = {
     try { const c = JSON.parse(lsGet(STATS_KEY) || 'null'); if (c && typeof c === 'object') onStats({ events: c.events | 0, announcements: c.announcements | 0 }); } catch {}
     let _statsT = null;
     const emit = () => { if (_statsT) return; _statsT = setTimeout(() => { _statsT = null; const v = { events: ids.size, announcements: ann.size }; onStats(v); if (eosed && ids.size) { try { lsSet(STATS_KEY, JSON.stringify(v)); } catch {} } }, 120); };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 500 }, { kinds: [1, 30078], '#p': [pub], limit: 500 }], {
+    // NARROWED 2026-11-11 (small pipes, reference/DOMAIN.md): the one number any screen shows from this is
+    // `announcements` (stew-dashboard.jsx, the Announcements tile) — the church's own kind-1 posts. The kind-30078
+    // half of the old filters pulled up to 1,000 church documents (the devotionals, the sealed calendar…) on every
+    // connect to count them for `events`, which no screen displays. So only the church's own kind-1 is asked for;
+    // `events` now counts those.
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1], authors: [pub], limit: 500 }], {
       onevent(e) { ids.add(e.id); if (e.kind === 1 && e.pubkey === pub) ann.add(e.id); emit(); },
       oneose() { eosed = true; emit(); },
     });
@@ -15782,7 +15787,16 @@ window.Steward = {
     try { const c = JSON.parse(lsGet(ACT_KEY) || '[]'); if (Array.isArray(c) && c.length) onActivity(c.slice(0, max)); } catch {}
     let _actT = null;
     const emit = () => { if (_actT) return; _actT = setTimeout(() => { _actT = null; const list = [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, max); onActivity(list); if (eosed && (list.length || sawItem)) { try { lsSet(ACT_KEY, JSON.stringify(list)); } catch {} } }, 120); };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 200 }, { kinds: [1, 30078], '#p': [pub], limit: 200 }], {
+    // NARROWED 2026-11-11 (small pipes, reference/DOMAIN.md). It used to ask for kinds 1 AND 30078, signed by or
+    // p-tagged to the church, 200 of each — which on a real church is the devotionals, the sealed calendar and the
+    // finance journal, downloaded on every connect to make `max` rows. What it makes rows from:
+    //   * kind 1 (announcements, group messages): the newest `max` of each filter — the newest `max` of a union is
+    //     always among the newest `max` of each part, so this is exact, not a sample;
+    //   * the members' own join documents ('trinityone/member:<church>', p-tagged to the church — never signed by
+    //     it, so not in the church feed): asked for by that exact d-tag;
+    //   * groups and funds the church signed: from the church feed (_corpusSub), which every other screen reads too.
+    // `eosed` (the seed's "settled") follows the first request — rows from the feed only add to a seed written later.
+    const handlers = {
       onevent(e) {
         const own = e.pubkey === pub;
         let item = null;
@@ -15801,8 +15815,11 @@ window.Steward = {
         if (item) { sawItem = true; byId.set(e.id, { id: e.id, ts: e.created_at, ...item }); emit(); }
       },
       oneose() { eosed = true; emit(); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [1], authors: [pub], limit: max }, { kinds: [1], '#p': [pub], limit: max },
+                                              { kinds: [30078], '#p': [pub], '#d': ['trinityone/member:' + pub], limit: 200 }], handlers);
+    const docs = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }], { onevent: (e) => handlers.onevent(e), oneose() { emit(); } });
+    return () => { try { sub.close(); } catch {} try { docs.close(); } catch {} };
   },
 
   // ---- join flow: members follow the church by its npub ----
