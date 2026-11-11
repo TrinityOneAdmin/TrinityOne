@@ -37,7 +37,7 @@ const RT = readFileSync(join(ROOT, 'app/steward-root.jsx'), 'utf8');
 
 async function loadGate(globals) {
   const src = [
-    fnBody(DASH, 'function useRealMemberCount() {', 'useRealMemberCount'),
+    fnBody(DASH, 'function useRealMemberCount(opts) {', 'useRealMemberCount'),
     fnBody(RT, 'window.rosterReadyFrom = function (admittedList, blockedList) {', 'rosterReadyFrom'),
   ].join('\n');
   const tmp = join(tmpdir(), 'rostergate-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
@@ -55,9 +55,11 @@ async function loadGate(globals) {
 const M = (n) => Array.from({ length: n }, (_, i) => ({ pubkey: 'pk' + i }));
 
 // Build a window whose hooks + Steward reflect one connection state, call the REAL useRealMemberCount.
-async function count({ fresh, complete = true, admitted = [], blocked = [], members = M(5), joinApproval = true, seed = [] }) {
-  const win = {
+async function count({ win: shared, steward = {}, hold = false, fresh, complete = true, admitted = [], blocked = [], members = M(5), joinApproval = true, seed = [] }) {
+  const win = shared || {};
+  Object.assign(win, {
     Steward: {
+      pubkey: 'me1', churchPub: 'churchA', ...steward,
       listIsFresh: () => fresh,
       listComplete: () => complete,
       admittedSeed: () => seed,
@@ -67,9 +69,9 @@ async function count({ fresh, complete = true, admitted = [], blocked = [], memb
     useStewardBlocked: () => blocked,
     useStewardJoinPolicy: () => joinApproval,
     useStewardIdv: () => 0,
-  };
+  });
   const mod = await loadGate({ window: win });
-  return mod.useRealMemberCount();
+  return mod.useRealMemberCount(hold ? { holdLast: true } : undefined);
 }
 
 // The tile mapping the StatCard uses: null -> "Checking…", 0 -> "—", n -> the number.
@@ -105,4 +107,36 @@ test('A GENUINELY EMPTY roster (no seed) reads as 0, not "Checking…"', async (
   const c = await count({ fresh: true, complete: true, admitted: [], seed: [] });
   assert.equal(c, 0);
   assert.equal(tile(c), '—');
+});
+
+// HOLD-LAST (owner requirement 2026-11-11): the Overview tile keeps the last REAL count during a re-read.
+// One shared window = one console session; the REAL hook is called with { holdLast: true } as the Overview does.
+const ready30 = { fresh: true, complete: true, members: M(30), joinApproval: false, hold: true };
+const notReady = { fresh: false, members: M(30), joinApproval: false, hold: true };
+
+test('HOLD-LAST: null before the first real count, 30 once read, STILL 30 while a re-read is not fresh', async () => {
+  const win = {};
+  assert.equal(await count({ ...notReady, win }), null, 'first read: Checking…');
+  assert.equal(await count({ ...ready30, win }), 30);
+  assert.equal(await count({ ...notReady, win }), 30, 'a connection bump must not flip the tile back to Checking…');
+  assert.equal(await count({ ...ready30, members: M(31), win }), 31, 'a new real count replaces the held one');
+});
+
+test('HOLD-LAST: without the opt-in (DashGroups) a not-ready read is still null', async () => {
+  const win = {};
+  await count({ ...ready30, hold: false, win });
+  assert.equal(await count({ ...notReady, hold: false, win }), null);
+});
+
+test('HOLD-LAST: never carried to another church, another identity, or past a lock / key removal', async () => {
+  const win = {};
+  await count({ ...ready30, win });
+  assert.equal(await count({ ...notReady, win, steward: { churchPub: 'churchB' } }), null, 'different church');
+  await count({ ...ready30, win });
+  assert.equal(await count({ ...notReady, win, steward: { pubkey: 'me2' } }), null, 'different identity (same church)');
+  await count({ ...ready30, win });
+  assert.equal(await count({ ...notReady, win, steward: { actingChurch: 'churchX' } }), null, 'delegated steward acting for another church');
+  await count({ ...ready30, win });
+  assert.equal(await count({ ...notReady, win, steward: { pubkey: null } }), null, 'locked / key removed');
+  assert.equal(await count({ ...notReady, win }), null, 'and the old number is gone when the key returns');
 });

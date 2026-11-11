@@ -604,7 +604,7 @@ function publishErrorMessage(reason, evt, opts) {
 // every group that 26 people could see it. Blocked are excluded always; pending only once the admitted/blocked
 // rosters have actually arrived, because on a hard reload those sets are briefly empty and everyone would
 // momentarily look like they were queuing at the door.
-function useRealMemberCount() {
+function useRealMemberCount(opts) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const admittedReal = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const blockedReal = window.useStewardBlocked ? window.useStewardBlocked() : [];
@@ -615,10 +615,23 @@ function useRealMemberCount() {
   // flipped true on the EMPTY answer a logged-out console is served, so this returned 0 and the tile read "—"
   // while the data was fine. `null` (distinct from a genuine 0) tells the tile to show "Checking…".
   const ready = window.rosterReadyFrom ? window.rosterReadyFrom(admittedReal, blockedReal) : true;
-  if (!ready) return null;
+  // HOLD-LAST (opt-in, Overview tile only): every connection bump re-opens the admitted/blocked reads and the
+  // roster is "not ready" until the narrow read settles. Without this the tile flipped back to "Checking…"
+  // each time. The last REAL count is kept per identity = (acting church | church) + the console's own pubkey,
+  // so a delegated steward, a church switch, a lock or a key removal never inherits another identity's number.
+  // "Checking…" (null) is now only before the first real count for that identity. Held on window so it is one
+  // store for every caller.
+  const hold = !!(opts && opts.holdLast);
+  const S = window.Steward || {};
+  const idKey = S.pubkey ? ((S.actingChurch || S.churchPub || '') + '|' + S.pubkey) : '';
+  const store = (window.__realMemberCountHeld = window.__realMemberCountHeld || { key: '', n: null });
+  if (!idKey || store.key !== idKey) { store.key = idKey; store.n = null; }
+  if (!ready) return hold && idKey && store.n != null ? store.n : null;
   const admittedSet = new Set(admittedReal);
-  return members.filter(m => !blockedSet.has(m.pubkey)
+  const n = members.filter(m => !blockedSet.has(m.pubkey)
     && !(joinApproval && !admittedSet.has(m.pubkey))).length;
+  if (idKey) store.n = n;
+  return n;
 }
 
 function PublishErrorBanner() {
@@ -3718,7 +3731,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const rosterReady = window.rosterReadyFrom ? window.rosterReadyFrom(admittedReal, blockedReal) : true;
   const admittedSet = new Set(admittedReal);
   const pendingCount = (joinApproval && rosterReady) ? members.filter(m => !admittedSet.has(m.pubkey) && !blockedSet.has(m.pubkey)).length : 0;
-  const realCount = useRealMemberCount();   // blocked + still-pending excluded — see useRealMemberCount
+  const realCount = useRealMemberCount({ holdLast: true });   // blocked + still-pending excluded — see useRealMemberCount
   const pendingBanner = pendingCount ? (
     <button onClick={() => onTab('members')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--clay) 32%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pray" size={22} color="var(--on-clay)" /></div>
