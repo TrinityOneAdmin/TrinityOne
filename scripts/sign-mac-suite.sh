@@ -11,8 +11,8 @@
 #   The relay never binds 127.0.0.1:8787 and the Suite hangs forever on "Starting your relay…".
 #   Notarization does NOT catch this: the notary only verifies that hardened runtime is ON, not that the
 #   JIT entitlements are present (that is why the broken 0.9.0 build notarized + stapled cleanly and still
-#   failed on the pilot's clean Mac). So we must re-sign EVERY nested Mach-O inside-out with
-#   Entitlements.plist ourselves, verify allow-jit landed, then notarize + staple.
+#   failed on the pilot's clean Mac). So we re-sign EVERY nested Mach-O inside-out with Entitlements.plist
+#   ourselves, verify allow-jit landed, then notarize + staple BOTH the app and the dmg.
 #
 # Usage:
 #   APPLE_SIGNING_IDENTITY="Developer ID Application: NAME (TEAMID)" \
@@ -20,8 +20,8 @@
 #   [SIGNING_KEYCHAIN=~/.trinityone-signing/trinityone-signing.keychain-db SIGNING_KEYCHAIN_PASS=...] \
 #   scripts/sign-mac-suite.sh ["path/to/TrinityOne Suite.app"] ["out.dmg"]
 #
-# Defaults point at the Tauri release bundle. Exits non-zero if the node sidecar does not carry
-# allow-jit after signing — i.e. it refuses to produce a build with the original defect.
+# Exits non-zero if the node sidecar does not carry allow-jit after signing — it refuses to emit a build
+# with the original defect.
 set -euo pipefail
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
@@ -31,6 +31,9 @@ APP="${1:-$HERE/relay-app/desktop/src-tauri/target/release/bundle/macos/TrinityO
 DMG="${2:-$HERE/relay-app/desktop/src-tauri/target/release/bundle/dmg/TrinityOne-Suite-macos-arm64.dmg}"
 
 : "${APPLE_SIGNING_IDENTITY:?set APPLE_SIGNING_IDENTITY to the Developer ID Application identity}"
+: "${APPLE_API_KEY:?set APPLE_API_KEY (key id)}"
+: "${APPLE_API_ISSUER:?set APPLE_API_ISSUER}"
+: "${APPLE_API_KEY_PATH:?set APPLE_API_KEY_PATH (.p8)}"
 [ -f "$ENTITLEMENTS" ] || { echo "FATAL: missing entitlements: $ENTITLEMENTS" >&2; exit 2; }
 [ -d "$APP" ]          || { echo "FATAL: app bundle not found: $APP" >&2; exit 2; }
 
@@ -49,6 +52,26 @@ if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
     *) security list-keychains -d user -s "$SIGNING_KEYCHAIN" $(security list-keychains -d user | sed 's/"//g') ;;
   esac
 fi
+
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+
+# notarize_wait <artifact>: submit, wait, print the submission id on stdout; pull the log + exit 4 if the
+# notary does not Accept it.
+notarize_wait() {
+  local art="$1" json id
+  json="$(xcrun notarytool submit "$art" \
+    --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+    --wait --output-format json)"
+  echo "$json" >&2
+  id="$(printf '%s' "$json" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)"
+  if ! printf '%s' "$json" | grep -q '"status":"Accepted"'; then
+    echo "NOTARIZATION NOT ACCEPTED for $art (id ${id:-?})" >&2
+    [ -n "$id" ] && xcrun notarytool log "$id" \
+      --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" >&2 || true
+    exit 4
+  fi
+  printf '%s' "$id"
+}
 
 sign_one() {  # sign one Mach-O / bundle: hardened runtime + our JIT entitlements, re-signing in place
   codesign --force --timestamp --options runtime \
@@ -81,36 +104,32 @@ if ! printf '%s' "$ENTS" | grep -q 'com.apple.security.cs.allow-jit'; then
 fi
 echo "OK: trinityone-relay-node carries com.apple.security.cs.allow-jit"
 
-echo "### PACKAGE DMG ###"
+# Staple the APP FIRST, so the copy that ends up inside the dmg is itself stapled and verifies OFFLINE
+# (a church Mac may have no network at first launch). Stapling needs a notarization ticket, so notarize a
+# zip of the app before stapling it.
+echo "### NOTARIZE + STAPLE app ###"
+/usr/bin/ditto -c -k --keepParent "$APP" "$TMP/suite.zip"
+APP_SUB_ID="$(notarize_wait "$TMP/suite.zip")"
+echo "app notarytool id: $APP_SUB_ID"
+xcrun stapler staple "$APP"
+
+echo "### PACKAGE DMG (from the now-stapled app) ###"
 mkdir -p "$(dirname "$DMG")"
-STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
+STAGE="$TMP/stage"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -volname "TrinityOne Suite" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
 codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG"
 
-echo "### NOTARIZE (dmg) ###"
-: "${APPLE_API_KEY:?set APPLE_API_KEY (key id)}"
-: "${APPLE_API_ISSUER:?set APPLE_API_ISSUER}"
-: "${APPLE_API_KEY_PATH:?set APPLE_API_KEY_PATH (.p8)}"
-SUB_JSON="$(xcrun notarytool submit "$DMG" \
-  --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
-  --wait --output-format json)"
-echo "$SUB_JSON"
-SUB_ID="$(printf '%s' "$SUB_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)"
-echo "notarytool submission id: ${SUB_ID:-<unparsed>}"
-printf '%s' "$SUB_JSON" | grep -q '"status":"Accepted"' || {
-  echo "NOTARIZATION NOT ACCEPTED — pulling log for $SUB_ID"; \
-  [ -n "$SUB_ID" ] && xcrun notarytool log "$SUB_ID" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" || true; \
-  exit 4; }
-
-echo "### STAPLE ###"
+echo "### NOTARIZE + STAPLE dmg ###"
+DMG_SUB_ID="$(notarize_wait "$DMG")"
+echo "dmg notarytool id: $DMG_SUB_ID"
 xcrun stapler staple "$DMG"
-xcrun stapler staple "$APP" || echo "(note: app staple skipped — it is covered by the dmg's notarization ticket)"
 
 echo "### FINAL GATEKEEPER CHECK ###"
 spctl -a -vvv -t install "$APP" 2>&1 | head -3 || true
-xcrun stapler validate "$DMG" 2>&1 | tail -1
-echo "### DONE — signed, notarized, stapled: $DMG"
-echo "### notarytool submission id: ${SUB_ID:-<unparsed>}"
+echo "-- app staple --";  xcrun stapler validate "$APP" 2>&1 | tail -1
+echo "-- dmg staple --";  xcrun stapler validate "$DMG" 2>&1 | tail -1
+echo "### DONE — signed, notarized, stapled (app + dmg): $DMG"
+echo "### notarytool: app=$APP_SUB_ID dmg=$DMG_SUB_ID"
