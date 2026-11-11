@@ -145,7 +145,7 @@ test('the grant for a church WE ASKED to join publishes a tombstone of our own S
   h.subscribe();
   await tick();
   const d = h.discovery();
-  assert.equal(d.length, 1, 'no discovery read opened');
+  assert.equal(d.length, 2, 'no discovery read opened (one subscription per relay since 2026-11-11, so each relay\'s answer is judged on its own)');
   h.grant(d[0], CHURCH);
 
   assert.ok(h.stewardedChurches.has(CHURCH), 'staging: the grant was not recorded');

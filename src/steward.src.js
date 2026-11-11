@@ -3148,6 +3148,26 @@ function _keyReadConnected(url) {
     return !!r && r.connected === true;
   } catch (e) { return true; }
 }
+// ── ONE RELAY, ONE SUBSCRIPTION: DID THIS RELAY GENUINELY ANSWER? (2026-11-11, audit of 9322383d..dfd1a66c) ─────────
+// nostr-tools' POOL-level oneose fires once every relay is "finished" — and a socket that dropped, a CLOSED (the relay's
+// "rate-limited: too many subscriptions" leaves the socket CONNECTED) and the library's own EOSE timer all count as
+// finished; the pool's onclose fires only once EVERY relay has closed (abstract-pool subscribeMap handleEose/handleClose).
+// So a pool-level answer over several relays cannot say WHICH relay answered. `oneRelay` (a local copy in
+// subscribeSafeguard and subscribeStewardedChurches — local so every harness that lifts either method keeps working
+// unchanged; _webRead is the same rule written for the key reads' token) opens ONE subscription on ONE relay and says,
+// once, whether its end was an answer (`h.onanswer(genuine, why)`, why = 'eose' | 'closed' | 'timer'):
+//   * the relay's CLOSED or its socket closing is not an answer — nostr-tools runs oneose and then onclose in the same
+//     turn, so the verdict is taken a microtask later; our own close() reports nothing at all;
+//   * a relay CONNECTED when asked gets NO library timer (maxWait _NO_EOSE_TIMER): a slow relay on a small pipe is still
+//     pending, never cut off for taking a long time (reference/DOMAIN.md, 2026-11-11). Safe to pass only then: maxWait
+//     also sizes nostr-tools' CONNECT timeout, and connect() on a socket already up returns at once without reading it;
+//   * a relay NOT yet connected keeps the library's default 4.4 s timer (so a dead address still fails its connect in
+//     3 s for every other read sharing it), and an EOSE at or past that timer is taken to BE the timer — 'timer', not an
+//     answer. Time is used only to recognise the library's timer, never to cut a relay off; the caller asks again.
+// `newest()` is the newest created_at delivered BEFORE the end. The relay sends a REQ's stored events oldest-first across
+// all its filters (gateway.mjs: matched.sort by created_at), so a read cut off part-way holds every event older than
+// that, and asking again with `since: newest()` (inclusive) resumes it instead of downloading it all again.
+const _NO_EOSE_TIMER = 2147483000;   // just under setTimeout's 2^31-1 ms ceiling, past which a delay fires at once
 // `opts.withoutFailed` — THE BLOCKLIST'S READ ONLY (subscribeBlocked; audit of 831dcea). The mint gates above need
 // every relay, because minting over an envelope a down relay holds destroys a church's keys. The blocklist read
 // gates no mint: it gates the ENROLMENT of members, and a relay that is down for days (a self-hosted box switched
@@ -3568,8 +3588,14 @@ const stewardedChurches = new Map();   // cp(hex) -> { name } — churches whose
 // bump, and its discovery read was `{ kinds: [30078], '#t': [NET] }` over every dialled relay — every church's whole
 // corpus, each time. It cannot simply be narrowed to the churches we asked to join: a church can add a helper
 // DIRECTLY, with no request (app/stew-dashboard.jsx, the Helpers panel), and only a broad read finds that. So the
-// broad read runs once per unlocked session per relay; every later opening asks only for the rosters it can name
-// (see `_stewardedNarrowDs`). { me, urls: Set } — the key it ran for and the relays that answered it; null after a lock.
+// broad read runs once per unlocked session PER RELAY, and counts as done for a relay only when THAT relay genuinely
+// answered it (oneRelay in subscribeStewardedChurches: its own EOSE — not a CLOSED, not its socket dropping, not nostr-tools' timer). Every later
+// opening on that relay asks for the rosters it can name (narrowDs in subscribeStewardedChurches) PLUS every roster
+// changed since that relay's broad read finished (less 900 s for the relays' clock window), so a church that adds us
+// directly mid-session is still seen with no lock/unlock. (Corrects 61de18d7, whose record was one set of URLs marked
+// done on the POOL's oneose — which fires for a timed-out or dropped relay too.)
+// { me, done: Map(url -> unix s the broad read finished there), part: Map(url -> newest created_at a cut-off broad read
+// got to, to resume from) } — null after a lock.
 let _stewardedBroad = null;
 // finalize a CHURCH-CONTENT event, stamping ['church',<cp>] when delegated so the relay accepts our key.
 // Signs with the active key `sk` (our own key in delegated mode; the church/network key otherwise).
@@ -6950,7 +6976,7 @@ function _webStuckClock(w, tNow, keyReady) {
   if (keyReady) for (const id of w.stuck) if (!w.stuckAt.has(id)) { w.stuckAt.set(id, tNow); changed = true; }
   if (changed) lsSet(_webStuckKey(w.pub), JSON.stringify([...w.stuckAt].slice(0, WEB_GROUP_MAX)));
 }
-let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, subs, listeners, busy, again, timer }
+let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, from: { share, corpus } (per relay, see _webRead), subs, listeners, busy, again, timer }
 function _webStop() { if (!_web) return; for (const off of _web.subs) { try { off(); } catch {} } if (_web.timer) clearTimeout(_web.timer); _web = null; }
 // `heldIds` is the other half of `held`: a count cannot be acted on, and the control on the Settings page
 // ticks exactly these ids "Not on the website". They come from the copies the relay holds, never from a
@@ -6968,7 +6994,7 @@ function _webSnap(w) {
 function _webEmit() { if (!_web) return; const snap = _webSnap(_web); for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
 function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
 // ── ONE OF THE MIRROR'S STREAMS, AND WHETHER IT GENUINELY FINISHED (2026-11-11) ─────────────────────────────
-// The three streams below used to be one pool.subscribeMany each, and their oneose set the "known" flag that lets
+// The mirror's streams used to be one pool.subscribeMany each, and their oneose set the "known" flag that lets
 // _webDesired decide. nostr-tools fires that oneose for things that are not an answer: a socket the relay CLOSES
 // mid-stream (abstract-pool handleClose calls handleEose — measured live 2026-11-11, the relay closing the
 // console's sockets with 1009 "too slow" every ~16 s), and its own EOSE timer. So the flags were set on HALF a
@@ -6987,6 +7013,27 @@ function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.
 // `onknown` runs ONCE, when every relay has answered and the ones without a genuine answer are no longer
 // connected and at least one answered genuinely — _openKeyRead's `withoutFailed`. A connected relay that gave no
 // genuine answer is asked again (after its login, or with the key reads' backoff) until the stream is known.
+//
+// WHAT "GENUINE" DOES NOT COVER (a known gap, said here so nobody reads more into it): the relay itself may truncate
+// an answer and still send EOSE — MAX_REQ_EVENTS (5,000 per REQ, gateway.mjs) and the connection's scan allowance.
+// A church past those limits gets a "whole" answer that is not whole. Nothing here can see that.
+//
+// SMALL PIPES (reference/DOMAIN.md, 2026-11-11; audit of 9322383d..dfd1a66c). Three things this used to do that a
+// church on home broadband or mobile data cannot afford:
+//   * a 15 s cutoff on every read — every try on a slow pipe was cut, retried, cut again, for ever, never deciding.
+//     Now a relay that is connected when asked has NO library timer (_NO_EOSE_TIMER); the only guard is PROGRESS:
+//     a read that has received nothing at all for WEB_READ_IDLE_MS is closed and asked again. Steady progress,
+//     however slow, is never cut.
+//   * every retry downloaded the whole stream again. The relay sends a REQ's stored events oldest-first (gateway.mjs,
+//     matched.sort), so everything older than the newest event a read received has been received: `from` (per
+//     relay, carried across restarts in the same church and epoch) is that point, and a retry asks `since` it.
+//     Advanced only by events read on a socket with no unaccepted login challenge — the relay withholds behind a
+//     challenge, so such a read is no prefix of anything, and its retry (after the login) starts from nothing.
+//     After a genuine answer `from` is "now, less WEB_RESUME_MARGIN_S" (relays' clock window, late writers).
+//   * a stream already known (carried over a restart) still re-read from zero and still ran the retry loop. It now
+//     re-reads only what changed `since` (from), and does not retry: it decides nothing new.
+const WEB_READ_IDLE_MS = 30000;     // NO PROGRESS for this long — not "took this long" — and a read is asked again
+const WEB_RESUME_MARGIN_S = 900;    // re-read this much before a relay's last whole answer
 function _webLoginPending(url) {
   try {
     let k = url; try { k = normalizeURL(url); } catch (e) {}
@@ -6994,8 +7041,10 @@ function _webLoginPending(url) {
     return !!r && !!r.challenge && _authAccepted.get(k) !== r;
   } catch (e) { return true; }
 }
-function _webRead(cp, filters, onevent, onknown) {
-  const st = { stopped: false, known: false, subs: new Map(), answers: new Map(), tries: new Map(), timers: new Set(), waiters: new Set() };
+function _webRead(cp, filters, onevent, onknown, opts) {
+  const known0 = !!(opts && opts.known);
+  const from = (opts && opts.from) || new Map();   // url -> created_at everything older than which this relay has sent
+  const st = { stopped: false, known: known0, subs: new Map(), answers: new Map(), tries: new Map(), timers: new Set(), waiters: new Set() };
   const urls = relays();
   const epoch = _keyReadEpoch;
   const live = () => !st.stopped && epoch === _keyReadEpoch && cp === (actingChurch || pub);
@@ -7006,45 +7055,78 @@ function _webRead(cp, filters, onevent, onknown) {
     if (without.some(u => _keyReadConnected(u))) return;         // a connected relay still owes an answer (asked again below)
     st.known = true; try { onknown(); } catch (e) {}
   };
+  const later = (url) => {                                         // the key reads' backoff, 2 s doubling to 60 s
+    const n = st.tries.get(url) || 0; st.tries.set(url, n + 1);
+    const t = setTimeout(() => { st.timers.delete(t); openOn(url); }, Math.min(60000, 2000 * Math.pow(2, n))); st.timers.add(t);
+  };
   const openOn = (url) => {
-    if (!live() || st.known) return;
-    const old = st.subs.get(url); if (old) { old.tok.closed = true; try { old.sub.close(); } catch (e) {} }
+    if (!live()) return;
+    const old = st.subs.get(url); if (old) { old.tok.closed = true; if (old.idle) clearTimeout(old.idle); try { old.sub.close(); } catch (e) {} }
     st.answers.delete(url);
     let up = false; try { const r = pool.relays.get(normalizeURL(url)); up = !!(r && r.connected); } catch (e) {}
-    const tok = { cp, epoch, at: Date.now(), url, wait: up ? _KEY_READ_LONG_WAIT : 4400, closed: false, relayClosed: false };
-    const sub = pool.subscribeMany([url], filters, {
-      ...(up ? { maxWait: _KEY_READ_LONG_WAIT } : {}),
-      onevent(e) { if (!tok.closed && live()) onevent(e); },
+    const since = from.get(url) || 0;
+    const fs = since ? filters.map(f => ({ ...f, since })) : filters;
+    const tok = { cp, epoch, at: Date.now(), url, wait: up ? _NO_EOSE_TIMER : 4400, closed: false, relayClosed: false };
+    const cur = { tok, sub: null, idle: null, last: Date.now(), answered: false };
+    // THE PROGRESS GUARD: re-armed for the remainder whenever something arrived; fires only after a whole
+    // WEB_READ_IDLE_MS with nothing. Not armed for a stream already known — it decides nothing new.
+    const watch = (ms) => {
+      cur.idle = setTimeout(() => {
+        cur.idle = null;
+        if (cur.answered || tok.closed || !live() || st.subs.get(url) !== cur) return;
+        const quiet = Date.now() - cur.last;
+        if (quiet < WEB_READ_IDLE_MS) { watch(WEB_READ_IDLE_MS - quiet); return; }
+        tok.closed = true; try { cur.sub.close(); } catch (e) {}
+        st.answers.set(url, false);
+        if (!st.known && _keyReadConnected(url)) later(url);
+        evaluate();
+      }, ms);
+    };
+    cur.sub = pool.subscribeMany([url], fs, {
+      ...(up ? { maxWait: _NO_EOSE_TIMER } : {}),
+      onevent(e) {
+        if (tok.closed || !live()) return;
+        cur.last = Date.now();
+        // a prefix only while nothing is withheld from this socket (see above), and only before the answer
+        if (!cur.answered && e && e.created_at > (from.get(url) || 0) && !_webLoginPending(url)) from.set(url, e.created_at);
+        onevent(e);
+      },
       // a microtask later, so the onclose nostr-tools runs straight after a close's synthetic oneose has marked the token
       oneose() {
         queueMicrotask(() => {
-          if (tok.closed || !live() || st.subs.get(url) !== cur) return;
+          if (tok.closed || !live() || st.subs.get(url) !== cur || cur.answered) return;
+          cur.answered = true; if (cur.idle) { clearTimeout(cur.idle); cur.idle = null; }
           const v = _keyReadOk(tok);
           const ok = v === true || (v === 'unauthed' && !_webLoginPending(url));
           st.answers.set(url, ok);
+          if (ok) from.set(url, Math.max(from.get(url) || 0, now() - WEB_RESUME_MARGIN_S));
           if (!ok && !st.known && _keyReadConnected(url)) {
-            if (v === 'unauthed') { const again = () => { st.waiters.delete(again); openOn(url); }; st.waiters.add(again); _keyReadAfterAuth(again); }
-            else { const n = st.tries.get(url) || 0; st.tries.set(url, n + 1); const t = setTimeout(() => { st.timers.delete(t); openOn(url); }, Math.min(60000, 2000 * Math.pow(2, n))); st.timers.add(t); }
+            if (v === 'unauthed') { from.delete(url); const again = () => { st.waiters.delete(again); openOn(url); }; st.waiters.add(again); _keyReadAfterAuth(again); }
+            else later(url);
           }
           evaluate();
         });
       },
       onclose() { tok.relayClosed = true; },
     });
-    const cur = { tok, sub };
     st.subs.set(url, cur);
+    if (!st.known) watch(WEB_READ_IDLE_MS);
   };
   for (const url of urls) openOn(url);
   return () => {
     st.stopped = true;
     for (const t of st.timers) clearTimeout(t); st.timers.clear();
     for (const a of st.waiters) _keyReadAuthWaiters.delete(a); st.waiters.clear();
-    for (const s of st.subs.values()) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} }
+    for (const s of st.subs.values()) { s.tok.closed = true; if (s.idle) clearTimeout(s.idle); try { s.sub.close(); } catch (e) {} }
     st.subs.clear();
   };
 }
 function _webEnsure(restart) {
-  if (_web && _web.pub === pub && !restart) return _web;
+  // …and a watch from an EARLIER EPOCH is restarted even when the church is the same (audit of 9322383d..dfd1a66c,
+  // LOW): a lock, a reset or a church switch and back leaves _web.pub unchanged, but every stream it holds was opened
+  // for the old epoch, so _webRead's live() refuses all their answers and nothing re-asks them — a console that went
+  // to act for another church and came back mirrored nothing until the next connection bump.
+  if (_web && _web.pub === pub && _web.epoch === _keyReadEpoch && !restart) return _web;
   const listeners = _web ? _web.listeners : new Set();
   // A RESTART FOR THE SAME CHURCH KEEPS WHAT IT ALREADY KNOWS ABOUT THE SWITCH. The first version started every
   // restart from the defaults (calendar off, no opt-outs) with `shareKnown` false, and the dashboard restarts
@@ -7054,10 +7136,11 @@ function _webEnsure(restart) {
   // console). The stream is re-issued below and newest-wins on top of what is carried over.
   //
   // …AND, SINCE 2026-11-11, EVERYTHING ELSE IT KNOWS ABOUT THIS CHURCH: the copies the relay holds (copies, copyTs,
-  // copiesKnown) and the calendar (events, versions, eventsKnown). The dashboard restarts this watch on every
-  // connection bump — every ~16 s on a console whose relay closes slow sockets — and every restart began with
-  // nothing known, so the first stream to be cut off part-way decided from half the data. What is carried is a
-  // view the new streams only add to, newest-wins: a copy or an event removed meanwhile arrives as its tombstone.
+  // copiesKnown), the calendar (events, versions, eventsKnown), and how far each relay's answer to each stream got
+  // (from — see _webRead). The dashboard restarts this watch on every connection bump — every ~16 s on a console whose
+  // relay closes slow sockets — and every restart began with nothing known, so the first stream to be cut off
+  // part-way decided from half the data. What is carried is a view the new streams only add to, newest-wins: a copy
+  // or an event removed meanwhile arrives as its tombstone, and a carried stream re-reads only what changed since.
   // ONLY FOR THE SAME CHURCH IN THE SAME EPOCH (_keyReadEpoch — a lock, a reset, a church switch): nothing read for
   // one church, or before a reset, may count for what comes after.
   const carried = (_web && _web.pub === pub && _web.epoch === _keyReadEpoch) ? _web : null;
@@ -7067,6 +7150,7 @@ function _webEnsure(restart) {
                      share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] }, shareTs: carried ? carried.shareTs : 0, shareKnown: !!(carried && carried.shareKnown),
                      events: carried ? carried.events : new Map(), versions: carried ? carried.versions : new Map(), eventsKnown: !!(carried && carried.eventsKnown),
                      copies: carried ? carried.copies : new Map(), copyTs: carried ? carried.copyTs : new Map(), copiesKnown: !!(carried && carried.copiesKnown),
+                     from: carried ? carried.from : { share: new Map(), corpus: new Map() },
                      subs: [], listeners, busy: false, again: false, timer: null,
                      stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub), stuckAt: _webStuckLoad(pub),
                      stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [] };
@@ -7083,22 +7167,27 @@ function _webEnsure(restart) {
       w.share = gone ? { ...WEB_DEFAULT, optOut: [] } : _webNormalise(c);
       _webEmit(); _webQueueSync();
     },
-    () => { w.shareKnown = true; _webEmit(); _webQueueSync(); }));
-  // 2. the copies the relay holds, newest per id, the church's own only
-  w.subs.push(_webRead(pub, [{ kinds: [30078], authors: [pub], '#t': [NET] }],
-    (e) => {
-      if (e.pubkey !== pub) return;
-      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(PUBEVENT_D)) return;
-      const id = d.slice(PUBEVENT_D.length);
-      if ((w.copyTs.get(id) || 0) > e.created_at) return; w.copyTs.set(id, e.created_at);
-      if (e.tags.some(t => t[0] === 'deleted') || !e.content) w.copies.delete(id); else w.copies.set(id, e.content);
-      _webQueueSync();
-    },
-    () => { w.copiesKnown = true; _webQueueSync(); }));
-  // 3. the calendar itself — the same two filters and the same newest-wins as _subAddr, opened with the name key
+    () => { w.shareKnown = true; _webEmit(); _webQueueSync(); },
+    { known: w.shareKnown, from: w.from.share }));
+  // 2. ONE CORPUS STREAM FOR BOTH the copies the relay holds and the calendar itself (audit of 9322383d..dfd1a66c: the
+  // copies stream's filter was the calendar stream's first filter, so the church's whole corpus crossed the pipe twice
+  // on every connect). The calendar's two filters and newest-wins, as _subAddr; each event goes to the half it is for.
+  // Both flags are set by the one genuine answer, so a cut-off corpus leaves BOTH unknown — never a whole calendar
+  // beside half the copies.
   w.subs.push(_webRead(pub, [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }],
     (e) => {
-      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(EVENT_D)) return;
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+      // 2a. a copy the relay holds, newest per id, the church's own only
+      if (d.startsWith(PUBEVENT_D)) {
+        if (e.pubkey !== pub) return;
+        const id = d.slice(PUBEVENT_D.length);
+        if ((w.copyTs.get(id) || 0) > e.created_at) return; w.copyTs.set(id, e.created_at);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) w.copies.delete(id); else w.copies.set(id, e.content);
+        _webQueueSync();
+        return;
+      }
+      // 2b. a calendar event, opened with the name key
+      if (!d.startsWith(EVENT_D)) return;
       const id = d.slice(EVENT_D.length);
       if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(w.versions, w.events, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); _webQueueSync(); return; }
       // THE CIPHERTEXT IS KEPT AND OPENED AT DECISION TIME, not here. On a fresh boot the calendar arrives
@@ -7109,7 +7198,8 @@ function _webEnsure(restart) {
       _absorbById(w.versions, w.events, id, { id, raw: String(e.content || ''), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
       _webQueueSync();
     },
-    () => { w.eventsKnown = true; _webQueueSync(); }));
+    () => { w.copiesKnown = true; w.eventsKnown = true; _webQueueSync(); },
+    { known: w.copiesKnown && w.eventsKnown, from: w.from.corpus }));
   return w;
 }
 // WHY ONE EVENT THIS CONSOLE CANNOT OPEN MUST NOT DECIDE FOR THE OTHERS. _webDesired used to answer `null`
@@ -10284,7 +10374,7 @@ window.Steward = {
       } catch (e) {}
       return false;
     };
-    let stopped = false, subClosed = false, waiting = null;
+    let stopped = false, waiting = null;
     const reaskOnLogin = () => {
       if (stopped || waiting || !eoseOn.size || (minorsKnown() && clearedKnown())) return;
       waiting = () => { waiting = null; if (stopped) return; emit(); reaskOnLogin(); };
@@ -10310,9 +10400,42 @@ window.Steward = {
     const _sgSeed = _sgClearGet(pub);
     const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: (_sgSeed && _sgSeed.approved) || null, expirySeed: (_sgSeed && _sgSeed.expiry) || null });
     if (_sgSeed) emit();   // paint the last-known clearance instantly via the *Seed fields (approved/expiry stay [])
-    const sgUrls = relays(), sgAt = Date.now();
-    const sub = pool.subscribeMany(sgUrls, [{ kinds: [30078], authors: [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }], {
-      onclose() { subClosed = true; },
+    // ONE SUBSCRIPTION PER RELAY (2026-11-11, audit of dfd1a66c). The pool-level read this replaced could not say WHICH
+    // relay answered: its oneose fires once every relay is "finished", a relay's CLOSED counts as finished while its
+    // socket stays CONNECTED ("rate-limited: too many subscriptions"), and its onclose fires only when EVERY relay has
+    // closed — so dfd1a66c's `subClosed` guard was not redundant, it was insufficient: with two relays, one that CLOSED
+    // our REQ but stayed connected was remembered in eoseOn, and a later login on it turned both flags true while the
+    // minors document was still withheld. Now each relay's end is judged on its own (oneRelay): only that relay's
+    // own EOSE counts — not its CLOSED, not its socket dropping, not nostr-tools' timer (which a relay connected when
+    // asked no longer has at all: a slow answer on a small pipe is waited for, not cut off). `sawEose` keeps its meaning:
+    // every relay's subscription has ended, however.
+    // ONE RELAY, ONE SUBSCRIPTION, AND WHETHER ITS END WAS AN ANSWER — see the note above _NO_EOSE_TIMER (a local copy on
+    // purpose, same note). onanswer(genuine, why) runs once: 'eose' (genuine) | 'closed' | 'timer'.
+    const relayUp = (url) => { try { let k = url; try { k = normalizeURL(url); } catch (e) {} const r = pool.relays && pool.relays.get(k); return !!r && r.connected === true; } catch (e) { return false; } };
+    const oneRelay = (url, filters, h) => {
+      const up = relayUp(url), at = Date.now();
+      let stopped = false, relayClosed = false, ended = false, newest = 0, sub = null;
+      try {
+        sub = pool.subscribeMany([url], filters, {
+          ...(up ? { maxWait: 2147483000 } : {}),   // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
+          onevent(e) { if (stopped) return; if (!ended && e && e.created_at > newest) newest = e.created_at; h.onevent(e); },
+          oneose() {
+            queueMicrotask(() => {
+              if (stopped || ended) return;
+              ended = true;
+              const why = relayClosed ? 'closed' : (!up && Date.now() - at >= 4400 - 100) ? 'timer' : 'eose';
+              try { h.onanswer(why === 'eose', why); } catch (e) {}
+            });
+          },
+          onclose() { relayClosed = true; },
+        });
+      } catch (e) {}
+      return { newest: () => newest, close() { stopped = true; try { if (sub) sub.close(); } catch (e) {} } };
+    };
+    const sgUrls = relays();
+    const sgFilters = [{ kinds: [30078], authors: [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], '#t': [NET] }];
+    const sgEnded = new Set();
+    const sgH = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
@@ -10345,28 +10468,35 @@ window.Steward = {
       // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
       // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
       // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-      oneose() { sawEose = true; emit();
+      // every relay's subscription has ended — the old pool-level oneose, and what `sawEose` has always meant
+      allEnded() { sawEose = true; emit();
         // PRELOAD WARMING: a GENUINE empty — the relay authenticated us and finished with NO approved doc — means the
         // church has no clearance record now, so drop any stale sealed seed (display already switched to the genuine
         // empty via clearedKnown). A bare/unauthed EOSE (sawApproved false, not authed) does NOTHING here, so the
         // last-known seed survives an offline open.
         if (!sawApproved && _isRelayAuthed()) { try { localStorage.removeItem(SGCLEAR_LAST_LS + pub); } catch (e) {} }
-        // see `lateAuthed` above: a microtask later, so a close's onclose (same turn) has been seen
+      },
+    };
+    const sgSubs = sgUrls.map(u => oneRelay(u, sgFilters, {
+      onevent: sgH.onevent,
+      // see `lateAuthed` above. `genuine` is THIS relay's own EOSE (already a microtask after it, so a CLOSED or a dropped
+      // socket in the same turn has been seen); the socket must still be the connected one, and not one the relay
+      // challenged without our login being accepted.
+      onanswer(genuine) {
+        if (stopped) return;
         try {
-          queueMicrotask(() => {
-            try {
-              if (stopped || subClosed || Date.now() - sgAt >= 4400 - 100) return;   // our close / every socket dropped / nostr-tools' 4.4 s timer
-              for (const u of sgUrls) {
-                let k = u; try { k = normalizeURL(u); } catch (e) {}
-                const r = pool.relays.get(k);
-                if (r && r.connected === true && !(r.challenge && _authAccepted.get(k) !== r)) eoseOn.set(k, r);
-              }
-              reaskOnLogin();
-            } catch (e) {}
-          });
-        } catch (e) {} },
-    });
-    return () => { stopped = true; if (waiting) { try { _keyReadAuthWaiters.delete(waiting); } catch (e) {} waiting = null; } try { sub.close(); } catch {} };
+          if (genuine) {
+            let k = u; try { k = normalizeURL(u); } catch (e) {}
+            const r = pool.relays.get(k);
+            if (r && r.connected === true && !(r.challenge && _authAccepted.get(k) !== r)) eoseOn.set(k, r);
+          }
+        } catch (e) {}
+        sgEnded.add(u);
+        if (sgEnded.size === sgUrls.length) sgH.allEnded();
+        try { reaskOnLogin(); } catch (e) {}
+      },
+    }));
+    return () => { stopped = true; if (waiting) { try { _keyReadAuthWaiters.delete(waiting); } catch (e) {} waiting = null; } for (const s of sgSubs) s.close(); };
   },
   setNoPhoto(pubkeys) {   // replace the whole photo-suppression list (church key, or a Safeguarding steward)
     _requireTrustedView('photo settings');
@@ -14028,7 +14158,7 @@ window.Steward = {
 
   // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
   // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
-  // `restart: true` re-issues the three subscriptions on the current relay set (the dashboard passes it on a
+  // `restart: true` re-issues the two subscriptions (share, corpus) on the current relay set (the dashboard passes it on a
   // connection bump, the way every makeSub hook re-subscribes: a returning socket does not re-issue its REQs).
   subscribeWebsiteShare(onShare, opts) {
     const w = _webEnsure(!!(opts && opts.restart)); if (!w) { try { onShare({ ...WEB_DEFAULT, optOut: [], known: false }); } catch {} return () => {}; }
@@ -14774,7 +14904,31 @@ window.Steward = {
     // The subscriptions are opened when the proof resolves, so they live in closure cells the closer can
     // reach; the closer runs synchronously (the hook needs an unsubscribe back at once) and marks itself
     // closed so a proof landing after it opens nothing.
-    let closed = false, sub = null, dialled = [];
+    let closed = false, dialled = [];
+    // ONE RELAY, ONE SUBSCRIPTION, AND WHETHER ITS END WAS AN ANSWER — see the note above _NO_EOSE_TIMER (a local copy on
+    // purpose, same note). onanswer(genuine, why) runs once: 'eose' (genuine) | 'closed' | 'timer'.
+    const relayUp = (url) => { try { let k = url; try { k = normalizeURL(url); } catch (e) {} const r = pool.relays && pool.relays.get(k); return !!r && r.connected === true; } catch (e) { return false; } };
+    const oneRelay = (url, filters, h) => {
+      const up = relayUp(url), at = Date.now();
+      let stopped = false, relayClosed = false, ended = false, newest = 0, sub = null;
+      try {
+        sub = pool.subscribeMany([url], filters, {
+          ...(up ? { maxWait: 2147483000 } : {}),   // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
+          onevent(e) { if (stopped) return; if (!ended && e && e.created_at > newest) newest = e.created_at; h.onevent(e); },
+          oneose() {
+            queueMicrotask(() => {
+              if (stopped || ended) return;
+              ended = true;
+              const why = relayClosed ? 'closed' : (!up && Date.now() - at >= 4400 - 100) ? 'timer' : 'eose';
+              try { h.onanswer(why === 'eose', why); } catch (e) {}
+            });
+          },
+          onclose() { relayClosed = true; },
+        });
+      } catch (e) {}
+      return { newest: () => newest, close() { stopped = true; try { if (sub) sub.close(); } catch (e) {} } };
+    };
+    const subs = new Map();   // url -> oneRelay: ONE discovery subscription per relay, so each relay's answer is judged on its own
     const nameSubs = new Map();
     // resolve a stewarded church's real name from its kind-0 profile (kept open so a rename follows live)
     const resolveName = (cp) => {
@@ -14785,7 +14939,7 @@ window.Steward = {
       }));
     };
     const closeAll = () => {
-      try { if (sub) sub.close(); } catch {} sub = null;
+      for (const s of subs.values()) s.close(); subs.clear();
       for (const s of nameSubs.values()) { try { s.close(); } catch {} } nameSubs.clear();
     };
     // WHICH ROSTERS A NARROW READ ASKS FOR: every church this console can name — the ones it already stewards (the
@@ -14801,13 +14955,16 @@ window.Steward = {
     let filterKey = '';
     const open = (urls) => {
       if (closed) return;
-      // ONCE PER SESSION PER RELAY (see _stewardedBroad): broad when this key has no completed broad read covering
-      // every relay dialled now; otherwise only the named rosters. The revoke filter is in both, as it always was.
-      const broad = !(_stewardedBroad && _stewardedBroad.me === me && urls.every(u => _stewardedBroad.urls.has(u)));
-      const ds = broad ? [] : narrowDs();
-      const key = broad ? '*' : ds.join(',');
-      const same = sub && urls.length === dialled.length && urls.every(u => dialled.includes(u)) && key === filterKey;
-      if (same) return;                       // the proof landed for a set we already dialled, asking the same question
+      // ONCE PER SESSION PER RELAY (see _stewardedBroad): a relay whose broad read has not genuinely finished gets the
+      // broad read (resumed from where a cut-off one got to); a relay where it has gets the named rosters plus every
+      // roster changed since it finished, less 900 s for the relays' clock window — so a church that adds us DIRECTLY
+      // mid-session (no request, so it is in no named set) still arrives, at the cost of what changed since. The revoke
+      // filter is in every opening, as it always was.
+      const rec = (_stewardedBroad && _stewardedBroad.me === me) ? _stewardedBroad : null;
+      const ds = narrowDs();
+      const plan = urls.map(u => ({ u, at: (rec && rec.done.get(u)) || 0, from: (rec && rec.part.get(u)) || 0 }));
+      const key = plan.map(p => p.u + (p.at ? '>' + p.at : '*' + p.from)).join('|') + (plan.some(p => p.at) ? '#' + ds.join(',') : '');
+      if (subs.size && key === filterKey) return;   // the proof landed for a set we already dialled, asking the same question
       closeAll();
       dialled = urls.slice();
       filterKey = key;
@@ -14818,11 +14975,8 @@ window.Steward = {
       // d=stewardrevoke:<me> to its subject ALONE (canRead STEWARDREVOKE_D branch) — an unauthenticated socket gets
       // nothing. `me` (= churchPub) is this helper's own key, the subject the owner's console addressed.
       const revoke = { kinds: [30078], '#d': [STEWARDREVOKE_D + me] };
-      const filters = broad ? [{ kinds: [30078], '#t': [NET] }, revoke] : ds.length ? [{ kinds: [30078], '#t': [NET], '#d': ds }, revoke] : [revoke];
-      const these = dialled.slice();
-      let allClosed = false, mine = null;
-      mine = sub = pool.subscribeMany(dialled, filters, {
-        onclose() { allClosed = true; },
+      const record = () => { if (!_stewardedBroad || _stewardedBroad.me !== me) _stewardedBroad = { me, done: new Map(), part: new Map() }; return _stewardedBroad; };
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           // A DEDICATED REVOCATION NOTICE the removed helper can still read (2026-11-05, helper-delegation). The
@@ -14908,14 +15062,34 @@ window.Steward = {
             cb([...stewardedChurches.keys()]);
           }
         },
-        oneose() {
-          cb([...stewardedChurches.keys()]);
-          // THE BROAD READ COUNTS AS DONE ONLY IF IT FINISHED: nostr-tools fires this oneose when every socket has
-          // CLOSED too (our own close, or the relay dropping them), and then onclose straight after, in the same turn.
-          // A broad read that did not finish is run again at the next opening.
-          if (broad) queueMicrotask(() => { if (!allClosed && !closed && sub === mine) _stewardedBroad = { me, urls: new Set(these) }; });
-        },
-      });
+      };
+      const openOn = (u, at, from) => {
+        const broad = !at;
+        const filters = broad
+          ? [{ kinds: [30078], '#t': [NET], ...(from ? { since: from } : {}) }, revoke]
+          : [...(ds.length ? [{ kinds: [30078], '#t': [NET], '#d': ds }] : []), { kinds: [30078], '#t': [NET], since: Math.max(0, at - 900) }, revoke];
+        const s = oneRelay(u, filters, {
+          onevent: handlers.onevent,
+          onanswer(genuine, why) {
+            if (closed || subs.get(u) !== s) return;
+            cb([...stewardedChurches.keys()]);
+            const r = record();
+            // A NARROW READ THAT GENUINELY ANSWERED has seen every roster changed up to now, so the next opening's
+            // "changed since" window starts here — it does not grow for the whole session.
+            if (!broad) { if (genuine) r.done.set(u, now()); return; }
+            // THE BROAD READ IS DONE ON THIS RELAY ONLY IF THIS RELAY ANSWERED IT. A CLOSED, a dropped socket or the
+            // library's timer leaves it pending: what it got to is remembered so the next opening resumes from there.
+            if (genuine) { r.done.set(u, now()); r.part.delete(u); return; }
+            const got = Math.max(from, s.newest());
+            if (got) r.part.set(u, got);
+            // nostr-tools' timer on a relay that was still connecting: it is connected now and still sending, so ask it
+            // again from where it got to, with no timer — a slow relay is pending, not done.
+            if (why === 'timer' && relayUp(u)) { s.close(); openOn(u, 0, got); }
+          },
+        });
+        subs.set(u, s);
+      };
+      for (const p of plan) openOn(p.u, p.at, p.from);
     };
     if (stewardedChurches.size) cb([...stewardedChurches.keys()]);   // emit the cached list immediately
     // Prove, then open. A refresh that rejects opens nothing; the returned-relay listener below is the retry.

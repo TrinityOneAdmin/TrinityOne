@@ -17591,6 +17591,7 @@ zoo`.split("\n");
       return true;
     }
   }
+  var _NO_EOSE_TIMER = 2147483e3;
   function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
     const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0, again: null };
     const stopSubs = () => {
@@ -20228,6 +20229,8 @@ zoo`.split("\n");
       }
     }, 250);
   }
+  var WEB_READ_IDLE_MS = 3e4;
+  var WEB_RESUME_MARGIN_S = 900;
   function _webLoginPending(url) {
     try {
       let k = url;
@@ -20241,8 +20244,10 @@ zoo`.split("\n");
       return true;
     }
   }
-  function _webRead(cp, filters, onevent, onknown) {
-    const st = { stopped: false, known: false, subs: /* @__PURE__ */ new Map(), answers: /* @__PURE__ */ new Map(), tries: /* @__PURE__ */ new Map(), timers: /* @__PURE__ */ new Set(), waiters: /* @__PURE__ */ new Set() };
+  function _webRead(cp, filters, onevent, onknown, opts) {
+    const known0 = !!(opts && opts.known);
+    const from = opts && opts.from || /* @__PURE__ */ new Map();
+    const st = { stopped: false, known: known0, subs: /* @__PURE__ */ new Map(), answers: /* @__PURE__ */ new Map(), tries: /* @__PURE__ */ new Map(), timers: /* @__PURE__ */ new Set(), waiters: /* @__PURE__ */ new Set() };
     const urls = relays();
     const epoch = _keyReadEpoch;
     const live = () => !st.stopped && epoch === _keyReadEpoch && cp === (actingChurch || pub);
@@ -20257,11 +20262,21 @@ zoo`.split("\n");
       } catch (e) {
       }
     };
+    const later = (url) => {
+      const n = st.tries.get(url) || 0;
+      st.tries.set(url, n + 1);
+      const t = setTimeout(() => {
+        st.timers.delete(t);
+        openOn(url);
+      }, Math.min(6e4, 2e3 * Math.pow(2, n)));
+      st.timers.add(t);
+    };
     const openOn = (url) => {
-      if (!live() || st.known) return;
+      if (!live()) return;
       const old = st.subs.get(url);
       if (old) {
         old.tok.closed = true;
+        if (old.idle) clearTimeout(old.idle);
         try {
           old.sub.close();
         } catch (e) {
@@ -20274,36 +20289,60 @@ zoo`.split("\n");
         up = !!(r && r.connected);
       } catch (e) {
       }
-      const tok = { cp, epoch, at: Date.now(), url, wait: up ? _KEY_READ_LONG_WAIT : 4400, closed: false, relayClosed: false };
-      const sub = pool.subscribeMany([url], filters, {
-        ...up ? { maxWait: _KEY_READ_LONG_WAIT } : {},
+      const since = from.get(url) || 0;
+      const fs = since ? filters.map((f) => ({ ...f, since })) : filters;
+      const tok = { cp, epoch, at: Date.now(), url, wait: up ? _NO_EOSE_TIMER : 4400, closed: false, relayClosed: false };
+      const cur = { tok, sub: null, idle: null, last: Date.now(), answered: false };
+      const watch = (ms) => {
+        cur.idle = setTimeout(() => {
+          cur.idle = null;
+          if (cur.answered || tok.closed || !live() || st.subs.get(url) !== cur) return;
+          const quiet = Date.now() - cur.last;
+          if (quiet < WEB_READ_IDLE_MS) {
+            watch(WEB_READ_IDLE_MS - quiet);
+            return;
+          }
+          tok.closed = true;
+          try {
+            cur.sub.close();
+          } catch (e) {
+          }
+          st.answers.set(url, false);
+          if (!st.known && _keyReadConnected(url)) later(url);
+          evaluate();
+        }, ms);
+      };
+      cur.sub = pool.subscribeMany([url], fs, {
+        ...up ? { maxWait: _NO_EOSE_TIMER } : {},
         onevent(e) {
-          if (!tok.closed && live()) onevent(e);
+          if (tok.closed || !live()) return;
+          cur.last = Date.now();
+          if (!cur.answered && e && e.created_at > (from.get(url) || 0) && !_webLoginPending(url)) from.set(url, e.created_at);
+          onevent(e);
         },
         // a microtask later, so the onclose nostr-tools runs straight after a close's synthetic oneose has marked the token
         oneose() {
           queueMicrotask(() => {
-            if (tok.closed || !live() || st.subs.get(url) !== cur) return;
+            if (tok.closed || !live() || st.subs.get(url) !== cur || cur.answered) return;
+            cur.answered = true;
+            if (cur.idle) {
+              clearTimeout(cur.idle);
+              cur.idle = null;
+            }
             const v = _keyReadOk(tok);
             const ok = v === true || v === "unauthed" && !_webLoginPending(url);
             st.answers.set(url, ok);
+            if (ok) from.set(url, Math.max(from.get(url) || 0, now() - WEB_RESUME_MARGIN_S));
             if (!ok && !st.known && _keyReadConnected(url)) {
               if (v === "unauthed") {
+                from.delete(url);
                 const again = () => {
                   st.waiters.delete(again);
                   openOn(url);
                 };
                 st.waiters.add(again);
                 _keyReadAfterAuth(again);
-              } else {
-                const n = st.tries.get(url) || 0;
-                st.tries.set(url, n + 1);
-                const t = setTimeout(() => {
-                  st.timers.delete(t);
-                  openOn(url);
-                }, Math.min(6e4, 2e3 * Math.pow(2, n)));
-                st.timers.add(t);
-              }
+              } else later(url);
             }
             evaluate();
           });
@@ -20312,8 +20351,8 @@ zoo`.split("\n");
           tok.relayClosed = true;
         }
       });
-      const cur = { tok, sub };
       st.subs.set(url, cur);
+      if (!st.known) watch(WEB_READ_IDLE_MS);
     };
     for (const url of urls) openOn(url);
     return () => {
@@ -20324,6 +20363,7 @@ zoo`.split("\n");
       st.waiters.clear();
       for (const s of st.subs.values()) {
         s.tok.closed = true;
+        if (s.idle) clearTimeout(s.idle);
         try {
           s.sub.close();
         } catch (e) {
@@ -20333,7 +20373,7 @@ zoo`.split("\n");
     };
   }
   function _webEnsure(restart) {
-    if (_web && _web.pub === pub && !restart) return _web;
+    if (_web && _web.pub === pub && _web.epoch === _keyReadEpoch && !restart) return _web;
     const listeners = _web ? _web.listeners : /* @__PURE__ */ new Set();
     const carried = _web && _web.pub === pub && _web.epoch === _keyReadEpoch ? _web : null;
     _webStop();
@@ -20350,6 +20390,7 @@ zoo`.split("\n");
       copies: carried ? carried.copies : /* @__PURE__ */ new Map(),
       copyTs: carried ? carried.copyTs : /* @__PURE__ */ new Map(),
       copiesKnown: !!(carried && carried.copiesKnown),
+      from: carried ? carried.from : { share: /* @__PURE__ */ new Map(), corpus: /* @__PURE__ */ new Map() },
       subs: [],
       listeners,
       busy: false,
@@ -20390,32 +20431,24 @@ zoo`.split("\n");
         w.shareKnown = true;
         _webEmit();
         _webQueueSync();
-      }
-    ));
-    w.subs.push(_webRead(
-      pub,
-      [{ kinds: [30078], authors: [pub], "#t": [NET] }],
-      (e) => {
-        if (e.pubkey !== pub) return;
-        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-        if (!d.startsWith(PUBEVENT_D)) return;
-        const id = d.slice(PUBEVENT_D.length);
-        if ((w.copyTs.get(id) || 0) > e.created_at) return;
-        w.copyTs.set(id, e.created_at);
-        if (e.tags.some((t) => t[0] === "deleted") || !e.content) w.copies.delete(id);
-        else w.copies.set(id, e.content);
-        _webQueueSync();
       },
-      () => {
-        w.copiesKnown = true;
-        _webQueueSync();
-      }
+      { known: w.shareKnown, from: w.from.share }
     ));
     w.subs.push(_webRead(
       pub,
       [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }],
       (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d.startsWith(PUBEVENT_D)) {
+          if (e.pubkey !== pub) return;
+          const id2 = d.slice(PUBEVENT_D.length);
+          if ((w.copyTs.get(id2) || 0) > e.created_at) return;
+          w.copyTs.set(id2, e.created_at);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) w.copies.delete(id2);
+          else w.copies.set(id2, e.content);
+          _webQueueSync();
+          return;
+        }
         if (!d.startsWith(EVENT_D)) return;
         const id = d.slice(EVENT_D.length);
         if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
@@ -20427,9 +20460,11 @@ zoo`.split("\n");
         _webQueueSync();
       },
       () => {
+        w.copiesKnown = true;
         w.eventsKnown = true;
         _webQueueSync();
-      }
+      },
+      { known: w.copiesKnown && w.eventsKnown, from: w.from.corpus }
     ));
     return w;
   }
@@ -23654,7 +23689,7 @@ zoo`.split("\n");
         }
         return false;
       };
-      let stopped = false, subClosed = false, waiting = null;
+      let stopped = false, waiting = null;
       const reaskOnLogin = () => {
         if (stopped || waiting || !eoseOn.size || minorsKnown() && clearedKnown()) return;
         waiting = () => {
@@ -23668,11 +23703,60 @@ zoo`.split("\n");
       const _sgSeed = _sgClearGet(pub);
       const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
       if (_sgSeed) emit();
-      const sgUrls = relays(), sgAt = Date.now();
-      const sub = pool.subscribeMany(sgUrls, [{ kinds: [30078], authors: [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }], {
-        onclose() {
-          subClosed = true;
-        },
+      const relayUp = (url) => {
+        try {
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          const r = pool.relays && pool.relays.get(k);
+          return !!r && r.connected === true;
+        } catch (e) {
+          return false;
+        }
+      };
+      const oneRelay = (url, filters, h) => {
+        const up = relayUp(url), at = Date.now();
+        let stopped2 = false, relayClosed = false, ended = false, newest = 0, sub = null;
+        try {
+          sub = pool.subscribeMany([url], filters, {
+            ...up ? { maxWait: 2147483e3 } : {},
+            // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
+            onevent(e) {
+              if (stopped2) return;
+              if (!ended && e && e.created_at > newest) newest = e.created_at;
+              h.onevent(e);
+            },
+            oneose() {
+              queueMicrotask(() => {
+                if (stopped2 || ended) return;
+                ended = true;
+                const why = relayClosed ? "closed" : !up && Date.now() - at >= 4400 - 100 ? "timer" : "eose";
+                try {
+                  h.onanswer(why === "eose", why);
+                } catch (e) {
+                }
+              });
+            },
+            onclose() {
+              relayClosed = true;
+            }
+          });
+        } catch (e) {
+        }
+        return { newest: () => newest, close() {
+          stopped2 = true;
+          try {
+            if (sub) sub.close();
+          } catch (e) {
+          }
+        } };
+      };
+      const sgUrls = relays();
+      const sgFilters = [{ kinds: [30078], authors: [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }];
+      const sgEnded = /* @__PURE__ */ new Set();
+      const sgH = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (_authFuture(e)) return;
@@ -23735,7 +23819,8 @@ zoo`.split("\n");
         // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
         // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-        oneose() {
+        // every relay's subscription has ended — the old pool-level oneose, and what `sawEose` has always meant
+        allEnded() {
           sawEose = true;
           emit();
           if (!sawApproved && _isRelayAuthed()) {
@@ -23744,27 +23829,35 @@ zoo`.split("\n");
             } catch (e) {
             }
           }
+        }
+      };
+      const sgSubs = sgUrls.map((u) => oneRelay(u, sgFilters, {
+        onevent: sgH.onevent,
+        // see `lateAuthed` above. `genuine` is THIS relay's own EOSE (already a microtask after it, so a CLOSED or a dropped
+        // socket in the same turn has been seen); the socket must still be the connected one, and not one the relay
+        // challenged without our login being accepted.
+        onanswer(genuine) {
+          if (stopped) return;
           try {
-            queueMicrotask(() => {
+            if (genuine) {
+              let k = u;
               try {
-                if (stopped || subClosed || Date.now() - sgAt >= 4400 - 100) return;
-                for (const u of sgUrls) {
-                  let k = u;
-                  try {
-                    k = normalizeURL2(u);
-                  } catch (e) {
-                  }
-                  const r = pool.relays.get(k);
-                  if (r && r.connected === true && !(r.challenge && _authAccepted.get(k) !== r)) eoseOn.set(k, r);
-                }
-                reaskOnLogin();
+                k = normalizeURL2(u);
               } catch (e) {
               }
-            });
+              const r = pool.relays.get(k);
+              if (r && r.connected === true && !(r.challenge && _authAccepted.get(k) !== r)) eoseOn.set(k, r);
+            }
+          } catch (e) {
+          }
+          sgEnded.add(u);
+          if (sgEnded.size === sgUrls.length) sgH.allEnded();
+          try {
+            reaskOnLogin();
           } catch (e) {
           }
         }
-      });
+      }));
       return () => {
         stopped = true;
         if (waiting) {
@@ -23774,10 +23867,7 @@ zoo`.split("\n");
           }
           waiting = null;
         }
-        try {
-          sub.close();
-        } catch {
-        }
+        for (const s of sgSubs) s.close();
       };
     },
     setNoPhoto(pubkeys) {
@@ -27170,7 +27260,7 @@ zoo`.split("\n");
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
-    // `restart: true` re-issues the three subscriptions on the current relay set (the dashboard passes it on a
+    // `restart: true` re-issues the two subscriptions (share, corpus) on the current relay set (the dashboard passes it on a
     // connection bump, the way every makeSub hook re-subscribes: a returning socket does not re-issue its REQs).
     subscribeWebsiteShare(onShare, opts) {
       const w = _webEnsure(!!(opts && opts.restart));
@@ -28088,7 +28178,58 @@ zoo`.split("\n");
         for (const u of relaysRaw()) add2(u);
         return out;
       };
-      let closed = false, sub = null, dialled = [];
+      let closed = false, dialled = [];
+      const relayUp = (url) => {
+        try {
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          const r = pool.relays && pool.relays.get(k);
+          return !!r && r.connected === true;
+        } catch (e) {
+          return false;
+        }
+      };
+      const oneRelay = (url, filters, h) => {
+        const up = relayUp(url), at = Date.now();
+        let stopped = false, relayClosed = false, ended = false, newest = 0, sub = null;
+        try {
+          sub = pool.subscribeMany([url], filters, {
+            ...up ? { maxWait: 2147483e3 } : {},
+            // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
+            onevent(e) {
+              if (stopped) return;
+              if (!ended && e && e.created_at > newest) newest = e.created_at;
+              h.onevent(e);
+            },
+            oneose() {
+              queueMicrotask(() => {
+                if (stopped || ended) return;
+                ended = true;
+                const why = relayClosed ? "closed" : !up && Date.now() - at >= 4400 - 100 ? "timer" : "eose";
+                try {
+                  h.onanswer(why === "eose", why);
+                } catch (e) {
+                }
+              });
+            },
+            onclose() {
+              relayClosed = true;
+            }
+          });
+        } catch (e) {
+        }
+        return { newest: () => newest, close() {
+          stopped = true;
+          try {
+            if (sub) sub.close();
+          } catch (e) {
+          }
+        } };
+      };
+      const subs = /* @__PURE__ */ new Map();
       const nameSubs = /* @__PURE__ */ new Map();
       const resolveName = (cp) => {
         if (closed || nameSubs.has(cp) || !dialled.length) return;
@@ -28109,11 +28250,8 @@ zoo`.split("\n");
         }));
       };
       const closeAll = () => {
-        try {
-          if (sub) sub.close();
-        } catch {
-        }
-        sub = null;
+        for (const s of subs.values()) s.close();
+        subs.clear();
         for (const s of nameSubs.values()) {
           try {
             s.close();
@@ -28140,11 +28278,11 @@ zoo`.split("\n");
       let filterKey = "";
       const open = (urls) => {
         if (closed) return;
-        const broad = !(_stewardedBroad && _stewardedBroad.me === me && urls.every((u) => _stewardedBroad.urls.has(u)));
-        const ds = broad ? [] : narrowDs();
-        const key = broad ? "*" : ds.join(",");
-        const same = sub && urls.length === dialled.length && urls.every((u) => dialled.includes(u)) && key === filterKey;
-        if (same) return;
+        const rec = _stewardedBroad && _stewardedBroad.me === me ? _stewardedBroad : null;
+        const ds = narrowDs();
+        const plan = urls.map((u) => ({ u, at: rec && rec.done.get(u) || 0, from: rec && rec.part.get(u) || 0 }));
+        const key = plan.map((p) => p.u + (p.at ? ">" + p.at : "*" + p.from)).join("|") + (plan.some((p) => p.at) ? "#" + ds.join(",") : "");
+        if (subs.size && key === filterKey) return;
         closeAll();
         dialled = urls.slice();
         filterKey = key;
@@ -28152,13 +28290,11 @@ zoo`.split("\n");
         [...stewardedChurches.keys()].forEach(resolveName);
         const seenAt = /* @__PURE__ */ new Map();
         const revoke = { kinds: [30078], "#d": [STEWARDREVOKE_D + me] };
-        const filters = broad ? [{ kinds: [30078], "#t": [NET] }, revoke] : ds.length ? [{ kinds: [30078], "#t": [NET], "#d": ds }, revoke] : [revoke];
-        const these = dialled.slice();
-        let allClosed = false, mine = null;
-        mine = sub = pool.subscribeMany(dialled, filters, {
-          onclose() {
-            allClosed = true;
-          },
+        const record = () => {
+          if (!_stewardedBroad || _stewardedBroad.me !== me) _stewardedBroad = { me, done: /* @__PURE__ */ new Map(), part: /* @__PURE__ */ new Map() };
+          return _stewardedBroad;
+        };
+        const handlers = {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (d.startsWith(STEWARDREVOKE_D)) {
@@ -28230,14 +28366,37 @@ zoo`.split("\n");
               }
               cb([...stewardedChurches.keys()]);
             }
-          },
-          oneose() {
-            cb([...stewardedChurches.keys()]);
-            if (broad) queueMicrotask(() => {
-              if (!allClosed && !closed && sub === mine) _stewardedBroad = { me, urls: new Set(these) };
-            });
           }
-        });
+        };
+        const openOn = (u, at, from) => {
+          const broad = !at;
+          const filters = broad ? [{ kinds: [30078], "#t": [NET], ...from ? { since: from } : {} }, revoke] : [...ds.length ? [{ kinds: [30078], "#t": [NET], "#d": ds }] : [], { kinds: [30078], "#t": [NET], since: Math.max(0, at - 900) }, revoke];
+          const s = oneRelay(u, filters, {
+            onevent: handlers.onevent,
+            onanswer(genuine, why) {
+              if (closed || subs.get(u) !== s) return;
+              cb([...stewardedChurches.keys()]);
+              const r = record();
+              if (!broad) {
+                if (genuine) r.done.set(u, now());
+                return;
+              }
+              if (genuine) {
+                r.done.set(u, now());
+                r.part.delete(u);
+                return;
+              }
+              const got = Math.max(from, s.newest());
+              if (got) r.part.set(u, got);
+              if (why === "timer" && relayUp(u)) {
+                s.close();
+                openOn(u, 0, got);
+              }
+            }
+          });
+          subs.set(u, s);
+        };
+        for (const p of plan) openOn(p.u, p.at, p.from);
       };
       if (stewardedChurches.size) cb([...stewardedChurches.keys()]);
       try {

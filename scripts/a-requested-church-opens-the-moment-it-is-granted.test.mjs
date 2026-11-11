@@ -178,7 +178,7 @@ test('LIVE: the grant for the requested church arrives and the console opens it 
   h.subscribe(l => lists.push(l));
   await tick(5);
   const d = h.discovery();
-  assert.equal(d.length, 1, 'no discovery read opened');
+  assert.equal(d.length, 2, 'no discovery read opened (one subscription per relay since 2026-11-11, so each relay\'s answer is judged on its own)');
   assert.equal(h.stubs.actingChurch, '', 'staging: the console is not acting as any church before the grant');
   h.grant(d[0], CHURCH);
   assert.equal(h.stubs.pub, CHURCH, 'the grant landed and the console did NOT open the requested church (pub not rebound)');

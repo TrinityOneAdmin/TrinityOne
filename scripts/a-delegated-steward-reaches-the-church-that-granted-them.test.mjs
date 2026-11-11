@@ -162,6 +162,9 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
       content: JSON.stringify({ pubkeys: [ME] }),
     }),
     discovery: () => subs.filter(s => s.filters.some(f => f.kinds && f.kinds.includes(30078))),
+    // since 2026-11-11 the discovery read is ONE subscription PER RELAY (so each relay's answer is judged on its own):
+    // the relays it dials are the union over the open ones
+    dialled: () => subs.filter(s => !s.closed && s.filters.some(f => f.kinds && f.kinds.includes(30078))).flatMap(s => s.urls),
   };
 }
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
@@ -176,15 +179,40 @@ test('HALF A: with the steward\'s own "no" cached, the discovery read still dial
   h.subscribe(l => lists.push(l));
   await tick(5);
   const d = h.discovery();
-  assert.equal(d.length, 1, 'expected exactly one stewards-scan subscription, got ' + d.length);
-  assert.ok(d[0].urls.includes(BOX),
-    'the discovery read never dials the box that served this console — it went over ' + JSON.stringify(d[0].urls) +
+  assert.equal(d.length, 2, 'expected one stewards-scan subscription per relay, got ' + d.length);
+  assert.ok(d.every(s => s.urls.length === 1), 'a stewards-scan subscription spans more than one relay');
+  const urls = h.dialled();
+  assert.ok(urls.includes(BOX),
+    'the discovery read never dials the box that served this console — it went over ' + JSON.stringify(urls) +
     '. The church this box holds cannot be found from here; measured 2026-09-06 as zero frames.');
-  assert.ok(d[0].urls.includes(CANON), 'the shared pool dropped out of the read');
-  assert.deepEqual(new Set(d[0].urls), new Set([BOX, CANON]), 'the read dialled something neither the origin nor relaysRaw() named');
+  assert.ok(urls.includes(CANON), 'the shared pool dropped out of the read');
+  assert.deepEqual(new Set(urls), new Set([BOX, CANON]), 'the read dialled something neither the origin nor relaysRaw() named');
   // and the roster arriving over that read makes the church appear
   h.grant(d[0]);
   assert.ok(h.stewardedChurches.has(CHURCH), 'the owner\'s roster arrived and the church was not recorded');
+  assert.deepEqual(lists[lists.length - 1], [CHURCH], 'the screen was not told');
+});
+
+test('NARROW READ (the once-a-session broad read already done): a reconnect still dials the box, and the grant still lands', async () => {
+  // Every reconnect after the first in a session takes this path (2026-11-11), so the rows above — which all see the
+  // broad read — are not enough on their own. The broad read finished on both relays a minute ago:
+  const T = Math.floor(Date.now() / 1000) - 60;
+  const h = harness({ cached: false });
+  h.stubs._stewardedBroad = { me: ME, done: new Map([[BOX, T], [CANON, T]]), part: new Map() };
+  const lists = [];
+  h.subscribe(l => lists.push(l));
+  await tick(5);
+  const d = h.discovery();
+  assert.equal(d.length, 2, 'expected one narrow subscription per relay, got ' + d.length);
+  assert.deepEqual(new Set(h.dialled()), new Set([BOX, CANON]), 'the narrow read does not dial the box that served this console');
+  for (const sub of d) {
+    assert.ok(!sub.filters.some(f => f['#t'] && !f['#d'] && f.since === undefined), 'a reconnect after the broad read finished ran the broad read again');
+    const win = sub.filters.find(f => f['#t'] && !f['#d'] && f.since !== undefined);
+    assert.ok(win && win.since === T - 900, 'the narrow read has no "changed since the broad read" window: ' + JSON.stringify(sub.filters));
+  }
+  // the owner grants us now (a direct add: no request, so no named roster) — it arrives in the window and lands
+  h.grant(d.find(sub => sub.urls[0] === BOX));
+  assert.ok(h.stewardedChurches.has(CHURCH), 'a grant arriving on the narrow read was not recorded');
   assert.deepEqual(lists[lists.length - 1], [CHURCH], 'the screen was not told');
 });
 
@@ -198,9 +226,8 @@ test('HALF A: on a cold cache the read waits for the proof — it is never opene
     'a subscription was opened before the proof landed — over ' + JSON.stringify(h.discovery().map(s => s.urls)) +
     '. admit() on a cold cache answers [], and a read over [] is the measured zero frames.');
   await tick(80);
-  const d = h.discovery();
-  assert.equal(d.length, 1, 'the proof landed and no subscription was opened');
-  assert.ok(d[0].urls.length > 0 && d[0].urls.includes(BOX), 'opened over ' + JSON.stringify(d[0].urls));
+  assert.ok(h.discovery().length > 0, 'the proof landed and no subscription was opened');
+  assert.ok(h.dialled().includes(BOX), 'opened over ' + JSON.stringify(h.dialled()));
 });
 
 test('HALF A: a relay proved AFTER the read opened re-opens it — the hook only re-subscribes on conn', async () => {
@@ -213,12 +240,12 @@ test('HALF A: a relay proved AFTER the read opened re-opens it — the hook only
   h.stubs._gate._admit(BOX);
   h.win.dispatchEvent({ type: 'steward-relay-returned', detail: { url: '' } });
   const d = h.discovery();
-  assert.equal(d.length, 2, 'the box entered the admitted set and the read was not re-opened to include it');
+  assert.equal(d.length, 3, 'the box entered the admitted set and the read was not re-opened to include it');
   assert.ok(d[0].closed, 'the old read was left open beside the new one');
-  assert.deepEqual(new Set(d[1].urls), new Set([BOX, CANON]), 're-opened over ' + JSON.stringify(d[1].urls));
+  assert.deepEqual(new Set(h.dialled()), new Set([BOX, CANON]), 're-opened over ' + JSON.stringify(h.dialled()));
   // …and the same event with nothing new does NOT churn the subscription
   h.win.dispatchEvent({ type: 'steward-relay-returned', detail: { url: '' } });
-  assert.equal(h.discovery().length, 2, 'the read was re-opened though the admitted set had not changed');
+  assert.equal(h.discovery().length, 3, 'the read was re-opened though the admitted set had not changed');
 });
 
 test('HALF A: the closer works before the proof lands, after it, and takes its listener with it', async () => {
@@ -408,7 +435,7 @@ test('a stale roster that removes ME does not override a newer one that includes
   h.subscribe(() => {});
   await tick(5);
   const d = h.discovery();
-  assert.equal(d.length, 1);
+  assert.equal(d.length, 2);   // one per relay; both relays' copies reach the same handler (and its newest-wins guard)
   // Newer roster: ME is listed
   d[0].handlers.onevent({
     created_at: 1000,

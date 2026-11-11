@@ -21,12 +21,13 @@ const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), '
 const CP = '1'.repeat(64);
 const URL1 = 'wss://a/';
 
-function harness() {
+const URL2 = 'wss://b/';
+function harness({ urls = [URL1] } = {}) {
   const body = fnBody(STEWARD, 'subscribeSafeguard(onLists) {', 'subscribeSafeguard');
   const helpers = [fnBody(STEWARD, 'function _keyReadAfterAuth', '_keyReadAfterAuth'), fnBody(STEWARD, 'function _runKeyReadAuthWaiters', '_runKeyReadAuthWaiters')].join('\n');
   let wall = 1_000_000;
   const sock = { connected: true, challenge: undefined };
-  const relaysMap = new Map([[URL1, sock]]);
+  const relaysMap = new Map([[URL1, sock], ...urls.filter(u => u !== URL1).map(u => [u, { connected: true, challenge: undefined }])]);
   const subs = [];
   const out = [];
   const scope = {
@@ -37,14 +38,14 @@ function harness() {
       relays: relaysMap,
       subscribeMany(urls, filters, h) { const s = { urls, filters, h, closed: false, close() { s.closed = true; } }; subs.push(s); return s; },
     },
-    relays: () => [URL1], normalizeURL: (u) => u,
+    relays: () => urls.slice(), normalizeURL: (u) => u,
     _byChurch: () => true, _byChurchOrSteward: () => true, _authFuture: () => false, _applyNoPhotoList: () => {},
     _sgClearGet: () => null, _sgClearSet: () => {}, _clearedTrail: null,
     _authedRelays: new Map(), _authAccepted: new Map(), _keyReadAuthWaiters: new Set(), _runPendingRotations: () => {},
     // the engine's own answer to "is any relay in the set logged in", over the same maps (the shipped
     // _isRelayAuthed asks pool.listConnectionStatus(); this fake pool's sockets are its status)
     _isRelayAuthed: () => [...relaysMap].some(([k, r]) => r.connected && scope._authedRelays.get(k) === r),
-    Date: { now: () => wall },
+    Date: class extends Date { static now() { return wall; } },
   };
   const names = Object.keys(scope);
   const api = new Function(...names, `${helpers}\nreturn { _runKeyReadAuthWaiters, sg: ({ ${body} }) };`)(...names.map(n => scope[n]));
@@ -52,11 +53,11 @@ function harness() {
     scope, subs, out, sock, relaysMap,
     open: () => api.sg.subscribeSafeguard((l) => out.push(l)),
     last: () => out[out.length - 1] || {},
-    sub: () => subs[subs.length - 1],
+    sub: (url = URL1) => [...subs].reverse().find(s => s.urls[0] === url),
     // a genuine EOSE, no document (none exists), socket stays up
-    eose: async () => { h.sub().h.oneose(); await new Promise(r => setImmediate(r)); },
+    eose: async (url = URL1) => { h.sub(url).h.oneose(); await new Promise(r => setImmediate(r)); },
     // the relay accepts our login on THIS socket: what the engine's automaticallyAuth records, then its waiters
-    login: (r = sock) => { scope._authedRelays.set(URL1, r); scope._authAccepted.set(URL1, r); api._runKeyReadAuthWaiters(); },
+    login: (r = sock, url = URL1) => { scope._authedRelays.set(url, r); scope._authAccepted.set(url, r); api._runKeyReadAuthWaiters(); },
     late: (ms) => { wall += ms; },
   };
   return h;
@@ -101,7 +102,10 @@ test('a socket the relay dropped (oneose then onclose, same turn), then a login 
 
 test('nostr-tools\' own EOSE timer, then a login on the same socket: still unknown', async () => {
   const h = harness();
+  h.sock.connected = false;                         // the library timer exists only for a relay still connecting when asked
   h.open();
+  assert.equal(h.sub().h.maxWait, undefined, 'staging: a relay still connecting keeps the library default timer');
+  h.sock.connected = true;
   h.late(4400);
   await h.eose();
   h.login();
@@ -127,4 +131,35 @@ test('a closed subscription does not answer a later login', async () => {
   h.login();
   assert.equal(h.out.length, n, 'a subscription the screen closed emitted after a login');
   assert.equal(h.scope._keyReadAuthWaiters.size, 0, 'the closed subscription left its login waiter behind');
+});
+
+test('a relay that CLOSES the safeguarding REQ but keeps its socket connected never counts — not even after a login on it', async () => {
+  // Two relays. A answers on a socket the relay challenged and we have not logged in to (so not genuine for these flags);
+  // B refuses the REQ with CLOSED ("rate-limited: too many subscriptions") and its socket stays CONNECTED. nostr-tools
+  // runs B's oneose then onclose in the same turn. The pool-level read this replaced fired one oneose once both were
+  // "finished", saw no all-closed onclose, and remembered B's socket as having answered.
+  const h = harness({ urls: [URL1, URL2] });
+  h.open();
+  assert.equal(h.subs.length, 2, 'one safeguarding subscription per relay');
+  assert.ok(h.subs.every(s => s.urls.length === 1), 'a safeguarding subscription spans more than one relay');
+  assert.ok(h.subs.every(s => s.h.maxWait > 600000), 'a connected relay must not be given a wall-clock cutoff');
+  h.sock.challenge = 'chal';
+  const b = h.sub(URL2);
+  b.h.oneose(); b.h.onclose('rate-limited: too many subscriptions');
+  await h.eose(URL1);
+  const bSock = h.relaysMap.get(URL2);
+  assert.equal(bSock.connected, true, 'staging: B\'s socket is still up');
+  h.login(bSock, URL2);
+  assert.equal(h.last().minorsKnown, false, 'A RELAY THAT REFUSED THE READ was taken as having answered "no children" once we logged in to it');
+  assert.equal(h.last().clearedKnown, false, 'a relay that refused the read made the clearance list "known"');
+});
+
+test('the instrument for the row above: the same two relays, B answering genuinely, then a login on B: known', async () => {
+  const h = harness({ urls: [URL1, URL2] });
+  h.open();
+  h.sock.challenge = 'chal';
+  await h.eose(URL2);
+  await h.eose(URL1);
+  h.login(h.relaysMap.get(URL2), URL2);
+  assert.equal(h.last().minorsKnown, true, 'a genuine answer from B plus a login on B should be known — else the row above proves nothing');
 });
