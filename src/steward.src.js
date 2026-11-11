@@ -6960,6 +6960,82 @@ function _webSnap(w) {
 }
 function _webEmit() { if (!_web) return; const snap = _webSnap(_web); for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
 function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
+// ── ONE OF THE MIRROR'S STREAMS, AND WHETHER IT GENUINELY FINISHED (2026-11-11) ─────────────────────────────
+// The three streams below used to be one pool.subscribeMany each, and their oneose set the "known" flag that lets
+// _webDesired decide. nostr-tools fires that oneose for things that are not an answer: a socket the relay CLOSES
+// mid-stream (abstract-pool handleClose calls handleEose — measured live 2026-11-11, the relay closing the
+// console's sockets with 1009 "too slow" every ~16 s), and its own EOSE timer. So the flags were set on HALF a
+// calendar, or half the copies, or no share document at all — and _webDesired then answered from it: copies
+// re-published every few seconds, and (the Opus audit's worse case) a calendar cut off part-way, or a share
+// document not yet read with the calendar defaulting to off, made `desired` too small and TOMBSTONED events off
+// the church's public website.
+//
+// So each stream is asked of each relay separately, and judged by the key reads' rule (_keyReadOk — our own
+// close, the relay's CLOSED or socket close in the same tick, nostr-tools' timer, a reset or church switch since:
+// none is an answer). One difference from the key reads, taken from _oneComplete's `privateDoc` rule: an answer
+// on a socket that is not logged in COUNTS unless that relay challenged us and has not accepted our login. The
+// relay challenges whenever it withholds something (see _oneComplete); one that never challenged withheld
+// nothing, and making the whole church corpus wait for a login and then download again would double what a
+// small pipe carries on every reconnect (reference/DOMAIN.md, 2026-11-11).
+// `onknown` runs ONCE, when every relay has answered and the ones without a genuine answer are no longer
+// connected and at least one answered genuinely — _openKeyRead's `withoutFailed`. A connected relay that gave no
+// genuine answer is asked again (after its login, or with the key reads' backoff) until the stream is known.
+function _webLoginPending(url) {
+  try {
+    let k = url; try { k = normalizeURL(url); } catch (e) {}
+    const r = pool.relays.get(k);
+    return !!r && !!r.challenge && _authAccepted.get(k) !== r;
+  } catch (e) { return true; }
+}
+function _webRead(cp, filters, onevent, onknown) {
+  const st = { stopped: false, known: false, subs: new Map(), answers: new Map(), tries: new Map(), timers: new Set(), waiters: new Set() };
+  const urls = relays();
+  const epoch = _keyReadEpoch;
+  const live = () => !st.stopped && epoch === _keyReadEpoch && cp === (actingChurch || pub);
+  const evaluate = () => {
+    if (st.known || !live() || urls.some(u => !st.answers.has(u))) return;
+    const without = urls.filter(u => st.answers.get(u) !== true);
+    if (without.length === urls.length) return;                  // no relay answered genuinely: nothing is known
+    if (without.some(u => _keyReadConnected(u))) return;         // a connected relay still owes an answer (asked again below)
+    st.known = true; try { onknown(); } catch (e) {}
+  };
+  const openOn = (url) => {
+    if (!live() || st.known) return;
+    const old = st.subs.get(url); if (old) { old.tok.closed = true; try { old.sub.close(); } catch (e) {} }
+    st.answers.delete(url);
+    let up = false; try { const r = pool.relays.get(normalizeURL(url)); up = !!(r && r.connected); } catch (e) {}
+    const tok = { cp, epoch, at: Date.now(), url, wait: up ? _KEY_READ_LONG_WAIT : 4400, closed: false, relayClosed: false };
+    const sub = pool.subscribeMany([url], filters, {
+      ...(up ? { maxWait: _KEY_READ_LONG_WAIT } : {}),
+      onevent(e) { if (!tok.closed && live()) onevent(e); },
+      // a microtask later, so the onclose nostr-tools runs straight after a close's synthetic oneose has marked the token
+      oneose() {
+        queueMicrotask(() => {
+          if (tok.closed || !live() || st.subs.get(url) !== cur) return;
+          const v = _keyReadOk(tok);
+          const ok = v === true || (v === 'unauthed' && !_webLoginPending(url));
+          st.answers.set(url, ok);
+          if (!ok && !st.known && _keyReadConnected(url)) {
+            if (v === 'unauthed') { const again = () => { st.waiters.delete(again); openOn(url); }; st.waiters.add(again); _keyReadAfterAuth(again); }
+            else { const n = st.tries.get(url) || 0; st.tries.set(url, n + 1); const t = setTimeout(() => { st.timers.delete(t); openOn(url); }, Math.min(60000, 2000 * Math.pow(2, n))); st.timers.add(t); }
+          }
+          evaluate();
+        });
+      },
+      onclose() { tok.relayClosed = true; },
+    });
+    const cur = { tok, sub };
+    st.subs.set(url, cur);
+  };
+  for (const url of urls) openOn(url);
+  return () => {
+    st.stopped = true;
+    for (const t of st.timers) clearTimeout(t); st.timers.clear();
+    for (const a of st.waiters) _keyReadAuthWaiters.delete(a); st.waiters.clear();
+    for (const s of st.subs.values()) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} }
+    st.subs.clear();
+  };
+}
 function _webEnsure(restart) {
   if (_web && _web.pub === pub && !restart) return _web;
   const listeners = _web ? _web.listeners : new Set();
@@ -6969,17 +7045,29 @@ function _webEnsure(restart) {
   // from the defaults: the calendar went OFF and every existing opt-out was discarded; and the next "on"
   // then put the withheld event on the website (audit of 7ffcfaf, findings 1 and 2, measured in the real
   // console). The stream is re-issued below and newest-wins on top of what is carried over.
-  const carried = (_web && _web.pub === pub) ? { share: _web.share, shareTs: _web.shareTs, shareKnown: _web.shareKnown } : null;
+  //
+  // …AND, SINCE 2026-11-11, EVERYTHING ELSE IT KNOWS ABOUT THIS CHURCH: the copies the relay holds (copies, copyTs,
+  // copiesKnown) and the calendar (events, versions, eventsKnown). The dashboard restarts this watch on every
+  // connection bump — every ~16 s on a console whose relay closes slow sockets — and every restart began with
+  // nothing known, so the first stream to be cut off part-way decided from half the data. What is carried is a
+  // view the new streams only add to, newest-wins: a copy or an event removed meanwhile arrives as its tombstone.
+  // ONLY FOR THE SAME CHURCH IN THE SAME EPOCH (_keyReadEpoch — a lock, a reset, a church switch): nothing read for
+  // one church, or before a reset, may count for what comes after.
+  const carried = (_web && _web.pub === pub && _web.epoch === _keyReadEpoch) ? _web : null;
   _webStop();
   if (!pub) return null;
-  const w = _web = { pub, share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] }, shareTs: carried ? carried.shareTs : 0, shareKnown: !!(carried && carried.shareKnown),
-                     events: new Map(), versions: new Map(), eventsKnown: false,
-                     copies: new Map(), copyTs: new Map(), copiesKnown: false, subs: [], listeners, busy: false, again: false, timer: null,
+  const w = _web = { pub, epoch: _keyReadEpoch,
+                     share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] }, shareTs: carried ? carried.shareTs : 0, shareKnown: !!(carried && carried.shareKnown),
+                     events: carried ? carried.events : new Map(), versions: carried ? carried.versions : new Map(), eventsKnown: !!(carried && carried.eventsKnown),
+                     copies: carried ? carried.copies : new Map(), copyTs: carried ? carried.copyTs : new Map(), copiesKnown: !!(carried && carried.copiesKnown),
+                     subs: [], listeners, busy: false, again: false, timer: null,
                      stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub), stuckAt: _webStuckLoad(pub),
                      stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [] };
+  // EACH "KNOWN" FLAG IS SET ONLY ON A GENUINE ANSWER — see _webRead above. A stream cut off, timed out, or answered
+  // on a socket whose login is pending leaves its flag as it was, and _webDesired then answers "decide nothing".
   // 1. the switch — the church's OWN copy only, never a steward's or a co-tenant's
-  const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [SHARE_D + pub] }], {
-    onevent(e) {
+  w.subs.push(_webRead(pub, [{ kinds: [30078], authors: [pub], '#d': [SHARE_D + pub] }],
+    (e) => {
       if (e.pubkey !== pub || _authFuture(e)) return;
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (d !== SHARE_D + pub) return;
       if (e.created_at < w.shareTs) return; w.shareTs = e.created_at;
@@ -6988,12 +7076,10 @@ function _webEnsure(restart) {
       w.share = gone ? { ...WEB_DEFAULT, optOut: [] } : _webNormalise(c);
       _webEmit(); _webQueueSync();
     },
-    oneose() { w.shareKnown = true; _webEmit(); _webQueueSync(); },
-  });
-  w.subs.push(() => { try { s1.close(); } catch {} });
+    () => { w.shareKnown = true; _webEmit(); _webQueueSync(); }));
   // 2. the copies the relay holds, newest per id, the church's own only
-  const s2 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
-    onevent(e) {
+  w.subs.push(_webRead(pub, [{ kinds: [30078], authors: [pub], '#t': [NET] }],
+    (e) => {
       if (e.pubkey !== pub) return;
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(PUBEVENT_D)) return;
       const id = d.slice(PUBEVENT_D.length);
@@ -7001,12 +7087,10 @@ function _webEnsure(restart) {
       if (e.tags.some(t => t[0] === 'deleted') || !e.content) w.copies.delete(id); else w.copies.set(id, e.content);
       _webQueueSync();
     },
-    oneose() { w.copiesKnown = true; _webQueueSync(); },
-  });
-  w.subs.push(() => { try { s2.close(); } catch {} });
+    () => { w.copiesKnown = true; _webQueueSync(); }));
   // 3. the calendar itself — the same two filters and the same newest-wins as _subAddr, opened with the name key
-  const s3 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
-    onevent(e) {
+  w.subs.push(_webRead(pub, [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }],
+    (e) => {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(EVENT_D)) return;
       const id = d.slice(EVENT_D.length);
       if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(w.versions, w.events, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); _webQueueSync(); return; }
@@ -7018,9 +7102,7 @@ function _webEnsure(restart) {
       _absorbById(w.versions, w.events, id, { id, raw: String(e.content || ''), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
       _webQueueSync();
     },
-    oneose() { w.eventsKnown = true; _webQueueSync(); },
-  });
-  w.subs.push(() => { try { s3.close(); } catch {} });
+    () => { w.eventsKnown = true; _webQueueSync(); }));
   return w;
 }
 // WHY ONE EVENT THIS CONSOLE CANNOT OPEN MUST NOT DECIDE FOR THE OTHERS. _webDesired used to answer `null`
@@ -7222,15 +7304,21 @@ async function _webSync() {
   if (!writes.length && !tombs.length) return;
   w.busy = true;
   try {
+    // …AND THE TIME OF WHAT WE WROTE, so an OLDER copy arriving afterwards is the stale thing it is (2026-11-11).
+    // Only the body used to be recorded: copyTs kept the relay's previous copy's time, so that previous copy — the
+    // second relay's answer, or the same relay's replay on the next restart — passed the newest-wins test, put the
+    // old body back, and the next sync wrote the new one again: one open console re-published every few seconds.
     for (const [id, body] of writes) {
       if (_web !== w) return;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PUBEVENT_D + id], ['t', NET]], content: body }, sk));
-      if (ok) w.copies.set(id, body);                                // optimistic, so the echo does not re-trigger a write
+      const at = now();
+      const ok = await publish(feChurch({ kind: 30078, created_at: at, tags: [['d', PUBEVENT_D + id], ['t', NET]], content: body }, sk));
+      if (ok) { w.copies.set(id, body); w.copyTs.set(id, Math.max(w.copyTs.get(id) || 0, at)); }   // optimistic, so the echo does not re-trigger a write
     }
     for (const id of tombs) {
       if (_web !== w) return;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PUBEVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
-      if (ok) w.copies.delete(id);
+      const at = now();
+      const ok = await publish(feChurch({ kind: 30078, created_at: at, tags: [['d', PUBEVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
+      if (ok) { w.copies.delete(id); w.copyTs.set(id, Math.max(w.copyTs.get(id) || 0, at)); }
     }
   } catch (e) {}
   finally { w.busy = false; if (w.again) { w.again = false; _webQueueSync(); } }

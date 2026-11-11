@@ -20227,23 +20227,128 @@ zoo`.split("\n");
       }
     }, 250);
   }
+  function _webLoginPending(url) {
+    try {
+      let k = url;
+      try {
+        k = normalizeURL2(url);
+      } catch (e) {
+      }
+      const r = pool.relays.get(k);
+      return !!r && !!r.challenge && _authAccepted.get(k) !== r;
+    } catch (e) {
+      return true;
+    }
+  }
+  function _webRead(cp, filters, onevent, onknown) {
+    const st = { stopped: false, known: false, subs: /* @__PURE__ */ new Map(), answers: /* @__PURE__ */ new Map(), tries: /* @__PURE__ */ new Map(), timers: /* @__PURE__ */ new Set(), waiters: /* @__PURE__ */ new Set() };
+    const urls = relays();
+    const epoch = _keyReadEpoch;
+    const live = () => !st.stopped && epoch === _keyReadEpoch && cp === (actingChurch || pub);
+    const evaluate = () => {
+      if (st.known || !live() || urls.some((u) => !st.answers.has(u))) return;
+      const without = urls.filter((u) => st.answers.get(u) !== true);
+      if (without.length === urls.length) return;
+      if (without.some((u) => _keyReadConnected(u))) return;
+      st.known = true;
+      try {
+        onknown();
+      } catch (e) {
+      }
+    };
+    const openOn = (url) => {
+      if (!live() || st.known) return;
+      const old = st.subs.get(url);
+      if (old) {
+        old.tok.closed = true;
+        try {
+          old.sub.close();
+        } catch (e) {
+        }
+      }
+      st.answers.delete(url);
+      let up = false;
+      try {
+        const r = pool.relays.get(normalizeURL2(url));
+        up = !!(r && r.connected);
+      } catch (e) {
+      }
+      const tok = { cp, epoch, at: Date.now(), url, wait: up ? _KEY_READ_LONG_WAIT : 4400, closed: false, relayClosed: false };
+      const sub = pool.subscribeMany([url], filters, {
+        ...up ? { maxWait: _KEY_READ_LONG_WAIT } : {},
+        onevent(e) {
+          if (!tok.closed && live()) onevent(e);
+        },
+        // a microtask later, so the onclose nostr-tools runs straight after a close's synthetic oneose has marked the token
+        oneose() {
+          queueMicrotask(() => {
+            if (tok.closed || !live() || st.subs.get(url) !== cur) return;
+            const v = _keyReadOk(tok);
+            const ok = v === true || v === "unauthed" && !_webLoginPending(url);
+            st.answers.set(url, ok);
+            if (!ok && !st.known && _keyReadConnected(url)) {
+              if (v === "unauthed") {
+                const again = () => {
+                  st.waiters.delete(again);
+                  openOn(url);
+                };
+                st.waiters.add(again);
+                _keyReadAfterAuth(again);
+              } else {
+                const n = st.tries.get(url) || 0;
+                st.tries.set(url, n + 1);
+                const t = setTimeout(() => {
+                  st.timers.delete(t);
+                  openOn(url);
+                }, Math.min(6e4, 2e3 * Math.pow(2, n)));
+                st.timers.add(t);
+              }
+            }
+            evaluate();
+          });
+        },
+        onclose() {
+          tok.relayClosed = true;
+        }
+      });
+      const cur = { tok, sub };
+      st.subs.set(url, cur);
+    };
+    for (const url of urls) openOn(url);
+    return () => {
+      st.stopped = true;
+      for (const t of st.timers) clearTimeout(t);
+      st.timers.clear();
+      for (const a of st.waiters) _keyReadAuthWaiters.delete(a);
+      st.waiters.clear();
+      for (const s of st.subs.values()) {
+        s.tok.closed = true;
+        try {
+          s.sub.close();
+        } catch (e) {
+        }
+      }
+      st.subs.clear();
+    };
+  }
   function _webEnsure(restart) {
     if (_web && _web.pub === pub && !restart) return _web;
     const listeners = _web ? _web.listeners : /* @__PURE__ */ new Set();
-    const carried = _web && _web.pub === pub ? { share: _web.share, shareTs: _web.shareTs, shareKnown: _web.shareKnown } : null;
+    const carried = _web && _web.pub === pub && _web.epoch === _keyReadEpoch ? _web : null;
     _webStop();
     if (!pub) return null;
     const w = _web = {
       pub,
+      epoch: _keyReadEpoch,
       share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] },
       shareTs: carried ? carried.shareTs : 0,
       shareKnown: !!(carried && carried.shareKnown),
-      events: /* @__PURE__ */ new Map(),
-      versions: /* @__PURE__ */ new Map(),
-      eventsKnown: false,
-      copies: /* @__PURE__ */ new Map(),
-      copyTs: /* @__PURE__ */ new Map(),
-      copiesKnown: false,
+      events: carried ? carried.events : /* @__PURE__ */ new Map(),
+      versions: carried ? carried.versions : /* @__PURE__ */ new Map(),
+      eventsKnown: !!(carried && carried.eventsKnown),
+      copies: carried ? carried.copies : /* @__PURE__ */ new Map(),
+      copyTs: carried ? carried.copyTs : /* @__PURE__ */ new Map(),
+      copiesKnown: !!(carried && carried.copiesKnown),
       subs: [],
       listeners,
       busy: false,
@@ -20259,8 +20364,10 @@ zoo`.split("\n");
       held: 0,
       heldIds: []
     };
-    const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }], {
-      onevent(e) {
+    w.subs.push(_webRead(
+      pub,
+      [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }],
+      (e) => {
         if (e.pubkey !== pub || _authFuture(e)) return;
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (d !== SHARE_D + pub) return;
@@ -20278,20 +20385,16 @@ zoo`.split("\n");
         _webEmit();
         _webQueueSync();
       },
-      oneose() {
+      () => {
         w.shareKnown = true;
         _webEmit();
         _webQueueSync();
       }
-    });
-    w.subs.push(() => {
-      try {
-        s1.close();
-      } catch {
-      }
-    });
-    const s2 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
-      onevent(e) {
+    ));
+    w.subs.push(_webRead(
+      pub,
+      [{ kinds: [30078], authors: [pub], "#t": [NET] }],
+      (e) => {
         if (e.pubkey !== pub) return;
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (!d.startsWith(PUBEVENT_D)) return;
@@ -20302,19 +20405,15 @@ zoo`.split("\n");
         else w.copies.set(id, e.content);
         _webQueueSync();
       },
-      oneose() {
+      () => {
         w.copiesKnown = true;
         _webQueueSync();
       }
-    });
-    w.subs.push(() => {
-      try {
-        s2.close();
-      } catch {
-      }
-    });
-    const s3 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
-      onevent(e) {
+    ));
+    w.subs.push(_webRead(
+      pub,
+      [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }],
+      (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (!d.startsWith(EVENT_D)) return;
         const id = d.slice(EVENT_D.length);
@@ -20326,17 +20425,11 @@ zoo`.split("\n");
         _absorbById(w.versions, w.events, id, { id, raw: String(e.content || ""), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
         _webQueueSync();
       },
-      oneose() {
+      () => {
         w.eventsKnown = true;
         _webQueueSync();
       }
-    });
-    w.subs.push(() => {
-      try {
-        s3.close();
-      } catch {
-      }
-    });
+    ));
     return w;
   }
   var WEB_BLOCKED_AFTER_S = 6;
@@ -20460,13 +20553,21 @@ zoo`.split("\n");
     try {
       for (const [id, body] of writes) {
         if (_web !== w) return;
-        const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PUBEVENT_D + id], ["t", NET]], content: body }, sk));
-        if (ok) w.copies.set(id, body);
+        const at = now();
+        const ok = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", PUBEVENT_D + id], ["t", NET]], content: body }, sk));
+        if (ok) {
+          w.copies.set(id, body);
+          w.copyTs.set(id, Math.max(w.copyTs.get(id) || 0, at));
+        }
       }
       for (const id of tombs) {
         if (_web !== w) return;
-        const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PUBEVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
-        if (ok) w.copies.delete(id);
+        const at = now();
+        const ok = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", PUBEVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+        if (ok) {
+          w.copies.delete(id);
+          w.copyTs.set(id, Math.max(w.copyTs.get(id) || 0, at));
+        }
       }
     } catch (e) {
     } finally {
