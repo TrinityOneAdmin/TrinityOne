@@ -21351,7 +21351,7 @@ zoo`.split("\n");
       } catch {
       }
       if (byPub.size) emit();
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [STEWARDREQ_D + pub], "#t": [NET] }, { kinds: [30078], authors: [pub], "#d": [STEWARDS_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d === STEWARDS_D + pub) {

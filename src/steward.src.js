@@ -8097,7 +8097,7 @@ window.Steward = {
     const emit = () => { const list = [...byPub.values()].filter(r => !roster.has(r.pubkey)); onReqs(list); if (eosed && (list.length || sawReq)) { try { lsSet(REQ_KEY, JSON.stringify(list.map(_reqSeedRow))); } catch {} } };
     try { const c = JSON.parse(lsGet(REQ_KEY) || '[]'); if (Array.isArray(c)) for (const r of c) if (r && typeof r.pubkey === 'string') byPub.set(r.pubkey, { pubkey: r.pubkey, npub: r.npub || npubEncode(r.pubkey), name: '', ts: r.ts || 0 }); } catch {}
     if (byPub.size) emit();   // paint the last-known requests instantly
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [STEWARDREQ_D + pub], '#t': [NET] }, { kinds: [30078], authors: [pub], '#d': [STEWARDS_D + pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d === STEWARDS_D + pub) { if (e.created_at < rosterAt) return; rosterAt = e.created_at; try { roster = new Set((JSON.parse(e.content).pubkeys) || []); } catch {} emit(); return; }
