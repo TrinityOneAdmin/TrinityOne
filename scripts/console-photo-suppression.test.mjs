@@ -130,7 +130,7 @@ test('the suppression set is fed by the church’s real nophoto document', async
 
   // and the shipped console wires that list into the lookup the badge calls
   const S = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
-  const at = S.indexOf('NOPHOTO_D + pub');
+  const at = S.indexOf('d === NOPHOTO_D + pub');   // the HANDLER's branch (not the '#d' list in the subscription's filters, which also names it)
   assert.notEqual(at, -1, 'the console no longer reads the nophoto document');
   assert.match(S.slice(at, at + 400), /_applyNoPhotoList\(/,
     'subscribeSafeguard reads the list and never feeds it to the suppression set — the badge will consult an empty set for ever');

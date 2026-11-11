@@ -75,7 +75,8 @@ function engine() {
     pool: {
       get relays() { return new Map([...t.up].map(u => [u, { connected: true }])); },
       subscribeMany(urls, filters, handlers) {
-        const rec = { url: urls[0], urls, d: ((filters[0] || {})['#d'] || [])[0], handlers, opts: handlers, closed: false };
+        // `d` names the NARROW key read (no '#t'). The live streams carry '#d' too since the console stopped reading the whole corpus (they keep '#t'), so '#d' alone no longer tells a stream from a narrow read.
+        const rec = { url: urls[0], urls, d: (filters[0] || {})['#t'] ? undefined : ((filters[0] || {})['#d'] || [])[0], handlers, opts: handlers, closed: false };
         subs.push(rec);
         // nostr-tools' SimplePool: close() → Subscription.close → onclose → handleClose → handleEose (params.oneose)
         // → params.onclose, after `await allOpened`
@@ -83,7 +84,7 @@ function engine() {
       },
     },
     window: { Steward: {}, dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); if (e.type === 'steward-keys-read') signals.push(e.detail.kind); return true; } },
-    BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:',
+    BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:', NAME_D: 'trinityone/name:', RESEAT_D: 'trinityone/reseat:',
     JOINPOLICY_D: 'trinityone/joinpolicy:', ADMITTED_D: 'trinityone/admitted:', GROUP_D: 'trinityone/group:', GROUPKEY_D: 'trinityone/groupkey:',
     GROUP_RING_MAX: 50, _memberEmitters: new Set(), _byChurch: (e) => e.pubkey === t.pub, _openChurchDoc: () => null,
     // what the REAL setActiveIdentity touches besides the key state (lifted below)
