@@ -9110,8 +9110,9 @@ const MAX_REQ_EVENTS = 5000;
 //   • NO MOVEMENT: a pause during which no data reaches the kernel for max(WS_PAUSE_MS (120 s), what the last burst
 //     earned). A burst earns the time a reader AT the floor would need to move it, less the time it took (capped at
 //     5 × WS_PAUSE_MS): a tunnel that empties a 5 MB buffer in one go may then be silent for up to 10 min, as an honest
-//     slow tunnel is; a reader trickling below the floor earns nothing. An attacker that sits silent after the initial
-//     swallow is therefore kept up to that cap — holding memory bounded below, and first in line for eviction.
+//     slow tunnel is; a reader trickling below the floor earns nothing. Only a burst that BEGAN after the episode's
+//     first pause earns: what the kernel swallowed before it proves nothing, so a reader that never drains is still
+//     closed at 120 s (and a deep buffer on a slow link whose FIRST silence exceeds 120 s still can be, as before).
 //   • HEARTBEAT: the 25 s ping is queued BEHIND the backlog, so a slow reader cannot answer it in time. A missed pong is
 //     forgiven only to a socket that had a backlog in flight when that ping was sent AND has moved real data within its
 //     no-movement tolerance. Any other socket that misses a pong is terminated at once — an idle dead peer goes within
@@ -9174,7 +9175,8 @@ function _noteProgress(ws, now) {
   const d = _drained(ws), last = ws._lastDrained || 0;
   if (d > last) {
     if (now - (ws._progressAt || 0) >= WS_BURST_GAP_MS) {   // a new burst after a silence: remember what the last one earned
-      ws._prevTol = _runTol(last - (ws._runD || 0), (ws._progressAt || 0) - (ws._runT || 0)); ws._runD = last; ws._runT = now;
+      ws._prevTol = ws._runEarns ? _runTol(last - (ws._runD || 0), (ws._progressAt || 0) - (ws._runT || 0)) : 0;
+      ws._runD = last; ws._runT = now; ws._runEarns = !!ws._pausedOnce;   // only a burst that began after a pause earns
     }
     ws._lastDrained = d; ws._progressAt = now; ws._pauseDrainAt = now;
   }
@@ -9185,7 +9187,7 @@ function _noteProgress(ws, now) {
   }
   return d;
 }
-function _burstTol(ws) { return Math.min(WS_MAX_STILL_MS, Math.max(ws._prevTol || 0, _runTol((ws._lastDrained || 0) - (ws._runD || 0), (ws._progressAt || 0) - (ws._runT || 0)))); }
+function _burstTol(ws) { return Math.min(WS_MAX_STILL_MS, Math.max(ws._prevTol || 0, ws._runEarns ? _runTol((ws._lastDrained || 0) - (ws._runD || 0), (ws._progressAt || 0) - (ws._runT || 0)) : 0)); }
 // How long this socket may show NO drain before it counts as stopped: 120 s, or longer if its last burst earned it.
 function _stillTol(ws) { return Math.max(WS_PAUSE_MS, _burstTol(ws)); }
 // The latest history point at or before now-w, or null if the episode is younger than w.
@@ -9193,10 +9195,11 @@ function _sampleBefore(ws, now, w) {
   const sm = ws._samples; if (!sm || now - sm[0][0] < w) return null;
   let s = sm[0]; for (const x of sm) { if (x[0] <= now - w) s = x; else break; } return s;
 }
-// Recent drain rate in bytes/s: over the last window, or since the episode began if it is younger.
+// Recent drain rate in bytes/s: over the last window, or — if the episode is younger — since its first pause (what the
+// kernel swallowed before that proves nothing, as for the burst tolerance).
 function _recentRate(ws, now) {
   const sm = ws._samples; if (!sm) return 0;
-  const s = _sampleBefore(ws, now, WS_PROGRESS_WINDOW_MS) || sm[0], dt = now - s[0];
+  const s = _sampleBefore(ws, now, WS_PROGRESS_WINDOW_MS) || ws._pauseMark || sm[0], dt = now - s[0];
   return dt > 0 ? ((ws._lastDrained || 0) - s[1]) * 1000 / dt : 0;
 }
 // The relay-wide total has passed its budget because `newcomer` just added a charge: close sockets (never the newcomer)
@@ -9239,8 +9242,9 @@ function _waitDrain(ws) {
     (ws._drainWaiters || (ws._drainWaiters = [])).push(res);
     if (!ws._drainTimer) {
       const now = Date.now();
-      _noteProgress(ws, now);   // what went out before this pause (the burst the kernel swallowed) is a burst like any other
-      ws._pausedSince = now; ws._pauseDrainAt = now;
+      _noteProgress(ws, now);   // what went out before this pause (the burst the kernel swallowed) is noted — but earns nothing
+      if (!ws._pausedOnce) ws._pauseMark = [now, ws._lastDrained || 0];
+      ws._pausedSince = now; ws._pauseDrainAt = now; ws._pausedOnce = true;
       ws._drainTimer = setInterval(() => _drainPoll(ws), WS_DRAIN_POLL_MS);
     }
   });
@@ -9253,7 +9257,7 @@ function _waitDrain(ws) {
 function pumpBacklog(ws, items, send, wanted, onDone, size) {
   let i = 0, held = 0, bytes = 0, sizes = null, base = 0, ended = false;
   // A backlog EPISODE starts when a socket with no stream in flight starts one; its drain history starts here.
-  if (!ws._streams) { const now = Date.now(); ws._samples = [[now, Math.max(ws._lastDrained || 0, _drained(ws))]]; }
+  if (!ws._streams) { const now = Date.now(); ws._samples = [[now, Math.max(ws._lastDrained || 0, _drained(ws))]]; ws._pausedOnce = false; ws._pauseMark = null; ws._prevTol = 0; ws._runEarns = false; }
   ws._streams = (ws._streams || 0) + 1;
   // Returns whatever is still charged. Idempotent: the counters are zeroed as they are returned.
   const release = () => {

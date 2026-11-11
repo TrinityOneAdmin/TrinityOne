@@ -19,7 +19,7 @@
 //   Relay A (budgets): per socket 8 MB, relay-wide 20 MB, grace 1.5 s; progress window left at the 60 s default.
 //   Relay B (progress): floor 400 KB/s over a 2 s sliding window, no-movement 20 s, heartbeat 1 s; budgets out of the
 //   way. Its readers sit behind a rate-limited proxy (a real slow link, as the relay sees it).
-//   Relay C (parking): relay-wide 30 MB, per socket out of the way, 0.5 s rate window (so parkers' rates are measured).
+//   Relay C (parking): relay-wide 30 MB, per socket out of the way.
 //   Relay D (one-tick eviction): relay-wide 46 MB, per socket out of the way.
 //   Relay E (sliding floor / time-to-finish): floor 100 KB/s over a 12 s window, no-movement 4 s, relay-wide 40 MB.
 //   MEASURED on loopback: the proxy's kernel receive buffer (MBs) means the relay sees a slow link's drain only in chunks
@@ -169,9 +169,9 @@ async function startRelay(r, env) {
 
 before(async () => {
   await startRelay(A, { RELAY_WS_MAX_HELD_BYTES: String(PER_SOCKET), RELAY_WS_MAX_HELD_BYTES_ALL: String(RELAY_WIDE), RELAY_WS_HELD_GRACE_MS: String(GRACE_MS) });
-  await startRelay(C, { RELAY_WS_PROGRESS_WINDOW_MS: '500', RELAY_WS_MAX_HELD_BYTES: String(1024 * MB), RELAY_WS_MAX_HELD_BYTES_ALL: String(PARK_WIDE) });
+  await startRelay(C, { RELAY_WS_MAX_HELD_BYTES: String(1024 * MB), RELAY_WS_MAX_HELD_BYTES_ALL: String(PARK_WIDE) });
   await startRelay(B, { RELAY_WS_PROGRESS_WINDOW_MS: String(WINDOW_MS), RELAY_WS_PROGRESS_FLOOR: String(FLOOR), RELAY_WS_HEARTBEAT_MS: String(HEARTBEAT_MS), RELAY_WS_MAX_HELD_BYTES: String(1024 * MB), RELAY_WS_MAX_HELD_BYTES_ALL: String(2048 * MB) });
-  await startRelay(Dr, { RELAY_WS_PROGRESS_WINDOW_MS: '500', RELAY_WS_MAX_HELD_BYTES: String(1024 * MB), RELAY_WS_MAX_HELD_BYTES_ALL: String(ONE_TICK_WIDE) });
+  await startRelay(Dr, { RELAY_WS_MAX_HELD_BYTES: String(1024 * MB), RELAY_WS_MAX_HELD_BYTES_ALL: String(ONE_TICK_WIDE) });
   await startRelay(E, { RELAY_WS_PROGRESS_WINDOW_MS: String(E_WINDOW), RELAY_WS_PROGRESS_FLOOR: String(E_FLOOR), RELAY_WS_PAUSE_MS: String(E_PAUSE), RELAY_WS_MAX_HELD_BYTES: String(1024 * MB), RELAY_WS_MAX_HELD_BYTES_ALL: String(E_WIDE) });
 });
 const RELAYS = [A, B, C, Dr, E];
@@ -293,7 +293,7 @@ test('(vi) PARKING: two non-reading sockets park ~24 MB; an honest console that 
   assert.equal((await backlog(C)).heldBytes, 0, 'the relay-wide charge did not return to 0 after eviction');
 });
 
-test('(ii) a reader on a link below the floor (50 KB/s < 400 KB/s) is closed 1009 and not served — within twice the silence its swallowed burst earned (here ≤ ~25 s; (viii) proves the floor itself)', { timeout: 90000 }, async t => {
+test('(ii) a reader on a link below the floor (50 KB/s < 400 KB/s) is closed 1009 and not served, within 30 s ((xiv) pins the floor itself)', { timeout: 90000 }, async t => {
   const { c, link } = await slowReader(B, 'T', 50 * 1024);
   const t0 = Date.now();
   await sleep(1000);
@@ -305,7 +305,7 @@ test('(ii) a reader on a link below the floor (50 KB/s < 400 KB/s) is closed 100
   await Promise.race([c.closed, sleep(10000)]);
   t.diagnostic(`trickler: charge released after ~${closedAt ? closedAt - t0 : '-'} ms with ${got} of ${N} events read; close ${c.closeCode}`);
   // At 50 KB/s the relay sees almost none of it (the proxy's kernel receive buffer holds MBs), so this reader looks like the
-  // initial swallow S followed by silence: closed by no-movement at max(20 s, S/floor) or the floor at 2·S/floor, S ≈ 3-5 MB.
+  // initial swallow followed by silence — which earns nothing — so the 20 s no-movement bound or the floor closes it.
   assert.ok(closedAt, 'the trickler still holds its charge after ~35 s — it was not closed');
   assert.ok(closedAt - t0 < 30000, `closed only after ${closedAt - t0} ms`);
   assert.equal(c.closeCode, 1009, `the trickling reader was not closed 1009 (code ${c.closeCode})`);
@@ -333,7 +333,11 @@ test('(vii) ONE TICK: a console whose 3 REQs arrive in one tick crosses the budg
   const p2 = await pausedReader(Dr, 'Q', 3); await sleep(500);
   const parked = (await backlog(Dr)).heldBytes;
   assert.ok(parked > 34 * MB && parked <= ONE_TICK_WIDE, `the parkers do not hold ~40 MB (${parked})`);
-  const L = await pausedReader(Dr, 'L', 3);   // signs in, stops reading, then 3 REQs in one tick
+  // The 3 REQs must reach the relay in ONE read, or its poller runs between them and releases the evicted charge anyway
+  // (measured: sent as 3 writes, this passed with the credit removed). Corked: one write, one read, one tick.
+  const L = await client(Dr); await signIn(L); L.ws.pause();
+  L.ws._socket.cork(); for (let i = 0; i < 3; i++) send(L, ['REQ', 'L' + i, BIG]); L.ws._socket.uncork();
+  await sleep(400);
   await finish(L, 'L', 3, 60000);
   for (const c of [p1, p2]) c.ws.resume();
   await until(() => [[p1, 'P'], [p2, 'Q']].every(([c, p]) => c.closeCode !== null || [0, 1, 2].every(i => eoseFor(c, p + i))), 60000, 'parkers end');
@@ -348,7 +352,7 @@ test('(vii) ONE TICK: a console whose 3 REQs arrive in one tick crosses the budg
   assert.equal((await backlog(Dr)).heldBytes, 0, 'the relay-wide charge did not return to 0');
 });
 
-test('(viii) SLIDING FLOOR: a reader that lets the kernel swallow MBs, then reads 256 KB every 3.5 s (~73 KB/s, below the 100 KB/s floor, each gap inside the 4 s no-movement bound) is closed 1009 within ~one window — the swallowed burst buys nothing', { timeout: 90000 }, async t => {
+test('(viii) a reader that lets the kernel swallow MBs, then reads 256 KB every 3.5 s (~73 KB/s, below the 100 KB/s floor) is closed 1009 within 30 s and never served — WHICH guard closes it is not isolated here (measured: still green with the sliding window removed); (xiv) pins the floor', { timeout: 90000 }, async t => {
   // Re-audit of cd261dad F3: averaged from the episode start, the swallowed burst S kept the average above the floor for
   // S/(floor - rate): here ~2 min; at production scale 35-85 min — while the reads kept the no-movement bound from firing.
   const { c, link } = await slowReader(E, 'Atk', 0, { link: { qhi: 1, qlo: 1 } });
@@ -366,13 +370,12 @@ test('(viii) SLIDING FLOOR: a reader that lets the kernel swallow MBs, then read
   await Promise.race([c.closed, sleep(10000)]);
   t.diagnostic(`trickler: charge ${swallowedCharge} at pause; released after ~${closedAt ? closedAt - t0 : '-'} ms with ${got} of ${N} read; close ${c.closeCode}`);
   assert.ok(closedAt, 'the trickler was never closed');
-  assert.ok(got > 15, `it read only ${got} events — the relay never saw it move, so this tests the no-movement bound, not the floor`);
   assert.ok(closedAt - t0 < 30000, `closed only after ${closedAt - t0} ms — the swallowed burst was still being credited`);
   assert.equal(c.closeCode, 1009, `not closed 1009 (code ${c.closeCode})`);
   assert.ok(!eoseFor(c, 'Atk0'), 'the trickler was served everything');
 });
 
-test('(ix) BURSTS + TIME TO FINISH: an honest bursty reader (2 MB bursts, 5 s silences — longer than the 4 s no-movement bound) survives, and when a newcomer forces one eviction a reader with the longer time to finish (1 MB per 6 s) goes — though it drained more recently', { timeout: 150000 }, async t => {
+test('(ix) BURSTS: an honest bursty reader (2 MB bursts, 5 s silences — longer than the 4 s no-movement bound) survives and gets everything; when a newcomer forces one eviction, the slower reader (1 MB per 6 s) goes — the ORDER is not isolated here (measured: still green under least-recent-progress order); (xv) pins it', { timeout: 150000 }, async t => {
   const H = await slowReader(E, 'x', 50 * MB, { subs: 0, link: { qhi: 1, qlo: 1 } });
   const K = await slowReader(E, 'y', 0, { subs: 0, link: { qhi: 1, qlo: 1 } });
   const nc = await client(E); await signIn(nc);
@@ -387,6 +390,9 @@ test('(ix) BURSTS + TIME TO FINISH: an honest bursty reader (2 MB bursts, 5 s si
   const cycle = (async () => { for (let k = 0; !stop; k++) {
     await sleep(T0 + k * 6000 - Date.now()); if (stop) break; H.link.allow(2 * MB);
     await sleep(T0 + k * 6000 + 2500 - Date.now()); if (stop) break; K.link.allow(1 * MB);
+    // one early burst 3 s in: only a burst that began after the first pause earns a long silence (the initial swallow
+    // proves nothing), so the honest reader's first silence must be inside the 4 s bound, as a real one's is
+    if (k === 0) { await sleep(T0 + 3000 - Date.now()); if (stop) break; H.link.allow(1 * MB); }
   } })();
   await sleep(T0 + 20000 - Date.now());
   nc.ws.pause(); send(nc, ['REQ', 'N0', { ...BIG, limit: 300 }]);
@@ -396,17 +402,18 @@ test('(ix) BURSTS + TIME TO FINISH: an honest bursty reader (2 MB bursts, 5 s si
   t.diagnostic(`at 20.9 s: honest ${hGot}, slower ${kGot} of ${2 * N}; held ${before}`);
   assert.ok(H.c.closeCode === null && K.c.closeCode === null, `a reader was closed before the newcomer came (H ${H.c.closeCode}, K ${K.c.closeCode})`);
   assert.ok(hGot < 2 * N - 50 && kGot < 2 * N - 50, 'a reader had (nearly) finished — this proves nothing');
-  let need = E_WIDE - before + MB / 2, j = 0;   // cross the budget by 0.5 MB: less than either reader still holds
+  let need = E_WIDE - before + 2 * MB, j = 0;   // cross the budget by 2 MB: less than either reader still holds (0.5 MB was
+  // measured to be eaten by the honest reader's drain landing between this reading and the REQs: no eviction at all)
   const reqs = [];
   while (need > 0) { const lim = Math.min(N, Math.ceil(need / item)); reqs.push(['REQ', 'N' + (++j), { ...BIG, limit: lim }]); need -= lim * item; }
   for (const m of reqs) send(nc, m);   // one tick
-  await until(() => H.c.closeCode !== null || K.c.closeCode !== null, 5000, 'an eviction').catch(() => {});
-  const evicted = { H: H.c.closeCode, K: K.c.closeCode };
-  nc.ws.resume();
+  // Resume at once: H's and K's close frames sit behind their throttled links, so the client cannot see an eviction
+  // yet, and a newcomer left paused past the 4 s no-movement bound is (rightly) closed — measured, waiting did that.
+  await sleep(300); nc.ws.resume();
   stop = true; await cycle; H.link.setRate(50 * MB); K.link.setRate(50 * MB);
   await until(() => H.c.closeCode !== null || (eoseFor(H.c, 'H0') && eoseFor(H.c, 'H1')), 60000, 'honest reader ends');
   await until(() => nc.closeCode !== null || reqs.every(m => eoseFor(nc, m[1])), 30000, 'newcomer ends');
-  t.diagnostic(`at eviction H ${evicted.H} K ${evicted.K}; honest ${eventsFor(H.c, 'H0') + eventsFor(H.c, 'H1')} of ${2 * N} close ${H.c.closeCode}; slower close ${K.c.closeCode}; newcomer ${reqs.length} REQs close ${nc.closeCode}`);
+  t.diagnostic(`honest ${eventsFor(H.c, 'H0') + eventsFor(H.c, 'H1')} of ${2 * N} close ${H.c.closeCode}; slower close ${K.c.closeCode}; newcomer ${reqs.length} REQs close ${nc.closeCode}`);
   assert.equal(K.c.closeCode, 1009, `the reader with the longest time to finish was not evicted (code ${K.c.closeCode})`);
   assert.equal(H.c.closeCode, null, `the honest bursty reader was closed (code ${H.c.closeCode})`);
   for (const s of ['H0', 'H1']) assert.equal(eventsFor(H.c, s), N, s + ' got every event');
@@ -474,4 +481,64 @@ test('(xii) lifted from scripts/gateway.mjs: budgets scale to RAM; a throw while
   assert.deepEqual([ws._streams, g.held(), g.socks.size], [1, 1000, 1], 'the paused stream was not charged');
   ws.bufferedAmount = 0; await sleep(200);   // the poller resumes it; the first send throws
   assert.deepEqual([ws._streams, g.held(), ws._heldBytes, ws._held, g.socks.size, done], [0, 0, 0, 0, 0, false], 'a throw after a pause kept a charge');
+});
+
+// ── LIFTED, ON A FAKE CLOCK ─────────────────────────────────────────────────────────────────────────────────────────────
+// On loopback the relay sees a slow link's drain only in kernel-sized chunks, so (vii)-(ix) above cannot pin WHICH guard
+// acted: measured, removing the eviction credit, the sliding window, or the time-to-finish order left them green. These
+// run the shipped SEND BACKPRESSURE block itself (sliced from scripts/gateway.mjs, not re-implemented) with Date, the
+// poller's timers and each socket's byte counters under the test's control.
+function liftBlock(env) {
+  const src = readFileSync(new URL('./gateway.mjs', import.meta.url), 'utf8');
+  const a = src.indexOf('const _envInt = (k, d) =>'), b = src.indexOf('let _gossipMergeBusy');
+  assert.ok(a > 0 && b > a, 'the SEND BACKPRESSURE block was not found');
+  const clock = { t: 1e6 }, timers = new Set();
+  const g = new Function('process', 'totalmem', 'MAX_REQ_EVENTS', 'console', 'Date', 'setInterval', 'clearInterval', src.slice(a, b) +
+    '\nreturn { pumpBacklog, held: () => _heldBytesAll };')(
+    { env }, () => 64 * 1024 * MB, 5000, { error() {} }, { now: () => clock.t }, fn => { timers.add(fn); return fn; }, h => timers.delete(h));
+  const sock = () => ({ readyState: 1, bufferedAmount: 2 * MB, _socket: { bytesWritten: 0, writableLength: 0 }, closed: null,
+    _progressAt: clock.t, _runT: clock.t, close(code) { this.readyState = 2; this.closed = code; } });
+  const park = (ws, bytes) => g.pumpBacklog(ws, [{}], () => {}, () => true, () => {}, () => bytes);   // pauses at once (buffer > 1 MB)
+  const at = async (t, f) => { clock.t = 1e6 + t; if (f) f(); for (const fn of [...timers]) fn(); await sleep(0); };
+  return { g, clock, sock, park, at };
+}
+
+test('(xiii) lifted, F2: three charges in one tick past the budget evict ONE parker, credited at once — the second parker and the newcomer stay', async () => {
+  const { g, sock, park, at } = liftBlock({ RELAY_WS_MAX_HELD_BYTES_ALL: '1000', RELAY_WS_MAX_HELD_BYTES: '100000' });
+  const p1 = sock(), p2 = sock(), nc = sock();
+  park(p1, 400); await at(10); park(p2, 400); await at(20);
+  park(nc, 150); park(nc, 150); park(nc, 150);   // 950, 1100 (evict p1), 1250 — no awaits: one tick
+  assert.deepEqual([p1.closed, p2.closed, nc.closed], [1009, null, null], 'p1 evicted alone; p2 and the newcomer kept');
+});
+
+test('(xiv) lifted, F3 floor: after a 10 MB swallow, 2 KB every 5 s (400 B/s < 1000 B/s floor, gaps far inside the 120 s no-movement bound) is closed by the SLIDING floor within ~one 10 s window', async () => {
+  const { sock, park, at } = liftBlock({ RELAY_WS_PROGRESS_FLOOR: '1000', RELAY_WS_PROGRESS_WINDOW_MS: '10000' });
+  const ws = sock();
+  park(ws, 100);
+  await at(10, () => { ws._socket.bytesWritten = 10e6; });   // the kernel swallows 10 MB at once
+  let closedAt = null;
+  for (let t = 1000; t <= 600000 && closedAt === null; t += 1000) {
+    await at(t, () => { if (t % 5000 === 0) ws._socket.bytesWritten += 2000; });
+    if (ws.closed) closedAt = t;
+  }
+  // averaged from the episode start (cd261dad) this survives until (10 MB + 400 t) / t < 1000, i.e. t ≈ 4.6 h
+  assert.equal(ws.closed, 1009, 'not closed within 600 s');
+  assert.ok(closedAt <= 30000, `closed only at ${closedAt} ms`);
+});
+
+test('(xv) lifted, F3 order: the socket with the longest time to finish is evicted, not the one with the least recent progress', async () => {
+  const { sock, park, at } = liftBlock({ RELAY_WS_MAX_HELD_BYTES_ALL: '1000', RELAY_WS_MAX_HELD_BYTES: '100000', RELAY_WS_PROGRESS_WINDOW_MS: '1000', RELAY_WS_PROGRESS_FLOOR: '1' });
+  const H = sock(), K = sock(), nc = sock();
+  park(H, 400); park(K, 400);
+  await at(10, () => { H._socket.bytesWritten = K._socket.bytesWritten = 100000; });   // both swallow 100 KB at the start
+  // (each must also move within every 1 s window: one that moved NOTHING for a whole window is rightly closed by the
+  // floor — measured: that is what this test first did)
+  for (const t of [100, 300, 500, 700, 900, 1000]) await at(t);
+  await at(1100, () => { K._socket.bytesWritten += 1000; H._socket.bytesWritten += 1000; });   // both dribble (each window needs > 1 B/s)
+  await at(1200, () => { H._socket.bytesWritten = 601000; });   // honest: a big burst, then silent
+  for (const t of [1400, 1600, 1800]) await at(t);
+  await at(1900, () => { K._socket.bytesWritten += 1000; });     // slow: a dribble, more recently
+  await at(2000);
+  park(nc, 300);   // 1100 > 1000: one eviction
+  assert.deepEqual([H.closed, K.closed, nc.closed], [null, 1009, null], 'H drained 500 KB/s in the window, K 2 KB/s: K has the longer time to finish');
 });
