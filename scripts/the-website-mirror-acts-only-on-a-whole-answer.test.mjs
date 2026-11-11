@@ -248,3 +248,21 @@ test('nothing carries into another epoch (a lock, a reset, a church switch): a r
   assert.equal(w.copies.size, 0, 'copies read in the old epoch were carried into the new one');
   assert.equal(c.api._webDesired(w), null, 'a watch that has read nothing in this epoch must decide nothing');
 });
+
+test('an answer on a socket whose login the relay asked for and has not accepted is not taken; after the login it is', async () => {
+  const c = consoleWith();
+  c.start();
+  c.relaysMap.get('wss://a/').challenge = 'chal';    // the relay withheld something and asked us to log in
+  c.send('share', [SHARE_ON()]); c.send('events', [A, B]); c.eoseAll();
+  await c.settle();
+  const w = c.api.web();
+  assert.equal(w.shareKnown || w.copiesKnown || w.eventsKnown, false, 'a read the relay held back for a login was taken as complete');
+  assert.deepEqual(c.published, []);
+  // the login is accepted: the reads asked again on it (the key reads' waiter set), and their answers now count
+  c.scope._authAccepted.set('wss://a/', c.relaysMap.get('wss://a/'));
+  for (const again of [...c.scope._keyReadAuthWaiters]) { c.scope._keyReadAuthWaiters.delete(again); again(); }
+  c.send('share', [SHARE_ON()]); c.send('events', [A, B]); c.eoseAll();
+  await c.settle();
+  assert.equal(w.shareKnown && w.copiesKnown && w.eventsKnown, true, 'the reads were not asked again after the login');
+  assert.deepEqual(c.writes().sort(), ['trinityone/pubevent:evta', 'trinityone/pubevent:evtbb']);
+});
