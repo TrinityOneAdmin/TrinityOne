@@ -91,6 +91,7 @@ function consoleApi({ signer, actingChurch }) {
   const scope = {
     sk: signer.sk, pub: cp, actingChurch,
     pool, relays: () => [WS_URL],
+    _corpusSub: (f, h) => pool.subscribeMany([WS_URL], f, h),   // the church feed is not under test here (the-church-corpus-crosses-the-pipe-once): its readers read this real relay directly, as before the feed
     NET, SERMON_D, PINSERMON_D,
     _careRoster: new Set([dana.pub]), _careRosterKnown: true, _careRosterSeen: true,
     _stewardCaps: { [dana.pub]: ['content'] },

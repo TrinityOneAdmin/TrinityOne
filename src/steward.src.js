@@ -17,6 +17,7 @@ import { SimplePool } from 'nostr-tools/pool';
 // lookup misses and the health check silently answers about nothing. Use the library's own function rather
 // than a hand-rolled one, so the two can never drift.
 import { normalizeURL } from 'nostr-tools/utils';
+import { matchFilters } from 'nostr-tools/filter';
 import { _absorbById, _forgetById, _seedFromCache, _tombstoneTargets } from './church-doc-store.src.js';
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the member app so both surfaces answer that question the same way. See src/relay-identity.src.js.
@@ -3856,6 +3857,7 @@ function _resetChurchScopedState() {
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null; _mediaKeyFresh = false; _mediaKeyMine = false; _mediaKeyAt = 0;
   // …and no read, publish or "we looked" opened before this line may count afterwards — see _keyReadOk.
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+  try { _feedCheck(_feed); } catch (e) {}   // the church feed was read for the epoch just left: a new generation, or dropped with its readers if the church changed (see _corpusSub)
   try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
   _minorsLastClear('');   // the key that sealed every device copy of a children list is gone or replaced
   _sgClearClear('');      // …and the sealed clearance record goes with it (same key, same church lifecycle)
@@ -7121,6 +7123,165 @@ function _webRead(cp, filters, onevent, onknown, opts) {
     st.subs.clear();
   };
 }
+// ── ONE CHURCH FEED: THE CORPUS CROSSES THE PIPE ONCE PER CONNECT (2026-11-11) ─────────────────────────────────────
+// Measured on the slow-link rig (scripts/the-console-fits-a-real-church-on-a-slow-link.test.mjs, 400 KB/s, a ~1 MB
+// Living-Word-shaped church): after the narrow reads the console still pulled ~12 MB per connect, ~11x the corpus,
+// because a dozen screens' streams each asked every relay for the SAME two filters — everything the church signed,
+// and everything tagged for it — and each one downloaded the whole corpus to keep the handful of documents it shows.
+// Churches run on small pipes (reference/DOMAIN.md, 2026-11-11): a church three times Living Word's size is ~33 MB a
+// connect, past the relay's 16 MiB buffer for a slow reader, and the socket is cut with 1009 for ever.
+//
+// So those streams now read ONE feed. `_corpusSub(filters, handlers)` is a drop-in for
+// `pool.subscribeMany(relays(), filters, handlers)` for a reader whose filters fall inside the church corpus; anything
+// else (a limit, another kind, another church, no '#t') is not covered and goes to the pool exactly as before.
+//
+//   * KEYED BY (church, owner/delegated/network view, _keyReadEpoch, the sorted relay set). A change of ANY of them
+//     drops the feed's store and its subscriptions. A change of church or view also drops its READERS — they are
+//     told nothing more, so nothing read for one church can ever be painted for another (the screens re-subscribe
+//     on the identity change). A change of epoch or relay set ALONE (same church, same view) starts a new
+//     generation for the readers already attached — nothing read before a reset is kept, and a feed is never left
+//     open over a relay that was removed — rather than leaving those screens deaf until the next reconnect. `pub` is the church in every view (setActiveIdentity: owner pub =
+//     churchPub; delegated pub = actingChurch; network pub = the network key), so `actingChurch || pub` and `pub`
+//     name the same church here, and a reader whose church differs (the Care module reads `actingChurch ||
+//     churchPub`, which in the network view is NOT `pub`) is simply not covered and reads on its own.
+//   * EACH RELAY IS ASKED SEPARATELY, AND JUDGED SEPARATELY — through _webRead, the website mirror's reader: one
+//     subscription per relay through the wrapped pool.subscribeMany (so _taggedForAnotherChurch and the inert-after-
+//     close rule hold), no library timer on a connected relay, and a PROGRESS guard only (WEB_READ_IDLE_MS of nothing
+//     at all), never wall-clock. A relay cut off part-way is asked again from where it got to, within this generation.
+//   * THE STORE keeps every event by id in arrival order, older versions included (readers that judge across
+//     versions — authors, tombstones — see what they saw before).
+//   * A READER's `oneose` is "the feed is KNOWN": every relay has answered, at least one GENUINELY, and no relay that
+//     is still connected owes an answer (_webRead's rule; a cut-off, the library's timer, a CLOSED or a dropped
+//     socket is never an answer). A relay that is down does not hold every screen back for ever — that was the
+//     member list's everyRelay hang. A reader that joins after the feed is known gets its oneose straight after its
+//     replay; one that joins while a relay is still owed waits with everyone else.
+//   * REPLAY IS ASYNCHRONOUS (a microtask): readers' handlers name their own `sub` before the call has returned.
+//   * A reader's close is final (nothing is delivered after it) and ref-counted: the feed outlives its last reader by
+//     FEED_IDLE_MS so moving between screens does not download the church again; a new reader in that time re-uses it.
+//   * A RECONNECT IS A NEW GENERATION: Steward.feedRenew() (app/steward-root.jsx, _maybeBumpConn, before the hooks
+//     re-subscribe) asks every relay afresh into an empty store. No `since` resume across connects (owner, 2026-11-11).
+//
+// NOT ON THE FEED, and why (do not "tidy" them in): the key reads (_openKeyRead/_freshDocRead/_oneComplete/
+// _newestByD — a mint gate needs every relay), subscribeSafeguard, readMinors, the everyRelay member read,
+// subscribeCheckinSessionKeys (its EOSE stamps _ckKeysSettled only if the socket is signed in AT THAT MOMENT; a
+// replayed EOSE could stamp it over a list read logged out and let the issuer re-mint a live key), encSubscribe
+// (the finance genuine-write gate, the children's register, Manna), migrateCheckinKeys (needs "nothing left"), every
+// read already narrowed with '#d', and _webEnsure's corpus stream (it carries `from` and its "known" flags across a
+// reconnect and resumes `since` — a different contract from this feed's fresh generation; it stays on its own
+// _webRead, one more corpus read on the first connect and only what changed after).
+const FEED_IDLE_MS = 60000;   // how long a feed with no readers is kept, so a screen change re-uses it (not a guard)
+let _feed = null;
+const _corpusFilters = (cp) => [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }];
+function _feedChurch() { return actingChurch || pub || ''; }
+function _feedKey() {
+  const cp = _feedChurch(); if (!cp) return '';
+  let rs = []; try { rs = relays().map(String).sort(); } catch (e) { rs = []; }
+  return cp + '|' + (actingChurch ? 'delegated' : _viewingNetwork() ? 'network' : 'owner') + '|' + _keyReadEpoch + '|' + rs.join(',');
+}
+const _feedHead = (k) => String(k || '').split('|').slice(0, 2).join('|');   // church + view: what a reader is FOR
+// Does every one of these filters ask only for documents inside the corpus of church `cp`? Only kind 30078, only
+// '#t': [NET], and either signed by the church or tagged for it; narrower is fine ('#d', ids, since/until), a `limit`
+// is not (the feed has everything, so it would hand back more than was asked for).
+function _feedCovers(filters, cp) {
+  if (!cp || !Array.isArray(filters) || !filters.length) return false;
+  return filters.every(f => {
+    if (!f || typeof f !== 'object') return false;
+    for (const k of Object.keys(f)) if (!(k === 'kinds' || k === 'authors' || k === 'ids' || k === 'since' || k === 'until' || (k.length > 1 && k[0] === '#'))) return false;
+    if (!Array.isArray(f.kinds) || !f.kinds.length || f.kinds.some(x => x !== 30078)) return false;
+    if (!Array.isArray(f['#t']) || !f['#t'].length || f['#t'].some(x => x !== NET)) return false;
+    const signed = Array.isArray(f.authors) && f.authors.length > 0 && f.authors.every(a => a === cp);
+    const tagged = Array.isArray(f['#church']) && f['#church'].length > 0 && f['#church'].every(c => c === cp);
+    return signed || tagged;
+  });
+}
+function _feedDeliver(c, e) { if (!c.closed && matchFilters(c.filters, e)) { try { c.h.onevent && c.h.onevent(e); } catch (x) {} } }
+function _feedEose(c) { if (c.closed || c.eosed) return; c.eosed = true; try { c.h.oneose && c.h.oneose(); } catch (x) {} }
+function _feedDrop(f) {
+  if (!f || f.dead) return;
+  f.dead = true;
+  if (f.idle) { clearTimeout(f.idle); f.idle = null; }
+  if (f.stop) { try { f.stop(); } catch (e) {} f.stop = null; }
+  for (const c of f.consumers) c.closed = true;   // inert: a reader of a dropped feed is told nothing more
+  f.consumers.clear(); f.store = []; f.ids = new Set();
+  if (_feed === f) _feed = null;
+}
+// A NEW GENERATION: fresh requests to every relay in the set, an empty store, every attached reader waiting again.
+function _feedStart(f) {
+  if (f.stop) { try { f.stop(); } catch (e) {} f.stop = null; }
+  f.gen++; f.store = []; f.ids = new Set(); f.settled = false;
+  for (const c of f.consumers) c.eosed = false;
+  const gen = f.gen;
+  if (!relays().length) {   // an empty set answers, it does not hang (see pool.subscribeMany, closed-network plan C4)
+    queueMicrotask(() => _feedSettle(f, gen));
+    return;
+  }
+  f.stop = _webRead(f.cp, _corpusFilters(f.cp), (e) => _feedEvent(f, gen, e), () => _feedSettle(f, gen), { from: new Map() });
+}
+// Is this feed still for the church, view, epoch and relays the console is on? A different church or view drops it
+// and its readers; a different epoch or relay set starts a new generation. False = do not use what just arrived.
+function _feedCheck(f) {
+  if (!f || f.dead) return false;
+  const k = _feedKey();
+  if (k === f.key) return true;
+  if (!k || _feedHead(k) !== _feedHead(f.key) || !f.consumers.size) { _feedDrop(f); return false; }
+  f.key = k; _feedStart(f);
+  return false;
+}
+function _feedEvent(f, gen, e) {
+  if (f.dead || gen !== f.gen || !e || !e.id) return;
+  if (!_feedCheck(f)) return;
+  if (f.ids.has(e.id)) return;   // a relay asked again re-sends from where it got to, and two relays send the same event
+  f.ids.add(e.id); f.store.push(e);
+  for (const c of [...f.consumers]) if (c.ready) _feedDeliver(c, e);
+}
+function _feedSettle(f, gen) {
+  if (f.dead || gen !== f.gen) return;
+  if (!_feedCheck(f)) return;
+  f.settled = true;
+  for (const c of [...f.consumers]) if (c.ready) _feedEose(c);
+}
+// The reader's half. Returns null when the filters are not covered (the caller then reads on its own), else a
+// subscription-shaped { close() }.
+function _feedSubscribe(filters, handlers) {
+  const cp = _feedChurch();
+  if (!_feedCovers(filters, cp)) return null;
+  const key = _feedKey(); if (!key) return null;
+  if (_feed && !_feed.dead && _feed.key !== key) _feedCheck(_feed);
+  if (!_feed || _feed.dead) {
+    _feed = { key, cp, gen: 0, store: [], ids: new Set(), consumers: new Set(), settled: false, stop: null, idle: null, dead: false };
+    _feedStart(_feed);
+  }
+  const f = _feed;
+  if (f.idle) { clearTimeout(f.idle); f.idle = null; }
+  const c = { filters, h: handlers || {}, ready: false, eosed: false, closed: false };
+  f.consumers.add(c);
+  queueMicrotask(() => {
+    if (c.closed || f.dead || !f.consumers.has(c)) return;
+    for (const e of f.store.slice()) { if (c.closed) return; _feedDeliver(c, e); }
+    c.ready = true;
+    if (f.settled) _feedEose(c);
+  });
+  return {
+    close() {
+      if (c.closed) return;
+      c.closed = true; f.consumers.delete(c);
+      if (!f.consumers.size && !f.dead && !f.idle) f.idle = setTimeout(() => { f.idle = null; if (!f.consumers.size) _feedDrop(f); }, FEED_IDLE_MS);
+    },
+  };
+}
+// THE CALL SITE: the feed when it covers the filters, the pool exactly as before when it does not.
+function _corpusSub(filters, handlers) {
+  return _feedSubscribe(filters, handlers) || pool.subscribeMany(relays(), filters, handlers);
+}
+// A reconnect: the attached readers keep their place and the feed asks every relay again, into an empty store.
+// A feed for a church/view the console has left is dropped instead; one nobody is reading is dropped (the next
+// reader opens a fresh one).
+function _feedRenew() {
+  const f = _feed; if (!f || f.dead) return;
+  const k = _feedKey();
+  if (!k || _feedHead(k) !== _feedHead(f.key) || !f.consumers.size) { _feedDrop(f); return; }
+  f.key = k; _feedStart(f);
+}
 function _webEnsure(restart) {
   // …and a watch from an EARLIER EPOCH is restarted even when the church is the same (audit of 9322383d..dfd1a66c,
   // LOW): a lock, a reset or a church switch and back leaves _web.pub unchanged, but every stream it holds was opened
@@ -7489,6 +7650,11 @@ window.Steward = {
   // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
   publishSigned: _publishSigned,
   subscribeMany: _subscribeMany,
+  // THE CHURCH FEED (see _corpusSub): a module whose filters fall inside the church's corpus reads the one feed
+  // instead of downloading the corpus again; anything else goes to the pool exactly as subscribeMany does.
+  corpusSubscribe: _corpusSub,
+  // A RECONNECT (app/steward-root.jsx _maybeBumpConn, before the hooks re-subscribe): the feed asks every relay again.
+  feedRenew() { try { _feedRenew(); } catch (e) {} },
   relayList() { return relays(); },
 
   // ---- key (pilot: self-custodial in localStorage; later: a signer) ----
@@ -9308,7 +9474,7 @@ window.Steward = {
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => onSermons([...byId.values()].sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0)));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(SERMON_D)) return;
         const id = d.slice(SERMON_D.length);
@@ -9596,7 +9762,7 @@ window.Steward = {
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => onFunds([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(FUND_D)) return;
@@ -9626,7 +9792,7 @@ window.Steward = {
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => onCats([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(CATEGORY_D)) return;
@@ -12742,7 +12908,7 @@ window.Steward = {
       },
       oneose() { emit(); },
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
     wantNarrow();   // the rooms the cache already knows are read at once
     return () => { tok.live = false; try { sub.close(); } catch {} if (stopNarrow) { try { stopNarrow(); } catch (e) {} } };
   },
@@ -12772,7 +12938,7 @@ window.Steward = {
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.created || a.ts || 0) - (b.created || b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onPlans(arr); };
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onPlans(cached); } } catch {}
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(PLAN_D)) return;
@@ -12851,7 +13017,7 @@ window.Steward = {
     const emit = () => { const arr = [...byId.values()].sort((a, b) => ord(a) - ord(b) || (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onDevos(arr); };
     // paint the last-known devotionals instantly so the page doesn't flash empty before the relay answers
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onDevos(cached); } } catch {}
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(DEVO_D)) return;
@@ -12908,7 +13074,7 @@ window.Steward = {
       },
       oneose() { emit(); },
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
     const stopKey = _onNameKeyRing(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
     return () => { try { sub.close(); } catch {} stopKey(); };
   },
@@ -13454,7 +13620,7 @@ window.Steward = {
       }
       cb(out.sort((a, b) => (b.ts || 0) - (a.ts || 0)));
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(CHECKINPERM_D)) return;
@@ -14349,7 +14515,7 @@ window.Steward = {
       },
       oneose() { emit(); },
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
     const stopKey = _onNameKeyRing(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
     return () => { try { sub.close(); } catch {} stopKey(); };
   },
@@ -14789,6 +14955,7 @@ window.Steward = {
     // re-entering the SAME church passed every "is this still the current church?" check (audit of e6a2e02).
     // See _keyReadOk. The name key's flag is cleared above; this epoch covers it too.
     _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+    try { _feedCheck(_feed); } catch (e) {}   // the church feed was read for the epoch just left: a new generation, or dropped with its readers if the church changed (see _corpusSub)
     try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
     _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
     _sgClearClear(actingChurch || pub);      // …nor its sealed clearance record
@@ -15121,7 +15288,7 @@ window.Steward = {
   subscribeNetworks(onNetworks) {
     const byId = new Map();
     const emit = () => onNetworks([...byId.values()]);
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = _corpusSub([{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(NETWORK_D)) return; const np = d.slice(NETWORK_D.length); if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byId.delete(np); emit(); return; } byId.set(np, { networkPub: np, npub: npubEncode(np) }); emit(); },
       oneose() { emit(); },
     });

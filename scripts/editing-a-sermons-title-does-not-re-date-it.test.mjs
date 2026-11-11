@@ -304,6 +304,7 @@ function consoleApi() {
   const scope = {
     sk: church.sk, pub: cp, actingChurch: '',
     pool, relays: () => [WS_URL], NET, SERMON_D, PINSERMON_D,
+    _corpusSub: (f, h) => pool.subscribeMany([WS_URL], f, h),   // the church feed is not under test here (the-church-corpus-crosses-the-pipe-once): its readers read this real relay directly, as before the feed
     _stewardCaps: {}, _careRoster: new Set(), _careRosterKnown: true, _careRosterSeen: true,
     _monotonic: (t) => t, now, sent: [],
     publish: async (evt) => { scope.sent.push(evt); const [ok] = await send(ws, evt); return ok; },

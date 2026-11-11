@@ -6267,6 +6267,40 @@
     }
   }
 
+  // node_modules/nostr-tools/lib/esm/filter.js
+  function matchFilter2(filter, event) {
+    if (filter.ids && filter.ids.indexOf(event.id) === -1) {
+      return false;
+    }
+    if (filter.kinds && filter.kinds.indexOf(event.kind) === -1) {
+      return false;
+    }
+    if (filter.authors && filter.authors.indexOf(event.pubkey) === -1) {
+      return false;
+    }
+    for (let f in filter) {
+      if (f[0] === "#") {
+        let tagName = f.slice(1);
+        let values = filter[`#${tagName}`];
+        if (values && !event.tags.find(([t, v]) => t === f.slice(1) && values.indexOf(v) !== -1))
+          return false;
+      }
+    }
+    if (filter.since && event.created_at < filter.since)
+      return false;
+    if (filter.until && event.created_at > filter.until)
+      return false;
+    return true;
+  }
+  function matchFilters2(filters, event) {
+    for (let i3 = 0; i3 < filters.length; i3++) {
+      if (matchFilter2(filters[i3], event)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // src/church-doc-store.src.js
   function _pickWinner(vers, trusted) {
     let best = null;
@@ -18191,6 +18225,10 @@ zoo`.split("\n");
     _careKeyVer++;
     _mediaKeyVer++;
     try {
+      _feedCheck(_feed);
+    } catch (e) {
+    }
+    try {
       const M = window.StewardMeals;
       if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
     } catch (e) {
@@ -20372,6 +20410,170 @@ zoo`.split("\n");
       st.subs.clear();
     };
   }
+  var FEED_IDLE_MS = 6e4;
+  var _feed = null;
+  var _corpusFilters = (cp) => [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }];
+  function _feedChurch() {
+    return actingChurch || pub || "";
+  }
+  function _feedKey() {
+    const cp = _feedChurch();
+    if (!cp) return "";
+    let rs = [];
+    try {
+      rs = relays().map(String).sort();
+    } catch (e) {
+      rs = [];
+    }
+    return cp + "|" + (actingChurch ? "delegated" : _viewingNetwork() ? "network" : "owner") + "|" + _keyReadEpoch + "|" + rs.join(",");
+  }
+  var _feedHead = (k) => String(k || "").split("|").slice(0, 2).join("|");
+  function _feedCovers(filters, cp) {
+    if (!cp || !Array.isArray(filters) || !filters.length) return false;
+    return filters.every((f) => {
+      if (!f || typeof f !== "object") return false;
+      for (const k of Object.keys(f)) if (!(k === "kinds" || k === "authors" || k === "ids" || k === "since" || k === "until" || k.length > 1 && k[0] === "#")) return false;
+      if (!Array.isArray(f.kinds) || !f.kinds.length || f.kinds.some((x) => x !== 30078)) return false;
+      if (!Array.isArray(f["#t"]) || !f["#t"].length || f["#t"].some((x) => x !== NET)) return false;
+      const signed = Array.isArray(f.authors) && f.authors.length > 0 && f.authors.every((a) => a === cp);
+      const tagged = Array.isArray(f["#church"]) && f["#church"].length > 0 && f["#church"].every((c) => c === cp);
+      return signed || tagged;
+    });
+  }
+  function _feedDeliver(c, e) {
+    if (!c.closed && matchFilters2(c.filters, e)) {
+      try {
+        c.h.onevent && c.h.onevent(e);
+      } catch (x) {
+      }
+    }
+  }
+  function _feedEose(c) {
+    if (c.closed || c.eosed) return;
+    c.eosed = true;
+    try {
+      c.h.oneose && c.h.oneose();
+    } catch (x) {
+    }
+  }
+  function _feedDrop(f) {
+    if (!f || f.dead) return;
+    f.dead = true;
+    if (f.idle) {
+      clearTimeout(f.idle);
+      f.idle = null;
+    }
+    if (f.stop) {
+      try {
+        f.stop();
+      } catch (e) {
+      }
+      f.stop = null;
+    }
+    for (const c of f.consumers) c.closed = true;
+    f.consumers.clear();
+    f.store = [];
+    f.ids = /* @__PURE__ */ new Set();
+    if (_feed === f) _feed = null;
+  }
+  function _feedStart(f) {
+    if (f.stop) {
+      try {
+        f.stop();
+      } catch (e) {
+      }
+      f.stop = null;
+    }
+    f.gen++;
+    f.store = [];
+    f.ids = /* @__PURE__ */ new Set();
+    f.settled = false;
+    for (const c of f.consumers) c.eosed = false;
+    const gen = f.gen;
+    if (!relays().length) {
+      queueMicrotask(() => _feedSettle(f, gen));
+      return;
+    }
+    f.stop = _webRead(f.cp, _corpusFilters(f.cp), (e) => _feedEvent(f, gen, e), () => _feedSettle(f, gen), { from: /* @__PURE__ */ new Map() });
+  }
+  function _feedCheck(f) {
+    if (!f || f.dead) return false;
+    const k = _feedKey();
+    if (k === f.key) return true;
+    if (!k || _feedHead(k) !== _feedHead(f.key) || !f.consumers.size) {
+      _feedDrop(f);
+      return false;
+    }
+    f.key = k;
+    _feedStart(f);
+    return false;
+  }
+  function _feedEvent(f, gen, e) {
+    if (f.dead || gen !== f.gen || !e || !e.id) return;
+    if (!_feedCheck(f)) return;
+    if (f.ids.has(e.id)) return;
+    f.ids.add(e.id);
+    f.store.push(e);
+    for (const c of [...f.consumers]) if (c.ready) _feedDeliver(c, e);
+  }
+  function _feedSettle(f, gen) {
+    if (f.dead || gen !== f.gen) return;
+    if (!_feedCheck(f)) return;
+    f.settled = true;
+    for (const c of [...f.consumers]) if (c.ready) _feedEose(c);
+  }
+  function _feedSubscribe(filters, handlers) {
+    const cp = _feedChurch();
+    if (!_feedCovers(filters, cp)) return null;
+    const key = _feedKey();
+    if (!key) return null;
+    if (_feed && !_feed.dead && _feed.key !== key) _feedCheck(_feed);
+    if (!_feed || _feed.dead) {
+      _feed = { key, cp, gen: 0, store: [], ids: /* @__PURE__ */ new Set(), consumers: /* @__PURE__ */ new Set(), settled: false, stop: null, idle: null, dead: false };
+      _feedStart(_feed);
+    }
+    const f = _feed;
+    if (f.idle) {
+      clearTimeout(f.idle);
+      f.idle = null;
+    }
+    const c = { filters, h: handlers || {}, ready: false, eosed: false, closed: false };
+    f.consumers.add(c);
+    queueMicrotask(() => {
+      if (c.closed || f.dead || !f.consumers.has(c)) return;
+      for (const e of f.store.slice()) {
+        if (c.closed) return;
+        _feedDeliver(c, e);
+      }
+      c.ready = true;
+      if (f.settled) _feedEose(c);
+    });
+    return {
+      close() {
+        if (c.closed) return;
+        c.closed = true;
+        f.consumers.delete(c);
+        if (!f.consumers.size && !f.dead && !f.idle) f.idle = setTimeout(() => {
+          f.idle = null;
+          if (!f.consumers.size) _feedDrop(f);
+        }, FEED_IDLE_MS);
+      }
+    };
+  }
+  function _corpusSub(filters, handlers) {
+    return _feedSubscribe(filters, handlers) || pool.subscribeMany(relays(), filters, handlers);
+  }
+  function _feedRenew() {
+    const f = _feed;
+    if (!f || f.dead) return;
+    const k = _feedKey();
+    if (!k || _feedHead(k) !== _feedHead(f.key) || !f.consumers.size) {
+      _feedDrop(f);
+      return;
+    }
+    f.key = k;
+    _feedStart(f);
+  }
   function _webEnsure(restart) {
     if (_web && _web.pub === pub && _web.epoch === _keyReadEpoch && !restart) return _web;
     const listeners = _web ? _web.listeners : /* @__PURE__ */ new Set();
@@ -20688,6 +20890,16 @@ zoo`.split("\n");
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
     publishSigned: _publishSigned,
     subscribeMany: _subscribeMany,
+    // THE CHURCH FEED (see _corpusSub): a module whose filters fall inside the church's corpus reads the one feed
+    // instead of downloading the corpus again; anything else goes to the pool exactly as subscribeMany does.
+    corpusSubscribe: _corpusSub,
+    // A RECONNECT (app/steward-root.jsx _maybeBumpConn, before the hooks re-subscribe): the feed asks every relay again.
+    feedRenew() {
+      try {
+        _feedRenew();
+      } catch (e) {
+      }
+    },
     relayList() {
       return relays();
     },
@@ -22587,7 +22799,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => onSermons([...byId.values()].sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(SERMON_D)) return;
@@ -23027,7 +23239,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => onFunds([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(FUND_D)) return;
@@ -23070,7 +23282,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => onCats([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(CATEGORY_D)) return;
@@ -25851,7 +26063,7 @@ zoo`.split("\n");
           emit();
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
       wantNarrow();
       return () => {
         tok.live = false;
@@ -25904,7 +26116,7 @@ zoo`.split("\n");
         }
       } catch {
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(PLAN_D)) return;
@@ -26036,7 +26248,7 @@ zoo`.split("\n");
         }
       } catch {
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(DEVO_D)) return;
@@ -26135,7 +26347,7 @@ zoo`.split("\n");
           emit();
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
       const stopKey = _onNameKeyRing(() => {
         for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
@@ -26624,7 +26836,7 @@ zoo`.split("\n");
         }
         cb(out.sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(CHECKINPERM_D)) return;
@@ -27465,7 +27677,7 @@ zoo`.split("\n");
           emit();
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
       const stopKey = _onNameKeyRing(() => {
         for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
@@ -28060,6 +28272,10 @@ zoo`.split("\n");
       _careKeyVer++;
       _mediaKeyVer++;
       try {
+        _feedCheck(_feed);
+      } catch (e) {
+      }
+      try {
         const M = window.StewardMeals;
         if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
       } catch (e) {
@@ -28450,7 +28666,7 @@ zoo`.split("\n");
     subscribeNetworks(onNetworks) {
       const byId = /* @__PURE__ */ new Map();
       const emit = () => onNetworks([...byId.values()]);
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(NETWORK_D)) return;

@@ -150,6 +150,9 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     // about what an envelope or a tombstone MEANS stays inside the lifted function.
     relays: () => ['wss://relay.test/relay'],
     pool: { subscribeMany: (_relays, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (the-church-corpus-crosses-the-pipe-once.test.mjs): its
+    // readers' subscription goes to this fake pool, exactly as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => ((_relays, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; })(null, f, h),
     _warnUnsealed: (cap, failed) => { warnings.push({ cap, failed: [...failed] }); },
     window: { dispatchEvent: (e) => { banners.push((e && e.detail) || {}); return true; } },
     // A FRESH ONE PER HARNESS. `_ckRotateWarned` is module state in the console — "say it once per console

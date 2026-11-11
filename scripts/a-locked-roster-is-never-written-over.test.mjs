@@ -65,6 +65,9 @@ function console_({ ring = [], store = openStore(':memory:'), clock = { s: T }, 
     localStorage: { getItem: (k) => (kv.has(k) ? kv.get(k) : null), setItem: (k, v) => kv.set(k, String(v)) },
     relays: () => ['wss://r'],
     pool: { subscribeMany: (_r, _f, h) => { subs.push(h); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (the-church-corpus-crosses-the-pipe-once.test.mjs): its
+    // readers' subscription goes to this fake pool, exactly as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => ((_r, _f, h) => { subs.push(h); return { close() {} }; })(null, f, h),
     now: () => clock.s, Date: { now: () => clock.s * 1000 },
     _skewShift: () => 0, STAMP_CAP_SEC: 600, SKEW_CAP_SEC: 900,
     finalizeEvent,

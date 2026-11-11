@@ -30,6 +30,9 @@ function relay() {
     feChurch: (ev) => ({ ...ev, pubkey: 'c'.repeat(64), id: 'e' + events.length }),
     publish: async (ev) => { deliver(ev); return ev; },
     pool: { subscribeMany: (_r, _f, h) => { subs.push(h); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (the-church-corpus-crosses-the-pipe-once.test.mjs): its
+    // readers' subscription goes to this fake pool, exactly as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => ((_r, _f, h) => { subs.push(h); return { close() {} }; })(null, f, h),
     relays: () => [], localStorage: { getItem: () => null, setItem() {} },
     _consoleDisplay: () => true, _consoleChurchVoice: () => true, _tombstoneTargets: () => [],
   };
