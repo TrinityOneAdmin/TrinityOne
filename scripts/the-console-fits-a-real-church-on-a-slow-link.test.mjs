@@ -17,21 +17,32 @@
 //   • no 1009 from the relay — the observed failure itself, read off the wire by the proxy (the relay's own close
 //     frame), not inferred by the browser;
 //   • the console received less than 16 MiB on the connect. That is the relay's MAX_WS_BUFFER: a connect that pulls
-//     more than the relay will hold for a slow reader is one a slow enough pipe WILL be cut on. It is a ceiling,
-//     not a target — measured 2026-11-11 on this branch, ~12.9 MB per connect, which is still ~13x the corpus (see
-//     the measurement note in the commit); a later step that shares one corpus download should tighten it;
+//     more than the relay will hold for a slow reader is one a slow enough pipe WILL be cut on;
+//   • THE CHURCH CORPUS CROSSES THE PIPE ONCE (the church feed, _corpusSub in src/steward.src.js): at most ONE
+//     whole-corpus REQ (the church's two corpus filters, no '#d', no since) per socket per connect — measured 12
+//     sockets' worth of them on this rig before the feed — and what the requests WITHOUT a `since` pulled is under
+//     WHOLE_MAX x the corpus. Measured 2026-11-11 with the feed: ~1.3x (the feed's one corpus read + the narrow
+//     reads); before it ~9-10x. Requests WITH a `since` (the website mirror's corpus stream and the helper's church
+//     discovery, both resuming from "their last whole answer, less 900 s") are counted in the total but not here:
+//     on this rig every document is minutes old, inside that 900 s window, so each of them re-reads the whole
+//     corpus — ~3x between them, an artefact of a freshly seeded church that a real church (whose documents are
+//     mostly older than 15 minutes) does not have. The TOTAL is bounded at TOTAL_MAX x (measured ~4.3x);
 //   • no new trinityone/pubevent: writes after the corpus had settled. A connect cut short made the website mirror
 //     decide on a half answer and rewrite public event copies on every reconnect.
-// And at the point of use: the Overview Members tile shows the real member count once the last connect has settled.
+// And at the point of use: the Overview Members tile shows the real member count once the last connect has settled,
+// and once it has shown the count it NEVER goes back to "Checking…" across the forced drops (every value the tile
+// shows is recorded in the page by a MutationObserver — scripts/slow-link-rig.mjs watchTile — not polled).
 //
 // TO SEE IT FAIL: TRINITY_SLOWLINK_GATEWAY=<another tree>/scripts/gateway.mjs runs that tree's gateway, which serves
 // that tree's console bundle — e.g. a copy of this tree with vendor/steward.js from 9e88acec. Nothing tracked is edited.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { openSlowConsole, seedChurch, corpusSize, membersTile, CHROME, H, sleep } from './slow-link-rig.mjs';
+import { openSlowConsole, seedChurch, corpusSize, membersTile, watchTile, tileLog, isWholeCorpusReq, reqFilters, CHROME, H, sleep } from './slow-link-rig.mjs';
 
 const MAX_WS_BUFFER = 16 * 1024 * 1024;   // scripts/gateway.mjs — the relay closes 1009 past this
 const RATE = 400 * 1024;
+const WHOLE_MAX = 2.0;   // x corpus, requests without `since` (measured ~1.3x with the feed, ~9-10x without)
+const TOTAL_MAX = 5.0;   // x corpus, everything (measured ~4.3x; see the since-artefact note above)
 const ENTRY = process.env.TRINITY_SLOWLINK_GATEWAY || undefined;
 let s = null;
 after(async () => { if (s) await s.close(); H.stopAll(); });
@@ -47,6 +58,12 @@ test('the console reconnects to a ~1 MB church over a 400 KB/s pipe without bein
   const pubeventsSeeded = s.sent.filter(x => x.d.startsWith('trinityone/pubevent:')).length;
   assert.ok(pubeventsSeeded >= 20, 'the website mirror wrote no public copies while seeding (' + pubeventsSeeded + '): the pubevent check below would prove nothing');
 
+  // the tile has its real count BEFORE the drops; from here on it must never say "Checking…" again
+  const t0 = Date.now(); let tile0 = null;
+  while (Date.now() - t0 < 90000 && (tile0 = await membersTile(s)) !== String(s.members.length)) await sleep(500);
+  assert.equal(tile0, String(s.members.length), 'the Overview Members tile never showed the church\'s members before the drops');
+  assert.equal(await watchTile(s), 'ok', 'the tile watcher did not install');
+
   const sentBefore = s.sent.length;
   s.link.setRate(RATE);
   const connects = [];
@@ -58,7 +75,12 @@ test('the console reconnects to a ~1 MB church over a 400 KB/s pipe without bein
     await s.quiet(8000, 75000);
     const wire = s.link.conns.slice(conns0).filter(c => c.ws);
     const socks = [...s.sockets.entries()].filter(([k]) => !socks0.has(k)).map(([, v]) => v);
-    connects.push({ bytes: socks.reduce((a, v) => a + v.bytes, 0), events: socks.reduce((a, v) => a + v.events, 0), wire: wire.reduce((a, c) => a + c.down, 0), closes: wire.flatMap(c => c.closeCodes) });
+    // bytes per REQ, split by whether the REQ carried a `since` (see the header)
+    let sinceBytes = 0;
+    for (const k of socks) for (const [sid, b] of Object.entries(k.bySub)) { const r = k.reqs.find(x => x.sid === sid); if (r && reqFilters(r).some(f => f.since)) sinceBytes += b.bytes; }
+    const bytes = socks.reduce((a, v) => a + v.bytes, 0);
+    connects.push({ bytes, wholeBytes: bytes - sinceBytes, sinceBytes, events: socks.reduce((a, v) => a + v.events, 0), wire: wire.reduce((a, c) => a + c.down, 0), closes: wire.flatMap(c => c.closeCodes),
+                    wholeCorpusReqs: socks.map(k => k.reqs.filter(r => isWholeCorpusReq(r, s.churchPub)).length) });
   }
   const report = JSON.stringify({ corpus: { docs: corpus.docs, bytes: corpus.bytes }, connects });
   console.log('# slow-link connects: ' + report);
@@ -66,7 +88,14 @@ test('the console reconnects to a ~1 MB church over a 400 KB/s pipe without bein
     assert.ok(c.events > 0, 'connect ' + (i + 1) + ' received nothing — the console did not reconnect through the pipe: ' + report);
     assert.ok(!c.closes.includes(1009), 'the relay closed connect ' + (i + 1) + ' with 1009 "too slow": ' + report);
     assert.ok(c.bytes < MAX_WS_BUFFER, 'connect ' + (i + 1) + ' pulled ' + c.bytes + ' B (' + (c.bytes / corpus.bytes).toFixed(1) + 'x the corpus), more than the relay buffers for a slow reader: ' + report);
+    assert.ok(c.wholeCorpusReqs.every(n => n <= 1), 'connect ' + (i + 1) + ' asked a socket for the whole church corpus more than once (' + JSON.stringify(c.wholeCorpusReqs) + ' per socket): ' + report);
+    assert.ok(c.wholeBytes <= WHOLE_MAX * corpus.bytes, 'connect ' + (i + 1) + ' pulled ' + c.wholeBytes + ' B (' + (c.wholeBytes / corpus.bytes).toFixed(2) + 'x the corpus) on requests with no `since` — the church corpus crossed the pipe more than once: ' + report);
+    assert.ok(c.bytes <= TOTAL_MAX * corpus.bytes, 'connect ' + (i + 1) + ' pulled ' + (c.bytes / corpus.bytes).toFixed(2) + 'x the corpus in all: ' + report);
   }
+  const log = await tileLog(s);
+  const firstCount = log.findIndex(x => x.v === String(s.members.length));
+  assert.ok(firstCount >= 0, 'the tile watcher never saw the member count: ' + JSON.stringify(log));
+  assert.deepEqual(log.slice(firstCount).filter(x => x.v === 'Checking…'), [], 'the Overview Members tile went back to "Checking…" after it had shown the count, across the drops: ' + JSON.stringify(log));
   const pubevents = s.sent.slice(sentBefore).filter(x => x.d.startsWith('trinityone/pubevent:'));
   assert.equal(pubevents.length, 0, 'the console rewrote public event copies after the drops: ' + JSON.stringify(pubevents.map(x => x.d)));
   assert.equal(await membersTile(s), String(s.members.length), 'the Overview Members tile does not show the church\'s members after the last connect');

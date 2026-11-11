@@ -59,7 +59,7 @@ export async function openSlowConsole({ entry, name = 'slow', rate = 64 * 1024 *
     cws.on('message', (d) => {
       const m = JSON.parse(d);
       if (m.method === 'Runtime.exceptionThrown') { const e = m.params.exceptionDetails; s.errors.push((e.exception?.description || e.text || '').split('\n')[0]); }
-      if (m.method === 'Network.webSocketCreated' && m.params.url.includes(relayUrl)) s.sockets.set(m.params.requestId, { opened: Date.now() - t0, closed: 0, bytes: 0, events: 0, reqs: [], bySub: {} });
+      if (m.method === 'Network.webSocketCreated' && m.params.url.includes(relayUrl)) s.sockets.set(m.params.requestId, { url: m.params.url, opened: Date.now() - t0, closed: 0, bytes: 0, events: 0, reqs: [], bySub: {} });
       if (m.method === 'Network.webSocketClosed') { const k = s.sockets.get(m.params.requestId); if (k) k.closed = Date.now() - t0; }
       if (m.method === 'Network.webSocketFrameReceived') {
         const k = s.sockets.get(m.params.requestId); if (!k) return;
@@ -179,5 +179,27 @@ export async function corpusSize(s) {
   } finally { db.close(); }
 }
 
+// A REQ's filters as the console sent them (["REQ", id, ...filters] — some builds nest them in one array).
+export const reqFilters = (r) => (Array.isArray(r.filters[0]) ? r.filters[0] : r.filters);
+// A WHOLE-CORPUS REQ: the church's two corpus filters (everything it signed, everything tagged for it), with no '#d'
+// and no `since` — a request that downloads the whole church.
+export const isWholeCorpusReq = (r, cp) => { const f = reqFilters(r); return f.length === 2 && !!f[0] && !!f[1]
+  && Array.isArray(f[0].authors) && f[0].authors[0] === cp && Array.isArray(f[1]['#church']) && f[1]['#church'][0] === cp
+  && !f.some(x => x['#d'] || x.since || x.limit); };
+// WATCH THE MEMBERS TILE for every value it shows, in the page itself: a MutationObserver re-reads it once per task
+// in which the DOM changed, so a "Checking…" that lasts one render is recorded, not missed between two polls.
+// Read back with tileLog(s): [{ t, v }] (t = page ms), in order.
+export const watchTile = (s) => s.ev(`(() => {
+  if (window.__tileWatch) return 'already';
+  const read = ${TILE_EXPR};
+  const log = window.__tileLog = []; let last, pending = false;
+  const look = () => { pending = false; const v = read(); if (v !== last) { last = v; log.push({ t: Math.round(performance.now()), v }); } };
+  window.__tileWatch = new MutationObserver(() => { if (!pending) { pending = true; setTimeout(look, 0); } });
+  window.__tileWatch.observe(document.body, { subtree: true, childList: true, characterData: true });
+  look(); return 'ok';
+})()`);
+export const tileLog = (s) => s.ev(`window.__tileLog || []`);
+
 // The Overview "Members" tile, read off the real screen: its value text ('Checking…', a count, '—'), or null if absent.
-export const membersTile = (s) => s.ev(`(() => { const el = [...document.querySelectorAll('*')].find(x => x.children.length === 0 && (x.textContent || '').trim() === 'Members' && x.closest('button,[role=button],div') && x.parentElement && /reading your church|invite/.test(x.parentElement.parentElement ? x.parentElement.parentElement.innerText : '')); if (!el) return null; const box = el.parentElement.parentElement; const t = box.innerText.split('\\n').map(x => x.trim()).filter(Boolean); return t.find(x => x !== 'Members' && !/reading your church|invite/.test(x)) || null; })()`);
+const TILE_EXPR = `() => { const el = [...document.querySelectorAll('*')].find(x => x.children.length === 0 && (x.textContent || '').trim() === 'Members' && x.closest('button,[role=button],div') && x.parentElement && /reading your church|invite/.test(x.parentElement.parentElement ? x.parentElement.parentElement.innerText : '')); if (!el) return null; const box = el.parentElement.parentElement; const t = box.innerText.split('\\n').map(x => x.trim()).filter(Boolean); return t.find(x => x !== 'Members' && !/reading your church|invite/.test(x)) || null; }`;
+export const membersTile = (s) => s.ev(`(${TILE_EXPR})()`);
