@@ -9089,16 +9089,38 @@ const MAX_REQ_EVENTS = 5000;
 //   • HELD EVENTS: the paused streams of ONE socket keep their matched arrays alive. MAX_SUBS_PER_CONN is 256, so
 //     without a bound one connection could park 256 × MAX_REQ_EVENTS parsed events. Past WS_MAX_HELD (4 ×
 //     MAX_REQ_EVENTS; the measured console needs ~4,300) the socket is closed instead.
+//   • HELD BYTES, per socket (audit 2026-11-11 F1): an event can be ~1 MB (maxPayload), so an event COUNT bounds
+//     nothing in bytes. A paused stream keeps its WHOLE items array referenced until it ends, so when a stream first
+//     pauses it charges the serialized JSON length of every item in that array (a proxy: parsed objects cost more
+//     heap than their JSON, and this is the same proxy for every socket). Past WS_MAX_HELD_BYTES (32 MB: ~2× the
+//     measured console's ~17 MB, so the console that motivated this pauses with room to spare) the socket is closed.
+//   • HELD BYTES, relay-wide: MAX_CONNS is 5000 and there is deliberately no per-IP cap, so a per-socket bound alone
+//     still lets many sockets park ~5000 × 32 MB. Past WS_MAX_HELD_BYTES_ALL (128 MB — about seven measured consoles
+//     paused at once; a self-hosting church's 1 GB Raspberry Pi cannot spare much more heap than that, and the parsed
+//     objects behind 128 MB of JSON already cost several times that) the socket whose pause would cross it is closed;
+//     sockets already paused are never touched. A stream's charge is released exactly once: when it finishes, is
+//     abandoned (socket gone, stalled, or closed for a bound), whichever comes first.
+//   • TOTAL STALL, per stream: the 30 s STALL bound re-arms every time the buffer dips under low-water, so a reader
+//     that trickles (~26 KB/s) was never closed. A stream still paused WS_STALL_TOTAL_MS (300 s) after it FIRST paused
+//     is closed at its next pause. 300 s: the measured 17 MB console finishes inside it on any link sustaining ~60 KB/s;
+//     the bound is what returns a trickler's held bytes, not what stops a fast reader. A stream can therefore live at
+//     most WS_STALL_TOTAL_MS + WS_PAUSE_MS after its first pause.
 // Per-socket memory while paused is therefore ≤ high-water + one event in the buffer (every send re-checks first, and
 // paused streams share the ONE socket buffer — a resumed stream that pushes it back over high-water makes the next one
-// wait again), plus ≤ WS_MAX_HELD events. Only WHEN is changed: what is sent, its order, the gates and the EOSE are not.
-// The env overrides exist for scripts/a-slow-reader-is-paused-not-dropped.test.mjs; production uses the defaults.
+// wait again), plus ≤ WS_MAX_HELD events and ≤ WS_MAX_HELD_BYTES of JSON, for ≤ WS_STALL_TOTAL_MS + WS_PAUSE_MS per
+// stream, and ≤ WS_MAX_HELD_BYTES_ALL across the relay. Only WHEN is changed: what is sent, its order, the gates and
+// the EOSE are not. The env overrides (RELAY_WS_*) exist for scripts/a-slow-reader-is-paused-not-dropped.test.mjs and
+// scripts/a-slow-reader-cannot-hold-unbounded-memory.test.mjs; production uses the defaults.
 const _envInt = (k, d) => { const n = parseInt(process.env[k], 10); return n > 0 ? n : d; };
 const WS_HIGH_WATER = _envInt('RELAY_WS_HIGH_WATER', 1024 * 1024);        // pause a backlog stream past 1 MB queued
 const WS_LOW_WATER = Math.min(_envInt('RELAY_WS_LOW_WATER', 256 * 1024), WS_HIGH_WATER);   // resume below 256 KB
 const MAX_WS_BUFFER = _envInt('RELAY_WS_HARD_CAP', 16 * 1024 * 1024);    // hard cap: past this, close (audit II's bound)
 const WS_PAUSE_MS = _envInt('RELAY_WS_PAUSE_MS', 30000);                 // stall bound: paused this long without draining → close
 const WS_MAX_HELD = _envInt('RELAY_WS_MAX_HELD', 4 * MAX_REQ_EVENTS);    // events one socket's paused streams may hold
+const WS_MAX_HELD_BYTES = _envInt('RELAY_WS_MAX_HELD_BYTES', 32 * 1024 * 1024);          // JSON bytes one socket's paused streams may hold
+const WS_MAX_HELD_BYTES_ALL = _envInt('RELAY_WS_MAX_HELD_BYTES_ALL', 128 * 1024 * 1024);  // …and every socket's together
+const WS_STALL_TOTAL_MS = _envInt('RELAY_WS_STALL_TOTAL_MS', 300000);     // a stream paused this long after its FIRST pause → close
+let _heldBytesAll = 0;                                                      // relay-wide sum of every paused stream's charge
 const WS_DRAIN_POLL_MS = 25;
 function _tooSlow(ws) { try { ws.close(1009, 'too slow'); } catch {} }
 // One poller per socket, shared by all of its paused streams. Resolves each waiter true (drained) or false (socket gone,
@@ -9119,15 +9141,26 @@ function _waitDrain(ws) {
 // pause, so a stream whose subscription was CLOSEd or replaced while it waited stops instead of sending to it. Calls
 // onDone() when every item has been offered — SYNCHRONOUSLY when no pause was needed, so a client that reads promptly
 // sees exactly the old timing. onDone is never called if the socket closed or the stream was abandoned.
-function pumpBacklog(ws, items, send, wanted, onDone) {
-  let i = 0, held = 0;
-  const release = () => { if (held) { ws._held = Math.max(0, (ws._held || 0) - held); held = 0; } };
+// size(item) is the item's serialized JSON length — what it costs to hold (see HELD BYTES above).
+function pumpBacklog(ws, items, send, wanted, onDone, size) {
+  let i = 0, held = 0, bytes = 0, firstPause = 0;
+  // Idempotent: the counters are zeroed as they are returned, so a second call returns nothing.
+  const release = () => {
+    if (held) { ws._held = Math.max(0, (ws._held || 0) - held); held = 0; }
+    if (bytes) { ws._heldBytes -= bytes; _heldBytesAll -= bytes; bytes = 0; }
+  };
   const run = () => {
     for (; i < items.length; i++) {
       if (ws.readyState !== 1) { release(); return; }
       if (ws.bufferedAmount > MAX_WS_BUFFER) { release(); _tooSlow(ws); return; }
       if (ws.bufferedAmount > WS_HIGH_WATER) {
-        if (!held) { held = items.length - i; ws._held = (ws._held || 0) + held; if (ws._held > WS_MAX_HELD) { release(); _tooSlow(ws); return; } }
+        if (!firstPause) {
+          firstPause = Date.now();
+          held = items.length - i; ws._held = (ws._held || 0) + held;
+          for (const it of items) bytes += size(it);   // the WHOLE array: it stays referenced until the stream ends
+          ws._heldBytes = (ws._heldBytes || 0) + bytes; _heldBytesAll += bytes;
+          if (ws._held > WS_MAX_HELD || ws._heldBytes > WS_MAX_HELD_BYTES || _heldBytesAll > WS_MAX_HELD_BYTES_ALL) { release(); _tooSlow(ws); return; }
+        } else if (Date.now() - firstPause > WS_STALL_TOTAL_MS) { release(); _tooSlow(ws); return; }
         _waitDrain(ws).then(ok => { if (!ok) { release(); return; } run(); });
         return;
       }
@@ -9370,6 +9403,11 @@ wss.on('connection', (ws, req) => {
         || Object.keys(f).some(k => k[0] === '#' && !Array.isArray(f[k])));
       if (badFilter) { ws.send(JSON.stringify(['CLOSED', subId, 'invalid: malformed filter'])); return; }
       mysubs.set(subId, filters);
+      // A REQ that REPLACES a subId whose EOSE is still held (audit 2026-11-11 F4) takes that EOSE with it: the held one
+      // vouched for the OLD stream, and left listed it would be sent by its grace timer or by an AUTH replay's flush
+      // before this stream's events — then this stream's own EOSE would be a second one. This stream's onDone re-holds
+      // its own EOSE if it needs to.
+      if (ws._pendingEose && ws._pendingEose.has(subId)) { const t = ws._pendingEose.get(subId); if (t) clearTimeout(t); ws._pendingEose.delete(subId); }
       // serve everything this connection may read now (blocked members withheld; invite-only group
       // messages withheld from non-members per NIP-42)
       let matched = []; const _seen = new Set(); let wantsSafeguard = false;
@@ -9448,7 +9486,7 @@ wss.on('connection', (ws, req) => {
         // for this subscription is what our EOSE vouches for, so let the replay's flush send it.
         } else if (wantsSafeguard && ws._replaying) { if (!ws._pendingEose) ws._pendingEose = new Map(); ws._pendingEose.set(subId, null);
         } else ws.send(JSON.stringify(['EOSE', subId]));
-      });
+      }, e => JSON.stringify(e).length);
     } else if (type === 'AUTH') {
       // NIP-42: the client proves which pubkey it controls, so we can serve it invite-only group reads
       const evt = rest[0];
@@ -9490,15 +9528,23 @@ wss.on('connection', (ws, req) => {
           // Collected first (same scan, same gates, same order), then sent through pumpBacklog so a large replay
           // pauses for a slow reader instead of closing it. Each item remembers the filters it was found for, so a
           // subscription CLOSEd or replaced while the replay is paused is skipped rather than sent to.
-          const _replay = [];
-          if (mine) for (const [subId, filters] of mine) {
+          // HELD BYTES applies here BEFORE anything is sent (audit 2026-11-11 F1, LOW): the whole replay is built in
+          // memory first, so a replay larger than one socket's byte budget is refused while it is being collected —
+          // closed 1009 like any other over-budget stream — rather than built in full and refused at its first pause.
+          const _replay = []; let _replayBytes = 0;
+          if (mine) collect: for (const [subId, filters] of mine) {
             const seen = new Set();
             for (const f of filters) for (const e of store.query(f, _replayBudget)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
               if (blockedBy(e.pubkey, owningChurch(e, (e.tags.find(t => t[0] === 'd') || [])[1] || '')) || !canRead(e, ws._auth)) continue;
-              if (!canRead(e, null)) _replay.push([subId, filters, e]);
+              if (!canRead(e, null)) {
+                const len = JSON.stringify(e).length;
+                if ((_replayBytes += len) + (ws._heldBytes || 0) > WS_MAX_HELD_BYTES) { _replay.length = 0; break collect; }
+                _replay.push([subId, filters, e, len]);
+              }
             }
           }
+          if (_replayBytes + (ws._heldBytes || 0) > WS_MAX_HELD_BYTES) { _tooSlow(ws); return; }
           // The deferred EOSEs wait for the replay, not for their 2.5 s grace timer: if the replay has to pause, a
           // timer firing mid-replay would tell the client "that is everything" before the withheld docs arrive —
           // the premature EOSE AUDIT-2026-07-24 exists to prevent. Disarm them (the subIds stay listed) until it ends.
@@ -9512,7 +9558,7 @@ wss.on('connection', (ws, req) => {
               for (const [sid, t] of ws._pendingEose) { if (t) clearTimeout(t); try { ws.send(JSON.stringify(['EOSE', sid])); } catch {} }
               ws._pendingEose.clear();
             }
-          });
+          }, it => it[3]);
         } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, boundToUs ? 'auth-failed: bad challenge or signature' : 'auth-failed: this auth is not addressed to this relay']));
       } catch { ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed'])); }
     } else if (type === 'CLOSE') { subs.get(ws)?.delete(rest[0]); }

@@ -23,7 +23,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 import { D } from './trinity-doc-types.mjs';
 
-const PORT = 8947;
+const PORT = 8951;
 const HTTP = `http://127.0.0.1:${PORT}`;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const NET = 'trinityone';
@@ -49,6 +49,12 @@ function client() {
   });
 }
 const send = (c, m) => c.ws.send(JSON.stringify(m));
+// Resolves once the socket has delivered nothing for `ms` (or closed): everything the relay was going to send has arrived.
+const quiet = async (c, ms, max = 40000) => { const t0 = Date.now(); let n = -1, since = Date.now(); while (Date.now() - t0 < max) { if (c.log.length !== n) { n = c.log.length; since = Date.now(); } else if (Date.now() - since >= ms || c.closeCode !== null) return; await sleep(50); } throw new Error('socket never went quiet'); };
+// What can be in flight when the relay stops a stream: the kernel's socket buffers on both ends plus one high-water
+// mark. Measured on loopback here it is a few MB; a whole subscription (N events, ~8 MB) is a generous ceiling that a
+// stream which was NOT stopped (N x SUBS events) still overshoots six-fold.
+const IN_FLIGHT = N;
 const until = async (pred, ms, what) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (pred()) return; await sleep(20); } throw new Error('timed out waiting for ' + what); };
 const authEvent = ch => finalizeEvent({ kind: 22242, created_at: Math.floor(Date.now() / 1000), tags: [['challenge', ch], ['relay', WS_URL]], content: '' }, ann.sk);
 const BIG = { kinds: [30078], authors: [church.pub] };
@@ -86,7 +92,11 @@ before(async () => {
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)],
     { cwd: new URL('..', import.meta.url).pathname,
       env: { ...process.env, TRINITY_DATA_DIR: dataDir, CHURCH_NPUB: npubEncode(church.pub), TRINITY_TAILSCALE_BIN: '/nonexistent', RELAY_LOOPBACK_ONLY: '1',
-        RELAY_WS_HIGH_WATER: String(64 * 1024), RELAY_WS_LOW_WATER: String(16 * 1024), RELAY_WS_PAUSE_MS: String(PAUSE_MS) },
+        RELAY_WS_HIGH_WATER: String(64 * 1024), RELAY_WS_LOW_WATER: String(16 * 1024), RELAY_WS_PAUSE_MS: String(PAUSE_MS),
+        // The byte budgets (production 32 MB per socket / 128 MB relay-wide) are raised here so that THIS file tests
+        // pausing and the stall bound with a 48 MB backlog; the budgets have their own file,
+        // a-slow-reader-cannot-hold-unbounded-memory.test.mjs.
+        RELAY_WS_MAX_HELD_BYTES: String(256 * 1024 * 1024), RELAY_WS_MAX_HELD_BYTES_ALL: String(1024 * 1024 * 1024) },
       stdio: 'ignore' });
   await waitReady();
   // Seed: Ann joins; the church publishes N ~20 KB sermons. Paced under the 100 msg/s inbound limit.
@@ -100,6 +110,8 @@ before(async () => {
     assert.equal(ok, true, 'sermon ' + i + ' stored');
     if (i % 50 === 49) await sleep(700);
   }
+  // One large PUBLIC event (a relay list is world-readable) for (d) to fill an anonymous reader's buffer with.
+  assert.equal(await pub(finalizeEvent({ kind: 10002, created_at: ++t, tags: [['r', 'wss://example.invalid']], content: 'x'.repeat(FILL_BYTES) }, church.sk)), true, 'large kind-10002 stored');
   c.ws.close();
 });
 after(async () => { try { relay && relay.kill('SIGKILL'); } catch {} await sleep(200); try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
@@ -133,7 +145,7 @@ test('(a2) AUTH replay path: a large replay of withheld docs to a slow reader pa
   c.ws.close();
 });
 
-test('(b) a reader that NEVER drains is still closed 1009 "too slow" after the stall bound', { timeout: 60000 }, async () => {
+test('(b) a reader that NEVER drains is still closed 1009 "too slow" after the stall bound', { timeout: 60000 }, async t => {
   const c = await client();
   await signIn(c);
   c.ws.pause();
@@ -143,11 +155,12 @@ test('(b) a reader that NEVER drains is still closed 1009 "too slow" after the s
   await Promise.race([c.closed, sleep(30000)]);
   assert.equal(c.closeCode, 1009, `expected 1009, got ${c.closeCode}`);
   const got = c.log.filter(m => m[0] === 'EVENT' && String(m[1]).startsWith('b')).length;
-  assert.ok(got < N * SUBS, `the stalled reader was sent everything (${got}) — nothing was withheld`);
+  t.diagnostic(`events received before the close: ${got} (bound ${IN_FLIGHT}; never stopped: ${N * SUBS})`);
+  assert.ok(got <= IN_FLIGHT, `the stalled reader was sent ${got} events — more than could have been in flight when it was closed`);
   assert.ok(!subIds('b').every(sid => c.log.some(m => m[0] === 'EOSE' && m[1] === sid)), 'every EOSE arrived — the stream was never stopped');
 });
 
-test('(c) a subscription CLOSEd while its stream is paused gets nothing more and no EOSE; the socket stays usable', { timeout: 60000 }, async () => {
+test('(c) a subscription CLOSEd while its stream is paused gets nothing more and no EOSE; the socket stays usable', { timeout: 60000 }, async t => {
   const c = await client();
   await signIn(c);
   c.ws.pause();
@@ -158,11 +171,65 @@ test('(c) a subscription CLOSEd while its stream is paused gets nothing more and
   send(c, ['REQ', 'after', { kinds: [30078], authors: [ann.pub] }]);
   c.ws.resume();
   await until(() => c.log.some(m => m[0] === 'EOSE' && m[1] === 'after') || c.closeCode !== null, 30000, 'EOSE for the later REQ');
-  await sleep(1000);                              // let anything a leaked stream would still send arrive
+  // Drain FULLY: a stream that ignored the CLOSE keeps sending at loopback speed after resume(), so wait until the
+  // socket has been silent for 1.5 s — by then a leaked stream has sent everything it had (audit 2026-11-11 F2: the
+  // old check ran while such streams were still mid-way, so it passed even with the CLOSE check removed).
+  await quiet(c, 1500);
   assert.equal(c.closeCode, null, `closed (code ${c.closeCode})`);
   const got = c.log.filter(m => m[0] === 'EVENT' && String(m[1]).startsWith('c')).length;
-  assert.ok(got < N * SUBS, `all ${got} events of the closed subscriptions were sent anyway`);
+  t.diagnostic(`events received for the CLOSEd subs: ${got} (bound ${IN_FLIGHT}; never stopped: ${N * SUBS})`);
+  assert.ok(got <= IN_FLIGHT, `${got} events of the CLOSEd subscriptions arrived — more than was in flight when they were CLOSEd`);
   for (const sid of subIds('c')) assert.ok(!c.log.some(m => m[0] === 'EOSE' && m[1] === sid), `${sid}: EOSE sent after CLOSE`);
   assert.ok(c.log.some(m => m[0] === 'EVENT' && m[1] === 'after'), 'the later REQ was answered');
+  c.ws.close();
+});
+
+// (d) audit 2026-11-11 F3 — the held-EOSE branch for a REQ that was asked UNAUTHENTICATED, was paused, and finishes
+// while an AUTH replay (itself paused) is still sending what that REQ was denied. Its EOSE must wait for the replay.
+// The only thing an anonymous reader can be sent in bulk is public, so the buffer is filled with one large kind-10002
+// (relay list, world-readable) asked for many times; the sub under test asks for that public event AND the sermons.
+const FILL = 24, FILL_BYTES = 800 * 1024;
+test('(d) a paused REQ that finishes DURING an AUTH replay: all its events, then exactly one EOSE', { timeout: 60000 }, async () => {
+  const c = await client();
+  send(c, ['REQ', 'probe', { kinds: [30078], authors: [ann.pub] }]);   // the challenge is per connection: learn it while reading
+  await until(() => c.challenge, 5000, 'AUTH challenge');
+  send(c, ['CLOSE', 'probe']);
+  c.ws.pause();
+  for (let k = 0; k < FILL; k++) send(c, ['REQ', 'fill' + k, { kinds: [10002], authors: [church.pub] }]);
+  send(c, ['REQ', 'd', { kinds: [10002, 30078], authors: [church.pub] }]);   // public 10002 (paused behind the fill) + withheld sermons
+  send(c, ['AUTH', authEvent(c.challenge)]);   // replay of d's N sermons starts — paused too
+  await sleep(1500);
+  c.ws.resume();
+  await until(() => c.log.some(m => m[0] === 'EOSE' && m[1] === 'd') || c.closeCode !== null, 40000, 'EOSE for d');
+  await quiet(c, 1500);
+  assert.equal(c.closeCode, null, `closed (code ${c.closeCode})`);
+  const mine = c.log.filter(m => m[1] === 'd' && (m[0] === 'EVENT' || m[0] === 'EOSE'));
+  const evs = mine.filter(m => m[0] === 'EVENT');
+  assert.equal(evs.filter(m => m[2].kind === 10002).length, 1, 'the public event was sent once');
+  assert.equal(new Set(evs.filter(m => m[2].kind === 30078).map(m => m[2].id)).size, N, 'every withheld sermon was replayed');
+  assert.equal(mine.filter(m => m[0] === 'EOSE').length, 1, 'exactly one EOSE');
+  assert.equal(mine[mine.length - 1][0], 'EOSE', `EOSE came before ${mine.length - 1 - mine.findIndex(m => m[0] === 'EOSE')} of d's events`);
+  c.ws.close();
+});
+
+// (e) audit 2026-11-11 F4 — a signed-in REQ that REPLACES a subId whose unauthenticated EOSE is still held. That held
+// EOSE vouched for the OLD stream; flushed by the replay it would land before the new stream's events, then a second.
+test('(e) a REQ that replaces a sub whose EOSE is held gets exactly one EOSE, after all its events', { timeout: 60000 }, async () => {
+  const c = await client();
+  for (const sid of subIds('e')) send(c, ['REQ', sid, BIG]);   // unauthenticated: withheld, EOSEs held
+  await until(() => c.challenge, 5000, 'AUTH challenge');
+  c.ws.pause();
+  send(c, ['AUTH', authEvent(c.challenge)]);   // ~48 MB replay, paused
+  send(c, ['REQ', 'e0', BIG]);                  // signed in now: replaces e0 while its old EOSE is still listed
+  await sleep(1500);
+  c.ws.resume();
+  await until(() => subIds('e').every(sid => c.log.some(m => m[0] === 'EOSE' && m[1] === sid)) || c.closeCode !== null, 40000, 'all EOSEs');
+  await quiet(c, 1500);
+  assert.equal(c.closeCode, null, `closed (code ${c.closeCode})`);
+  const mine = c.log.filter(m => m[1] === 'e0' && (m[0] === 'EVENT' || m[0] === 'EOSE'));
+  assert.equal(mine.filter(m => m[0] === 'EOSE').length, 1, `e0 got ${mine.filter(m => m[0] === 'EOSE').length} EOSEs`);
+  assert.equal(mine[mine.length - 1][0], 'EOSE', 'e0: EOSE came last');
+  assert.equal(new Set(mine.filter(m => m[0] === 'EVENT').map(m => m[2].id)).size, N, 'e0: every event');
+  assertComplete(c, subIds('e').slice(1), false);
   c.ws.close();
 });
