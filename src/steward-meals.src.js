@@ -71,6 +71,12 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   // Used for the settings, needs, slots and skips READS. The request/chat/careteam paths further down still
   // use churchPub: they mix "the church" with "me" and need a per-site decision (see publishCareTeam).
   const activeChurch = () => { const s = S(); return (s && (s.actingChurch || s.churchPub)) || ''; };
+  // THE CHURCH FEED (Steward.corpusSubscribe, see _corpusSub in src/steward.src.js) for the three readers whose filters
+  // are the church corpus — settings, needs, and the slots/skips stream — so Care does not download the whole church
+  // again on every connect. The feed takes a reader only when its filters name the church the feed is for: in the
+  // network view `activeChurch()` is the console's own church while the feed is the network's, and those reads fall
+  // through to subscribeMany, exactly as before. An engine without the feed (or one that returns nothing): subscribeMany.
+  const _corpusRead = (filters, handlers) => { const s = S(); return (typeof s.corpusSubscribe === 'function' && s.corpusSubscribe(filters, handlers)) || s.subscribeMany(filters, handlers); };
   const enKey = () => 'trinityone.meals.enabled.' + activeChurch();
   function cachedEnabled() { try { return localStorage.getItem(enKey()) === '1'; } catch (e) { return false; } }
 
@@ -156,7 +162,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     cb({ ...DEFAULTS, enabled: cachedEnabled() });   // paint immediately so the nav item is correct on first render
     const seen = { ts: 0, doc: { ...DEFAULTS } };
     const emit = () => { try { localStorage.setItem(enKey(), seen.doc.enabled ? '1' : '0'); } catch (e) {} cb({ ...seen.doc }); };
-    const sub = S().subscribeMany(
+    const sub = _corpusRead(
       [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }],
       {
         onevent(e) {
@@ -380,7 +386,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const emit = () => { const list = [...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)); cb(list); if (eosed && _mayCacheSeed() && (list.length || sawNeed)) _writeSeed(_needsSeedKey(), list.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '') || (b.ts || 0) - (a.ts || 0)).map(_needSeedRow)); };
     // paint the last-known PUBLIC SUBSET instantly (sealed cards show "details hidden" until the key lands)
     { const seeded = _readSeed(_needsSeedKey()); if (seeded.length) cb(seeded); }
-    const sub = S().subscribeMany(
+    const sub = _corpusRead(
       [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }],
       {
         onevent(e) {
@@ -429,7 +435,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const emit = () => { const list = [...byKey.values()]; cb(list); if (eosed && seedKeyFn && seedRowFn && _mayCacheSeed() && (list.length || sawRow)) _writeSeed(seedKeyFn(), list.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(seedRowFn)); };
     // paint the last-known STRUCTURAL SUBSET instantly so the slot grid doesn't flash empty
     if (seedKeyFn) { const seeded = _readSeed(seedKeyFn()); if (seeded.length) cb(seeded); }
-    const sub = S().subscribeMany(
+    const sub = _corpusRead(
       [{ kinds: [30078], '#church': [activeChurch()], '#t': [NET] }],
       {
         onevent(e) {
