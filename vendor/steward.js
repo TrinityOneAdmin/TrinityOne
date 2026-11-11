@@ -21539,7 +21539,7 @@ zoo`.split("\n");
     // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
     subscribeMessageTags(cb) {
       let bestTs = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MSGTAGS_D], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [MSGTAGS_D], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
@@ -27519,7 +27519,7 @@ zoo`.split("\n");
         { everyRelay: true }
       );
       let stopRead = openRead();
-      const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [NAME_D + pub, RESEAT_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [NAME_D + pub, RESEAT_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d === NAME_D + pub) {

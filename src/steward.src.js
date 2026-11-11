@@ -8272,7 +8272,7 @@ window.Steward = {
   // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
   subscribeMessageTags(cb) {
     let bestTs = 0;
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MSGTAGS_D], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [MSGTAGS_D], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
@@ -14275,7 +14275,7 @@ window.Steward = {
     // (DOMAIN.md "same member Anonymous on one console, named on another", 2026-10-13). RULE 10 / RELAY-ADMISSION
     // SAFE: relays() is the same proof-gated publish set it always was; this widens nothing and changes no admission
     // decision — it only re-reads the church's OWN relays once the gate has admitted one more of them.
-    const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [NAME_D + pub, RESEAT_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [NAME_D + pub, RESEAT_D + pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         // a member's own sealed name for this church — authorised by AUTHORSHIP (it is their own name), so the
