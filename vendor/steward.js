@@ -18057,6 +18057,7 @@ zoo`.split("\n");
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
+  var _stewardedBroad = null;
   function _consoleDisplay(rec) {
     if (!_careRosterKnown) return true;
     const by = String(rec && rec._by || "");
@@ -20774,6 +20775,7 @@ zoo`.split("\n");
       currentMnemonic = null;
       churchSk = null;
       churchPub = null;
+      _stewardedBroad = null;
       window.Steward.pubkey = null;
       window.Steward.npub = null;
       window.Steward.hasKey = false;
@@ -21337,6 +21339,10 @@ zoo`.split("\n");
               a.push(cp);
               localStorage.setItem(RK, JSON.stringify(a));
             }
+          } catch (e) {
+          }
+          try {
+            window.dispatchEvent(new CustomEvent("steward-stewarded-watch"));
           } catch (e) {
           }
         }
@@ -28066,16 +28072,43 @@ zoo`.split("\n");
         }
         nameSubs.clear();
       };
+      const narrowDs = () => {
+        const cps = new Set(stewardedChurches.keys());
+        try {
+          const a = JSON.parse(localStorage.getItem("trinityone.steward.requested." + (me || "")) || "[]");
+          if (Array.isArray(a)) a.forEach((x) => cps.add(String(x || "")));
+        } catch (e) {
+        }
+        try {
+          cps.add(localStorage.getItem(PENDING_CHURCH_KEY) || "");
+        } catch (e) {
+        }
+        cps.delete("");
+        cps.delete(me);
+        return [...cps].sort().map((cp) => STEWARDS_D + cp);
+      };
+      let filterKey = "";
       const open = (urls) => {
         if (closed) return;
-        const same = sub && urls.length === dialled.length && urls.every((u) => dialled.includes(u));
+        const broad = !(_stewardedBroad && _stewardedBroad.me === me && urls.every((u) => _stewardedBroad.urls.has(u)));
+        const ds = broad ? [] : narrowDs();
+        const key = broad ? "*" : ds.join(",");
+        const same = sub && urls.length === dialled.length && urls.every((u) => dialled.includes(u)) && key === filterKey;
         if (same) return;
         closeAll();
         dialled = urls.slice();
+        filterKey = key;
         if (!dialled.length) return;
         [...stewardedChurches.keys()].forEach(resolveName);
         const seenAt = /* @__PURE__ */ new Map();
-        sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }, { kinds: [30078], "#d": [STEWARDREVOKE_D + me] }], {
+        const revoke = { kinds: [30078], "#d": [STEWARDREVOKE_D + me] };
+        const filters = broad ? [{ kinds: [30078], "#t": [NET] }, revoke] : ds.length ? [{ kinds: [30078], "#t": [NET], "#d": ds }, revoke] : [revoke];
+        const these = dialled.slice();
+        let allClosed = false, mine = null;
+        mine = sub = pool.subscribeMany(dialled, filters, {
+          onclose() {
+            allClosed = true;
+          },
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (d.startsWith(STEWARDREVOKE_D)) {
@@ -28150,6 +28183,9 @@ zoo`.split("\n");
           },
           oneose() {
             cb([...stewardedChurches.keys()]);
+            if (broad) queueMicrotask(() => {
+              if (!allClosed && !closed && sub === mine) _stewardedBroad = { me, urls: new Set(these) };
+            });
           }
         });
       };
@@ -28173,14 +28209,33 @@ zoo`.split("\n");
         window.addEventListener("steward-relay-returned", onReturned);
       } catch (e) {
       }
+      const onWatch = () => {
+        if (!closed && dialled.length) open(dialled);
+      };
+      try {
+        window.addEventListener("steward-stewarded-watch", onWatch);
+      } catch (e) {
+      }
       return () => {
         closed = true;
         try {
           window.removeEventListener("steward-relay-returned", onReturned);
         } catch (e) {
         }
+        try {
+          window.removeEventListener("steward-stewarded-watch", onWatch);
+        } catch (e) {
+        }
         closeAll();
       };
+    },
+    // Run subscribeStewardedChurches' broad discovery read again now (it otherwise runs once per unlocked session).
+    refreshStewardedChurches() {
+      _stewardedBroad = null;
+      try {
+        window.dispatchEvent(new CustomEvent("steward-stewarded-watch"));
+      } catch (e) {
+      }
     },
     // this church's network memberships -> [{ networkPub, npub }]
     subscribeNetworks(onNetworks) {

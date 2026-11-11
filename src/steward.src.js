@@ -3564,6 +3564,13 @@ let lastProfile = {};   // cached church profile so partial publishProfile edits
 // relay grants the delegated authority. Empty = acting as our own identity (owner/normal). See STEWARD-ROSTER-DESIGN.md.
 let actingChurch = '';
 const stewardedChurches = new Map();   // cp(hex) -> { name } — churches whose roster lists OUR key
+// THE BROAD DISCOVERY READ, ONCE A SESSION (2026-11-11). subscribeStewardedChurches is re-run on every connection
+// bump, and its discovery read was `{ kinds: [30078], '#t': [NET] }` over every dialled relay — every church's whole
+// corpus, each time. It cannot simply be narrowed to the churches we asked to join: a church can add a helper
+// DIRECTLY, with no request (app/stew-dashboard.jsx, the Helpers panel), and only a broad read finds that. So the
+// broad read runs once per unlocked session per relay; every later opening asks only for the rosters it can name
+// (see `_stewardedNarrowDs`). { me, urls: Set } — the key it ran for and the relays that answered it; null after a lock.
+let _stewardedBroad = null;
 // finalize a CHURCH-CONTENT event, stamping ['church',<cp>] when delegated so the relay accepts our key.
 // Signs with the active key `sk` (our own key in delegated mode; the church/network key otherwise).
 // WHO MAY SPEAK FOR THIS CHURCH, as this console sees it. The member app has _churchVoice for exactly this
@@ -7535,6 +7542,7 @@ window.Steward = {
     if (needsPin) return;
     sk = null; pub = null; currentMnemonic = null;
     churchSk = null; churchPub = null;
+    _stewardedBroad = null;   // the next unlock runs subscribeStewardedChurches' broad discovery read again
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
     window.Steward.locked = !!lsGet(ENC_LS);
     // Only an IDLE lock re-arms the stay-open replay, so the lock screen reopens from the live record.
@@ -8106,6 +8114,9 @@ window.Steward = {
       // the same gate as PENDING_CHURCH_KEY, so a request nobody received records nothing to retract.
       .then((ok) => { if (ok) { try { localStorage.setItem(PENDING_CHURCH_KEY, cp); } catch (e) {}
           try { const RK = 'trinityone.steward.requested.' + (churchPub || ''); let a = []; try { a = JSON.parse(localStorage.getItem(RK) || '[]') || []; } catch (e) { a = []; } if (!Array.isArray(a)) a = []; if (!a.includes(cp)) { a.push(cp); localStorage.setItem(RK, JSON.stringify(a)); } } catch (e) {}
+          // …and tell an open subscribeStewardedChurches, whose narrow read names the churches it asks about: it
+          // re-opens with this one in the list, so the grant is seen while this session watches.
+          try { window.dispatchEvent(new CustomEvent('steward-stewarded-watch')); } catch (e) {}
         } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
   },
   // THE "WAITING TO BE APPROVED AS A HELPER" STATE, for the console's onboarding screen. A console that minted a
@@ -14736,19 +14747,41 @@ window.Steward = {
       try { if (sub) sub.close(); } catch {} sub = null;
       for (const s of nameSubs.values()) { try { s.close(); } catch {} } nameSubs.clear();
     };
+    // WHICH ROSTERS A NARROW READ ASKS FOR: every church this console can name — the ones it already stewards (the
+    // cache above plus anything found since), the ones it asked to join (the requested set requestSteward keeps), and
+    // the one it is waiting on (PENDING_CHURCH_KEY). A church that added us directly is found by the broad read.
+    const narrowDs = () => {
+      const cps = new Set(stewardedChurches.keys());
+      try { const a = JSON.parse(localStorage.getItem('trinityone.steward.requested.' + (me || '')) || '[]'); if (Array.isArray(a)) a.forEach(x => cps.add(String(x || ''))); } catch (e) {}
+      try { cps.add(localStorage.getItem(PENDING_CHURCH_KEY) || ''); } catch (e) {}
+      cps.delete(''); cps.delete(me);
+      return [...cps].sort().map(cp => STEWARDS_D + cp);
+    };
+    let filterKey = '';
     const open = (urls) => {
       if (closed) return;
-      const same = sub && urls.length === dialled.length && urls.every(u => dialled.includes(u));
-      if (same) return;                       // the proof landed for a set we already dialled
+      // ONCE PER SESSION PER RELAY (see _stewardedBroad): broad when this key has no completed broad read covering
+      // every relay dialled now; otherwise only the named rosters. The revoke filter is in both, as it always was.
+      const broad = !(_stewardedBroad && _stewardedBroad.me === me && urls.every(u => _stewardedBroad.urls.has(u)));
+      const ds = broad ? [] : narrowDs();
+      const key = broad ? '*' : ds.join(',');
+      const same = sub && urls.length === dialled.length && urls.every(u => dialled.includes(u)) && key === filterKey;
+      if (same) return;                       // the proof landed for a set we already dialled, asking the same question
       closeAll();
       dialled = urls.slice();
+      filterKey = key;
       if (!dialled.length) return;            // nothing proved: keep listening for a relay to return
       [...stewardedChurches.keys()].forEach(resolveName);   // refresh names for cached entries
       const seenAt = new Map();
       // The revoke filter rides the SAME already-NIP-42-authed socket as the roster read, because the relay serves
       // d=stewardrevoke:<me> to its subject ALONE (canRead STEWARDREVOKE_D branch) — an unauthenticated socket gets
       // nothing. `me` (= churchPub) is this helper's own key, the subject the owner's console addressed.
-      sub = pool.subscribeMany(dialled, [{ kinds: [30078], '#t': [NET] }, { kinds: [30078], '#d': [STEWARDREVOKE_D + me] }], {
+      const revoke = { kinds: [30078], '#d': [STEWARDREVOKE_D + me] };
+      const filters = broad ? [{ kinds: [30078], '#t': [NET] }, revoke] : ds.length ? [{ kinds: [30078], '#t': [NET], '#d': ds }, revoke] : [revoke];
+      const these = dialled.slice();
+      let allClosed = false, mine = null;
+      mine = sub = pool.subscribeMany(dialled, filters, {
+        onclose() { allClosed = true; },
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           // A DEDICATED REVOCATION NOTICE the removed helper can still read (2026-11-05, helper-delegation). The
@@ -14834,7 +14867,13 @@ window.Steward = {
             cb([...stewardedChurches.keys()]);
           }
         },
-        oneose() { cb([...stewardedChurches.keys()]); },
+        oneose() {
+          cb([...stewardedChurches.keys()]);
+          // THE BROAD READ COUNTS AS DONE ONLY IF IT FINISHED: nostr-tools fires this oneose when every socket has
+          // CLOSED too (our own close, or the relay dropping them), and then onclose straight after, in the same turn.
+          // A broad read that did not finish is run again at the next opening.
+          if (broad) queueMicrotask(() => { if (!allClosed && !closed && sub === mine) _stewardedBroad = { me, urls: new Set(these) }; });
+        },
       });
     };
     if (stewardedChurches.size) cb([...stewardedChurches.keys()]);   // emit the cached list immediately
@@ -14850,12 +14889,19 @@ window.Steward = {
       if (now.some(u => !dialled.includes(u))) open(now);
     };
     try { window.addEventListener('steward-relay-returned', onReturned); } catch (e) {}
+    // RE-ASK WHEN THE LIST OF CHURCHES WE CAN NAME CHANGES (requestSteward), or on refreshStewardedChurches: the same
+    // relays, a different question — open() compares the filter as well as the relays.
+    const onWatch = () => { if (!closed && dialled.length) open(dialled); };
+    try { window.addEventListener('steward-stewarded-watch', onWatch); } catch (e) {}
     return () => {
       closed = true;
       try { window.removeEventListener('steward-relay-returned', onReturned); } catch (e) {}
+      try { window.removeEventListener('steward-stewarded-watch', onWatch); } catch (e) {}
       closeAll();
     };
   },
+  // Run subscribeStewardedChurches' broad discovery read again now (it otherwise runs once per unlocked session).
+  refreshStewardedChurches() { _stewardedBroad = null; try { window.dispatchEvent(new CustomEvent('steward-stewarded-watch')); } catch (e) {} },
   // this church's network memberships -> [{ networkPub, npub }]
   subscribeNetworks(onNetworks) {
     const byId = new Map();

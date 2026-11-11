@@ -116,7 +116,7 @@ function launch(dev, { manualTimers = false } = {}) {
   // the SHIPPED wrappers, bound to this launch's engine
   // lock(reason) is the SHIPPED method; its key-material variables are declared here so it does not leak globals
   const shipped = new Function('_stay', '_enterUnlocked', 'window', 'lsGet', 'CustomEvent',
-    'const ENC_LS = "enc"; let needsPin = false, sk = null, pub = null, currentMnemonic = null, churchSk = null, churchPub = null; return ({ ' + METHODS + ' });')(
+    'const ENC_LS = "enc"; let needsPin = false, sk = null, pub = null, currentMnemonic = null, churchSk = null, churchPub = null, _stewardedBroad = null; return ({ ' + METHODS + ' });')(
     stay, enter, b.window, () => (dev.blob ? 'marker' : null), b.window.CustomEvent);
   for (const k of Object.keys(shipped)) Steward[k] = shipped[k].bind(shipped);
   b.window.Steward = Steward;

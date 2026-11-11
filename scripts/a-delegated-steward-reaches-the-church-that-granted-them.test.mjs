@@ -88,6 +88,8 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     // no pending, so the read returns null and nothing auto-opens — but the identifier must resolve (the proxy
     // throws on an unknown one) so the pending check genuinely runs and finds nothing, which is the control.
     PENDING_CHURCH_KEY: 'pending',
+    // the once-a-session broad discovery read (2026-11-11): null = not yet run this session, so these rows see the broad read
+    _stewardedBroad: null,
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) },
     lsSet: (k, v) => store.set(k, v),
     lsGet: (k) => (store.has(k) ? store.get(k) : null),
