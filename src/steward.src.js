@@ -11086,7 +11086,7 @@ window.Steward = {
       state.approval = approval;
       return true;
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#d': [JOINPOLICY_D + cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#d': [JOINPOLICY_D + cp0], '#t': [NET] }], {
       onevent(e) { if (take(e)) push(); },
       oneose() { push(); },
     });
@@ -11279,7 +11279,7 @@ window.Steward = {
       fold();
       return true;
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#d': [ADMITTED_D + cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#d': [ADMITTED_D + cp0], '#t': [NET] }], {
       onevent(e) { if (take(e)) push(); },
       oneose() { push(); },
     });
@@ -11300,7 +11300,7 @@ window.Steward = {
   // to BECOME them, and would be worth stealing.
   subscribeReseats(onList) {   // the church's re-seat pairs → [{ old, new, at }]
     let cur = [], latest = 0;
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [RESEAT_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [RESEAT_D + pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== RESEAT_D + pub) return;
@@ -11764,7 +11764,7 @@ window.Steward = {
         onList(cur);
       },
     };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [STEWARDS_D + pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#d': [STEWARDS_D + pub], '#t': [NET] }], handlers);
     const stopRead = _freshDocRead(pub, [STEWARDS_D + pub], (e) => handlers.onevent(e),
       () => { tok.genuine = true; tok.at = Date.now(); _careRosterKnown = true; onList([...cur]); _keysReadSignal('stewards'); });
     return () => { tok.live = false; try { sub.close(); } catch {} try { stopRead(); } catch {} };

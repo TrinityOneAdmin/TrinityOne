@@ -24289,7 +24289,7 @@ zoo`.split("\n");
         state.approval = approval;
         return true;
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#d": [JOINPOLICY_D + cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#d": [JOINPOLICY_D + cp0], "#t": [NET] }], {
         onevent(e) {
           if (take(e)) push();
         },
@@ -24518,7 +24518,7 @@ zoo`.split("\n");
         fold();
         return true;
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#d": [ADMITTED_D + cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#d": [ADMITTED_D + cp0], "#t": [NET] }], {
         onevent(e) {
           if (take(e)) push();
         },
@@ -24574,7 +24574,7 @@ zoo`.split("\n");
     // to BECOME them, and would be worth stealing.
     subscribeReseats(onList) {
       let cur = [], latest = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [RESEAT_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [RESEAT_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== RESEAT_D + pub) return;
@@ -24913,7 +24913,7 @@ zoo`.split("\n");
           onList(cur);
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [STEWARDS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [STEWARDS_D + pub], "#t": [NET] }], handlers);
       const stopRead = _freshDocRead(
         pub,
         [STEWARDS_D + pub],
