@@ -105,10 +105,15 @@ test('a box with a clean pass and peers reads "Synced"', () => {
     { state: 'synced', label: 'Synced' });
 });
 
-test('a behind box reads "Catching up…" / an island reads "Not syncing" (fails if the classifier always says Synced)', () => {
+test('an island reads "Not syncing"; a box-wide ok:false does NOT redden this church (Option A, 2026-11-11)', () => {
   const f = relaySyncState();
-  assert.equal(f({ ok: false, error: 'a peer refused this box', peers: 2, at: 1700000000 }).label, 'Catching up…',
-    'a failed/refused pass must not read as synced');
+  // OPTION A (fix/relay-panel-truth-2026-11-11): the `sync.ok === false → Catching up…` branch was REMOVED.
+  // `/status.sync.ok` is the relay's BOX-WIDE aggregate (false if ANY church on the box failed its last pass),
+  // so it bled one church's trouble onto every church's chip. A box-wide red now falls through to unknown/blank
+  // rather than reddening a church that is itself fine. (Pinned also in the-relay-panel-tells-the-truth-2026-11-11.)
+  const red = f({ ok: false, error: 'a peer refused this box', peers: 2, at: 1700000000 });
+  assert.notEqual(red.label, 'Catching up…', 'a box-wide ok:false must not borrow this church\'s chip a red');
+  assert.deepEqual(red, { state: 'unknown', label: '' }, 'a box-wide red falls through to blank');
   assert.equal(f({ ok: true, at: 1700000000, peers: 0 }).state, 'island',
     'peers:0 is an island with nothing to pull from — a stale view can win there; it must not read "Synced"');
   assert.equal(f({ running: true, peers: 1 }).label, 'Catching up…', 'a box mid-import is catching up');

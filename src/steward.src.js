@@ -7718,14 +7718,19 @@ window.Steward = {
   // relayIdentities) — so a box can under- or over-state its own sync and this cannot tell.
   //   · running         → still importing            → "Catching up…"
   //   · peers === 0      → no peer to pull from, an island a stale view can win on → "Not syncing"
-  //   · ok === false     → last pass failed/refused   → "Catching up…"
   //   · ok && at > 0     → a clean pass landed         → "Synced"
   //   · anything else    → unknown, show nothing.
+  //
+  // DELIBERATELY NO `sync.ok === false` BRANCH (removed 2026-11-11, Option A). `/status.sync.ok` is the relay's
+  // BOX-WIDE aggregate — false if ANY church on that box failed its last sync pass — so reddening THIS church's
+  // chip on it bled one church's trouble onto every church's console (a box-wide red turned a healthy church's
+  // "Synced" into a borrowed "Catching up…"). With the branch gone a box-wide failure falls through to the final
+  // `unknown` and the chip shows nothing rather than a borrowed red; the per-church signals that remain (running,
+  // peers, a clean dated pass) still classify this church's own state honestly. DISPLAY ONLY — admits nothing.
   relaySyncState(sync) {
     if (!sync || typeof sync !== 'object') return { state: 'unknown', label: '' };
     if (sync.running) return { state: 'syncing', label: 'Catching up…' };
     if (!(Number(sync.peers) > 0)) return { state: 'island', label: 'Not syncing' };
-    if (sync.ok === false) return { state: 'behind', label: 'Catching up…' };
     if (sync.ok === true && Number(sync.at) > 0) return { state: 'synced', label: 'Synced' };
     return { state: 'unknown', label: '' };
   },
@@ -15201,29 +15206,61 @@ window.Steward = {
   // different facts and the card shows both.
   //
   // A RELAY THIS CONSOLE IS ALREADY TALKING TO IS NOT "DOWN". Sim 2026-10-02 #63: "Your relay: Down" all
-  // afternoon while publishing worked. The probe below dials a THROWAWAY socket every 30 seconds and calls the
-  // relay off if that one fails to open in 2.5s - and a relay that rate-limits new connections, or a slow link,
-  // refuses the throwaway while the pool's own long-lived socket, the one every publish and subscription rides,
-  // is open and healthy. So when the probe says "off" but the pool reports that very relay connected, the answer
-  // is "on" (`viaPool`, no latency - nothing was timed). A probe that succeeds is reported exactly as before.
+  // afternoon while publishing worked; and owner 2026-11-10 saw 0/4 online while a8 and the box were both up.
+  //
+  // R1 (2026-11-11): the dot is derived PRIMARILY from the HELD connection the pool actually maintains, not from
+  // a throwaway `new WebSocket` per relay. A fresh dial with a 2.5s timeout fails on a loaded/slow link while the
+  // pool's own long-lived socket — the one every publish and subscription rides — is open and healthy, so the old
+  // probe mislabelled healthy, held relays as Offline and churned a socket per relay every tick. The dial is now a
+  // LAST-RESORT HINT only, for a relay the pool holds no live socket for (e.g. a candidate not in the publish set),
+  // and never runs for a relay already held open — so the per-tick socket storm is gone for the normal case.
+  //
+  // DISPLAY ONLY — reads the pool's live state, admits nothing, changes no relay list (CLAUDE.md rule 10).
+  //
+  // "Held + listening" is the SAME instance-aware question relaysHealthy()/_keyReadAuthedOn ask, and for the same
+  // reason: a bare `listConnectionStatus() === true` is "connected but not listening" — a dropped socket re-opened
+  // by a one-shot read, with nothing subscribed or re-authed — the exact false-GREEN those were written to defeat.
+  // So "on" requires the OPEN pool socket for this url to be the VERY INSTANCE our subscriptions live on
+  // (_subbedOn), or the one the relay authed / accepted our login on (_authedRelays / _authAccepted). Connection
+  // status alone is never enough, so the false-RED is fixed without trading it for a false-GREEN.
+  //
   // CALLERS (rule 2): app/steward-root.jsx useStewardRelays (-> DashOverview's "Your relay" card, which reads
   // `status === 'on'`) and nothing else; Relays-panel rows read the same array and gain only the `viaPool` flag.
   relayStatus() {
-    return Promise.all(relaysRaw().map(url => new Promise(res => {
-      let done = false; const t0 = Date.now();
+    // The pool is holding an OPEN socket for this url AND it is the instance we are actually listening/authed on.
+    // Keys are normalised in production (_relayKey); the raw-url fallbacks are harmless extra robustness.
+    const heldOn = (url) => {
+      try {
+        const k = _relayKey(url);
+        const live = pool.relays.get(k) || pool.relays.get(url);
+        if (!live) return false;                                          // no pool socket for this url at all
+        const st = pool.listConnectionStatus();
+        if (st.get(k) !== true && st.get(url) !== true) return false;     // present but not an OPEN socket
+        return _subbedOn.get(k) === live || _subbedOn.get(url) === live               // subscriptions live here
+            || _authAccepted.get(k) === live || _authAccepted.get(url) === live       // relay accepted our login here
+            || _authedRelays.get(k) === live || _authedRelays.get(url) === live;      // we signed the challenge here
+      } catch (e) { return false; }
+    };
+    return Promise.all(relaysRaw().map(url => {
       const member = (() => { try { return _gate.admits(url, pub); } catch (e) { return false; } })();
-      const poolUp = () => { try { const st = pool.listConnectionStatus(); return st.get(url) === true || st.get(_relayKey(url)) === true; } catch (e) { return false; } };
-      const finish = (status) => {
-        if (done) return; done = true; try { ws.close(); } catch {}
-        if (status !== 'on' && poolUp()) return res({ url, status: 'on', ms: null, member, viaPool: true });
-        res({ url, status, ms: status === 'on' ? Date.now() - t0 : null, member });
-      };
-      let ws;
-      try { ws = new WebSocket(url); } catch { return finish('off'); }
-      const to = setTimeout(() => finish('off'), 2500);
-      ws.onopen = () => { clearTimeout(to); finish('on'); };
-      ws.onerror = () => { clearTimeout(to); finish('off'); };
-    })));
+      // PRIMARY SIGNAL: a relay the pool genuinely holds open and we are listening/authed on is "on", reported
+      // with no latency (nothing was timed) in the same `viaPool` shape the card already renders.
+      if (heldOn(url)) return Promise.resolve({ url, status: 'on', ms: null, member, viaPool: true });
+      // LAST RESORT: no held, listening socket for this url. One throwaway dial, 2.5s, then closed — so a
+      // reachable box the church no longer writes to still shows reachable rather than vanishing from the panel.
+      return new Promise(res => {
+        let done = false; const t0 = Date.now();
+        const finish = (status) => {
+          if (done) return; done = true; try { ws.close(); } catch {}
+          res({ url, status, ms: status === 'on' ? Date.now() - t0 : null, member });
+        };
+        let ws;
+        try { ws = new WebSocket(url); } catch { return finish('off'); }
+        const to = setTimeout(() => finish('off'), 2500);
+        ws.onopen = () => { clearTimeout(to); finish('on'); };
+        ws.onerror = () => { clearTimeout(to); finish('off'); };
+      });
+    }));
   },
   // live count of the church's footprint on the relay (its own events + everything addressed to it),
   // plus how many of those are the church's own announcements (kind-1 it authored)
