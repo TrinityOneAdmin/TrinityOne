@@ -109,6 +109,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: macOS — WARN that this artifact is unsigned
+        if: runner.os == 'macOS'
+        run: |
+          echo "::warning title=macOS artifact is UNSIGNED and UN-NOTARIZED::This macOS build is NOT signed or notarized. Do NOT ship it. Replace it with a hand-signed dmg from scripts/sign-mac-suite.sh (sign, notarize, staple, upload) before release. See docs/ops/RELEASES.md."
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:

@@ -37,8 +37,7 @@
     "resources": ["payload/**/*"],
     "externalBin": ["binaries/trinityone-relay-node", "binaries/trinityone-cloudflared"],
     "macOS": {
-      "minimumSystemVersion": "11.0",
-      "entitlements": "Entitlements.plist"
+      "minimumSystemVersion": "11.0"
     },
     "category": "Utility",
     "shortDescription": "Run your church's TrinityOne relay.",
