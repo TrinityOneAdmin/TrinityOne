@@ -9074,7 +9074,71 @@ const MAX_FILTERS_PER_REQ = 32; // a single REQ carrying thousands of filters is
 // truncation also happens after all the work. 5000 matches the store's own default page and is still far above
 // any real client read.
 const MAX_REQ_EVENTS = 5000;
-const MAX_WS_BUFFER = 16 * 1024 * 1024; // if a client isn't draining and our socket buffer passes this, it's a slow-loris/OOM lever — stop sending + close
+// SEND BACKPRESSURE for a REQ's stored backlog (and the post-AUTH replay). Audit II (e63cc348) closed the slow-loris /
+// OOM lever — "a client that isn't reading must not make us buffer unbounded" — by CLOSING the socket (1009) the moment
+// ws.bufferedAmount passed 16 MB. Measured live 2026-11-11, that also killed every real steward console on a tunnel: it
+// opens ~12 overlapping subscriptions that each return the church's whole ~1 MB corpus, ~17 MB lands in the buffer at
+// once, the Funnel/Cloudflare/mobile link cannot drain it, the relay closes 1009, the console reconnects and asks again
+// — every ~16 s, for ever. Now the stream PAUSES instead of closing: past the high-water mark it waits (polling — the
+// `ws` WebSocket has no 'drain' event) until the buffer falls below the low-water mark, then carries on in order and
+// ends with the same EOSE. The DoS bound is kept, three ways — each closes 1009 'too slow' exactly as before:
+//   • STALL: paused for WS_PAUSE_MS without draining below low-water. 30 s: far longer than any real link needs to move
+//     768 KB (that is 25 KB/s), short enough that a reader who never reads holds nothing for long.
+//   • HARD CAP: the buffer ever passes 16 MB (the old figure, unchanged) — only live broadcasts, which this does not
+//     pace, could push it there, and a client that far behind is the case audit II was written for.
+//   • HELD EVENTS: the paused streams of ONE socket keep their matched arrays alive. MAX_SUBS_PER_CONN is 256, so
+//     without a bound one connection could park 256 × MAX_REQ_EVENTS parsed events. Past WS_MAX_HELD (4 ×
+//     MAX_REQ_EVENTS; the measured console needs ~4,300) the socket is closed instead.
+// Per-socket memory while paused is therefore ≤ high-water + one event in the buffer (every send re-checks first, and
+// paused streams share the ONE socket buffer — a resumed stream that pushes it back over high-water makes the next one
+// wait again), plus ≤ WS_MAX_HELD events. Only WHEN is changed: what is sent, its order, the gates and the EOSE are not.
+// The env overrides exist for scripts/a-slow-reader-is-paused-not-dropped.test.mjs; production uses the defaults.
+const _envInt = (k, d) => { const n = parseInt(process.env[k], 10); return n > 0 ? n : d; };
+const WS_HIGH_WATER = _envInt('RELAY_WS_HIGH_WATER', 1024 * 1024);        // pause a backlog stream past 1 MB queued
+const WS_LOW_WATER = Math.min(_envInt('RELAY_WS_LOW_WATER', 256 * 1024), WS_HIGH_WATER);   // resume below 256 KB
+const MAX_WS_BUFFER = _envInt('RELAY_WS_HARD_CAP', 16 * 1024 * 1024);    // hard cap: past this, close (audit II's bound)
+const WS_PAUSE_MS = _envInt('RELAY_WS_PAUSE_MS', 30000);                 // stall bound: paused this long without draining → close
+const WS_MAX_HELD = _envInt('RELAY_WS_MAX_HELD', 4 * MAX_REQ_EVENTS);    // events one socket's paused streams may hold
+const WS_DRAIN_POLL_MS = 25;
+function _tooSlow(ws) { try { ws.close(1009, 'too slow'); } catch {} }
+// One poller per socket, shared by all of its paused streams. Resolves each waiter true (drained) or false (socket gone,
+// stalled, or over the hard cap — the socket has been closed). Cleared on drain, on close, and by the 'close' handler.
+function _drainPoll(ws) {
+  const done = ok => { clearInterval(ws._drainTimer); ws._drainTimer = null; const w = ws._drainWaiters || []; ws._drainWaiters = []; for (const r of w) r(ok); };
+  if (ws.readyState !== 1) return done(false);
+  if (ws.bufferedAmount > MAX_WS_BUFFER || Date.now() - ws._pausedSince > WS_PAUSE_MS) { _tooSlow(ws); return done(false); }
+  if (ws.bufferedAmount <= WS_LOW_WATER) return done(true);
+}
+function _waitDrain(ws) {
+  return new Promise(res => {
+    (ws._drainWaiters || (ws._drainWaiters = [])).push(res);
+    if (!ws._drainTimer) { ws._pausedSince = Date.now(); ws._drainTimer = setInterval(() => _drainPoll(ws), WS_DRAIN_POLL_MS); }
+  });
+}
+// Send items[i] with send(item) in order, pausing when the socket is backed up. wanted(item) is re-asked after every
+// pause, so a stream whose subscription was CLOSEd or replaced while it waited stops instead of sending to it. Calls
+// onDone() when every item has been offered — SYNCHRONOUSLY when no pause was needed, so a client that reads promptly
+// sees exactly the old timing. onDone is never called if the socket closed or the stream was abandoned.
+function pumpBacklog(ws, items, send, wanted, onDone) {
+  let i = 0, held = 0;
+  const release = () => { if (held) { ws._held = Math.max(0, (ws._held || 0) - held); held = 0; } };
+  const run = () => {
+    for (; i < items.length; i++) {
+      if (ws.readyState !== 1) { release(); return; }
+      if (ws.bufferedAmount > MAX_WS_BUFFER) { release(); _tooSlow(ws); return; }
+      if (ws.bufferedAmount > WS_HIGH_WATER) {
+        if (!held) { held = items.length - i; ws._held = (ws._held || 0) + held; if (ws._held > WS_MAX_HELD) { release(); _tooSlow(ws); return; } }
+        _waitDrain(ws).then(ok => { if (!ok) { release(); return; } run(); });
+        return;
+      }
+      if (!wanted(items[i])) continue;
+      send(items[i]);
+    }
+    release();
+    onDone();
+  };
+  run();
+}
 let _gossipMergeBusy = false;   // one /relay-names/sync merge at a time (bounds unauthenticated schnorr-verify CPU)
 server.on('upgrade', (req, socket, head) => {
   if ((req.url || '').split('?')[0] !== '/relay') { socket.destroy(); return; }
@@ -9357,24 +9421,34 @@ wss.on('connection', (ws, req) => {
       const _lims = filters.map(f => f.limit || 0);
       const lim = _lims.every(l => l > 0) ? Math.min(MAX_REQ_EVENTS, _lims.reduce((a, b) => a + b, 0)) : Math.max(0, ..._lims);
       if (lim) matched = matched.slice(-lim);
-      for (const e of matched) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }   // backpressure: a client that isn't reading can't make us buffer unbounded
-      // AUDIT-2026-07-24 (root cause of a whole class of client-side data loss): when we WITHHELD private docs
-      // from an unauthenticated connection, an immediate EOSE says "that is everything" — indistinguishable
-      // from "this church has none". Clients then act on that emptiness destructively: mint a second care key,
-      // republish a one-entry minors list over the real one, re-seed the finance book. We already challenge
-      // here, so hold the EOSE until the AUTH round-trip resolves (the AUTH handler replays what was withheld
-      // and then flushes these), or until a short timeout if the client never authenticates. A late EOSE is
-      // ordinary; a premature one is a lie. NOT ["CLOSED", …, "auth-required: …"] — nostr-tools only recovers
-      // from that when a per-subscription `onauth` is passed, which SimplePool's automaticallyAuth does not
-      // set, so CLOSED would silently kill the subscription instead.
-      if (wantsSafeguard && !ws._auth) {
-        if (!ws._pendingEose) ws._pendingEose = new Map();
-        const prev = ws._pendingEose.get(subId); if (prev) clearTimeout(prev);
-        ws._pendingEose.set(subId, setTimeout(() => {
-          if (ws._pendingEose) ws._pendingEose.delete(subId);
-          if (ws.readyState === 1) { try { ws.send(JSON.stringify(['EOSE', subId])); } catch {} }
-        }, EOSE_AUTH_GRACE_MS));
-      } else ws.send(JSON.stringify(['EOSE', subId]));
+      // BACKPRESSURE (see pumpBacklog): pause while the client catches up rather than buffer without bound or drop it.
+      // `wanted` is identity on this REQ's filters, so a CLOSE or a replacing REQ for the same subId while we are
+      // paused stops this stream — nothing more is sent for it, and no EOSE. Everything after the stream (the held or
+      // immediate EOSE) runs from onDone, in the same order as before; with no pause it runs synchronously, as before.
+      const _live = () => subs.get(ws) === mysubs && mysubs.get(subId) === filters;
+      pumpBacklog(ws, matched, e => ws.send(JSON.stringify(['EVENT', subId, e])), _live, () => {
+        if (!_live()) return;
+        // AUDIT-2026-07-24 (root cause of a whole class of client-side data loss): when we WITHHELD private docs
+        // from an unauthenticated connection, an immediate EOSE says "that is everything" — indistinguishable
+        // from "this church has none". Clients then act on that emptiness destructively: mint a second care key,
+        // republish a one-entry minors list over the real one, re-seed the finance book. We already challenge
+        // here, so hold the EOSE until the AUTH round-trip resolves (the AUTH handler replays what was withheld
+        // and then flushes these), or until a short timeout if the client never authenticates. A late EOSE is
+        // ordinary; a premature one is a lie. NOT ["CLOSED", …, "auth-required: …"] — nostr-tools only recovers
+        // from that when a per-subscription `onauth` is passed, which SimplePool's automaticallyAuth does not
+        // set, so CLOSED would silently kill the subscription instead.
+        if (wantsSafeguard && !ws._auth) {
+          if (!ws._pendingEose) ws._pendingEose = new Map();
+          const prev = ws._pendingEose.get(subId); if (prev) clearTimeout(prev);
+          ws._pendingEose.set(subId, setTimeout(() => {
+            if (ws._pendingEose) ws._pendingEose.delete(subId);
+            if (ws.readyState === 1) { try { ws.send(JSON.stringify(['EOSE', subId])); } catch {} }
+          }, EOSE_AUTH_GRACE_MS));
+        // An AUTH that arrived while this stream was paused may still be replaying (itself paused): what it replays
+        // for this subscription is what our EOSE vouches for, so let the replay's flush send it.
+        } else if (wantsSafeguard && ws._replaying) { if (!ws._pendingEose) ws._pendingEose = new Map(); ws._pendingEose.set(subId, null);
+        } else ws.send(JSON.stringify(['EOSE', subId]));
+      });
     } else if (type === 'AUTH') {
       // NIP-42: the client proves which pubkey it controls, so we can serve it invite-only group reads
       const evt = rest[0];
@@ -9413,25 +9487,37 @@ wss.on('connection', (ws, req) => {
           // connection could not read before, so it is the one scan a legitimate member most needs to
           // complete — and by now they are authenticated, which is exactly when the cap is generous.
           const _replayBudget = scanAllowance(ws);
+          // Collected first (same scan, same gates, same order), then sent through pumpBacklog so a large replay
+          // pauses for a slow reader instead of closing it. Each item remembers the filters it was found for, so a
+          // subscription CLOSEd or replaced while the replay is paused is skipped rather than sent to.
+          const _replay = [];
           if (mine) for (const [subId, filters] of mine) {
             const seen = new Set();
             for (const f of filters) for (const e of store.query(f, _replayBudget)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
               if (blockedBy(e.pubkey, owningChurch(e, (e.tags.find(t => t[0] === 'd') || [])[1] || '')) || !canRead(e, ws._auth)) continue;
-              if (!canRead(e, null)) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }
+              if (!canRead(e, null)) _replay.push([subId, filters, e]);
             }
           }
-          // the replay above is what the deferred EOSEs were waiting for — now the client really does have
-          // everything it may read, so end those subscriptions' backlog honestly.
-          if (ws._pendingEose) {
-            for (const [sid, t] of ws._pendingEose) { clearTimeout(t); try { ws.send(JSON.stringify(['EOSE', sid])); } catch {} }
-            ws._pendingEose.clear();
-          }
+          // The deferred EOSEs wait for the replay, not for their 2.5 s grace timer: if the replay has to pause, a
+          // timer firing mid-replay would tell the client "that is everything" before the withheld docs arrive —
+          // the premature EOSE AUDIT-2026-07-24 exists to prevent. Disarm them (the subIds stay listed) until it ends.
+          if (ws._pendingEose) for (const [sid, t] of ws._pendingEose) { if (t) clearTimeout(t); ws._pendingEose.set(sid, null); }
+          ws._replaying = (ws._replaying || 0) + 1;
+          pumpBacklog(ws, _replay, ([sid, , e]) => ws.send(JSON.stringify(['EVENT', sid, e])), ([sid, filters]) => subs.get(ws) === mine && mine.get(sid) === filters, () => {
+            ws._replaying--;
+            // the replay above is what the deferred EOSEs were waiting for — now the client really does have
+            // everything it may read, so end those subscriptions' backlog honestly.
+            if (ws._pendingEose) {
+              for (const [sid, t] of ws._pendingEose) { if (t) clearTimeout(t); try { ws.send(JSON.stringify(['EOSE', sid])); } catch {} }
+              ws._pendingEose.clear();
+            }
+          });
         } else ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, boundToUs ? 'auth-failed: bad challenge or signature' : 'auth-failed: this auth is not addressed to this relay']));
       } catch { ws.send(JSON.stringify(['OK', (evt && evt.id) || '', false, 'auth-failed'])); }
     } else if (type === 'CLOSE') { subs.get(ws)?.delete(rest[0]); }
   });
-  ws.on('close', () => { subs.delete(ws); if (ws._pendingEose) { for (const t of ws._pendingEose.values()) clearTimeout(t); ws._pendingEose.clear(); } });
+  ws.on('close', () => { subs.delete(ws); if (ws._pendingEose) { for (const t of ws._pendingEose.values()) if (t) clearTimeout(t); ws._pendingEose.clear(); } if (ws._drainTimer) _drainPoll(ws); });   // _drainPoll on a closed socket clears the timer and releases every paused stream
 });
 // keepalive: ping every 25s so idle relay sockets stay open through the Tailscale Funnel / mobile NAT
 // (otherwise live pushes silently stop until the client reconnects). Terminate sockets that miss a pong.
