@@ -221,7 +221,7 @@ test('someone who runs church A asks to help church B from Settings: invite firs
   // staging for the bug: church A's profile (its name) is loaded in this console — what the old code sealed
   await OTHER.waitFor(`document.body.innerText.includes(${JSON.stringify(OTHER_CHURCH_NAME)})`, 30000, 'church A\'s name on its own dashboard');
   // the person's own name, set the ordinary way: Settings → Your name as a steward
-  await toSettingsPage(OTHER, /^Your name as a steward\s*Under every notice/, 'People', `!!document.querySelector('input[aria-label="Your role"]')`);
+  await toSettingsPage(OTHER, /^Your name as a steward\s*Under every notice/, 'Congregation', `!!document.querySelector('input[aria-label="Your role"]')`);
   await setNameField(OTHER, STEWARD_NAME);
   await OTHER.press(/^Save$/, 'Save');
   await sleep(800);
