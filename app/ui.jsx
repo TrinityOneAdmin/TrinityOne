@@ -6,6 +6,30 @@ const { useState: useU, useEffect: useUE, useRef: useUR } = React;
 
 function cx(...a) { return a.filter(Boolean).join(' '); }
 
+// THE CHURCH'S MAIN COLOUR (owner 2026-11-12). A church has two colours: ACCENT (buttons, links, highlights —
+// unchanged) and MAIN, which paints the church's own surfaces: the header when there is no banner, the badge
+// when there is no picture, and the verse-of-the-day / featured-sermon cards. It arrives on the UNTRUSTED
+// relay-published kind-0 profile, so only a strict #RRGGBB is accepted (never url()/var()/expressions — the
+// anti-beacon rule safeCssColor exists for); anything else is null and every surface keeps today's look.
+function churchMainColor(church) {
+  const v = church && church.mainColor;
+  return (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) ? v : null;
+}
+// Dark or white text on a church colour — the same relative-luminance rule as app.jsx _readableOn.
+function churchOnColor(hex) {
+  try {
+    const c = (String(hex).replace('#', '').slice(0, 6).match(/../g) || []).map(x => parseInt(x, 16) / 255)
+      .map(v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+    const L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    return L > 0.42 ? '#2A1B12' : '#fff';
+  } catch (e) { return '#fff'; }
+}
+// A MAIN-colour card fill, deepening toward the bottom the way the clay cards do.
+function churchMainGradient(hex, deg) {
+  return `linear-gradient(${deg}deg, ${hex} 0%, color-mix(in oklab, ${hex} 62%, #16120c) 100%)`;
+}
+window.churchMainColor = churchMainColor; window.churchOnColor = churchOnColor; window.churchMainGradient = churchMainGradient;
+
 // Name-clash disambiguation: identity is the pubkey, names are free-text labels, so two members
 // (or churches) can share a name. Build a labeller over a list that appends a discriminator ONLY to
 // the colliding names — a verified @handle if there is one, else a short key tag — so the common

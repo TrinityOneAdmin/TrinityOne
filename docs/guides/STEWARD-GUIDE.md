@@ -104,8 +104,7 @@ before releasing the child. Records are **encrypted to your church key** — who
 never reach the relay or other members. Run from the **church-key holder's** console (the owner).
 
 ### Settings
-- **Church profile** — name, web handle.
-- **Branding** — banner image + brand accent colour (members see it).
+- **Church identity** — name, picture, joining handle, banner and colours (members see it).
 - **Media** — link your YouTube/Rumble channel (Watch tab) and a podcast RSS (Listen tab).
 - **Features** (under **Congregation**) — turn whole sections (Bible / Community / Library) on or off for your
   church; **Extras** → opt-in **Kids check-in**; **Joining** → *Require approval to

@@ -2393,6 +2393,10 @@ function TodayScreen({ ctx }) {
     if (row) votd = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
   }
   const votdQ = votdQuoteMarks(votd.text);
+  // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) paints the verse-of-the-day and featured-sermon cards. Unset,
+  // each card keeps its exact clay gradient and white ink.
+  const mainC = (typeof churchMainColor === 'function') ? churchMainColor(ctx.church) : null;
+  const onMain = mainC ? churchOnColor(mainC) : '#fff';
 
   // church verse prompt — a steward pushed a specific verse for all members
   const [versePrompt, setVersePrompt] = React.useState(null);
@@ -2702,18 +2706,18 @@ function TodayScreen({ ctx }) {
         return (
         <div onClick={() => ctx.playSermon(ps)} style={{
           display: 'flex', alignItems: 'center', gap: 14, padding: 15, borderRadius: 20, cursor: 'pointer', marginBottom: 22,
-          background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow-lg)',
+          background: mainC ? churchMainGradient(mainC, 150) : 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: mainC ? onMain : 'var(--on-clay)', boxShadow: 'var(--shadow-lg)',
           position: 'relative', overflow: 'hidden', animation: 'trinityFade .5s ease both',
         }}>
-          <div style={{ position: 'absolute', right: -18, bottom: -22, opacity: .16 }}><Icon name={String(ps.mime || '').startsWith('video') ? 'play' : 'headphones'} size={100} color="#fff" /></div>
+          <div style={{ position: 'absolute', right: -18, bottom: -22, opacity: .16 }}><Icon name={String(ps.mime || '').startsWith('video') ? 'play' : 'headphones'} size={100} color={onMain} /></div>
           <div style={{ width: 46, height: 46, borderRadius: 13, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Icon name={isVid ? 'play' : 'headphones'} size={22} color="#fff" />
+            <Icon name={isVid ? 'play' : 'headphones'} size={22} color={onMain} />
           </div>
           <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', opacity: .9 }}>{fresh ? ('New ' + kind) : kind}</div>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700, lineHeight: 1.2, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ps.title}</div>
           </div>
-          <button onClick={(e) => { e.stopPropagation(); setSermonSeen(ps.id); try { localStorage.setItem('trinityone.sermon-seen', ps.id); } catch {} }} aria-label="Dismiss" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative' }}><Icon name="x" size={15} color="#fff" /></button>
+          <button onClick={(e) => { e.stopPropagation(); setSermonSeen(ps.id); try { localStorage.setItem('trinityone.sermon-seen', ps.id); } catch {} }} aria-label="Dismiss" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: onMain, width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative' }}><Icon name="x" size={15} color={onMain} /></button>
         </div>
         );
       })() : null}
@@ -2780,29 +2784,29 @@ function TodayScreen({ ctx }) {
 
       {/* Verse of the day — minimisable hero (near the reading section); hidden entirely when turned off in Settings */}
       {!votdOff && (votdMin ? (
-        <button type="button" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
-          <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+        <button type="button" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: mainC ? churchMainGradient(mainC, 150) : 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: mainC ? onMain : 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+          <Icon name="sparkle" size={15} color={onMain} style={{ flexShrink: 0, opacity: .92 }} />
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
-          <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+          <Icon name="chevD" size={18} color={onMain} style={{ flexShrink: 0, opacity: .92 }} />
         </button>
       ) : (
-      <div onClick={() => ctx.openShareSheet(votd)} style={{
+      <div data-votd-card="1" onClick={() => ctx.openShareSheet(votd)} style={{
         position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
-        background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
-        padding: '22px 22px 18px', color: '#fff', marginBottom: 22, boxShadow: 'var(--shadow-lg)',
+        background: mainC ? churchMainGradient(mainC, 155) : 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
+        padding: '22px 22px 18px', color: onMain, marginBottom: 22, boxShadow: 'var(--shadow-lg)',
         animation: 'trinityFade .5s ease .05s both',
       }}>
         <div style={{ position: 'absolute', inset: 0, opacity: .5,
           background: 'radial-gradient(circle at 85% 12%, rgba(255,255,255,.28), transparent 42%)' }} />
         <div style={{ position: 'absolute', right: -28, bottom: -34, opacity: .14 }}>
-          <Icon name="sun" size={180} stroke={1.2} color="#fff" />
+          <Icon name="sun" size={180} stroke={1.2} color={onMain} />
         </div>
         <div style={{ position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 7 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
               <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
             </div>
-            <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color="#fff" /></button>
+            <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: onMain, width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color={onMain} /></button>
           </div>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
             {votdQ.open}{votd.text}{votdQ.close}
@@ -2813,7 +2817,7 @@ function TodayScreen({ ctx }) {
               {['heart', 'share'].map(n => (
                 <div key={n} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-                  <Icon name={n} size={17} stroke={2} color="#fff" />
+                  <Icon name={n} size={17} stroke={2} color={onMain} />
                 </div>
               ))}
             </div>
