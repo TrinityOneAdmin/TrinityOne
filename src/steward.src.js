@@ -3168,6 +3168,9 @@ function _keyReadConnected(url) {
 // `newest()` is the newest created_at delivered BEFORE the end. The relay sends a REQ's stored events oldest-first across
 // all its filters (gateway.mjs: matched.sort by created_at), so a read cut off part-way holds every event older than
 // that, and asking again with `since: newest()` (inclusive) resumes it instead of downloading it all again.
+// ONLY ON A READ OPENED ON A SOCKET ALREADY LOGGED IN (_keyReadAuthedOn): elsewhere newest() stays 0. The relay's AUTH
+// replay re-sends withheld documents in no order to every subscription open when a login is accepted, and anything
+// withheld behind a challenge is missing from the sorted answer — see `from` above _webRead (Opus audit of 05c47363).
 const _NO_EOSE_TIMER = 2147483000;   // just under setTimeout's 2^31-1 ms ceiling, past which a delay fires at once
 // `opts.withoutFailed` — THE BLOCKLIST'S READ ONLY (subscribeBlocked; audit of 831dcea). The mint gates above need
 // every relay, because minting over an envelope a down relay holds destroys a church's keys. The blocklist read
@@ -7029,8 +7032,16 @@ function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.
 //   * every retry downloaded the whole stream again. The relay sends a REQ's stored events oldest-first (gateway.mjs,
 //     matched.sort), so everything older than the newest event a read received has been received: `from` (per
 //     relay, carried across restarts in the same church and epoch) is that point, and a retry asks `since` it.
-//     Advanced only by events read on a socket with no unaccepted login challenge — the relay withholds behind a
-//     challenge, so such a read is no prefix of anything, and its retry (after the login) starts from nothing.
+//     Advanced ONLY by a read whose socket was already logged in (the relay's OK, _keyReadAuthedOn) WHEN THE READ
+//     OPENED. Two things break "oldest-first" on any other read: the relay withholds private documents behind a
+//     login challenge (so what arrives is no prefix of anything), and when the login is accepted part-way through
+//     a paused, slow answer the relay RE-SENDS what it withheld, in no order (gateway.mjs AUTH replay, which goes
+//     to every subscription open on the socket at that moment). One recent private document there pushed the
+//     resume point past public events not yet received; after a drop the mirror asked only for newer ones, took
+//     the answer as whole and TOMBSTONED a live event (Opus audit of 05c47363, finding 1). A subscription opened
+//     after the OK is never in a replay (the relay builds it synchronously on the AUTH, and never challenges a
+//     logged-in socket again), so its events do arrive oldest-first. Any other read leaves `from` alone: its
+//     retry re-reads from where the last trustworthy read got to — bandwidth, never a missing event.
 //     After a genuine answer `from` is "now, less WEB_RESUME_MARGIN_S" (relays' clock window, late writers).
 //   * a stream already known (carried over a restart) still re-read from zero and still ran the retry loop. It now
 //     re-reads only what changed `since` (from), and does not retry: it decides nothing new.
@@ -7069,7 +7080,9 @@ function _webRead(cp, filters, onevent, onknown, opts) {
     const since = from.get(url) || 0;
     const fs = since ? filters.map(f => ({ ...f, since })) : filters;
     const tok = { cp, epoch, at: Date.now(), url, wait: up ? _NO_EOSE_TIMER : 4400, closed: false, relayClosed: false };
-    const cur = { tok, sub: null, idle: null, last: Date.now(), answered: false };
+    // logged in on this socket BEFORE asking: no AUTH replay can reach this subscription (see `from`, above)
+    let authed = false; try { authed = _keyReadAuthedOn(url); } catch (e) { authed = false; }
+    const cur = { tok, sub: null, idle: null, last: Date.now(), answered: false, authed };
     // THE PROGRESS GUARD: re-armed for the remainder whenever something arrived; fires only after a whole
     // WEB_READ_IDLE_MS with nothing. Not armed for a stream already known — it decides nothing new.
     const watch = (ms) => {
@@ -7089,8 +7102,8 @@ function _webRead(cp, filters, onevent, onknown, opts) {
       onevent(e) {
         if (tok.closed || !live()) return;
         cur.last = Date.now();
-        // a prefix only while nothing is withheld from this socket (see above), and only before the answer
-        if (!cur.answered && e && e.created_at > (from.get(url) || 0) && !_webLoginPending(url)) from.set(url, e.created_at);
+        // a prefix only on a read opened already logged in (see `from`, above), and only before the answer
+        if (!cur.answered && cur.authed && e && e.created_at > (from.get(url) || 0)) from.set(url, e.created_at);
         onevent(e);
       },
       // a microtask later, so the onclose nostr-tools runs straight after a close's synthetic oneose has marked the token
@@ -15077,11 +15090,14 @@ window.Steward = {
     const relayUp = (url) => { try { let k = url; try { k = normalizeURL(url); } catch (e) {} const r = pool.relays && pool.relays.get(k); return !!r && r.connected === true; } catch (e) { return false; } };
     const oneRelay = (url, filters, h) => {
       const up = relayUp(url), at = Date.now();
+      // newest() is a resume point only on a read opened already logged in: no AUTH replay can reach it (see the note
+      // above _NO_EOSE_TIMER). Any other read reports 0, and the caller resumes from where it was before.
+      let authed = false; try { authed = _keyReadAuthedOn(url); } catch (e) { authed = false; }
       let stopped = false, relayClosed = false, ended = false, newest = 0, sub = null;
       try {
         sub = pool.subscribeMany([url], filters, {
           ...(up ? { maxWait: 2147483000 } : {}),   // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
-          onevent(e) { if (stopped) return; if (!ended && e && e.created_at > newest) newest = e.created_at; h.onevent(e); },
+          onevent(e) { if (stopped) return; if (!ended && authed && e && e.created_at > newest) newest = e.created_at; h.onevent(e); },
           oneose() {
             queueMicrotask(() => {
               if (stopped || ended) return;

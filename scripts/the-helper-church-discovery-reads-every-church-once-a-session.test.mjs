@@ -97,6 +97,7 @@ function harness({ proven = [BOX, CANON], up = [] } = {}) {
     _applyNoPhotoList: () => {}, CAP_KEYS: {}, _capState: {}, _checkinMigrated: '',
     _ckKeysSettled: '', _ckSessionKeys: new Map(),
     _keyReadEpoch: 0, _careKeyVer: 0, _mediaKeyVer: 0,
+    _authAccepted: new Map(), normalizeURL: (u) => u,   // the relay's accepted logins, read by the lifted _keyReadAuthedOn
     _latestGuardNotice: new Map(), _senvPending: new Map(),
     _minorsLastClear: () => {}, _sgClearClear: () => {}, _finBookClear: () => {}, _seedSweep: () => {},
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
@@ -108,6 +109,7 @@ function harness({ proven = [BOX, CANON], up = [] } = {}) {
   stubs.relaysRaw = lift('function relaysRaw() {', 'relaysRaw');
   stubs._boxHostsKey = lift('function _boxHostsKey() {', '_boxHostsKey');
   stubs._loadBoxHosts = lift('function _loadBoxHosts() {', '_loadBoxHosts');
+  stubs._keyReadAuthedOn = lift('function _keyReadAuthedOn(', '_keyReadAuthedOn');
   const method = (anchor, name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, anchor, name)} }).${name}; }`)(scope);
   const subscribe = method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches');
   const switchTo = method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
@@ -214,7 +216,9 @@ test('nostr-tools\' own timer is not an answer: a relay still connecting is not 
   const again = h.on(BOX);
   assert.ok(again && again !== first, 'a timed-out broad read was not asked again once the relay was up');
   assert.ok(h.isBroad(again), 'the re-ask must be the broad read');
-  assert.equal(again.filters.find(f => f['#t'] && !f['#d']).since, NOW - 50, 'the re-ask must RESUME from the newest event received, not download it all again');
+  // the first read opened before the socket was up, so it was not logged in: what it received may hold the relay's AUTH
+  // replay (no order), so it is no resume point — the re-ask starts from the beginning (rows at the end of this file)
+  assert.equal(again.filters.find(f => f['#t'] && !f['#d']).since, undefined, 'a read opened NOT logged in must not be resumed from');
   assert.equal(again.handlers.maxWait > 600000, true, 'a connected relay must not be given a wall-clock cutoff');
   // a slow pipe: the roster that lists us arrives long after any timer would have fired, and the church is found
   h.late(60000);
@@ -292,4 +296,47 @@ test('a lock ends the session: the next unlock runs the broad read again; so doe
   h.eoseAll(); await tick();
   h.refresh();
   assert.ok(h.discovery().every(h.isBroad), 'refreshStewardedChurches did not re-run the broad read on the open subscription');
+});
+
+// ── THE RESUME POINT AND THE RELAY'S AUTH REPLAY (Opus audit of 05c47363, finding 1) ─────────────────────────────────
+// newest() is where a cut-off broad read resumes. The relay sends a REQ's events oldest-first, but when a login is
+// accepted part-way through the answer it RE-SENDS withheld documents in no order to every open subscription
+// (gateway.mjs AUTH replay). A newer re-sent doc must not move the resume point past rosters not yet received.
+// `relayAnswer` plays the relay honestly: every roster at or after the read's `since`, oldest-first.
+const PRIVDOC = (at) => ({ pubkey: 'ff'.repeat(32), created_at: at, tags: [['d', 'trinityone/care:x'], ['t', 'trinityone']], content: 'sealed' });
+function relayAnswer(h, s, rosters) {
+  const since = (s.filters.find(f => f['#t'] && !f['#d']) || {}).since || 0;
+  for (const r of rosters.filter(r => r.at >= since).sort((a, b) => a.at - b.at)) h.roster(s, r.cp, r.pubkeys, r.at);
+  return since;
+}
+async function helperReplay({ replay, authedAtOpen }) {
+  const h = harness({ proven: [BOX], up: [BOX] });
+  const r = h.relaysMap.get(BOX);
+  if (authedAtOpen) h.stubs._authAccepted.set(BOX, r);
+  let off = await h.bump();
+  const first = h.on(BOX);
+  const rosters = [{ cp: STEWARDED, pubkeys: [], at: NOW - 60 }, { cp: DIRECT, pubkeys: [ME], at: NOW - 50 }];
+  h.roster(first, STEWARDED, [], NOW - 60);          // oldest-first: an older roster that does not list us…
+  if (replay) { h.stubs._authAccepted.set(BOX, r); first.handlers.onevent(PRIVDOC(NOW)); }   // …login accepted: a NEWER withheld doc re-sent
+  h.eose(first); first.handlers.onclose(['1009 too slow']);   // the socket drops before DIRECT's roster (NOW - 50) arrives
+  await tick();
+  // a fresh socket: up, not logged in
+  h.stubs._authAccepted.delete(BOX); h.relaysMap.set(BOX, { connected: true });
+  off = await h.bump(off);
+  const again = h.on(BOX);
+  assert.ok(h.isBroad(again), 'staging: a broad read cut off is asked again as the broad read');
+  const since = relayAnswer(h, again, rosters);
+  return { h, since };
+}
+
+test('control: a broad read opened logged in, cut off part-way, RESUMES from the newest event and still finds the church', async () => {
+  const { h, since } = await helperReplay({ replay: false, authedAtOpen: true });
+  assert.equal(since, NOW - 60, 'a read opened logged in did not resume from the newest event it received');
+  assert.ok(h.stewardedChurches.has(DIRECT), 'the resumed read lost the church that lists us');
+});
+
+test('MEDIUM: a re-sent private doc dated NEWER does not move the resume point past a roster not yet received — the church is still found', async () => {
+  const { h, since } = await helperReplay({ replay: true, authedAtOpen: false });
+  assert.ok(since <= NOW - 50, 'THE AUTH REPLAY MOVED THE RESUME POINT to ' + since + ' — past the roster that lists us');
+  assert.ok(h.stewardedChurches.has(DIRECT), 'A CHURCH THAT ADDED US WAS NEVER FOUND: the resumed read skipped its roster');
 });

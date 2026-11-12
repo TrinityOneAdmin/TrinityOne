@@ -20330,7 +20330,13 @@ zoo`.split("\n");
       const since = from.get(url) || 0;
       const fs = since ? filters.map((f) => ({ ...f, since })) : filters;
       const tok = { cp, epoch, at: Date.now(), url, wait: up ? _NO_EOSE_TIMER : 4400, closed: false, relayClosed: false };
-      const cur = { tok, sub: null, idle: null, last: Date.now(), answered: false };
+      let authed = false;
+      try {
+        authed = _keyReadAuthedOn(url);
+      } catch (e) {
+        authed = false;
+      }
+      const cur = { tok, sub: null, idle: null, last: Date.now(), answered: false, authed };
       const watch = (ms) => {
         cur.idle = setTimeout(() => {
           cur.idle = null;
@@ -20355,7 +20361,7 @@ zoo`.split("\n");
         onevent(e) {
           if (tok.closed || !live()) return;
           cur.last = Date.now();
-          if (!cur.answered && e && e.created_at > (from.get(url) || 0) && !_webLoginPending(url)) from.set(url, e.created_at);
+          if (!cur.answered && cur.authed && e && e.created_at > (from.get(url) || 0)) from.set(url, e.created_at);
           onevent(e);
         },
         // a microtask later, so the onclose nostr-tools runs straight after a close's synthetic oneose has marked the token
@@ -28410,6 +28416,12 @@ zoo`.split("\n");
       };
       const oneRelay = (url, filters, h) => {
         const up = relayUp(url), at = Date.now();
+        let authed = false;
+        try {
+          authed = _keyReadAuthedOn(url);
+        } catch (e) {
+          authed = false;
+        }
         let stopped = false, relayClosed = false, ended = false, newest = 0, sub = null;
         try {
           sub = pool.subscribeMany([url], filters, {
@@ -28417,7 +28429,7 @@ zoo`.split("\n");
             // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
             onevent(e) {
               if (stopped) return;
-              if (!ended && e && e.created_at > newest) newest = e.created_at;
+              if (!ended && authed && e && e.created_at > newest) newest = e.created_at;
               h.onevent(e);
             },
             oneose() {

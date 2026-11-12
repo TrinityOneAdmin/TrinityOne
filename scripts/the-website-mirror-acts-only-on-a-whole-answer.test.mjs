@@ -321,6 +321,8 @@ test('a slow relay delivering the corpus over far longer than 15 s, with steady 
 
 test('a read that makes NO progress is asked again — and a cut-off read RESUMES from the newest event it received, not from zero', async () => {
   const c = consoleWith();
+  // logged in before the reads open: only such a read may resume (no AUTH replay can reach it — rows below)
+  c.scope._authAccepted.set('wss://a/', c.relaysMap.get('wss://a/'));
   c.start();
   c.send('share', [SHARE_ON()]); c.eose('share');
   c.send('corpus', [EV('evta', 'One', 60), EV('evtbb', 'Two', 61)]);
@@ -373,4 +375,64 @@ test('LOW: a watch from an earlier epoch (acting for another church and back) is
   c.send('share', [SHARE_ON()]); c.eoseAll();
   await c.settle();
   assert.equal(c.api.web().shareKnown, true, 'the re-opened watch did not take its answer');
+});
+
+// ── THE RESUME POINT AND THE RELAY'S AUTH REPLAY (Opus audit of 05c47363, finding 1) ─────────────────────────────────
+// A REQ's stored events come oldest-first (gateway.mjs matched.sort). But when a login is accepted part-way through a
+// paused, slow answer, the relay RE-SENDS what it withheld, in no order, to every subscription open on that socket
+// (gateway.mjs AUTH replay). One recent private document there must not move the resume point past public events not
+// yet received: after a drop the resumed read would skip them, be taken as whole, and tombstone their public copies.
+// `relayAnswer` plays the relay honestly: everything in `all` at or after the live read's `since`, oldest-first.
+const PRIV = (ts) => ({ pubkey: CP, created_at: ts, tags: [['d', 'trinityone/care:r1'], ['t', 'trinityone']], content: sealed({ note: 'private' }) });
+function relayAnswer(c, all) {
+  const s = c.live('corpus'); assert.ok(s, 'no live corpus subscription');
+  const since = s.filters[0].since || 0;
+  const out = all.filter(e => e.created_at >= since).sort((a, b) => a.created_at - b.created_at);
+  for (const e of out) s.h.onevent(e);
+  return since;
+}
+async function replayScenario({ replay, authedAtOpen }) {
+  const bodies = await bodiesFor([A, B]);
+  const copies = [COPY('evta', bodies.evta, 1000), COPY('evtbb', bodies.evtbb, 1000)];   // the website holds both
+  const c = consoleWith();
+  const r = c.relaysMap.get('wss://a/');
+  if (authedAtOpen) { r.challenge = 'chal'; c.scope._authAccepted.set('wss://a/', r); }
+  c.start();
+  c.send('share', [SHARE_ON()]); c.eose('share');
+  await c.settle();
+  c.send('corpus', [A]);                             // oldest-first: A (60); B (61) and the copies (1000) still to come
+  if (replay) {
+    r.challenge = 'chal'; c.scope._authAccepted.set('wss://a/', r);   // a key read's challenge; the login is accepted…
+    c.send('corpus', [PRIV(500)]);                   // …and the relay re-sends a withheld private doc, out of order
+  }
+  c.cut('corpus');                                   // the slow socket drops before B arrives
+  // a fresh socket: nothing challenged, nothing logged in yet (the corpus is public, so the relay asks for no login)
+  r.challenge = undefined; c.scope._authAccepted.delete('wss://a/');
+  c.reconnect();
+  await c.settle();
+  c.start();                                         // the connection bump restarts the watch, carrying `from`
+  const since = relayAnswer(c, [A, B, PRIV(500), ...copies]);
+  c.eose('corpus');
+  await c.settle();
+  return { c, since };
+}
+
+test('control: a read opened logged in, cut off part-way, RESUMES from the newest event and removes nothing', async () => {
+  const { c, since } = await replayScenario({ replay: false, authedAtOpen: true });
+  assert.equal(since, 60, 'staging: a read opened logged in resumes from the newest event it received');
+  assert.deepEqual(c.tombs(), [], 'a resumed read with no replay took a public event off the website');
+  assert.deepEqual(c.writes(), [], 'a resumed read re-published a copy the relay already holds');
+});
+
+test('control: a read cut off with NO replay removes nothing', async () => {
+  const { c } = await replayScenario({ replay: false, authedAtOpen: false });
+  assert.deepEqual(c.tombs(), [], 'a resumed read with no replay took a public event off the website');
+  assert.deepEqual(c.writes(), []);
+});
+
+test('MEDIUM: a re-sent private doc dated NEWER, arriving before older public events, does not move the resume point — the public event stays on the website', async () => {
+  const { c, since } = await replayScenario({ replay: true, authedAtOpen: false });
+  assert.ok(since < 61, 'THE AUTH REPLAY MOVED THE RESUME POINT to ' + since + ' — past event B (61), which the resumed read never asks for');
+  assert.deepEqual(c.tombs(), [], 'A LIVE EVENT CAME OFF THE CHURCH\'S WEBSITE: the resumed read skipped it and was taken as whole');
+  assert.deepEqual(c.writes(), []);
 });
