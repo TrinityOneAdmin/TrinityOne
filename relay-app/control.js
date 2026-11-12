@@ -728,7 +728,7 @@
       if (suite.staged && (suite.staged.version || suite.staged.sha)) parts.push('An update is staged for tonight');
       else if (suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') parts.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
       else if (suite.lastOutcome === 'rolledback') parts.push('A bad update was rolled back');
-      if (suite.enabled && suite.nextAt) parts.push('Next check ' + suite.nextAt);
+      if (suite.enabled && suite.nextAt) parts.push('Next update ' + suite.nextAt);
       status.textContent = parts.join(' · ');
     };
 
