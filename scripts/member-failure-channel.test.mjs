@@ -120,7 +120,7 @@ test('the bundle exposes the failures to a device session', () => {
 test('the member app renders a surface for it, and it is not the success toast', () => {
   assert.match(UI, /function FeatureTrouble\(/, 'the notice component is gone');
   assert.match(UI, /addEventListener\('trinity-feature-failed'/, 'the notice does not listen for the event the engine dispatches');
-  assert.match(UI, /FeatureTrouble \}\);|, FeatureTrouble \}/, 'FeatureTrouble is not exported to the global scope, so app.jsx cannot render it');
+  assert.match(UI, /Object\.assign\(window, \{[^}]*\bFeatureTrouble\b[^}]*\}\)/, 'FeatureTrouble is not exported to the global scope, so app.jsx cannot render it');
   assert.match(APP, /<FeatureTrouble \/>/, 'nothing renders the notice — the engine would dispatch into an empty room');
   // Toast draws a tick. A tick over a failure is a lie, so they must stay separate components.
   const at = UI.indexOf('function FeatureTrouble(');
