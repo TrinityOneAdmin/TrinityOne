@@ -133,9 +133,11 @@ function harness({ pending = '', proven = [BOX, CANON], seedStewarded = [] } = {
   const switchTo = method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
   const request = method('requestSteward(payload, name) {', 'requestSteward');
   const parse = method('parseStewardInvite(payload) {', 'parseStewardInvite');
+  const check = method('checkStewardInvite(payload) {', 'checkStewardInvite');   // requestSteward's invite check (2026-11-12)
   stubs.window.Steward.setActiveIdentity = (p, opts) => switchTo.call(stubs.window.Steward, p, opts);
   stubs.window.Steward.subscribeStewardedChurches = (cb) => subscribe.call(stubs.window.Steward, cb);
   stubs.window.Steward.parseStewardInvite = (p) => parse.call(stubs.window.Steward, p);
+  stubs.window.Steward.checkStewardInvite = (p) => check.call(stubs.window.Steward, p);
   stubs.window.Steward.requestSteward = (p, n = 'Ruth') => request.call(stubs.window.Steward, p, n);
   return {
     stubs, store, subs,

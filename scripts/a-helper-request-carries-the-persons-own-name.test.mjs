@@ -1,6 +1,7 @@
 // A REQUEST TO HELP RUN A CHURCH CARRIES THE NAME THE PERSON GAVE — NOT A BLANK, AND NOT THEIR OWN CHURCH'S NAME.
 //   Run: node --test scripts/a-helper-request-carries-the-persons-own-name.test.mjs
-//   (HELPERNAME_SHOTS=<dir> also saves screenshots of the two request screens and the owner's request row.)
+//   (HELPERNAME_SHOTS=<dir> also saves screenshots — desktop 1280 wide and phone 390 wide — of each step of the two
+//   request screens, and the owner's request row.)
 //
 // OWNER-CONFIRMED 2026-11-12. requestSteward sealed `lastProfile.name` as the requester's name — but lastProfile is
 // the console's cached CHURCH profile, not the person. So:
@@ -10,10 +11,12 @@
 //     owner saw "claims to be 'Trinity Church Littlehampton'".
 // Neither screen asked the person for their name.
 //
-// THE FIX. Both screens have a "Your name" field, prefilled from the person's own "Your name as a steward" (if they
-// have one), and requestSteward(payload, name) seals THAT, still NIP-44 to the church key. An empty name is refused
-// before anything is sent. The owner's Helpers page shows the given name first, with the invented name and the key
-// underneath.
+// THE FIX. Both screens ask for the person's name, prefilled from their own "Your name as a steward" (if they have
+// one), and requestSteward(payload, name) seals THAT, still NIP-44 to the church key. An empty name is refused before
+// anything is sent. The owner's Helpers page shows the given name first, with the invented name and the key underneath.
+// THE ORDER (owner 2026-11-12): the invite first — scanned or pasted, with no name box and nothing blocking the
+// camera — then, only for an invite that checks out, a second step "Your name" with Send and Back. An invalid invite
+// shows its error on the first step and never reaches the name step.
 //
 // POINT OF USE (CLAUDE.md rules 1 and 3). A real gateway on a free port; the owner's real console made through the
 // real wizard (new-church-session.mjs); the helpers are SEPARATE headless chromium profiles on the same relay, driving
@@ -70,13 +73,21 @@ async function openConsole(relay, tag) {
   return s;
 }
 
-async function shot(s, name) {
+// Desktop, then (unless `phone: false`) the same screen at phone width. Settings must pass `phone: false`: at phone
+// width Settings becomes a list and the open page — with the step it was on — closes; its phone shots are a separate
+// pass at the end of the Settings test.
+async function shot(s, name, { phone = true } = {}) {
   if (!SHOTS) return;
   try {
     mkdirSync(SHOTS, { recursive: true });
     const r = await s.send('Page.captureScreenshot', { format: 'png' });
-    if (r?.result?.data) writeFileSync(join(SHOTS, name + '.png'), Buffer.from(r.result.data, 'base64'));
-  } catch {}
+    if (r?.result?.data) writeFileSync(join(SHOTS, name + '-desktop.png'), Buffer.from(r.result.data, 'base64'));
+    if (!phone) return;
+    await s.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await sleep(500);
+    const p = await s.send('Page.captureScreenshot', { format: 'png' });
+    if (p?.result?.data) writeFileSync(join(SHOTS, name + '-phone.png'), Buffer.from(p.result.data, 'base64'));
+  } catch {} finally { try { await s.send('Emulation.clearDeviceMetricsOverride'); await sleep(400); } catch {} }
 }
 
 // Make a church in a helper console through the real wizard — the same steps new-church-session.mjs drives.
@@ -119,6 +130,8 @@ const rowText = (np) => `(() => { const els=[...document.querySelectorAll('div')
   if(!els.length) return ''; els.sort((a,b)=>a.innerText.length-b.innerText.length); return els[0].innerText; })()`;
 const reqRowsFrom = (pubHex) => OWNER.rows(`kind = 30078 AND dtag = '${STEWARDREQ_D + OWNER.churchPub}'`).filter(r => r.e.pubkey === pubHex);
 const setNameField = (s, v) => s.ev(typeInto('input[aria-label="Your name"]', v));
+const hasNameStep = (s) => s.ev(`!!document.querySelector('input[aria-label="Your name"]')`);
+const BAD_INVITE = 'trinityone-stewardinvite:npub1notachurch';
 const fieldValue = (s) => s.ev(`(() => { const i=document.querySelector('input[aria-label="Your name"]'); return i ? i.value : null; })()`);
 
 before(async () => {
@@ -134,7 +147,7 @@ before(async () => {
 after(() => { try { NEWBIE && NEWBIE.close(); } catch {} try { OTHER && OTHER.close(); } catch {} try { OWNER && OWNER.close(); } catch {} H.stopAll(); });
 const SKIP = !CHROME ? 'no chromium' : false;
 
-test('a new helper on the welcome screen cannot send a request with no name — nothing reaches the relay', { skip: SKIP, timeout: 240000 }, async () => {
+test('welcome screen: the invite step has no name box, and an invalid invite never reaches the name step', { skip: SKIP, timeout: 240000 }, async () => {
   NEWBIE = await openConsole(OWNER.relay, 'new');
   await NEWBIE.press(/^Help run a church$/, 'Help run a church');
   await NEWBIE.waitFor(`!!document.querySelector('input[aria-label="Church invite code"]')`, 30000, 'the invite step');
@@ -144,9 +157,24 @@ test('a new helper on the welcome screen cannot send a request with no name — 
   // helper's own relay list (the relay panel's store) and the test waits until it has proved itself.
   await NEWBIE.ev(`(() => { localStorage.setItem('trinityone.steward.extra-relays', JSON.stringify([${JSON.stringify(OWNER.relay.wsUrl)}])); return 1; })()`);
   await NEWBIE.waitFor(`window.Steward.relayList().length > 0`, 30000, 'the helper console to prove the box');
-  assert.equal(await fieldValue(NEWBIE), '', 'the welcome screen has no empty "Your name" field for a brand-new helper');
+  assert.equal(await hasNameStep(NEWBIE), false, 'the invite step shows a "Your name" box — the name must come after the invite');
+  await shot(NEWBIE, 'welcome-1-invite-step');
+  await NEWBIE.ev(typeInto('input[aria-label="Church invite code"]', BAD_INVITE));
+  await sleep(300);
+  await NEWBIE.press(/^Next$/, 'Next');
+  await sleep(600);
+  assert.equal(await hasNameStep(NEWBIE), false, 'an invalid invite reached the name step');
+  assert.ok(/doesn.t look like a church invite/i.test(await NEWBIE.text()), 'no error for an invalid invite on the invite step');
+  assert.ok(await NEWBIE.ev(`!!document.querySelector('input[aria-label="Church invite code"]')`), 'the invite box is gone after an invalid invite');
+});
+
+test('welcome screen: a valid invite asks for a name; Send with no name is refused and nothing reaches the relay', { skip: SKIP, timeout: 240000 }, async () => {
   await NEWBIE.ev(typeInto('input[aria-label="Church invite code"]', invite));
   await sleep(300);
+  await NEWBIE.press(/^Next$/, 'Next');
+  await NEWBIE.waitFor(`!!document.querySelector('input[aria-label="Your name"]')`, 10000, 'the name step');
+  assert.equal(await NEWBIE.ev(`!!document.querySelector('input[aria-label="Church invite code"]')`), false, 'the name step still shows the invite box');
+  assert.equal(await fieldValue(NEWBIE), '', 'the name box is not empty for a brand-new helper');
   await NEWBIE.press(/^Send$/, 'Send');
   await sleep(2500);
   const me = await NEWBIE.ev(`window.Steward.pubkey`);
@@ -154,15 +182,18 @@ test('a new helper on the welcome screen cannot send a request with no name — 
   assert.equal(reqRowsFrom(me).length, 0, 'THE BUG: a request with an empty name was sent');
   const t = await NEWBIE.text();
   assert.ok(!/Request sent/.test(t), 'the screen says "Request sent" over a request that was refused');
-  assert.ok(/name/i.test(t.split('Send').slice(1).join(' ')), 'no plain error about the name under the Send button: ' + t.slice(0, 600));
+  assert.ok(/Add your name first/.test(t), 'no plain error about the name: ' + t.slice(0, 600));
+  assert.equal(await hasNameStep(NEWBIE), true, 'the refusal left the name step');
+  await shot(NEWBIE, 'welcome-3-empty-name-error');
 });
 
 test('a new helper types a name on the welcome screen, sends, and the owner\'s Helpers page shows THAT name first', { skip: SKIP, timeout: 240000 }, async () => {
   await setNameField(NEWBIE, NEW_HELPER_NAME);
   await sleep(300);
-  await shot(NEWBIE, '1-welcome-screen-request');
+  await shot(NEWBIE, 'welcome-2-name-step');
   await NEWBIE.press(/^Send$/, 'Send');
   await NEWBIE.waitFor(`/Request sent/.test(document.body.innerText)`, 30000, 'the "Request sent" state');
+  await shot(NEWBIE, 'welcome-4-request-sent');
   const me = await NEWBIE.ev(`window.Steward.pubkey`);
   const np = await NEWBIE.ev(`window.Steward.npub`);
   const rows = reqRowsFrom(me);
@@ -179,11 +210,11 @@ test('a new helper types a name on the welcome screen, sends, and the owner\'s H
   assert.ok(row.indexOf(NEW_HELPER_NAME) < row.indexOf(nice), 'the given name is not shown first, above the invented name. Row: ' + row);
   await OWNER.ev(`(() => { const els=[...document.querySelectorAll('div')].filter(d=>(d.innerText||'').includes(${JSON.stringify(np)}) && (d.innerText.match(/npub1/g)||[]).length===1 && /Approve/.test(d.innerText)); els.sort((a,b)=>a.innerText.length-b.innerText.length); if(els[0]) els[0].scrollIntoView({block:'center'}); return 1; })()`);
   await sleep(300);
-  await shot(OWNER, '3-owner-request-row');
+  await shot(OWNER, 'owner-request-row');
   NEWBIE.close(); NEWBIE = null;
 });
 
-test('someone who runs church A asks to help church B from Settings: B\'s owner sees the PERSON\'s name, never church A\'s', { skip: SKIP, timeout: 420000 }, async () => {
+test('someone who runs church A asks to help church B from Settings: invite first, then their name — B\'s owner sees the PERSON\'s name, never church A\'s', { skip: SKIP, timeout: 420000 }, async () => {
   OTHER = await openConsole(OWNER.relay, 'other');
   await makeChurch(OTHER, OTHER_CHURCH_NAME);
   await OTHER.waitFor(`!!(window.Steward && window.Steward.relayAuthed && window.Steward.relayAuthed())`, 60000, 'church A logged in');
@@ -195,14 +226,38 @@ test('someone who runs church A asks to help church B from Settings: B\'s owner 
   await OTHER.press(/^Save$/, 'Save');
   await sleep(800);
   await toHelpOthers(OTHER);
-  assert.equal(await fieldValue(OTHER), STEWARD_NAME, 'the "Your name" field is not prefilled with the person\'s own steward name');
+  // step 1: the invite, with no name box
+  assert.equal(await hasNameStep(OTHER), false, 'the Settings invite step shows a "Your name" box — the name must come after the invite');
+  await shot(OTHER, 'settings-1-invite-step', { phone: false });
+  await OTHER.ev(typeInto('input[aria-label="Church invite code"]', BAD_INVITE));
+  await sleep(300);
+  await OTHER.press(/^Next$/, 'Next');
+  await sleep(600);
+  assert.equal(await hasNameStep(OTHER), false, 'an invalid invite reached the name step on Settings');
+  assert.ok(/doesn.t look like a church invite/i.test(await OTHER.text()), 'no error for an invalid invite on the Settings invite step');
+  // step 2: a valid invite asks for the name, prefilled with the person's own steward name
   await OTHER.ev(typeInto('input[aria-label="Church invite code"]', invite));
   await sleep(300);
-  await shot(OTHER, '2-settings-help-run-a-church');
-  await OTHER.press(/^Send$/, 'Send');
-  await OTHER.waitFor(`/Request sent/.test(document.body.innerText)`, 30000, 'the "Request sent" message');
+  await OTHER.press(/^Next$/, 'Next');
+  await OTHER.waitFor(`!!document.querySelector('input[aria-label="Your name"]')`, 10000, 'the Settings name step');
+  assert.equal(await fieldValue(OTHER), STEWARD_NAME, 'the "Your name" field is not prefilled with the person\'s own steward name');
   const me = await OTHER.ev(`window.Steward.pubkey`);
   const np = await OTHER.ev(`window.Steward.npub`);
+  // an emptied name is refused here too, and nothing is published
+  await setNameField(OTHER, '');
+  await sleep(300);
+  await OTHER.press(/^Send$/, 'Send');
+  await sleep(2500);
+  assert.equal(reqRowsFrom(me).length, 0, 'THE BUG: Settings sent a request with an empty name');
+  assert.ok(/Add your name first/.test(await OTHER.text()), 'no plain error about the name on Settings');
+  assert.ok(!/Request sent/.test(await OTHER.text()), 'Settings says "Request sent" over a refused request');
+  await shot(OTHER, 'settings-3-empty-name-error', { phone: false });
+  await setNameField(OTHER, STEWARD_NAME);
+  await sleep(300);
+  await shot(OTHER, 'settings-2-name-step', { phone: false });
+  await OTHER.press(/^Send$/, 'Send');
+  await OTHER.waitFor(`/Request sent/.test(document.body.innerText)`, 30000, 'the "Request sent" message');
+  await shot(OTHER, 'settings-4-request-sent', { phone: false });
   assert.equal(reqRowsFrom(me).length, 1, 'church A\'s request never reached the relay');
 
   await toHelpers(OWNER);
@@ -210,4 +265,29 @@ test('someone who runs church A asks to help church B from Settings: B\'s owner 
   const row = await OWNER.ev(rowText(np));
   assert.ok(!row.includes(OTHER_CHURCH_NAME), 'THE BUG: church B\'s owner sees church A\'s NAME as the person asking. Row: ' + row);
   assert.ok(row.includes(STEWARD_NAME), 'church B\'s owner does not see the person\'s own name. Row: ' + row);
+
+  // SCREENSHOTS ONLY (HELPERNAME_SHOTS): the same Settings steps at phone width. Asserts nothing new; a second Send
+  // replaces the same request (one replaceable document per church).
+  if (SHOTS) {
+    await OTHER.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    try {
+      await sleep(800);
+      await OTHER.press(/^Help run a church\s*Help another church/, 'the Help run a church row (phone)');
+      await OTHER.waitFor(`!!document.querySelector('input[aria-label="Church invite code"]')`, 15000, 'the invite step (phone)');
+      await sleep(500);
+      const snap = async (name) => { const r = await OTHER.send('Page.captureScreenshot', { format: 'png' }); if (r?.result?.data) writeFileSync(join(SHOTS, name + '-phone.png'), Buffer.from(r.result.data, 'base64')); };
+      await snap('settings-1-invite-step');
+      await OTHER.ev(typeInto('input[aria-label="Church invite code"]', invite)); await sleep(300);
+      await OTHER.press(/^Next$/, 'Next (phone)');
+      await OTHER.waitFor(`!!document.querySelector('input[aria-label="Your name"]')`, 10000, 'the name step (phone)');
+      await snap('settings-2-name-step');
+      await setNameField(OTHER, ''); await sleep(300);
+      await OTHER.press(/^Send$/, 'Send (phone)'); await sleep(1200);
+      await snap('settings-3-empty-name-error');
+      await setNameField(OTHER, STEWARD_NAME); await sleep(300);
+      await OTHER.press(/^Send$/, 'Send (phone)');
+      await OTHER.waitFor(`/Request sent/.test(document.body.innerText)`, 30000, 'the "Request sent" message (phone)');
+      await snap('settings-4-request-sent');
+    } finally { try { await OTHER.send('Emulation.clearDeviceMetricsOverride'); } catch {} }
+  }
 });

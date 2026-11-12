@@ -11595,9 +11595,19 @@ function DashBecomeStewardPanel() {
   const [myName, setMyName] = React.useState(() => (window.Steward && window.Steward.ownStewardName && window.Steward.ownStewardName()) || '');
   const svg = showQR && window.Steward.qrSVG ? window.Steward.qrSVG(code) : '';
   if (!code) return null;
+  // TWO STEPS (owner 2026-11-12): the invite first — scanned or pasted, never blocked for want of a name — then, only
+  // for an invite that checks out, "Your name" and Send. `nameFor` is the checked invite waiting on step 2.
+  const [nameFor, setNameFor] = React.useState('');
   const onInvite = (payload) => {
     setScanInvite(false);
-    Promise.resolve(window.Steward.requestSteward(payload, myName)).then(r => {
+    const chk = window.Steward.checkStewardInvite(payload);
+    if (!chk || !chk.ok) { setReqMsg((chk && chk.error) || 'That doesn’t look like a church invite.'); return; }
+    setReqMsg(''); setNameFor(String(payload));
+  };
+  const sendRequest = () => {
+    setReqMsg('');
+    Promise.resolve(window.Steward.requestSteward(nameFor, myName)).then(r => {
+      if (r && r.ok) { setNameFor(''); setInviteText(''); }
       setReqMsg(r && r.ok ? '✓ Request sent — the church’s owner will approve you. The church will then appear in your switcher (top-left).' : ((r && r.error) || 'Couldn’t send the request.'));
     });
   };
@@ -11606,14 +11616,21 @@ function DashBecomeStewardPanel() {
       <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Helping run <b style={{ color: 'var(--ink)' }}>another</b> church? <b style={{ color: 'var(--ink)' }}>Scan or enter its invite</b> and the owner approves you. (No camera at their end? Give the owner your code below instead.) This shares only your public ID — never a key.</div>
       {scanInvite
         ? <div><StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} /><button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 8 }}>Cancel scan</button></div>
-        : <div>
+        : nameFor
+        ? <div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '0 0 6px' }}>Your name</div>
-            <input value={myName} onChange={e => { setMyName(e.target.value); setReqMsg(''); }} aria-label="Your name" maxLength={60} autoComplete="name" placeholder="Your name" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 10 }} />
-            {stewOnPhoneApp() ? <button onClick={() => { if (!myName.trim()) { setReqMsg('Add your name first.'); return; } setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button> : null}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={myName} onChange={e => { setMyName(e.target.value); setReqMsg(''); }} onKeyDown={e => { if (e.key === 'Enter') sendRequest(); }} aria-label="Your name" maxLength={60} autoComplete="name" autoFocus placeholder="Your name" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              <button onClick={sendRequest} className="sk-btn sk-btn--clay" style={{ padding: '9px 13px', fontSize: 13, flexShrink: 0 }}>Send</button>
+            </div>
+            <button onClick={() => { setNameFor(''); setReqMsg(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5, marginTop: 8 }}>Back</button>
+          </div>
+        : <div>
+            {stewOnPhoneApp() ? <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button> : null}
             <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '9px 0 6px' }}>No camera? Paste the invite the owner sent you:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={inviteText} onChange={e => { setInviteText(e.target.value); setReqMsg(''); }} aria-label="Church invite code" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
-              <button onClick={() => onInvite(inviteText)} disabled={!inviteText.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: inviteText.trim() ? 1 : 0.5, flexShrink: 0 }}>Send</button>
+              <button onClick={() => onInvite(inviteText)} disabled={!inviteText.trim()} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: inviteText.trim() ? 1 : 0.5, flexShrink: 0 }}>Next</button>
             </div>
           </div>}
       {reqMsg ? <div style={{ fontSize: 12.5, color: reqMsg.startsWith('✓') ? 'var(--sage-ink)' : 'var(--clay-ink)', fontWeight: 600, marginTop: 9, lineHeight: 1.45 }}>{reqMsg}</div> : null}

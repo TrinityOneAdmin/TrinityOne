@@ -21,6 +21,8 @@ function setup() {
   const Steward = fakeSteward({
     createKeyQuiet: () => ({ code: 'trinityone-steward:npub1me', npub: 'npub1me' }),
     stewardName: () => 'Gentle Cedar',
+    // the invite check the screen runs before it asks for a name (real one: Steward.checkStewardInvite)
+    checkStewardInvite: (payload) => (payload === INVITE ? { ok: true, church: 'cc' } : { ok: false, error: 'That doesn’t look like a church invite.' }),
     requestSteward: (payload, name) => { reqs.push([payload, name]); return Promise.resolve({ ok: true, church: 'cc', npub: 'npub1church' }); },
     setPin: async () => {}, enterConsole: () => {}, qrSVG: () => '<svg/>',
   });
@@ -43,13 +45,17 @@ function setup() {
   return { fr, draw, all, press, typeInto, get reqs() { return reqs; }, get tree() { return tree; } };
 }
 
-test('Help run a church -> enter the invite -> Send calls requestSteward with the invite', async () => {
+test('Help run a church -> enter the invite -> Next -> your name -> Send calls requestSteward with the invite and the name', async () => {
   const h = setup();
   h.press('Help run a church');                 // mint a quiet key, go to the invite step
   assert.ok(h.all().some(n => (n.type === 'input') && n.props && n.props['aria-label'] === 'Church invite code'),
     'the wizard does not offer an invite box after "Help run a church"');
-  h.typeInto('Your name', 'Ruth Bellamy');   // the name the owner will see (2026-11-12: it used to send the church profile's)
+  // 2026-11-12: the name comes AFTER the invite — step 1 has no name box
+  assert.ok(!h.all().some(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Your name'), 'the invite step shows a name box');
   h.typeInto('Church invite code', INVITE);
+  h.press('Next');
+  assert.deepEqual(h.reqs, [], 'Next sent a request before the person gave a name');
+  h.typeInto('Your name', 'Ruth Bellamy');   // the name the owner will see (2026-11-12: it used to send the church profile's)
   h.press('Send');
   await new Promise(r => setImmediate(r));
   h.draw();

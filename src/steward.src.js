@@ -8396,6 +8396,17 @@ window.Steward = {
     s = s.replace(/^trinityone-stewardinvite:/i, '').trim();
     return toPubHex(s);
   },
+  // THE INVITE CHECK, ON ITS OWN, so a screen can refuse a bad invite BEFORE it asks for a name (owner 2026-11-12:
+  // the name comes after the scan/paste). Pure: reads nothing from a relay, signs and sends nothing. requestSteward
+  // runs the same check, so a screen that skips it still cannot send to a bad invite.
+  // CALLERS: requestSteward (below); StewardWelcome onInvite (app/steward-root.jsx); DashBecomeStewardPanel onInvite
+  // (app/stew-dashboard.jsx).
+  checkStewardInvite(payload) {
+    const cp = window.Steward.parseStewardInvite(payload);
+    if (!cp) return { ok: false, error: 'That doesn’t look like a church invite.' };
+    if (cp === churchPub) return { ok: false, error: 'That’s your own church.' };
+    return { ok: true, church: cp };
+  },
   // requester side: scan/paste a church's invite → publish a steward request (signed by OUR key, naming the church)
   // `name` IS THE NAME THE PERSON TYPED on the request screen. It was `lastProfile.name` — the console's cached CHURCH
   // profile, not the person — so a brand-new helper always sent '' and someone who runs a church sent THAT church's
@@ -8404,9 +8415,9 @@ window.Steward = {
   // CALLERS: StewardWelcome onInvite (app/steward-root.jsx — welcome screen, "Help run a church") and
   // DashBecomeStewardPanel onInvite (app/stew-dashboard.jsx — Settings → Help run a church). No other caller.
   requestSteward(payload, name) {
-    const cp = window.Steward.parseStewardInvite(payload);
-    if (!cp) return Promise.resolve({ ok: false, error: 'That doesn’t look like a church invite.' });
-    if (cp === churchPub) return Promise.resolve({ ok: false, error: 'That’s your own church.' });
+    const chk = window.Steward.checkStewardInvite(payload);
+    if (!chk.ok) return Promise.resolve({ ok: false, error: chk.error });
+    const cp = chk.church;
     const who = String(name == null ? '' : name).trim().slice(0, 60);
     if (!who) return Promise.resolve({ ok: false, error: 'Add your name first.' });
     // SEALED TO THE CHURCH KEY, not the name key. Only the owner's console reads this document, and a

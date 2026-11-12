@@ -604,10 +604,19 @@ function StewardWelcome() {
   // THE NAME THE OWNER WILL SEE on this request — typed by the person, prefilled from their own steward name if this
   // console has one (a brand-new helper has none). requestSteward seals it to the church and refuses an empty one.
   const [myName, setMyName] = useSt(() => (window.Steward && window.Steward.ownStewardName && window.Steward.ownStewardName()) || '');
+  // TWO STEPS (owner 2026-11-12): the invite first — scanned or pasted, never blocked for want of a name — then, only
+  // for an invite that checks out, "Your name" and Send. `nameFor` is the checked invite waiting on step 2.
+  const [nameFor, setNameFor] = useSt('');
   const onInvite = (payload) => {
+    setScanInvite(false);
+    const chk = window.Steward.checkStewardInvite(payload);
+    if (!chk || !chk.ok) { setReqMsg((chk && chk.error) || 'That doesn’t look like a church invite.'); return; }
+    setReqMsg(''); setNameFor(String(payload));
+  };
+  const sendRequest = () => {
     setReqMsg('');
-    Promise.resolve(window.Steward.requestSteward(payload, myName)).then(r => {
-      if (r && r.ok) { setScanInvite(false); setReqSent(true); setReqMsg(''); }
+    Promise.resolve(window.Steward.requestSteward(nameFor, myName)).then(r => {
+      if (r && r.ok) { setNameFor(''); setReqSent(true); setReqMsg(''); }
       else setReqMsg((r && r.error) || 'Couldn’t send the request — check your connection and try again.');
     });
   };
@@ -668,6 +677,14 @@ function StewardWelcome() {
               <StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} />
               <button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, marginTop: 12, width: '100%', justifyContent: 'center' }}>Enter the invite instead</button>
             </div>
+          ) : nameFor && !reqSent ? (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>YOUR NAME</div>
+              <input value={myName} onChange={e => { setMyName(e.target.value); setReqMsg(''); }} onKeyDown={e => { if (e.key === 'Enter') sendRequest(); }} aria-label="Your name" maxLength={60} autoComplete="name" autoFocus placeholder="Your name" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              {reqMsg ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8, lineHeight: 1.45 }}>{reqMsg}</div> : null}
+              <button onClick={sendRequest} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 12 }}>Send</button>
+              <button onClick={() => { setNameFor(''); setReqMsg(''); }} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13, width: '100%', justifyContent: 'center', marginTop: 8 }}>Back</button>
+            </div>
           ) : reqSent ? (
             <div>
               {/* CALM WAITING STATE. Stage 1 already auto-lands this console in the church the moment the owner
@@ -685,13 +702,11 @@ function StewardWelcome() {
               {/* THE PATH, mirroring a member entering a joining code: scan or paste the church's invite, and the
                   owner approves you. The reciprocal "give the owner your code" is kept only as a quiet fallback. */}
               <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Scan or enter the <b>invite</b> the church’s owner shows you. They’ll approve you, and that church then appears here in your switcher. This shares only your public ID — never a key.</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>YOUR NAME</div>
-              <input value={myName} onChange={e => { setMyName(e.target.value); setReqMsg(''); }} aria-label="Your name" maxLength={60} autoComplete="name" placeholder="Your name" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 12 }} />
-              {isNative ? <button onClick={() => { if (!myName.trim()) { setReqMsg('Add your name first.'); return; } setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 12 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the church’s invite</button> : null}
+              {isNative ? <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 12 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the church’s invite</button> : null}
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>{isNative ? 'OR PASTE THE INVITE' : 'PASTE THE INVITE THE OWNER SENT YOU'}</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input value={invite} onChange={e => { setInvite(e.target.value); setReqMsg(''); }} onKeyDown={e => { if (e.key === 'Enter' && invite.trim()) onInvite(invite); }} aria-label="Church invite code" spellCheck={false} autoCapitalize="none" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />
-                <button onClick={() => onInvite(invite)} disabled={!invite.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5, opacity: invite.trim() ? 1 : 0.5, flexShrink: 0 }}>Send</button>
+                <button onClick={() => onInvite(invite)} disabled={!invite.trim()} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5, opacity: invite.trim() ? 1 : 0.5, flexShrink: 0 }}>Next</button>
               </div>
               {reqMsg ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8, lineHeight: 1.45 }}>{reqMsg}</div> : null}
               {/* de-emphasised reciprocal path, for a pair with no camera at the owner's end */}
