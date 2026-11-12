@@ -95,15 +95,10 @@ async function relayPanel() {
     js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
   } finally { rmSync(tmp, { force: true }); }
   const key = '__rl_' + Math.random().toString(36).slice(2);
-  // The REAL classifyRelay; provenRelayPub stands in for the verified-identity cache (per-URL), as the gate
-  // would answer it on the phone. relayNet() is the church's signed set — it carries the ADDED box, so that
-  // row classifies 'self' (the exact bug: every added relay is church-signed), and the card must still show
-  // NO pill for it. The own loopback box is caught by the loopback-origin signal.
+  // provenRelayPub stands in for the verified-identity cache (per-URL), as the gate would answer it on the
+  // phone; the card uses it to count boxes. The card draws no pill, so no classifier is supplied to it.
   const Steward = {
-    classifyRelay,
     provenRelayPub: (u) => PROVEN[u] || '',
-    sharedRelayKeys: () => [CANON],
-    relayNet: async () => [{ pubkey: SIGNED }],
     ownRelay: () => ROW_SELF,
     isSelfHosted: () => true,
     relayNameFor: () => '',
@@ -125,7 +120,7 @@ async function relayPanel() {
   const pre = Object.keys(globalThis[key]).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
   const b64 = Buffer.from(pre + '\n' + js).toString('base64');
   const Comp = (await import('data:text/javascript;base64,' + b64)).DashRelaysCard;
-  // Two draws: the first runs the relay-net pre-resolve effect; the second renders with its result settled.
+  // Two draws: the first runs the mount effects; the second renders with their results settled.
   const draw = () => { reset(); const t = Comp({}); flush(); return t; };
   draw();
   return { draw };

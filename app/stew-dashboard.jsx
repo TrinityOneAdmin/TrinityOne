@@ -5614,8 +5614,7 @@ function DashRelaysCard() {
   // COUNT DISTINCT BOXES, NOT ADDRESSES. One physical relay answers at several addresses (the a8's
   // Cloudflare + Tailscale routes both prove the SAME identity key), and each address is a row in `status`.
   // The badge is a redundancy/health summary, so it must count BOXES: group the rows by the identity each
-  // address PROVED — provenRelayPub, the same gate-cache key the per-row label reads below and the same
-  // identity backupState dedups by — falling back to the address only while nothing has proved there yet. A
+  // address PROVED — provenRelayPub, the verified-identity cache, the same identity backupState dedups by — falling back to the address only while nothing has proved there yet. A
   // box is "online" if ANY of its addresses is answering (the WS status==='on' probe, kept so this agrees
   // with the per-row dots). Because provenRelayPub reads the verified-identity CACHE, a box that is momentarily
   // offline keeps its identity and stays in the denominator as a down box, so the badge can still go red.
