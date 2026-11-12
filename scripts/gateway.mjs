@@ -121,7 +121,11 @@ const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // keepApkCurrent: refresh the APKs this box hands out whenever the update source has different ones.
 // DEFAULT OFF on purpose — see the "KEEPING IT CURRENT WITHOUT A HUMAN" note below. A church on a metered
 // or thin pipe must not be given two 40 MB downloads it never asked for; it gets the warning instead.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false, keepRelayCurrent: false, showChurchNames: false, keepAwake: true };
+// autoUpdate / autoUpdateAt: the Suite JS auto-update toggle (opt-in, DEFAULT OFF) and the local "HH:MM" time
+// the Rust app shell applies a staged bundle at. Only a PACKAGED Suite box acts on them (see suiteAutoUpdate +
+// the `suite-autoupdate` marker the /settings handler maintains for the shell). A server-install relay ignores
+// them entirely — its software comes from relay-update.sh, not this path.
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false, keepRelayCurrent: false, showChurchNames: false, keepAwake: true, autoUpdate: false, autoUpdateAt: '03:00' };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -144,9 +148,28 @@ function loadSettings() {
       // default (owner decision) — only an explicit false disables it. The Tauri Rust controller does not read
       // this SETTINGS value; it reads the `keep-awake-off` marker the /settings handler maintains (see below).
       SETTINGS.keepAwake = s.keepAwake !== false;
+      // Suite JS auto-update: opt-in, default OFF; the apply time is a validated "HH:MM" (default 03:00). One
+      // coercion, shared with POST /settings, lifted + run by scripts/suite-autoupdate-settings.test.mjs.
+      coerceSuiteAutoUpdate(s, SETTINGS);
     }
   } catch {}
 }
+// SUITE-AUTOUPDATE-SETTINGS-BEGIN — lifted & run by scripts/suite-autoupdate-settings.test.mjs (CLAUDE.md rule 1/3)
+// Coerce the two Suite-auto-update settings into `out` from a parsed settings object OR a POST body `s`.
+// Opt-in: autoUpdate is true ONLY for an explicit boolean true. autoUpdateAt must be a valid 24h "HH:MM"; a
+// missing/invalid value leaves the existing value (or the 03:00 default) in place rather than corrupting it.
+function coerceHHMM(v) {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(v == null ? '' : v).trim());
+  return m ? m[0] : '';
+}
+function coerceSuiteAutoUpdate(s, out) {
+  if (s && 'autoUpdate' in s) out.autoUpdate = s.autoUpdate === true;
+  else if (out.autoUpdate === undefined) out.autoUpdate = false;
+  if (s && 'autoUpdateAt' in s) { const v = coerceHHMM(s.autoUpdateAt); if (v) out.autoUpdateAt = v; }
+  if (!out.autoUpdateAt) out.autoUpdateAt = '03:00';
+  return out;
+}
+// SUITE-AUTOUPDATE-SETTINGS-END
 // Media-hosting policy for a SHARED/community relay: sermon media (audio/video, or any large blob) may only be
 // uploaded by a church GRANTED media hosting here (MEDIA_HOSTS — a self-hoster, or one the operator vouches for).
 // A church can be provisioned for conversations + text resources (those are Nostr events, never blobs, so this
@@ -193,6 +216,12 @@ const RELEASE_ORIGIN_SEED = join(ROOT, 'release-origin');
 // Suite's software updates when a newer Suite is installed (/suite-update, home.js). The panel reads this
 // and shows that sentence instead of a button that would queue a flag nothing consumes.
 const PACKAGED = existsSync(RELEASE_ORIGIN_SEED);
+// WHERE THE TRUST ROOT LIVES when this relay is running as an auto-update OVERRIDE. The Rust app shell launches
+// an activated override from DATA_DIR/suite/active and passes PAYLOAD_DIR pointing at the read-only, OS-signed
+// payload. The pinned release key + the verifier are read from THERE, never from the (writable) override tree,
+// so a tampered override cannot supply its own key or verifier. Unset on a normal payload/checkout launch, in
+// which case ROOT (this tree) is the payload and already holds both files.
+const PAYLOAD_DIR = (process.env.PAYLOAD_DIR || '').trim();
 // '' for blank, the normalised origin for a valid one, null for something that is not an http(s) origin.
 // Only scheme + host[:port] survive: the readers append fixed paths, and credentials or a path in here would
 // be silently prepended to every fetch.
@@ -470,6 +499,126 @@ async function relayAutoUpdate(why) {
   finally { _relayAutoBusy = false; }
 }
 setInterval(() => { if (SETTINGS.keepRelayCurrent) relayAutoUpdate('periodic check').catch(() => {}); }, 3600 * 1000);
+
+// ── SUITE JS AUTO-UPDATE (P3): CHECK + DOWNLOAD + STAGE. Does NOT apply — the Rust app shell does (P2). ──────
+// This is the PACKAGED-Suite counterpart to relayAutoUpdate (which stays OFF for packaged boxes). It is gated on
+// PACKAGED && SETTINGS.autoUpdate, polls for a newer SIGNED JS bundle, downloads it into DATA_DIR/suite/staging,
+// pre-verifies the detached Ed25519 signature over the EXACT tarball bytes, enforces anti-rollback by date, and
+// writes staging/READY for the shell to act on at the operator's chosen time. It never swaps or restarts code.
+//
+// INTEGRITY = THE SIGNATURE OVER THE BYTES, NEVER manifest.sha256 (that hash is advisory and will not match the
+// host-rebuilt tgz — gating on it would reject every valid release). `sha`(git) is used only for newness and
+// `date` only for anti-rollback. Verification runs the shared verifier (scripts/verify-suite-bundle.mjs) with
+// the pinned read-only key, so the stage-time and apply-time checks are one implementation.
+//
+// SUITE-AUTOUPDATE-BEGIN — lifted & run by scripts/suite-autoupdate-stage.test.mjs (CLAUDE.md rule 1/3)
+function suiteUpdateBase() {
+  // Where to fetch suite-latest.json + the bundle from. SUITE_UPDATE_BASE lets a test redirect this to a
+  // localhost fixture so no test ever touches the network (the relay-bundle-publish network trap).
+  const o = String(process.env.SUITE_UPDATE_BASE || '').trim().replace(/\/+$/, '');
+  if (o) return o;
+  return 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download';
+}
+// Pure decision: is the remote bundle NEWER than what this box runs? sha (git) is not orderable, so "newer"
+// means a different valid sha; `date` (ISO) carries the ordering and gives anti-rollback at the pre-download
+// gate. Same sha → no-op; older/equal date → refused.
+function suiteIsNewer(remote, mine) {
+  if (!remote || typeof remote.sha !== 'string' || !/^[0-9a-f]{40}$/.test(remote.sha)) return false;
+  if (typeof remote.date !== 'string' || !remote.date) return false;
+  if (remote.sha === (mine && mine.sha)) return false;
+  const md = (mine && mine.date) || '';
+  if (!(remote.date > md)) return false;
+  return true;
+}
+let _suiteAutoBusy = false;
+// opts carries everything so the function can be lifted and driven in a test with no module globals:
+//   { packaged, settings, dataDir, build, base, verifier, pubkey, node }
+async function suiteAutoUpdate(why, opts = {}) {
+  const packaged = opts.packaged;
+  const settings = opts.settings || {};
+  const dataDir  = opts.dataDir;
+  const build    = opts.build || {};
+  const base     = opts.base;
+  const verifier = opts.verifier;
+  const pubkey   = opts.pubkey;
+  const node     = opts.node || process.execPath;
+  const vTimeout = opts.verifyTimeoutMs || 15000;
+  // GATE: only a packaged Suite box with the toggle on ever runs. Checked before any network/disk touch so a
+  // non-packaged box (every server install, every test-spawned gateway) is provably inert.
+  if (!packaged || settings.autoUpdate !== true) return { ok: false, skipped: 'disabled' };
+  if (_suiteAutoBusy) return { ok: false, skipped: 'busy' };
+  _suiteAutoBusy = true;
+  const suiteDir = join(dataDir, 'suite');
+  const staging  = join(suiteDir, 'staging');
+  const stTgz    = join(staging, 'bundle.tgz');
+  const stSig    = join(staging, 'bundle.sig');
+  const stReady  = join(staging, 'READY');
+  const discard  = () => { try { rmSync(stTgz, { force: true }); } catch {} try { rmSync(stSig, { force: true }); } catch {} try { rmSync(stReady, { force: true }); } catch {} };
+  try {
+    // 1. fetch the manifest
+    let remote = null;
+    try {
+      const r = await fetch(base + '/suite-latest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (r.ok) remote = await r.json();
+    } catch {}
+    if (!remote || typeof remote !== 'object') return { ok: false, reason: 'no-manifest' };
+    // 2. newer than mine (sha differs AND date strictly newer)?
+    if (!suiteIsNewer(remote, build)) return { ok: false, reason: 'not-newer' };
+    // 3. download tgz + sig to staging/.tmp, then atomic-rename into staging/
+    const tmp = join(staging, '.tmp');
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+    mkdirSync(tmp, { recursive: true });
+    const tgzUrl = (typeof remote.url === 'string' && /^https?:\/\//.test(remote.url)) ? remote.url : (base + '/suite-js-bundle.tgz');
+    const sigUrl = (typeof remote.sig === 'string' && /^https?:\/\//.test(remote.sig)) ? remote.sig : (base + '/suite-js-bundle.tgz.sig');
+    let tgzBuf, sigBuf;
+    try {
+      const tr = await fetch(tgzUrl, { cache: 'no-store', signal: AbortSignal.timeout(900000) });
+      if (!tr.ok) throw new Error('HTTP ' + tr.status + ' for the bundle');
+      tgzBuf = Buffer.from(await tr.arrayBuffer());
+      if (tgzBuf.length < 512) throw new Error('bundle too small (' + tgzBuf.length + ' bytes)');
+      const sr = await fetch(sigUrl, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
+      if (!sr.ok) throw new Error('HTTP ' + sr.status + ' for the signature');
+      sigBuf = Buffer.from(await sr.arrayBuffer());
+    } catch (e) {
+      try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+      return { ok: false, reason: 'download-failed', error: String((e && e.message) || e) };
+    }
+    const tmpTgz = join(tmp, 'bundle.tgz'), tmpSig = join(tmp, 'bundle.sig');
+    writeFileSync(tmpTgz, tgzBuf); writeFileSync(tmpSig, sigBuf);
+    // Clear any stale READY (a previous staged bundle) BEFORE the new bytes land, so READY never points at a
+    // mix, then rename the verified-nothing-yet files into place and prove them below.
+    try { rmSync(stReady, { force: true }); } catch {}
+    renameSync(tmpTgz, stTgz); renameSync(tmpSig, stSig);
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+    // 4. pre-verify the detached Ed25519 signature over the EXACT bytes, with the shared verifier + pinned key.
+    const vr = spawnSync(node, [verifier, stTgz, stSig, pubkey], { timeout: vTimeout, stdio: 'ignore' });
+    if (!vr || vr.status !== 0) { discard(); return { ok: false, reason: 'bad-signature', status: vr && vr.status }; }
+    // 5. anti-rollback: the remote date must exceed BOTH my build date and any recorded installed date.
+    let floor = (build && build.date) || '';
+    try { const st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8')); if (st && typeof st.installedDate === 'string' && st.installedDate > floor) floor = st.installedDate; } catch {}
+    if (!(remote.date > floor)) { discard(); return { ok: false, reason: 'anti-rollback' }; }
+    // 6. write READY (does NOT apply — the shell reads this at the chosen time)
+    const ready = { version: String(remote.version || remote.sha), sha: remote.sha, date: remote.date };
+    const tmpReady = stReady + '.tmp';
+    writeFileSync(tmpReady, JSON.stringify(ready) + '\n'); renameSync(tmpReady, stReady);
+    return { ok: true, staged: true, ready };
+  } catch (e) {
+    return { ok: false, reason: 'error', error: String((e && e.message) || e) };
+  } finally { _suiteAutoBusy = false; }
+}
+// SUITE-AUTOUPDATE-END
+// The module-level defaults handed to suiteAutoUpdate from the real call sites (the test passes its own opts).
+// The verifier + key are read from the read-only PAYLOAD_DIR when running as an override, else from this tree.
+function suiteAutoUpdateDefaults() {
+  const payload = PAYLOAD_DIR || ROOT;
+  return {
+    packaged: PACKAGED, settings: SETTINGS, dataDir: DATA_DIR, build: BUILD, base: suiteUpdateBase(),
+    verifier: join(payload, 'scripts', 'verify-suite-bundle.mjs'),
+    pubkey: process.env.RELEASE_PUBKEY_PATH || join(payload, 'relay-app', 'release-pubkey.pem'),
+  };
+}
+// Hourly check (mirrors the relayAutoUpdate setInterval precedent above) + fire on enable (POST /settings).
+setInterval(() => { if (PACKAGED && SETTINGS.autoUpdate) suiteAutoUpdate('periodic check', suiteAutoUpdateDefaults()).catch(() => {}); }, 3600 * 1000);
 
 // The absolute address to send a member to. SETTINGS.appUrl is what the operator has TOLD this box it is
 // reachable at (behind a tunnel the Host header can be anything); fall back to the host the asker used.
@@ -7874,6 +8023,13 @@ function serveStatic(req, res) {
             // (the default). So keepAwake=true removes the marker; keepAwake=false writes it.
             try { const mk = join(DATA_DIR, 'keep-awake-off'); if (SETTINGS.keepAwake) rmSync(mk, { force: true }); else writeFileSync(mk, '1\n'); } catch {}
           }
+          if ('autoUpdate' in s || 'autoUpdateAt' in s) {
+            // Coerce via the SAME helper loadSettings uses (one rule), then maintain the `suite-autoupdate`
+            // marker the Rust app shell reads DIRECTLY from the data dir (it applies staged bundles, not this
+            // gateway). Marker PRESENCE ⇒ enabled; its contents are "HH:MM\n" — the time the shell applies at.
+            coerceSuiteAutoUpdate(s, SETTINGS);
+            try { const mk = join(DATA_DIR, 'suite-autoupdate'); if (SETTINGS.autoUpdate) writeFileSync(mk, (SETTINGS.autoUpdateAt || '03:00') + '\n'); else rmSync(mk, { force: true }); } catch {}
+          }
           if ('serveApp' in s) SETTINGS.serveApp = !!s.serveApp;
           if ('serveModules' in s) SETTINGS.serveModules = !!s.serveModules;
           if ('serveAudio' in s) SETTINGS.serveAudio = !!s.serveAudio;
@@ -7893,6 +8049,9 @@ function serveStatic(req, res) {
           // ticks the box because the panel just told them they are behind must not be left still behind.
           if ('keepApkCurrent' in s && SETTINGS.keepApkCurrent) { apkAutoRefresh('the operator turned it on', true).catch(() => {}); }
           if ('keepRelayCurrent' in s && SETTINGS.keepRelayCurrent) { relayAutoUpdate('the operator turned it on').catch(() => {}); }
+          // Turning Suite auto-update ON acts NOW rather than at the next hourly tick, so a staged bundle can be
+          // ready for tonight. Only a PACKAGED box does anything (suiteAutoUpdate re-checks internally too).
+          if (PACKAGED && 'autoUpdate' in s && SETTINGS.autoUpdate) { suiteAutoUpdate('the operator turned it on', suiteAutoUpdateDefaults()).catch(() => {}); }
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, origin: ORIGIN, packaged: PACKAGED }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });
@@ -8072,7 +8231,23 @@ function serveStatic(req, res) {
         // payload (updates with the Suite), and a box that was simply never told where to get things from.
         // `codeSource` is the file as written (blank when the origin doubles as it), so the panel can say
         // where the software comes from when that is not where the installers do.
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, codeSource: codeSource(), releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest }));
+        // SUITE AUTO-UPDATE STATUS (P3) — for the P4 control-panel card. Reports the live toggle, the staged
+        // bundle (if any) this box has downloaded + verified, and the last apply outcome the shell recorded in
+        // DATA_DIR/suite/state.json. Read-only surface; the notify-only banner (/suite-update) is untouched.
+        let suite = null;
+        try {
+          const suiteDir = join(DATA_DIR, 'suite');
+          let st = {}; try { st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8')) || {}; } catch {}
+          let ready = null; try { ready = JSON.parse(readFileSync(join(suiteDir, 'staging', 'READY'), 'utf8')); } catch {}
+          suite = {
+            enabled: SETTINGS.autoUpdate === true, at: SETTINGS.autoUpdateAt,
+            installedVersion: st.installedVersion || st.installedSha || '', installedDate: st.installedDate || '',
+            lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '',
+            nextAt: st.nextAt || SETTINGS.autoUpdateAt,
+            staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
+          };
+        } catch {}
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, codeSource: codeSource(), releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest, suite }));
       })();
       return;
     }
