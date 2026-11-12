@@ -423,7 +423,10 @@ test('the arrow keys move focus over the rows on screen, never into a shut group
   header(s.tree, 'Congregation').props.onClick();          // People shuts; Church holds the open page and stays
   const w = walkable(s);
   assert.equal(w.rows.length, PAGES - 4, `expected the four People rows to be gone, found ${w.rows.length} rows`);
-  assert.equal(w.names.includes('Features'), false, 're-anchor: People is still listed');
+  // The label comes from the EXECUTED SETTINGS_GROUPS (item k:'features' under 'Congregation'), not from a literal here.
+  const congLabels = s.mod.SETTINGS_GROUPS.find(g => g[0] === 'Congregation')[1].map(it => it.n);
+  assert.ok(congLabels.includes('Features'), 'SETTINGS_GROUPS no longer labels the Congregation page "Features" - re-anchor');
+  for (const label of congLabels) assert.equal(w.names.includes(label), false, 're-anchor: Congregation is still listed (' + label + ')');
 
   // THE BOUNDARY PRESS. The row after Church's last is the first row of the next group ON SCREEN.
   const lastOfChurch = w.names.lastIndexOf('Backup & data');
