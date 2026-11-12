@@ -77,6 +77,10 @@
       const s = S();
       return s && (s.actingChurch || s.churchPub) || "";
     };
+    const _corpusRead = (filters, handlers) => {
+      const s = S();
+      return typeof s.corpusSubscribe === "function" && s.corpusSubscribe(filters, handlers) || s.subscribeMany(filters, handlers);
+    };
     const enKey = () => "trinityone.meals.enabled." + activeChurch();
     function cachedEnabled() {
       try {
@@ -144,7 +148,7 @@
         }
         cb({ ...seen.doc });
       };
-      const sub = S().subscribeMany(
+      const sub = _corpusRead(
         [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }],
         {
           onevent(e) {
@@ -332,7 +336,7 @@
         const seeded = _readSeed(_needsSeedKey());
         if (seeded.length) cb(seeded);
       }
-      const sub = S().subscribeMany(
+      const sub = _corpusRead(
         [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }],
         {
           onevent(e) {
@@ -395,7 +399,7 @@
         const seeded = _readSeed(seedKeyFn());
         if (seeded.length) cb(seeded);
       }
-      const sub = S().subscribeMany(
+      const sub = _corpusRead(
         [{ kinds: [30078], "#church": [activeChurch()], "#t": [NET] }],
         {
           onevent(e) {

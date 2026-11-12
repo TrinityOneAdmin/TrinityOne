@@ -6267,6 +6267,40 @@
     }
   }
 
+  // node_modules/nostr-tools/lib/esm/filter.js
+  function matchFilter2(filter, event) {
+    if (filter.ids && filter.ids.indexOf(event.id) === -1) {
+      return false;
+    }
+    if (filter.kinds && filter.kinds.indexOf(event.kind) === -1) {
+      return false;
+    }
+    if (filter.authors && filter.authors.indexOf(event.pubkey) === -1) {
+      return false;
+    }
+    for (let f in filter) {
+      if (f[0] === "#") {
+        let tagName = f.slice(1);
+        let values = filter[`#${tagName}`];
+        if (values && !event.tags.find(([t, v]) => t === f.slice(1) && values.indexOf(v) !== -1))
+          return false;
+      }
+    }
+    if (filter.since && event.created_at < filter.since)
+      return false;
+    if (filter.until && event.created_at > filter.until)
+      return false;
+    return true;
+  }
+  function matchFilters2(filters, event) {
+    for (let i3 = 0; i3 < filters.length; i3++) {
+      if (matchFilter2(filters[i3], event)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // src/church-doc-store.src.js
   function _pickWinner(vers, trusted) {
     let best = null;
@@ -17591,6 +17625,7 @@ zoo`.split("\n");
       return true;
     }
   }
+  var _NO_EOSE_TIMER = 2147483e3;
   function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
     const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0, again: null };
     const stopSubs = () => {
@@ -18057,6 +18092,7 @@ zoo`.split("\n");
   var lastProfile = {};
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
+  var _stewardedBroad = null;
   function _consoleDisplay(rec) {
     if (!_careRosterKnown) return true;
     const by = String(rec && rec._by || "");
@@ -18188,6 +18224,10 @@ zoo`.split("\n");
     _keyReadEpoch++;
     _careKeyVer++;
     _mediaKeyVer++;
+    try {
+      _feedCheck(_feed);
+    } catch (e) {
+    }
     try {
       const M = window.StewardMeals;
       if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
@@ -20227,23 +20267,332 @@ zoo`.split("\n");
       }
     }, 250);
   }
+  var WEB_READ_IDLE_MS = 3e4;
+  var WEB_RESUME_MARGIN_S = 900;
+  function _webLoginPending(url) {
+    try {
+      let k = url;
+      try {
+        k = normalizeURL2(url);
+      } catch (e) {
+      }
+      const r = pool.relays.get(k);
+      return !!r && !!r.challenge && _authAccepted.get(k) !== r;
+    } catch (e) {
+      return true;
+    }
+  }
+  function _webRead(cp, filters, onevent, onknown, opts) {
+    const known0 = !!(opts && opts.known);
+    const from = opts && opts.from || /* @__PURE__ */ new Map();
+    const st = { stopped: false, known: known0, subs: /* @__PURE__ */ new Map(), answers: /* @__PURE__ */ new Map(), tries: /* @__PURE__ */ new Map(), timers: /* @__PURE__ */ new Set(), waiters: /* @__PURE__ */ new Set() };
+    const urls = relays();
+    const epoch = _keyReadEpoch;
+    const live = () => !st.stopped && epoch === _keyReadEpoch && cp === (actingChurch || pub);
+    const evaluate = () => {
+      if (st.known || !live() || urls.some((u) => !st.answers.has(u))) return;
+      const without = urls.filter((u) => st.answers.get(u) !== true);
+      if (without.length === urls.length) return;
+      if (without.some((u) => _keyReadConnected(u))) return;
+      st.known = true;
+      try {
+        onknown();
+      } catch (e) {
+      }
+    };
+    const later = (url) => {
+      const n = st.tries.get(url) || 0;
+      st.tries.set(url, n + 1);
+      const t = setTimeout(() => {
+        st.timers.delete(t);
+        openOn(url);
+      }, Math.min(6e4, 2e3 * Math.pow(2, n)));
+      st.timers.add(t);
+    };
+    const openOn = (url) => {
+      if (!live()) return;
+      const old = st.subs.get(url);
+      if (old) {
+        old.tok.closed = true;
+        if (old.idle) clearTimeout(old.idle);
+        try {
+          old.sub.close();
+        } catch (e) {
+        }
+      }
+      st.answers.delete(url);
+      let up = false;
+      try {
+        const r = pool.relays.get(normalizeURL2(url));
+        up = !!(r && r.connected);
+      } catch (e) {
+      }
+      const since = from.get(url) || 0;
+      const fs = since ? filters.map((f) => ({ ...f, since })) : filters;
+      const tok = { cp, epoch, at: Date.now(), url, wait: up ? _NO_EOSE_TIMER : 4400, closed: false, relayClosed: false };
+      const cur = { tok, sub: null, idle: null, last: Date.now(), answered: false };
+      const watch = (ms) => {
+        cur.idle = setTimeout(() => {
+          cur.idle = null;
+          if (cur.answered || tok.closed || !live() || st.subs.get(url) !== cur) return;
+          const quiet = Date.now() - cur.last;
+          if (quiet < WEB_READ_IDLE_MS) {
+            watch(WEB_READ_IDLE_MS - quiet);
+            return;
+          }
+          tok.closed = true;
+          try {
+            cur.sub.close();
+          } catch (e) {
+          }
+          st.answers.set(url, false);
+          if (!st.known && _keyReadConnected(url)) later(url);
+          evaluate();
+        }, ms);
+      };
+      cur.sub = pool.subscribeMany([url], fs, {
+        ...up ? { maxWait: _NO_EOSE_TIMER } : {},
+        onevent(e) {
+          if (tok.closed || !live()) return;
+          cur.last = Date.now();
+          if (!cur.answered && e && e.created_at > (from.get(url) || 0) && !_webLoginPending(url)) from.set(url, e.created_at);
+          onevent(e);
+        },
+        // a microtask later, so the onclose nostr-tools runs straight after a close's synthetic oneose has marked the token
+        oneose() {
+          queueMicrotask(() => {
+            if (tok.closed || !live() || st.subs.get(url) !== cur || cur.answered) return;
+            cur.answered = true;
+            if (cur.idle) {
+              clearTimeout(cur.idle);
+              cur.idle = null;
+            }
+            const v = _keyReadOk(tok);
+            const ok = v === true || v === "unauthed" && !_webLoginPending(url);
+            st.answers.set(url, ok);
+            if (ok) from.set(url, Math.max(from.get(url) || 0, now() - WEB_RESUME_MARGIN_S));
+            if (!ok && !st.known && _keyReadConnected(url)) {
+              if (v === "unauthed") {
+                from.delete(url);
+                const again = () => {
+                  st.waiters.delete(again);
+                  openOn(url);
+                };
+                st.waiters.add(again);
+                _keyReadAfterAuth(again);
+              } else later(url);
+            }
+            evaluate();
+          });
+        },
+        onclose() {
+          tok.relayClosed = true;
+        }
+      });
+      st.subs.set(url, cur);
+      if (!st.known) watch(WEB_READ_IDLE_MS);
+    };
+    for (const url of urls) openOn(url);
+    return () => {
+      st.stopped = true;
+      for (const t of st.timers) clearTimeout(t);
+      st.timers.clear();
+      for (const a of st.waiters) _keyReadAuthWaiters.delete(a);
+      st.waiters.clear();
+      for (const s of st.subs.values()) {
+        s.tok.closed = true;
+        if (s.idle) clearTimeout(s.idle);
+        try {
+          s.sub.close();
+        } catch (e) {
+        }
+      }
+      st.subs.clear();
+    };
+  }
+  var FEED_IDLE_MS = 6e4;
+  var _feed = null;
+  var _corpusFilters = (cp) => [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }];
+  function _feedChurch() {
+    return actingChurch || pub || "";
+  }
+  function _feedKey() {
+    const cp = _feedChurch();
+    if (!cp) return "";
+    let rs = [];
+    try {
+      rs = relays().map(String).sort();
+    } catch (e) {
+      rs = [];
+    }
+    return cp + "|" + (actingChurch ? "delegated" : _viewingNetwork() ? "network" : "owner") + "|" + _keyReadEpoch + "|" + rs.join(",");
+  }
+  var _feedHead = (k) => String(k || "").split("|").slice(0, 2).join("|");
+  function _feedCovers(filters, cp) {
+    if (!cp || !Array.isArray(filters) || !filters.length) return false;
+    return filters.every((f) => {
+      if (!f || typeof f !== "object") return false;
+      for (const k of Object.keys(f)) if (!(k === "kinds" || k === "authors" || k === "ids" || k === "since" || k === "until" || k.length > 1 && k[0] === "#")) return false;
+      if (!Array.isArray(f.kinds) || !f.kinds.length || f.kinds.some((x) => x !== 30078)) return false;
+      if (!Array.isArray(f["#t"]) || !f["#t"].length || f["#t"].some((x) => x !== NET)) return false;
+      const signed = Array.isArray(f.authors) && f.authors.length > 0 && f.authors.every((a) => a === cp);
+      const tagged = Array.isArray(f["#church"]) && f["#church"].length > 0 && f["#church"].every((c) => c === cp);
+      return signed || tagged;
+    });
+  }
+  function _feedDeliver(c, e) {
+    if (!c.closed && matchFilters2(c.filters, e)) {
+      try {
+        c.h.onevent && c.h.onevent(e);
+      } catch (x) {
+      }
+    }
+  }
+  function _feedEose(c) {
+    if (c.closed || c.eosed) return;
+    c.eosed = true;
+    try {
+      c.h.oneose && c.h.oneose();
+    } catch (x) {
+    }
+  }
+  function _feedDrop(f) {
+    if (!f || f.dead) return;
+    f.dead = true;
+    if (f.idle) {
+      clearTimeout(f.idle);
+      f.idle = null;
+    }
+    if (f.stop) {
+      try {
+        f.stop();
+      } catch (e) {
+      }
+      f.stop = null;
+    }
+    for (const c of f.consumers) c.closed = true;
+    f.consumers.clear();
+    f.store = [];
+    f.ids = /* @__PURE__ */ new Set();
+    if (_feed === f) _feed = null;
+  }
+  function _feedStart(f) {
+    if (f.stop) {
+      try {
+        f.stop();
+      } catch (e) {
+      }
+      f.stop = null;
+    }
+    f.gen++;
+    f.store = [];
+    f.ids = /* @__PURE__ */ new Set();
+    f.settled = false;
+    for (const c of f.consumers) c.eosed = false;
+    const gen = f.gen;
+    if (!relays().length) {
+      queueMicrotask(() => _feedSettle(f, gen));
+      return;
+    }
+    f.stop = _webRead(f.cp, _corpusFilters(f.cp), (e) => _feedEvent(f, gen, e), () => _feedSettle(f, gen), { from: /* @__PURE__ */ new Map() });
+  }
+  function _feedCheck(f) {
+    if (!f || f.dead) return false;
+    const k = _feedKey();
+    if (k === f.key) return true;
+    if (!k || _feedHead(k) !== _feedHead(f.key) || !f.consumers.size) {
+      _feedDrop(f);
+      return false;
+    }
+    f.key = k;
+    _feedStart(f);
+    return false;
+  }
+  function _feedEvent(f, gen, e) {
+    if (f.dead || gen !== f.gen || !e || !e.id) return;
+    if (!_feedCheck(f)) return;
+    if (f.ids.has(e.id)) return;
+    f.ids.add(e.id);
+    f.store.push(e);
+    for (const c of [...f.consumers]) if (c.ready) _feedDeliver(c, e);
+  }
+  function _feedSettle(f, gen) {
+    if (f.dead || gen !== f.gen) return;
+    if (!_feedCheck(f)) return;
+    f.settled = true;
+    for (const c of [...f.consumers]) if (c.ready) _feedEose(c);
+  }
+  function _feedSubscribe(filters, handlers) {
+    const cp = _feedChurch();
+    if (!_feedCovers(filters, cp)) return null;
+    const key = _feedKey();
+    if (!key) return null;
+    if (_feed && !_feed.dead && _feed.key !== key) _feedCheck(_feed);
+    if (!_feed || _feed.dead) {
+      _feed = { key, cp, gen: 0, store: [], ids: /* @__PURE__ */ new Set(), consumers: /* @__PURE__ */ new Set(), settled: false, stop: null, idle: null, dead: false };
+      _feedStart(_feed);
+    }
+    const f = _feed;
+    if (f.idle) {
+      clearTimeout(f.idle);
+      f.idle = null;
+    }
+    const c = { filters, h: handlers || {}, ready: false, eosed: false, closed: false };
+    f.consumers.add(c);
+    queueMicrotask(() => {
+      if (c.closed || f.dead || !f.consumers.has(c)) return;
+      for (const e of f.store.slice()) {
+        if (c.closed) return;
+        _feedDeliver(c, e);
+      }
+      c.ready = true;
+      if (f.settled) _feedEose(c);
+    });
+    return {
+      close() {
+        if (c.closed) return;
+        c.closed = true;
+        f.consumers.delete(c);
+        if (!f.consumers.size && !f.dead && !f.idle) f.idle = setTimeout(() => {
+          f.idle = null;
+          if (!f.consumers.size) _feedDrop(f);
+        }, FEED_IDLE_MS);
+      }
+    };
+  }
+  function _corpusSub(filters, handlers) {
+    return _feedSubscribe(filters, handlers) || pool.subscribeMany(relays(), filters, handlers);
+  }
+  function _feedRenew() {
+    const f = _feed;
+    if (!f || f.dead) return;
+    const k = _feedKey();
+    if (!k || _feedHead(k) !== _feedHead(f.key) || !f.consumers.size) {
+      _feedDrop(f);
+      return;
+    }
+    f.key = k;
+    _feedStart(f);
+  }
   function _webEnsure(restart) {
-    if (_web && _web.pub === pub && !restart) return _web;
+    if (_web && _web.pub === pub && _web.epoch === _keyReadEpoch && !restart) return _web;
     const listeners = _web ? _web.listeners : /* @__PURE__ */ new Set();
-    const carried = _web && _web.pub === pub ? { share: _web.share, shareTs: _web.shareTs, shareKnown: _web.shareKnown } : null;
+    const carried = _web && _web.pub === pub && _web.epoch === _keyReadEpoch ? _web : null;
     _webStop();
     if (!pub) return null;
     const w = _web = {
       pub,
+      epoch: _keyReadEpoch,
       share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] },
       shareTs: carried ? carried.shareTs : 0,
       shareKnown: !!(carried && carried.shareKnown),
-      events: /* @__PURE__ */ new Map(),
-      versions: /* @__PURE__ */ new Map(),
-      eventsKnown: false,
-      copies: /* @__PURE__ */ new Map(),
-      copyTs: /* @__PURE__ */ new Map(),
-      copiesKnown: false,
+      events: carried ? carried.events : /* @__PURE__ */ new Map(),
+      versions: carried ? carried.versions : /* @__PURE__ */ new Map(),
+      eventsKnown: !!(carried && carried.eventsKnown),
+      copies: carried ? carried.copies : /* @__PURE__ */ new Map(),
+      copyTs: carried ? carried.copyTs : /* @__PURE__ */ new Map(),
+      copiesKnown: !!(carried && carried.copiesKnown),
+      from: carried ? carried.from : { share: /* @__PURE__ */ new Map(), corpus: /* @__PURE__ */ new Map() },
       subs: [],
       listeners,
       busy: false,
@@ -20259,8 +20608,10 @@ zoo`.split("\n");
       held: 0,
       heldIds: []
     };
-    const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }], {
-      onevent(e) {
+    w.subs.push(_webRead(
+      pub,
+      [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }],
+      (e) => {
         if (e.pubkey !== pub || _authFuture(e)) return;
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
         if (d !== SHARE_D + pub) return;
@@ -20278,44 +20629,28 @@ zoo`.split("\n");
         _webEmit();
         _webQueueSync();
       },
-      oneose() {
+      () => {
         w.shareKnown = true;
         _webEmit();
         _webQueueSync();
-      }
-    });
-    w.subs.push(() => {
-      try {
-        s1.close();
-      } catch {
-      }
-    });
-    const s2 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
-      onevent(e) {
-        if (e.pubkey !== pub) return;
-        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-        if (!d.startsWith(PUBEVENT_D)) return;
-        const id = d.slice(PUBEVENT_D.length);
-        if ((w.copyTs.get(id) || 0) > e.created_at) return;
-        w.copyTs.set(id, e.created_at);
-        if (e.tags.some((t) => t[0] === "deleted") || !e.content) w.copies.delete(id);
-        else w.copies.set(id, e.content);
-        _webQueueSync();
       },
-      oneose() {
-        w.copiesKnown = true;
-        _webQueueSync();
-      }
-    });
-    w.subs.push(() => {
-      try {
-        s2.close();
-      } catch {
-      }
-    });
-    const s3 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
-      onevent(e) {
+      { known: w.shareKnown, from: w.from.share }
+    ));
+    w.subs.push(_webRead(
+      pub,
+      [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }],
+      (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d.startsWith(PUBEVENT_D)) {
+          if (e.pubkey !== pub) return;
+          const id2 = d.slice(PUBEVENT_D.length);
+          if ((w.copyTs.get(id2) || 0) > e.created_at) return;
+          w.copyTs.set(id2, e.created_at);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) w.copies.delete(id2);
+          else w.copies.set(id2, e.content);
+          _webQueueSync();
+          return;
+        }
         if (!d.startsWith(EVENT_D)) return;
         const id = d.slice(EVENT_D.length);
         if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
@@ -20326,17 +20661,13 @@ zoo`.split("\n");
         _absorbById(w.versions, w.events, id, { id, raw: String(e.content || ""), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
         _webQueueSync();
       },
-      oneose() {
+      () => {
+        w.copiesKnown = true;
         w.eventsKnown = true;
         _webQueueSync();
-      }
-    });
-    w.subs.push(() => {
-      try {
-        s3.close();
-      } catch {
-      }
-    });
+      },
+      { known: w.copiesKnown && w.eventsKnown, from: w.from.corpus }
+    ));
     return w;
   }
   var WEB_BLOCKED_AFTER_S = 6;
@@ -20460,13 +20791,21 @@ zoo`.split("\n");
     try {
       for (const [id, body] of writes) {
         if (_web !== w) return;
-        const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PUBEVENT_D + id], ["t", NET]], content: body }, sk));
-        if (ok) w.copies.set(id, body);
+        const at = now();
+        const ok = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", PUBEVENT_D + id], ["t", NET]], content: body }, sk));
+        if (ok) {
+          w.copies.set(id, body);
+          w.copyTs.set(id, Math.max(w.copyTs.get(id) || 0, at));
+        }
       }
       for (const id of tombs) {
         if (_web !== w) return;
-        const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PUBEVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
-        if (ok) w.copies.delete(id);
+        const at = now();
+        const ok = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", PUBEVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+        if (ok) {
+          w.copies.delete(id);
+          w.copyTs.set(id, Math.max(w.copyTs.get(id) || 0, at));
+        }
       }
     } catch (e) {
     } finally {
@@ -20551,6 +20890,16 @@ zoo`.split("\n");
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
     publishSigned: _publishSigned,
     subscribeMany: _subscribeMany,
+    // THE CHURCH FEED (see _corpusSub): a module whose filters fall inside the church's corpus reads the one feed
+    // instead of downloading the corpus again; anything else goes to the pool exactly as subscribeMany does.
+    corpusSubscribe: _corpusSub,
+    // A RECONNECT (app/steward-root.jsx _maybeBumpConn, before the hooks re-subscribe): the feed asks every relay again.
+    feedRenew() {
+      try {
+        _feedRenew();
+      } catch (e) {
+      }
+    },
     relayList() {
       return relays();
     },
@@ -20673,6 +21022,7 @@ zoo`.split("\n");
       currentMnemonic = null;
       churchSk = null;
       churchPub = null;
+      _stewardedBroad = null;
       window.Steward.pubkey = null;
       window.Steward.npub = null;
       window.Steward.hasKey = false;
@@ -21238,6 +21588,10 @@ zoo`.split("\n");
             }
           } catch (e) {
           }
+          try {
+            window.dispatchEvent(new CustomEvent("steward-stewarded-watch"));
+          } catch (e) {
+          }
         }
         return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null;
       });
@@ -21351,7 +21705,7 @@ zoo`.split("\n");
       } catch {
       }
       if (byPub.size) emit();
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [STEWARDREQ_D + pub], "#t": [NET] }, { kinds: [30078], authors: [pub], "#d": [STEWARDS_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d === STEWARDS_D + pub) {
@@ -21539,7 +21893,7 @@ zoo`.split("\n");
     // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
     subscribeMessageTags(cb) {
       let bestTs = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MSGTAGS_D], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [MSGTAGS_D], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== MSGTAGS_D || (e.created_at || 0) <= bestTs) return;
@@ -22445,7 +22799,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => onSermons([...byId.values()].sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(SERMON_D)) return;
@@ -22885,7 +23239,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => onFunds([...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(FUND_D)) return;
@@ -22928,7 +23282,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => onCats([...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(CATEGORY_D)) return;
@@ -23332,7 +23686,7 @@ zoo`.split("\n");
         if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest, cur);
         return true;
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [BLOCKED_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [BLOCKED_D + pub], "#t": [NET] }], {
         onevent(e) {
           if (take(e)) onBlocked(cur);
         },
@@ -23537,12 +23891,84 @@ zoo`.split("\n");
       let cleared = {};
       let expiry = {};
       const isLoaded = () => sawMinors && sawEose;
-      const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed();
-      const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed();
+      const clearedKnown = () => sawApproved || sawEose && _isRelayAuthed() || lateAuthed();
+      const minorsKnown = () => sawMinors || sawEose && _isRelayAuthed() || lateAuthed();
+      const eoseOn = /* @__PURE__ */ new Map();
+      const lateAuthed = () => {
+        try {
+          for (const [k, r] of eoseOn) if (pool.relays.get(k) === r && r.connected === true && _authAccepted.get(k) === r) return true;
+        } catch (e) {
+        }
+        return false;
+      };
+      let stopped = false, waiting = null;
+      const reaskOnLogin = () => {
+        if (stopped || waiting || !eoseOn.size || minorsKnown() && clearedKnown()) return;
+        waiting = () => {
+          waiting = null;
+          if (stopped) return;
+          emit();
+          reaskOnLogin();
+        };
+        _keyReadAfterAuth(waiting);
+      };
       const _sgSeed = _sgClearGet(pub);
       const emit = () => onLists({ minors, approved, cleared, expiry, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown(), minorsDocSeen: sawMinors, approvedSeed: _sgSeed && _sgSeed.approved || null, expirySeed: _sgSeed && _sgSeed.expiry || null });
       if (_sgSeed) emit();
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const relayUp = (url) => {
+        try {
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          const r = pool.relays && pool.relays.get(k);
+          return !!r && r.connected === true;
+        } catch (e) {
+          return false;
+        }
+      };
+      const oneRelay = (url, filters, h) => {
+        const up = relayUp(url), at = Date.now();
+        let stopped2 = false, relayClosed = false, ended = false, newest = 0, sub = null;
+        try {
+          sub = pool.subscribeMany([url], filters, {
+            ...up ? { maxWait: 2147483e3 } : {},
+            // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
+            onevent(e) {
+              if (stopped2) return;
+              if (!ended && e && e.created_at > newest) newest = e.created_at;
+              h.onevent(e);
+            },
+            oneose() {
+              queueMicrotask(() => {
+                if (stopped2 || ended) return;
+                ended = true;
+                const why = relayClosed ? "closed" : !up && Date.now() - at >= 4400 - 100 ? "timer" : "eose";
+                try {
+                  h.onanswer(why === "eose", why);
+                } catch (e) {
+                }
+              });
+            },
+            onclose() {
+              relayClosed = true;
+            }
+          });
+        } catch (e) {
+        }
+        return { newest: () => newest, close() {
+          stopped2 = true;
+          try {
+            if (sub) sub.close();
+          } catch (e) {
+          }
+        } };
+      };
+      const sgUrls = relays();
+      const sgFilters = [{ kinds: [30078], authors: [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [MINORS_D + pub, APPROVED_D + pub, NOPHOTO_D + pub, GUARDIANS_D + pub], "#t": [NET] }];
+      const sgEnded = /* @__PURE__ */ new Set();
+      const sgH = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (_authFuture(e)) return;
@@ -23605,7 +24031,8 @@ zoo`.split("\n");
         // children", sealing every child a doc saying they are an adult — which their app then trusts OVER the
         // list fallback. `ensureNameKeyForMembers` three functions below already states this rule: an empty
         // answer from an unauthenticated or unreachable relay looks exactly like a real one. AUDIT-2026-07-28.
-        oneose() {
+        // every relay's subscription has ended — the old pool-level oneose, and what `sawEose` has always meant
+        allEnded() {
           sawEose = true;
           emit();
           if (!sawApproved && _isRelayAuthed()) {
@@ -23615,12 +24042,44 @@ zoo`.split("\n");
             }
           }
         }
-      });
-      return () => {
-        try {
-          sub.close();
-        } catch {
+      };
+      const sgSubs = sgUrls.map((u) => oneRelay(u, sgFilters, {
+        onevent: sgH.onevent,
+        // see `lateAuthed` above. `genuine` is THIS relay's own EOSE (already a microtask after it, so a CLOSED or a dropped
+        // socket in the same turn has been seen); the socket must still be the connected one, and not one the relay
+        // challenged without our login being accepted.
+        onanswer(genuine) {
+          if (stopped) return;
+          try {
+            if (genuine) {
+              let k = u;
+              try {
+                k = normalizeURL2(u);
+              } catch (e) {
+              }
+              const r = pool.relays.get(k);
+              if (r && r.connected === true && !(r.challenge && _authAccepted.get(k) !== r)) eoseOn.set(k, r);
+            }
+          } catch (e) {
+          }
+          sgEnded.add(u);
+          if (sgEnded.size === sgUrls.length) sgH.allEnded();
+          try {
+            reaskOnLogin();
+          } catch (e) {
+          }
         }
+      }));
+      return () => {
+        stopped = true;
+        if (waiting) {
+          try {
+            _keyReadAuthWaiters.delete(waiting);
+          } catch (e) {
+          }
+          waiting = null;
+        }
+        for (const s of sgSubs) s.close();
       };
     },
     setNoPhoto(pubkeys) {
@@ -24138,7 +24597,7 @@ zoo`.split("\n");
     subscribeGuardians(onData) {
       let cur = {}, curClosed = {}, latest = 0;
       const _emit = () => onData({ links: cur, closed: curClosed });
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [GUARDIANS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [GUARDIANS_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== GUARDIANS_D + pub) return;
@@ -24289,7 +24748,7 @@ zoo`.split("\n");
         state.approval = approval;
         return true;
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#d": [JOINPOLICY_D + cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#d": [JOINPOLICY_D + cp0], "#t": [NET] }], {
         onevent(e) {
           if (take(e)) push();
         },
@@ -24518,7 +24977,7 @@ zoo`.split("\n");
         fold();
         return true;
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#d": [ADMITTED_D + cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#d": [ADMITTED_D + cp0], "#t": [NET] }], {
         onevent(e) {
           if (take(e)) push();
         },
@@ -24574,7 +25033,7 @@ zoo`.split("\n");
     // to BECOME them, and would be worth stealing.
     subscribeReseats(onList) {
       let cur = [], latest = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [RESEAT_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [RESEAT_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== RESEAT_D + pub) return;
@@ -24913,7 +25372,7 @@ zoo`.split("\n");
           onList(cur);
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [STEWARDS_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [STEWARDS_D + pub], "#t": [NET] }], handlers);
       const stopRead = _freshDocRead(
         pub,
         [STEWARDS_D + pub],
@@ -25604,7 +26063,7 @@ zoo`.split("\n");
           emit();
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
       wantNarrow();
       return () => {
         tok.live = false;
@@ -25657,7 +26116,7 @@ zoo`.split("\n");
         }
       } catch {
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(PLAN_D)) return;
@@ -25789,7 +26248,7 @@ zoo`.split("\n");
         }
       } catch {
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(DEVO_D)) return;
@@ -25888,7 +26347,7 @@ zoo`.split("\n");
           emit();
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
       const stopKey = _onNameKeyRing(() => {
         for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
@@ -26377,7 +26836,7 @@ zoo`.split("\n");
         }
         cb(out.sort((a, b) => (b.ts || 0) - (a.ts || 0)));
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(CHECKINPERM_D)) return;
@@ -27013,7 +27472,7 @@ zoo`.split("\n");
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
-    // `restart: true` re-issues the three subscriptions on the current relay set (the dashboard passes it on a
+    // `restart: true` re-issues the two subscriptions (share, corpus) on the current relay set (the dashboard passes it on a
     // connection bump, the way every makeSub hook re-subscribes: a returning socket does not re-issue its REQs).
     subscribeWebsiteShare(onShare, opts) {
       const w = _webEnsure(!!(opts && opts.restart));
@@ -27218,7 +27677,7 @@ zoo`.split("\n");
           emit();
         }
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
       const stopKey = _onNameKeyRing(() => {
         for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
@@ -27519,7 +27978,7 @@ zoo`.split("\n");
         { everyRelay: true }
       );
       let stopRead = openRead();
-      const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const openReseat = () => pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [NAME_D + pub, RESEAT_D + pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#d": [NAME_D + pub, RESEAT_D + pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d === NAME_D + pub) {
@@ -27813,6 +28272,10 @@ zoo`.split("\n");
       _careKeyVer++;
       _mediaKeyVer++;
       try {
+        _feedCheck(_feed);
+      } catch (e) {
+      }
+      try {
         const M = window.StewardMeals;
         if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
       } catch (e) {
@@ -27931,7 +28394,58 @@ zoo`.split("\n");
         for (const u of relaysRaw()) add2(u);
         return out;
       };
-      let closed = false, sub = null, dialled = [];
+      let closed = false, dialled = [];
+      const relayUp = (url) => {
+        try {
+          let k = url;
+          try {
+            k = normalizeURL2(url);
+          } catch (e) {
+          }
+          const r = pool.relays && pool.relays.get(k);
+          return !!r && r.connected === true;
+        } catch (e) {
+          return false;
+        }
+      };
+      const oneRelay = (url, filters, h) => {
+        const up = relayUp(url), at = Date.now();
+        let stopped = false, relayClosed = false, ended = false, newest = 0, sub = null;
+        try {
+          sub = pool.subscribeMany([url], filters, {
+            ...up ? { maxWait: 2147483e3 } : {},
+            // _NO_EOSE_TIMER: a connected relay is never cut off for being slow
+            onevent(e) {
+              if (stopped) return;
+              if (!ended && e && e.created_at > newest) newest = e.created_at;
+              h.onevent(e);
+            },
+            oneose() {
+              queueMicrotask(() => {
+                if (stopped || ended) return;
+                ended = true;
+                const why = relayClosed ? "closed" : !up && Date.now() - at >= 4400 - 100 ? "timer" : "eose";
+                try {
+                  h.onanswer(why === "eose", why);
+                } catch (e) {
+                }
+              });
+            },
+            onclose() {
+              relayClosed = true;
+            }
+          });
+        } catch (e) {
+        }
+        return { newest: () => newest, close() {
+          stopped = true;
+          try {
+            if (sub) sub.close();
+          } catch (e) {
+          }
+        } };
+      };
+      const subs = /* @__PURE__ */ new Map();
       const nameSubs = /* @__PURE__ */ new Map();
       const resolveName = (cp) => {
         if (closed || nameSubs.has(cp) || !dialled.length) return;
@@ -27952,11 +28466,8 @@ zoo`.split("\n");
         }));
       };
       const closeAll = () => {
-        try {
-          if (sub) sub.close();
-        } catch {
-        }
-        sub = null;
+        for (const s of subs.values()) s.close();
+        subs.clear();
         for (const s of nameSubs.values()) {
           try {
             s.close();
@@ -27965,16 +28476,41 @@ zoo`.split("\n");
         }
         nameSubs.clear();
       };
+      const narrowDs = () => {
+        const cps = new Set(stewardedChurches.keys());
+        try {
+          const a = JSON.parse(localStorage.getItem("trinityone.steward.requested." + (me || "")) || "[]");
+          if (Array.isArray(a)) a.forEach((x) => cps.add(String(x || "")));
+        } catch (e) {
+        }
+        try {
+          cps.add(localStorage.getItem(PENDING_CHURCH_KEY) || "");
+        } catch (e) {
+        }
+        cps.delete("");
+        cps.delete(me);
+        return [...cps].sort().map((cp) => STEWARDS_D + cp);
+      };
+      let filterKey = "";
       const open = (urls) => {
         if (closed) return;
-        const same = sub && urls.length === dialled.length && urls.every((u) => dialled.includes(u));
-        if (same) return;
+        const rec = _stewardedBroad && _stewardedBroad.me === me ? _stewardedBroad : null;
+        const ds = narrowDs();
+        const plan = urls.map((u) => ({ u, at: rec && rec.done.get(u) || 0, from: rec && rec.part.get(u) || 0 }));
+        const key = plan.map((p) => p.u + (p.at ? ">" + p.at : "*" + p.from)).join("|") + (plan.some((p) => p.at) ? "#" + ds.join(",") : "");
+        if (subs.size && key === filterKey) return;
         closeAll();
         dialled = urls.slice();
+        filterKey = key;
         if (!dialled.length) return;
         [...stewardedChurches.keys()].forEach(resolveName);
         const seenAt = /* @__PURE__ */ new Map();
-        sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }, { kinds: [30078], "#d": [STEWARDREVOKE_D + me] }], {
+        const revoke = { kinds: [30078], "#d": [STEWARDREVOKE_D + me] };
+        const record = () => {
+          if (!_stewardedBroad || _stewardedBroad.me !== me) _stewardedBroad = { me, done: /* @__PURE__ */ new Map(), part: /* @__PURE__ */ new Map() };
+          return _stewardedBroad;
+        };
+        const handlers = {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (d.startsWith(STEWARDREVOKE_D)) {
@@ -28046,11 +28582,37 @@ zoo`.split("\n");
               }
               cb([...stewardedChurches.keys()]);
             }
-          },
-          oneose() {
-            cb([...stewardedChurches.keys()]);
           }
-        });
+        };
+        const openOn = (u, at, from) => {
+          const broad = !at;
+          const filters = broad ? [{ kinds: [30078], "#t": [NET], ...from ? { since: from } : {} }, revoke] : [...ds.length ? [{ kinds: [30078], "#t": [NET], "#d": ds }] : [], { kinds: [30078], "#t": [NET], since: Math.max(0, at - 900) }, revoke];
+          const s = oneRelay(u, filters, {
+            onevent: handlers.onevent,
+            onanswer(genuine, why) {
+              if (closed || subs.get(u) !== s) return;
+              cb([...stewardedChurches.keys()]);
+              const r = record();
+              if (!broad) {
+                if (genuine) r.done.set(u, now());
+                return;
+              }
+              if (genuine) {
+                r.done.set(u, now());
+                r.part.delete(u);
+                return;
+              }
+              const got = Math.max(from, s.newest());
+              if (got) r.part.set(u, got);
+              if (why === "timer" && relayUp(u)) {
+                s.close();
+                openOn(u, 0, got);
+              }
+            }
+          });
+          subs.set(u, s);
+        };
+        for (const p of plan) openOn(p.u, p.at, p.from);
       };
       if (stewardedChurches.size) cb([...stewardedChurches.keys()]);
       try {
@@ -28072,20 +28634,39 @@ zoo`.split("\n");
         window.addEventListener("steward-relay-returned", onReturned);
       } catch (e) {
       }
+      const onWatch = () => {
+        if (!closed && dialled.length) open(dialled);
+      };
+      try {
+        window.addEventListener("steward-stewarded-watch", onWatch);
+      } catch (e) {
+      }
       return () => {
         closed = true;
         try {
           window.removeEventListener("steward-relay-returned", onReturned);
         } catch (e) {
         }
+        try {
+          window.removeEventListener("steward-stewarded-watch", onWatch);
+        } catch (e) {
+        }
         closeAll();
       };
+    },
+    // Run subscribeStewardedChurches' broad discovery read again now (it otherwise runs once per unlocked session).
+    refreshStewardedChurches() {
+      _stewardedBroad = null;
+      try {
+        window.dispatchEvent(new CustomEvent("steward-stewarded-watch"));
+      } catch (e) {
+      }
     },
     // this church's network memberships -> [{ networkPub, npub }]
     subscribeNetworks(onNetworks) {
       const byId = /* @__PURE__ */ new Map();
       const emit = () => onNetworks([...byId.values()]);
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const sub = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(NETWORK_D)) return;
@@ -28638,7 +29219,7 @@ zoo`.split("\n");
           }
         }, 120);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 500 }, { kinds: [1, 30078], "#p": [pub], limit: 500 }], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [1], authors: [pub], limit: 500 }], {
         onevent(e) {
           ids.add(e.id);
           if (e.kind === 1 && e.pubkey === pub) ann.add(e.id);
@@ -28681,7 +29262,7 @@ zoo`.split("\n");
           }
         }, 120);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1, 30078], authors: [pub], limit: 200 }, { kinds: [1, 30078], "#p": [pub], limit: 200 }], {
+      const handlers = {
         onevent(e) {
           const own = e.pubkey === pub;
           let item = null;
@@ -28727,10 +29308,22 @@ zoo`.split("\n");
           eosed = true;
           emit();
         }
-      });
+      };
+      const sub = pool.subscribeMany(relays(), [
+        { kinds: [1], authors: [pub], limit: max2 },
+        { kinds: [1], "#p": [pub], limit: max2 },
+        { kinds: [30078], "#p": [pub], "#d": ["trinityone/member:" + pub], limit: 200 }
+      ], handlers);
+      const docs = _corpusSub([{ kinds: [30078], authors: [pub], "#t": [NET] }], { onevent: (e) => handlers.onevent(e), oneose() {
+        emit();
+      } });
       return () => {
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          docs.close();
         } catch {
         }
       };

@@ -88,6 +88,8 @@ function build({ ownName = '', registered = false, stewarded = [], active = '', 
     // the read returns null and the pending branch is skipped — but the identifier must resolve or the whole
     // restore try throws a ReferenceError that the outer catch swallows, silently killing the auto-land below.
     PENDING_CHURCH_KEY: 'trinityone.steward.pending-church',
+    // the once-a-session broad discovery read (2026-11-11): null = not yet run this session, so these rows see the broad read
+    _stewardedBroad: null,
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
     lsGet: (k) => (store.has(k) ? store.get(k) : null),
     lsSet: (k, v) => store.set(k, v),

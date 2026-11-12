@@ -56,6 +56,9 @@ function engine(clock) {
     localStorage: { getItem: () => null, setItem() {} },
     relays: () => ['wss://r'],
     pool: { subscribeMany: (_r, _f, h) => { subs.push(h); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (scripts/the-church-corpus-crosses-the-pipe-once.test.mjs):
+    // its readers' subscription goes to this fake pool, as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => world.pool.subscribeMany(world.relays(), f, h),
     now: () => clock.s, Date: { now: () => clock.s * 1000 },
     _skewShift: () => 0, STAMP_CAP_SEC: 600, SKEW_CAP_SEC: 900, finalizeEvent,
     publish: async (evt, opts) => {

@@ -73,7 +73,7 @@ function harness({ proven = [BOX, CANON] } = {}) {
     npubEncode: (p) => 'npub_' + p,
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     privateKeyFromSeedWords: () => { throw new Error('not a network key'); }, getPublicKey: () => '',
-    NET: 'trinityone', STEWARDS_D, STEWARDREQ_D, STEWARDREVOKE_D: 'trinityone/stewardrevoke:', ACTIVE_ID_KEY: 'active', PENDING_CHURCH_KEY: 'pending',
+    NET: 'trinityone', STEWARDS_D, STEWARDREQ_D, STEWARDREVOKE_D: 'trinityone/stewardrevoke:', ACTIVE_ID_KEY: 'active', PENDING_CHURCH_KEY: 'pending', _stewardedBroad: null,   // not yet run this session: the broad read (2026-11-11)
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
     lsSet: (k, v) => store.set(k, v),
     lsGet: (k) => (store.has(k) ? store.get(k) : null),
@@ -145,7 +145,7 @@ test('the grant for a church WE ASKED to join publishes a tombstone of our own S
   h.subscribe();
   await tick();
   const d = h.discovery();
-  assert.equal(d.length, 1, 'no discovery read opened');
+  assert.equal(d.length, 2, 'no discovery read opened (one subscription per relay since 2026-11-11, so each relay\'s answer is judged on its own)');
   h.grant(d[0], CHURCH);
 
   assert.ok(h.stewardedChurches.has(CHURCH), 'staging: the grant was not recorded');

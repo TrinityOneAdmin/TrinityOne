@@ -46,6 +46,9 @@ function lift(initialCaps) {
     _stewardCaps: {},
     relays: () => ['wss://relay.test/relay'],
     pool: { subscribeMany: (_r, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (the-church-corpus-crosses-the-pipe-once.test.mjs): its
+    // readers' subscription goes to this fake pool, exactly as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => ((_r, filters, handlers) => { subs.push({ filters, handlers }); return { close() {} }; })(null, f, h),
   };
   const scope = new Proxy(stubs, {
     has: () => true,

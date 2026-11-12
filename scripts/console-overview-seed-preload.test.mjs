@@ -32,6 +32,7 @@ function load(signature, name, opts = {}) {
   const ctx = {
     pool,
     relays: () => [],
+    _corpusSub: () => ({ close() {} }),   // the church feed (activity's group/fund rows) is not under test here; its seeds ride the pool read
     pub: ('pub' in opts) ? opts.pub : 'CHURCH_A',
     actingChurch: ('actingChurch' in opts) ? opts.actingChurch : '',
     lsGet: (k) => ls.getItem(k),
@@ -394,7 +395,9 @@ function loadSafeguard(opts = {}) {
   const ls = opts.localStorage || fakeLS();
   const ctx = {
     pool: { subscribeMany: (r, f, h) => { subs.push({ filters: f, handlers: h }); return { close() {} }; } },
-    relays: () => [],
+    // ONE relay: since 2026-11-11 the safeguarding read is one subscription PER relay, so an empty list opens none
+    // (an empty list never answered before either — nostr-tools fires no oneose over no relays)
+    relays: () => ['wss://x/'],
     pub: opts.pub || 'CHURCH_A',
     churchSk: ('churchSk' in opts) ? opts.churchSk : 'SK',           // null → the console's key is locked/absent
     // the seal helpers call the BUNDLED crypto names (nip44e/nip44d are bundled as encrypt2/decrypt3); provide
@@ -407,6 +410,9 @@ function loadSafeguard(opts = {}) {
     NET: 'trinityone',
     _authFuture: () => false, _byChurch: () => true, _byChurchOrSteward: () => true, _applyNoPhotoList: () => {},
     _isRelayAuthed: () => (opts.authed !== false),
+    // the late-login re-ask (2026-11-11, audit F1) reads these; stubbed so deps() does not lift the engine's own
+    normalizeURL: (u) => u, _authAccepted: new Map(), _keyReadAfterAuth: () => {}, _keyReadAuthWaiters: new Set(),
+    challenge: undefined,   // deps() reads the property name in `r.challenge` as an identifier and would lift nostr-tools' challenge()
   };
   const depsCode = deps(BUNDLE, body, Object.keys(ctx));
   // deps() already lifts the bundle's own `_clearedTrail` declaration, so we must NOT declare it again here.
@@ -487,18 +493,22 @@ test('safeguard: write is gated on a genuine approved doc, not a bare EOSE', () 
   assert.equal(localStorage.getItem(SG_KEY('CHURCH_A')), null, 'wrote a clearance seed with no genuine approved doc');
 });
 
-test('safeguard: a transient/OFFLINE EOSE keeps the seed; a genuine authed-empty EOSE clears it', () => {
+test('safeguard: a transient/OFFLINE EOSE keeps the seed; a genuine authed-empty EOSE clears it', async () => {
+  // each relay's end is judged a microtask after its EOSE (2026-11-11, one subscription per relay), so wait for it
+  const settled = () => new Promise(r => setImmediate(r));
   // offline: not authed, no approved doc → the last-known seed must survive
   const lsOff = seedSafeguard('CHURCH_A', ['ADULT-CLEARED-PK'], { 'ADULT-CLEARED-PK': 1893456000 });
   const off = loadSafeguard({ localStorage: lsOff, authed: false });
   off.subscribeSafeguard(() => {});
   off.subs[0].handlers.oneose();
+  await settled();
   assert.ok(lsOff.getItem(SG_KEY('CHURCH_A')), 'an offline EOSE wrongly cleared the last-known clearance seed');
   // genuine: authed, EOSE, no approved doc → the church has no clearance record now → drop the stale seed
   const lsOn = seedSafeguard('CHURCH_A', ['ADULT-CLEARED-PK'], { 'ADULT-CLEARED-PK': 1893456000 });
   const on = loadSafeguard({ localStorage: lsOn, authed: true });
   on.subscribeSafeguard(() => {});
   on.subs[0].handlers.oneose();
+  await settled();
   assert.equal(lsOn.getItem(SG_KEY('CHURCH_A')), null, 'a genuine authed-empty EOSE must drop the stale clearance seed');
 });
 

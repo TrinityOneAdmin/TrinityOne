@@ -18,11 +18,11 @@ const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url),
 
 // Lift the filter expression out of useRealMemberCount and run it against synthetic rosters.
 function realRule() {
-  const at = DASH.indexOf('function useRealMemberCount()');
+  const at = DASH.indexOf('function useRealMemberCount(');
   assert.notEqual(at, -1, 'useRealMemberCount is gone — the count rule has no single home again');
   // fnBody() reads to the function's real closing brace rather than a fixed window: useRealMemberCount grew
   // past the old 1400-char slice (now 1432), which truncated the body and defeated the match. (test-windows.)
-  const m = fnBody(DASH, at, 'useRealMemberCount').match(/return members\.filter\(m =>([\s\S]*?)\)\.length;/);
+  const m = fnBody(DASH, at, 'useRealMemberCount').match(/(?:return|const n =) members\.filter\(m =>([\s\S]*?)\)\.length;/);
   assert.ok(m, 'could not find the filter expression');
   return new Function('members', 'blockedSet', 'admittedSet', 'joinApproval', 'rosterLoaded',
     `return members.filter(m => ${m[1]}).length;`);

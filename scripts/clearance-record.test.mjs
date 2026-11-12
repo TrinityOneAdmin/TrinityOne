@@ -210,7 +210,7 @@ function runApprovedHandler(events) {
   };
   const names = Object.keys(scope);
   const fn = new Function(...names, 'return ({ ' + body + ' });')(...names.map(n => scope[n]));
-  fn.subscribeSafeguard((lists) => { out = lists; });
+  fn.subscribeSafeguard((lists) => { out = lists; runApprovedHandler.last = lists; });
   return out;
 }
 const ev = (d, content, at) => ({ tags: [['d', d]], content: JSON.stringify(content), created_at: at, pubkey: '1'.repeat(64) });
@@ -226,9 +226,13 @@ test('an older console republishing the plain list does not erase the record', (
     'a write from an older console erased the clearance date');
 });
 
-test('the clearance list being absent is only trusted when the relay actually answered', () => {
+test('the clearance list being absent is only trusted when the relay actually answered', async () => {
   // EOSE alone is not evidence — it also fires on a client timeout and on a dropped socket. Believing it then
   // would stamp today's date onto people cleared years ago.
-  const out = runApprovedHandler([]);
+  // Each relay's end is judged a microtask after its EOSE (2026-11-11: one subscription per relay, so a CLOSED or a
+  // dropped socket in the same turn is seen first), so the answer is read once that microtask has run.
+  runApprovedHandler([]);
+  await new Promise(r => setImmediate(r));
+  const out = runApprovedHandler.last;
   assert.equal(out.clearedKnown, true, 'an authenticated relay saying "that is everything" was not believed');
 });

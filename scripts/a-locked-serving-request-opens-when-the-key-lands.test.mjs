@@ -61,6 +61,9 @@ function memberPhone() {
     window: { Fellowship: { myPubkey: ME, relays: ['wss://r'], churchPub: CP } },
     _netRelays: (r) => r,
     pool: { subscribeMany: (_r, _f, h) => { handlers.push(h); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (the-church-corpus-crosses-the-pipe-once.test.mjs): its
+    // readers' subscription goes to this fake pool, exactly as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => ((_r, _f, h) => { handlers.push(h); return { close() {} }; })(null, f, h),
   };
   const names = Object.keys(world);
   const body = `${st(FELLOW, 'var _nameKeyListeners', 'fellowship.js')}
@@ -161,6 +164,9 @@ function console_() {
     _sealEach: async (pl, recips, f) => Object.fromEntries(recips.map(p => [p, f(pl, p)])),
     publish: async () => ({ id: 'published' }), feChurch: (x) => x, now: () => 300,
     pool: { subscribeMany: (_r, _f, h) => { handlers.push(h); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (the-church-corpus-crosses-the-pipe-once.test.mjs): its
+    // readers' subscription goes to this fake pool, exactly as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => ((_r, _f, h) => { handlers.push(h); return { close() {} }; })(null, f, h),
   };
   const names = Object.keys(world);
   const body = `let _nameKeyRing = [], _nameKeyDocKeys = null, _nameKeyChecked = false;

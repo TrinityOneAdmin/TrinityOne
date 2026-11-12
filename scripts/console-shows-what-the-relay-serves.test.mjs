@@ -76,6 +76,9 @@ function consoleAt({ relayAuthed = true, cache = null, oldCache = null, mountGro
   if (oldCache) stored.set('trinityone.steward.groups.' + CHURCH, JSON.stringify(oldCache));   // written before 2026-10-02
   const scope = {
     pool: { subscribeMany: (_r, _f, h) => { opened.push(h); return { close() {} }; } },
+    // the church feed (_corpusSub) is not under test here (the-church-corpus-crosses-the-pipe-once.test.mjs): its
+    // readers' subscription goes to this fake pool, exactly as pool.subscribeMany(relays(), …) did before the feed
+    _corpusSub: (f, h) => ((_r, _f, h) => { opened.push(h); return { close() {} }; })(null, f, h),
     relays: () => ['wss://relay.example'],
     pub: CHURCH, NET, GROUP_D, STEWARDS_D,
     GROUPKEY_D: 'trinityone/groupkey:',

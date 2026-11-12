@@ -108,6 +108,7 @@ async function _maybeBumpConn() {
       const heal = await St.healStuckLogin();
       if (heal === 'closed') {   // the stale sockets were torn down → re-subscribe so they reopen and re-challenge
         _connNoteRelays();
+        try { St.feedRenew && St.feedRenew(); } catch (e) {}   // the church feed asks again BEFORE the hooks re-subscribe to it
         _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
         try { St.markResubscribed(); } catch (e) {}
         _connMisses = 0; return;
@@ -162,6 +163,9 @@ async function _maybeBumpConn() {
     // unlocks writing again after a drop.
     if (replaced || back) {
       _connNoteRelays();   // the streams about to be rebuilt open over the set as it is NOW
+      // A NEW GENERATION OF THE CHURCH FEED (src/steward.src.js, _corpusSub): fresh requests on the new sockets, an empty
+      // store — BEFORE the hooks re-subscribe, so they join the new generation instead of replaying the old one.
+      try { window.Steward.feedRenew && window.Steward.feedRenew(); } catch (e) {}
       _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
       // Record which sockets the rebuilt subscriptions live on. Only this counts — a bare successful connect
       // does not, because one-shot reads produce those too and leave nothing listening (AUDIT-5).
