@@ -186,6 +186,7 @@ function _mergeChurchProfile(cs, id, p){
     lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving,
     picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner,
     bannerFade: p.bannerFade != null ? p.bannerFade : x.bannerFade, accent: p.accent != null ? p.accent : x.accent, titleColor: p.titleColor != null ? p.titleColor : x.titleColor,
+    mainColor: p.mainColor != null ? p.mainColor : x.mainColor,   // the church's MAIN colour (2026-11-12); churchMainColor() validates it at every render
     features: p.features != null ? p.features : x.features, rules: p.rules != null ? p.rules : x.rules,
     initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() };
   const same = (a, b) => a === b || (a && b && typeof a === 'object' && JSON.stringify(a) === JSON.stringify(b));

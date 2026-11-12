@@ -84,13 +84,15 @@ function QRScanner({ onResult, onCancel, prompt, onManual, manualPrompt }) {
 function ChurchBadge({ church, size = 46, radius = 14 }) {
   // SECURITY-AUDIT-2026-07-06 H2: accent/picture come from the untrusted relay-published church profile;
   // guard both so a crafted value can't smuggle a url() beacon (deanonymises every follower on render).
-  const accent = safeCssColor(church.accent, 'var(--clay)');
+  // MAIN colour (owner 2026-11-12) paints a picture-less badge; unset, it is the accent gradient exactly as before.
+  const main = (typeof churchMainColor === 'function') ? churchMainColor(church) : null;
+  const accent = main || safeCssColor(church.accent, 'var(--clay)');
   const pic = safeImgUrl(church.picture);
   return (
-    <div style={{
+    <div data-church-badge="1" style={{
       width: size, height: size, borderRadius: 999, flexShrink: 0, overflow: 'hidden',   /* church DP is round */
       background: pic ? `center/cover no-repeat url("${pic}")` : `linear-gradient(150deg, ${accent}, color-mix(in oklab, ${accent} 62%, #16120c))`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', color: (main && !pic) ? churchOnColor(main) : '#fff',
       fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: size * 0.38, letterSpacing: '.3px',
     }}>{pic ? '' : church.initials}</div>
   );
@@ -102,6 +104,9 @@ window.ChurchBadge = ChurchBadge;
 function ChurchPill({ ctx }) {
   const c = ctx.church;
   if (!c) return null;
+  // MAIN colour (owner 2026-11-12): fills the compact header, and is what a banner's faded edge blends into.
+  // Unset, both are exactly as before (the surface card; the banner fading into the page).
+  const main = (typeof churchMainColor === 'function') ? churchMainColor(c) : null;
   // with a brand banner: a wide header image with the badge + name overlaid (the church's identity).
   const banner = safeImgUrl(c.banner);   // SECURITY-AUDIT-2026-07-06 H2: only a data: URI, never a remote beacon URL
   if (banner) {
@@ -112,6 +117,7 @@ function ChurchPill({ ctx }) {
         position: 'relative', display: 'block', width: '100%',
         overflow: 'hidden', textAlign: 'left',
         aspectRatio: '3 / 1',
+        ...(main ? { background: main } : {}),
       }}>
         {/* image + legibility scrim on a MASKED layer — the steward's fade blends THIS into the page.
             The badge + name below sit on an unmasked layer, so they stay crisp even at a heavy fade. */}
@@ -130,11 +136,11 @@ function ChurchPill({ ctx }) {
   return (
     <div data-church-pill="1" style={{
       display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, border: '1px solid var(--line)',
-      background: 'var(--surface)', borderRadius: 14, padding: '7px 11px',
+      background: main || 'var(--surface)', borderRadius: 14, padding: '7px 11px',
       boxShadow: 'var(--shadow)', textAlign: 'left',
     }}>
       <ChurchBadge church={c} size={30} radius={9} />
-      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>{c.name}</div>
+      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: main ? churchOnColor(main) : 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>{c.name}</div>
     </div>
   );
 }

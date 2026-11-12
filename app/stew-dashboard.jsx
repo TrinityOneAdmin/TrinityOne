@@ -13067,7 +13067,7 @@ function ImageCropModal({ file, outW, outH, round, radiusPct, title, onSave, onC
 window.ImageCropModal = ImageCropModal;
 
 // Church branding — a wide banner + a brand accent colour, published on the kind-0 profile
-// (banner ~768×256, accent as a hex). The logo lives on the identity card above: since 2026-11-12 this panel
+// (banner ~768×256, accent as a hex, plus mainColor since 2026-11-12). The logo lives on the identity card above: since 2026-11-12 this panel
 // is the SECOND card on the 'identity' settings page (the old 'branding' page is an alias of it). Members' app
 // shows the banner on the church header and tints its clay accents to the church's colour.
 function DashBrandingPanel({ church }) {
@@ -13108,6 +13108,29 @@ function DashBrandingPanel({ church }) {
     else if (/^#[0-9a-fA-F]{6}$/.test(s)) onAccent(s);
   };
   const acc = accent || '#C25A38';
+  // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) — the second church colour, beside the accent. It paints the
+  // members' church header (no banner), the badge (no picture), and the verse-of-the-day / featured-sermon
+  // cards. Same pattern as the accent: sync only from a DEFINED value (2026-07-07), 400ms debounce, publish
+  // through publishProfile. Unset ('') until the steward picks one — the picker shows the accent as a
+  // placeholder and never publishes on its own.
+  const [mainCol, setMainState] = React.useState(church.mainColor || '');
+  const mainTimer = React.useRef(null);
+  React.useEffect(() => { if (church.mainColor !== undefined) setMainState(church.mainColor || ''); }, [church.mainColor]);
+  const onMain = (v) => {
+    setMainState(v);
+    if (mainTimer.current) clearTimeout(mainTimer.current);
+    mainTimer.current = setTimeout(() => window.Steward.publishProfile({ mainColor: v }), 400);
+  };
+  const [mainHex, setMainHex] = React.useState((church.mainColor || '').toUpperCase());
+  React.useEffect(() => { setMainHex(mainCol ? mainCol.toUpperCase() : ''); }, [mainCol]);
+  const resetMain = () => { if (mainTimer.current) clearTimeout(mainTimer.current); setMainState(''); setMainHex(''); window.Steward.publishProfile({ mainColor: '' }); };
+  const onMainHex = (v) => {
+    let s = v.trim(); if (s && s[0] !== '#') s = '#' + s;
+    setMainHex(s.toUpperCase());
+    if (/^#[0-9a-fA-F]{3}$/.test(s)) onMain(('#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3]).toLowerCase());
+    else if (/^#[0-9a-fA-F]{6}$/.test(s)) onMain(s.toLowerCase());
+  };
+  const mainShown = mainCol || acc;   // what the preview and the picker tile show: main, else the accent
   const swatches = ['#C25A38', '#3B6FB0', '#5E8C6A', '#7A4FA3', '#B0853B', '#1F2A37'];
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -13119,10 +13142,10 @@ function DashBrandingPanel({ church }) {
       <div style={lbl}>Banner</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
       {/* live preview — banner + logo + name, the way members see the header */}
-      <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${acc}, color-mix(in oklab, ${acc} 60%, #000))`, WebkitMaskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
+      <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${mainShown}, color-mix(in oklab, ${mainShown} 60%, #000))`, WebkitMaskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
         <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <SkBadge initials={initials} picture={church.picture} accent={acc} size={36} radius={999} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
+          <SkBadge initials={initials} picture={church.picture} accent={mainShown} size={36} radius={999} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
           {!hideName ? <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: titleCol || '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div> : null}
         </div>
       </div>
@@ -13172,24 +13195,43 @@ function DashBrandingPanel({ church }) {
 
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
 
-      <div style={lbl}>Brand colour</div>
+      <div style={lbl}>Main colour</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Fills your church’s header when there is no banner, your badge when there is no picture, and the verse of the day and featured sermon cards in members’ apps.</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: mainShown, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
+          <input type="color" value={mainShown.toLowerCase()} onChange={e => onMain(e.target.value)} aria-label="Main colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+        </label>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
+          <input value={mainHex.replace(/^#/, '')} onChange={e => onMainHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Main colour hex code" placeholder={acc.replace(/^#/, '')}
+            style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
+          {mainCol ? <button onClick={resetMain} title="Reset to default" aria-label="Reset main colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 18 }}>
+        {swatches.map(s => (
+          <button key={s} onClick={() => onMain(s.toLowerCase())} title={s} aria-label={'Main colour ' + s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (mainCol.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
+        ))}
+      </div>
+
+      <div style={lbl}>Accent colour</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Tints the highlights, buttons and active states in your members’ app to match your church.</div>
       {/* big spectrum-picker tile + a prominent # hex field */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: acc, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
-          <input type="color" value={acc} onChange={e => onAccent(e.target.value)} aria-label="Brand colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+          <input type="color" value={acc} onChange={e => onAccent(e.target.value)} aria-label="Accent colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
         </label>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
-          <input value={hexDraft.replace(/^#/, '')} onChange={e => onHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Brand colour hex code" placeholder="C25A38"
+          <input value={hexDraft.replace(/^#/, '')} onChange={e => onHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Accent colour hex code" placeholder="C25A38"
             style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
-          {accent ? <button onClick={resetAccent} title="Reset to default" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
+          {accent ? <button onClick={resetAccent} title="Reset to default" aria-label="Reset accent colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
         </div>
       </div>
       {/* quick presets */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
         {swatches.map(s => (
-          <button key={s} onClick={() => onAccent(s)} title={s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (accent.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
+          <button key={s} onClick={() => onAccent(s)} title={s} aria-label={'Accent colour ' + s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (accent.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
         ))}
       </div>
     </Panel>
