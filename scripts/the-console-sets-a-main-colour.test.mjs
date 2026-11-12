@@ -107,3 +107,42 @@ test('the accent controls still publish { accent } and never mainColor — the t
   assert.deepEqual(p.published.at(-1), { accent: '#5E8C6A' });
   assert.ok(p.published.every(m => !('mainColor' in m)), 'an accent control published mainColor');
 });
+
+// POINT OF USE for the UNTRUSTED kind-0: the REAL useStewardChurch (app/steward-root.jsx) is sliced and run with
+// a profile whose mainColor is garbage, and its result is fed to the REAL DashBrandingPanel. Neither may crash,
+// and the panel must show no main colour (no Reset).
+const ROOT_JSX = readFileSync(join(ROOT, 'app/steward-root.jsx'), 'utf8');
+async function churchFromProfile(profile) {
+  const src = fnBody(ROOT_JSX, 'function useStewardChurch(', 'useStewardChurch') + '\nexport { useStewardChurch };\n';
+  const tmp = join(tmpdir(), 'mainc-root-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
+  let js;
+  try {
+    writeFileSync(tmp, src);
+    js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
+  } finally { rmSync(tmp, { force: true }); }
+  let state = {}; const effects = [];
+  const key = '__mainc_root_' + Math.random().toString(36).slice(2);
+  const g = globalThis[key] = {
+    useSt: () => [state, (v) => { state = v; }],
+    useStE: (f) => { effects.push(f); },
+    useStewardIdv: () => 1, useStewardConn: () => 1,
+    window: { Steward: { subscribeProfile: (cb) => { cb(profile); return () => {}; }, npub: 'npub1x', isViewingNetwork: () => false }, addEventListener() {}, removeEventListener() {} },
+  };
+  const preamble = Object.keys(g).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
+  const mod = await import('data:text/javascript;base64,' + Buffer.from(preamble + '\n' + js).toString('base64'));
+  mod.useStewardChurch();
+  for (const f of effects) f();          // clear-on-identity, then subscribeProfile delivers the profile
+  return mod.useStewardChurch();
+}
+
+test('a garbage / non-string mainColor on the kind-0 reaches the branding panel as no main colour, without crashing', async () => {
+  for (const bad of [{ x: 1 }, 42, true, ['#112233'], 'url(https://evil.example/b.png)', '#12345', 'red', '#12345G']) {
+    const church = await churchFromProfile({ name: 'Grace', mainColor: bad });
+    assert.equal(church.mainColor, '', 'the console accepted mainColor ' + JSON.stringify(bad));
+    const p = await panel(church);                       // must not throw
+    assert.equal(p.by('Reset main colour'), undefined, 'garbage mainColor ' + JSON.stringify(bad) + ' shows as a set main colour');
+  }
+  const ok = await churchFromProfile({ name: 'Grace', mainColor: '#1f4e79' });
+  assert.equal(ok.mainColor, '#1f4e79');
+  assert.ok((await panel(ok)).by('Reset main colour'), 'a valid main colour no longer shows Reset');
+});

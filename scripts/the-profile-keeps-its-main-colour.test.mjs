@@ -11,8 +11,10 @@
 //      the field, members never see it. The main-era copy (6b42955f, before mainColor) must DROP the field
 //      without throwing — that is the old-member-app compatibility proof.
 //
-// KNOWN, OWNER-ACCEPTED LOSS (not engineered around): an OLD console's publishProfile has no mainColor in its
-// list, so any save from an old console republishes kind-0 without it and the main colour reverts to unset.
+// OLD-CONSOLE SAVE (corrected 2026-11-12): an OLD console's publishProfile has no mainColor in its list, so its
+// save republishes kind-0 without the field. That does NOT revert members to unset: _mergeChurchProfile keeps the
+// member's cached mainColor when the delivered profile lacks it, so phones keep the last colour until a NEW
+// console saves again (which writes '' or a colour).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
