@@ -13,11 +13,11 @@ import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find, texts, reads } from './render-jsx-screen.mjs';
 
 const BOOKS = { 1: 'Genesis', 19: 'Psalms', 43: 'John' };
-function panel(bookmarks) {
+function panel(bookmarks, items = [], noItems = false) {
   const { React, draw } = miniReact();
   const calls = { goto: [], toggled: [], closed: 0 };
   const Bible = {
-    parseRef: () => null, refKey: (l, v) => l.book + '.' + l.chap + '.' + v,
+    parseRef: (s) => { const m = /^John (\d+):(\d+)$/.exec(String(s)); return m ? { book: 43, chap: +m[1], verse: +m[2] } : null; }, refKey: (l, v) => l.book + '.' + l.chap + '.' + v,
     refLabel: (l, v) => BOOKS[l.book] + ' ' + l.chap + ':' + v,
     getCommentary: () => [], getCrossRefs: () => ({}), subscribe: () => () => {},
   };
@@ -27,7 +27,7 @@ function panel(bookmarks) {
     IconBtn: () => null, BottomSheet: () => null, Btn: () => null, Empty: () => null, Pill: () => null, Chip: () => null,
     setTimeout: () => 0, clearTimeout() {},
   });
-  const ctx = { notes: {}, version: 'kjv', bookmarks, setNote() {}, toggleBookmark: (k) => calls.toggled.push(k), gotoRef: (b, c, v) => calls.goto.push([b, c, v]) };
+  const ctx = { notes: {}, version: 'kjv', bookmarks, ...(noItems ? {} : { bookmarkItems: items }), setNote() {}, toggleBookmark: (k) => calls.toggled.push(k), gotoRef: (b, c, v) => calls.goto.push([b, c, v]) };
   const props = { loc: { book: 1, chap: 1 }, label: 'Genesis 1', open: true, onClose: () => { calls.closed++; }, ctx, docked: true };
   return { calls, redraw: () => draw(mod.CommentaryPanel, props) };
 }
@@ -91,4 +91,45 @@ test('Study panel: tabs never squish — two rows of two, every tab reachable by
   assert.ok(rows(p.redraw()).length > 0, 'the second-row Bookmarks tab does not open the bookmarks');
   seg(p.redraw(), /^Notes/).props.onClick();
   assert.equal(rows(p.redraw()).length, 0, 'the Notes tab did not leave the bookmarks view');
+});
+
+const tagNodes = (r) => find(r, n => n.props && n.props['data-bookmark-tag']);
+const openMarks = (p) => { seg(p.redraw(), /^Bookmarks/).props.onClick(); return p.redraw(); };
+
+test('Study panel: a tagged bookmark shows its tags under the verse; an untagged one is unchanged; Commentary tab shows none', () => {
+  const p = panel(['43.3.16', '1.1.3'], [{ id: '43.3.16', ref: '43.3.16', tags: ['hope', 'sermon'] }, { ref: '1.1.3' }]);
+  assert.equal(tagNodes(p.redraw()).length, 0, 'tags leaked onto the Commentary tab');
+  const t = openMarks(p);
+  const john = rows(t).find(r => /John 3:16/.test(reads(r))), gen = rows(t).find(r => /Genesis 1:3/.test(reads(r)));
+  assert.deepEqual(tagNodes(john).map(n => n.props['data-bookmark-tag']), ['hope', 'sermon']);
+  assert.deepEqual(tagNodes(john).map(n => reads(n)), ['hope', 'sermon']);
+  assert.equal(tagNodes(gen).length, 0);
+  assert.equal(reads(gen), 'Genesis 1:3', 'an untagged row must read exactly as before');
+  const wrap = find(john, n => n.props && n.props['data-bookmark-tags'])[0];
+  assert.equal(wrap.props.style.flexWrap, 'wrap');
+  assert.equal(tagNodes(john)[0].props.style.textOverflow, 'ellipsis');
+});
+
+test('Study panel: an old-spelling bookmark key still finds its tags', () => {
+  const p = panel(['John 3:16'], [{ ref: 'John 3:16', tags: ['grace'] }]);
+  const john = rows(openMarks(p))[0];
+  assert.deepEqual(tagNodes(john).map(n => n.props['data-bookmark-tag']), ['grace']);
+});
+
+test('Study panel: junk tags and a missing bookmarkItems never crash and draw no chips', () => {
+  const p = panel(['43.3.16', '1.1.3'], [{ ref: '43.3.16', tags: undefined }, { ref: '1.1.3', tags: [null, ''] }]);
+  assert.equal(tagNodes(openMarks(p)).length, 0);
+  const q = panel(['43.3.16'], [], true);
+  assert.equal(rows(openMarks(q)).length, 1);
+  assert.equal(tagNodes(q.redraw()).length, 0);
+});
+
+test('Study panel: tapping a tag chip does not remove the bookmark; X still removes with the stored key', () => {
+  const p = panel(['43.3.16'], [{ ref: '43.3.16', tags: ['hope'] }]);
+  const john = rows(openMarks(p))[0];
+  const chip = tagNodes(john)[0];
+  if (chip.props.onClick) chip.props.onClick({ stopPropagation() {} });
+  assert.deepEqual(p.calls.toggled, [], 'a chip tap removed the bookmark');
+  find(john, n => n.type === 'button' && /^Remove bookmark/.test(String(n.props['aria-label'])))[0].props.onClick();
+  assert.deepEqual(p.calls.toggled, ['43.3.16']);
 });
