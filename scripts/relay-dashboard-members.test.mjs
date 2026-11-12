@@ -1,5 +1,6 @@
 // Relay dashboard "Members" tile = APPROVED members summed over every church this relay hosts (owner decision
-// 2026-11-12: a person in two churches counts twice). It used to show the number of kind-0 PROFILE events in the
+// 2026-11-12: a person in two churches counts twice; blocked people and leavers do not count; an open church
+// counts everyone who joined). It used to show the number of kind-0 PROFILE events in the
 // whole store — "4 churches, 7 members" on a box where the 7 were profiles, not people let in.
 //   Run: node --test scripts/relay-dashboard-members.test.mjs      (own port 8152; never run with other relay tests)
 //
@@ -21,7 +22,7 @@ const SRC = readFileSync(new URL('../relay-app/control.js', import.meta.url), 'u
 const PORT = 8152;
 const BASE = `http://127.0.0.1:${PORT}`;
 const NET = 'trinityone';
-const MEMBER_D = 'trinityone/member:', JOINPOLICY_D = 'trinityone/joinpolicy:', ADMITTED_D = 'trinityone/admitted:';
+const MEMBER_D = 'trinityone/member:', JOINPOLICY_D = 'trinityone/joinpolicy:', ADMITTED_D = 'trinityone/admitted:', BLOCKED_D = 'trinityone/blocked:';
 const now = () => Math.floor(Date.now() / 1000);
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
 
@@ -40,10 +41,15 @@ function liftPoll(fetchImpl) {
   return { poll: fn, els, errors };
 }
 
-// Two churches, both approval-gated. Ada/Ben/Pat approved at A, Cal pending at A. Pat (in BOTH) and Dee approved
-// at B, Eve pending at B. Approved per church: A=3, B=2 → 5. Distinct approved people: 4. Profiles: everyone.
-const A = K(), B = K();
-const ada = K(), ben = K(), pat = K(), cal = K(), dee = K(), eve = K();
+// Three churches. A and B are approval-gated; O is OPEN (no approval needed).
+//   A: Ada/Ben/Pat approved, Cal pending, Bob approved but then BLOCKED by A            -> 3
+//   B: Pat (in BOTH A and B) and Dee approved, Eve pending                              -> 2
+//   O: Fay and Gus joined (open church: joining is enough), Hal joined then LEFT        -> 2
+// Approved per church: 3 + 2 + 2 = 7. Counting Bob (blocklist ignored) gives 8; counting Hal (leaver kept) gives 8;
+// dropping the open church gives 5; counting pending gives 9. Profiles: everyone.
+const A = K(), B = K(), O = K();
+const ada = K(), ben = K(), pat = K(), cal = K(), dee = K(), eve = K(), bob = K(), fay = K(), gus = K(), hal = K();
+const EXPECTED = 7;
 let relay, dataDir, token;
 
 const publish = (ws, evt) => new Promise((res) => {
@@ -57,7 +63,7 @@ before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'trin-dmembers-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_LOOPBACK_ONLY: '1', CHURCH_NPUB: [A, B].map(k => npubEncode(k.pub)).join(',') },
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_LOOPBACK_ONLY: '1', CHURCH_NPUB: [A, B, O].map(k => npubEncode(k.pub)).join(',') },
     stdio: 'ignore',
   });
   for (let i = 0; i < 100; i++) { try { if ((await fetch(BASE + '/status')).ok) break; } catch {} await new Promise(r => setTimeout(r, 150)); }
@@ -65,12 +71,18 @@ before(async () => {
   const ws = await new Promise((res, rej) => { const w = new WebSocket(`ws://127.0.0.1:${PORT}/relay`); w.on('open', () => res(w)); w.on('error', rej); });
   try {
     for (const c of [A, B]) assert.equal(await publish(ws, doc(c, JOINPOLICY_D + c.pub, JSON.stringify({ approval: true }))), true, 'join policy refused');
-    for (const [c, people] of [[A, [ada, ben, pat, cal]], [B, [pat, dee, eve]]])
+    assert.equal(await publish(ws, doc(O, JOINPOLICY_D + O.pub, JSON.stringify({ approval: false }))), true, 'open join policy refused');
+    for (const [c, people] of [[A, [ada, ben, pat, cal, bob]], [B, [pat, dee, eve]], [O, [fay, gus, hal]]])
       for (const p of people) assert.equal(await publish(ws, doc(p, MEMBER_D + c.pub, '{}')), true, 'member doc refused');
-    assert.equal(await publish(ws, doc(A, ADMITTED_D + A.pub, JSON.stringify({ pubkeys: [ada.pub, ben.pub, pat.pub] }))), true);
+    assert.equal(await publish(ws, doc(A, ADMITTED_D + A.pub, JSON.stringify({ pubkeys: [ada.pub, ben.pub, pat.pub, bob.pub] }))), true);
     assert.equal(await publish(ws, doc(B, ADMITTED_D + B.pub, JSON.stringify({ pubkeys: [pat.pub, dee.pub] }))), true);
+    // Bob is admitted at A, then A blocks him
+    assert.equal(await publish(ws, doc(A, BLOCKED_D + A.pub, JSON.stringify({ pubkeys: [bob.pub] }))), true, 'blocklist refused');
+    // Hal leaves O: the app's leave is the same member doc, emptied (later timestamp so it replaces the join)
+    const leave = finalizeEvent({ kind: 30078, created_at: now() + 1, tags: [['d', MEMBER_D + O.pub], ['t', NET], ['deleted', '1']], content: '' }, hal.sk);
+    assert.equal(await publish(ws, leave), true, 'leave refused');
     // profiles for everyone — the old tile counted these; whether the relay takes a pending joiner's is not asserted
-    for (const p of [ada, ben, pat, cal, dee, eve])
+    for (const p of [ada, ben, pat, cal, dee, eve, bob, fay, gus, hal])
       await publish(ws, finalizeEvent({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: 'x' }) }, p.sk));
   } finally { ws.close(); }
 });
@@ -78,17 +90,17 @@ after(() => { try { relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { re
 
 const authed = (url, opts = {}) => fetch(BASE + url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token } });
 
-test('the Members tile shows APPROVED members summed per church (5), not profiles, not distinct people, not pending', async () => {
+test('the Members tile shows APPROVED members summed per church (7): not profiles, not distinct people, not pending, not blocked, not leavers; open church counts its joiners', async () => {
   const { poll, els, errors } = liftPoll(authed);
   await poll();
   assert.deepEqual(errors, [], 'poll() hit its render-failure path');
-  assert.equal(els['s-churches'].textContent, 2, 'church count (sanity: the poll rendered)');
-  assert.equal(String(els['s-members'].textContent), '5',
-    'Members tile is not the approved-per-church sum (A: ada, ben, pat; B: pat, dee — pending cal and eve excluded)');
+  assert.equal(els['s-churches'].textContent, 3, 'church count (sanity: the poll rendered)');
+  assert.equal(String(els['s-members'].textContent), String(EXPECTED),
+    'Members tile is not the approved-per-church sum (A: ada, ben, pat; B: pat, dee; O: fay, gus — pending cal/eve, blocked bob, leaver hal excluded)');
   // and it is not secretly the old number: say what the kind-0 count was, so a coincidence would show
   const st = await (await authed('/stats?days=1')).json();
   const profiles = ((st.kinds || []).find(k => k.kind === 0) || {}).n;
-  assert.notEqual(profiles, 5, `fixture no longer separates the two numbers (kind-0 count is ${profiles})`);
+  assert.notEqual(profiles, EXPECTED, `fixture no longer separates the two numbers (kind-0 count is ${profiles})`);
 });
 
 test('/stats carries `members` only behind the admin token; public /status does not', async () => {
