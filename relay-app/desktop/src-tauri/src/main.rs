@@ -17,10 +17,13 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use std::net::TcpStream;
-use std::path::Path;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::{thread, time::Duration};
-use tauri::{Manager, WindowEvent};
+use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -244,6 +247,751 @@ impl KeepAwake {
     }
 }
 
+// ── Suite JS auto-update (P2 — the app shell's half) ────────────────────────────────────────────
+// This shell is the trust root. The signed JS bundle is checked/downloaded/staged by the relay (P3,
+// gateway.mjs suiteAutoUpdate) into <TRINITY_DATA_DIR>/suite/, but it is NEVER activated there. The shell
+// decides what code the relay runs:
+//   • EVERY LAUNCH: run the activated override (suite/active) IFF its retained verified tarball
+//     (active.tgz/active.sig) still verifies against the READ-ONLY payload key; else run the baked-in payload.
+//   • TIMED APPLY: at the operator's HH:MM, once per calendar day, if a verified bundle is staged, re-verify
+//     it, enforce the anti-rollback floor, stop the relay, swap active/, restart from active/, health-check,
+//     and roll back to last-good (or payload) on any failure.
+// The verifier and the pinned release-pubkey.pem are ALWAYS taken from the read-only payload, never from the
+// (writable) override — see verify_tarball and the PAYLOAD_DIR invariant in spawn_relay.
+
+// Which code tree the relay runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodeDir {
+    Payload,
+    Active,
+}
+
+// PURE launch decision (point-of-use, cargo-testable without a real verify). Run the override only when its
+// retained tarball + signature are both present AND verified against the read-only payload key; any failure,
+// corruption or absence falls back to the baked-in payload.
+fn choose_code_dir(active_tgz_exists: bool, active_sig_exists: bool, active_verify_ok: bool) -> CodeDir {
+    if active_tgz_exists && active_sig_exists && active_verify_ok {
+        CodeDir::Active
+    } else {
+        CodeDir::Payload
+    }
+}
+
+// Where to recover to if a freshly-applied bundle fails its health check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RollbackTarget {
+    Keep,     // health ok — keep the new active/
+    LastGood, // roll back to the retained previous override
+    Payload,  // no last-good — fall back to the baked-in payload
+}
+
+// PURE rollback decision (cargo-testable).
+fn rollback_target(health_ok: bool, have_last_good: bool) -> RollbackTarget {
+    if health_ok {
+        RollbackTarget::Keep
+    } else if have_last_good {
+        RollbackTarget::LastGood
+    } else {
+        RollbackTarget::Payload
+    }
+}
+
+// PURE apply-window decision (cargo-testable). Apply when the local time-of-day has reached the operator's
+// HH:MM AND we have not already applied today. This also handles "missed while asleep" (we were off at HH:MM;
+// on the next start past HH:MM `now_min >= target_min` is still true and lastApplied is an earlier day → apply)
+// and "once per calendar day" (lastApplied == today → skip). The staged-READY-present and marker-enabled gates
+// are checked by the caller (they are I/O, not policy).
+fn due(now_min: u32, target_min: u32, today: &str, last_applied: &str) -> bool {
+    now_min >= target_min && last_applied != today
+}
+
+// Parse "HH:MM" (tolerating surrounding whitespace / trailing newline) to minutes-of-day.
+fn parse_hhmm(s: &str) -> Option<u32> {
+    let t = s.trim();
+    let (h, m) = t.split_once(':')?;
+    let h: u32 = h.trim().parse().ok()?;
+    let m: u32 = m.trim().parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+// Days since 1970-01-01 for a proleptic-Gregorian date (Howard Hinnant's algorithm). PURE.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (m + 9) % 12; // Mar=0 … Feb=11
+    let doy = (153 * mp + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146097 + doe - 719468
+}
+
+// Parse an ISO-8601 / RFC-3339 instant to epoch SECONDS. PURE. Handles "YYYY-MM-DD",
+// "YYYY-MM-DDThh:mm:ss", a fractional-second part (ignored), and a trailing offset ("Z", "+01:00", "-0500").
+// This is the Rust twin of gateway.mjs's Date.parse use: an offset is applied so two instants compare by the
+// MOMENT they name, not by their text (git %cI stamps carry offsets, so "…+01:00" vs "…Z" order the opposite
+// way lexically). A datetime with no offset is read as UTC (deterministic + testable); in practice every date
+// this handles — READY.date and payload version.txt's %cI — carries an offset.
+fn parse_instant(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (date_part, rest) = match s.find(['T', 't', ' ']) {
+        Some(i) => (&s[..i], &s[i + 1..]),
+        None => (s, ""),
+    };
+    let mut dps = date_part.split('-');
+    let y: i64 = dps.next()?.trim().parse().ok()?;
+    let mo: i64 = dps.next()?.parse().ok()?;
+    let d: i64 = dps.next()?.parse().ok()?;
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let days = days_from_civil(y, mo, d);
+    let (mut hh, mut mi, mut ss, mut off) = (0i64, 0i64, 0i64, 0i64);
+    if !rest.is_empty() {
+        // The offset begins at a 'Z'/'z', or at a '+'/'-' that is not the first character of `rest`.
+        let mut tz_idx = None;
+        for (i, c) in rest.char_indices() {
+            if c == 'Z' || c == 'z' || ((c == '+' || c == '-') && i > 0) {
+                tz_idx = Some(i);
+                break;
+            }
+        }
+        let (time_str, tz_str) = match tz_idx {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, ""),
+        };
+        let mut tps = time_str.trim().split(':');
+        hh = tps.next().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+        mi = tps.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+        if let Some(sec) = tps.next() {
+            ss = sec.split('.').next().unwrap_or("0").parse().unwrap_or(0);
+        }
+        let tzc = tz_str.trim();
+        if !tzc.is_empty() && !tzc.eq_ignore_ascii_case("z") {
+            let sign = if tzc.starts_with('-') { -1 } else { 1 };
+            let digits: String = tzc[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+            let oh: i64 = digits.get(0..2).and_then(|x| x.parse().ok()).unwrap_or(0);
+            let om: i64 = digits.get(2..4).and_then(|x| x.parse().ok()).unwrap_or(0);
+            off = sign * (oh * 3600 + om * 60);
+        }
+    }
+    Some(days * 86400 + hh * 3600 + mi * 60 + ss - off)
+}
+
+// Strictly-after by INSTANT. PURE. Mirrors gateway.mjs suiteDateAfter EXACTLY: an unparseable `a` → false
+// (refuse); an unparseable/empty floor `b` → true (nothing valid to beat).
+fn date_after(a: &str, b: &str) -> bool {
+    match parse_instant(a) {
+        None => false,
+        Some(ta) => match parse_instant(b) {
+            None => true,
+            Some(tb) => ta > tb,
+        },
+    }
+}
+
+// Coarse JSON string-value read (NOT a parser) — the same house style as json_bool_true / json_str_nonempty.
+// Returns the value of `"key":"…"` up to the next quote. The only values we read with it (sha, date, version,
+// lastApplied, installedDate) are plain tokens with no embedded quote or escape, so this is sufficient.
+fn json_str_value(body: &str, key: &str) -> Option<String> {
+    for open in [format!("\"{key}\":\""), format!("\"{key}\": \"")] {
+        if let Some(i) = body.find(&open) {
+            let rest = &body[i + open.len()..];
+            if let Some(end) = rest.find('"') {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+// Minimal JSON string-literal encoder for the handful of state.json values we write.
+fn jstr(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 2);
+    o.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            _ => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+// The bundled node sidecar, resolved next to our own executable (the same convention main.rs already uses for
+// trinityone-cloudflared). Used to run the verifier and to read local wall-clock time.
+fn node_sidecar_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = if cfg!(windows) {
+        "trinityone-relay-node.exe"
+    } else {
+        "trinityone-relay-node"
+    };
+    Some(dir.join(name))
+}
+
+// Authoritatively verify a retained/staged tarball against the READ-ONLY payload verifier + key. The verifier
+// (scripts/verify-suite-bundle.mjs) and the pinned release-pubkey.pem are ALWAYS taken from `payload`, never
+// from a (writable) override, so a tampered active/ cannot supply its own verifier or key. Exit 0 = good.
+fn verify_tarball(node: &Path, payload: &Path, tgz: &Path, sig: &Path, log: &Path) -> bool {
+    let verifier = payload.join("scripts").join("verify-suite-bundle.mjs");
+    let key = payload.join("relay-app").join("release-pubkey.pem");
+    match std::process::Command::new(node)
+        .arg(&verifier)
+        .arg(tgz)
+        .arg(sig)
+        .arg(&key)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(s) => s.success(),
+        Err(e) => {
+            applog(log, &format!("suite: verifier spawn failed: {e}"));
+            false
+        }
+    }
+}
+
+// Local wall-clock, via the bundled node (the Rust std has no timezone-aware local time and we add no crate).
+// Returns (minutes-of-day, "YYYY-MM-DD") in the machine's local time — the clock the operator set HH:MM in.
+// Called only once an apply is actually plausible (marker on AND a bundle staged), so it is not a hot path.
+fn local_now(node: &Path) -> Option<(u32, String)> {
+    let out = std::process::Command::new(node)
+        .arg("-e")
+        .arg("const d=new Date();const p=n=>String(n).padStart(2,'0');process.stdout.write((d.getHours()*60+d.getMinutes())+' '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()))")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let mut it = s.split_whitespace();
+    let min: u32 = it.next()?.parse().ok()?;
+    let ymd = it.next()?.to_string();
+    Some((min, ymd))
+}
+
+// PURE env assembly for a relay launch (cargo-testable). `code_dir` is the tree the relay's cwd will be set
+// to (payload OR an activated override); it is deliberately NOT what PAYLOAD_DIR points at.
+//
+// [P3-AUDIT — HIGH, trust root] PAYLOAD_DIR is ALWAYS the read-only `payload`, independent of `code_dir`. The
+// relay resolves its verifier + pinned release-pubkey.pem from PAYLOAD_DIR || ROOT; when launching an override,
+// ROOT (cwd) is the writable active/ dir, so if PAYLOAD_DIR were omitted — or set to code_dir — the override
+// would silently become its own trust root. The test `override_env_payload_dir_is_payload` goes red if this
+// line is weakened. The rest matches the original single-spawn site exactly.
+fn relay_env(
+    _code_dir: &Path,
+    payload: &Path,
+    data_dir: &Path,
+    cloudflared: &str,
+    relay_host: &str,
+) -> Vec<(String, String)> {
+    vec![
+        ("TRINITY_DATA_DIR".into(), data_dir.to_string_lossy().to_string()),
+        // the bundled cloudflared, so the relay can start a Cloudflare quick tunnel ("go public") itself
+        ("CLOUDFLARED_BIN".into(), cloudflared.to_string()),
+        // BIND ADDRESS: loopback by default; 0.0.0.0 only when the operator opted into LAN access.
+        ("RELAY_HOST".into(), relay_host.to_string()),
+        // the Tauri window IS the control UI; don't also open a browser.
+        ("RELAY_NO_OPEN".into(), "1".into()),
+        // Trust root — ALWAYS the read-only payload, in BOTH launch modes. See the doc above.
+        ("PAYLOAD_DIR".into(), payload.to_string_lossy().to_string()),
+    ]
+}
+
+// Spawn the relay sidecar from `code_dir`, wiring a FRESH stdout/stderr pump and an alive-flag the pump clears
+// when the child exits (CommandEvent::Terminated, or the event channel closing). Returns that alive-flag so the
+// controller can wait for a clean stop before any swap/rebind. The child is parked in the Tauri-managed Relay
+// slot so the window-close handler still reaps whichever child is current.
+//
+// [P3-AUDIT — HIGH, trust root] PAYLOAD_DIR is set to the READ-ONLY payload in BOTH launch modes. The relay
+// resolves its verifier + pinned release-pubkey.pem from PAYLOAD_DIR || ROOT; when launching an override, ROOT
+// is the writable active/ dir, so omitting PAYLOAD_DIR would silently make the override its own trust root.
+// When launching the payload itself PAYLOAD_DIR == ROOT, which is correct and harmless. All other env matches
+// the original single-spawn site (TRINITY_DATA_DIR, CLOUDFLARED_BIN, RELAY_HOST, RELAY_NO_OPEN).
+fn spawn_relay(
+    app: &AppHandle,
+    code_dir: &Path,
+    payload: &Path,
+    data_dir: &Path,
+    log: &Path,
+) -> Option<Arc<AtomicBool>> {
+    let cmd = match app.shell().sidecar("trinityone-relay-node") {
+        Ok(c) => c,
+        Err(e) => {
+            applog(log, &format!("SIDECAR RESOLVE FAILED: {e}"));
+            return None;
+        }
+    };
+    let cloudflared = std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            p.parent().map(|d| {
+                d.join(if cfg!(windows) {
+                    "trinityone-cloudflared.exe"
+                } else {
+                    "trinityone-cloudflared"
+                })
+            })
+        })
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "cloudflared".into());
+    let relay_host = if data_dir.join("lan-access").exists() {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    };
+    let mut cmd = cmd
+        .current_dir(code_dir.to_path_buf())
+        .arg("scripts/gateway.mjs")
+        .arg(PORT.to_string());
+    for (k, v) in relay_env(code_dir, payload, data_dir, &cloudflared, relay_host) {
+        cmd = cmd.env(k, v);
+    }
+    match cmd.spawn() {
+        Ok((mut rx, child)) => {
+            applog(log, &format!("sidecar spawned OK (cwd={code_dir:?})"));
+            *app.state::<Relay>().0.lock().unwrap() = Some(child);
+            let alive = Arc::new(AtomicBool::new(true));
+            let alive2 = alive.clone();
+            let lp = log.to_path_buf();
+            tauri::async_runtime::spawn(async move {
+                while let Some(ev) = rx.recv().await {
+                    match ev {
+                        CommandEvent::Stdout(b) => {
+                            applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end()))
+                        }
+                        CommandEvent::Stderr(b) => {
+                            applog(&lp, &format!("[err] {}", String::from_utf8_lossy(&b).trim_end()))
+                        }
+                        CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
+                        CommandEvent::Terminated(t) => {
+                            applog(&lp, &format!("[exit] {t:?}"));
+                            alive2.store(false, Ordering::SeqCst);
+                        }
+                        _ => {}
+                    }
+                }
+                // Channel closed → no more events will come → the child is gone.
+                alive2.store(false, Ordering::SeqCst);
+            });
+            Some(alive)
+        }
+        Err(e) => {
+            applog(log, &format!("SPAWN FAILED: {e}"));
+            None
+        }
+    }
+}
+
+// Is the relay port currently accepting connections?
+fn port_reachable() -> bool {
+    TcpStream::connect(("127.0.0.1", PORT)).is_ok()
+}
+
+// Wait until the port accepts connections (relay is up), or the timeout elapses.
+fn wait_port_up(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if port_reachable() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+// After kill(), wait for BOTH the pid to be gone (the pump cleared the alive-flag on Terminated / channel
+// close) AND the port to be free. CommandChild::kill() returns before the async exit, so this guards against a
+// Windows file lock on the old node and against EADDRINUSE on the restart.
+fn wait_stopped(alive: &Arc<AtomicBool>, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !alive.load(Ordering::SeqCst) && !port_reachable() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+// Unpack a .tgz into dest using the system tar (bsdtar on Windows 10 1803+, GNU/BSD tar on mac/Linux). The
+// bundle is produced with a leading "./" (build-suite-js-bundle.sh) so this lands scripts/ etc. at dest root.
+fn untar(tgz: &Path, dest: &Path, log: &Path) -> bool {
+    match std::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(tgz)
+        .arg("-C")
+        .arg(dest)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(s) if s.success() => true,
+        Ok(s) => {
+            applog(log, &format!("suite: tar exited {s:?}"));
+            false
+        }
+        Err(e) => {
+            applog(log, &format!("suite: tar spawn failed: {e}"));
+            false
+        }
+    }
+}
+
+// Rename with a short retry window (Windows may briefly lock a just-released file).
+fn rename_retry(from: &Path, to: &Path, log: &Path) -> std::io::Result<()> {
+    let mut last = std::fs::rename(from, to);
+    let mut tries = 0;
+    while last.is_err() && tries < 20 {
+        thread::sleep(Duration::from_millis(100));
+        last = std::fs::rename(from, to);
+        tries += 1;
+    }
+    if let Err(ref e) = last {
+        applog(log, &format!("suite: rename {from:?} -> {to:?} failed: {e}"));
+    }
+    last
+}
+
+// Atomic file write (temp + rename), so a reader never sees a half-written state.json / quarantine-sha.
+fn write_file_atomic(path: &Path, contents: &str, log: &Path) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, contents)?;
+    let r = std::fs::rename(&tmp, path);
+    if let Err(ref e) = r {
+        applog(log, &format!("suite: finalise {path:?} failed: {e}"));
+    }
+    r
+}
+
+// Record the apply outcome for the P3 status surface (GET /update reads these fields).
+#[allow(clippy::too_many_arguments)]
+fn write_state(
+    suite_dir: &Path,
+    sha: &str,
+    version: &str,
+    date: &str,
+    last_applied: &str,
+    outcome: &str,
+    next_at: &str,
+    log: &Path,
+) {
+    let json = format!(
+        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"nextAt\":{}}}\n",
+        jstr(sha),
+        jstr(version),
+        jstr(date),
+        jstr(last_applied),
+        jstr(outcome),
+        jstr(next_at.trim()),
+    );
+    let _ = write_file_atomic(&suite_dir.join("state.json"), &json, log);
+}
+
+// Remove the staged bundle so a failed/consumed bundle is never reconsidered.
+fn discard_staging(suite_dir: &Path) {
+    let staging = suite_dir.join("staging");
+    let _ = std::fs::remove_file(staging.join("READY"));
+    let _ = std::fs::remove_file(staging.join("bundle.tgz"));
+    let _ = std::fs::remove_file(staging.join("bundle.sig"));
+}
+
+// Health probe: public GET /status says ok AND reports the version we just activated. We accept a match on
+// either READY.sha (the git sha /status reports as `version`) or READY.version, so a manifest that labels its
+// version separately still passes.
+fn health_ok(ready_sha: &str, ready_version: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(body) = http_get_loopback("/status", None) {
+            if json_bool_true(&body, "ok") {
+                if let Some(v) = json_str_value(&body, "version") {
+                    if (!ready_sha.is_empty() && v == ready_sha)
+                        || (!ready_version.is_empty() && v == ready_version)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
+// Point the control window at the (freshly-served) app again after a swap.
+fn reload_webview(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("control") {
+        if let Ok(u) = format!("http://127.0.0.1:{PORT}/relay-app/home.html").parse() {
+            let _ = win.navigate(u);
+        }
+    }
+}
+
+// The payload's own build date (version.txt line 2 = git %cI), for the anti-rollback floor. Empty on an
+// unstamped working tree ($Format…) — treated by date_after as "nothing to beat".
+fn read_version_date(payload: &Path) -> String {
+    match std::fs::read_to_string(payload.join("version.txt")) {
+        Ok(s) => s.lines().nth(1).map(|x| x.trim().to_string()).unwrap_or_default(),
+        Err(_) => String::new(),
+    }
+}
+
+// Set `*cur_code_dir`, spawn the relay from it, update `*cur_alive`, and wait for the port to come up.
+// Returns whether the relay became reachable. Shared by apply-start, recover, and rollback.
+#[allow(clippy::too_many_arguments)]
+fn spawn_and_wait(
+    app: &AppHandle,
+    dir: &Path,
+    payload: &Path,
+    data_dir: &Path,
+    log: &Path,
+    cur_code_dir: &mut PathBuf,
+    cur_alive: &mut Arc<AtomicBool>,
+) -> bool {
+    *cur_code_dir = dir.to_path_buf();
+    match spawn_relay(app, dir, payload, data_dir, log) {
+        Some(a) => {
+            *cur_alive = a;
+            wait_port_up(Duration::from_secs(45))
+        }
+        None => false,
+    }
+}
+
+// Decide (gate) whether to apply now, then run the apply. Reads the enable marker, the staged READY, and the
+// local clock; everything cryptographic/destructive lives in attempt_apply. Called from the controller tick,
+// OUTSIDE the keep-awake-off / token early-continues so turning keep-awake off never disables auto-update.
+#[allow(clippy::too_many_arguments)]
+fn maybe_apply(
+    app: &AppHandle,
+    suite_dir: &Path,
+    payload: &Path,
+    data_dir: &Path,
+    log: &Path,
+    node: Option<&Path>,
+    cur_code_dir: &mut PathBuf,
+    cur_alive: &mut Arc<AtomicBool>,
+) {
+    // Enabled? The marker is the shell's only read of the operator's setting (content = "HH:MM\n").
+    let at_raw = match std::fs::read_to_string(data_dir.join("suite-autoupdate")) {
+        Ok(s) => s,
+        Err(_) => return, // not enabled
+    };
+    let target_min = parse_hhmm(&at_raw).unwrap_or(180); // default 03:00, matching the relay default
+    // Anything staged? (P3 may leave an unverified .tmp with no READY after a crash — we act only on READY.)
+    let ready_raw = match std::fs::read_to_string(suite_dir.join("staging").join("READY")) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let node = match node {
+        Some(n) => n,
+        None => {
+            applog(log, "suite: apply gate — node sidecar not found; cannot verify/apply");
+            return;
+        }
+    };
+    let r_version = json_str_value(&ready_raw, "version").unwrap_or_default();
+    let r_sha = json_str_value(&ready_raw, "sha").unwrap_or_default();
+    let r_date = json_str_value(&ready_raw, "date").unwrap_or_default();
+    if r_sha.is_empty() || r_date.is_empty() {
+        applog(log, "suite: staged READY missing sha/date; discarding");
+        discard_staging(suite_dir);
+        return;
+    }
+    let (now_min, today) = match local_now(node) {
+        Some(v) => v,
+        None => return,
+    };
+    let state_raw = std::fs::read_to_string(suite_dir.join("state.json")).unwrap_or_default();
+    let last_applied = json_str_value(&state_raw, "lastApplied").unwrap_or_default();
+    if !due(now_min, target_min, &today, &last_applied) {
+        return;
+    }
+    applog(log, &format!("suite: apply window reached ({today} {now_min}min >= {target_min}min); applying staged {r_version}"));
+    attempt_apply(
+        app, suite_dir, payload, data_dir, log, node, &r_version, &r_sha, &r_date, &state_raw,
+        &today, at_raw.trim(), cur_code_dir, cur_alive,
+    );
+}
+
+// The 8-step apply, fail-closed at every step. Any failure leaves the Suite running a known-good tree (the
+// one it was already running, last-good, or the baked-in payload) and never leaves a half-applied active/.
+#[allow(clippy::too_many_arguments)]
+fn attempt_apply(
+    app: &AppHandle,
+    suite_dir: &Path,
+    payload: &Path,
+    data_dir: &Path,
+    log: &Path,
+    node: &Path,
+    r_version: &str,
+    r_sha: &str,
+    r_date: &str,
+    prev_state_raw: &str,
+    today: &str,
+    at_str: &str,
+    cur_code_dir: &mut PathBuf,
+    cur_alive: &mut Arc<AtomicBool>,
+) {
+    let staging = suite_dir.join("staging");
+    let s_tgz = staging.join("bundle.tgz");
+    let s_sig = staging.join("bundle.sig");
+
+    // 1. Authoritatively re-verify the staged tarball (don't trust READY alone). Payload verifier + key.
+    if !s_tgz.exists() || !s_sig.exists() || !verify_tarball(node, payload, &s_tgz, &s_sig, log) {
+        applog(log, "suite: APPLY aborted — staged bundle failed signature verify; discarding staging");
+        discard_staging(suite_dir);
+        return;
+    }
+
+    // 2. Anti-rollback floor: staged date must be strictly after MAX(payload date, installed date), by INSTANT.
+    let mut floor = read_version_date(payload);
+    let installed_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
+    if date_after(&installed_date, &floor) {
+        floor = installed_date;
+    }
+    if !date_after(r_date, &floor) {
+        applog(log, &format!("suite: APPLY aborted — anti-rollback (staged {r_date} not after floor {floor}); discarding"));
+        discard_staging(suite_dir);
+        return;
+    }
+
+    // 3. Quarantine: a sha that already failed health is never auto-applied again.
+    let q = std::fs::read_to_string(suite_dir.join("quarantine-sha")).unwrap_or_default();
+    if q.trim() == r_sha {
+        applog(log, "suite: APPLY aborted — staged sha is quarantined; discarding staging");
+        discard_staging(suite_dir);
+        return;
+    }
+
+    // 4. Stop the relay and confirm it is fully down (pid gone AND port free) before touching active/.
+    let prev_dir = cur_code_dir.clone();
+    applog(log, "suite: stopping relay for code swap");
+    if let Some(child) = app.state::<Relay>().0.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    if !wait_stopped(cur_alive, Duration::from_secs(20)) {
+        applog(log, "suite: APPLY aborted — relay did not stop cleanly; restarting current code, keeping staging");
+        spawn_and_wait(app, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        return;
+    }
+
+    // 5. Unpack to active.new, then promote: active -> last-good, active.new -> active (same-fs renames).
+    let active = suite_dir.join("active");
+    let active_new = suite_dir.join("active.new");
+    let last_good = suite_dir.join("last-good");
+    let _ = std::fs::remove_dir_all(&active_new);
+    if let Err(e) = std::fs::create_dir_all(&active_new) {
+        applog(log, &format!("suite: APPLY aborted — mkdir active.new failed: {e}; restarting current"));
+        spawn_and_wait(app, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        return;
+    }
+    if !untar(&s_tgz, &active_new, log) {
+        applog(log, "suite: APPLY aborted — unpack failed; restarting current");
+        let _ = std::fs::remove_dir_all(&active_new);
+        spawn_and_wait(app, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        return;
+    }
+    // Roll the previous override (if any) to last-good, including its retained verified tarball.
+    let _ = std::fs::remove_dir_all(&last_good);
+    if active.exists() {
+        let _ = rename_retry(&active, &last_good, log);
+        let _ = rename_retry(&suite_dir.join("active.tgz"), &suite_dir.join("last-good.tgz"), log);
+        let _ = rename_retry(&suite_dir.join("active.sig"), &suite_dir.join("last-good.sig"), log);
+    }
+    if let Err(e) = rename_retry(&active_new, &active, log) {
+        applog(log, &format!("suite: APPLY FAILED at swap ({e}); restoring and restarting"));
+        if last_good.exists() && !active.exists() {
+            let _ = rename_retry(&last_good, &active, log);
+            let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
+            let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
+        }
+        let dir = if active.exists() { active.clone() } else { payload.to_path_buf() };
+        spawn_and_wait(app, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        return;
+    }
+    // The retained verified tarball the next launch re-checks against the payload key.
+    let _ = std::fs::copy(&s_tgz, suite_dir.join("active.tgz"));
+    let _ = std::fs::copy(&s_sig, suite_dir.join("active.sig"));
+
+    // 6. Start from active/ (PAYLOAD_DIR=payload via spawn_relay), reload the webview.
+    applog(log, "suite: starting relay from active/ (override)");
+    let came_up = spawn_and_wait(app, &active, payload, data_dir, log, cur_code_dir, cur_alive);
+    reload_webview(app);
+
+    // 7. Health: public /status ok AND reported version matches what we activated.
+    if came_up && health_ok(r_sha, r_version, Duration::from_secs(45)) {
+        // 8. Record success and clear staging.
+        write_state(suite_dir, r_sha, r_version, r_date, today, "applied", at_str, log);
+        discard_staging(suite_dir);
+        let short = &r_sha[..r_sha.len().min(7)];
+        applog(log, &format!("suite: APPLY OK — now running {r_version} ({short})"));
+        return;
+    }
+
+    // Health failed → quarantine the sha, roll back to last-good (or payload), restart, record the rollback.
+    applog(log, "suite: APPLY health check FAILED — quarantining sha and rolling back");
+    let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
+    if let Some(child) = app.state::<Relay>().0.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    let _ = wait_stopped(cur_alive, Duration::from_secs(20));
+    let dir = match rollback_target(false, last_good.exists()) {
+        RollbackTarget::LastGood => {
+            let _ = std::fs::remove_dir_all(&active);
+            let _ = rename_retry(&last_good, &active, log);
+            let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
+            let _ = std::fs::remove_file(suite_dir.join("active.sig"));
+            let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
+            let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
+            active.clone()
+        }
+        RollbackTarget::Payload => {
+            let _ = std::fs::remove_dir_all(&active);
+            let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
+            let _ = std::fs::remove_file(suite_dir.join("active.sig"));
+            payload.to_path_buf()
+        }
+        RollbackTarget::Keep => active.clone(), // unreachable with health_ok == false
+    };
+    spawn_and_wait(app, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
+    reload_webview(app);
+    // Keep the previous installed identity (we reverted); mark lastApplied=today so a bad bundle isn't retried
+    // in a hot loop, and record the rollback for the UI.
+    let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
+    let prev_ver = json_str_value(prev_state_raw, "installedVersion").unwrap_or_default();
+    let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
+    write_state(suite_dir, &prev_sha, &prev_ver, &prev_date, today, "rolledback", at_str, log);
+    discard_staging(suite_dir);
+    applog(log, "suite: rollback complete");
+}
+
 fn main() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -275,54 +1023,39 @@ fn main() {
             applog(&log, &format!("data_dir  = {data_dir:?}"));
             applog(&log, &format!("exe       = {:?}", std::env::current_exe()));
 
-            // start the relay: bundled node scripts/gateway.mjs <port> (cwd = payload), data → writable dir,
-            // bound to loopback so there's no firewall prompt.
-            let cmd = match app.shell().sidecar("trinityone-relay-node") {
-                Ok(c) => c,
-                Err(e) => {
-                    applog(&log, &format!("SIDECAR RESOLVE FAILED: {e}"));
-                    return Ok(());
-                }
-            };
-            let cmd = cmd
-                .current_dir(payload.clone())
-                .arg("scripts/gateway.mjs")
-                .arg(PORT.to_string())
-                .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
-                // the bundled cloudflared, so the relay can start a Cloudflare quick tunnel ("go public") itself
-                .env("CLOUDFLARED_BIN", std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(if cfg!(windows) { "trinityone-cloudflared.exe" } else { "trinityone-cloudflared" }))).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "cloudflared".into()))
-                // BIND ADDRESS. Loopback by default: the app window reaches the relay via 127.0.0.1, and nothing
-                // else on the network can. A church that wants phones on its own wifi to connect directly turns
-                // that on in the control panel, which writes the `lan-access` marker read here at start-up.
-                //
-                // AUDIT-2026-07-27: this used to set no RELAY_HOST at all, so the gateway took its server default
-                // of 0.0.0.0 and the desktop relay was reachable by anyone on the same network — a church hall's
-                // guest wifi, a coffee shop — while the comment here AND the one on BIND_HOST in gateway.mjs both
-                // stated it bound loopback. Two comments asserting a protection that was not implemented.
-                //
-                // Windows shows a one-time "allow network access?" prompt when this is on; the loopback path works
-                // regardless of the answer, so a missed prompt never stalls the app — it just gates OTHER devices.
-                .env("RELAY_HOST", if data_dir.join("lan-access").exists() { "0.0.0.0" } else { "127.0.0.1" })
-                .env("RELAY_NO_OPEN", "1"); // the Tauri window IS the control UI; don't also open a browser
-            match cmd.spawn() {
-                Ok((mut rx, child)) => {
-                    applog(&log, "sidecar spawned OK");
-                    *app.state::<Relay>().0.lock().unwrap() = Some(child);
-                    let lp = log.clone();
-                    tauri::async_runtime::spawn(async move {
-                        while let Some(ev) = rx.recv().await {
-                            match ev {
-                                CommandEvent::Stdout(b) => applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end())),
-                                CommandEvent::Stderr(b) => applog(&lp, &format!("[err] {}", String::from_utf8_lossy(&b).trim_end())),
-                                CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
-                                CommandEvent::Terminated(t) => applog(&lp, &format!("[exit] {t:?}")),
-                                _ => {}
-                            }
-                        }
-                    });
-                }
-                Err(e) => applog(&log, &format!("SPAWN FAILED: {e}")),
-            }
+            // EVERY LAUNCH (before the first spawn): choose the code tree. Run the activated override
+            // (suite/active) only if its retained verified tarball still checks out against the READ-ONLY
+            // payload key; otherwise run the baked-in payload. The verifier + release-pubkey.pem are ALWAYS
+            // taken from the payload, never from the (writable) active/ — see verify_tarball + spawn_relay.
+            // Any missing/corrupt/forged tarball falls back to payload. (P3 can leave an unverified .tmp with
+            // no READY after a crash; we never look at that here — only at active.tgz/active.sig.)
+            let suite_dir = data_dir.join("suite");
+            let node = node_sidecar_path();
+            let active_dir = suite_dir.join("active");
+            let active_tgz = suite_dir.join("active.tgz");
+            let active_sig = suite_dir.join("active.sig");
+            let active_verify_ok = active_tgz.exists()
+                && active_sig.exists()
+                && node
+                    .as_deref()
+                    .map(|n| verify_tarball(n, &payload, &active_tgz, &active_sig, &log))
+                    .unwrap_or(false);
+            let code_dir =
+                match choose_code_dir(active_tgz.exists(), active_sig.exists(), active_verify_ok) {
+                    CodeDir::Active => {
+                        applog(&log, "launch: running activated override (suite/active)");
+                        active_dir.clone()
+                    }
+                    CodeDir::Payload => {
+                        applog(&log, "launch: running baked-in payload");
+                        payload.clone()
+                    }
+                };
+            // start the relay (cwd = chosen code dir), data → writable dir, bound to loopback by default. All
+            // the env assembly (TRINITY_DATA_DIR / CLOUDFLARED_BIN / RELAY_HOST / RELAY_NO_OPEN / PAYLOAD_DIR)
+            // now lives in spawn_relay so the controller can respawn identically on an apply.
+            let app_handle = app.handle().clone();
+            let initial_alive = spawn_relay(&app_handle, &code_dir, &payload, &data_dir, &log);
 
             // wait for the relay to accept connections, then point the window at its control panel (127.0.0.1,
             // not localhost — on Windows localhost can resolve to IPv6 ::1 while the relay listens on IPv4).
@@ -378,9 +1111,20 @@ fn main() {
             // both sides agree on where it lives.
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             let inhibitor_slot = app.state::<Inhibitor>().0.clone();
+            // Handed to the controller so it can drive the auto-update apply: a handle to spawn/kill the relay,
+            // the suite + payload dirs, and the node sidecar for verify + local-clock reads.
+            let app_ctrl = app.handle().clone();
+            let suite_c = suite_dir.clone();
+            let payload_c = payload.clone();
+            let node_c = node.clone();
             {
                 let dd = data_dir.clone();
                 let lp = log.clone();
+                // The code dir currently running + the alive-flag of the current child, updated on every
+                // (re)spawn so the apply can stop-and-wait before a swap.
+                let mut cur_code_dir = code_dir.clone();
+                let mut cur_alive =
+                    initial_alive.clone().unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
                 thread::spawn(move || {
                     let mut ka = KeepAwake::new(
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -388,7 +1132,29 @@ fn main() {
                     );
                     let mut held = false;
                     let mut token_warned = false; // log the "no token yet" case once, not every 15s
+                    // Throttle the auto-update apply check to ~once a minute (HH:MM is minute-resolution and
+                    // apply is once-per-day); the keep-awake policy below keeps its own 15s cadence.
+                    let mut last_apply_eval = Instant::now() - Duration::from_secs(120);
                     loop {
+                        // ── SUITE AUTO-UPDATE APPLY ─────────────────────────────────────────────────────
+                        // Evaluated at the TOP of the tick, BEFORE the keep-awake-off and token early-continues
+                        // below and OUTSIDE any #[cfg] block, so (a) turning keep-awake OFF never also disables
+                        // auto-update and (b) the swap/respawn runs on every OS, Windows included. It gates on
+                        // its OWN suite-autoupdate marker, reads staging/READY from disk, and health-probes the
+                        // PUBLIC /status — no admin token needed. [AUDIT#2 MEDIUM] [AUDIT FIX #4]
+                        if last_apply_eval.elapsed() >= Duration::from_secs(60) {
+                            last_apply_eval = Instant::now();
+                            maybe_apply(
+                                &app_ctrl,
+                                &suite_c,
+                                &payload_c,
+                                &dd,
+                                &lp,
+                                node_c.as_deref(),
+                                &mut cur_code_dir,
+                                &mut cur_alive,
+                            );
+                        }
                         // Off-switch FIRST, before any network GET: release if we were holding, then idle.
                         if dd.join("keep-awake-off").exists() {
                             if held {
@@ -523,5 +1289,139 @@ mod tests {
         assert_eq!(extract_token("{\"token\": \"a-b_C9\"}"), Some("a-b_C9".to_string())); // one space + base64url
         assert_eq!(extract_token("{\"token\":\"\"}"), None); // empty token → None
         assert_eq!(extract_token("{\"other\":\"x\"}"), None); // field absent
+    }
+
+    // ── Suite auto-update (P2) pure-decision tests ──────────────────────────────────────────────
+
+    #[test]
+    fn choose_code_dir_picks_active_only_when_verified_and_present() {
+        // A valid, present, verified override → run it.
+        assert_eq!(choose_code_dir(true, true, true), CodeDir::Active);
+        // Any missing piece or a failed verify → fall back to the baked-in payload.
+        assert_eq!(choose_code_dir(true, true, false), CodeDir::Payload); // verify failed
+        assert_eq!(choose_code_dir(false, true, true), CodeDir::Payload); // no tgz
+        assert_eq!(choose_code_dir(true, false, true), CodeDir::Payload); // no sig
+        assert_eq!(choose_code_dir(false, false, false), CodeDir::Payload); // nothing staged
+    }
+
+    #[test]
+    fn rollback_target_decides() {
+        assert_eq!(rollback_target(true, true), RollbackTarget::Keep); // healthy → keep new
+        assert_eq!(rollback_target(true, false), RollbackTarget::Keep);
+        assert_eq!(rollback_target(false, true), RollbackTarget::LastGood); // fail + have last-good
+        assert_eq!(rollback_target(false, false), RollbackTarget::Payload); // fail + none → payload
+    }
+
+    #[test]
+    fn due_window() {
+        let today = "2026-11-12";
+        // time-of-day reached, never applied → due.
+        assert!(due(180, 180, today, ""));
+        assert!(due(181, 180, today, ""));
+        // before the time → not due.
+        assert!(!due(120, 180, today, ""));
+        // already applied today → not due (once per calendar day).
+        assert!(!due(600, 180, today, "2026-11-12"));
+        // missed while asleep: woke at 10:00, 03:00 target, last applied an earlier day → due at next start.
+        assert!(due(600, 180, today, "2026-11-11"));
+        // off at the time then on later the same day, never applied → due.
+        assert!(due(200, 180, today, "2026-11-01"));
+    }
+
+    #[test]
+    fn parse_hhmm_reads() {
+        assert_eq!(parse_hhmm("03:00"), Some(180));
+        assert_eq!(parse_hhmm("03:00\n"), Some(180)); // trailing newline (the marker's content)
+        assert_eq!(parse_hhmm(" 23:59 "), Some(23 * 60 + 59));
+        assert_eq!(parse_hhmm("00:00"), Some(0));
+        assert_eq!(parse_hhmm("24:00"), None); // hour out of range
+        assert_eq!(parse_hhmm("03:60"), None); // minute out of range
+        assert_eq!(parse_hhmm("0300"), None); // no colon
+    }
+
+    #[test]
+    fn date_after_orders_by_instant_not_text() {
+        // Same wall-clock text, different offsets: 03:00+01:00 is EARLIER (02:00Z) than 03:00Z. A string
+        // compare would call them equal; by instant the Z one is later.
+        assert!(date_after("2026-11-12T03:00:00Z", "2026-11-12T03:00:00+01:00"));
+        assert!(!date_after("2026-11-12T03:00:00+01:00", "2026-11-12T03:00:00Z"));
+        // Across a day boundary with offsets: 2026-11-12T23:30:00-02:00 == 2026-11-13T01:30:00Z, which is
+        // LATER than 2026-11-13T00:30:00Z — so the earlier-text, earlier-day string is the later instant.
+        assert!(date_after("2026-11-12T23:30:00-02:00", "2026-11-13T00:30:00+00:00"));
+        assert!(!date_after("2026-11-13T00:30:00+00:00", "2026-11-12T23:30:00-02:00"));
+        // Equal instants expressed differently → not strictly after.
+        assert!(!date_after("2026-11-12T02:00:00Z", "2026-11-12T03:00:00+01:00"));
+        // Compact offset form (+0100) parses the same as +01:00.
+        assert!(date_after("2026-11-12T03:00:00Z", "2026-11-12T03:00:00+0100"));
+        // Mirror suiteDateAfter edge rules: bad `a` → false; bad/empty floor → true.
+        assert!(!date_after("not-a-date", "2026-11-12T00:00:00Z"));
+        assert!(date_after("2026-11-12T00:00:00Z", ""));
+        assert!(date_after("2026-11-12T00:00:00Z", "garbage"));
+    }
+
+    #[test]
+    fn parse_instant_matches_known_epochs() {
+        // 1970-01-01T00:00:00Z = 0.
+        assert_eq!(parse_instant("1970-01-01T00:00:00Z"), Some(0));
+        // 2000-01-01T00:00:00Z = 946684800.
+        assert_eq!(parse_instant("2000-01-01T00:00:00Z"), Some(946684800));
+        // Offset is applied: 2000-01-01T01:00:00+01:00 is the same instant as 00:00:00Z.
+        assert_eq!(parse_instant("2000-01-01T01:00:00+01:00"), Some(946684800));
+        // Date-only → UTC midnight.
+        assert_eq!(parse_instant("1970-01-02"), Some(86400));
+        // Fractional seconds are ignored.
+        assert_eq!(parse_instant("1970-01-01T00:00:01.500Z"), Some(1));
+        assert_eq!(parse_instant(""), None);
+    }
+
+    #[test]
+    fn json_str_value_reads() {
+        let ready = "{\"version\":\"v2\",\"sha\":\"abc123\",\"date\":\"2026-11-12T03:00:00Z\"}";
+        assert_eq!(json_str_value(ready, "sha"), Some("abc123".to_string()));
+        assert_eq!(json_str_value(ready, "version"), Some("v2".to_string()));
+        assert_eq!(json_str_value(ready, "date"), Some("2026-11-12T03:00:00Z".to_string()));
+        assert_eq!(json_str_value("{\"sha\": \"spaced\"}", "sha"), Some("spaced".to_string())); // one space
+        assert_eq!(json_str_value(ready, "missing"), None);
+    }
+
+    #[test]
+    fn override_env_payload_dir_is_payload() {
+        use std::path::Path;
+        let payload = Path::new("/opt/app/payload");
+        let active = Path::new("/home/u/.local/share/trinity/data/suite/active");
+        let data = Path::new("/home/u/.local/share/trinity/data");
+        // Launching the OVERRIDE: cwd is active/, but PAYLOAD_DIR must still point at the read-only payload —
+        // never at the override — or the relay's trust root is defeated.
+        let env = relay_env(active, payload, data, "/opt/app/cloudflared", "127.0.0.1");
+        let pd = env.iter().find(|(k, _)| k == "PAYLOAD_DIR").map(|(_, v)| v.as_str());
+        assert_eq!(pd, Some("/opt/app/payload"));
+        assert_ne!(pd, Some(active.to_string_lossy().as_ref())); // NOT the writable override
+        // And the rest of the contract the relay depends on is carried.
+        let get = |k: &str| env.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.clone());
+        assert_eq!(get("TRINITY_DATA_DIR").as_deref(), Some("/home/u/.local/share/trinity/data"));
+        assert_eq!(get("RELAY_HOST").as_deref(), Some("127.0.0.1"));
+        assert_eq!(get("RELAY_NO_OPEN").as_deref(), Some("1"));
+        assert_eq!(get("CLOUDFLARED_BIN").as_deref(), Some("/opt/app/cloudflared"));
+        // Launching the PAYLOAD itself: PAYLOAD_DIR == payload == cwd, still correct.
+        let env2 = relay_env(payload, payload, data, "/opt/app/cloudflared", "0.0.0.0");
+        assert_eq!(
+            env2.iter().find(|(k, _)| k == "PAYLOAD_DIR").map(|(_, v)| v.as_str()),
+            Some("/opt/app/payload")
+        );
+        assert_eq!(
+            env2.iter().find(|(k, _)| k == "RELAY_HOST").map(|(_, v)| v.as_str()),
+            Some("0.0.0.0")
+        );
+    }
+
+    #[test]
+    fn jstr_escapes() {
+        assert_eq!(jstr("abc"), "\"abc\"");
+        assert_eq!(jstr("a\"b"), "\"a\\\"b\"");
+        assert_eq!(jstr("a\\b"), "\"a\\\\b\"");
+        // A state.json value round-trips back out through json_str_value unchanged.
+        let v = "2026-11-12T03:00:00Z";
+        let doc = format!("{{\"date\":{}}}", jstr(v));
+        assert_eq!(json_str_value(&doc, "date"), Some(v.to_string()));
     }
 }
