@@ -357,3 +357,41 @@ test('M1 + M2 on ANOTHER DEVICE (a fresh profile from the 12 words): the refused
   assert.equal(await B.ev(rowShown(npub(PAT))), true, 'THE BUG (M1): a refused Approve hides the request on the owner\'s other device');
   assert.equal(await B.ev(rowShown(npub(SKEW))), true, 'THE BUG (M2): the slow-clock re-request is hidden on the owner\'s other device');
 });
+
+// AUDIT OF 0252ae9a (2026-11-12), M2 + L3. A request's name is written by the REQUESTER: anyone who knows the church's
+// public key can publish one, sealed to the church or (the pre-2026-09-05 form) in the clear. A name of 5, true,
+// ["x"] or {} reached the Helpers page, whose `.split` (initials) or text child threw in render — the whole console
+// dropped to the crash card, on the very page where the owner would decline it. Published here exactly as an
+// attacker would, by hand; read back from the owner's real DOM; the real × pressed.
+const HOSTILE = [
+  { k: H.key(), name: 5 }, { k: H.key(), name: true }, { k: H.key(), name: ['x'] }, { k: H.key(), name: {} },
+  { k: H.key(), name: 'Q'.repeat(500) },
+];
+const CLEAR_HOSTILE = [{ k: H.key(), name: 42 }, { k: H.key(), name: { a: 1 } }];   // the old clear-text `name`
+const clearReq = (who, cp, name, at) => finalizeEvent({ kind: 30078, created_at: at, tags: [['d', STEWARDREQ_D + cp], ['t', 'trinityone'], ['p', cp]],
+  content: JSON.stringify({ name }) }, who.sk);
+
+test('M2/L3: requests whose name is a number, boolean, array, object or 500 characters — the Helpers page renders every row, cuts the long name, and the × still declines', { skip: SKIP, timeout: 300000 }, async () => {
+  const cp = A.churchPub;
+  const at = Math.floor(Date.now() / 1000) - 30;
+  await H.publishAll(A.relay, [...HOSTILE.map(h => stewardReq(h.k, cp, h.name, at)), ...CLEAR_HOSTILE.map(h => clearReq(h.k, cp, h.name, at))]);
+  const all = [...HOSTILE, ...CLEAR_HOSTILE];
+  await toHelpers(A);
+  const crashed = `/This screen stopped working/.test(document.body.innerText)`;
+  try { await A.waitFor(all.map(h => rowShown(npub(h.k))).join(' && '), 45000, 'every hostile request row on the Helpers page'); }
+  catch (e) {
+    throw new Error((await A.ev(crashed) ? 'THE BUG (M2): the console dropped to the crash card on the Helpers page. ' : '') + e.message);
+  }
+  await sleep(1500);
+  assert.equal(await A.ev(crashed), false, 'THE BUG (M2): the console shows the crash card');
+  assert.equal(await A.ev(`document.body.innerText.includes(${JSON.stringify('Q'.repeat(60))})`), true,
+    'staging: the long name is not shown at all');
+  assert.equal(await A.ev(`document.body.innerText.includes(${JSON.stringify('Q'.repeat(61))})`), false,
+    'THE BUG (L3): a hand-made 500-character name is shown uncut — the reader must cut it to the 60 the sender allows');
+  // the × on a hostile row (the number-named one) declines that one person only
+  const victim = npub(HOSTILE[0].k);
+  assert.equal(await A.ev(declineRow(victim)), 'ok', 'could not find the × on the number-named row');
+  await A.waitFor(`!${rowShown(victim)}`, 15000, 'the number-named row to go after the ×');
+  for (const h of all.slice(1)) assert.equal(await A.ev(rowShown(npub(h.k))), true, 'the × took another hostile request with it');
+  assert.equal(await A.ev(crashed), false, 'the console crashed after the ×');
+});
