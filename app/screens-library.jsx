@@ -730,11 +730,16 @@ function CollectionView({ coll, open, onClose, ctx }) {
   const owned = !isXref;   // user-owned types are managed; cross-refs are read-only reference data
 
   const raw = isXref ? (D.COLLECTION_ITEMS.crossrefs || []) : MD.list(coll.id);
-  const allTags = isBookmarks ? [...new Set(raw.flatMap(b => (Array.isArray(b.tags) ? b.tags : []).filter(Boolean)))].sort() : [];
+  // Tags are compared as TEXT and a non-array `tags` counts as none — the same as the Study panel (screens-read.jsx),
+  // so a number 1 and the text "1" are one row, and a string `tags` from sync/import cannot crash a card.
+  const tagsOf = (b) => (b && Array.isArray(b.tags) ? [...new Set(b.tags.filter(Boolean).map(String))] : []);
+  const allTags = isBookmarks ? [...new Set(raw.flatMap(tagsOf))].sort() : [];
   const ticked = tagFilter.filter(t => allTags.indexOf(t) >= 0);   // a tag whose last bookmark went is no longer ticked
+  // ...and the tick is forgotten too, not just hidden, so it cannot reappear if that tag comes back later.
+  if (ticked.length !== tagFilter.length) setTagFilter(ticked);
   const ql = q.trim().toLowerCase();
   const preFilter = ql ? raw.filter(it => ((it.ref || '') + ' ' + (it.text || '') + ' ' + (it.who || '')).toLowerCase().includes(ql)) : raw;
-  const items = isBookmarks && ticked.length ? preFilter.filter(it => Array.isArray(it.tags) && it.tags.some(t => ticked.indexOf(t) >= 0)) : preFilter;
+  const items = isBookmarks && ticked.length ? preFilter.filter(it => tagsOf(it).some(t => ticked.indexOf(t) >= 0)) : preFilter;
   const blurb = { highlights: 'Verses you’ve marked', bookmarks: 'Saved for later', notes: 'Your reflections in the margin',
     prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
 
@@ -829,9 +834,9 @@ function CollectionView({ coll, open, onClose, ctx }) {
                 <p style={{ margin: 0, fontFamily: isXref ? 'var(--font-ui)' : 'var(--font-read)', fontSize: isXref ? 13.5 : 16, fontWeight: isXref ? 600 : 400,
                   lineHeight: 1.5, color: isXref ? 'var(--ink-2)' : 'var(--ink)', textWrap: 'pretty',
                   display: '-webkit-box', WebkitLineClamp: isNotes || isPrayer ? 3 : 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{it.text}</p>
-                {isBookmarks && (it.tags || []).length > 0 ? (
+                {isBookmarks && tagsOf(it).length > 0 ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
-                    {it.tags.map(t => (
+                    {tagsOf(it).map(t => (
                       <span key={t} style={{ padding: '2px 9px', borderRadius: 999, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>{t}</span>
                     ))}
                   </div>

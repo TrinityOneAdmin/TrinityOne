@@ -12,7 +12,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find, texts, reads } from './render-jsx-screen.mjs';
 
-function realTagMenu(React, Icon) {
+function realTagMenu(React, Icon, wrapEl) {
+  // wrapEl: give the menu's wrapper ref a real EventTarget so its NATIVE keydown listener (the one a browser uses)
+  // is attached by the real effect; the mini React does not attach refs itself.
+  if (wrapEl) { let n = 0; const base = React; React = { ...base, useRef: (i) => { const r = base.useRef(i); if (n++ % 2 === 0) r.current = wrapEl; return r; } }; }
   return loadScreen('app/ui.jsx', ['TagFilterMenu'], {
     React, window: {}, Icon, document: { addEventListener() {}, removeEventListener() {} }, PhoneFrame: () => null,
     localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, navigator: {},
@@ -56,8 +59,9 @@ function library(list) {
   });
   const props = { coll: { id: 'bookmarks', name: 'Bookmarks', icon: 'bookmark' }, open: true, onClose() {}, ctx: { toast() {}, openReader() {} } };
   const redraw = () => draw(CollectionView, props);
+  const setOpen = (o) => { props.open = o; };
   const cards = (t) => find(t, n => n.type === 'div' && typeof n.props.onClick === 'function' && n.props.style && n.props.style.borderRadius === 16);
-  return { redraw, rows: () => cards(redraw()).map(c => find(c, n => n.type === 'span' && n.props.style && n.props.style.textOverflow === 'ellipsis').map(reads)[0]) };
+  return { redraw, setOpen, rows: () => cards(redraw()).map(c => find(c, n => n.type === 'span' && n.props.style && n.props.style.textOverflow === 'ellipsis').map(reads)[0]) };
 }
 
 const menuBtn = (t) => find(t, n => n.type === 'button' && n.props['data-tag-filter-button'])[0];
@@ -172,4 +176,67 @@ test('Study panel: a ticked tag that no bookmark carries any more is dropped, so
   assert.deepEqual(s.rows(), ['1.1.3', '43.3.16'], 'a stale tick hid every bookmark');
   assert.equal(reads(menuBtn(t)), 'Tags');
   assert.equal(find(t, n => n.props && n.props['data-tag-option'] === 'hope').length, 0);
+});
+
+// REAL-BROWSER Escape: React 18 never runs the onKeyDown Escape branch, because the menu's NATIVE keydown listener
+// on its wrapper stops the event first. So drive THAT path: a real keydown event dispatched on the wrapper element.
+test('Escape as a browser delivers it (native keydown on the menu) closes the menu and does not leak outward', () => {
+  const wrap = new EventTarget(); wrap.querySelector = () => null;
+  const { React, draw } = miniReact();
+  const Icon = () => null;
+  const Menu = realTagMenu(React, Icon, wrap);
+  let tagged = [];
+  const redraw = () => draw(Menu, { tags: ['hope'], selected: tagged, onChange: (v) => { tagged = v; } });
+  menuBtn(redraw()).props.onClick();
+  redraw();   // effects run after this draw, attaching the native listener
+  assert.equal(options(redraw()).length, 1, 'menu not open');
+  const ev = new Event('keydown', { cancelable: true }); ev.key = 'Escape';
+  wrap.dispatchEvent(ev);
+  assert.equal(options(redraw()).length, 0, 'native Escape did not close the menu');
+  assert.equal(ev.cancelBubble, true, 'native Escape was not stopped from reaching the panel behind');
+  const ev2 = new Event('keydown'); ev2.key = 'a'; wrap.dispatchEvent(ev2);
+  assert.equal(ev2.cancelBubble, false);
+});
+
+// ── Library: things the first cut claimed but nothing pinned ──
+test('Library: the filter is reset when the overlay is reopened', () => {
+  const s = LIB();
+  openMenu(s); tick(s, 'hope');
+  assert.deepEqual(s.rows(), ['John 3:16', 'Psalms 23:1']);
+  s.setOpen(false); s.redraw();
+  s.setOpen(true); s.redraw();   // the on-open effect runs after this draw; React then re-renders
+  assert.deepEqual(s.rows(), ['John 3:16', 'Genesis 1:3', 'Psalms 23:1', 'John 1:1'], 'a tick survived closing and reopening');
+  assert.equal(reads(menuBtn(s.redraw())), 'Tags');
+});
+
+test('Library: a tick whose tag has gone is forgotten, and does not come back when the tag returns', () => {
+  const list = [{ id: 'a', ref: 'John 3:16', text: 'x', tags: ['hope'] }, { id: 'b', ref: 'Genesis 1:3', text: 'x', tags: ['creation'] }];
+  const s = library(list);
+  openMenu(s); tick(s, 'hope');
+  assert.deepEqual(s.rows(), ['John 3:16']);
+  list[0].tags = ['grace'];
+  assert.deepEqual(s.rows(), ['John 3:16', 'Genesis 1:3'], 'a stale tick hid the list');
+  list[0].tags = ['hope'];
+  assert.deepEqual(s.rows(), ['John 3:16', 'Genesis 1:3'], 'a forgotten tick came back');
+  assert.equal(reads(menuBtn(s.redraw())), 'Tags');
+});
+
+test('Study panel: a tick whose tag has gone does not come back when the tag returns', () => {
+  const items = [{ ref: '43.3.16', tags: ['hope'] }, { ref: '1.1.3', tags: ['creation'] }];
+  const s = study(['43.3.16', '1.1.3'], items);
+  openMenu(s); tick(s, 'hope');
+  items[0].tags = ['grace']; s.redraw();
+  items[0].tags = ['hope'];
+  assert.deepEqual(s.rows(), ['1.1.3', '43.3.16'], 'a forgotten tick came back');
+  assert.equal(reads(menuBtn(s.redraw())), 'Tags');
+});
+
+test('Library: tags are compared as text (number 1 and "1" are one row) and a string `tags` does not crash a card', () => {
+  const s = library([{ id: 'a', ref: 'John 3:16', text: 'x', tags: [1] }, { id: 'b', ref: 'Genesis 1:3', text: 'x', tags: ['1'] },
+    { id: 'c', ref: 'Psalms 23:1', text: 'x', tags: 'hope' }, { id: 'd', ref: 'John 1:1', text: 'x', tags: ['2', '2'] }]);
+  const t = openMenu(s);
+  assert.deepEqual(options(t).map(o => o.props['data-tag-option']), ['1', '2'], 'one tag drawn as two rows, or a string tags offered');
+  assert.equal(s.rows().length, 4, 'a bookmark with string tags broke the list');
+  tick(s, '1');
+  assert.deepEqual(s.rows(), ['John 3:16', 'Genesis 1:3'], 'ticking 1 must match both the number and the text');
 });

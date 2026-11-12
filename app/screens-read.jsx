@@ -1192,6 +1192,8 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   const [markTagSel, setMarkTagSel] = useS([]);
   const markTags = [...new Set(myMarks.flatMap(bm => bm.tags.map(String)))].sort();
   const markTicked = markTagSel.filter(t => markTags.indexOf(t) >= 0);
+  // A tick whose tag has gone is forgotten, not just hidden, so it cannot come back if the tag returns later.
+  if (markTicked.length !== markTagSel.length) setMarkTagSel(markTicked);
   const shownMarks = markTicked.length ? myMarks.filter(bm => bm.tags.some(t => markTicked.indexOf(String(t)) >= 0)) : myMarks;
   // Tabs never squish: TWO ROWS OF TWO (a 2x2 grid, data-tab-grid), every tab the same generous width and always
   // reachable without sideways scrolling, and a count is a small BADGE (data-tab-count) rather than a "· N" text suffix.
