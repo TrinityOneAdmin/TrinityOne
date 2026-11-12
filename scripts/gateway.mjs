@@ -5258,6 +5258,17 @@ function effMemberOf(who, cp) {
   const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
   return !!(md && md.has(who)) && !blockedBy(who, cp) && (!gated || !!(admitted && admitted.has(who)));
 }
+// APPROVED members, summed per hosted church — the dashboard's "Members" tile (/stats). Uses effMemberOf(), the
+// relay's one definition of "is a member of this church" (joined, not blocked, admitted where the church gates
+// joining), so it can never disagree with who this box actually lets in. It sums over every REGISTERED church
+// (CHURCH_PUBS), all of them. That is NOT the same set as the "Churches" tile beside it, which counts churches
+// with data in the store (event-store.mjs qByChurch, capped at 8) — on a box hosting more than 8 churches, or
+// holding data for a church it no longer registers, the two tiles cover different churches.
+function approvedMemberCount() {
+  let n = 0;
+  for (const cp of CHURCH_PUBS) for (const pk of (MEMBER_DOCS.get(cp) || EMPTY_SET)) if (effMemberOf(pk, cp)) n++;
+  return n;
+}
 // May `authed` read content belonging to church cp at all? The church itself, a network it belongs to, one of
 // its current stewards, or an effective member.
 function churchReader(authed, cp) {
@@ -6885,6 +6896,12 @@ function serveStatic(req, res) {
       // than a church fact, but it is still a signal about how busy a congregation is, and the gated
       // endpoint costs nothing to use — the panel already sends the token for its activity chart.
       connections: wss ? wss.clients.size : 0,
+      // THE "MEMBERS" TILE (owner decision 2026-11-12): APPROVED members summed over every church this box
+      // hosts, one per church — a person in two churches counts twice. The panel used to show the number of
+      // kind-0 profile events in the whole store, which counts pending joiners, blocked people, stewards,
+      // anyone who ever published a profile here, and nobody without one. Here, behind the admin token, not on
+      // the public /status: a per-relay headcount of congregations is a church fact.
+      members: approvedMemberCount(),
       traffic: { bytesIn: _wsBytesIn, bytesOut: _wsBytesOut },
       // the relay-wide charge of paused backlog streams (unsent JSON bytes; see SEND BACKPRESSURE) and how many sockets hold one
       backlog: { heldBytes: _heldBytesAll, heldSockets: _heldSockets.size },

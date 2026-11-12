@@ -95,9 +95,12 @@
       if (st) {
         const kinds = st.kinds || [];
         const total = kinds.reduce((a, k) => a + (k.n || 0), 0);
-        const profiles = (kinds.find(k => k.kind === 0) || {}).n;
         document.getElementById('s-churches').textContent = registeredChurches(s, st);
-        if (profiles != null) document.getElementById('s-members').textContent = profiles;
+        // APPROVED members across every hosted church (a person in two churches counts twice) — `st.members`,
+        // computed by the relay from each church's roster. NOT the kind-0 count it used to be: that counted
+        // profile events, so pending joiners and blocked people were "members". An older relay sends no
+        // `members`, and then the tile stays `—` rather than showing a number that means something else.
+        if (typeof st.members === 'number') document.getElementById('s-members').textContent = st.members;
         document.getElementById('s-events').textContent = total.toLocaleString();
         if (st.connections != null) document.getElementById('s-conns').textContent = st.connections;
       }
