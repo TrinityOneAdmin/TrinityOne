@@ -148,6 +148,13 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/voice:':        { write: 'church',    read: 'members', scope: 'suffix', note: 'who signs what the church sends — a display by-line only. Church-signed so it cannot be forged; readable by members because it is what they see under a notice. Deliberately NOT part of the steward roster: a name is cosmetic, a roster is authority, and a bug in one must never damage the other.' },
   'trinityone/stewards:':     { write: 'church',    read: 'members', scope: 'suffix', note: 'owner-only — this is what grants steward authority' },
   'trinityone/stewardreq:':   { write: 'member',    read: 'members', scope: 'tag',    note: 'capped: anti-flood' },
+  // THE OWNER'S ANSWERS TO REQUESTS TO HELP (2026-11-12). d=stewardhandled:<churchpub>, church-signed, content NIP-44
+  // SEALED to the church's own key: {cp, at:{<requester pub>: <unix seconds declined/approved/removed>}}. No rule of its own
+  // in the relay, by choice: accept() admits it through the church-key arm of the catch-all, and canRead serves the church
+  // its own copy (authed === e.pubkey) and the ENVELOPE to that church's effective members by the default member rule —
+  // which is why the content is sealed: a member, a steward or the relay sees ciphertext, never the list of would-be
+  // helpers. A stranger is refused. Writer: Steward.markStewardRequestHandled; reader: subscribeHandledStewardRequests.
+  'trinityone/stewardhandled:': { write: 'church', read: 'members', scope: 'author', gatedBy: 'if (isAnyChurch || isNetwork) return true;', note: 'the owner’s remembered answers to helper requests; sealed to the church key, so members get ciphertext only' },
   // THE REVOKED-HELPER NOTICE (2026-11-05, helper-delegation). d=stewardrevoke:<removed helper pub>, CHURCH-SIGNED.
   // When the owner revokes a helper the relay (correctly) stops serving them the church's documents — including the
   // stewards: roster that would tell their app it was dropped — so their console kept a dead "ghost" church on screen.

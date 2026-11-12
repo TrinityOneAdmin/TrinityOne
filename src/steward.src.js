@@ -1068,6 +1068,41 @@ const _legacyBookKeyHex = () => { try { return churchSkHeld() ? _hex(nip44ck(chu
 const VOICE_D = 'trinityone/voice:';
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
+// THE OWNER'S ANSWERS TO "REQUESTS TO HELP" (2026-11-12, owner-reported on Living Word: a dismissed request "keeps
+// coming back", and other devices never knew it had been answered). d=stewardhandled:<churchpub>, CHURCH-KEY SIGNED,
+// one document per church holding { <requester pubkey>: <unix seconds the owner last declined/approved/removed them> }.
+// SEALED TO THE CHURCH'S OWN KEY (NIP-44, conversation key nip44ck(churchSk, churchPub) — the self-conversation the
+// legacy finance book uses): the relay serves a church-authored document's ENVELOPE to that church's members (canRead's
+// default member rule; there is no rule of its own), so the list of would-be helpers must not be in the clear. Only a
+// console holding the church key can open it, which is also who may approve (DashStewardsPanel is owner-only).
+// MAX-MERGE, never replace: every write carries the whole map, and readers fold every copy they see by the larger time
+// per person, so two devices' writes cannot erase each other's entries once both have been read. The timestamp rule
+// is the reader's (pendingHelperRequests in app/stew-dashboard.jsx): a request NEWER than the entry shows again.
+// WRITERS: Steward.markStewardRequestHandled only. READERS: Steward.subscribeHandledStewardRequests only (→
+// window.useHandledStewardRequests → useHelperRequests in app/stew-dashboard.jsx).
+const STEWARDHANDLED_D = 'trinityone/stewardhandled:';
+let _hh = { cp: '', map: {} };
+const _hhListeners = new Set();
+function _hhScope() { const cp = (!actingChurch && churchPub) || ''; if (_hh.cp !== cp) _hh = { cp, map: {} }; return cp; }
+function _hhFold(at) {
+  let changed = false;
+  if (!at || typeof at !== 'object') return false;
+  for (const k of Object.keys(at)) {
+    const n = Number(at[k]);
+    if (!/^[0-9a-f]{64}$/.test(k) || !Number.isFinite(n) || n <= 0) continue;
+    if (n > (_hh.map[k] || 0)) { _hh.map[k] = n; changed = true; }
+  }
+  return changed;
+}
+function _hhOpen(e) {
+  if (!churchSkHeld() || !e || e.pubkey !== churchPub || !e.content) return null;
+  if ((e.tags || []).some(t => t[0] === 'deleted')) return null;
+  try {
+    const o = JSON.parse(nip44d(JSON.parse(e.content).e, nip44ck(churchSk, churchPub)));
+    return (o && o.cp === churchPub && o.at && typeof o.at === 'object') ? o.at : null;
+  } catch (x) { return null; }
+}
+function _hhEmit() { const snap = { ..._hh.map }; for (const fn of [..._hhListeners]) { try { fn(snap); } catch (e) {} } }
 const STEWARDREVOKE_D = 'trinityone/stewardrevoke:'; // church->removed-helper revocation notice (church-signed), d=stewardrevoke:<removed helper pub>; the one doc a revoked helper can still read (the roster that would tell them is no longer served). See gateway.mjs STEWARDREVOKE_D branches.
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
@@ -8493,6 +8528,47 @@ window.Steward = {
       oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // THE OWNER'S ANSWERS, read back — { <requester pubkey>: <unix seconds> } from the church's sealed stewardhandled:
+  // document (see STEWARDHANDLED_D). Owner console only: a delegate cannot open it, and gets {} (their banner then
+  // filters by roster alone, as before). Emits again whenever markStewardRequestHandled records an answer here.
+  subscribeHandledStewardRequests(onMap) {
+    const cp = _hhScope();
+    if (!cp || !churchSkHeld()) { onMap({}); return () => {}; }
+    _hhListeners.add(onMap);
+    onMap({ ..._hh.map });
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [STEWARDHANDLED_D + cp] }], {
+      onevent(e) { if (_hhScope() !== cp) return; if (_hhFold(_hhOpen(e))) _hhEmit(); },
+      oneose() {},
+    });
+    return () => { _hhListeners.delete(onMap); try { sub.close(); } catch {} };
+  },
+  // RECORD AN ANSWER — the owner declined (×), approved, or removed this requester at `at` (unix seconds; default now).
+  // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
+  // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
+  // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).
+  // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add(), remove()).
+  markStewardRequestHandled(pk, at) {
+    const who = String(pk || '').toLowerCase();
+    const cp = _hhScope();
+    if (!cp || !churchSkHeld() || actingChurch || !/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(false);
+    const when = Math.floor(Number(at) || now());
+    if (_hhFold({ [who]: when })) _hhEmit();
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(); };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [STEWARDHANDLED_D + cp] }], {
+        onevent(e) { if (_hhScope() === cp && _hhFold(_hhOpen(e))) _hhEmit(); },
+        oneose: finish,
+      });
+      setTimeout(finish, 5000);
+    }).then(() => {
+      if (_hhScope() !== cp || !churchSkHeld()) return false;
+      let content;
+      try { content = JSON.stringify({ e: nip44e(JSON.stringify({ cp, at: { ..._hh.map } }), nip44ck(churchSk, churchPub)) }); }
+      catch (e) { return false; }
+      return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDHANDLED_D + cp], ['t', NET]], content }), churchSk));
+    });
   },
   // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
   // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.

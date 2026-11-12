@@ -350,6 +350,8 @@ window.useStewardRequests = makeSub(S, 'subscribeRequests', () => []);
 window.useStewardBlocked = makeSub(S, 'subscribeBlocked', () => []);
 window.useStewardStewards = makeSub(S, 'subscribeStewards', () => []);
 window.usePendingStewards = makeSub(S, 'subscribeStewardRequests', () => []);
+// the owner's remembered answers to those requests (declined/approved/removed), sealed to the church key on the relay
+window.useHandledStewardRequests = makeSub(S, 'subscribeHandledStewardRequests', () => ({}));
 // minorsKnown:false IN THE DEFAULT, and it is the whole point of the flag. This default is what every
 // screen sees on its FIRST PAINT, before subscribeSafeguard has called back. Without the key here, a
 // consumer asking "is it known?" gets `undefined` and has to guess — and both consumers guessed the unsafe

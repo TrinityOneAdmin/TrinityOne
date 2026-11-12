@@ -15801,6 +15801,46 @@ zoo`.split("\n");
   var VOICE_D = "trinityone/voice:";
   var STEWARDS_D = "trinityone/stewards:";
   var STEWARDREQ_D = "trinityone/stewardreq:";
+  var STEWARDHANDLED_D = "trinityone/stewardhandled:";
+  var _hh = { cp: "", map: {} };
+  var _hhListeners = /* @__PURE__ */ new Set();
+  function _hhScope() {
+    const cp = !actingChurch && churchPub || "";
+    if (_hh.cp !== cp) _hh = { cp, map: {} };
+    return cp;
+  }
+  function _hhFold(at) {
+    let changed = false;
+    if (!at || typeof at !== "object") return false;
+    for (const k of Object.keys(at)) {
+      const n = Number(at[k]);
+      if (!/^[0-9a-f]{64}$/.test(k) || !Number.isFinite(n) || n <= 0) continue;
+      if (n > (_hh.map[k] || 0)) {
+        _hh.map[k] = n;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  function _hhOpen(e) {
+    if (!churchSkHeld() || !e || e.pubkey !== churchPub || !e.content) return null;
+    if ((e.tags || []).some((t) => t[0] === "deleted")) return null;
+    try {
+      const o = JSON.parse(decrypt3(JSON.parse(e.content).e, getConversationKey(churchSk, churchPub)));
+      return o && o.cp === churchPub && o.at && typeof o.at === "object" ? o.at : null;
+    } catch (x) {
+      return null;
+    }
+  }
+  function _hhEmit() {
+    const snap = { ..._hh.map };
+    for (const fn of [..._hhListeners]) {
+      try {
+        fn(snap);
+      } catch (e) {
+      }
+    }
+  }
   var STEWARDREVOKE_D = "trinityone/stewardrevoke:";
   var PIN_D = "trinityone/pin:";
   var HIDE_D = "trinityone/hidden:";
@@ -21762,6 +21802,74 @@ zoo`.split("\n");
         } catch {
         }
       };
+    },
+    // THE OWNER'S ANSWERS, read back — { <requester pubkey>: <unix seconds> } from the church's sealed stewardhandled:
+    // document (see STEWARDHANDLED_D). Owner console only: a delegate cannot open it, and gets {} (their banner then
+    // filters by roster alone, as before). Emits again whenever markStewardRequestHandled records an answer here.
+    subscribeHandledStewardRequests(onMap) {
+      const cp = _hhScope();
+      if (!cp || !churchSkHeld()) {
+        onMap({});
+        return () => {
+        };
+      }
+      _hhListeners.add(onMap);
+      onMap({ ..._hh.map });
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], "#d": [STEWARDHANDLED_D + cp] }], {
+        onevent(e) {
+          if (_hhScope() !== cp) return;
+          if (_hhFold(_hhOpen(e))) _hhEmit();
+        },
+        oneose() {
+        }
+      });
+      return () => {
+        _hhListeners.delete(onMap);
+        try {
+          sub.close();
+        } catch {
+        }
+      };
+    },
+    // RECORD AN ANSWER — the owner declined (×), approved, or removed this requester at `at` (unix seconds; default now).
+    // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
+    // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
+    // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).
+    // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add(), remove()).
+    markStewardRequestHandled(pk, at) {
+      const who = String(pk || "").toLowerCase();
+      const cp = _hhScope();
+      if (!cp || !churchSkHeld() || actingChurch || !/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(false);
+      const when = Math.floor(Number(at) || now());
+      if (_hhFold({ [who]: when })) _hhEmit();
+      return new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          try {
+            sub.close();
+          } catch {
+          }
+          resolve();
+        };
+        const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], "#d": [STEWARDHANDLED_D + cp] }], {
+          onevent(e) {
+            if (_hhScope() === cp && _hhFold(_hhOpen(e))) _hhEmit();
+          },
+          oneose: finish
+        });
+        setTimeout(finish, 5e3);
+      }).then(() => {
+        if (_hhScope() !== cp || !churchSkHeld()) return false;
+        let content;
+        try {
+          content = JSON.stringify({ e: encrypt2(JSON.stringify({ cp, at: { ..._hh.map } }), getConversationKey(churchSk, churchPub)) });
+        } catch (e) {
+          return false;
+        }
+        return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDHANDLED_D + cp], ["t", NET]], content }), churchSk));
+      });
     },
     // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
     // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
