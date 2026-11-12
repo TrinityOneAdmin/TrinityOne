@@ -57,6 +57,10 @@ function releaseHost() {
   // the scripts under test are the WORKING TREE's, not the clone's committed copies
   cpSync(join(ROOT, 'scripts', 'publish-relay-bundle.sh'), join(dir, 'scripts', 'publish-relay-bundle.sh'));
   cpSync(join(ROOT, 'scripts', 'build-strict-tgz.sh'), join(dir, 'scripts', 'build-strict-tgz.sh'));
+  // publish-relay-bundle.sh now also builds + signs the Suite JS auto-update bundle (§3b), which runs
+  // build-suite-js-bundle.sh → build-relay-payload.sh. Drive the WORKING TREE's copies of both.
+  cpSync(join(ROOT, 'scripts', 'build-suite-js-bundle.sh'), join(dir, 'scripts', 'build-suite-js-bundle.sh'));
+  cpSync(join(ROOT, 'scripts', 'build-relay-payload.sh'), join(dir, 'scripts', 'build-relay-payload.sh'));
   const nm = join(dir, 'node_modules'); mkdirSync(join(nm, '.bin'), { recursive: true });
   cpSync(join(ROOT, 'node_modules', 'esbuild'), join(nm, 'esbuild'), { recursive: true, dereference: false });
   cpSync(join(ROOT, 'node_modules', '@esbuild'), join(nm, '@esbuild'), { recursive: true, dereference: false });
@@ -82,6 +86,16 @@ case "$1 $2" in
   *) echo "fake gh: $*" >&2; exit 1;;
 esac
 `); chmodSync(join(bin, 'gh'), 0o755);
+  // A stub `npm` on PATH, for two reasons, neither of which is under test here:
+  //   • §1b of publish-relay-bundle.sh runs `npm test` as its release gate. The real one is the whole suite
+  //     (a suite-inside-a-suite), which this file must not spawn; the guards and the signing are what it tests.
+  //   • §3b's build-suite-js-bundle.sh → build-relay-payload.sh runs `npm install` for the three runtime deps,
+  //     which needs the network. The signature is over the tarball's bytes, not its deps, so a stub node_modules
+  //     is enough to produce a bundle to sign. (A real, bootable bundle is proven in build-suite-js-bundle.test.mjs.)
+  writeFileSync(join(bin, 'npm'), '#!/usr/bin/env bash\n'
+    + '# test stub: no network, no suite. `install` leaves a node_modules behind; everything else is a no-op.\n'
+    + 'if [ "${1:-}" = "install" ]; then mkdir -p node_modules/.payload-test-stub; fi\nexit 0\n');
+  chmodSync(join(bin, 'npm'), 0o755);
   const host = {
     scratch, dir, sha, gh, bin,
     releaseExists(t = TAG) { writeFileSync(join(gh, 'releases', t), ''); },
@@ -175,11 +189,14 @@ test('with the right key it uploads exactly the named assets, the signature veri
     assert.match(r.uploads[0], /--clobber/, 'the upload does not --clobber, so a re-run after a failed upload would fail on the existing asset');
     assert.match(r.uploads[0], new RegExp('^release upload ' + TAG + ' '), 'the upload is not to the tag\'s release');
     assert.deepEqual(r.uploaded(), [...ASSETS].sort(), 'what reached the release is not the asset list --list-assets prints');
-    assert.deepEqual([...ASSETS].sort(), ['bundle.json', 'bundle.sig', 'bundle.tgz', 'install.sh'], 'the asset list changed — every printed download URL and both fetch scripts are built on these four names');
+    assert.deepEqual([...ASSETS].sort(), ['bundle.json', 'bundle.sig', 'bundle.tgz', 'install.sh', 'suite-js-bundle.sig', 'suite-js-bundle.tgz'], 'the asset list changed — every printed download URL and both fetch scripts are built on these names');
     const up = (n) => join(h.gh, 'uploaded', TAG, n);
     // the signature is over the very bytes uploaded, by the key the fleet's copy of release-pubkey.pem verifies
     const v = spawnSync('openssl', ['pkeyutl', '-verify', '-pubin', '-inkey', join(h.scratch, 'release.pub'), '-rawin', '-in', up('bundle.tgz'), '-sigfile', up('bundle.sig')]);
     assert.equal(v.status, 0, 'the uploaded bundle.sig does not verify over the uploaded bundle.tgz');
+    // the Suite JS auto-update bundle is signed by the SAME key over its own uploaded bytes (§3b)
+    const sv = spawnSync('openssl', ['pkeyutl', '-verify', '-pubin', '-inkey', join(h.scratch, 'release.pub'), '-rawin', '-in', up('suite-js-bundle.tgz'), '-sigfile', up('suite-js-bundle.sig')]);
+    assert.equal(sv.status, 0, 'the uploaded suite-js-bundle.sig does not verify over the uploaded suite-js-bundle.tgz');
     const j = JSON.parse(readFileSync(up('bundle.json'), 'utf8'));
     assert.equal(j.tag, TAG); assert.equal(j.sha, h.sha, 'bundle.json names a commit other than the tag\'s');
     assert.equal(j.sha256, sha256(up('bundle.tgz')), 'bundle.json\'s sha256 is not the uploaded bundle\'s');
