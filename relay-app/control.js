@@ -43,7 +43,7 @@
     copyMap.wss = wssUrl; copyMap.console = consoleUrl;
     document.getElementById('reach').innerHTML = isPublic
       ? '<div class="row" style="background:color-mix(in oklab, var(--sage) 9%, var(--surface)); border-color:color-mix(in oklab, var(--sage) 28%, transparent)"><span style="color:var(--sage); font-weight:700; font-size:13px">✓ Reachable from anywhere</span><span class="muted" style="margin-left:auto">'+publicBase.replace(/^https?:\/\//,'')+'</span></div>'
-      : '<div class="warn">⚠ This relay is only reachable on your computer / local network. Turn on public access below — one click, no terminal.</div>';
+      : '<div class="warn">⚠ Only reachable on this computer or your local network. Turn on public access in Settings.</div>';
   }
   // Return to the Steward console IN THIS WINDOW — window.open('_blank') doesn't work in the desktop app's
   // webview. Prefer going back (preserves the console's state); fall back to navigating there fresh.
@@ -718,6 +718,7 @@
       // while the operator is typing in it, when a 60-second re-read must not wipe their edit.
       const oIn = document.getElementById('originIn');
       if (oIn && document.activeElement !== oIn) oIn.value = cur.origin || '';
+      const oFold = document.getElementById('originFold'); if (oFold && !cur.origin) oFold.open = true;
       const body = document.getElementById('u-body');
       // report the LAST OUTCOME whenever we look, not only if we happened to be watching (H2/H7)
       const lastMsg = document.getElementById('updateMsg');
@@ -735,15 +736,15 @@
       // fresh box. A Suite's code is read-only inside the installed app and nothing there consumes the
       // update flag, so its software moves with the Suite itself; a box with no source is told so and given
       // the field above rather than a button that would fail underneath.
-      if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: its software updates when you install a newer Suite — the launcher (Back) says when one is out. The update source above is still what the installer card below fetches from.'; return; }
+      if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: it updates when you install a newer Suite. The launcher (Back) says when one is out.'; return; }
       // WHERE THE CODE COMES FROM is its own answer (cur.codeSource, relay/code-source — a GitHub release on
       // a box installed since 2026-09-21) and is what "Update now" pulls; the update source above is where
       // the installers come from. A box without a code source pulls from its update source, as before.
       const codeSrc = cur.codeSource || cur.origin;
-      const from = cur.codeSource && cur.codeSource !== cur.origin ? '<div class="hint" style="margin-bottom:6px">Software comes from ' + esc(cur.codeSource) + '. The update source above is where the installers come from.</div>' : '';
+      const from = cur.codeSource && cur.codeSource !== cur.origin ? '<div class="hint" style="margin-bottom:6px">Software comes from ' + esc(cur.codeSource) + '. The update source below is only for the app installer.</div>' : '';
       if (!codeSrc) {
         if (cur.releaseHost) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
-        body.innerHTML = '<b>This box was never told where to get things from</b> — set an update source above. Until then there is nowhere to check for a newer build or pull one from.'
+        body.innerHTML = '<b>This box was never told where to get things from</b>. Set an update source below; until then it cannot check for or pull a newer build.'
           + '<button class="btn-clay" id="doUpdate" title="Install the newer relay version now" disabled aria-disabled="true" style="margin-top:8px;display:block;opacity:.55;cursor:not-allowed">Update now</button>';
         return;
       }
@@ -802,6 +803,23 @@
   setInterval(() => { if (!updateBusy() && !document.hidden) loadUpdate(); }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !updateBusy()) loadUpdate(); });
 
+  // ── ONE "Updates" card, two halves (Settings C, 2026-11-12) ─────────────────────────────────────────────
+  // #updateCard (relay software) and #installerCard (the phone app installer) used to be two cards; they are now
+  // the halves of #updatesCard. Their own loaders still decide each half's display on every return path, so the
+  // outer card simply follows: shown while either half is. An observer rather than a call in each loader, so a
+  // future early return cannot forget it.
+  function updatesCardShown(a, b) {
+    return [a, b].some(e => !!e && e.style.display !== 'none');
+  }
+  function syncUpdatesCard() {
+    const box = document.getElementById('updatesCard'); if (!box) return;
+    box.style.display = updatesCardShown(document.getElementById('updateCard'), document.getElementById('installerCard')) ? 'block' : 'none';
+  }
+  if (typeof MutationObserver === 'function') {
+    const mo = new MutationObserver(syncUpdatesCard);
+    for (const id of ['updateCard', 'installerCard']) { const e = document.getElementById(id); if (e) mo.observe(e, { attributes: true, attributeFilter: ['style'] }); }
+  }
+
   // ── the installer this box hands out ─────────────────────────────────────────────────────────────────
   // WHY THIS READS AN ENDPOINT INSTEAD OF /apk-latest.json, WHICH IS WHAT IT USED TO DO.
   // The old line fetched THIS RELAY'S OWN apk-latest.json and printed "latest: 0.9.71 (206)". That file
@@ -844,7 +862,7 @@
     // a source exists; the reason names where to set it.
     const noSource = !s.origin;
     const head = noSource
-      ? '<div class="apk-note warn">This box was never told where to get things from, so it cannot fetch an installer — set an update source under “Relay software” above.' + (s.holding ? ' Members can still install the copy it already holds.' : '') + '</div>'
+      ? '<div class="apk-note warn">This box was never told where to get things from, so it cannot fetch an installer. Set an update source below.' + (s.holding ? ' Members can still install the copy it already holds.' : '') + '</div>'
       : s.behind
         ? '<div class="apk-note warn">This box is handing out an installer that is behind. Press “Update the installer now”.</div>'
         : s.holding
