@@ -716,8 +716,10 @@ function CollectionView({ coll, open, onClose, ctx }) {
   // Notes only: the note being edited (the MyData item) and its draft text.
   const [editNote, setEditNote] = React.useState(null);
   const [noteText, setNoteText] = React.useState('');
-  const [tagFilter, setTagFilter] = React.useState(null);   // null = "All", string = specific tag
-  React.useEffect(() => { if (open) { setEditNote(null); setQ(''); setAdding(false); setPWho(''); setPText(''); setTagFilter(null); } }, [open, coll && coll.id]);
+  // Bookmarks only: the tags ticked in the shared TagFilterMenu (app/ui.jsx). [] = show all; several = OR (a
+  // bookmark shows if it has ANY ticked tag). Per view, reset on open, never persisted (as the old pill row was).
+  const [tagFilter, setTagFilter] = React.useState([]);
+  React.useEffect(() => { if (open) { setEditNote(null); setQ(''); setAdding(false); setPWho(''); setPText(''); setTagFilter([]); } }, [open, coll && coll.id]);
   React.useEffect(() => MD.on(() => force(x => x + 1)), []);
   if (!coll) return null;
 
@@ -728,10 +730,16 @@ function CollectionView({ coll, open, onClose, ctx }) {
   const owned = !isXref;   // user-owned types are managed; cross-refs are read-only reference data
 
   const raw = isXref ? (D.COLLECTION_ITEMS.crossrefs || []) : MD.list(coll.id);
-  const allTags = isBookmarks ? [...new Set(raw.flatMap(b => b.tags || []))].sort() : [];
+  // Tags are compared as TEXT and a non-array `tags` counts as none — the same as the Study panel (screens-read.jsx),
+  // so a number 1 and the text "1" are one row, and a string `tags` from sync/import cannot crash a card.
+  const tagsOf = (b) => (b && Array.isArray(b.tags) ? [...new Set(b.tags.filter(Boolean).map(String))] : []);
+  const allTags = isBookmarks ? [...new Set(raw.flatMap(tagsOf))].sort() : [];
+  const ticked = tagFilter.filter(t => allTags.indexOf(t) >= 0);   // a tag whose last bookmark went is no longer ticked
+  // ...and the tick is forgotten too, not just hidden, so it cannot reappear if that tag comes back later.
+  if (ticked.length !== tagFilter.length) setTagFilter(ticked);
   const ql = q.trim().toLowerCase();
   const preFilter = ql ? raw.filter(it => ((it.ref || '') + ' ' + (it.text || '') + ' ' + (it.who || '')).toLowerCase().includes(ql)) : raw;
-  const items = isBookmarks && tagFilter ? preFilter.filter(it => (it.tags || []).includes(tagFilter)) : preFilter;
+  const items = isBookmarks && ticked.length ? preFilter.filter(it => tagsOf(it).some(t => ticked.indexOf(t) >= 0)) : preFilter;
   const blurb = { highlights: 'Verses you’ve marked', bookmarks: 'Saved for later', notes: 'Your reflections in the margin',
     prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
 
@@ -777,13 +785,10 @@ function CollectionView({ coll, open, onClose, ctx }) {
         </div>
       </div>
 
-      {/* bookmark tag filter chips */}
+      {/* bookmark tag filter: the shared "Tags" tick-box dropdown (app/ui.jsx TagFilterMenu); draws nothing with no tags */}
       {isBookmarks && allTags.length > 0 ? (
-        <div className="no-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 16px 12px', flexShrink: 0 }}>
-          <button onClick={() => setTagFilter(null)} style={{ padding: '5px 14px', borderRadius: 999, border: tagFilter === null ? 'none' : '1px solid var(--line)', background: tagFilter === null ? 'var(--clay)' : 'var(--surface-2)', color: tagFilter === null ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>All</button>
-          {allTags.map(t => (
-            <button key={t} onClick={() => setTagFilter(tagFilter === t ? null : t)} style={{ padding: '5px 14px', borderRadius: 999, border: tagFilter === t ? 'none' : '1px solid var(--line)', background: tagFilter === t ? 'var(--clay)' : 'var(--surface-2)', color: tagFilter === t ? 'var(--on-clay)' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t}</button>
-          ))}
+        <div style={{ padding: '0 16px 12px', flexShrink: 0 }}>
+          <TagFilterMenu tags={allTags} selected={ticked} onChange={setTagFilter} />
         </div>
       ) : null}
 
@@ -805,7 +810,10 @@ function CollectionView({ coll, open, onClose, ctx }) {
         {items.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--ink-3)' }}>
             <Icon name={coll.icon} size={30} color="var(--ink-3)" />
-            <p style={{ margin: '12px 0 0', fontSize: 14.5 }}>{q ? `No matches in ${coll.name}` : (isPrayer ? 'Add someone or something to pray for.' : `Nothing in ${coll.name} yet.`)}</p>
+            <p style={{ margin: '12px 0 0', fontSize: 14.5 }}>{isBookmarks && ticked.length && preFilter.length ? 'No bookmarks with these tags' : q ? `No matches in ${coll.name}` : (isPrayer ? 'Add someone or something to pray for.' : `Nothing in ${coll.name} yet.`)}</p>
+            {isBookmarks && ticked.length && preFilter.length ? (
+              <button type="button" data-tag-filter-empty-clear onClick={() => setTagFilter([])} style={{ marginTop: 12, padding: '7px 16px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--clay)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Clear</button>
+            ) : null}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
@@ -826,9 +834,9 @@ function CollectionView({ coll, open, onClose, ctx }) {
                 <p style={{ margin: 0, fontFamily: isXref ? 'var(--font-ui)' : 'var(--font-read)', fontSize: isXref ? 13.5 : 16, fontWeight: isXref ? 600 : 400,
                   lineHeight: 1.5, color: isXref ? 'var(--ink-2)' : 'var(--ink)', textWrap: 'pretty',
                   display: '-webkit-box', WebkitLineClamp: isNotes || isPrayer ? 3 : 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{it.text}</p>
-                {isBookmarks && (it.tags || []).length > 0 ? (
+                {isBookmarks && tagsOf(it).length > 0 ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
-                    {it.tags.map(t => (
+                    {tagsOf(it).map(t => (
                       <span key={t} style={{ padding: '2px 9px', borderRadius: 999, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>{t}</span>
                     ))}
                   </div>

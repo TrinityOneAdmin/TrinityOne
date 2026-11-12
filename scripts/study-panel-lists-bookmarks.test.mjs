@@ -21,9 +21,16 @@ function panel(bookmarks, items = [], noItems = false) {
     refLabel: (l, v) => BOOKS[l.book] + ' ' + l.chap + ':' + v,
     getCommentary: () => [], getCrossRefs: () => ({}), subscribe: () => () => {},
   };
+  const Icon = ({ name }) => React.createElement('i', { 'data-icon': name });
+  // The Bookmarks tab draws the shared tag filter (app/ui.jsx TagFilterMenu) when any bookmark has a tag — hand it
+  // the REAL one, compiled from source, so a tagged list is drawn as a member sees it.
+  const { TagFilterMenu } = loadScreen('app/ui.jsx', ['TagFilterMenu'], {
+    React, window: {}, Icon, document: { addEventListener() {}, removeEventListener() {} }, PhoneFrame: () => null,
+    localStorage: { getItem: () => null, setItem() {} }, setTimeout, clearTimeout, navigator: {},
+  });
   const mod = loadScreen('app/screens-read.jsx', ['CommentaryPanel'], {
-    React, Bible, window: { Bible, sanitizeHtml: (x) => x },
-    Icon: ({ name }) => React.createElement('i', { 'data-icon': name }),
+    React, Bible, window: { Bible, sanitizeHtml: (x) => x }, TagFilterMenu,
+    Icon,
     IconBtn: () => null, BottomSheet: () => null, Btn: () => null, Empty: () => null, Pill: () => null, Chip: () => null,
     setTimeout: () => 0, clearTimeout() {},
   });
