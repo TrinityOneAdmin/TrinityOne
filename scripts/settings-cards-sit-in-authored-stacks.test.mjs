@@ -191,8 +191,7 @@ test('the cards on a page are the page\'s own children, in the order they are wr
 //    scripts/settings-pages-are-a-list-and-a-detail.test.mjs. This is the per-page table.)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 const CARDS_ON = {
-  identity: ['Panel:Church identity'],
-  branding: ['DashBrandingPanel'],
+  identity: ['Panel:Church identity', 'DashBrandingPanel'],   // Branding merged into identity 2026-11-12, as its second card
   media: ['DashMediaPanel'],
   backup: ['DashBackup'],
   website: ['DashWebsitePanel'],   // feat/church-website-feeds: the public calendar feed's switch and address

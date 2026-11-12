@@ -1,7 +1,7 @@
 // stew-meals.jsx — Steward console surface for the Meal trains / practical-care module.
 // Two top-level components (mirrors Finance):
 //   • DashMeals       — the console tab (need list, slot grid, signups)
-//   • DashMealsPanel  — the enable ROW in Settings → Features → Congregation features → Extras (it was a
+//   • DashMealsPanel  — the enable ROW in Settings → Congregation → Features → Extras (it was a
 //                        card of its own until it was folded in there; it renders no Panel of its own now)
 // Copy is care-framed deliberately (warm, calls into pastoral care, NOT slot-management).
 // Read-only here on the steward side for slot fills + skips — members fill from their app.

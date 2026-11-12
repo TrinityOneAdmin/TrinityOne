@@ -96,7 +96,7 @@ Everyone who's joined.
 - **Requests to join** — if approval-to-join is on (see *Settings → Joining*), new people wait here for
   your **Approve** / **Decline**.
 
-### Check-in  *(optional — turn on in Settings → Congregation features → Extras)*
+### Check-in  *(optional — turn on in Settings → Congregation → Features → Extras)*
 Children's check-in for a session (Sunday kids, youth club). Tap **Check a child in**, pick from your
 **Child**-marked members (their linked guardians show), and the app generates a **4-digit pickup code** —
 write it on the parent's slip. At collection, **Check out** and enter the code on their slip to confirm
@@ -104,10 +104,9 @@ before releasing the child. Records are **encrypted to your church key** — who
 never reach the relay or other members. Run from the **church-key holder's** console (the owner).
 
 ### Settings
-- **Church profile** — name, web handle.
-- **Branding** — banner image + brand accent colour (members see it).
+- **Church identity** — name, picture, joining handle, banner and colours (members see it).
 - **Media** — link your YouTube/Rumble channel (Watch tab) and a podcast RSS (Listen tab).
-- **Congregation features** — turn whole sections (Bible / Community / Library) on or off for your
+- **Features** (under **Congregation**) — turn whole sections (Bible / Community / Library) on or off for your
   church; **Extras** → opt-in **Kids check-in**; **Joining** → *Require approval to
   join*; **Member names** → *Require a real first & last name*.
 - **Networks** — join a wider church network; announce to it if you own one.
@@ -141,7 +140,7 @@ No domain of your own? Leave the web address **blank** — the default handle wo
 
 ---
 
-## The rules you can switch on  *(Settings → Congregation features)*
+## The rules you can switch on  *(Settings → Congregation → Features)*
 
 | Rule | Default | What it does |
 |---|---|---|

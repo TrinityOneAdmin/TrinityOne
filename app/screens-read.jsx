@@ -1168,13 +1168,33 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
   // was put there. A key that cannot be placed on a verse is left out (nothing to jump to).
   const myMarks = (() => {
     const seen = {}, out = [];
+    // Tags live on ctx.bookmarkItems (ctx.bookmarks is bare refs). Matched on `raw`, the stored key, so an
+    // old-spelling bookmark still finds its tags. Missing/odd data means no chips, never a crash.
+    const tagsByRef = {};
+    // Keyed on the canonical verse key and UNIONED, de-duplicated: one verse saved under two spellings shows the
+    // tags of both, and a tag repeated inside a record (sync/import) is shown once so React keys stay unique.
+    (ctx.bookmarkItems || []).forEach(it => {
+      if (!(it && it.ref && Array.isArray(it.tags))) return;
+      const k = noteKeyOf(it.ref), have = tagsByRef[k] || (tagsByRef[k] = []);
+      it.tags.filter(Boolean).forEach(t => { if (have.indexOf(t) < 0) have.push(t); });
+    });
     (ctx.bookmarks || []).forEach(raw => {
       const c = noteKeyOf(raw), m = /^(\d+)\.(\d+)\.(\d+)$/.exec(c);
       if (!m || seen[c]) return;
-      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3] });
+      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3], tags: tagsByRef[c] || [] });
     });
     return out.sort((x, y) => (x.b - y.b) || (x.c - y.c) || (x.v - y.v));
   })();
+  // TAG FILTER on the Bookmarks tab — the same shared TagFilterMenu as Library > Bookmarks (app/ui.jsx). The list
+  // offered is the union of the tags on these bookmarks, sorted; [] ticked = all, several = OR. Per view, not persisted.
+  // A tick is kept only while some bookmark still carries that tag, so (with no search box here) a filter can never
+  // match nothing — every offered tag is on a drawn bookmark — and the tab needs no "no matches" state.
+  const [markTagSel, setMarkTagSel] = useS([]);
+  const markTags = [...new Set(myMarks.flatMap(bm => bm.tags.map(String)))].sort();
+  const markTicked = markTagSel.filter(t => markTags.indexOf(t) >= 0);
+  // A tick whose tag has gone is forgotten, not just hidden, so it cannot come back if the tag returns later.
+  if (markTicked.length !== markTagSel.length) setMarkTagSel(markTicked);
+  const shownMarks = markTicked.length ? myMarks.filter(bm => bm.tags.some(t => markTicked.indexOf(String(t)) >= 0)) : myMarks;
   // Tabs never squish: TWO ROWS OF TWO (a 2x2 grid, data-tab-grid), every tab the same generous width and always
   // reachable without sideways scrolling, and a count is a small BADGE (data-tab-count) rather than a "· N" text suffix.
   const seg = (k, lbl, n) => (
@@ -1289,14 +1309,20 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
               )}
             </React.Fragment>;
           })() : view === 'bookmarks' ? (
-            myMarks.length ? myMarks.map(bm => (
+            myMarks.length ? <React.Fragment>
+              {markTags.length ? <div style={{ marginBottom: 10 }}><TagFilterMenu tags={markTags} selected={markTicked} onChange={setMarkTagSel} /></div> : null}
+              {shownMarks.map(bm => (
               <div key={bm.key} data-bookmark={bm.key} style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 14px', borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}>
-                <button onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 9, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
-                  <Icon name="bookmark" size={15} color="var(--clay)" fill /> {verseRefLabel(bm.key)}
+                <button onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(bm.b, bm.c, bm.v); }} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, padding: '10px 0', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14.5, color: 'var(--ink)' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Icon name="bookmark" size={15} color="var(--clay)" fill /> {verseRefLabel(bm.key)}</span>
+                  {bm.tags.length ? <span data-bookmark-tags style={{ display: 'flex', flexWrap: 'wrap', gap: 5, maxWidth: '100%' }}>
+                    {bm.tags.map(t => <span key={String(t)} data-bookmark-tag={String(t)} style={{ padding: '2px 9px', borderRadius: 999, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-ui)', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(t)}</span>)}
+                  </span> : null}
                 </button>
                 <button onClick={() => ctx.toggleBookmark(bm.raw)} aria-label={'Remove bookmark ' + verseRefLabel(bm.key)} title="Remove bookmark" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 8 }}><Icon name="x" size={16} /></button>
               </div>
-            )) : (
+              ))}
+            </React.Fragment> : (
               <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--ink-3)' }}>
                 <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="bookmark" size={24} /></div>
                 <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>No bookmarks yet</div>

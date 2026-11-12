@@ -102,7 +102,7 @@ function consoleWith(React, over = {}) {
     stewCapState: () => ({ allowed: false }),
   };
   const names = Object.keys(globals);
-  const want = ['DashSettings', 'DashOverview', 'StewSetupWizard', 'StewDashboard', 'Panel', 'SETTINGS_GROUPS', 'SETTINGS_PAGE_ALIASES'];
+  const want = ['DashSettings', 'DashOverview', 'StewSetupWizard', 'StewDashboard', 'Panel', 'SETTINGS_GROUPS', 'SETTINGS_PAGE_ALIASES', 'settingsPageFor'];
   const mod = new Function(...names, JS + '\nreturn { ' + want.join(', ') + ' };')(...names.map(k => globals[k]));
   for (const n of want.slice(0, 5)) {
     assert.equal(typeof mod[n], 'function', `${n} is not a component any more — re-anchor this test`);
@@ -157,7 +157,7 @@ function catalogue(over = {}) {
 }
 
 test('the list is grouped the way the mockup groups it', () => {
-  assert.deepEqual(catalogue().groups.map(([g]) => g), ['Church', 'People', 'Infrastructure', 'Master key', 'Helpers'],
+  assert.deepEqual(catalogue().groups.map(([g]) => g), ['Church', 'Congregation', 'Infrastructure', 'Master key', 'Helpers'],
     'the settings groups are not Church / People / Infrastructure / Master key / Helpers. The single Security ' +
     'group split in two on 2026-11-05 — Master key (Church key + the full-key handover) and Helpers (the ' +
     'everyday revocable sharing) — so the handover sits a group away from Helpers and cannot be stumbled onto');
@@ -365,9 +365,11 @@ const LANDS_ON = [
   // a real page. 'features' and 'network' are page keys as well as old tab keys, and the PAGE wins — see the
   // invariant asserted below.
   ['church', 'Church identity', 'the old Church tab, which is not a page key'],
-  ['features', 'Congregation features', 'the old Features tab, which is also a page key'],
+  ['features', 'Features', 'the old Features tab, which is also a page key'],
   ['network', 'Network', 'the old Network & relays tab, which is also a page key'],
   ['security', 'Helpers', 'the old Security tab, which is not a page key'],
+  // merged into identity 2026-11-12; a saved link to the old Branding page must open a page, not a blank panel
+  ['branding', 'Church identity', 'the old Branding page, merged into identity 2026-11-12'],
 ];
 
 for (const [key, page, who] of LANDS_ON) {
@@ -380,6 +382,39 @@ for (const [key, page, who] of LANDS_ON) {
       "`initialSection === 'relays' ? 'network'` alias existed to prevent.");
   });
 }
+
+// The LANDS_ON row for "branding" cannot tell the alias from the fallback: with the alias deleted, 'branding'
+// is in no group, so settingsPageFor falls through to pages[0] — which is ALSO identity. That row would pass
+// over a missing alias. This one runs the REAL settingsPageFor with the page list reversed, so identity is
+// NOT the fallback: only the alias can bring "branding" to identity here. (Chosen 2026-11-12 over asserting
+// the table's value, which is not behaviour.)
+test('a deep link to the old Branding page reaches identity through the alias, not by falling through', () => {
+  const cat = catalogue();
+  const { React } = miniReact();
+  const mod = consoleWith(React);
+  const reversed = cat.pages.slice().reverse();
+  assert.notEqual(reversed[0].k, 'identity', 're-anchor: identity is still the fallback page, so this proves nothing');
+  assert.equal(mod.settingsPageFor('nowhere-at-all', cat.groups, reversed), reversed[0].k,
+    're-anchor: an unknown key no longer falls back to pages[0], so the control below is not the one written');
+  assert.equal(mod.settingsPageFor('branding', cat.groups, reversed), 'identity',
+    'a saved link to the old Branding page no longer resolves to Church identity — the alias is gone');
+});
+
+test('the identity page carries both the identity card and the branding card', () => {
+  assert.deepEqual(cardsOn(settings('identity').tree), ['Church identity', 'Church branding'],
+    'the Church identity page does not render the identity card then the branding card — the merged Branding ' +
+    'page lost its card, or the order changed');
+});
+
+test('there is no Branding row in the list', () => {
+  assert.equal(catalogue().pages.some(p => p.k === 'branding'), false, 'SETTINGS_GROUPS still has a Branding page');
+  const s = settings(null, { allOpen: true });
+  const labels = rows(s.tree).map(b => texts(b).join(' '));
+  assert.ok(labels.length >= 15, `re-anchor: the list rendered ${labels.length} rows`);
+  assert.equal(labels.some(t => /^\s*Branding\b/.test(t)), false,
+    'the rendered settings list still has a Branding row: ' + JSON.stringify(labels.filter(t => /Branding/.test(t))));
+  assert.ok(labels.some(t => /Church identity/.test(t)), 're-anchor: no Church identity row was found in the list');
+});
 
 test('no alias shadows a page of the same name', () => {
   // THE BUG THIS CAUGHT, before it shipped. Three of the four old tab keys — 'features', 'network', 'relays' —
@@ -503,4 +538,23 @@ test('NETWORKS OFF: a deep link to "network" opens another page with cards of it
   // It lands on the first page of the Network page's own group (Infrastructure): Relays. That is the designed
   // fallback, and it is the ONE Relays page (the fix-it control lives there once), not a second copy of it.
   assert.deepEqual(cardsOn(s.tree), cardsOn(settings('relays', { networks: false }).tree), 'the "network" deep link did not land on the plain Relays page');
+});
+
+// 2026-11-12: the group "People" became "Congregation" and the item "Congregation features" became "Features".
+// Help articles quote that path as text. help-data.jsx is DATA (an object literal assigned to window.HelpData),
+// so it is EXECUTED here, not text-matched; the expected path is derived from the real SETTINGS_GROUPS.
+test('every help article that names the Features page quotes the path the navigation really has', () => {
+  const win = {};
+  new Function('window', readFileSync(join(ROOT, 'app/help-data.jsx'), 'utf8'))(win);
+  const strings = [];
+  (function walk(v) { if (typeof v === 'string') strings.push(v); else if (v && typeof v === 'object') Object.values(v).forEach(walk); })(win.HelpData);
+  const { groups } = catalogue();
+  const group = groups.find(([, items]) => items.some(p => p.k === 'features'));
+  assert.ok(group, 're-anchor: no group holds the features page');
+  const item = group[1].find(p => p.k === 'features');
+  const want = `Settings → ${group[0]} → ${item.n}`;
+  const quoting = strings.filter(s => s.includes('Settings → ') && /Features|Congregation features/.test(s));
+  assert.ok(quoting.length >= 3, `expected the three help passages that point at the Features page, found ${quoting.length}`);
+  for (const s of quoting) assert.ok(s.includes(want), `help says a path that is not the navigation's "${want}": ${s.slice(0, 140)}`);
+  assert.ok(!strings.some(s => /Settings → People/.test(s)), 'a help article still sends the steward to Settings → People');
 });

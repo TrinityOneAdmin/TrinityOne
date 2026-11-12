@@ -102,7 +102,7 @@ test('CONTROL: the Delegated stewards page still renders, and the People group s
   const s = settings('delegated');
   assert.equal(region(s.tree).props['aria-label'], 'Helpers', 're-anchor: the delegated page did not open');
   const names = rowNames(s.tree);
-  for (const n of ['Congregation features', 'Rules & privacy', 'Chat message tags']) assert.ok(names.includes(n), `re-anchor: "${n}" is not in the list`);
+  for (const n of ['Features', 'Rules & privacy', 'Chat message tags']) assert.ok(names.includes(n), `re-anchor: "${n}" is not in the list`);
 });
 
 test('the row "Your name as a steward" is in the list, in the People group, after Chat message tags and before the Security pages', () => {
@@ -110,7 +110,7 @@ test('the row "Your name as a steward" is in the list, in the People group, afte
   const names = rowNames(s.tree);
   assert.ok(names.includes(ROW), 'the by-line has no row of its own in Settings');
   const grp = s.mod.SETTINGS_GROUPS.find(([, items]) => items.some(p => p.n === ROW));
-  assert.equal(grp && grp[0], 'People', 'the row is not in the People group');
+  assert.equal(grp && grp[0], 'Congregation', 'the row is not in the Congregation group');
   assert.equal(names.indexOf(ROW), names.indexOf('Chat message tags') + 1, 'the row is not the last of People, directly after Chat message tags');
   assert.ok(names.indexOf(ROW) < names.indexOf('Helpers'), 'the row is not above Helpers');
 });
