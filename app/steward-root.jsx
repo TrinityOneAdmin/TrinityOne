@@ -601,9 +601,12 @@ function StewardWelcome() {
   const [reqMsg, setReqMsg] = useSt('');
   const [reqSent, setReqSent] = useSt(false);
   const [showCode, setShowCode] = useSt(false);
+  // THE NAME THE OWNER WILL SEE on this request — typed by the person, prefilled from their own steward name if this
+  // console has one (a brand-new helper has none). requestSteward seals it to the church and refuses an empty one.
+  const [myName, setMyName] = useSt(() => (window.Steward && window.Steward.ownStewardName && window.Steward.ownStewardName()) || '');
   const onInvite = (payload) => {
     setReqMsg('');
-    Promise.resolve(window.Steward.requestSteward(payload)).then(r => {
+    Promise.resolve(window.Steward.requestSteward(payload, myName)).then(r => {
       if (r && r.ok) { setScanInvite(false); setReqSent(true); setReqMsg(''); }
       else setReqMsg((r && r.error) || 'Couldn’t send the request — check your connection and try again.');
     });
@@ -682,7 +685,9 @@ function StewardWelcome() {
               {/* THE PATH, mirroring a member entering a joining code: scan or paste the church's invite, and the
                   owner approves you. The reciprocal "give the owner your code" is kept only as a quiet fallback. */}
               <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Scan or enter the <b>invite</b> the church’s owner shows you. They’ll approve you, and that church then appears here in your switcher. This shares only your public ID — never a key.</div>
-              {isNative ? <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 12 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the church’s invite</button> : null}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>YOUR NAME</div>
+              <input value={myName} onChange={e => { setMyName(e.target.value); setReqMsg(''); }} aria-label="Your name" maxLength={60} autoComplete="name" placeholder="Your name" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 12 }} />
+              {isNative ? <button onClick={() => { if (!myName.trim()) { setReqMsg('Add your name first.'); return; } setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '13px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginBottom: 12 }}><Icon name="qr" size={16} color="var(--on-clay)" /> Scan the church’s invite</button> : null}
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 7 }}>{isNative ? 'OR PASTE THE INVITE' : 'PASTE THE INVITE THE OWNER SENT YOU'}</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input value={invite} onChange={e => { setInvite(e.target.value); setReqMsg(''); }} onKeyDown={e => { if (e.key === 'Enter' && invite.trim()) onInvite(invite); }} aria-label="Church invite code" spellCheck={false} autoCapitalize="none" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '11px 13px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />

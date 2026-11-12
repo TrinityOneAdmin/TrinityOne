@@ -21,7 +21,7 @@ function setup() {
   const Steward = fakeSteward({
     createKeyQuiet: () => ({ code: 'trinityone-steward:npub1me', npub: 'npub1me' }),
     stewardName: () => 'Gentle Cedar',
-    requestSteward: (payload) => { reqs.push(payload); return Promise.resolve({ ok: true, church: 'cc', npub: 'npub1church' }); },
+    requestSteward: (payload, name) => { reqs.push([payload, name]); return Promise.resolve({ ok: true, church: 'cc', npub: 'npub1church' }); },
     setPin: async () => {}, enterConsole: () => {}, qrSVG: () => '<svg/>',
   });
   const { window } = fakeBrowser({ Steward });
@@ -48,12 +48,13 @@ test('Help run a church -> enter the invite -> Send calls requestSteward with th
   h.press('Help run a church');                 // mint a quiet key, go to the invite step
   assert.ok(h.all().some(n => (n.type === 'input') && n.props && n.props['aria-label'] === 'Church invite code'),
     'the wizard does not offer an invite box after "Help run a church"');
+  h.typeInto('Your name', 'Ruth Bellamy');   // the name the owner will see (2026-11-12: it used to send the church profile's)
   h.typeInto('Church invite code', INVITE);
   h.press('Send');
   await new Promise(r => setImmediate(r));
   h.draw();
 
-  assert.deepEqual(h.reqs, [INVITE], 'requestSteward was not called with the pasted invite');
+  assert.deepEqual(h.reqs, [[INVITE, 'Ruth Bellamy']], 'requestSteward was not called with the pasted invite and the name typed');
   assert.ok(/Waiting for the church to approve you/.test(texts(h.tree).join(' ')),
     'the calm waiting state did not render after the request was sent');
 });

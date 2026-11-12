@@ -131,16 +131,16 @@ function harness({ pending = '', proven = [BOX, CANON], seedStewarded = [] } = {
   const method = (anchor, name) => new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, anchor, name)} }).${name}; }`)(scope);
   const subscribe = method('subscribeStewardedChurches(cb) {', 'subscribeStewardedChurches');
   const switchTo = method('setActiveIdentity(targetPub, { persist = true } = {}) {', 'setActiveIdentity');
-  const request = method('requestSteward(payload) {', 'requestSteward');
+  const request = method('requestSteward(payload, name) {', 'requestSteward');
   const parse = method('parseStewardInvite(payload) {', 'parseStewardInvite');
   stubs.window.Steward.setActiveIdentity = (p, opts) => switchTo.call(stubs.window.Steward, p, opts);
   stubs.window.Steward.subscribeStewardedChurches = (cb) => subscribe.call(stubs.window.Steward, cb);
   stubs.window.Steward.parseStewardInvite = (p) => parse.call(stubs.window.Steward, p);
-  stubs.window.Steward.requestSteward = (p) => request.call(stubs.window.Steward, p);
+  stubs.window.Steward.requestSteward = (p, n = 'Ruth') => request.call(stubs.window.Steward, p, n);
   return {
     stubs, store, subs,
     subscribe: (cb) => subscribe.call(stubs.window.Steward, cb),
-    requestSteward: (p) => request.call(stubs.window.Steward, p),
+    requestSteward: (p, n = 'Ruth') => request.call(stubs.window.Steward, p, n),   // a request now carries the name the person typed
     discovery: () => subs.filter(s => s.filters.some(f => f.kinds && f.kinds.includes(30078))),
     // the owner's roster for a church, naming ME, arriving on the discovery read
     grant: (sub, church) => sub.handlers.onevent({

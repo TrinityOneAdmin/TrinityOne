@@ -21608,13 +21608,21 @@ zoo`.split("\n");
       return toPubHex(s);
     },
     // requester side: scan/paste a church's invite → publish a steward request (signed by OUR key, naming the church)
-    requestSteward(payload) {
+    // `name` IS THE NAME THE PERSON TYPED on the request screen. It was `lastProfile.name` — the console's cached CHURCH
+    // profile, not the person — so a brand-new helper always sent '' and someone who runs a church sent THAT church's
+    // name ("claims to be 'Trinity Church Littlehampton'"; owner-confirmed 2026-11-12). A request with no name is
+    // refused here, before anything is signed or sent; the screens show this error.
+    // CALLERS: StewardWelcome onInvite (app/steward-root.jsx — welcome screen, "Help run a church") and
+    // DashBecomeStewardPanel onInvite (app/stew-dashboard.jsx — Settings → Help run a church). No other caller.
+    requestSteward(payload, name) {
       const cp = window.Steward.parseStewardInvite(payload);
       if (!cp) return Promise.resolve({ ok: false, error: "That doesn\u2019t look like a church invite." });
       if (cp === churchPub) return Promise.resolve({ ok: false, error: "That\u2019s your own church." });
+      const who = String(name == null ? "" : name).trim().slice(0, 60);
+      if (!who) return Promise.resolve({ ok: false, error: "Add your name first." });
       let content;
       try {
-        content = JSON.stringify({ n: encrypt2(JSON.stringify({ name: lastProfile && lastProfile.name || "" }), getConversationKey(sk, cp)) });
+        content = JSON.stringify({ n: encrypt2(JSON.stringify({ name: who }), getConversationKey(sk, cp)) });
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
@@ -25617,6 +25625,21 @@ zoo`.split("\n");
     voice() {
       _loadVoice();
       return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } };
+    },
+    // THIS PERSON'S OWN NAME, for prefilling "Your name" on a request to help another church: the by-line they set under
+    // Settings → Your name as a steward (_voiceKey, per church). Their own church's first (churchPub — the console's own
+    // key), then the active identity's. NEVER lastProfile.name — that is the church, not the person. '' when unset (a
+    // brand-new helper). Read-only; writes nothing.
+    ownStewardName() {
+      for (const cp of [churchPub, pub]) {
+        if (!cp) continue;
+        try {
+          const v = JSON.parse(lsGet("trinityone.steward.voice:" + cp) || "null");
+          if (v && typeof v.name === "string" && v.name.trim()) return v.name.trim().slice(0, 60);
+        } catch (e) {
+        }
+      }
+      return "";
     },
     // REPUBLISHING THE ROSTER TO CHANGE A NAME MUST NOT CHANGE WHO IS ON IT. My first version rebuilt the list
     // from _stewardCaps, which holds only stewards who have capabilities recorded — so setting a by-line would

@@ -11435,10 +11435,15 @@ function DashStewardsPanel({ church }) {
         {pending.map(r => (
           <div key={r.pubkey} style={{ padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 7 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 11 }}>
-              <SkBadge initials={niceName(r.pubkey).split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={32} radius={10} accent={SK_TINT.gold.fg} />
+              <SkBadge initials={(r.name || niceName(r.pubkey)).split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={32} radius={10} accent={SK_TINT.gold.fg} />
+              {/* THE NAME THEY GAVE, FIRST — self-declared, so it says so; the owner still checks in person. Under it the
+                  invented name from their key and the key itself. An older request may carry no name (it shows the
+                  invented name alone) or the requester's church name (sent before 2026-11-12) — both still render. */}
               <div style={{ flex: '1 1 150px', minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 13.5, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{niceName(r.pubkey)}</div>
-                {r.name ? <div style={{ fontSize: 11.5, color: 'var(--ink-2)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>claims to be “{r.name}”</div> : null}
+                {r.name ? <React.Fragment>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{r.name} <span style={{ fontWeight: 500, fontSize: 11.5, color: 'var(--ink-3)' }}>· says so themselves</span></div>
+                  <div style={{ fontSize: 11.5, color: 'var(--ink-2)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{niceName(r.pubkey)}</div>
+                </React.Fragment> : <div style={{ fontWeight: 700, fontSize: 13.5, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{niceName(r.pubkey)}</div>}
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to help</div>
               </div>
               {approving === r.pubkey ? null : <React.Fragment>
@@ -11585,11 +11590,14 @@ function DashBecomeStewardPanel() {
   const [scanInvite, setScanInvite] = React.useState(false);
   const [inviteText, setInviteText] = React.useState('');
   const [reqMsg, setReqMsg] = React.useState('');
+  // THE NAME THE OTHER CHURCH'S OWNER WILL SEE — the person's, typed here, prefilled from their own "Your name as a
+  // steward". Never this church's name (which is what used to be sent). requestSteward refuses an empty one.
+  const [myName, setMyName] = React.useState(() => (window.Steward && window.Steward.ownStewardName && window.Steward.ownStewardName()) || '');
   const svg = showQR && window.Steward.qrSVG ? window.Steward.qrSVG(code) : '';
   if (!code) return null;
   const onInvite = (payload) => {
     setScanInvite(false);
-    Promise.resolve(window.Steward.requestSteward(payload)).then(r => {
+    Promise.resolve(window.Steward.requestSteward(payload, myName)).then(r => {
       setReqMsg(r && r.ok ? '✓ Request sent — the church’s owner will approve you. The church will then appear in your switcher (top-left).' : ((r && r.error) || 'Couldn’t send the request.'));
     });
   };
@@ -11599,7 +11607,9 @@ function DashBecomeStewardPanel() {
       {scanInvite
         ? <div><StewQRScanner onResult={onInvite} onCancel={() => setScanInvite(false)} /><button onClick={() => setScanInvite(false)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 12.5, marginTop: 8 }}>Cancel scan</button></div>
         : <div>
-            {stewOnPhoneApp() ? <button onClick={() => { setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button> : null}
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '0 0 6px' }}>Your name</div>
+            <input value={myName} onChange={e => { setMyName(e.target.value); setReqMsg(''); }} aria-label="Your name" maxLength={60} autoComplete="name" placeholder="Your name" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 10 }} />
+            {stewOnPhoneApp() ? <button onClick={() => { if (!myName.trim()) { setReqMsg('Add your name first.'); return; } setReqMsg(''); setScanInvite(true); }} className="sk-btn sk-btn--clay" style={{ padding: '10px 14px', fontSize: 13.5 }}><Icon name="qr" size={15} color="var(--on-clay)" /> Scan a church’s invite</button> : null}
             <div style={{ fontSize: 12, color: 'var(--ink-3)', margin: '9px 0 6px' }}>No camera? Paste the invite the owner sent you:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={inviteText} onChange={e => { setInviteText(e.target.value); setReqMsg(''); }} aria-label="Church invite code" placeholder="Paste the church invite…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none' }} />

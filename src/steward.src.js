@@ -8397,10 +8397,18 @@ window.Steward = {
     return toPubHex(s);
   },
   // requester side: scan/paste a church's invite → publish a steward request (signed by OUR key, naming the church)
-  requestSteward(payload) {
+  // `name` IS THE NAME THE PERSON TYPED on the request screen. It was `lastProfile.name` — the console's cached CHURCH
+  // profile, not the person — so a brand-new helper always sent '' and someone who runs a church sent THAT church's
+  // name ("claims to be 'Trinity Church Littlehampton'"; owner-confirmed 2026-11-12). A request with no name is
+  // refused here, before anything is signed or sent; the screens show this error.
+  // CALLERS: StewardWelcome onInvite (app/steward-root.jsx — welcome screen, "Help run a church") and
+  // DashBecomeStewardPanel onInvite (app/stew-dashboard.jsx — Settings → Help run a church). No other caller.
+  requestSteward(payload, name) {
     const cp = window.Steward.parseStewardInvite(payload);
     if (!cp) return Promise.resolve({ ok: false, error: 'That doesn’t look like a church invite.' });
     if (cp === churchPub) return Promise.resolve({ ok: false, error: 'That’s your own church.' });
+    const who = String(name == null ? '' : name).trim().slice(0, 60);
+    if (!who) return Promise.resolve({ ok: false, error: 'Add your name first.' });
     // SEALED TO THE CHURCH KEY, not the name key. Only the owner's console reads this document, and a
     // would-be steward may not yet hold the church name key — so this one is sealed to the church itself.
     // It named the requester in the clear: a list of people asking for authority in a congregation, which
@@ -8408,7 +8416,7 @@ window.Steward = {
     // leadership. If sealing is impossible we publish the request WITHOUT a name rather than with one; the
     // owner still sees the request and can identify it by key.
     let content;
-    try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: (lastProfile && lastProfile.name) || '' }), nip44ck(sk, cp)) }); }
+    try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: who }), nip44ck(sk, cp)) }); }
     catch (e) { content = JSON.stringify({ n: '' }); }
     return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }), sk))
       // A REQUEST NOBODY RECEIVED MUST NOT SAY "sent". The screen shows "✓ Request sent — the church's
@@ -12417,6 +12425,17 @@ window.Steward = {
   stewardLabels() { return { ..._stewardNames }; },
   // The by-line this console writes under, and the delegated stewards the owner has chosen to name publicly.
   voice() { _loadVoice(); return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } }; },
+  // THIS PERSON'S OWN NAME, for prefilling "Your name" on a request to help another church: the by-line they set under
+  // Settings → Your name as a steward (_voiceKey, per church). Their own church's first (churchPub — the console's own
+  // key), then the active identity's. NEVER lastProfile.name — that is the church, not the person. '' when unset (a
+  // brand-new helper). Read-only; writes nothing.
+  ownStewardName() {
+    for (const cp of [churchPub, pub]) {
+      if (!cp) continue;
+      try { const v = JSON.parse(lsGet('trinityone.steward.voice:' + cp) || 'null'); if (v && typeof v.name === 'string' && v.name.trim()) return v.name.trim().slice(0, 60); } catch (e) {}
+    }
+    return '';
+  },
   // REPUBLISHING THE ROSTER TO CHANGE A NAME MUST NOT CHANGE WHO IS ON IT. My first version rebuilt the list
   // from _stewardCaps, which holds only stewards who have capabilities recorded — so setting a by-line would
   // have quietly REMOVED every unscoped steward. A Remove button hidden inside a name change.
