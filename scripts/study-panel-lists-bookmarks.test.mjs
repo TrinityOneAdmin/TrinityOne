@@ -133,3 +133,31 @@ test('Study panel: tapping a tag chip does not remove the bookmark; X still remo
   find(john, n => n.type === 'button' && /^Remove bookmark/.test(String(n.props['aria-label'])))[0].props.onClick();
   assert.deepEqual(p.calls.toggled, ['43.3.16']);
 });
+
+test('Study panel: tapping a tag chip still jumps to the verse and closes the panel (the tap reaches the row button)', () => {
+  const p = panel(['43.3.16'], [{ ref: '43.3.16', tags: ['hope'] }]);
+  const john = rows(openMarks(p))[0];
+  const chip = tagNodes(john)[0];
+  const holder = find(john, n => n.type === 'button' && find(n, m => m === chip).length)[0];
+  assert.ok(holder, 'the chip is not inside a tappable row button');
+  let stopped = false;
+  if (chip.props.onClick) chip.props.onClick({ stopPropagation() { stopped = true; } });
+  assert.equal(stopped, false, 'a chip handler swallowed the tap before it reached the row');
+  holder.props.onClick();   // the bubble: the tap lands on the row button
+  assert.deepEqual(p.calls.goto, [[43, 3, 16]]);
+  assert.equal(p.calls.closed, 1);
+  assert.deepEqual(p.calls.toggled, []);
+});
+
+test('Study panel: one verse bookmarked under two spellings shows the UNION of both records tags, once each', () => {
+  const p = panel(['John 3:16', '43.3.16'], [{ ref: 'John 3:16', tags: ['grace', 'hope'] }, { ref: '43.3.16', tags: ['hope', 'sermon'] }]);
+  const t = openMarks(p);
+  assert.equal(rows(t).length, 1, 'the two spellings must stay one row');
+  assert.deepEqual(tagNodes(rows(t)[0]).map(n => n.props['data-bookmark-tag']).sort(), ['grace', 'hope', 'sermon']);
+});
+
+test('Study panel: a tag repeated inside one record is drawn once, so no two chips share a React key', () => {
+  const p = panel(['43.3.16'], [{ ref: '43.3.16', tags: ['hope', 'hope', 'sermon', 'hope'] }]);
+  const chips = tagNodes(rows(openMarks(p))[0]);
+  assert.deepEqual(chips.map(n => n.props.key), ['hope', 'sermon']);
+});

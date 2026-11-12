@@ -1171,11 +1171,17 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, read
     // Tags live on ctx.bookmarkItems (ctx.bookmarks is bare refs). Matched on `raw`, the stored key, so an
     // old-spelling bookmark still finds its tags. Missing/odd data means no chips, never a crash.
     const tagsByRef = {};
-    (ctx.bookmarkItems || []).forEach(it => { if (it && it.ref && Array.isArray(it.tags)) tagsByRef[it.ref] = it.tags.filter(Boolean); });
+    // Keyed on the canonical verse key and UNIONED, de-duplicated: one verse saved under two spellings shows the
+    // tags of both, and a tag repeated inside a record (sync/import) is shown once so React keys stay unique.
+    (ctx.bookmarkItems || []).forEach(it => {
+      if (!(it && it.ref && Array.isArray(it.tags))) return;
+      const k = noteKeyOf(it.ref), have = tagsByRef[k] || (tagsByRef[k] = []);
+      it.tags.filter(Boolean).forEach(t => { if (have.indexOf(t) < 0) have.push(t); });
+    });
     (ctx.bookmarks || []).forEach(raw => {
       const c = noteKeyOf(raw), m = /^(\d+)\.(\d+)\.(\d+)$/.exec(c);
       if (!m || seen[c]) return;
-      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3], tags: tagsByRef[raw] || [] });
+      seen[c] = 1; out.push({ raw, key: c, b: +m[1], c: +m[2], v: +m[3], tags: tagsByRef[c] || [] });
     });
     return out.sort((x, y) => (x.b - y.b) || (x.c - y.c) || (x.v - y.v));
   })();
