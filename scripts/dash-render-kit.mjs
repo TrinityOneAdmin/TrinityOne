@@ -49,6 +49,11 @@ export async function compiled(name, globals, extra = [], src0 = DASH) {
     src += '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n')
       + '\n' + constLine({ src: DASH, const: 'STEW_KEYS_LOADING' });
   }
+  // THE SHARED HELPER-REQUESTS FILTER (2026-11-12): the Overview banner and DashStewardsPanel both read their list through
+  // useHelperRequests, so it is compiled in, real, whenever the screen uses it — a stub would answer "who is waiting?".
+  if (src0 === DASH && /\buseHelperRequests\(/.test(src) && !/function useHelperRequests\(/.test(src)) {
+    src += '\n' + ['pendingHelperRequests', 'useHelperRequests'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n');
+  }
   const tmp = join(tmpdir(), 'dk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

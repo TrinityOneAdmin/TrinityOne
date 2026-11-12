@@ -23,6 +23,12 @@
 // window + localStorage persist) is the reload. No text is matched in the .jsx to prove behaviour: the
 // assertions are on which request rows the real filter renders. Delete the markHandled() write in add()/
 // remove(), weaken the `r.ts <= handledAt` comparison, or drop the handled term from the filter, and these go red.
+//
+// AUDIT OF eb5c10eb (M1, M2), 2026-11-12. add()/remove() now record the answer only once the roster write has LANDED
+// (setStewards answers truthy / the removal outcome is 'landed'), so the record is written a tick after the click and
+// these tests wait for it (`settle`). The time recorded is the request's own created_at (r.ts — the requester's clock),
+// or for a removal the moment they were put on the roster (stewardSince), never the owner's wall clock; the request
+// rows here therefore carry a ts, as every real one does. The last test proves a REFUSED approve/remove records nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConsole, fakeReact, fakeBrowser, fakeSteward, nodes, texts } from './console-screens.mjs';
@@ -31,8 +37,10 @@ const OWNER = 'aa'.repeat(32);
 const HELPER = 'bb'.repeat(32);   // Ruth — approved, then removed
 const NEWBIE = 'cc'.repeat(32);   // Sam — a genuinely new request that must still show
 const HANDLED_KEY = 'trinityone.steward.handledreqs.' + OWNER;
+const REQ_AT = 1_790_000_000;   // when Ruth's request was made (her clock)
+const settle = () => new Promise(r => setTimeout(r, 20));   // the landed write answers a tick after the click
 
-function setup({ reqList = [], roster = [] } = {}) {
+function setup({ reqList = [], roster = [], since = {}, setStewardsResult = true, outcome = 'unknown' } = {}) {
   const fr = fakeReact();
   const wrote = [];
   let reqCb = null;
@@ -43,10 +51,10 @@ function setup({ reqList = [], roster = [] } = {}) {
     presetCaps: () => ['care', 'content', 'members'],
     stewardCapNames: () => ['finance', 'care', 'safeguarding', 'members', 'content', 'sealedrooms'],
     hasPinLock: () => false,
-    stewardLabels: () => ({}), stewardCaps: () => ({}), stewardSince: () => ({}),
+    stewardLabels: () => ({}), stewardCaps: () => ({}), stewardSince: () => ({ ...since }),
     subscribeStewardRequests: (cb) => { reqCb = cb; cb(state.reqList); return () => {}; },
-    setStewards: (pubkeys, caps, names) => { wrote.push({ pubkeys, caps, names }); return Promise.resolve(true); },
-    stewardRemovalOutcome: () => 'unknown',
+    setStewards: (pubkeys, caps, names) => { wrote.push({ pubkeys, caps, names }); return Promise.resolve(setStewardsResult); },
+    stewardRemovalOutcome: () => outcome,
   });
   const { window, localStorage } = fakeBrowser({ Steward });
   const mods = loadConsole({ React: fr.React, window, expr: '{ DashStewardsPanel }' });
@@ -71,23 +79,24 @@ function setup({ reqList = [], roster = [] } = {}) {
     remount, get wrote() { return wrote; }, get tree() { return tree; } };
 }
 
-test('approving a request, then a reload with the request still live, does NOT bring it back', () => {
-  const h = setup({ reqList: [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley' }] });
+test('approving a request, then a reload with the request still live, does NOT bring it back', async () => {
+  const h = setup({ reqList: [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: REQ_AT }] });
   assert.ok(h.words().includes('Requests to help'), 'staging: the pending request did not render');
   assert.ok(h.words().includes('Ruth Bexley'), 'staging: the requester Ruth is not shown before approval');
 
   h.press('Approve');             // open the approve sheet
-  h.press('Approve as helper');   // confirm with the default preset -> add(HELPER) -> markHandled + persist
+  h.press('Approve as helper');   // confirm with the default preset -> add(HELPER) -> landed -> markHandled + persist
   assert.equal(h.wrote.length, 1, 'staging: approving did not publish a roster');
-  // durable set was written, scoped to THIS church (ownerPub)
+  await settle(); h.draw();
+  // durable set was written, scoped to THIS church (ownerPub), with the time of the request answered (M2)
   const saved = JSON.parse(h.localStorage.getItem(HANDLED_KEY) || '{}');
-  assert.ok(saved[HELPER], 'the approved helper was not recorded in the durable handled set');
+  assert.equal(saved[HELPER], REQ_AT, 'the approved helper was not recorded with the time of the request answered');
   assert.ok(!h.words().includes('Ruth Bexley'), 'Ruth is still listed as a pending request right after approval');
 
   // THE RELOAD. The stale STEWARDREQ is still on the relay, and the owner has since REMOVED Ruth, so the
   // roster no longer protects her. Only the durable set can keep her out — and it is read fresh on remount.
   h.state.roster = [];                 // Ruth is not (or no longer) a current steward
-  h.state.reqList = [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley' }];   // her request is still live
+  h.state.reqList = [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: REQ_AT }];   // her request is still live
   h.remount();
   assert.ok(h.words().includes('Requests to help') === false || !h.words().includes('Ruth Bexley'),
     'after a reload the removed helper\'s stale request came back — the durable dismiss did not survive the remount');
@@ -95,14 +104,15 @@ test('approving a request, then a reload with the request still live, does NOT b
     'THE BUG: the approved-then-removed helper reappeared under "Requests to help" after a reload');
 });
 
-test('a genuinely new request still shows after the reload — the durable set hides only the handled one', () => {
-  const h = setup({ reqList: [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley' }] });
+test('a genuinely new request still shows after the reload — the durable set hides only the handled one', async () => {
+  const h = setup({ reqList: [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: REQ_AT }] });
   h.press('Approve');
-  h.press('Approve as helper');       // Ruth handled + persisted
+  h.press('Approve as helper');       // Ruth handled + persisted, once the roster write landed
+  await settle();
 
   h.state.roster = [];
   h.state.reqList = [
-    { pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley' },   // stale, must stay hidden
+    { pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: REQ_AT },   // stale, must stay hidden
     { pubkey: NEWBIE, npub: 'npub_sam', name: 'Sam Newcomer' },   // new, must show
   ];
   h.remount();
@@ -112,19 +122,20 @@ test('a genuinely new request still shows after the reload — the durable set h
   assert.ok(h.words().includes('Requests to help'), 'the new request did not render the Requests-to-help section');
 });
 
-test('REMOVING a steward also writes the durable set, so their old request cannot resurface', () => {
-  // Ruth is a CURRENT steward (approved on an earlier run), with no pending request showing.
-  const h = setup({ reqList: [], roster: [HELPER] });
+test('REMOVING a steward also writes the durable set, so their old request cannot resurface', async () => {
+  // Ruth is a CURRENT steward (approved on an earlier run, put on the roster at REQ_AT + 3600), no request showing.
+  const h = setup({ reqList: [], roster: [HELPER], since: { [HELPER]: REQ_AT + 3600 } });
   assert.ok(!JSON.parse(h.localStorage.getItem(HANDLED_KEY) || '{}')[HELPER], 'staging: handled set should start empty for Ruth');
   // arm, then confirm the revoke on Ruth's steward row
   h.press((n) => n.props && n.props.title === 'Revoke this helper');
-  h.press('Revoke');   // the confirm control -> remove(HELPER) -> markHandled runs first, synchronously
+  h.press('Revoke');   // the confirm control -> remove(HELPER) -> landed -> markHandled
+  await settle(); h.draw();
   const saved = JSON.parse(h.localStorage.getItem(HANDLED_KEY) || '{}');
-  assert.ok(saved[HELPER], 'removing a steward did not record them in the durable handled set');
+  assert.equal(saved[HELPER], REQ_AT + 3600, 'removing a steward did not record them, as of when they joined the roster');
 
   // the relay still holds Ruth's old STEWARDREQ; a reload that delivers it must not surface it
   h.state.roster = [];
-  h.deliver([{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley' }]);
+  h.deliver([{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: REQ_AT }]);
   h.remount();
   assert.ok(!h.words().includes('Ruth Bexley'),
     'a removed steward\'s old request resurfaced after a reload — remove() must write the durable set too');
@@ -169,4 +180,24 @@ test('CONTROL: an unhandled request is NOT hidden — the filter suppresses only
   assert.ok(h.words().includes('Sam Newcomer'), 'a fresh, unhandled request was hidden by the durable filter');
   h.remount();
   assert.ok(h.words().includes('Sam Newcomer'), 'a fresh request vanished across a reload though it was never handled');
+});
+
+test('M1: an Approve or a Remove whose roster write did NOT land records nothing — the request keeps showing', async () => {
+  // Approve, but no relay accepted the roster (setStewards answers false): Ruth is not a helper, so her request stays.
+  { const h = setup({ reqList: [{ pubkey: HELPER, npub: 'npub_ruth', name: 'Ruth Bexley', ts: REQ_AT }], setStewardsResult: false });
+    h.press('Approve');
+    h.press('Approve as helper');
+    assert.equal(h.wrote.length, 1, 'staging: approving did not try to write the roster');
+    await settle(); h.draw();
+    assert.equal(JSON.parse(h.localStorage.getItem(HANDLED_KEY) || '{}')[HELPER], undefined,
+      'THE BUG (M1): a refused Approve was recorded as answered, which hides the request on every device');
+    h.remount();
+    assert.ok(h.words().includes('Ruth Bexley'), 'after a refused Approve and a reload, Ruth\'s request is gone'); }
+  // Remove, but every relay still lists her (setStewards false, outcome 'not-landed'): nothing recorded.
+  { const h = setup({ reqList: [], roster: [HELPER], since: { [HELPER]: REQ_AT + 3600 }, setStewardsResult: false, outcome: 'not-landed' });
+    h.press((n) => n.props && n.props.title === 'Revoke this helper');
+    h.press('Revoke');
+    await settle(); h.draw();
+    assert.equal(JSON.parse(h.localStorage.getItem(HANDLED_KEY) || '{}')[HELPER], undefined,
+      'a Remove that did not land was recorded as answered'); }
 });

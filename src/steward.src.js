@@ -1068,6 +1068,44 @@ const _legacyBookKeyHex = () => { try { return churchSkHeld() ? _hex(nip44ck(chu
 const VOICE_D = 'trinityone/voice:';
 const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward roster (owner-signed), d=stewards:<churchpub>; see STEWARD-ROSTER-DESIGN.md
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
+// THE OWNER'S ANSWERS TO "REQUESTS TO HELP" (2026-11-12, owner-reported on Living Word: a dismissed request "keeps
+// coming back", and other devices never knew it had been answered). d=stewardhandled:<churchpub>, CHURCH-KEY SIGNED,
+// one document per church holding { <requester pubkey>: <unix seconds> }. Since the audit of eb5c10eb (M2) the value
+// is the created_at of the request the owner answered (the REQUESTER's clock) — or, for a removal, when that helper was
+// put on the roster — so the reader's `r.ts <= value` compares one clock with itself; copies eb5c10eb wrote hold the
+// owner's clock at the answer and are read the same way. The console records an approve/remove only once it LANDED (M1).
+// SEALED TO THE CHURCH'S OWN KEY (NIP-44, conversation key nip44ck(churchSk, churchPub) — the self-conversation the
+// legacy finance book uses): the relay serves a church-authored document's ENVELOPE to that church's members (canRead's
+// default member rule; there is no rule of its own), so the list of would-be helpers must not be in the clear. Only a
+// console holding the church key can open it, which is also who may approve (DashStewardsPanel is owner-only).
+// MAX-MERGE, never replace: every write carries the whole map, and readers fold every copy they see by the larger time
+// per person, so two devices' writes cannot erase each other's entries once both have been read. The timestamp rule
+// is the reader's (pendingHelperRequests in app/stew-dashboard.jsx): a request NEWER than the entry shows again.
+// WRITERS: Steward.markStewardRequestHandled only. READERS: Steward.subscribeHandledStewardRequests only (→
+// window.useHandledStewardRequests → useHelperRequests in app/stew-dashboard.jsx).
+const STEWARDHANDLED_D = 'trinityone/stewardhandled:';
+let _hh = { cp: '', map: {} };
+const _hhListeners = new Set();
+function _hhScope() { const cp = (!actingChurch && churchPub) || ''; if (_hh.cp !== cp) _hh = { cp, map: {} }; return cp; }
+function _hhFold(at) {
+  let changed = false;
+  if (!at || typeof at !== 'object') return false;
+  for (const k of Object.keys(at)) {
+    const n = Number(at[k]);
+    if (!/^[0-9a-f]{64}$/.test(k) || !Number.isFinite(n) || n <= 0) continue;
+    if (n > (_hh.map[k] || 0)) { _hh.map[k] = n; changed = true; }
+  }
+  return changed;
+}
+function _hhOpen(e) {
+  if (!churchSkHeld() || !e || e.pubkey !== churchPub || !e.content) return null;
+  if ((e.tags || []).some(t => t[0] === 'deleted')) return null;
+  try {
+    const o = JSON.parse(nip44d(JSON.parse(e.content).e, nip44ck(churchSk, churchPub)));
+    return (o && o.cp === churchPub && o.at && typeof o.at === 'object') ? o.at : null;
+  } catch (x) { return null; }
+}
+function _hhEmit() { const snap = { ..._hh.map }; for (const fn of [..._hhListeners]) { try { fn(snap); } catch (e) {} } }
 const STEWARDREVOKE_D = 'trinityone/stewardrevoke:'; // church->removed-helper revocation notice (church-signed), d=stewardrevoke:<removed helper pub>; the one doc a revoked helper can still read (the roster that would tell them is no longer served). See gateway.mjs STEWARDREVOKE_D branches.
 const PIN_D = 'trinityone/pin:';            // a group's pinned message, d=pin:<groupId> (one per group; empty/deleted = unpinned)
 const HIDE_D = 'trinityone/hidden:';        // a removed/hidden message, d=hidden:<msgId> (one per message; deleted = restored)
@@ -8358,11 +8396,30 @@ window.Steward = {
     s = s.replace(/^trinityone-stewardinvite:/i, '').trim();
     return toPubHex(s);
   },
-  // requester side: scan/paste a church's invite → publish a steward request (signed by OUR key, naming the church)
-  requestSteward(payload) {
+  // THE INVITE CHECK, ON ITS OWN, so a screen can refuse a bad invite BEFORE it asks for a name (owner 2026-11-12:
+  // the name comes after the scan/paste). Pure: reads nothing from a relay, signs and sends nothing. requestSteward
+  // runs the same check, so a screen that skips it still cannot send to a bad invite.
+  // CALLERS: requestSteward (below); StewardWelcome onInvite (app/steward-root.jsx); DashBecomeStewardPanel onInvite
+  // (app/stew-dashboard.jsx).
+  checkStewardInvite(payload) {
     const cp = window.Steward.parseStewardInvite(payload);
-    if (!cp) return Promise.resolve({ ok: false, error: 'That doesn’t look like a church invite.' });
-    if (cp === churchPub) return Promise.resolve({ ok: false, error: 'That’s your own church.' });
+    if (!cp) return { ok: false, error: 'That doesn’t look like a church invite.' };
+    if (cp === churchPub) return { ok: false, error: 'That’s your own church.' };
+    return { ok: true, church: cp };
+  },
+  // requester side: scan/paste a church's invite → publish a steward request (signed by OUR key, naming the church)
+  // `name` IS THE NAME THE PERSON TYPED on the request screen. It was `lastProfile.name` — the console's cached CHURCH
+  // profile, not the person — so a brand-new helper always sent '' and someone who runs a church sent THAT church's
+  // name ("claims to be 'Trinity Church Littlehampton'"; owner-confirmed 2026-11-12). A request with no name is
+  // refused here, before anything is signed or sent; the screens show this error.
+  // CALLERS: StewardWelcome onInvite (app/steward-root.jsx — welcome screen, "Help run a church") and
+  // DashBecomeStewardPanel onInvite (app/stew-dashboard.jsx — Settings → Help run a church). No other caller.
+  requestSteward(payload, name) {
+    const chk = window.Steward.checkStewardInvite(payload);
+    if (!chk.ok) return Promise.resolve({ ok: false, error: chk.error });
+    const cp = chk.church;
+    const who = String(name == null ? '' : name).trim().slice(0, 60);
+    if (!who) return Promise.resolve({ ok: false, error: 'Add your name first.' });
     // SEALED TO THE CHURCH KEY, not the name key. Only the owner's console reads this document, and a
     // would-be steward may not yet hold the church name key — so this one is sealed to the church itself.
     // It named the requester in the clear: a list of people asking for authority in a congregation, which
@@ -8370,7 +8427,7 @@ window.Steward = {
     // leadership. If sealing is impossible we publish the request WITHOUT a name rather than with one; the
     // owner still sees the request and can identify it by key.
     let content;
-    try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: (lastProfile && lastProfile.name) || '' }), nip44ck(sk, cp)) }); }
+    try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: who }), nip44ck(sk, cp)) }); }
     catch (e) { content = JSON.stringify({ n: '' }); }
     return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }), sk))
       // A REQUEST NOBODY RECEIVED MUST NOT SAY "sent". The screen shows "✓ Request sent — the church's
@@ -8481,11 +8538,17 @@ window.Steward = {
         // was written before that and is still on relays. Read both. A request whose name will not open is
         // still shown — the owner sees the npub and can approve or refuse it — because dropping the request
         // would be worse than showing it unnamed.
+        // THE NAME IS WRITTEN BY THE REQUESTER, NOT BY US: anyone who knows the church's public key can publish a
+        // request, sealed or clear, carrying `name: 5`, `true`, `["x"]` or `{}`. The Helpers page splits it for the
+        // initials and renders it as text, so a non-string crashed the owner's whole console — on the very page
+        // where they would decline it (audit of 0252ae9a, M2). Keep a string only, trimmed and cut to the 60 the
+        // sender allows (requestSteward); anything else reads as no name, and the row still shows by its npub.
+        const asName = (x) => (typeof x === 'string' ? x.trim().slice(0, 60) : '');
         let name = '';
         try {
           const c = JSON.parse(e.content);
-          if (typeof c.n === 'string' && c.n) { try { name = (JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}).name || ''; } catch {} }
-          if (!name) name = c.name || '';
+          if (typeof c.n === 'string' && c.n) { try { name = asName((JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}).name); } catch {} }
+          if (!name) name = asName(c.name);
         } catch {}
         byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
         emit();
@@ -8493,6 +8556,48 @@ window.Steward = {
       oneose() { eosed = true; emit(); },
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // THE OWNER'S ANSWERS, read back — { <requester pubkey>: <unix seconds> } from the church's sealed stewardhandled:
+  // document (see STEWARDHANDLED_D). Owner console only: a delegate cannot open it, and gets {} (their banner then
+  // filters by roster alone, as before). Emits again whenever markStewardRequestHandled records an answer here.
+  subscribeHandledStewardRequests(onMap) {
+    const cp = _hhScope();
+    if (!cp || !churchSkHeld()) { onMap({}); return () => {}; }
+    _hhListeners.add(onMap);
+    onMap({ ..._hh.map });
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [STEWARDHANDLED_D + cp] }], {
+      onevent(e) { if (_hhScope() !== cp) return; if (_hhFold(_hhOpen(e))) _hhEmit(); },
+      oneose() {},
+    });
+    return () => { _hhListeners.delete(onMap); try { sub.close(); } catch {} };
+  },
+  // RECORD AN ANSWER — the owner declined (×), approved, or removed this requester; `at` is unix seconds (the answered
+  // request's created_at — see STEWARDHANDLED_D; default now).
+  // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
+  // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
+  // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).
+  // CALLERS: useHelperRequests().markHandled in app/stew-dashboard.jsx (the ×, add(), remove()).
+  markStewardRequestHandled(pk, at) {
+    const who = String(pk || '').toLowerCase();
+    const cp = _hhScope();
+    if (!cp || !churchSkHeld() || actingChurch || !/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(false);
+    const when = Math.floor(Number(at) || now());
+    if (_hhFold({ [who]: when })) _hhEmit();
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; try { sub.close(); } catch {} resolve(); };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [STEWARDHANDLED_D + cp] }], {
+        onevent(e) { if (_hhScope() === cp && _hhFold(_hhOpen(e))) _hhEmit(); },
+        oneose: finish,
+      });
+      setTimeout(finish, 5000);
+    }).then(() => {
+      if (_hhScope() !== cp || !churchSkHeld()) return false;
+      let content;
+      try { content = JSON.stringify({ e: nip44e(JSON.stringify({ cp, at: { ..._hh.map } }), nip44ck(churchSk, churchPub)) }); }
+      catch (e) { return false; }
+      return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDHANDLED_D + cp], ['t', NET]], content }), churchSk));
+    });
   },
   // remove the church key from THIS device (completing a handoff, or stepping away). The church lives on
   // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
@@ -12337,6 +12442,17 @@ window.Steward = {
   stewardLabels() { return { ..._stewardNames }; },
   // The by-line this console writes under, and the delegated stewards the owner has chosen to name publicly.
   voice() { _loadVoice(); return { self: _selfVoice ? { ..._selfVoice } : null, public: { ..._publicVoices } }; },
+  // THIS PERSON'S OWN NAME, for prefilling "Your name" on a request to help another church: the by-line they set under
+  // Settings → Your name as a steward (_voiceKey, per church). Their own church's first (churchPub — the console's own
+  // key), then the active identity's. NEVER lastProfile.name — that is the church, not the person. '' when unset (a
+  // brand-new helper). Read-only; writes nothing.
+  ownStewardName() {
+    for (const cp of [churchPub, pub]) {
+      if (!cp) continue;
+      try { const v = JSON.parse(lsGet('trinityone.steward.voice:' + cp) || 'null'); if (v && typeof v.name === 'string' && v.name.trim()) return v.name.trim().slice(0, 60); } catch (e) {}
+    }
+    return '';
+  },
   // REPUBLISHING THE ROSTER TO CHANGE A NAME MUST NOT CHANGE WHO IS ON IT. My first version rebuilt the list
   // from _stewardCaps, which holds only stewards who have capabilities recorded — so setting a by-line would
   // have quietly REMOVED every unscoped steward. A Remove button hidden inside a name change.

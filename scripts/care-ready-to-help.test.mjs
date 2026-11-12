@@ -269,7 +269,7 @@ function renderOverview({ needs, slots, careOn = true, allowed = true }) {
       throw new ReferenceError('needs a stub for ' + s);
     },
   });
-  const Comp = new Function('scope', `with (scope) { ${compile(fnBody(DASH_JSX, 'function DashOverview(', 'DashOverview'), 'DashOverview')} }`)(loose);
+  const Comp = new Function('scope', `with (scope) { ${compile(['DashOverview', 'pendingHelperRequests', 'useHelperRequests'].map(n => fnBody(DASH_JSX, 'function ' + n + '(', n)).join('\n'), 'DashOverview')} }`)(loose);
   return texts(reach(Comp({ onTab: noop, onNewPost: noop, onSettings: noop })));
 }
 test('(B) the Overview names the people who signed up to a need', () => {

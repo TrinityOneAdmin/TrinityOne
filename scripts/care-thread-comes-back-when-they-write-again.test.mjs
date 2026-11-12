@@ -234,7 +234,8 @@ test('PAGE: the conversation the steward is typing in outlives the row — reply
 
 // ── 4. THE OVERVIEW BANNER ───────────────────────────────────────────────────────────────────────────────
 function overview(list) {
-  const src = fnBody(DASH, 'function DashOverview(', 'DashOverview');
+  // + the shared helper-requests filter the banner reads (2026-11-12), real, from the same file
+  const src = ['DashOverview', 'pendingHelperRequests', 'useHelperRequests'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n');
   const tmp = join(tmpdir(), 'ovcare-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
