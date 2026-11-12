@@ -519,15 +519,51 @@ function suiteUpdateBase() {
   if (o) return o;
   return 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download';
 }
+// [AUDIT FIX #4 — date] Strictly-after by INSTANT, not by lexicographic string. git %cI stamps carry a
+// timezone offset, so two instants can order the opposite way as strings ("…+01:00" vs "…Z"). Date.parse →
+// epoch ms. An unparseable remote date is treated as NOT after (refuse); an unparseable/empty floor as
+// "remote is after" (there is nothing valid to beat).
+function suiteDateAfter(a, b) {
+  const ta = Date.parse(a);
+  if (!Number.isFinite(ta)) return false;
+  const tb = Date.parse(b);
+  if (!Number.isFinite(tb)) return true;
+  return ta > tb;
+}
+// [AUDIT FIX #2 — DoS] Hard ceilings on the download. A controlled suite-latest.json must never make the relay
+// buffer more than a JS bundle could ever be: ws + nostr-tools + web-push are pure JS (a few MB today), so
+// 100 MiB is generous headroom and still caps OOM on a phone-class box. The detached Ed25519 signature is a
+// few hundred bytes → 64 KiB is ample.
+const SUITE_BUNDLE_MAX_BYTES = 100 * 1024 * 1024;
+const SUITE_SIG_MAX_BYTES = 64 * 1024;
+// Read a fetch body under a hard ceiling: refuse on an over-cap Content-Length, AND abort mid-stream if the
+// streamed bytes exceed the cap even when Content-Length lied or was absent — never buffer an unbounded body.
+async function suiteReadCapped(resp, maxBytes, label) {
+  const clen = Number(resp.headers.get('content-length'));
+  if (Number.isFinite(clen) && clen > maxBytes) throw new Error(label + ' content-length ' + clen + ' > cap ' + maxBytes);
+  if (!resp.body) { const b = Buffer.from(await resp.arrayBuffer()); if (b.length > maxBytes) throw new Error(label + ' ' + b.length + ' > cap ' + maxBytes); return b; }
+  const reader = resp.body.getReader();
+  const chunks = []; let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) { try { await reader.cancel(); } catch {} throw new Error(label + ' exceeded cap (' + total + ' > ' + maxBytes + ')'); }
+      chunks.push(Buffer.from(value));
+    }
+  } finally { try { reader.releaseLock(); } catch {} }
+  return Buffer.concat(chunks, total);
+}
 // Pure decision: is the remote bundle NEWER than what this box runs? sha (git) is not orderable, so "newer"
 // means a different valid sha; `date` (ISO) carries the ordering and gives anti-rollback at the pre-download
-// gate. Same sha → no-op; older/equal date → refused.
+// gate. Same sha → no-op; older/equal date (by INSTANT) → refused.
 function suiteIsNewer(remote, mine) {
   if (!remote || typeof remote.sha !== 'string' || !/^[0-9a-f]{40}$/.test(remote.sha)) return false;
   if (typeof remote.date !== 'string' || !remote.date) return false;
   if (remote.sha === (mine && mine.sha)) return false;
   const md = (mine && mine.date) || '';
-  if (!(remote.date > md)) return false;
+  if (!suiteDateAfter(remote.date, md)) return false;
   return true;
 }
 let _suiteAutoBusy = false;
@@ -553,7 +589,6 @@ async function suiteAutoUpdate(why, opts = {}) {
   const stTgz    = join(staging, 'bundle.tgz');
   const stSig    = join(staging, 'bundle.sig');
   const stReady  = join(staging, 'READY');
-  const discard  = () => { try { rmSync(stTgz, { force: true }); } catch {} try { rmSync(stSig, { force: true }); } catch {} try { rmSync(stReady, { force: true }); } catch {} };
   try {
     // 1. fetch the manifest
     let remote = null;
@@ -564,40 +599,61 @@ async function suiteAutoUpdate(why, opts = {}) {
     if (!remote || typeof remote !== 'object') return { ok: false, reason: 'no-manifest' };
     // 2. newer than mine (sha differs AND date strictly newer)?
     if (!suiteIsNewer(remote, build)) return { ok: false, reason: 'not-newer' };
-    // 3. download tgz + sig to staging/.tmp, then atomic-rename into staging/
+    // 3. [AUDIT FIX #1 — SSRF] Pin BOTH downloads to the SAME origin the manifest was fetched from. A
+    // controlled/MITM'd suite-latest.json must not be able to aim the relay's fetch at an arbitrary (e.g.
+    // internal) host — that would be a probe primitive. `url`/`sig`, when present, must share scheme+host+port
+    // with `base`; when absent they are constructed from `base`. Either mismatch → refuse, fetch nothing.
+    let baseOrigin;
+    try { baseOrigin = new URL(base).origin; } catch { return { ok: false, reason: 'bad-base' }; }
+    const pinUrl = (v, fallbackPath) => {
+      if (typeof v !== 'string' || !v) return base + fallbackPath;     // absent → build from the pinned base
+      if (!/^https?:\/\//i.test(v)) return null;
+      let o; try { o = new URL(v).origin; } catch { return null; }
+      return o === baseOrigin ? v : null;                               // foreign origin → refuse
+    };
+    const tgzUrl = pinUrl(remote.url, '/suite-js-bundle.tgz');
+    const sigUrl = pinUrl(remote.sig, '/suite-js-bundle.tgz.sig');
+    if (tgzUrl === null || sigUrl === null) return { ok: false, reason: 'url-origin-mismatch' };
+    // 4. [AUDIT FIX #3 — update-DoS] download tgz + sig to staging/.tmp and VERIFY THERE; nothing is promoted
+    // over a previously-good staged bundle until the NEW bytes pass signature + anti-rollback. A forged
+    // newer-dated manifest with bad bytes therefore cannot wipe a good staged bundle. Downloads are size-capped
+    // ([AUDIT FIX #2 — DoS]) so a lying/huge Content-Length or body cannot OOM the box.
     const tmp = join(staging, '.tmp');
-    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+    const cleanTmp = () => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} };
+    cleanTmp();
     mkdirSync(tmp, { recursive: true });
-    const tgzUrl = (typeof remote.url === 'string' && /^https?:\/\//.test(remote.url)) ? remote.url : (base + '/suite-js-bundle.tgz');
-    const sigUrl = (typeof remote.sig === 'string' && /^https?:\/\//.test(remote.sig)) ? remote.sig : (base + '/suite-js-bundle.tgz.sig');
-    let tgzBuf, sigBuf;
+    const maxTgz = opts.maxBundleBytes || SUITE_BUNDLE_MAX_BYTES;   // test hook; defaults used in production
+    const maxSig = opts.maxSigBytes || SUITE_SIG_MAX_BYTES;
+    const tmpTgz = join(tmp, 'bundle.tgz'), tmpSig = join(tmp, 'bundle.sig');
     try {
       const tr = await fetch(tgzUrl, { cache: 'no-store', signal: AbortSignal.timeout(900000) });
       if (!tr.ok) throw new Error('HTTP ' + tr.status + ' for the bundle');
-      tgzBuf = Buffer.from(await tr.arrayBuffer());
+      const tgzBuf = await suiteReadCapped(tr, maxTgz, 'bundle');
       if (tgzBuf.length < 512) throw new Error('bundle too small (' + tgzBuf.length + ' bytes)');
       const sr = await fetch(sigUrl, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
       if (!sr.ok) throw new Error('HTTP ' + sr.status + ' for the signature');
-      sigBuf = Buffer.from(await sr.arrayBuffer());
+      const sigBuf = await suiteReadCapped(sr, maxSig, 'signature');
+      writeFileSync(tmpTgz, tgzBuf); writeFileSync(tmpSig, sigBuf);
     } catch (e) {
-      try { rmSync(tmp, { recursive: true, force: true }); } catch {}
-      return { ok: false, reason: 'download-failed', error: String((e && e.message) || e) };
+      cleanTmp();
+      const msg = String((e && e.message) || e);
+      const reason = /\bcap\b|content-length/i.test(msg) ? 'too-large' : 'download-failed';
+      return { ok: false, reason, error: msg };
     }
-    const tmpTgz = join(tmp, 'bundle.tgz'), tmpSig = join(tmp, 'bundle.sig');
-    writeFileSync(tmpTgz, tgzBuf); writeFileSync(tmpSig, sigBuf);
-    // Clear any stale READY (a previous staged bundle) BEFORE the new bytes land, so READY never points at a
-    // mix, then rename the verified-nothing-yet files into place and prove them below.
+    // 5. pre-verify the detached Ed25519 signature over the EXACT .tmp bytes, with the shared verifier + key.
+    const vr = spawnSync(node, [verifier, tmpTgz, tmpSig, pubkey], { timeout: vTimeout, stdio: 'ignore' });
+    if (!vr || vr.status !== 0) { cleanTmp(); return { ok: false, reason: 'bad-signature', status: vr && vr.status }; }
+    // 6. anti-rollback: the remote date must exceed BOTH my build date and any recorded installed date,
+    //    compared by INSTANT ([AUDIT FIX #4]).
+    let floor = (build && build.date) || '';
+    try { const st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8')); if (st && typeof st.installedDate === 'string' && suiteDateAfter(st.installedDate, floor)) floor = st.installedDate; } catch {}
+    if (!suiteDateAfter(remote.date, floor)) { cleanTmp(); return { ok: false, reason: 'anti-rollback' }; }
+    // 7. PROMOTE the verified .tmp bytes and write READY (does NOT apply — the shell reads this at the chosen
+    //    time). Only now is a pre-existing good bundle replaced; READY is cleared first so it never points at a
+    //    mix, then rewritten atomically.
     try { rmSync(stReady, { force: true }); } catch {}
     renameSync(tmpTgz, stTgz); renameSync(tmpSig, stSig);
-    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
-    // 4. pre-verify the detached Ed25519 signature over the EXACT bytes, with the shared verifier + pinned key.
-    const vr = spawnSync(node, [verifier, stTgz, stSig, pubkey], { timeout: vTimeout, stdio: 'ignore' });
-    if (!vr || vr.status !== 0) { discard(); return { ok: false, reason: 'bad-signature', status: vr && vr.status }; }
-    // 5. anti-rollback: the remote date must exceed BOTH my build date and any recorded installed date.
-    let floor = (build && build.date) || '';
-    try { const st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8')); if (st && typeof st.installedDate === 'string' && st.installedDate > floor) floor = st.installedDate; } catch {}
-    if (!(remote.date > floor)) { discard(); return { ok: false, reason: 'anti-rollback' }; }
-    // 6. write READY (does NOT apply — the shell reads this at the chosen time)
+    cleanTmp();
     const ready = { version: String(remote.version || remote.sha), sha: remote.sha, date: remote.date };
     const tmpReady = stReady + '.tmp';
     writeFileSync(tmpReady, JSON.stringify(ready) + '\n'); renameSync(tmpReady, stReady);

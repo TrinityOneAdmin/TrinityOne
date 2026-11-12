@@ -45,7 +45,7 @@ const BUILD = { sha: 'b'.repeat(40), date: '2026-01-01T00:00:00Z' };   // what t
 
 // ── The localhost fixture: switchable manifest/tgz/sig; counts hits so case (e) can prove "never ran". ───────
 let server, baseUrl, hits = 0;
-let manifest = null, serveTgz = TGZ, serveSig = SIG;
+let manifest = null, serveTgz = TGZ, serveSig = SIG, chunkTgz = false;
 
 before(async () => {
   writeFileSync(PUBKEY_PATH, publicKey.export({ type: 'spki', format: 'pem' }));
@@ -53,7 +53,17 @@ before(async () => {
     hits++;
     const url = req.url.split('?')[0];
     if (url === '/suite-latest.json' && manifest) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(manifest)); return; }
-    if (url === '/suite-js-bundle.tgz') { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(serveTgz); return; }
+    if (url === '/suite-js-bundle.tgz') {
+      if (chunkTgz) {
+        // No Content-Length: body streams in chunks, so only the mid-stream byte-count guard can catch an
+        // over-cap body here — the Content-Length pre-check cannot (there is none to read).
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Transfer-Encoding': 'chunked' });
+        const half = serveTgz.length >> 1;
+        res.write(serveTgz.subarray(0, half)); res.end(serveTgz.subarray(half));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(serveTgz); return;
+    }
     if (url === '/suite-js-bundle.tgz.sig') { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(serveSig); return; }
     res.writeHead(404); res.end('not found');
   });
@@ -162,6 +172,91 @@ test('anti-rollback: a recorded installedDate newer than the remote is refused e
     assert.ok(!existsSync(readyPath(d)), 'no READY when anti-rollback fires');
     assert.ok(!existsSync(tgzPath(d)), 'the rolled-back bundle is discarded');
   } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+// ── Security-hardening fixes (independent audit, 2026-11-12). Each goes RED without its fix. ──────────────────
+
+test('[SSRF] a manifest whose url/sig point at a FOREIGN origin is refused; the foreign host is never contacted', async () => {
+  const d = freshDataDir();
+  try {
+    // Same sha/date as case (a) so the newness + anti-rollback gates would pass — only the origin pin stops it.
+    // The foreign url is a DIFFERENT port (origin = scheme+host+port), pointed at a port we never listen on, so
+    // if the code ever fetched it the test would error/hang instead of returning a clean refusal.
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2',
+                 url: 'http://127.0.0.1:1/suite-js-bundle.tgz', sig: 'http://127.0.0.1:1/suite-js-bundle.tgz.sig' };
+    serveTgz = TGZ; serveSig = SIG; chunkTgz = false;
+    const before = hits;
+    const r = await api.suiteAutoUpdate('test', opts(d));
+    assert.equal(r.reason, 'url-origin-mismatch', 'a foreign download origin must be refused: ' + JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY for a foreign-origin manifest');
+    assert.ok(!existsSync(tgzPath(d)), 'nothing staged for a foreign-origin manifest');
+    assert.equal(hits - before, 1, 'only the manifest (1 hit) is fetched — the foreign host is never contacted');
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[size cap] an over-cap Content-Length is refused before buffering — no READY', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = SIG; chunkTgz = false;   // TGZ is 2048B; cap it at 1024 via the test hook
+    const r = await api.suiteAutoUpdate('test', opts(d, { maxBundleBytes: 1024 }));
+    assert.equal(r.reason, 'too-large', 'a bundle over the cap must be refused: ' + JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY when the bundle exceeds the cap');
+    assert.ok(!existsSync(tgzPath(d)), 'nothing staged when the bundle exceeds the cap');
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[size cap] a chunked (no Content-Length) over-cap body is aborted mid-stream — no READY', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = SIG; chunkTgz = true;    // served chunked: no Content-Length, so ONLY the stream guard can catch it
+    const r = await api.suiteAutoUpdate('test', opts(d, { maxBundleBytes: 1024 }));
+    assert.equal(r.reason, 'too-large', 'an over-cap streamed body must be aborted: ' + JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY when the streamed body exceeds the cap');
+    assert.ok(!existsSync(tgzPath(d)), 'nothing staged when the streamed body exceeds the cap');
+  } finally { chunkTgz = false; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[verify-in-.tmp] a forged newer-dated bad-sig manifest leaves a previously-good staged bundle intact', async () => {
+  const d = freshDataDir();
+  try {
+    // 1) stage a genuinely-good bundle: READY + bundle.tgz/.sig all present and valid.
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = SIG; chunkTgz = false;
+    const first = await api.suiteAutoUpdate('test', opts(d));
+    assert.ok(first.ok && first.staged, 'precondition: a good bundle stages: ' + JSON.stringify(first));
+    const goodTgz = readFileSync(tgzPath(d));
+    const goodSig = readFileSync(sigPath(d));
+    const goodReady = readFileSync(readyPath(d), 'utf8');
+    // 2) a forged manifest: NEWER date (passes the pre-gate) but the signature is over the WRONG bytes.
+    manifest = { sha: 'f'.repeat(40), date: '2026-07-01T00:00:00Z', version: 'v3' };
+    serveTgz = TGZ;
+    serveSig = cryptoSign(null, Buffer.from('forged — signed over the WRONG bytes'), privateKey);
+    const r = await api.suiteAutoUpdate('test', opts(d));
+    assert.equal(r.reason, 'bad-signature', 'the forged bundle must be refused at verify: ' + JSON.stringify(r));
+    // 3) the ORIGINAL good staged bundle must be exactly as it was — the forged bytes never landed.
+    assert.ok(existsSync(tgzPath(d)) && existsSync(sigPath(d)) && existsSync(readyPath(d)), 'the good staged bundle survives');
+    assert.ok(readFileSync(tgzPath(d)).equals(goodTgz), 'bundle.tgz is unchanged by the forged attempt');
+    assert.ok(readFileSync(sigPath(d)).equals(goodSig), 'bundle.sig is unchanged by the forged attempt');
+    assert.equal(readFileSync(readyPath(d), 'utf8'), goodReady, 'READY still points at the good v2, not the forged v3');
+    assert.ok(!existsSync(join(d, 'suite', 'staging', '.tmp')), '.tmp is cleaned up on the failure path');
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[date] anti-rollback / newness decide by INSTANT, not lexicographic string (TZ offsets)', () => {
+  // A later wall-clock STRING that is an EARLIER instant must NOT count as newer.
+  // mine = 2026-06-01T00:00:00Z ; remote string "…T01:00:00+05:00" = 2026-05-31T20:00:00Z (earlier instant).
+  const mineA = { sha: 'b'.repeat(40), date: '2026-06-01T00:00:00Z' };
+  assert.equal(api.suiteIsNewer({ sha: 'a'.repeat(40), date: '2026-06-01T01:00:00+05:00' }, mineA), false,
+    'a lexicographically-later but chronologically-earlier date is NOT newer');
+  // An earlier wall-clock STRING that is a LATER instant MUST count as newer.
+  // mine = 2026-06-01T05:00:00+05:00 = 2026-06-01T00:00:00Z ; remote "…T01:00:00Z" is a later instant but a smaller string.
+  const mineB = { sha: 'b'.repeat(40), date: '2026-06-01T05:00:00+05:00' };
+  assert.equal(api.suiteIsNewer({ sha: 'a'.repeat(40), date: '2026-06-01T01:00:00Z' }, mineB), true,
+    'a lexicographically-smaller but chronologically-later date IS newer');
+  // An unparseable remote date is refused.
+  assert.equal(api.suiteIsNewer({ sha: 'a'.repeat(40), date: 'not-a-date' }, mineA), false, 'an unparseable date is refused');
 });
 
 test('suiteIsNewer is a pure decision; suiteUpdateBase honours the env override', () => {
