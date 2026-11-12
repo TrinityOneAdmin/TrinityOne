@@ -11594,10 +11594,12 @@ function DashBecomeStewardPanel() {
   // steward". Never this church's name (which is what used to be sent). requestSteward refuses an empty one.
   const [myName, setMyName] = React.useState(() => (window.Steward && window.Steward.ownStewardName && window.Steward.ownStewardName()) || '');
   const svg = showQR && window.Steward.qrSVG ? window.Steward.qrSVG(code) : '';
-  if (!code) return null;
   // TWO STEPS (owner 2026-11-12): the invite first — scanned or pasted, never blocked for want of a name — then, only
   // for an invite that checks out, "Your name" and Send. `nameFor` is the checked invite waiting on step 2.
+  // ABOVE the early return, like every hook here: `code` goes to '' when the church is cleared, and a hook below
+  // the return would change the hook count — React #310 (scripts/no-hook-after-an-early-return.test.mjs).
   const [nameFor, setNameFor] = React.useState('');
+  if (!code) return null;
   const onInvite = (payload) => {
     setScanInvite(false);
     const chk = window.Steward.checkStewardInvite(payload);

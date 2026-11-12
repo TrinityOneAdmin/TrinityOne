@@ -8538,11 +8538,17 @@ window.Steward = {
         // was written before that and is still on relays. Read both. A request whose name will not open is
         // still shown — the owner sees the npub and can approve or refuse it — because dropping the request
         // would be worse than showing it unnamed.
+        // THE NAME IS WRITTEN BY THE REQUESTER, NOT BY US: anyone who knows the church's public key can publish a
+        // request, sealed or clear, carrying `name: 5`, `true`, `["x"]` or `{}`. The Helpers page splits it for the
+        // initials and renders it as text, so a non-string crashed the owner's whole console — on the very page
+        // where they would decline it (audit of 0252ae9a, M2). Keep a string only, trimmed and cut to the 60 the
+        // sender allows (requestSteward); anything else reads as no name, and the row still shows by its npub.
+        const asName = (x) => (typeof x === 'string' ? x.trim().slice(0, 60) : '');
         let name = '';
         try {
           const c = JSON.parse(e.content);
-          if (typeof c.n === 'string' && c.n) { try { name = (JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}).name || ''; } catch {} }
-          if (!name) name = c.name || '';
+          if (typeof c.n === 'string' && c.n) { try { name = asName((JSON.parse(nip44d(c.n, nip44ck(sk, e.pubkey))) || {}).name); } catch {} }
+          if (!name) name = asName(c.name);
         } catch {}
         byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
         emit();

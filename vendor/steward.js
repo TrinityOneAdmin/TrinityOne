@@ -21795,16 +21795,17 @@ zoo`.split("\n");
             emit();
             return;
           }
+          const asName = (x) => typeof x === "string" ? x.trim().slice(0, 60) : "";
           let name = "";
           try {
             const c = JSON.parse(e.content);
             if (typeof c.n === "string" && c.n) {
               try {
-                name = (JSON.parse(decrypt3(c.n, getConversationKey(sk, e.pubkey))) || {}).name || "";
+                name = asName((JSON.parse(decrypt3(c.n, getConversationKey(sk, e.pubkey))) || {}).name);
               } catch {
               }
             }
-            if (!name) name = c.name || "";
+            if (!name) name = asName(c.name);
           } catch {
           }
           byPub.set(e.pubkey, { pubkey: e.pubkey, npub: npubEncode(e.pubkey), name, ts: e.created_at });
