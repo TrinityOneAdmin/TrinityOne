@@ -19,6 +19,17 @@
     if (sync.ok === false) return when + ' \u2014 failed' + (/peer refused/i.test(String(sync.error || '')) ? ' \u00b7 trust list or a clock may be wrong' : '');
     return when + (sync.imported ? ' \u00b7 pulled ' + sync.imported : ' \u00b7 nothing new');
   }
+  // The Relay-health "Relay sync" row: one word for whether syncing works, from the same public /status.sync
+  // as the line above (box-wide, no church in it). `peers` is how many churches here have another relay to
+  // sync with. Note: a relay started with RELAY_SYNC=0 never runs a pass and /status does not say so, so it
+  // reads "Waiting" for ever if it has peers.
+  function syncStateText(sync) {
+    if (!sync) return { text: '\u2014', bad: false };
+    if (sync.running) return { text: 'Syncing now', bad: false };
+    if (!sync.at) return sync.peers ? { text: 'Waiting for the first check', bad: false } : { text: 'No other relays yet', bad: false };
+    if (sync.ok === false) return { text: 'Not working', bad: true };
+    return { text: 'Working', bad: false };
+  }
   function reachInfo() {
     const wssUrl = publicBase.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:') + '/relay';
     const consoleUrl = publicBase + '/steward.html';
@@ -113,6 +124,8 @@
       }
       renderDisk(s.storage);
       // sync health — the point of the card is 'is this working?', not a button
+      const sm = document.getElementById('syncMsg');
+      if (sm) { const st = syncStateText(s.sync); sm.textContent = st.text; sm.style.color = st.bad ? 'var(--clay-ink)' : ''; }
       const sw = document.getElementById('syncWhen');
       if (sw && s.sync) {
         sw.textContent = syncLineText(s.sync, Date.now() / 1000);
@@ -925,9 +938,9 @@
     } catch (err) { e.target.checked = !on; m.style.color = 'var(--clay-ink)'; m.textContent = '· ✗ ' + (err.message || 'failed'); }
   });
   document.getElementById('syncNow')?.addEventListener('click', async () => {
-    // Feedback goes to #syncNowMsg, which sits under THIS button in the Settings card. It used to write to
-    // #syncMsg — the Relay-health row on the DASHBOARD tab, hidden while Settings is open — so a click (and
-    // its errors) produced no visible result on the tab the operator was looking at.
+    // Feedback goes to #syncNowMsg, right under THIS button. The button now lives in the Dashboard's Relay health
+    // card beside the sync rows (it was in Settings' software-update card, labelled like an update check);
+    // #syncMsg stays the box's sync state from /status, so a click's own result does not overwrite it.
     const m = document.getElementById('syncNowMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'syncing…';
     try {
       const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
@@ -1231,6 +1244,9 @@
     // the storage figures come from the same admin-only /stats, so they go with it rather than sitting
     // there as a stale reading from before the token was cleared
     if (locked) { const sr = document.getElementById('storeRow'); if (sr) sr.style.display = 'none'; }
+    // "Sync now" needs the admin token too (/sync-now answers 401 without it), so it goes with the lock
+    // rather than sitting on the Dashboard as a button that can only fail
+    const sn = document.getElementById('syncNowBox'); if (sn) sn.style.display = locked ? 'none' : '';
   }
   function wireTabs() {
     TABS.forEach((t, i) => {

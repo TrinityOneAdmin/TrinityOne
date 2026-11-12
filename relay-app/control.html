@@ -140,6 +140,16 @@
     .row .k { width:100%; }
     .row .v { white-space:normal; word-break:break-all; }
     .btn-ghost, .btn-clay { padding:11px 15px; }   /* ≥44px touch targets */
+    /* header: the title takes the whole first line and the two buttons drop below it — squeezed beside
+       them it wrapped one word per line and ran under Back */
+    .hero { flex-wrap:wrap; }
+    .hero > div { flex:1 1 calc(100% - 26px) !important; }
+    /* a toggle's status note ("· public via Tailscale — managed there") goes on its own line under the row,
+       instead of squeezing the description to one word per line */
+    .toggle-row { flex-wrap:wrap; }
+    .toggle-row > .wz-meta { order:3; flex:1 1 100%; }
+    .card-head { flex-wrap:wrap; }
+    .card-head > .apply-tag { order:3; flex-basis:calc(100% - 45px); margin-left:45px; }   /* under the title, past the 34px icon */
   }
   /* themed dialog — window.confirm() can't be styled, and the codebase already notes it is unreliable in a
      webview (Update and Restore use a two-click armed pattern for exactly that reason). This matches the
@@ -167,11 +177,13 @@
      Grid is used here instead of CSS multi-column because WebKit (the Suite's WKWebView on Mac)
      mishandles break-inside:avoid — it split and mis-balanced cards — and multi-column flowed cards
      top-to-bottom down each column, scrambling the reading order. Grid runs left-to-right in rows. */
-  .deck3 { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; align-items:start; }
+  /* minmax(0,1fr), never bare 1fr: 1fr is minmax(auto,1fr), so one long unbreakable church key set the whole
+     column's minimum and laid a phone's Settings out 689px wide, shrunk to ~57% (measured 2026-11-12). */
+  .deck3 { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:16px; align-items:start; }
   .deck3 > .card { margin-bottom:0; }
   /* a third of a laptop screen is too narrow for an npub row; step down well before that bites */
-  @media (max-width:1500px) { .deck3 { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width:1000px) { .deck3 { grid-template-columns: 1fr; } }
+  @media (max-width:1500px) { .deck3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width:1000px) { .deck3 { grid-template-columns: minmax(0, 1fr); } }
   .card-head { display:flex; align-items:flex-start; gap:11px; margin-bottom:11px; }
   .hd-ic { width:34px; height:34px; border-radius:10px; background:var(--surface-2); color:var(--clay);
            display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -379,7 +391,7 @@
     <div class="stat" title="Phones and computers connected right now"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
     <div class="stat" title="Messages passed along since midnight"><div class="n" id="s-today">—</div><div class="l">Sent today</div></div>
     <div class="stat" title="Photos and files saved on this relay"><div class="n" id="s-media">—</div><div class="l">Media stored</div></div>
-    <div class="stat" title="Data moved since you opened this page"><div class="n" id="s-traffic">—</div><div class="l">Traffic (session)</div></div>
+    <div class="stat" title="Data moved since the relay last started"><div class="n" id="s-traffic">—</div><div class="l">Traffic since start</div></div>
   </div>
 
   <!-- card deck: auto-fit grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
@@ -436,6 +448,12 @@
     <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>
     <div class="row"><span class="k">Relay sync</span><span class="v" id="syncMsg" style="font-weight:600">—</span></div>
     <div class="row"><span class="k">Last checked</span><span class="v" id="syncWhen">—</span></div>
+    <!-- Pulls anything new from the churches' other relays now. Was "Check sync now" in Settings' software card,
+         titled "Check for a newer version". Hidden while locked (control.js syncSettingsLock): it needs the token. -->
+    <div id="syncNowBox" style="margin-top:10px">
+      <button class="btn btn-ghost" id="syncNow" title="Fetch anything new from your church's other relays now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg>Sync now</button>
+      <div class="hint" id="syncNowMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
+    </div>
     <!-- Storage: only a relay with a limit set can be "x% full", so the meter appears only when one is.
          Uncapped, there is no proportion to draw and we say the plain truth instead. -->
     <div id="storeRow" style="margin-top:14px; display:none">
@@ -448,7 +466,7 @@
       <div class="bar-track"><div class="bar-fill" id="diskFill" style="width:0%"></div></div>
       <div class="meter-note" id="diskNote"></div>
     </div>
-    <div class="muted" style="margin-top:8px">Each church can trust more than one relay, and this box keeps itself level with theirs automatically. Updating and syncing on demand live in <b>Settings</b>.</div>
+    <div class="muted" style="margin-top:8px">Each church can trust more than one relay, and this box keeps itself level with theirs automatically. Updates are in <b>Settings</b>.</div>
   </div>
 
   </div><!-- /deck -->
@@ -594,7 +612,7 @@
         </div>
         <div class="sub-row">
           <div class="sub-count"><span class="sub-n" id="subsCount">—</span><span class="sub-l" id="subsLabel">subscribers</span></div>
-          <button class="btn btn-ghost" id="dlSubs" title="Download the list of phones that receive notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
+          <button class="btn btn-ghost" id="dlSubs" title="Download the email list as a spreadsheet file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
         </div>
       </section>
 
@@ -619,10 +637,6 @@
         <div class="hint" id="originMsg" role="status" aria-live="polite" style="min-height:1.2em">Update source: where this box fetches the app installers it hands out from. The software card below says where its own code comes from.</div>
         <div id="u-body" class="muted" style="margin-top:10px">Checking for updates…</div>
         <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-2)">
-          <div class="wz-actions">
-            <button class="btn btn-ghost" id="syncNow" title="Check for a newer version now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg>Check sync now</button>
-          </div>
-          <div class="hint" id="syncNowMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
           <div class="hint">Updating the relay's software does <b>not</b> update the app installer it hands out — those are separate, and the installer has its own card below.</div>
         </div>
         <div class="toggle-row" style="margin-top:10px">
