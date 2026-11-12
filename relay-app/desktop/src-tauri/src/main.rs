@@ -827,6 +827,40 @@ fn reload_webview(app: &AppHandle) {
     }
 }
 
+// ── Relay process host (apply seam) ─────────────────────────────────────────────────────────────
+// The apply orchestration (maybe_apply / attempt_apply / spawn_and_wait / rollback_and_restart) needs exactly
+// three capabilities from the Tauri shell: spawn the relay child (parking it in the managed Relay slot), stop
+// the current child, and point the control webview at the freshly-served app. Those three are the ONLY coupling
+// to AppHandle. Factoring them behind this trait lets the end-to-end apply harness drive the REAL orchestration
+// against a REAL `node scripts/gateway.mjs` child with no Tauri runtime, while production keeps byte-identical
+// behaviour through TauriHost — which delegates spawn/reload to the UNCHANGED spawn_relay / reload_webview free
+// fns and keeps the exact take+kill the apply path used inline at its two stop points. This is a pure seam: it
+// moves no verify, anti-rollback, swap or health decision — those all stay in attempt_apply.
+trait RelayHost {
+    fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>>;
+    fn stop_relay(&self);
+    fn reload_webview(&self);
+}
+
+// Production host: delegates verbatim to the existing free fns + the existing Relay-slot kill.
+struct TauriHost {
+    app: AppHandle,
+}
+
+impl RelayHost for TauriHost {
+    fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
+        spawn_relay(&self.app, code_dir, payload, data_dir, log)
+    }
+    fn stop_relay(&self) {
+        if let Some(child) = self.app.state::<Relay>().0.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
+    fn reload_webview(&self) {
+        reload_webview(&self.app);
+    }
+}
+
 // The payload's own build date (version.txt line 2 = git %cI), for the anti-rollback floor. Empty on an
 // unstamped working tree ($Format…) — treated by date_after as "nothing to beat".
 fn read_version_date(payload: &Path) -> String {
@@ -840,7 +874,7 @@ fn read_version_date(payload: &Path) -> String {
 // Returns whether the relay became reachable. Shared by apply-start, recover, and rollback.
 #[allow(clippy::too_many_arguments)]
 fn spawn_and_wait(
-    app: &AppHandle,
+    host: &dyn RelayHost,
     dir: &Path,
     payload: &Path,
     data_dir: &Path,
@@ -849,7 +883,7 @@ fn spawn_and_wait(
     cur_alive: &mut Arc<AtomicBool>,
 ) -> bool {
     *cur_code_dir = dir.to_path_buf();
-    match spawn_relay(app, dir, payload, data_dir, log) {
+    match host.spawn_relay(dir, payload, data_dir, log) {
         Some(a) => {
             *cur_alive = a;
             wait_port_up(Duration::from_secs(45))
@@ -865,7 +899,7 @@ fn spawn_and_wait(
 // since a retain failure is a local-disk problem, not a bad bundle.
 #[allow(clippy::too_many_arguments)]
 fn rollback_and_restart(
-    app: &AppHandle,
+    host: &dyn RelayHost,
     suite_dir: &Path,
     payload: &Path,
     data_dir: &Path,
@@ -896,8 +930,8 @@ fn rollback_and_restart(
         }
         RollbackTarget::Keep => active.to_path_buf(), // unreachable (we only call with health_ok == false)
     };
-    spawn_and_wait(app, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
-    reload_webview(app);
+    spawn_and_wait(host, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
+    host.reload_webview();
     // Keep the previous installed identity (we reverted); mark lastApplied=today so a bad bundle isn't retried
     // in a hot loop, and record the rollback for the UI.
     let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
@@ -912,7 +946,7 @@ fn rollback_and_restart(
 // OUTSIDE the keep-awake-off / token early-continues so turning keep-awake off never disables auto-update.
 #[allow(clippy::too_many_arguments)]
 fn maybe_apply(
-    app: &AppHandle,
+    host: &dyn RelayHost,
     suite_dir: &Path,
     payload: &Path,
     data_dir: &Path,
@@ -965,7 +999,7 @@ fn maybe_apply(
     }
     applog(log, &format!("suite: apply window reached ({today} {now_min}min >= {target_min}min); applying staged {r_version}"));
     attempt_apply(
-        app, suite_dir, payload, data_dir, log, node, &r_version, &r_sha, &r_date, &state_raw,
+        host, suite_dir, payload, data_dir, log, node, &r_version, &r_sha, &r_date, &state_raw,
         &today, at_raw.trim(), cur_code_dir, cur_alive, cooldown_until,
     );
 }
@@ -974,7 +1008,7 @@ fn maybe_apply(
 // one it was already running, last-good, or the baked-in payload) and never leaves a half-applied active/.
 #[allow(clippy::too_many_arguments)]
 fn attempt_apply(
-    app: &AppHandle,
+    host: &dyn RelayHost,
     suite_dir: &Path,
     payload: &Path,
     data_dir: &Path,
@@ -1024,15 +1058,13 @@ fn attempt_apply(
     // 4. Stop the relay and confirm it is fully down (pid gone AND port free) before touching active/.
     let prev_dir = cur_code_dir.clone();
     applog(log, "suite: stopping relay for code swap");
-    if let Some(child) = app.state::<Relay>().0.lock().unwrap().take() {
-        let _ = child.kill();
-    }
+    host.stop_relay();
     if !wait_stopped(cur_alive, Duration::from_secs(20)) {
         // [AUDIT FIX #3] Back off before retrying so we don't kill→20s-wait→respawn every ~60s against a
         // wedged child. The relay never swapped, so restarting prev_dir keeps the church online meanwhile.
         *cooldown_until = Some(Instant::now() + APPLY_COOLDOWN);
         applog(log, "suite: APPLY aborted — relay did not stop cleanly; restarting current code, keeping staging; backing off apply ~1h");
-        spawn_and_wait(app, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        spawn_and_wait(host, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
         return;
     }
 
@@ -1043,13 +1075,13 @@ fn attempt_apply(
     let _ = std::fs::remove_dir_all(&active_new);
     if let Err(e) = std::fs::create_dir_all(&active_new) {
         applog(log, &format!("suite: APPLY aborted — mkdir active.new failed: {e}; restarting current"));
-        spawn_and_wait(app, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        spawn_and_wait(host, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
         return;
     }
     if !untar(&s_tgz, &active_new, log) {
         applog(log, "suite: APPLY aborted — unpack failed; restarting current");
         let _ = std::fs::remove_dir_all(&active_new);
-        spawn_and_wait(app, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        spawn_and_wait(host, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
         return;
     }
     // Roll the previous override (if any) to last-good, including its retained verified tarball.
@@ -1067,7 +1099,7 @@ fn attempt_apply(
             let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
         }
         let dir = if active.exists() { active.clone() } else { payload.to_path_buf() };
-        spawn_and_wait(app, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        spawn_and_wait(host, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
         return;
     }
     // The retained verified tarball the next launch re-checks against the payload key. [AUDIT FIX #4] A copy
@@ -1080,7 +1112,7 @@ fn attempt_apply(
     {
         applog(log, "suite: APPLY FAILED — could not retain active.(tgz,sig); rolling back to last-good/payload");
         rollback_and_restart(
-            app, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
+            host, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
             cur_code_dir, cur_alive,
         );
         applog(log, "suite: rollback complete (retain failure)");
@@ -1089,8 +1121,8 @@ fn attempt_apply(
 
     // 6. Start from active/ (PAYLOAD_DIR=payload via spawn_relay), reload the webview.
     applog(log, "suite: starting relay from active/ (override)");
-    let came_up = spawn_and_wait(app, &active, payload, data_dir, log, cur_code_dir, cur_alive);
-    reload_webview(app);
+    let came_up = spawn_and_wait(host, &active, payload, data_dir, log, cur_code_dir, cur_alive);
+    host.reload_webview();
 
     // 7. Health: probe public /status for reachability, version identity, ok, and whether an ok:false is
     //    SOLELY a degraded store; decide via the pure matrix. [AUDIT FIX #1] A good bundle that boots and
@@ -1124,12 +1156,10 @@ fn attempt_apply(
                 let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
             }
             // Stop the freshly-started (bad) relay, then roll back and restart on known-good code.
-            if let Some(child) = app.state::<Relay>().0.lock().unwrap().take() {
-                let _ = child.kill();
-            }
+            host.stop_relay();
             let _ = wait_stopped(cur_alive, Duration::from_secs(20));
             rollback_and_restart(
-                app, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
+                host, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
                 cur_code_dir, cur_alive,
             );
             applog(log, "suite: rollback complete");
@@ -1283,6 +1313,9 @@ fn main() {
                     // [AUDIT FIX #3] Set when an apply aborts on a stop-timeout; suppresses retries until it
                     // elapses (see maybe_apply / attempt_apply). Owned by this long-lived controller thread.
                     let mut apply_cooldown_until: Option<Instant> = None;
+                    // The production RelayHost: wraps this thread's AppHandle clone so the apply path can
+                    // spawn/stop the relay child and reload the webview exactly as before (see TauriHost).
+                    let host = TauriHost { app: app_ctrl };
                     loop {
                         // ── SUITE AUTO-UPDATE APPLY ─────────────────────────────────────────────────────
                         // Evaluated at the TOP of the tick, BEFORE the keep-awake-off and token early-continues
@@ -1293,7 +1326,7 @@ fn main() {
                         if last_apply_eval.elapsed() >= Duration::from_secs(60) {
                             last_apply_eval = Instant::now();
                             maybe_apply(
-                                &app_ctrl,
+                                &host,
                                 &suite_c,
                                 &payload_c,
                                 &dd,
@@ -1386,6 +1419,12 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running TrinityOne Relay");
 }
+
+// End-to-end apply harness (P5 keystone): drives the REAL maybe_apply/attempt_apply pipeline against REAL
+// signed tarballs and a REAL `node scripts/gateway.mjs` child, through the RelayHost seam. See the file.
+#[cfg(test)]
+#[path = "apply_harness_test.rs"]
+mod apply_harness_test;
 
 // Point-of-use tests for the pure keep-awake logic (CLAUDE.md rule 1). No relay, no OS calls — these
 // exercise the exact decision the controller makes and the exact substring reads it feeds it. Run with
