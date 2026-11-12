@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  The bundled relay sidecar `trinityone-relay-node` is a stock V8/Node runtime. Under the hardened
+	  runtime (which Developer ID signing + notarization require) V8 cannot allocate JIT / executable
+	  memory without these entitlements, so AMFI kills it on any machine that enforces strictly (a clean
+	  or quarantined Mac — i.e. every machine except the one it was signed on). The relay then never binds
+	  127.0.0.1:8787 and the Suite hangs on "Starting your relay…". See scripts/sign-mac-suite.sh.
+	  Applied ONLY to trinityone-relay-node (by the script), never to the main app or cloudflared.
+	  Deliberately NOT included: disable-library-validation. The relay loads no native addons (no .node or
+	  .dylib in the payload; ws is pure JS; SQLite is built into Node), and that entitlement would let the
+	  process load dylibs signed by anyone. allow-unsigned-executable-memory is kept: it is on Node's own
+	  documented hardened-runtime entitlement list alongside allow-jit.
+	-->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

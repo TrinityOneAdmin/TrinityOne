@@ -62,6 +62,8 @@ scripts/publish-relay-bundle.sh relay-v0.8.1           # 2. THIS BOX builds bund
                                                        #    bundle.sig, bundle.json and install.sh to that Release
 ```
 
+**macOS Suite dmg is signed by hand, not by CI** (CI's macOS artifact is UNSIGNED and un-notarized): rebuild on the Mac, run `scripts/sign-mac-suite.sh` (sign, notarize, staple), clean-Mac test, then `gh release upload relay-vX.Y.Z <dmg> --clobber` over the CI one.
+
 Step 2 exists because the release key lives here and never goes to CI. Until 2026-09-21 nothing did step 2:
 the only signed bundle was the one this box's own gateway serves at `/relay-app/bundle.tgz`, and the installer's
 default source was `app.trinityone.church`, which has no key and answers 404 — so the documented server route
