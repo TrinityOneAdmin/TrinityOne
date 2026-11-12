@@ -691,6 +691,75 @@
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
 
+  // SUITE-AUTOUPDATE-UI-BEGIN — lifted & run by scripts/suite-autoupdate-ui.test.mjs (CLAUDE.md rule 1/3)
+  // The Suite JS auto-update control (P4), shown by loadUpdate in place of the old "updates when you reinstall"
+  // message on a PACKAGED Suite box. The toggle POSTs /settings {autoUpdate}; the HH:MM time POSTs
+  // {autoUpdateAt}; the status line is rendered from GET /update's `suite` object (installed version, next
+  // apply, and a human line from lastOutcome/staged). On a failed save we show an inline hint and NEVER hide or
+  // leave the control disabled — that was the sleep-button bug — so the operator can always retry. Deps
+  // (doc/fetchFn/authFn) are injected so the exact behaviour runs headless against a fake DOM + fake fetch.
+  function wireSuiteAutoUpdate(doc, fetchFn, authFn, suite) {
+    suite = suite || {};
+    const toggle = doc.getElementById('suiteAutoToggle');
+    const time   = doc.getElementById('suiteAutoTime');
+    const status = doc.getElementById('suiteAutoStatus');
+    const hint   = doc.getElementById('suiteAutoHint');
+    if (!toggle || !time) return;
+
+    // A late-evening apply may never fire: the apply runs at the next START past HH:MM, so a box that is off
+    // overnight can skip an evening time. An early-morning time (default 03:00) is safe for a daytime box.
+    const timeNote = (v) => {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(v || '');
+      if (!m) return '';
+      const h = +m[1];
+      return (h >= 20 || h < 1) ? 'This runs at the next start after that time, so a late-evening time may be missed if the computer is off overnight — an early-morning time (e.g. 03:00) is safest.' : '';
+    };
+    const setHint = (text, bad) => {
+      if (!hint) return;
+      if (text) { hint.style.display = 'inline'; hint.style.color = bad ? 'var(--clay-ink)' : 'var(--ink-3)'; hint.textContent = text; }
+      else { hint.style.display = 'none'; hint.textContent = ''; }
+    };
+
+    // Status line from the `suite` payload — re-rendered on every loadUpdate so it tracks the box.
+    const renderStatus = () => {
+      if (!status) return;
+      const parts = [];
+      if (suite.installedVersion) parts.push('Installed ' + suite.installedVersion + (suite.installedDate ? ' · ' + String(suite.installedDate).slice(0, 10) : ''));
+      if (suite.staged && (suite.staged.version || suite.staged.sha)) parts.push('An update is staged for tonight');
+      else if (suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') parts.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
+      else if (suite.lastOutcome === 'rolledback') parts.push('A bad update was rolled back');
+      if (suite.enabled && suite.nextAt) parts.push('Next check ' + suite.nextAt);
+      status.textContent = parts.join(' · ');
+    };
+
+    // Reflect the box's current settings into the inputs — but never while a save is in flight (disabled) or
+    // while the operator is editing the time field, so a 60s re-read can't clobber their choice.
+    if (!toggle.disabled) toggle.checked = suite.enabled === true;
+    if (!time.disabled && doc.activeElement !== time) time.value = suite.at || '03:00';
+    renderStatus();
+    setHint(timeNote(time.value), false);
+
+    if (toggle._wired) return;   // wire the handlers once; the render above still runs on every call
+    toggle._wired = true;
+
+    const post = async (payload) => {
+      toggle.disabled = true; time.disabled = true;   // DISABLED WHILE SAVING
+      try {
+        const r = await fetchFn('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authFn() }, body: JSON.stringify(payload) });
+        if (!(r && r.ok)) throw new Error('save failed');
+        setHint(timeNote(time.value), false);   // success: clear the error, keep any time guidance
+      } catch (e) {
+        setHint('Couldn’t save — check the relay and try again.', true);   // hint, and NEVER hide the control
+      } finally {
+        toggle.disabled = false; time.disabled = false;   // RE-ENABLED so a retry is always possible
+      }
+    };
+
+    toggle.onchange = () => post({ autoUpdate: !!toggle.checked });
+    time.onchange = () => { setHint(timeNote(time.value), false); return post({ autoUpdateAt: time.value }); };
+  }
+  // SUITE-AUTOUPDATE-UI-END
+
   // ── relay software updates (version check + one-click "Update now") via /update + /status ──
   let relayVersion = '';
   async function loadUpdate() {
@@ -722,7 +791,14 @@
       // fresh box. A Suite's code is read-only inside the installed app and nothing there consumes the
       // update flag, so its software moves with the Suite itself; a box with no source is told so and given
       // the field above rather than a button that would fail underneath.
-      if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: its software updates when you install a newer Suite — the launcher (Back) says when one is out. The update source above is still what the installer card below fetches from.'; return; }
+      if (cur.packaged) {
+        // P4: the real Suite JS auto-update control replaces the old "updates when you reinstall" sentence.
+        // The launcher (home.js /suite-update banner) remains the fallback for boxes with this turned OFF.
+        body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>. Keep its software up to date automatically below, or leave it off and the launcher (Back) tells you when a newer Suite is out. The update source above is where the app installers it hands out come from.';
+        const blk = document.getElementById('suiteAutoBlock'); if (blk) blk.style.display = 'block';
+        wireSuiteAutoUpdate(document, (...a) => fetch(...a), authHeaders, cur.suite);
+        return;
+      }
       // WHERE THE CODE COMES FROM is its own answer (cur.codeSource, relay/code-source — a GitHub release on
       // a box installed since 2026-09-21) and is what "Update now" pulls; the update source above is where
       // the installers come from. A box without a code source pulls from its update source, as before.
