@@ -5631,7 +5631,6 @@ function DashRelaysCard() {
   const checking = status.length === 0;
   const allUp = online === boxes;
   const own = window.Steward.ownRelay ? window.Steward.ownRelay() : '';
-  const selfHostedConsole = !!(window.Steward.isSelfHosted && window.Steward.isSelfHosted());
   // THE OWN-BOX ROW'S HANDLE. A self-hosted console's own relay has a chosen name (MY_RELAY_NAME) just as an
   // added-by-name relay does, and ownRelayName() returns it — but it is async and loopback+token-gated
   // (returns '' off-box), so it is resolved ONCE into state here and read synchronously by the row label
@@ -5647,22 +5646,6 @@ function DashRelaysCard() {
     })();
     return () => { ok = false; };
   }, [own]);
-  // THE PILL IS LABELLED FROM THE PROVEN IDENTITY, NOT THE PAGE ADDRESS. The shipped shared-relay keys and
-  // the church's own signed relay-net pubkeys are what decide Shared vs Self-hosted vs Added; the render is
-  // synchronous, so the church's signed set (relayNet() is async) is pre-resolved into state here. Display
-  // only — see classifyRelay/provenRelayPub in src/steward.src.js; nothing here changes relay admission.
-  const canonicalKeys = (window.Steward.sharedRelayKeys ? window.Steward.sharedRelayKeys() : []);
-  const [churchEntryPubs, setChurchEntryPubs] = React.useState([]);
-  React.useEffect(() => {
-    let ok = true;
-    (async () => {
-      try {
-        const entries = window.Steward.relayNet ? await window.Steward.relayNet() : [];
-        if (ok) setChurchEntryPubs((entries || []).map(e => String((e && e.pubkey) || '').toLowerCase()).filter(Boolean));
-      } catch (e) {}
-    })();
-    return () => { ok = false; };
-  }, [status.length]);
   const [regOpen, setRegOpen] = React.useState(false);
   // shown only after this relay has actually refused a write — see noteRelayRejection(). Pasting a
   // relay's admin token hands over full control of that relay, so it is not something to leave sitting
@@ -5820,22 +5803,11 @@ function DashRelaysCard() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {status.map(r => {
             // `self` is UNCHANGED and still URL-based ON PURPOSE: it gates the Remove (trash) button below,
-            // where "is this the box serving this console" is the right question. The LABEL no longer rides
-            // on it — see relayKind.
+            // where "is this the box serving this console" is the right question.
             const self = host && r.url.includes(host);
-            // THE LABEL, from the relay's PROVEN identity (classifyRelay, src/steward.src.js). classifyRelay
-            // still returns 'shared'/'self'/'neutral', but only ONE pill renders now (see :5470): canonical /
-            // official T1 relays (relayKind === 'shared', matched against the shipped SHARED_RELAY_KEYS) show
-            // the "Shared" pill, and self/added relays show NO pill. The "Self-hosted" and "Added" labels were
-            // removed because the church signs EVERY relay it adds, so classifyRelay cannot tell a box the
-            // church HOSTS from one it merely ADDED, and a plain added box was mislabelled "Self-hosted". Only
-            // 'shared' is a reliable identity, so only it is shown. isLoopbackOrigin and proven still feed
-            // classifyRelay (relayKind is read elsewhere). Display only; it does not touch admission.
-            const proven = window.Steward.provenRelayPub ? window.Steward.provenRelayPub(r.url) : '';
-            const isLoopbackOrigin = selfHostedConsole && !!own && r.url === own;
-            const relayKind = window.Steward.classifyRelay
-              ? window.Steward.classifyRelay({ pub: proven, isLoopbackOrigin, canonicalKeys, churchEntryPubs })
-              : (self ? 'self' : 'shared');
+            // NO IDENTITY LABEL IS DRAWN on a row (owner decision 2026-11-12: all relays are shared, so the
+            // "Shared" tag is moot; Self-hosted/Added went earlier because classifyRelay cannot tell a box the
+            // church HOSTS from one it ADDED). classifyRelay still exists in src/steward.src.js, unused here.
             const up = r.status === 'on';
             // Per-relay sync chip from this box's PUBLIC /status.sync (syncByUrl). Shown only for a relay that
             // is ANSWERING (an offline box's last-known sync is not news) and only once we actually have a
@@ -5857,14 +5829,13 @@ function DashRelaysCard() {
                   {rowName(r) ? <div style={{ fontSize: 11, color: 'var(--ink-3)', fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{r.url}</div> : null}
                 </div>
                 {/* THE CHIPS WRAP. This strip was one unbreakable line — `flexShrink: 0`, no wrap — so on a
-                    360px phone "Shared · Refused our last change · ● Answering · 118ms" ran to x 609 and the
+                    360px phone "Refused our last change · ● Answering · 118ms" ran to x 609 and the
                     health of the relay was off the right edge of the screen (audit 2026-09-19 §E,
                     p/here/01-17-settings-relays-refusing-fix.png). The row already wraps this strip under
                     the address; now the strip wraps within itself too, so on a wide card it is still one
                     line and on a phone the status drops under the chips. `maxWidth: 100%` keeps it inside
                     the card's padding box rather than letting `flexShrink: 0` overrule the wrap. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
-                  {relayKind === 'shared' ? <SkPill tint="ink">Shared</SkPill> : null}
                   {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
                       the other must not look fine. Under the closed network nothing is published to an
                       address until it has PROVED it holds a key this church's network contains, so a live
