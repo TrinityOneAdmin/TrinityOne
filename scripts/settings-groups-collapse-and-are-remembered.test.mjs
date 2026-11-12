@@ -148,7 +148,7 @@ const region = (tree) => find(tree, n => n.type === 'section' && n.props['aria-l
 const GROUPS = ['Church', 'People', 'Infrastructure', 'Master key', 'Helpers'];
 const expanded = (tree) => headers(tree).map(b => b.props['aria-expanded']);
 const counts = (tree) => headers(tree).map(b => shownIn(b, 'set-grp-c'));
-const PAGES = 18;   // owner's pages across the FIVE groups (16 + voice + website, 2026-09-22); a regroup moves no page, so the total is unchanged; a delegate has fewer
+const PAGES = 17;   // owner's pages across the FIVE groups (16 + voice + website, 2026-09-22; minus Branding, merged into identity 2026-11-12); a regroup moves no page, so the total is unchanged; a delegate has fewer
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // CONTROL — if this fails, every assertion below is meaningless.
@@ -181,7 +181,7 @@ test('a steward who has never chosen gets every group SHUT with its count — ex
   const ph = screen(null, { innerWidth: 500 });
   assert.deepEqual(expanded(ph.tree), [false, false, false, false, false],
     'on a phone, a steward who has never chosen does not get all five groups shut');
-  assert.deepEqual(counts(ph.tree), ['5', '4', '5', '2', '2'], 'the phone\'s shut groups do not each say their count');
+  assert.deepEqual(counts(ph.tree), ['4', '4', '5', '2', '2'], 'the phone\'s shut groups do not each say their count');
   // …and "never chosen" is still stored as nothing at all, so the default can tell a fresh console from a
   // deliberate one — a stored [] is now the one way to say "all open".
   assert.equal(s.store.size, 0,

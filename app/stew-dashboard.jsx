@@ -13067,7 +13067,8 @@ function ImageCropModal({ file, outW, outH, round, radiusPct, title, onSave, onC
 window.ImageCropModal = ImageCropModal;
 
 // Church branding — a wide banner + a brand accent colour, published on the kind-0 profile
-// (banner ~768×256, accent as a hex). The logo lives on the identity card above. Members' app
+// (banner ~768×256, accent as a hex). The logo lives on the identity card above: since 2026-11-12 this panel
+// is the SECOND card on the 'identity' settings page (the old 'branding' page is an alias of it). Members' app
 // shows the banner on the church header and tints its clay accents to the church's colour.
 function DashBrandingPanel({ church }) {
   const [busy, setBusy] = React.useState(false);
@@ -13497,8 +13498,7 @@ function DashBackup() {
 //   delegate: the opposite — the notice that only a delegated steward is shown
 const SETTINGS_GROUPS = [
   ['Church', [
-    { k: 'identity', n: 'Church identity', d: 'Name, picture, joining handle' },
-    { k: 'branding', n: 'Branding', d: 'Colours and church mark' },
+    { k: 'identity', n: 'Church identity', d: 'Name, picture, handle, colours and banner' },
     { k: 'media', n: 'Video & audio', d: 'The Watch and Listen tabs' },
     // OWNER-ONLY: the relay accepts the share: document from the church key alone (gateway.mjs accept()), and
     // the console mirrors the public copies only in owner mode — a delegate's switch would flip nothing.
@@ -13574,7 +13574,9 @@ const SETTINGS_GROUPS = [
 // 'security' goes to Delegated stewards because that is where the one screen deep-linking it — Overview's
 // "N people want to help steward" banner — says in its own words it is sending the steward. A delegate, who
 // has no such page, is caught by resolvePage's group fallback and gets the notice instead.
-const SETTINGS_PAGE_ALIASES = { church: 'identity', security: 'delegated' };
+// 'branding' was its own page until 2026-11-12, when it was merged into identity; a saved link to the old
+// Branding page lands on the page that now holds it.
+const SETTINGS_PAGE_ALIASES = { church: 'identity', security: 'delegated', branding: 'identity' };
 
 // WHICH PAGE A DEEP LINK OPENS. `visible` is the groups this steward may see and `pages` is those groups
 // flattened. A page this steward cannot see falls back to the first page of its OWN group that they can —
@@ -13914,6 +13916,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
         <button onClick={() => setPage(null)} className="set-back"><Icon name="chevL" size={16} color="currentColor" /> All settings</button>
       ) : null}
       {open === 'identity' ? (
+      <React.Fragment>
       <Panel title={church.isNetwork ? 'Network identity' : 'Church identity'} action={<button onClick={() => setEditingName(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="pen" size={14} color="currentColor" /> Edit name</button>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 16 }}>
           <label title="Upload a church picture" style={{ position: 'relative', cursor: picBusy ? 'default' : 'pointer', flexShrink: 0, opacity: picBusy ? .6 : 1 }}>
@@ -13936,9 +13939,10 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <button onClick={() => setEditingWeb(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12.5, flexShrink: 0 }}><Icon name="pen" size={13} color="currentColor" /> Edit</button>
         </div>
       </Panel>
+      <DashBrandingPanel church={church} />
+      </React.Fragment>
       ) : null}
 
-      {open === 'branding' ? <DashBrandingPanel church={church} /> : null}
       {open === 'media' ? <DashMediaPanel church={church} /> : null}
       {open === 'backup' ? <DashBackup /> : null}
       {open === 'website' ? <DashWebsitePanel church={church} /> : null}
