@@ -9,27 +9,6 @@
   // Clipboard handling lives in copy.js so control.js and home.js cannot drift apart.
   const { copyText, flashCopied, showCopyFallback, copyWithFeedback } = window.RelayCopy;
 
-  // The sync card's one line. A failed pass says WHY in four words when the relay named a cause: a 401 can mean this
-  // box's clock, the peer's clock, or that the peer no longer trusts this box, and the relay cannot tell which.
-  function syncLineText(sync, nowSec) {
-    if (sync.running) return 'checking now\u2026';
-    if (!sync.at) return sync.peers ? 'not yet \u2014 first check runs shortly' : 'no other relays to check';
-    const mins = Math.floor((nowSec - sync.at) / 60);
-    const when = mins < 1 ? 'just now' : mins === 1 ? '1 minute ago' : mins < 60 ? mins + ' minutes ago' : Math.floor(mins / 60) + 'h ago';
-    if (sync.ok === false) return when + ' \u2014 failed' + (/peer refused/i.test(String(sync.error || '')) ? ' \u00b7 trust list or a clock may be wrong' : '');
-    return when + (sync.imported ? ' \u00b7 pulled ' + sync.imported : ' \u00b7 nothing new');
-  }
-  // The Relay-health "Relay sync" row: one word for whether syncing works, from the same public /status.sync
-  // as the line above (box-wide, no church in it). `peers` is how many churches here have another relay to
-  // sync with. Note: a relay started with RELAY_SYNC=0 never runs a pass and /status does not say so, so it
-  // reads "Waiting" for ever if it has peers.
-  function syncStateText(sync) {
-    if (!sync) return { text: '\u2014', bad: false };
-    if (sync.running) return { text: 'Syncing now', bad: false };
-    if (!sync.at) return sync.peers ? { text: 'Waiting for the first check', bad: false } : { text: 'No other relays yet', bad: false };
-    if (sync.ok === false) return { text: 'Not working', bad: true };
-    return { text: 'Working', bad: false };
-  }
   function reachInfo() {
     const wssUrl = publicBase.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:') + '/relay';
     const consoleUrl = publicBase + '/steward.html';
@@ -123,14 +102,6 @@
         if (st.connections != null) document.getElementById('s-conns').textContent = st.connections;
       }
       renderDisk(s.storage);
-      // sync health — the point of the card is 'is this working?', not a button
-      const sm = document.getElementById('syncMsg');
-      if (sm) { const st = syncStateText(s.sync); sm.textContent = st.text; sm.style.color = st.bad ? 'var(--clay-ink)' : ''; }
-      const sw = document.getElementById('syncWhen');
-      if (sw && s.sync) {
-        sw.textContent = syncLineText(s.sync, Date.now() / 1000);
-        sw.style.color = (!s.sync.running && s.sync.at && s.sync.ok === false) ? 'var(--clay-ink)' : '';
-      }
     } catch (e) {
       // THE RELAY ANSWERED. Whatever went wrong here is ours — a field that changed shape, a missing
       // element — and it must never be reported as the relay being down, which is what sent a volunteer
@@ -955,21 +926,6 @@
       setTimeout(() => { m.textContent = ''; }, 4000);
     } catch (err) { e.target.checked = !on; m.style.color = 'var(--clay-ink)'; m.textContent = '· ✗ ' + (err.message || 'failed'); }
   });
-  document.getElementById('syncNow')?.addEventListener('click', async () => {
-    // Feedback goes to #syncNowMsg, right under THIS button. The button now lives in the Dashboard's Relay health
-    // card beside the sync rows (it was in Settings' software-update card, labelled like an update check);
-    // #syncMsg stays the box's sync state from /status, so a click's own result does not overwrite it.
-    const m = document.getElementById('syncNowMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'syncing…';
-    try {
-      const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
-      const s = await r.json();
-      if (!r.ok || !s.ok) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + (s.error || 'failed'); return; }
-      if (s.busy) { m.style.color = 'var(--ink-3)'; m.textContent = 'a sync is already running \u2014 give it a moment'; return; }
-      m.style.color = 'var(--sage-ink)';
-      const across = s.churches > 1 ? ' across ' + s.churches + ' churches' : '';
-      m.textContent = s.imported ? '\u2713 pulled ' + s.imported + ' new' + across : '\u2713 nothing new' + across;
-    } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
-  });
   // Re-ask on a timer, because an installer goes stale exactly while nobody is looking at the panel.
   // The FIRST read is deliberately not here: it belongs after the admin token has been settled (the
   // /local-token block below, and the unlock handler). A bare call at this point races that block, gets a
@@ -1262,9 +1218,6 @@
     // the storage figures come from the same admin-only /stats, so they go with it rather than sitting
     // there as a stale reading from before the token was cleared
     if (locked) { const sr = document.getElementById('storeRow'); if (sr) sr.style.display = 'none'; }
-    // "Sync now" needs the admin token too (/sync-now answers 401 without it), so it goes with the lock
-    // rather than sitting on the Dashboard as a button that can only fail
-    const sn = document.getElementById('syncNowBox'); if (sn) sn.style.display = locked ? 'none' : '';
   }
   function wireTabs() {
     TABS.forEach((t, i) => {

@@ -4,15 +4,16 @@
 //
 // Every on-screen assertion is read off the DOM of relay-app/control.html in headless Chromium, against a real
 // gateway with an empty data dir and one registered throwaway church (the long church key is what made Settings
-// overflow). Nothing is matched against control.js source text (CLAUDE.md rule 3): the two pure functions are
-// LIFTED and RUN. Skips the browser cases without chromium.
+// overflow). Nothing is matched against control.js source text (CLAUDE.md rule 3). Skips the browser cases
+// without chromium.
 //
 //   1. Settings at 390px laid out 689px wide (.deck3's bare 1fr = minmax(auto,1fr) let the nowrap npub row set
 //      the column minimum) and was shrunk to ~57%.
 //   2. Phone header: "Your relay is running" wrapped one word per line and ran under the Back button.
-//   3. Dashboard "Relay sync" row always read "—" (nothing wrote #syncMsg).
-//   4. "Check sync now" sat in the software-update card titled "Check for a newer version now"; it pulls data
-//      from other relays. Now "Sync now" in the Relay health card, hidden while the panel is locked.
+//   3+4. (Superseded 2026-11-12, owner decision.) These fixed the Dashboard "Relay sync" row and moved "Sync now"
+//      into the Relay health card. The owner then ruled that relay-sync status belongs in the steward console,
+//      not the relay panel, so the row, the "Last checked" line and the button are gone; test 3+4 below asserts
+//      their ABSENCE on the rendered Dashboard. The gateway's /sync-now and /status.sync are untouched.
 //   5. "Traffic (session)" claimed "since you opened this page"; the gateway counts since the relay started.
 //   6. The email-subscriber download was titled as a list of phones that receive notifications.
 import { test, before, after } from 'node:test';
@@ -28,44 +29,8 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { freePort } from './relay-network-harness.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const CONTROL = readFileSync(join(ROOT, 'relay-app/control.js'), 'utf8');
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-// ── lifted functions ─────────────────────────────────────────────────────────────────────────────────────────
-function liftFn(anchor) {
-  const i = CONTROL.indexOf(anchor);
-  assert.ok(i >= 0, anchor + ' is gone from control.js — re-anchor');
-  assert.equal(CONTROL.indexOf(anchor, i + 1), -1, anchor + ' appears twice — re-anchor');
-  let d = 0;
-  for (let k = CONTROL.indexOf('{', i); k < CONTROL.length; k++) {
-    if (CONTROL[k] === '{') d++;
-    else if (CONTROL[k] === '}') { d--; if (!d) return CONTROL.slice(i, k + 1); }
-  }
-  throw new Error('unbalanced braces after ' + anchor);
-}
-
-test('3: syncStateText names the box\'s sync state, and a failed pass reads as not working', () => {
-  const f = new Function('return (' + liftFn('function syncStateText(sync) {') + ')')();
-  assert.deepEqual(f({ at: 1700000000, ok: true, peers: 2, running: false }), { text: 'Working', bad: false });
-  assert.deepEqual(f({ at: 1700000000, ok: false, peers: 2, running: false }), { text: 'Not working', bad: true });
-  assert.equal(f({ running: true, peers: 1 }).text, 'Syncing now');
-  assert.equal(f({ at: 0, ok: null, peers: 0 }).text, 'No other relays yet');
-  assert.equal(f({ at: 0, ok: null, peers: 3 }).text, 'Waiting for the first check');
-  assert.equal(f(undefined).text, '—', 'no sync block at all (an old relay) must stay the honest dash');
-});
-
-test('4: a locked panel hides "Sync now" (it needs the token) and an unlocked one shows it', () => {
-  const body = liftFn('function syncSettingsLock(locked) {');
-  const els = {};
-  const document = { getElementById: (id) => (els[id] ||= { textContent: '', style: {} }) };
-  const syncSettingsLock = new Function('document', 'STAT_CARDS', 'let statsLocked; return (' + body + ')')(document, []);
-  els.syncNowBox = { style: { display: '' } };
-  syncSettingsLock(true);
-  assert.equal(els.syncNowBox.style.display, 'none', 'a locked panel still offers "Sync now", which can only answer 401');
-  syncSettingsLock(false);
-  assert.equal(els.syncNowBox.style.display, '', 'unlocking did not bring "Sync now" back');
-});
 
 // ── the real page ────────────────────────────────────────────────────────────────────────────────────────────
 const BLACKHOLE = `const real = globalThis.fetch;
@@ -160,34 +125,26 @@ test('2: the phone header keeps "Your relay is running" on one line, clear of th
   } finally { c.stop(); }
 });
 
-test('3: the Dashboard "Relay sync" row shows the relay\'s sync state, not a permanent dash', { skip, timeout: 60000 }, async () => {
+test('3+4: the Dashboard shows NO relay-sync status and NO "Sync now" button (owner: that belongs in the console)', { skip, timeout: 60000 }, async () => {
   const c = await startChrome(1280);
   try {
     await c.open('dash');
-    const v = await waitFor(c, `document.getElementById('syncMsg').textContent`, v => v && v !== '—');
-    // this box runs with no peers, so the honest state is "no other relays" — and /status agrees
-    const s = await (await fetch(gw.base + '/status')).json();
-    assert.equal(s.sync.peers, 0, 're-anchor: the fixture box has peers');
-    assert.equal(v, 'No other relays yet', 'the Relay sync row still reads "—" (or says something /status does not)');
-  } finally { c.stop(); }
-});
-
-test('4: "Sync now" sits in the Relay health card, says what it does, and works', { skip, timeout: 60000 }, async () => {
-  const c = await startChrome(1280);
-  try {
-    await c.open('dash');
-    // the panel takes the admin token from /local-token on its own machine; wait for the unlock
-    await waitFor(c, `getComputedStyle(document.getElementById('syncNowBox')).display`, v => v !== 'none');
-    const b = JSON.parse(await c.evalIn(`(() => { const e = document.getElementById('syncNow'); const r = e.getBoundingClientRect(); return JSON.stringify({ inHealth: !!e.closest('#healthCard'), inUpdate: !!e.closest('#updateCard'), text: e.textContent.trim(), title: e.title, shown: r.width > 0 && r.height > 0 }); })()`));
-    assert.equal(b.inHealth, true, 'the sync button is not in the Relay health card beside the sync rows');
-    assert.equal(b.inUpdate, false, 'the sync button is still in the software-update card');
-    assert.equal(b.shown, true, 'the sync button is not on screen on the Dashboard');
-    assert.equal(b.text, 'Sync now');
-    assert.doesNotMatch(b.title, /version|update/i, 'the tooltip still describes a software update check');
-    assert.match(b.title, /other relays/i, 'the tooltip does not say it fetches from other relays');
-    await c.evalIn(`document.getElementById('syncNow').click()`);
-    const msg = await waitFor(c, `document.getElementById('syncNowMsg').textContent`, v => /✓|✗/.test(v || ''));
-    assert.match(msg, /✓/, 'pressing Sync now did not report a result under the button: ' + msg);
+    // wait for the states in which the old row and button were filled and shown: /status rendered (build row)
+    // AND the panel unlocked with the admin token (the traffic tile only fills from the token-gated /stats)
+    const build = await waitFor(c, `document.getElementById('u-current').textContent`, v => v && v !== '—');
+    assert.ok(build && build !== '—', 're-anchor: the Relay health card never rendered the build row');
+    const traffic = await waitFor(c, `document.getElementById('s-traffic').textContent`, v => v && v !== '—');
+    assert.ok(traffic && traffic !== '—', 're-anchor: the panel never unlocked (the token-gated tiles stayed blank)');
+    const d = JSON.parse(await c.evalIn(`(() => {
+      const dash = document.getElementById('panel-dash'), health = document.getElementById('healthCard');
+      const btns = [...document.querySelectorAll('button, [role=button], input[type=button], input[type=submit]')]
+        .map(b => (b.textContent || b.value || '') + ' ' + (b.title || '')).filter(t => /sync/i.test(t));
+      return JSON.stringify({ dashHidden: dash.hidden, healthText: health.innerText, dashText: dash.innerText, btns });
+    })()`));
+    assert.equal(d.dashHidden, false, 're-anchor: the Dashboard is not the open tab');
+    assert.match(d.healthText, /This relay.s build/i, 're-anchor: the Relay health card is not on screen');
+    assert.doesNotMatch(d.dashText, /Relay sync|Last checked|Sync now|syncing|No other relays/i, 'the Dashboard still shows relay-sync status');
+    assert.deepEqual(d.btns, [], 'the panel still has a sync button: ' + JSON.stringify(d.btns));
   } finally { c.stop(); }
 });
 
