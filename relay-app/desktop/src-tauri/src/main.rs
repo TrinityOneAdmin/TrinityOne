@@ -296,6 +296,65 @@ fn rollback_target(health_ok: bool, have_last_good: bool) -> RollbackTarget {
     }
 }
 
+// The post-respawn health verdict. Keep{store_degraded} means the new code is applied (store_degraded only
+// changes the recorded outcome label). Rollback{quarantine} means revert; quarantine marks the sha so it is
+// never auto-applied again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Keep { store_degraded: bool },
+    Rollback { quarantine: bool },
+}
+
+// [AUDIT FIX #1 — MEDIUM] PURE post-respawn health decision (cargo-testable). The old gate quarantined+rolled
+// back a GOOD bundle whenever /status reported ok:false, but gateway.mjs sets `ok: !STORE_DEGRADED` (L7155),
+// i.e. ok:false means ONLY "the store is degraded" — a transient data-plane problem that is INDEPENDENT of
+// which code version booted. So the decision is:
+//   • not reachable (no /status inside the window)        → the new code never booted      → Rollback+quarantine
+//   • reachable but version/sha does NOT match READY      → wrong code is answering         → Rollback+quarantine
+//   • reachable, version matches, ok:true                 → healthy                          → Keep
+//   • reachable, version matches, ok:false BUT solely a   → booted + identifies correctly;   → Keep (note degraded,
+//     degraded STORAGE store (degraded.what=="storage")     bad code is not the cause            do NOT quarantine)
+//   • reachable, version matches, ok:false for ANY OTHER  → conservative: treat as bad       → Rollback+quarantine
+//     reason (no storage-degraded evidence)
+// Being conservative about the storage case is deliberate: today ok:false ⟺ STORE_DEGRADED ⟺ what=="storage",
+// but a future non-storage ok:false must still fail closed.
+fn health_outcome(reachable: bool, version_match: bool, ok: bool, degraded_storage: bool) -> Outcome {
+    if !reachable || !version_match {
+        // No boot, or the wrong code identified itself: the new bundle is genuinely bad.
+        return Outcome::Rollback { quarantine: true };
+    }
+    if ok {
+        return Outcome::Keep { store_degraded: false };
+    }
+    // ok:false while version matches → keep ONLY if the sole reason is a degraded store.
+    if degraded_storage {
+        Outcome::Keep { store_degraded: true }
+    } else {
+        Outcome::Rollback { quarantine: true }
+    }
+}
+
+// [AUDIT FIX #2 — LOW] Char-safe short sha. The old `&r_sha[..7]` (and `&r_sha[..r_sha.len().min(7)]`) slice
+// on BYTE boundaries and panic if byte index 7 lands inside a multibyte char — a malformed-but-benign sha
+// could crash the controller thread. Taking chars is boundary-safe and simply yields fewer chars for shorts.
+fn short_sha(s: &str) -> String {
+    s.chars().take(7).collect()
+}
+
+// [AUDIT FIX #3 — LOW] After a stop-timeout (kill didn't confirm within the window) the controller must not
+// kill→wait→respawn every minute against a wedged child. This PURE helper says whether the apply cooldown has
+// elapsed: no cooldown set → proceed; otherwise proceed only once `now` has reached the stored retry instant.
+fn cooldown_elapsed(now: Instant, retry_at: Option<Instant>) -> bool {
+    match retry_at {
+        None => true,
+        Some(t) => now >= t,
+    }
+}
+
+// How long to back off apply attempts after a stop-timeout. Long enough to stop the ~60s thrash; the church
+// stays ONLINE on its current code throughout, and a later tick retries once the window elapses.
+const APPLY_COOLDOWN: Duration = Duration::from_secs(3600);
+
 // PURE apply-window decision (cargo-testable). Apply when the local time-of-day has reached the operator's
 // HH:MM AND we have not already applied today. This also handles "missed while asleep" (we were off at HH:MM;
 // on the next start past HH:MM `now_min >= target_min` is still true and lastApplied is an earlier day → apply)
@@ -720,25 +779,40 @@ fn discard_staging(suite_dir: &Path) {
     let _ = std::fs::remove_file(staging.join("bundle.sig"));
 }
 
-// Health probe: public GET /status says ok AND reports the version we just activated. We accept a match on
-// either READY.sha (the git sha /status reports as `version`) or READY.version, so a manifest that labels its
-// version separately still passes.
-fn health_ok(ready_sha: &str, ready_version: &str, timeout: Duration) -> bool {
+// Health probe (I/O): poll public GET /status within the window and report the four facts health_outcome
+// needs — (reachable, version_match, ok, degraded_storage). Version matches on either READY.sha (the git sha
+// /status reports as `version`) or READY.version, so a manifest that labels its version separately still
+// passes. `degraded_storage` is read from the `what` field of gateway.mjs's `degraded` object — emitted ONLY
+// when STORE_DEGRADED, and then always `"storage"` (gateway.mjs L7161); it is the only `what` key in /status.
+// Returns as soon as it sees a fully-healthy state (version match + ok:true) so a clean apply is not labelled
+// degraded over a transient blip; otherwise reports the best facts observed up to the deadline.
+fn health_probe(ready_sha: &str, ready_version: &str, timeout: Duration) -> (bool, bool, bool, bool) {
     let deadline = Instant::now() + timeout;
+    let mut reachable = false;
+    let mut version_match = false;
+    let mut degraded_storage = false;
     loop {
         if let Some(body) = http_get_loopback("/status", None) {
-            if json_bool_true(&body, "ok") {
-                if let Some(v) = json_str_value(&body, "version") {
-                    if (!ready_sha.is_empty() && v == ready_sha)
+            reachable = true;
+            let v_match = json_str_value(&body, "version")
+                .map(|v| {
+                    (!ready_sha.is_empty() && v == ready_sha)
                         || (!ready_version.is_empty() && v == ready_version)
-                    {
-                        return true;
-                    }
+                })
+                .unwrap_or(false);
+            if v_match {
+                version_match = true;
+                if json_bool_true(&body, "ok") {
+                    // Fully healthy — the best possible verdict; stop here.
+                    return (true, true, true, false);
                 }
+                // ok:false → is the sole reported degradation a storage one?
+                degraded_storage =
+                    json_str_value(&body, "what").map(|w| w == "storage").unwrap_or(false);
             }
         }
         if Instant::now() >= deadline {
-            return false;
+            return (reachable, version_match, false, degraded_storage);
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -784,6 +858,55 @@ fn spawn_and_wait(
     }
 }
 
+// Shared rollback-and-restart: restore active/ to last-good (or the baked-in payload), restart there, reload
+// the webview, and record a "rolledback" state that keeps the PREVIOUS installed identity. ASSUMES the relay
+// is already stopped. Keeps the church ONLINE on known-good code. Used by the health-fail path and by the
+// [AUDIT FIX #4] active.(tgz,sig) retain-failure path. Does NOT write quarantine — the caller decides that,
+// since a retain failure is a local-disk problem, not a bad bundle.
+#[allow(clippy::too_many_arguments)]
+fn rollback_and_restart(
+    app: &AppHandle,
+    suite_dir: &Path,
+    payload: &Path,
+    data_dir: &Path,
+    log: &Path,
+    active: &Path,
+    last_good: &Path,
+    prev_state_raw: &str,
+    today: &str,
+    at_str: &str,
+    cur_code_dir: &mut PathBuf,
+    cur_alive: &mut Arc<AtomicBool>,
+) {
+    let dir = match rollback_target(false, last_good.exists()) {
+        RollbackTarget::LastGood => {
+            let _ = std::fs::remove_dir_all(active);
+            let _ = rename_retry(last_good, active, log);
+            let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
+            let _ = std::fs::remove_file(suite_dir.join("active.sig"));
+            let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
+            let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
+            active.to_path_buf()
+        }
+        RollbackTarget::Payload => {
+            let _ = std::fs::remove_dir_all(active);
+            let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
+            let _ = std::fs::remove_file(suite_dir.join("active.sig"));
+            payload.to_path_buf()
+        }
+        RollbackTarget::Keep => active.to_path_buf(), // unreachable (we only call with health_ok == false)
+    };
+    spawn_and_wait(app, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
+    reload_webview(app);
+    // Keep the previous installed identity (we reverted); mark lastApplied=today so a bad bundle isn't retried
+    // in a hot loop, and record the rollback for the UI.
+    let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
+    let prev_ver = json_str_value(prev_state_raw, "installedVersion").unwrap_or_default();
+    let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
+    write_state(suite_dir, &prev_sha, &prev_ver, &prev_date, today, "rolledback", at_str, log);
+    discard_staging(suite_dir);
+}
+
 // Decide (gate) whether to apply now, then run the apply. Reads the enable marker, the staged READY, and the
 // local clock; everything cryptographic/destructive lives in attempt_apply. Called from the controller tick,
 // OUTSIDE the keep-awake-off / token early-continues so turning keep-awake off never disables auto-update.
@@ -797,7 +920,14 @@ fn maybe_apply(
     node: Option<&Path>,
     cur_code_dir: &mut PathBuf,
     cur_alive: &mut Arc<AtomicBool>,
+    cooldown_until: &mut Option<Instant>,
 ) {
+    // [AUDIT FIX #3] After a stop-timeout we back off (see attempt_apply): skip apply attempts until the
+    // cooldown elapses so we don't thrash kill→20s-wait→respawn every minute against a wedged child. The
+    // church stays online on its current code throughout.
+    if !cooldown_elapsed(Instant::now(), *cooldown_until) {
+        return;
+    }
     // Enabled? The marker is the shell's only read of the operator's setting (content = "HH:MM\n").
     let at_raw = match std::fs::read_to_string(data_dir.join("suite-autoupdate")) {
         Ok(s) => s,
@@ -836,7 +966,7 @@ fn maybe_apply(
     applog(log, &format!("suite: apply window reached ({today} {now_min}min >= {target_min}min); applying staged {r_version}"));
     attempt_apply(
         app, suite_dir, payload, data_dir, log, node, &r_version, &r_sha, &r_date, &state_raw,
-        &today, at_raw.trim(), cur_code_dir, cur_alive,
+        &today, at_raw.trim(), cur_code_dir, cur_alive, cooldown_until,
     );
 }
 
@@ -858,6 +988,7 @@ fn attempt_apply(
     at_str: &str,
     cur_code_dir: &mut PathBuf,
     cur_alive: &mut Arc<AtomicBool>,
+    cooldown_until: &mut Option<Instant>,
 ) {
     let staging = suite_dir.join("staging");
     let s_tgz = staging.join("bundle.tgz");
@@ -897,7 +1028,10 @@ fn attempt_apply(
         let _ = child.kill();
     }
     if !wait_stopped(cur_alive, Duration::from_secs(20)) {
-        applog(log, "suite: APPLY aborted — relay did not stop cleanly; restarting current code, keeping staging");
+        // [AUDIT FIX #3] Back off before retrying so we don't kill→20s-wait→respawn every ~60s against a
+        // wedged child. The relay never swapped, so restarting prev_dir keeps the church online meanwhile.
+        *cooldown_until = Some(Instant::now() + APPLY_COOLDOWN);
+        applog(log, "suite: APPLY aborted — relay did not stop cleanly; restarting current code, keeping staging; backing off apply ~1h");
         spawn_and_wait(app, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
         return;
     }
@@ -936,60 +1070,71 @@ fn attempt_apply(
         spawn_and_wait(app, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
         return;
     }
-    // The retained verified tarball the next launch re-checks against the payload key.
-    let _ = std::fs::copy(&s_tgz, suite_dir.join("active.tgz"));
-    let _ = std::fs::copy(&s_sig, suite_dir.join("active.sig"));
+    // The retained verified tarball the next launch re-checks against the payload key. [AUDIT FIX #4] A copy
+    // failure is FATAL to the apply: active/ is the new code, so a missing/partial active.(tgz,sig) would make
+    // the NEXT launch verify a stale or absent pair and silently fall back — active/ and its retained tarball
+    // must never disagree. The relay is still stopped here (step 6 hasn't run), so roll back and restart on
+    // known-good code. NOT quarantined: the bundle is fine, only this box's local copy failed.
+    if std::fs::copy(&s_tgz, suite_dir.join("active.tgz")).is_err()
+        || std::fs::copy(&s_sig, suite_dir.join("active.sig")).is_err()
+    {
+        applog(log, "suite: APPLY FAILED — could not retain active.(tgz,sig); rolling back to last-good/payload");
+        rollback_and_restart(
+            app, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
+            cur_code_dir, cur_alive,
+        );
+        applog(log, "suite: rollback complete (retain failure)");
+        return;
+    }
 
     // 6. Start from active/ (PAYLOAD_DIR=payload via spawn_relay), reload the webview.
     applog(log, "suite: starting relay from active/ (override)");
     let came_up = spawn_and_wait(app, &active, payload, data_dir, log, cur_code_dir, cur_alive);
     reload_webview(app);
 
-    // 7. Health: public /status ok AND reported version matches what we activated.
-    if came_up && health_ok(r_sha, r_version, Duration::from_secs(45)) {
-        // 8. Record success and clear staging.
-        write_state(suite_dir, r_sha, r_version, r_date, today, "applied", at_str, log);
-        discard_staging(suite_dir);
-        let short = &r_sha[..r_sha.len().min(7)];
-        applog(log, &format!("suite: APPLY OK — now running {r_version} ({short})"));
-        return;
-    }
-
-    // Health failed → quarantine the sha, roll back to last-good (or payload), restart, record the rollback.
-    applog(log, "suite: APPLY health check FAILED — quarantining sha and rolling back");
-    let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
-    if let Some(child) = app.state::<Relay>().0.lock().unwrap().take() {
-        let _ = child.kill();
-    }
-    let _ = wait_stopped(cur_alive, Duration::from_secs(20));
-    let dir = match rollback_target(false, last_good.exists()) {
-        RollbackTarget::LastGood => {
-            let _ = std::fs::remove_dir_all(&active);
-            let _ = rename_retry(&last_good, &active, log);
-            let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
-            let _ = std::fs::remove_file(suite_dir.join("active.sig"));
-            let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
-            let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
-            active.clone()
-        }
-        RollbackTarget::Payload => {
-            let _ = std::fs::remove_dir_all(&active);
-            let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
-            let _ = std::fs::remove_file(suite_dir.join("active.sig"));
-            payload.to_path_buf()
-        }
-        RollbackTarget::Keep => active.clone(), // unreachable with health_ok == false
+    // 7. Health: probe public /status for reachability, version identity, ok, and whether an ok:false is
+    //    SOLELY a degraded store; decide via the pure matrix. [AUDIT FIX #1] A good bundle that boots and
+    //    identifies correctly is NOT rolled back/quarantined just because the store is transiently degraded.
+    let (reachable, version_match, ok, degraded_storage) = if came_up {
+        health_probe(r_sha, r_version, Duration::from_secs(45))
+    } else {
+        (false, false, false, false) // never bound the port → no boot
     };
-    spawn_and_wait(app, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
-    reload_webview(app);
-    // Keep the previous installed identity (we reverted); mark lastApplied=today so a bad bundle isn't retried
-    // in a hot loop, and record the rollback for the UI.
-    let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
-    let prev_ver = json_str_value(prev_state_raw, "installedVersion").unwrap_or_default();
-    let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
-    write_state(suite_dir, &prev_sha, &prev_ver, &prev_date, today, "rolledback", at_str, log);
-    discard_staging(suite_dir);
-    applog(log, "suite: rollback complete");
+    match health_outcome(reachable, version_match, ok, degraded_storage) {
+        Outcome::Keep { store_degraded } => {
+            // 8. Record success and clear staging. The new code booted and identifies as what we activated.
+            let outcome = if store_degraded { "applied-store-degraded" } else { "applied" };
+            write_state(suite_dir, r_sha, r_version, r_date, today, outcome, at_str, log);
+            discard_staging(suite_dir);
+            let short = short_sha(r_sha);
+            if store_degraded {
+                applog(log, &format!("suite: APPLY OK (store degraded — kept, not quarantined) — now running {r_version} ({short})"));
+            } else {
+                applog(log, &format!("suite: APPLY OK — now running {r_version} ({short})"));
+            }
+            return;
+        }
+        Outcome::Rollback { quarantine } => {
+            applog(log, &format!(
+                "suite: APPLY health check FAILED (reachable={reachable} version_match={version_match} ok={ok}) — rolling back{}",
+                if quarantine { " and quarantining sha" } else { "" }
+            ));
+            // Quarantine the sha so it is never auto-applied again (always true for a genuine health failure).
+            if quarantine {
+                let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
+            }
+            // Stop the freshly-started (bad) relay, then roll back and restart on known-good code.
+            if let Some(child) = app.state::<Relay>().0.lock().unwrap().take() {
+                let _ = child.kill();
+            }
+            let _ = wait_stopped(cur_alive, Duration::from_secs(20));
+            rollback_and_restart(
+                app, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
+                cur_code_dir, cur_alive,
+            );
+            applog(log, "suite: rollback complete");
+        }
+    }
 }
 
 fn main() {
@@ -1135,6 +1280,9 @@ fn main() {
                     // Throttle the auto-update apply check to ~once a minute (HH:MM is minute-resolution and
                     // apply is once-per-day); the keep-awake policy below keeps its own 15s cadence.
                     let mut last_apply_eval = Instant::now() - Duration::from_secs(120);
+                    // [AUDIT FIX #3] Set when an apply aborts on a stop-timeout; suppresses retries until it
+                    // elapses (see maybe_apply / attempt_apply). Owned by this long-lived controller thread.
+                    let mut apply_cooldown_until: Option<Instant> = None;
                     loop {
                         // ── SUITE AUTO-UPDATE APPLY ─────────────────────────────────────────────────────
                         // Evaluated at the TOP of the tick, BEFORE the keep-awake-off and token early-continues
@@ -1153,6 +1301,7 @@ fn main() {
                                 node_c.as_deref(),
                                 &mut cur_code_dir,
                                 &mut cur_alive,
+                                &mut apply_cooldown_until,
                             );
                         }
                         // Off-switch FIRST, before any network GET: release if we were holding, then idle.
@@ -1412,6 +1561,51 @@ mod tests {
             env2.iter().find(|(k, _)| k == "RELAY_HOST").map(|(_, v)| v.as_str()),
             Some("0.0.0.0")
         );
+    }
+
+    // [AUDIT FIX #1] The post-respawn health matrix: a good bundle that boots + identifies is kept even when
+    // the store is transiently degraded; only genuine code failure (no boot, wrong version, or a NON-storage
+    // ok:false) rolls back + quarantines.
+    #[test]
+    fn health_outcome_matrix() {
+        // reachable + version match + ok:true → keep, not degraded, no quarantine.
+        assert_eq!(health_outcome(true, true, true, false), Outcome::Keep { store_degraded: false });
+        // reachable + version match + ok:false SOLELY because the store is degraded → keep (note degraded),
+        // do NOT roll back, do NOT quarantine. This is the whole point of the fix.
+        assert_eq!(health_outcome(true, true, false, true), Outcome::Keep { store_degraded: true });
+        // reachable + version match + ok:false for a NON-storage reason → roll back + quarantine (fail-closed).
+        assert_eq!(health_outcome(true, true, false, false), Outcome::Rollback { quarantine: true });
+        // reachable but the WRONG code identified itself (version mismatch) → roll back + quarantine, even if
+        // ok and even if a storage flag happened to be set.
+        assert_eq!(health_outcome(true, false, true, false), Outcome::Rollback { quarantine: true });
+        assert_eq!(health_outcome(true, false, false, true), Outcome::Rollback { quarantine: true });
+        // not reachable → the new code never booted → roll back + quarantine (other flags irrelevant).
+        assert_eq!(health_outcome(false, false, false, false), Outcome::Rollback { quarantine: true });
+        assert_eq!(health_outcome(false, true, true, true), Outcome::Rollback { quarantine: true });
+    }
+
+    // [AUDIT FIX #2] The short-sha helper must never panic on a non-ASCII / multibyte sha and must truncate on
+    // CHARACTER boundaries. `&r_sha[..7]` would panic here because byte 7 falls inside a multibyte char.
+    #[test]
+    fn short_sha_is_char_safe() {
+        assert_eq!(short_sha("abcdef0123456789"), "abcdef0"); // normal: first 7 chars
+        assert_eq!(short_sha("abc"), "abc"); // shorter than 7 → whole string, no panic
+        assert_eq!(short_sha(""), ""); // empty → empty, no panic
+        // Multibyte: a byte-slice at 7 would panic; char-take yields 7 chars safely.
+        let s = "é€αβγδεζη"; // each char is 2–3 bytes, so byte 7 is mid-char
+        assert_eq!(short_sha(s).chars().count(), 7);
+        assert_eq!(short_sha(s), "é€αβγδε");
+    }
+
+    // [AUDIT FIX #3] Cooldown gate: no cooldown set → proceed; a future retry instant → wait; a past one →
+    // proceed again.
+    #[test]
+    fn cooldown_gate() {
+        let now = Instant::now();
+        assert!(cooldown_elapsed(now, None)); // never backed off → always proceed
+        assert!(!cooldown_elapsed(now, Some(now + Duration::from_secs(3600)))); // backed off, not yet elapsed
+        assert!(cooldown_elapsed(now, Some(now - Duration::from_secs(1)))); // elapsed → proceed
+        assert!(cooldown_elapsed(now, Some(now))); // boundary: now >= retry_at → proceed
     }
 
     #[test]
