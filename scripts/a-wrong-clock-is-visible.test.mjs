@@ -208,17 +208,3 @@ test('clockSuspect expires, is not extended by further refusals, and a fresh ref
   const again = (await r.status()).clockSuspect;
   assert.ok(again && again.at >= first.at + 3, 'a fresh refusal after expiry did not raise it again');
 });
-
-// ---- the relay dashboard's sync line (relay-app/control.js) ------------------------------------------------------
-const CONTROL = readFileSync(new URL('../relay-app/control.js', import.meta.url), 'utf8');
-test('the dashboard sync line says trust-or-clock only when a peer refused, and keeps its other lines', () => {
-  const line = liftFn(CONTROL, 'function syncLineText(sync, nowSec) {', 'syncLineText', {});
-  const now = 1e6;
-  const refused = line({ at: now - 30, ok: false, error: 'a peer refused this box - its trust list or a clock may be wrong' }, now);
-  assert.match(refused, /failed/); assert.match(refused, /trust list or a clock may be wrong/);
-  assert.doesNotMatch(line({ at: now - 30, ok: false, error: 'ECONNREFUSED' }, now), /clock|trust/, 'CONTROL: another failure must not blame clocks or trust');
-  assert.equal(line({ at: now - 30, ok: true, imported: 0 }, now), 'just now · nothing new');
-  assert.equal(line({ at: now - 600, ok: true, imported: 3 }, now), '10 minutes ago · pulled 3');
-  assert.equal(line({ running: true }, now), 'checking now…');
-  assert.equal(line({ at: 0, peers: 0 }, now), 'no other relays to check');
-});

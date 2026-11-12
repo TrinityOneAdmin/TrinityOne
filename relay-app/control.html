@@ -40,16 +40,22 @@
      phantom columns and dead space on the right — the cards stretch to fill the row. align-items:stretch
      (default) lets a row's cards share a height so they don't go ragged. (WebKit/WKWebView — the Suite's
      Tauri webview on Mac — honoured auto-fill's empty tracks literally, which is why it looked worst there.) */
-  .deck { display:grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap:16px; align-items:stretch; }
-  .deck > .card { margin-bottom:0; }
-  /* cap at 3 columns on a very wide display so a handful of cards don't spread into one thin row;
-     .card--wide spans 2 of the 3, which this still allows */
-  @media (min-width: 1500px) { .deck { grid-template-columns: repeat(3, minmax(310px, 1fr)); } }
-  /* the churches list carries npubs and per-row detail — give it room once there is room to give */
-  @media (min-width: 1000px) { .card--wide { grid-column: span 2; } }
-  /* the churches list is the tallest card by far — on a wide screen let it hold its own column pair
-     and scroll internally, so 22 rows don't push every other card down a screen and a half. */
-  @media (min-width: 1000px) { .card--wide .ch-scroll { max-height: 620px; overflow-y: auto; padding-right: 4px; } }
+  /* Dashboard cards on a FIXED grid (owner's pick 2026-11-12, mockup "Dashboard A"), so rows line up and no
+     card is left alone on a row: wide = 12 columns, Activity 8 + How members reach you 4, then What's stored,
+     Busiest churches and Relay health at 4 each. Tablet = 2 columns with Activity across both. Phone = 1.
+     minmax(0,1fr), never bare 1fr — a long address would otherwise set a column's minimum (see .deck3). */
+  .deck { display:grid; grid-template-columns: minmax(0, 1fr); gap:16px; align-items:stretch; }
+  .deck > .card { margin-bottom:0; min-width:0; }
+  @media (min-width: 700px) {
+    .deck { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .deck > .card--wide, .deck > #actCard { grid-column: 1 / -1; }
+  }
+  @media (min-width: 1100px) {
+    .deck { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+    .deck > .card { grid-column: span 4; }
+    .deck > #actCard { grid-column: span 8; }
+    .deck > .card--wide { grid-column: 1 / -1; }
+  }
   .brand { display:flex; align-items:center; gap:9px; margin-bottom:22px; }
   .brand b { font-weight:800; font-size:18px; letter-spacing:-.2px; } .brand .clay { color:var(--clay); }
   /* the console's .sk-pill, so the surface badge reads the same in both halves of the Suite */
@@ -60,7 +66,21 @@
   .dot.on { background:var(--sage); box-shadow:0 0 0 4px color-mix(in oklab, var(--sage) 22%, transparent); }
   .dot.off { background:var(--ink-3); }
   .hero h1 { margin:0; font-size:20px; letter-spacing:-.2px; } .hero .sub { color:var(--ink-2); font-size:13.5px; margin-top:3px; }
-  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(122px, 1fr)); gap:10px; margin-bottom:16px; max-width:940px; }
+  /* Dashboard numbers: three headline tiles (Churches, Connected now, Sent today), then the other four as one
+     muted line. Placed by POSITION in the markup (1 churches, 2 members, 3 events, 4 connected, 5 today,
+     6 media, 7 traffic) rather than by moving the tiles, so every id and tooltip stays where it was.
+     The ::after is a zero-height full-width flex item that forces the line break between the two groups. */
+  .dstats { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+  .dstats::after { content:''; order:1; flex:0 0 100%; height:0; margin-top:-10px; }
+  .dstats > .stat { order:0; flex:1 1 0; min-width:0; }
+  .dstats > .stat:nth-child(2), .dstats > .stat:nth-child(3), .dstats > .stat:nth-child(6), .dstats > .stat:nth-child(7) {
+    order:2; flex:0 0 auto; background:none; border:0; padding:0 2px; display:flex; align-items:center; gap:5px; line-height:18px; }
+  .dstats > .stat:nth-child(2) .n, .dstats > .stat:nth-child(3) .n, .dstats > .stat:nth-child(6) .n, .dstats > .stat:nth-child(7) .n {
+    font-size:13px; font-weight:700; letter-spacing:0; color:var(--ink-2); }
+  .dstats > .stat:nth-child(2) .l, .dstats > .stat:nth-child(3) .l, .dstats > .stat:nth-child(6) .l, .dstats > .stat:nth-child(7) .l {
+    font-size:12.5px; margin-top:0; }
+  .dstats > .stat:nth-child(3)::before, .dstats > .stat:nth-child(6)::before, .dstats > .stat:nth-child(7)::before {
+    content:'·'; color:var(--ink-3); margin-right:5px; }
   /* Activity chart. Plain flex bars rather than SVG: no viewBox maths, it reflows with the card, and the
      bar count changes with ?days= without recomputing a coordinate system. */
   .spark { display:flex; align-items:flex-end; gap:2px; height:132px; padding-top:4px; }
@@ -135,11 +155,21 @@
      grid at 360px gave ~72px columns, so counts overflowed and labels wrapped to three lines. */
   @media (max-width: 560px) {
     .wrap { padding:18px 14px 48px; }
-    .grid { grid-template-columns: repeat(2, 1fr); }
+    .dstats > .stat { padding:11px 10px; }
     .row { flex-wrap:wrap; }
     .row .k { width:100%; }
     .row .v { white-space:normal; word-break:break-all; }
     .btn-ghost, .btn-clay { padding:11px 15px; }   /* ≥44px touch targets */
+    /* header: the title takes the whole first line and the two buttons drop below it — squeezed beside
+       them it wrapped one word per line and ran under Back */
+    .hero { flex-wrap:wrap; }
+    .hero > div { flex:1 1 calc(100% - 26px) !important; }
+    /* a toggle's status note ("· public via Tailscale — managed there") goes on its own line under the row,
+       instead of squeezing the description to one word per line */
+    .toggle-row { flex-wrap:wrap; }
+    .toggle-row > .wz-meta { order:3; flex:1 1 100%; }
+    .card-head { flex-wrap:wrap; }
+    .card-head > .apply-tag { order:3; flex-basis:calc(100% - 45px); margin-left:45px; }   /* under the title, past the 34px icon */
   }
   /* themed dialog — window.confirm() can't be styled, and the codebase already notes it is unreliable in a
      webview (Update and Restore use a two-click armed pattern for exactly that reason). This matches the
@@ -167,11 +197,32 @@
      Grid is used here instead of CSS multi-column because WebKit (the Suite's WKWebView on Mac)
      mishandles break-inside:avoid — it split and mis-balanced cards — and multi-column flowed cards
      top-to-bottom down each column, scrambling the reading order. Grid runs left-to-right in rows. */
-  .deck3 { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; align-items:start; }
+  /* minmax(0,1fr), never bare 1fr: 1fr is minmax(auto,1fr), so one long unbreakable church key set the whole
+     column's minimum and laid a phone's Settings out 689px wide, shrunk to ~57% (measured 2026-11-12). */
+  /* Settings C (2026-11-12): two placed columns from 1000px — Internet across both, then Churches | stack of
+     Name / Serves / Subscribers, then Updates | Backup. align-items:stretch so each row's two cards end level. */
+  .deck3 { display:grid; grid-template-columns: minmax(0, 1fr); gap:16px; align-items:stretch; }
   .deck3 > .card { margin-bottom:0; }
-  /* a third of a laptop screen is too narrow for an npub row; step down well before that bites */
-  @media (max-width:1500px) { .deck3 { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width:1000px) { .deck3 { grid-template-columns: 1fr; } }
+  @media (min-width:1000px) {
+    .deck3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .deck3 > .s-wide { grid-column: 1 / -1; }
+  }
+  .s-stack { display:flex; flex-direction:column; gap:16px; min-width:0; }
+  .s-stack > .card { margin-bottom:0; }
+  /* folds for the rare things (web address + storage limits, update source, restore) */
+  .fold { margin-top:12px; padding-top:10px; border-top:1px solid var(--line-2); }
+  .fold > summary { cursor:pointer; list-style:none; font-size:13px; font-weight:700; color:var(--ink-2); padding:4px 0; }
+  .fold > summary::-webkit-details-marker { display:none; }
+  .fold > summary::before { content:'\25B8'; display:inline-block; width:14px; transition:transform .15s var(--ease); }
+  .fold[open] > summary::before { transform:rotate(90deg); }
+  .fold[open] > summary { margin-bottom:10px; }
+  .fold-danger > summary { color:var(--clay-ink); }
+  .fold .danger-zone { margin-top:0; }
+  .fold .ch-add .btn { white-space:nowrap; }
+  /* the two halves of the Updates card */
+  .upd-part { margin-top:4px; padding-top:12px; border-top:1px solid var(--line-2); }
+  .upd-part + .upd-part { margin-top:14px; }
+  .upd-h { font-weight:700; font-size:14px; margin-bottom:6px; }
   .card-head { display:flex; align-items:flex-start; gap:11px; margin-bottom:11px; }
   .hd-ic { width:34px; height:34px; border-radius:10px; background:var(--surface-2); color:var(--clay);
            display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -372,14 +423,14 @@
 
   <div class="panel" id="panel-dash" role="tabpanel" aria-labelledby="tab-dash">
 
-  <div class="grid">
+  <div class="dstats" id="dashStats">
     <div class="stat" title="Churches using this relay"><div class="n" id="s-churches">—</div><div class="l">Churches</div></div>
     <div class="stat" title="People across all those churches"><div class="n" id="s-members">—</div><div class="l">Members</div></div>
     <div class="stat" title="Messages and records saved on this relay"><div class="n" id="s-events">—</div><div class="l">Events stored</div></div>
     <div class="stat" title="Phones and computers connected right now"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
     <div class="stat" title="Messages passed along since midnight"><div class="n" id="s-today">—</div><div class="l">Sent today</div></div>
     <div class="stat" title="Photos and files saved on this relay"><div class="n" id="s-media">—</div><div class="l">Media stored</div></div>
-    <div class="stat" title="Data moved since you opened this page"><div class="n" id="s-traffic">—</div><div class="l">Traffic (session)</div></div>
+    <div class="stat" title="Data moved since the relay last started"><div class="n" id="s-traffic">—</div><div class="l">Traffic since start</div></div>
   </div>
 
   <!-- card deck: auto-fit grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
@@ -402,7 +453,7 @@
        and offer the way across rather than leaving three cards spinning on "Loading…". -->
   <div class="card card--wide" id="dashLocked" style="display:none">
     <h2>Activity is locked</h2>
-    <div class="muted" style="margin-bottom:12px">The figures below need this relay's <b>admin token</b>. On the relay's own computer it fills in automatically; from another device, enter it once in Settings.</div>
+    <div class="muted" style="margin-bottom:12px">These figures need the <b>admin token</b>. On the relay's own computer it fills in by itself; elsewhere, enter it once in Settings.</div>
     <button class="btn-clay" id="goUnlock" title="Type your admin token to unlock the controls">Enter the admin token</button>
   </div>
 
@@ -418,7 +469,7 @@
     <div id="reach"></div>
     <div class="row"><span class="k">Member relay</span><span class="v" id="wss">—</span><button class="btn-ghost" data-copy="wss">Copy</button></div>
     <div class="row"><span class="k">Console</span><span class="v" id="console">—</span><button class="btn-ghost" data-copy="console">Copy</button></div>
-    <div class="muted" style="margin-top:6px">Members join with the invite QR you share from the console — it carries this relay automatically.</div>
+    <div class="muted" style="margin-top:6px">The invite QR from the console already includes this.</div>
   </div>
 
   <div class="card" id="kindCard">
@@ -434,8 +485,6 @@
   <div class="card" id="healthCard">
     <h2>Relay health</h2>
     <div class="row"><span class="k">This relay's build</span><span class="v" id="u-current">—</span></div>
-    <div class="row"><span class="k">Relay sync</span><span class="v" id="syncMsg" style="font-weight:600">—</span></div>
-    <div class="row"><span class="k">Last checked</span><span class="v" id="syncWhen">—</span></div>
     <!-- Storage: only a relay with a limit set can be "x% full", so the meter appears only when one is.
          Uncapped, there is no proportion to draw and we say the plain truth instead. -->
     <div id="storeRow" style="margin-top:14px; display:none">
@@ -448,7 +497,6 @@
       <div class="bar-track"><div class="bar-fill" id="diskFill" style="width:0%"></div></div>
       <div class="meter-note" id="diskNote"></div>
     </div>
-    <div class="muted" style="margin-top:8px">Each church can trust more than one relay, and this box keeps itself level with theirs automatically. Updating and syncing on demand live in <b>Settings</b>.</div>
   </div>
 
   </div><!-- /deck -->
@@ -473,49 +521,39 @@
   <div id="setBody">
 
 
-  <!-- Every settings card in one three-column flow, rather than three separately-headed two-up rows. The
-       section headings were costing a card's worth of vertical space each to label pairs the card titles
-       already name. Order still reads connection → churches → services → maintenance, running down each
-       column in turn. -->
+  <!-- Settings, owner's pick 2026-11-12 (mockup "Settings C"): the same cards, each PLACED rather than
+       auto-flowed. Internet runs full width on top; Churches on the left with Name / Shares / Subscribers
+       stacked on the right; then one Updates card (relay software + phone app installer, which used to be two
+       cards) beside Backup. Rare things fold away: web address and storage limits, the update source, and
+       Restore. Two columns from 1000px, one below. Every id the code reads is unchanged; updateCard and
+       installerCard are now the two halves of #updatesCard, which control.js shows when either half is. -->
   <div class="deck3">
-      <section class="card" id="goPublic" aria-label="Reach members from anywhere">
+      <section class="card s-wide" id="goPublic" aria-label="Reach members from anywhere">
         <div class="card-head">
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"></path></svg></span>
           <div class="card-titles">
             <div class="card-title">Reach members from anywhere</div>
-            <div class="card-desc">Put this relay on the public internet over a secure tunnel — no router setup.</div>
+            <div class="card-desc">A secure tunnel to the internet. No router setup.</div>
           </div>
           <span class="apply-tag" id="gpStatus"></span>
         </div>
         <div id="gpBody"><div class="muted">Checking…</div></div>
         <div class="toggle-row" id="stayPublicRow">
-          <div class="toggle-main"><div class="toggle-t">Stay public</div><div class="toggle-s">Keeps the secure public tunnel open, and reopens it after a restart. Off closes it and keeps it closed.</div></div>
+          <div class="toggle-main"><div class="toggle-t">Stay public</div><div class="toggle-s">Reopens after a restart. Off closes it.</div></div>
           <span class="wz-meta" id="stayMsg"></span>
           <input type="checkbox" class="sw" id="t-stay" title="On: keep this relay reachable from the internet over a secure tunnel. Off: close it." aria-label="Stay public">
         </div>
         <div class="toggle-row" id="keepAwakeRow">
-          <div class="toggle-main"><div class="toggle-t">Keep this computer awake while public</div><div class="toggle-s">Holds off sleep so members can reach your church at any hour. Leave this on unless you have another way to stop this machine sleeping.</div></div>
+          <div class="toggle-main"><div class="toggle-t">Keep this computer awake while public</div><div class="toggle-s">Members can't reach you while it sleeps.</div></div>
           <span class="wz-meta" id="keepAwakeMsg"></span>
           <input type="checkbox" class="sw" id="t-keepawake" checked title="On: stop this computer sleeping while the relay is public. Off: let it sleep as normal." aria-label="Keep this computer awake while public">
         </div>
         <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="openSleepBtn" type="button" title="Open this computer's sleep and power settings">Open sleep settings</button><span class="muted" id="sleepHint" style="display:none"></span></div>
         <div class="sleepwarn" id="gpSleepWarn" style="display:none">
-          <b>This computer must stay awake for members to reach your church.</b>
-          Keep-awake is on, so it will not sleep while you are public.
-          <span class="sw-sub">If it is a laptop you close: on battery with the lid shut, macOS can still sleep — keep it plugged in.</span>
-          <span class="sw-sub">Reachable 24/7? A free quick tunnel address changes each restart. For a permanent address use a named Cloudflare tunnel, or turn on Tailscale Funnel above.</span>
+          <b>Members reach you only while this computer is awake.</b>
+          <span class="sw-sub">Laptop? Keep it plugged in: on battery with the lid shut, macOS can still sleep.</span>
+          <span class="sw-sub">A quick tunnel's address changes on every restart. For a fixed one, use a named Cloudflare tunnel or Tailscale Funnel.</span>
         </div>
-      </section>
-
-      <section class="card" id="relayNameCard" aria-label="Your relay's name">
-        <div class="card-head">
-          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9-9-9Z"></path><circle cx="7.5" cy="7.5" r="1.4"></circle></svg></span>
-          <div class="card-titles">
-            <div class="card-title">Your relay's name</div>
-            <div class="card-desc">A memorable handle so members connect by name, not a URL.</div>
-          </div>
-        </div>
-        <div id="relayNameBody"><div class="muted">Checking…</div></div>
       </section>
 
       <section class="card" aria-label="Churches on this relay">
@@ -523,14 +561,14 @@
         <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"></circle><path d="M3.5 20a5.5 5.5 0 0 1 11 0"></path><path d="M16 5.2a3.4 3.4 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-2.7-4.7"></path></svg></span>
         <div class="card-titles">
           <div class="card-title" id="cfgCount">Churches</div>
-          <div class="card-desc">Each church here can publish to and read from this relay. <span id="cfgStatus"></span></div>
+          <div class="card-desc"><span id="cfgStatus"></span></div>
         </div>
-        <span class="apply-tag"><span class="d"></span>Changes apply immediately</span>
+        <span class="apply-tag"><span class="d"></span>Applies straight away</span>
       </div>
       <div class="ch-toggles">
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">You add each church. Off = a church can add itself from its Steward console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" title="On: only churches you add can use this relay. Off: a church can add itself." aria-label="Invite-only"></div>
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Churches without a server can find this relay via "Auto-find relays" and ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" title="On: other churches without a server can choose to use this relay" aria-label="Offer to host other churches"></div>
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Show church names</div><div class="toggle-s">Off by default — churches are labelled with a generated name from their key. On shows the real name from each church's profile.</div></div><input type="checkbox" class="sw" id="t-shownames" title="On: show church names instead of generated ones" aria-label="Show church names"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">Off: a church can add itself from its console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" title="On: only churches you add can use this relay. Off: a church can add itself." aria-label="Invite-only"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Churches without a server can ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" title="On: other churches without a server can choose to use this relay" aria-label="Offer to host other churches"></div>
+        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Show church names</div><div class="toggle-s">Off: each church shows a made-up name.</div></div><input type="checkbox" class="sw" id="t-shownames" title="On: show church names instead of generated ones" aria-label="Show church names"></div>
       </div>
       <div class="ch-add">
         <input class="mono" id="addNpub" title="The church key (starts with npub) from that church's steward console" placeholder="Paste an npub to add a church…" autocomplete="off" spellcheck="false" aria-label="Add a church by npub" />
@@ -541,26 +579,40 @@
       <div class="ch-list" id="cfgList"><div class="muted">Loading…</div></div>
     </section>
 
+      <div class="s-stack">
+      <section class="card" id="relayNameCard" aria-label="Your relay's name">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9-9-9Z"></path><circle cx="7.5" cy="7.5" r="1.4"></circle></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Your relay's name</div>
+            <div class="card-desc">Members can connect by this name.</div>
+          </div>
+        </div>
+        <div id="relayNameBody"><div class="muted">Checking…</div></div>
+      </section>
+
       <section class="card card-save" id="servesCard" style="display:none" aria-label="What this relay serves">
         <div class="card-head">
           <span class="hd-ic" style="color:var(--gold-ink)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"></path></svg></span>
           <div class="card-titles">
             <div class="card-title">What this relay serves</div>
-            <div class="card-desc">These settings are staged. Review them, then Save to apply together. <span id="servesMsg"></span></div>
+            <div class="card-desc">Changes here wait for Save. <span id="servesMsg"></span></div>
           </div>
         </div>
         <div class="save-note" id="servesDirtyNote" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg> You have unsaved changes</div>
         <div class="ch-toggles" style="border-bottom:none; padding-bottom:0">
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">The web app</div><div class="toggle-s">Serve TrinityOne from this box at your own web address.</div></div><input type="checkbox" class="sw" id="t-app" title="On: this computer serves the TrinityOne web app at your web address" aria-label="Serve the web app"></div>
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Bible &amp; dictionary downloads</div><div class="toggle-s">Members download study modules from this box.</div></div><input type="checkbox" class="sw" id="t-modules" title="On: members can download Bibles and dictionaries from this computer" aria-label="Serve Bible downloads"></div>
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Audio Bibles &amp; media</div><div class="toggle-s">The audio-Bible / podcast proxy. Uses the most bandwidth.</div></div><input type="checkbox" class="sw" id="t-audio" title="On: this computer relays audio Bibles and podcasts. Uses the most internet." aria-label="Serve audio and media"></div>
-          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Let phones on this wifi connect directly</div><div class="toggle-s">Off is safer. On, anyone on the same network — including a guest or church-hall wifi — can reach this relay. Takes effect next time you open the app.</div></div><input type="checkbox" class="sw" id="t-lan" title="On: phones on the same wifi can connect directly. Off is safer." aria-label="Allow devices on this network to connect directly"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">The web app</div></div><input type="checkbox" class="sw" id="t-app" title="On: this computer serves the TrinityOne web app at your web address" aria-label="Serve the web app"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Bible &amp; dictionary downloads</div></div><input type="checkbox" class="sw" id="t-modules" title="On: members can download Bibles and dictionaries from this computer" aria-label="Serve Bible downloads"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Audio Bibles &amp; media</div><div class="toggle-s">Uses the most internet.</div></div><input type="checkbox" class="sw" id="t-audio" title="On: this computer relays audio Bibles and podcasts. Uses the most internet." aria-label="Serve audio and media"></div>
+          <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Let phones on this wifi connect directly</div><div class="toggle-s">Off is safer. On, anyone on the same network, guests included, can reach this relay. Takes effect next time you open the app.</div></div><input type="checkbox" class="sw" id="t-lan" title="On: phones on the same wifi can connect directly. Off is safer." aria-label="Allow devices on this network to connect directly"></div>
         </div>
-        <div class="field" style="margin-top:16px">
-          <div class="field-l">Church web address (optional)</div>
-          <input id="t-appurl" title="Your church's web address, for example yourchurch.org" placeholder="yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
-          <div class="hint">Your own domain. The app, joining codes and handles read as yours.</div>
-          <div id="dnsWizard" style="display:none; margin-top:12px; padding:14px; border-radius:var(--r-sm); background:var(--surface-2); border:1px solid var(--line)">
+        <details class="fold" id="servesMore">
+          <summary>Web address &amp; storage limits</summary>
+          <div class="field">
+            <div class="field-l">Church web address (optional)</div>
+            <input id="t-appurl" title="Your church's web address, for example yourchurch.org" placeholder="yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
+            <div class="hint">Your own domain, e.g. yourchurch.org.</div>
+            <div id="dnsWizard" style="display:none; margin-top:12px; padding:14px; border-radius:var(--r-sm); background:var(--surface-2); border:1px solid var(--line)">
             <div style="font-weight:700; font-size:13px; margin-bottom:8px">DNS setup</div>
             <div id="dnsSteps" style="font-size:12.5px; color:var(--ink-2); line-height:1.6"></div>
             <div style="display:flex; gap:8px; margin-top:10px; align-items:center">
@@ -568,15 +620,16 @@
               <span id="dnsResult" style="font-size:12.5px; font-weight:600"></span>
             </div>
           </div>
-        </div>
-        <div class="field">
-          <div class="field-l">Storage limits <span id="mediaUsed" style="text-transform:none; letter-spacing:0"></span></div>
-          <div class="storage-grid">
+          </div>
+          <div class="field">
+            <div class="field-l">Storage limits <span id="mediaUsed" style="text-transform:none; letter-spacing:0"></span></div>
+            <div class="storage-grid">
             <input id="t-mediacap" title="Most space photos and files may use in total. 0 means no limit." type="number" min="0" step="1" placeholder="Total GB (0 = unlimited)" aria-label="Total media storage limit in GB" />
             <input id="t-churchcap" title="Most space each church may use. 0 means no limit." type="number" min="0" step="1" placeholder="Per church GB (0 = unlimited)" aria-label="Per-church storage limit in GB" />
           </div>
-          <div class="hint">Cap total media (and optionally per church). Over-limit uploads are refused; messages unaffected.</div>
-        </div>
+            <div class="hint">0 = no limit. Uploads over a limit are refused; messages are not.</div>
+          </div>
+        </details>
         <div class="save-footer" id="servesFooter" style="display:none">
           <span class="sf-text" id="servesCount">Changes waiting</span>
           <button class="btn btn-ghost" id="discardServes" title="Throw away your unsaved changes">Discard</button>
@@ -589,79 +642,52 @@
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"></rect><path d="m4 7 8 6 8-6"></path></svg></span>
           <div class="card-titles">
             <div class="card-title">Email subscribers</div>
-            <div class="card-desc">People who opted in via the website's "Stay updated" form. Export to send from your own mail tool. <span id="subsMsg"></span></div>
+            <div class="card-desc">People who signed up on your website. <span id="subsMsg"></span></div>
           </div>
         </div>
         <div class="sub-row">
           <div class="sub-count"><span class="sub-n" id="subsCount">—</span><span class="sub-l" id="subsLabel">subscribers</span></div>
-          <button class="btn btn-ghost" id="dlSubs" title="Download the list of phones that receive notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
+          <button class="btn btn-ghost" id="dlSubs" title="Download the email list as a spreadsheet file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download CSV</button>
         </div>
       </section>
+      </div><!-- /s-stack -->
 
-      <section class="card" id="updateCard" style="display:none" aria-label="Relay software">
+      <section class="card" id="updatesCard" style="display:none" aria-label="Updates">
         <div class="card-head">
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg></span>
-          <div class="card-titles">
-            <div class="card-title">Relay software</div>
-            <div class="card-desc">Health and the current build are on the Dashboard. <span id="updateMsg"></span></div>
+          <div class="card-titles"><div class="card-title">Updates</div></div>
+        </div>
+        <div class="upd-part" id="updateCard" style="display:none" aria-label="Relay software">
+          <div class="upd-h">Relay software <span id="updateMsg"></span></div>
+          <div id="u-body" class="muted">Checking for updates…</div>
+          <div class="toggle-row" style="margin-top:6px">
+            <div class="toggle-main">
+              <div class="toggle-t">Update automatically</div>
+              <div class="toggle-s">Checks hourly. The relay restarts briefly each time.</div>
+            </div>
+            <input type="checkbox" class="sw" id="keepRelayCurrent" title="On: install new relay versions automatically" aria-label="Update relay software automatically">
           </div>
         </div>
-        <!-- THE UPDATE SOURCE, ON SCREEN AND CHANGEABLE. Until 2026-09-21 the only writer of this address was
-             relay-app/install.sh, so a relay installed from the desktop Suite had none: the panel below said
-             "this box hands out nothing yet", and the button under it answered "✗ this relay has no origin to
-             fetch from" — the action offered, the precondition never mentioned. Now the address is shown here,
-             a packaged Suite arrives with one, and the two buttons that need it are disabled with the reason
-             until it exists (control.js loadUpdate / loadApkStatus). -->
-        <div class="ch-add" style="margin-bottom:4px">
-          <input class="mono" id="originIn" title="The web address this computer downloads updates from" type="url" placeholder="https://…" autocomplete="off" spellcheck="false" aria-label="Update source — where this box fetches the installers it hands out from" />
-          <button class="btn btn-ghost" id="originSave" title="Save the update address">Save source</button>
-        </div>
-        <div class="hint" id="originMsg" role="status" aria-live="polite" style="min-height:1.2em">Update source: where this box fetches the app installers it hands out from. The software card below says where its own code comes from.</div>
-        <div id="u-body" class="muted" style="margin-top:10px">Checking for updates…</div>
-        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-2)">
-          <div class="wz-actions">
-            <button class="btn btn-ghost" id="syncNow" title="Check for a newer version now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg>Check sync now</button>
-          </div>
-          <div class="hint" id="syncNowMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
-          <div class="hint">Updating the relay's software does <b>not</b> update the app installer it hands out — those are separate, and the installer has its own card below.</div>
-        </div>
-        <div class="toggle-row" style="margin-top:10px">
-          <div class="toggle-main">
-            <div class="toggle-t">Update automatically</div>
-            <div class="toggle-s">Checks hourly and applies new builds with no downtime beyond the restart. Off by default — the relay restarts briefly each time.</div>
-          </div>
-          <input type="checkbox" class="sw" id="keepRelayCurrent" title="On: install new relay versions automatically" aria-label="Update relay software automatically">
-        </div>
-      </section>
-
-      <!-- LET MEMBERS INSTALL THE APP FROM THIS BOX.
-           This used to be one ghost button labelled "Fetch latest APK" tucked under the software-update card,
-           with a hint describing what it technically did. Nothing said what the capability was FOR, and
-           nothing at all said which build the box was actually handing out — so a8 served a two-day-old
-           installer for four days with every screen looking healthy. The card now leads with the purpose,
-           states what it holds, and says plainly when the update source has moved past it. -->
-      <section class="card" id="installerCard" style="display:none" aria-label="Let members install the app from this box">
-        <div class="card-head">
-          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg></span>
-          <div class="card-titles">
-            <div class="card-title">Let members install the app from this box</div>
-            <div class="card-desc">Your congregation can install TrinityOne straight from this machine over your own wifi — no app store, and nobody spends mobile data. Share the page below and they tap once to install.</div>
-          </div>
-        </div>
-        <div id="apkHeld" class="muted">Checking what this box hands out…</div>
-        <div class="wz-actions" style="margin-top:13px">
+        <!-- THE PHONE APP INSTALLER THIS BOX HANDS OUT (was its own card, "Let members install the app from this
+             box"). It once served a two-day-old installer for four days with every screen looking healthy, so
+             #apkHeld leads with what the box actually holds and says plainly when it is behind. -->
+        <div class="upd-part" id="installerCard" style="display:none" aria-label="Phone app installer">
+          <div class="upd-h">Let members install the app from this box</div>
+          <div class="toggle-s" style="margin:0 0 8px">Over your own wifi, no app store. Separate from the relay software.</div>
+          <div id="apkHeld" class="muted">Checking what this box hands out…</div>
+          <div class="wz-actions" style="margin-top:13px">
           <button class="btn btn-ghost" id="fetchApk" title="Download the latest phone app so this computer can hand it out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Update the installer now</button>
           <a class="btn btn-ghost" id="openInstall" title="Open the page members use to install the phone app" href="/install" target="_blank" rel="noopener" style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>Open the page members see</a>
         </div>
-        <div class="hint" id="apkMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
-        <div class="toggle-row" style="margin-top:6px">
-          <div class="toggle-main">
-            <div class="toggle-t">Keep the installer up to date automatically</div>
-            <div class="toggle-s">Off by default: it downloads about 80&nbsp;MB whenever a new build appears. On a metered or slow connection, leave this off and press the button above when it suits you.</div>
+          <div class="hint" id="apkMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
+          <div class="toggle-row" style="margin-top:6px">
+            <div class="toggle-main">
+              <div class="toggle-t">Keep the installer up to date automatically</div>
+              <div class="toggle-s">About 80&nbsp;MB each time. Leave off on a slow or metered connection.</div>
+            </div>
+            <input type="checkbox" class="sw" id="keepApkCurrent" title="On: keep the phone app download up to date automatically" aria-label="Keep the installer up to date automatically">
           </div>
-          <input type="checkbox" class="sw" id="keepApkCurrent" title="On: keep the phone app download up to date automatically" aria-label="Keep the installer up to date automatically">
-        </div>
-        <div class="share-box">
+          <div class="share-box">
           <img id="installQr" class="share-qr" src="/apks/qr.svg" width="150" height="150" alt="QR code linking to this box's install page">
           <div class="share-words">
             <!-- loadApkStatus rewrites all three: a loopback address is not shareable and is never printed
@@ -672,6 +698,17 @@
             <div class="share-u" id="installUrl">—</div>
           </div>
         </div>
+        </div>
+        <!-- THE UPDATE SOURCE, ON SCREEN AND CHANGEABLE (control.js loadUpdate / loadApkStatus). Folded away, but
+             loadUpdate opens the fold while no source is set: both halves above then point here. -->
+        <details class="fold" id="originFold">
+          <summary>Update source</summary>
+          <div class="ch-add" style="margin:0 0 4px">
+            <input class="mono" id="originIn" title="The web address this computer downloads updates from" type="url" placeholder="https://…" autocomplete="off" spellcheck="false" aria-label="Update source — where this box fetches the installers it hands out from" />
+          <button class="btn btn-ghost" id="originSave" title="Save the update address">Save source</button>
+          </div>
+          <div class="hint" id="originMsg" role="status" aria-live="polite" style="min-height:1.2em">Where this box downloads app installers from.</div>
+        </details>
       </section>
 
       <section class="card" id="backupCard" style="display:none" aria-label="Back up and restore">
@@ -679,20 +716,23 @@
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg></span>
           <div class="card-titles">
             <div class="card-title">Back up &amp; restore</div>
-            <div class="card-desc">A snapshot is everything on this relay in one file — every church's messages, records and media, plus this relay's identity. <span id="backupMsg"></span></div>
+            <div class="card-desc">Everything on this relay in one file. <span id="backupMsg"></span></div>
           </div>
         </div>
         <a class="btn btn-ghost" id="dlBackup" title="Download a backup of everything this relay stores" href="#" download style="text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg>Download a backup</a>
-        <div class="hint">⚠ It contains keys — keep it as safe as your recovery phrase.</div>
-        <div class="danger-zone">
-          <div class="dz-head"><span class="dz-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg></span><span class="dz-title">Restore from a backup</span></div>
-          <div class="dz-body"><b>This replaces everything</b> — every church's messages, files and lists are overwritten by the snapshot, and you must restart the app to apply. It cannot be undone.</div>
-          <div class="dz-actions">
+        <div class="hint">⚠ It contains keys. Keep it as safe as your recovery phrase.</div>
+        <details class="fold fold-danger" id="restoreFold">
+          <summary>Restore from a backup…</summary>
+          <div class="danger-zone">
+            <div class="dz-head"><span class="dz-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg></span><span class="dz-title">Restore from a backup</span></div>
+            <div class="dz-body"><b>This replaces everything</b> on this relay with the backup: every church's messages, files and lists. Restart the app to apply. It cannot be undone.</div>
+            <div class="dz-actions">
             <input type="file" id="restoreFile" title="Choose a backup file you downloaded earlier" accept=".tgz,.tar.gz,application/gzip" style="font-size:12.5px; width:auto; flex:1; min-width:180px" />
             <button class="btn btn-danger" id="doRestore" title="Replace this relay's records with the chosen backup">Restore…</button>
           </div>
-          <div class="hint" id="restoreMsg"></div>
-        </div>
+            <div class="hint" id="restoreMsg"></div>
+          </div>
+        </details>
       </section>
   </div><!-- /deck3 -->
 

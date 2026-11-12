@@ -9,16 +9,6 @@
   // Clipboard handling lives in copy.js so control.js and home.js cannot drift apart.
   const { copyText, flashCopied, showCopyFallback, copyWithFeedback } = window.RelayCopy;
 
-  // The sync card's one line. A failed pass says WHY in four words when the relay named a cause: a 401 can mean this
-  // box's clock, the peer's clock, or that the peer no longer trusts this box, and the relay cannot tell which.
-  function syncLineText(sync, nowSec) {
-    if (sync.running) return 'checking now\u2026';
-    if (!sync.at) return sync.peers ? 'not yet \u2014 first check runs shortly' : 'no other relays to check';
-    const mins = Math.floor((nowSec - sync.at) / 60);
-    const when = mins < 1 ? 'just now' : mins === 1 ? '1 minute ago' : mins < 60 ? mins + ' minutes ago' : Math.floor(mins / 60) + 'h ago';
-    if (sync.ok === false) return when + ' \u2014 failed' + (/peer refused/i.test(String(sync.error || '')) ? ' \u00b7 trust list or a clock may be wrong' : '');
-    return when + (sync.imported ? ' \u00b7 pulled ' + sync.imported : ' \u00b7 nothing new');
-  }
   function reachInfo() {
     const wssUrl = publicBase.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:') + '/relay';
     const consoleUrl = publicBase + '/steward.html';
@@ -32,7 +22,7 @@
     copyMap.wss = wssUrl; copyMap.console = consoleUrl;
     document.getElementById('reach').innerHTML = isPublic
       ? '<div class="row" style="background:color-mix(in oklab, var(--sage) 9%, var(--surface)); border-color:color-mix(in oklab, var(--sage) 28%, transparent)"><span style="color:var(--sage); font-weight:700; font-size:13px">✓ Reachable from anywhere</span><span class="muted" style="margin-left:auto">'+publicBase.replace(/^https?:\/\//,'')+'</span></div>'
-      : '<div class="warn">⚠ This relay is only reachable on your computer / local network. Turn on public access below — one click, no terminal.</div>';
+      : '<div class="warn">⚠ Only reachable on this computer or your local network. Turn on public access in Settings.</div>';
   }
   // Return to the Steward console IN THIS WINDOW — window.open('_blank') doesn't work in the desktop app's
   // webview. Prefer going back (preserves the console's state); fall back to navigating there fresh.
@@ -112,12 +102,6 @@
         if (st.connections != null) document.getElementById('s-conns').textContent = st.connections;
       }
       renderDisk(s.storage);
-      // sync health — the point of the card is 'is this working?', not a button
-      const sw = document.getElementById('syncWhen');
-      if (sw && s.sync) {
-        sw.textContent = syncLineText(s.sync, Date.now() / 1000);
-        sw.style.color = (!s.sync.running && s.sync.at && s.sync.ok === false) ? 'var(--clay-ink)' : '';
-      }
     } catch (e) {
       // THE RELAY ANSWERED. Whatever went wrong here is ours — a field that changed shape, a missing
       // element — and it must never be reported as the relay being down, which is what sent a volunteer
@@ -705,6 +689,7 @@
       // while the operator is typing in it, when a 60-second re-read must not wipe their edit.
       const oIn = document.getElementById('originIn');
       if (oIn && document.activeElement !== oIn) oIn.value = cur.origin || '';
+      const oFold = document.getElementById('originFold'); if (oFold && !cur.origin) oFold.open = true;
       const body = document.getElementById('u-body');
       // report the LAST OUTCOME whenever we look, not only if we happened to be watching (H2/H7)
       const lastMsg = document.getElementById('updateMsg');
@@ -722,15 +707,15 @@
       // fresh box. A Suite's code is read-only inside the installed app and nothing there consumes the
       // update flag, so its software moves with the Suite itself; a box with no source is told so and given
       // the field above rather than a button that would fail underneath.
-      if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: its software updates when you install a newer Suite — the launcher (Back) says when one is out. The update source above is still what the installer card below fetches from.'; return; }
+      if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: it updates when you install a newer Suite. The launcher (Back) says when one is out.'; return; }
       // WHERE THE CODE COMES FROM is its own answer (cur.codeSource, relay/code-source — a GitHub release on
       // a box installed since 2026-09-21) and is what "Update now" pulls; the update source above is where
       // the installers come from. A box without a code source pulls from its update source, as before.
       const codeSrc = cur.codeSource || cur.origin;
-      const from = cur.codeSource && cur.codeSource !== cur.origin ? '<div class="hint" style="margin-bottom:6px">Software comes from ' + esc(cur.codeSource) + '. The update source above is where the installers come from.</div>' : '';
+      const from = cur.codeSource && cur.codeSource !== cur.origin ? '<div class="hint" style="margin-bottom:6px">Software comes from ' + esc(cur.codeSource) + '. The update source below is only for the app installer.</div>' : '';
       if (!codeSrc) {
         if (cur.releaseHost) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
-        body.innerHTML = '<b>This box was never told where to get things from</b> — set an update source above. Until then there is nowhere to check for a newer build or pull one from.'
+        body.innerHTML = '<b>This box was never told where to get things from</b>. Set an update source below; until then it cannot check for or pull a newer build.'
           + '<button class="btn-clay" id="doUpdate" title="Install the newer relay version now" disabled aria-disabled="true" style="margin-top:8px;display:block;opacity:.55;cursor:not-allowed">Update now</button>';
         return;
       }
@@ -789,6 +774,23 @@
   setInterval(() => { if (!updateBusy() && !document.hidden) loadUpdate(); }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !updateBusy()) loadUpdate(); });
 
+  // ── ONE "Updates" card, two halves (Settings C, 2026-11-12) ─────────────────────────────────────────────
+  // #updateCard (relay software) and #installerCard (the phone app installer) used to be two cards; they are now
+  // the halves of #updatesCard. Their own loaders still decide each half's display on every return path, so the
+  // outer card simply follows: shown while either half is. An observer rather than a call in each loader, so a
+  // future early return cannot forget it.
+  function updatesCardShown(a, b) {
+    return [a, b].some(e => !!e && e.style.display !== 'none');
+  }
+  function syncUpdatesCard() {
+    const box = document.getElementById('updatesCard'); if (!box) return;
+    box.style.display = updatesCardShown(document.getElementById('updateCard'), document.getElementById('installerCard')) ? 'block' : 'none';
+  }
+  if (typeof MutationObserver === 'function') {
+    const mo = new MutationObserver(syncUpdatesCard);
+    for (const id of ['updateCard', 'installerCard']) { const e = document.getElementById(id); if (e) mo.observe(e, { attributes: true, attributeFilter: ['style'] }); }
+  }
+
   // ── the installer this box hands out ─────────────────────────────────────────────────────────────────
   // WHY THIS READS AN ENDPOINT INSTEAD OF /apk-latest.json, WHICH IS WHAT IT USED TO DO.
   // The old line fetched THIS RELAY'S OWN apk-latest.json and printed "latest: 0.9.71 (206)". That file
@@ -831,7 +833,7 @@
     // a source exists; the reason names where to set it.
     const noSource = !s.origin;
     const head = noSource
-      ? '<div class="apk-note warn">This box was never told where to get things from, so it cannot fetch an installer — set an update source under “Relay software” above.' + (s.holding ? ' Members can still install the copy it already holds.' : '') + '</div>'
+      ? '<div class="apk-note warn">This box was never told where to get things from, so it cannot fetch an installer. Set an update source below.' + (s.holding ? ' Members can still install the copy it already holds.' : '') + '</div>'
       : s.behind
         ? '<div class="apk-note warn">This box is handing out an installer that is behind. Press “Update the installer now”.</div>'
         : s.holding
@@ -923,21 +925,6 @@
       m.textContent = on ? '· ✓ auto-update on — checks hourly' : '· ✓ off — update by hand with the button above';
       setTimeout(() => { m.textContent = ''; }, 4000);
     } catch (err) { e.target.checked = !on; m.style.color = 'var(--clay-ink)'; m.textContent = '· ✗ ' + (err.message || 'failed'); }
-  });
-  document.getElementById('syncNow')?.addEventListener('click', async () => {
-    // Feedback goes to #syncNowMsg, which sits under THIS button in the Settings card. It used to write to
-    // #syncMsg — the Relay-health row on the DASHBOARD tab, hidden while Settings is open — so a click (and
-    // its errors) produced no visible result on the tab the operator was looking at.
-    const m = document.getElementById('syncNowMsg'); m.style.color = 'var(--ink-3)'; m.textContent = 'syncing…';
-    try {
-      const r = await fetch('/sync-now', { method: 'POST', headers: authHeaders() });
-      const s = await r.json();
-      if (!r.ok || !s.ok) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + (s.error || 'failed'); return; }
-      if (s.busy) { m.style.color = 'var(--ink-3)'; m.textContent = 'a sync is already running \u2014 give it a moment'; return; }
-      m.style.color = 'var(--sage-ink)';
-      const across = s.churches > 1 ? ' across ' + s.churches + ' churches' : '';
-      m.textContent = s.imported ? '\u2713 pulled ' + s.imported + ' new' + across : '\u2713 nothing new' + across;
-    } catch (e) { m.style.color = 'var(--clay)'; m.textContent = '✗ ' + e.message; }
   });
   // Re-ask on a timer, because an installer goes stale exactly while nobody is looking at the panel.
   // The FIRST read is deliberately not here: it belongs after the admin token has been settled (the
