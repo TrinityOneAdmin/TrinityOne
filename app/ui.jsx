@@ -563,4 +563,82 @@ function FeatureTrouble() {
   );
 }
 
-Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, toastKind, useBackLayer, FeatureTrouble });
+// ── TAG FILTER: a "Tags ▾" button that opens a small menu of tick boxes, one per tag (owner, 2026-11-12) ──
+// ONE control for bookmarks in BOTH places — the Study panel's Bookmarks tab (screens-read.jsx CommentaryPanel)
+// and Library > Bookmarks (screens-library.jsx CollectionView). Multi-select, OR: an item shows if it carries ANY
+// ticked tag; nothing ticked shows everything (each caller filters its own rows). `selected` is owned by the caller (per view,
+// not persisted). Draws nothing when there are no tags. Closes on a tap outside (a transparent backdrop under the
+// menu) and on Escape — caught natively on the wrapper so it does not also close the Overlay/dialog around it.
+function TagFilterMenu({ tags, selected, onChange, label = 'Filter by tag' }) {
+  const [open, setOpen] = useU(false);
+  const wrapRef = useUR(null), btnRef = useUR(null);
+  const close = () => { setOpen(false); try { btnRef.current && btnRef.current.focus(); } catch (e) {} };
+  useUE(() => {
+    const w = wrapRef.current;
+    if (!open || !w || !w.addEventListener) return;
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    w.addEventListener('keydown', onKey);
+    // move focus into the menu so the keyboard user lands on the first tick box
+    try { const first = w.querySelector('[data-tag-option]'); if (first) first.focus(); } catch (e) {}
+    return () => w.removeEventListener('keydown', onKey);
+  }, [open]);
+  if (!tags || !tags.length) return null;
+  const sel = (selected || []).filter(t => tags.indexOf(t) >= 0);
+  const n = sel.length;
+  const toggle = (t) => onChange(sel.indexOf(t) >= 0 ? sel.filter(x => x !== t) : sel.concat([t]));
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape' && open) { if (e.stopPropagation) e.stopPropagation(); close(); return; }
+    if (!open || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
+    try {
+      const opts = Array.prototype.slice.call(e.currentTarget.querySelectorAll('[data-tag-option]'));
+      if (!opts.length) return;
+      e.preventDefault();
+      const i = opts.indexOf(document.activeElement);
+      const next = e.key === 'ArrowDown' ? (i + 1) % opts.length : (i <= 0 ? opts.length - 1 : i - 1);
+      opts[next].focus();
+    } catch (err) {}
+  };
+  return (
+    <div ref={wrapRef} data-tag-filter onKeyDown={onKeyDown} style={{ position: 'relative', maxWidth: '100%' }}>
+      <button ref={btnRef} type="button" data-tag-filter-button aria-haspopup="true" aria-expanded={open}
+        aria-label={n ? label + ', ' + n + ' ticked' : label} onClick={() => setOpen(o => !o)} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999, cursor: 'pointer',
+          border: n ? '1.5px solid var(--clay)' : '1px solid var(--line)',
+          background: n ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface-2)',
+          color: n ? 'var(--clay)' : 'var(--ink-2)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, whiteSpace: 'nowrap' }}>
+        {n ? 'Tags · ' + n : 'Tags'}<Icon name={open ? 'chevU' : 'chevD'} size={14} color="currentColor" />
+      </button>
+      {open ? <div data-tag-filter-backdrop onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 40, background: 'transparent' }} /> : null}
+      {open ? (
+        <div data-tag-filter-menu role="group" aria-label={label} style={{
+          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 41, boxSizing: 'border-box',
+          minWidth: 'min(200px, 100%)', maxWidth: '100%', width: 'max-content', maxHeight: 280, overflowY: 'auto',
+          padding: 6, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '4px 8px 6px' }}>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', fontFamily: 'var(--font-ui)' }}>{label}</span>
+            <button type="button" data-tag-filter-clear onClick={() => onChange([])} disabled={!n} style={{
+              border: 'none', background: 'none', padding: '2px 4px', cursor: n ? 'pointer' : 'default', color: n ? 'var(--clay)' : 'var(--ink-3)',
+              opacity: n ? 1 : 0.55, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Clear</button>
+          </div>
+          {tags.map(t => {
+            const on = sel.indexOf(t) >= 0;
+            return (
+              <button key={String(t)} type="button" role="checkbox" aria-checked={on} data-tag-option={String(t)} onClick={() => toggle(t)} style={{
+                display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '9px 8px', borderRadius: 9,
+                border: 'none', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'transparent', cursor: 'pointer',
+                textAlign: 'left', fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>
+                <span aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 5, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  border: on ? 'none' : '1.5px solid var(--line)', background: on ? 'var(--clay)' : 'var(--surface)', color: 'var(--on-clay)' }}>
+                  {on ? <Icon name="check" size={12} stroke={3} color="currentColor" /> : null}
+                </span>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{String(t)}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, toastKind, useBackLayer, FeatureTrouble, TagFilterMenu });
