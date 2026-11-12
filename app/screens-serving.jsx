@@ -1436,7 +1436,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   // would simply vanish and a worker would read that as the app breaking. The tab stays to say what happened.
   const kidsOn = !!(_ckReg.cleared || _ckReg.notYet || _ckReg.withdrawn || (_ckReg.keysHeld > 0));
   // PER-CHURCH FEATURE VISIBILITY (church.features; default-on). A steward hides serving/rota or events/calendar
-  // from the member app in Settings → Congregation features. Serving AND Rota ride on `rota`; Events AND
+  // from the member app in Settings → Congregation → Features. Serving AND Rota ride on `rota`; Events AND
   // Calendar ride on `calendar`. Unset means on, so an existing church is unchanged. Kids and Care keep their
   // own gates (checkin / meals) above.
   const _svFeat = (ctx.church && ctx.church.features) || {};

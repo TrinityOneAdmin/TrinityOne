@@ -2,7 +2,7 @@
 //   Run: node --test scripts/per-feature-toggles-console.test.mjs
 //
 // A steward hides a whole section from the console (and, where it has one, from the member app) by turning
-// it off in Settings → Congregation features. Three things must hold, and each is proved by RUNNING shipped
+// it off in Settings → Congregation → Features. Three things must hold, and each is proved by RUNNING shipped
 // code, never by matching text in app/*.jsx (CLAUDE.md rule 3 — those ship unbundled, so `false && ` leaves
 // every word in place and a text match still passes):
 //

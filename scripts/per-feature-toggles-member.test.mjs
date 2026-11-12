@@ -1,7 +1,7 @@
 // PER-FEATURE VISIBILITY TOGGLES — THE MEMBER HALF (rota / calendar / resources).
 //   Run: node --test scripts/per-feature-toggles-member.test.mjs
 //
-// A steward who hides a section in Settings → Congregation features must see it DISAPPEAR from the member
+// A steward who hides a section in Settings → Congregation → Features must see it DISAPPEAR from the member
 // app, not just from the console. These three features each span several member surfaces, and CLAUDE.md
 // rule 1 wants a point-of-use test PER surface — one that fails if the gate is deleted FROM THE SCREEN.
 // Rule 3: nothing here matches text in app/*.jsx (they ship unbundled); every claim is read off a RENDERED

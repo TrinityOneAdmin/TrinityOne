@@ -157,7 +157,7 @@ function catalogue(over = {}) {
 }
 
 test('the list is grouped the way the mockup groups it', () => {
-  assert.deepEqual(catalogue().groups.map(([g]) => g), ['Church', 'People', 'Infrastructure', 'Master key', 'Helpers'],
+  assert.deepEqual(catalogue().groups.map(([g]) => g), ['Church', 'Congregation', 'Infrastructure', 'Master key', 'Helpers'],
     'the settings groups are not Church / People / Infrastructure / Master key / Helpers. The single Security ' +
     'group split in two on 2026-11-05 — Master key (Church key + the full-key handover) and Helpers (the ' +
     'everyday revocable sharing) — so the handover sits a group away from Helpers and cannot be stumbled onto');
@@ -365,7 +365,7 @@ const LANDS_ON = [
   // a real page. 'features' and 'network' are page keys as well as old tab keys, and the PAGE wins — see the
   // invariant asserted below.
   ['church', 'Church identity', 'the old Church tab, which is not a page key'],
-  ['features', 'Congregation features', 'the old Features tab, which is also a page key'],
+  ['features', 'Features', 'the old Features tab, which is also a page key'],
   ['network', 'Network', 'the old Network & relays tab, which is also a page key'],
   ['security', 'Helpers', 'the old Security tab, which is not a page key'],
 ];
@@ -503,4 +503,23 @@ test('NETWORKS OFF: a deep link to "network" opens another page with cards of it
   // It lands on the first page of the Network page's own group (Infrastructure): Relays. That is the designed
   // fallback, and it is the ONE Relays page (the fix-it control lives there once), not a second copy of it.
   assert.deepEqual(cardsOn(s.tree), cardsOn(settings('relays', { networks: false }).tree), 'the "network" deep link did not land on the plain Relays page');
+});
+
+// 2026-11-12: the group "People" became "Congregation" and the item "Congregation features" became "Features".
+// Help articles quote that path as text. help-data.jsx is DATA (an object literal assigned to window.HelpData),
+// so it is EXECUTED here, not text-matched; the expected path is derived from the real SETTINGS_GROUPS.
+test('every help article that names the Features page quotes the path the navigation really has', () => {
+  const win = {};
+  new Function('window', readFileSync(join(ROOT, 'app/help-data.jsx'), 'utf8'))(win);
+  const strings = [];
+  (function walk(v) { if (typeof v === 'string') strings.push(v); else if (v && typeof v === 'object') Object.values(v).forEach(walk); })(win.HelpData);
+  const { groups } = catalogue();
+  const group = groups.find(([, items]) => items.some(p => p.k === 'features'));
+  assert.ok(group, 're-anchor: no group holds the features page');
+  const item = group[1].find(p => p.k === 'features');
+  const want = `Settings → ${group[0]} → ${item.n}`;
+  const quoting = strings.filter(s => s.includes('Settings → ') && /Features|Congregation features/.test(s));
+  assert.ok(quoting.length >= 3, `expected the three help passages that point at the Features page, found ${quoting.length}`);
+  for (const s of quoting) assert.ok(s.includes(want), `help says a path that is not the navigation's "${want}": ${s.slice(0, 140)}`);
+  assert.ok(!strings.some(s => /Settings → People/.test(s)), 'a help article still sends the steward to Settings → People');
 });

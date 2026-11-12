@@ -193,7 +193,7 @@ groups. The link only adds *"this one specific adult can also always reach them.
 
 ## Kids check-in  *(optional)*
 
-Turn it on in **Settings → Congregation features → Extras → Kids check-in**, and the console
+Turn it on in **Settings → Congregation → Features → Extras → Kids check-in**, and the console
 gains a **Check-in** tab for running a children's session safely:
 
 1. **Check a child in** from your **Child**-marked members (their linked guardians are shown).

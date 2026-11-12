@@ -154,7 +154,7 @@ const NAV = [
 
 // PER-FEATURE VISIBILITY (church.features, same mechanism as read / community / library). A steward hides a
 // whole section from the console — and, where it has one, from the member app — by turning it off in
-// Settings → Congregation features. DEFAULT ON WHEN UNSET (`features[k] !== false`), so every church that
+// Settings → Congregation → Features. DEFAULT ON WHEN UNSET (`features[k] !== false`), so every church that
 // predates these toggles is unchanged. These two helpers are PURE on purpose: app/*.jsx ships UNBUNDLED, so
 // CLAUDE.md rule 3 forbids proving the gate by matching text — a point-of-use test RUNS these instead, and a
 // deleted gate then fails (rules 1 & 3). stewNav is the whole church nav memo body, lifted out so the test
@@ -13475,8 +13475,8 @@ const SETTINGS_GROUPS = [
     { k: 'website', n: 'Your website', d: 'Your calendar on your own site', owner: true },
     { k: 'backup', n: 'Backup & data', d: 'Export, import and recovery' },
   ]],
-  ['People', [
-    { k: 'features', n: 'Congregation features', d: 'What members see' },
+  ['Congregation', [
+    { k: 'features', n: 'Features', d: 'What members see' },
     { k: 'rules', n: 'Rules & privacy', d: 'Photos, encryption, joining' },
     { k: 'tags', n: 'Chat message tags', d: 'Prayer request, and your own' },
     // The OWNER'S by-line, on a page of its own (owner, 2026-09-22: it "shouldn't be in the delegated stewards

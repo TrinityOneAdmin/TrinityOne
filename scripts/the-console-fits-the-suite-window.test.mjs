@@ -238,22 +238,27 @@ test('a fresh console opens Settings with only the current page\'s group open, t
   await openSection('Settings');
   const fresh = JSON.parse(await c.evalIn(GROUP_HEADERS));
   console.log('    settings groups, fresh: ' + JSON.stringify(fresh));
-  assert.deepEqual(fresh.map(h => h.g), ['Church', 'People', 'Infrastructure', 'Security'], 're-anchor: the four groups');
-  assert.deepEqual(fresh.map(h => h.open), [true, false, false, false], 'THE DEFECT: a fresh console does not open Settings with only Church (the group of the open page) open');
-  // Infrastructure holds the Network page only while the NETWORKS SWITCH is on (app/stew-data.jsx), so the expected
-  // count is derived from what the page itself says the switch is, never hard-coded to one state.
-  const netOn = await c.evalIn(`window.NETWORKS_ENABLED === true`);
-  assert.deepEqual(fresh.slice(1).map(h => h.count), netOn ? ['4', '5', '4'] : ['4', '4', '4'], 'the shut groups do not show their counts (networks switch ' + (netOn ? 'on' : 'off') + ')');
-  // open Security by hand, then one of its pages: Security open, Church (holding nothing, never chosen) shut
-  await c.evalIn(`[...document.querySelectorAll('button.set-grp')].find(b => (b.querySelector('.set-grp-n')||{}).textContent === 'Security').click()`);
+  // The group list is DERIVED from the page's own SETTINGS_GROUPS (5 groups since 2026-11-05: Church, Congregation,
+  // Infrastructure, Master key, Helpers), filtered the way DashSettings filters it for the OWNER (no `delegate`-only
+  // pages; the Network page only while the NETWORKS switch is on). Never a literal list here.
+  const real = JSON.parse(await c.evalIn(`JSON.stringify(SETTINGS_GROUPS.map(([g, items]) => [g, items.filter(p => !p.delegate && (p.k !== 'network' || window.NETWORKS_ENABLED === true)).map(p => ({ k: p.k, n: p.n }))]).filter(([, items]) => items.length))`));
+  assert.ok(real.length >= 5, 're-anchor: SETTINGS_GROUPS has fewer groups than the five it had on 2026-11-12');
+  assert.deepEqual(fresh.map(h => h.g), real.map(([g]) => g), 'the headers on screen are not the groups SETTINGS_GROUPS lists');
+  assert.deepEqual(fresh.map(h => h.open), real.map((_, i) => i === 0), 'THE DEFECT: a fresh console does not open Settings with only Church (the group of the open page) open');
+  assert.deepEqual(fresh.slice(1).map(h => h.count), real.slice(1).map(([, items]) => String(items.length)), 'the shut groups do not show their counts');
+  // open the group holding the Church key page by hand, then that page: that group open, Church (holding nothing, never chosen) shut
+  const keyAt = real.findIndex(([, items]) => items.some(p => p.k === 'key'));
+  assert.ok(keyAt > 0, 're-anchor: no group holds the Church key page');
+  const keyGroup = real[keyAt][0], keyLabel = real[keyAt][1].find(p => p.k === 'key').n;
+  await c.evalIn(`[...document.querySelectorAll('button.set-grp')].find(b => (b.querySelector('.set-grp-n')||{}).textContent === ${JSON.stringify(keyGroup)}).click()`);
   await sleep(300);
-  await c.evalIn(`[...document.querySelectorAll('button.set-item')].find(b => (b.querySelector('.set-item-n')||{}).textContent === 'Church key').click()`);
+  await c.evalIn(`[...document.querySelectorAll('button.set-item')].find(b => (b.querySelector('.set-item-n')||{}).textContent === ${JSON.stringify(keyLabel)}).click()`);
   await sleep(500);
   const moved = JSON.parse(await c.evalIn(GROUP_HEADERS));
-  assert.deepEqual(moved.map(h => h.open), [false, false, false, true], 'with a Security page open, Security is not the one open group: ' + JSON.stringify(moved));
-  // reload: the remembered Security stays open beside the forced-open Church (Settings reopens on its first page)
+  assert.deepEqual(moved.map(h => h.open), real.map((_, i) => i === keyAt), 'with the ' + keyLabel + ' page open, ' + keyGroup + ' is not the one open group: ' + JSON.stringify(moved));
+  // reload: the remembered group stays open beside the forced-open Church (Settings reopens on its first page)
   await unlock();
   await openSection('Settings');
   const after = JSON.parse(await c.evalIn(GROUP_HEADERS));
-  assert.deepEqual(after.map(h => h.open), [true, false, false, true], 'after a reload the remembered choice did not win: ' + JSON.stringify(after));
+  assert.deepEqual(after.map(h => h.open), real.map((_, i) => i === 0 || i === keyAt), 'after a reload the remembered choice did not win: ' + JSON.stringify(after));
 });
