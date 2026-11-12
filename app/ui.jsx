@@ -180,7 +180,7 @@ window.DesktopNav = DesktopNav;
 function ReadPlansTabs({ ctx, style = {} }) {
   const v = ctx.readView || 'bible';
   // The Plans tab is the `resources` feature (reading plans & devotionals); a steward can hide it from the
-  // member app in Settings → Congregation features. Default-on (unset means on). app.jsx forces the Bible
+  // member app in Settings → Congregation → Features. Default-on (unset means on). app.jsx forces the Bible
   // view when resources is off, so this just removes the way back to Plans.
   const resourcesOn = !(ctx.church && ctx.church.features && ctx.church.features.resources === false);
   return (

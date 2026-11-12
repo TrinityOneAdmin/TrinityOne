@@ -145,7 +145,7 @@ const region = (tree) => find(tree, n => n.type === 'section' && n.props['aria-l
 // 2026-11-05: the old single 'Security' group split into two — 'Master key' (Church key + the full-key
 // handover) and 'Helpers' (the everyday, revocable steward-sharing), so the full-key handover sits a group
 // away from Helpers and cannot be stumbled onto while adding a helper. Five groups now, not four.
-const GROUPS = ['Church', 'People', 'Infrastructure', 'Master key', 'Helpers'];
+const GROUPS = ['Church', 'Congregation', 'Infrastructure', 'Master key', 'Helpers'];
 const expanded = (tree) => headers(tree).map(b => b.props['aria-expanded']);
 const counts = (tree) => headers(tree).map(b => shownIn(b, 'set-grp-c'));
 const PAGES = 18;   // owner's pages across the FIVE groups (16 + voice + website, 2026-09-22); a regroup moves no page, so the total is unchanged; a delegate has fewer
@@ -199,7 +199,7 @@ test('moving to a page in another group moves the open group; a group the stewar
   assert.deepEqual(expanded(s.tree), [true, false, false, false, false], 're-anchor: a fresh console did not start Church-open');
   header(s.tree, 'Master key').props.onClick();
   assert.deepEqual(expanded(s.render()), [true, false, false, true, false], 'pressing a shut group\'s header did not open it');
-  assert.deepEqual(JSON.parse(store.get([...store.keys()][0])).sort(), ['Church', 'Helpers', 'Infrastructure', 'People'],
+  assert.deepEqual(JSON.parse(store.get([...store.keys()][0])).sort(), ['Church', 'Congregation', 'Helpers', 'Infrastructure'],
     'opening one group from the shut-by-default start did not record the other four as the steward\'s shut groups');
   // now open a page inside Master key, the way a steward does — its row
   rows(s.render()).find(b => shownIn(b, 'set-item-n') === 'Church key').props.onClick();
@@ -250,12 +250,12 @@ test('a collapsed group says how many pages are behind it', () => {
 test('the choice survives a remount, read back from storage and not from a component that kept it', () => {
   const store = new Map();
   const first = screen('identity', { store, allOpen: true });
-  header(first.tree, 'People').props.onClick();
+  header(first.tree, 'Congregation').props.onClick();
   header(first.render(), 'Infrastructure').props.onClick();
 
   const keys = [...store.keys()];
   assert.equal(keys.length, 1, `expected one stored preference, found ${keys.length}: ${keys.join(', ')}`);
-  assert.deepEqual(JSON.parse(store.get(keys[0])).sort(), ['Infrastructure', 'People'],
+  assert.deepEqual(JSON.parse(store.get(keys[0])).sort(), ['Congregation', 'Infrastructure'],
     'the collapsed groups were not written to storage as the names of the groups');
 
   // a genuinely new mount, sharing only the storage
@@ -338,7 +338,7 @@ test('a reload while a page in a collapsed group is open shows that group, howev
   const store = new Map();
   const probe = consoleWith(miniReact().React, { store });
   store.set(probe.mod.settingsGroupsLsKey(), JSON.stringify(GROUPS));   // every group shut
-  for (const [page, group] of [['identity', 'Church'], ['rules', 'People'], ['relays', 'Infrastructure'], ['key', 'Master key'], ['delegated', 'Helpers']]) {
+  for (const [page, group] of [['identity', 'Church'], ['rules', 'Congregation'], ['relays', 'Infrastructure'], ['key', 'Master key'], ['delegated', 'Helpers']]) {
     const s = screen(page, { store });
     assert.equal(header(s.tree, group).props['aria-expanded'], true,
       `every group is stored shut and the console reopened on ${page}; ${group} did not open to show it`);
@@ -377,17 +377,17 @@ test('each group header is a real button that says whether it is open', () => {
     assert.equal(typeof h.props.onClick, 'function', 'a group header does not respond to a press');
     assert.notEqual(h.props.tabIndex, -1, 'a group header is out of the Tab order');
   }
-  header(s.tree, 'People').props.onClick();
-  assert.equal(header(s.render(), 'People').props['aria-expanded'], false,
+  header(s.tree, 'Congregation').props.onClick();
+  assert.equal(header(s.render(), 'Congregation').props['aria-expanded'], false,
     'pressing a group header did not change what it says about itself');
 });
 
 test('a shut group’s list is not left behind pointing at nothing', () => {
   const s = screen('identity', { allOpen: true });
   const listFor = (t, g) => find(nav(t), n => n.type === 'ul' && n.props['aria-labelledby'] === header(t, g).props.id);
-  assert.equal(listFor(s.tree, 'People').length, 1, 're-anchor: the People list is not labelled by its header');
-  header(s.tree, 'People').props.onClick();
-  assert.equal(listFor(s.render(), 'People').length, 0,
+  assert.equal(listFor(s.tree, 'Congregation').length, 1, 're-anchor: the People list is not labelled by its header');
+  header(s.tree, 'Congregation').props.onClick();
+  assert.equal(listFor(s.render(), 'Congregation').length, 0,
     'a shut group still renders its list. Either its rows are reachable when they should not be, or it is an ' +
     'empty list a reader announces as "list, 0 items"');
   // every list still on the page names a header that is also still on the page
@@ -420,10 +420,10 @@ function walkable(s) {
 
 test('the arrow keys move focus over the rows on screen, never into a shut group’s empty slots', () => {
   const s = screen('identity', { allOpen: true });
-  header(s.tree, 'People').props.onClick();          // People shuts; Church holds the open page and stays
+  header(s.tree, 'Congregation').props.onClick();          // People shuts; Church holds the open page and stays
   const w = walkable(s);
   assert.equal(w.rows.length, PAGES - 4, `expected the four People rows to be gone, found ${w.rows.length} rows`);
-  assert.equal(w.names.includes('Congregation features'), false, 're-anchor: People is still listed');
+  assert.equal(w.names.includes('Features'), false, 're-anchor: People is still listed');
 
   // THE BOUNDARY PRESS. The row after Church's last is the first row of the next group ON SCREEN.
   const lastOfChurch = w.names.lastIndexOf('Backup & data');
@@ -534,7 +534,7 @@ test('a steward\'s own choice still wins on the phone: a stored shut group stays
   // stored "People shut" on the APK: People shut, the other three open — the phone default did not overrule it
   const store = new Map();
   const probe = consoleWith(miniReact().React, { store });
-  store.set(probe.mod.settingsGroupsLsKey(), JSON.stringify(['People']));
+  store.set(probe.mod.settingsGroupsLsKey(), JSON.stringify(['Congregation']));
   const ph = screen(null, { store, phoneApp: true, innerWidth: 360 });
   assert.deepEqual(expanded(ph.tree), [true, false, true, true, true],
     'THE PHONE DEFAULT OVERRULED THE STEWARD\'S OWN STORED CHOICE. Headers read: ' + JSON.stringify(expanded(ph.tree)));
@@ -544,4 +544,11 @@ test('a steward\'s own choice still wins on the phone: a stored shut group stays
   const store2 = new Map();
   const s = screen(null, { store: store2, allOpen: true, innerWidth: 900 });
   assert.deepEqual(expanded(s.tree), [true, true, true, true, true], 'a stored [] no longer means "all open" in the Suite window');
+});
+
+test('POINT OF USE: the rendered list has a group header reading "Congregation" and none reading "People"', () => {
+  const s = screen(null, { allOpen: true });
+  const names = headers(s.tree).map(grpName);
+  assert.ok(names.includes('Congregation'), 'no rendered group header reads "Congregation": ' + JSON.stringify(names));
+  assert.ok(!names.includes('People'), 'a rendered group header still reads "People"');
 });

@@ -238,7 +238,7 @@ test('a fresh console opens Settings with only the current page\'s group open, t
   await openSection('Settings');
   const fresh = JSON.parse(await c.evalIn(GROUP_HEADERS));
   console.log('    settings groups, fresh: ' + JSON.stringify(fresh));
-  assert.deepEqual(fresh.map(h => h.g), ['Church', 'People', 'Infrastructure', 'Security'], 're-anchor: the four groups');
+  assert.deepEqual(fresh.map(h => h.g), ['Church', 'Congregation', 'Infrastructure', 'Security'], 're-anchor: the four groups');
   assert.deepEqual(fresh.map(h => h.open), [true, false, false, false], 'THE DEFECT: a fresh console does not open Settings with only Church (the group of the open page) open');
   // Infrastructure holds the Network page only while the NETWORKS SWITCH is on (app/stew-data.jsx), so the expected
   // count is derived from what the page itself says the switch is, never hard-coded to one state.

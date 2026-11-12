@@ -461,7 +461,7 @@ window.HelpData = {
           { lead: 'Where your church lives (the relay)', text: 'Every church runs on a relay — the small server that carries its chat, members and announcements (the Bible reader needs none of it). New churches start on the shared TrinityOne relay with nothing to set up; when you’re ready, Settings → Infrastructure → Relays can point your church at one you trust, or your own, without anyone losing anything.' },
           { lead: 'Your website', text: 'Settings → Church → Your website can share your calendar with the outside world — off until you switch it on. Turn it on and your church’s events publish to a link you can paste into your own website’s calendar, or subscribe to from a calendar app; a group’s events only join it if a steward ticks them in one by one. You choose how far ahead it looks, what the calendar is called, and whether each event shows full details or just the title and time. Only the events you choose to share ever leave the app — nothing about your members does. One honest note: the feed’s own web address shows which relay serves your church, the same way any website address names the server it lives on.' },
         ] },
-        { type: 'callout', tone: 'sage', text: 'Practical care — meal trains, lifts and errands — switches on under Settings → People → Congregation features when your church wants it. Church finances, a treasurer’s ledger, is already there in the console’s own list (see the next guide).' },
+        { type: 'callout', tone: 'sage', text: 'Practical care — meal trains, lifts and errands — switches on under Settings → Congregation → Features when your church wants it. Church finances, a treasurer’s ledger, is already there in the console’s own list (see the next guide).' },
         { type: 'note', text: 'Being a helper is delegated and revocable: a helper gets their own key and can be added or removed at any time, so leadership can change hands without anyone losing access to the church.' },
         // MARKETING-AUDIT-2026-08-05: from stewards-guide.html, now deleted (940 words, zero inbound links —
         // it had no href pointing at it from anywhere on the site). This distinction is the useful part, and
@@ -691,7 +691,7 @@ window.HelpData = {
           'Members → the adult’s row → “Clear for youth”.',
         ] },
         { type: 'callout', tone: 'clay', text: 'Your cleared list is also who can receive a request for help from a young person. Being on the care rota is not enough. If nobody in your church is cleared, no child in your church can ask for help through the app — the request has nowhere to go.' },
-        { type: 'note', text: 'Settings → People → Congregation features → “Allow children’s photos” is off to begin with: children use a colour, initial or symbol instead. Photos are visible to your whole church, and you can switch this back off at any time.' },
+        { type: 'note', text: 'Settings → Congregation → Features → “Allow children’s photos” is off to begin with: children use a colour, initial or symbol instead. Photos are visible to your whole church, and you can switch this back off at any time.' },
         { type: 'note', text: 'This supports your church’s safeguarding — it doesn’t replace background checks, training, supervision or policy. Clear only adults who are already on your church’s cleared-worker list. If you’re ever concerned, speak to your church’s safeguarding lead.' },
         { type: 'note', text: 'Safeguarding is one of the grants you can give a steward, and it is worth knowing what it opens: who is marked as a child, which adults are cleared, who each child’s guardians are, and the check-in records with names, rooms and pickup codes. Only you can change those lists.' },
         { type: 'tech', text: 'This is enforced at the relay, not just hidden in the app: the minor and approved-adult lists are owner-only, and the write-policy blocks child↔adult direct messages and child posts to adult groups server-side, so a tampered or third-party client can’t get around it.' },
@@ -761,7 +761,7 @@ window.HelpData = {
         { type: 'callout', tone: 'clay', text: 'A parent with the app sees their OWN children while they are checked in — the name and the pickup code — and nothing else: no register, no other family, no way to check a child out. A parent with no app, or one you checked in at the desk without them, sees nothing and is told to ask you for the code. Say both when you announce it.' },
         { type: 'steps', label: 'Before your first Sunday', items: [
           'Members → mark each child, and confirm who their guardians are. The register reads that list, so a child who is not marked cannot be checked in.',
-          'Settings → People → Congregation features → “Kids check-in” must be on for the page to appear at all.',
+          'Settings → Congregation → Features → “Kids check-in” must be on for the page to appear at all.',
           'Check-in → “Clear someone” for any children’s worker who is not already a safeguarding steward.',
         ] },
         { type: 'steps', label: 'On the day', items: [
