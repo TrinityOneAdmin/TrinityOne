@@ -11007,7 +11007,9 @@ function VoiceSetup({ onDelegated }) {
 // steward") and Settings → Helpers ("Requests to help · N"), so the two counts cannot disagree again (owner-reported
 // 2026-11-12 on Living Word: the banner said 5, the page listed 4, because the banner counted the raw stream).
 // A request is waiting unless its author is already a steward, is the church itself, or the owner answered them
-// (declined with ×, approved, or removed) at or after the request was made. Each handled map is pubkey -> unix seconds;
+// (declined with ×, approved, or removed) and this request is no newer than the one they answered. Each handled map is
+// pubkey -> unix seconds: since the audit of eb5c10eb (M2) the created_at of the request answered (the requester's
+// clock, see useHelperRequests); copies eb5c10eb wrote hold the owner's clock at the answer, read the same way;
 // a non-time value (the bare `1`/`true` an older build kept in localStorage) means "answered, time unknown" and hides
 // every request — the backward-compatible reading. A request with no `ts` counts as time 0, so a handled one stays
 // hidden. A request NEWER than the answer is a genuine re-request and shows again.
@@ -11036,9 +11038,21 @@ function pendingHelperRequests(requests, stewards, ownerPub, ...handledMaps) {
     return true;
   });
 }
-// THE HOOK both screens use. Returns { pending, markHandled }. markHandled(pk) records the answer in BOTH places:
-// localStorage at once (so this screen updates on the click, even with no relay), and the church's relay document
-// (Steward.markStewardRequestHandled — owner-only; a delegate's console writes nothing there).
+// THE HOOK both screens use. Returns { pending, markHandled, answeredAt }. markHandled(pk, at) records the answer in
+// BOTH places: localStorage at once (so this screen updates on the click, even with no relay), and the church's relay
+// document (Steward.markStewardRequestHandled — owner-only; a delegate's console writes nothing there).
+// WHAT `at` IS (audit of eb5c10eb, M2): the created_at of the request being answered — the REQUESTER's clock — never
+// the owner's wall clock. The filter compares it with a request's created_at, so both sides of `r.ts <= at` are the
+// requester's clock and a wrong clock on the owner's device can no longer hide a genuine re-request. answeredAt(pk,
+// rowTs) gives that value: the row's own ts, else the newest request listed from them; the owner's clock only when a
+// request IS listed but carries no time (a row with no ts is hidden by any time, so nothing is lost); 0 when no request
+// from them is listed at all — and markHandled(pk, 0) records nothing, because there is nothing to answer.
+// BACKWARD COMPATIBILITY: values eb5c10eb wrote (the owner's clock) and the older bare `1`/`true` are read exactly as
+// before; the relay copy folds by the LATER value per person and so does this browser's copy below, so a new, smaller
+// requester-clock value never lowers an old one and nothing already hidden comes back. A bare `1`/`true` here is
+// replaced by a real time on the next answer, as eb5c10eb did — it is the only way it ever stops hiding re-requests.
+// CALLERS of markHandled: the × (decline), add() and remove() in DashStewardsPanel — add()/remove() ONLY once the
+// roster write has landed (M1).
 function useHelperRequests() {
   const requests = window.usePendingStewards ? window.usePendingStewards() : [];
   const stewards = window.useStewardStewards ? window.useStewardStewards() : [];
@@ -11048,13 +11062,25 @@ function useHelperRequests() {
   // Every read/write is wrapped: a private window or blocked storage must not crash the screen.
   const [local, setLocal] = React.useState(() => { try { return JSON.parse(window.localStorage.getItem(handledKey) || '{}') || {}; } catch (e) { return {}; } });
   const pending = pendingHelperRequests(requests, stewards, ownerPub, local, relayHandled);
-  const markHandled = (pk) => {
-    if (!pk) return;
-    const at = Math.floor(Date.now() / 1000);
-    setLocal(h => { const n = { ...h, [pk]: at }; try { window.localStorage.setItem(handledKey, JSON.stringify(n)); } catch (e) {} return n; });
-    try { if (window.Steward && window.Steward.markStewardRequestHandled) Promise.resolve(window.Steward.markStewardRequestHandled(pk, at)).catch(() => {}); } catch (e) {}
+  const answeredAt = (pk, rowTs) => {
+    const own = Number(rowTs);
+    if (Number.isFinite(own) && own >= 1e9) return Math.floor(own);
+    let seen = false, t = 0;
+    for (const r of (requests || [])) if (r && r.pubkey === pk) { seen = true; const n = Number(r.ts); if (Number.isFinite(n) && n > t) t = n; }
+    if (!seen) return 0;
+    return t >= 1e9 ? Math.floor(t) : Math.floor(Date.now() / 1000);
   };
-  return { pending, markHandled };
+  const markHandled = (pk, at) => {
+    const when = Math.floor(Number(at));
+    if (!pk || !Number.isFinite(when) || when < 1e9) return;
+    setLocal(h => {
+      const cur = Number(h[pk]);
+      if (Number.isFinite(cur) && cur >= 1e9 && cur >= when) return h;   // the later answer stands, as on the relay
+      const n = { ...h, [pk]: when }; try { window.localStorage.setItem(handledKey, JSON.stringify(n)); } catch (e) {} return n;
+    });
+    try { if (window.Steward && window.Steward.markStewardRequestHandled) Promise.resolve(window.Steward.markStewardRequestHandled(pk, when)).catch(() => {}); } catch (e) {}
+  };
+  return { pending, markHandled, answeredAt };
 }
 // Delegated stewards — the OWNER (this church key) names co-stewards by promoting members. The relay grants
 // those keys day-to-day church powers (NOT roster/blocklist/relay-policy) and revocation is instant. The
@@ -11155,11 +11181,12 @@ function DashStewardsPanel({ church }) {
   const visibleStewards = stewards.filter(pk => !pendingRemoval.has(pk));   // the board hides a row the moment its Revoke is confirmed
   // WOULD-BE HELPERS STILL WAITING, and the record of the owner's answers — one hook, shared with the Overview banner
   // (useHelperRequests / pendingHelperRequests above), so the banner's count and this list are the same list.
-  // markHandled(pk) records "the owner answered this person now" — on approve (add), remove, and the × (decline) —
-  // in this browser AND in the church's sealed relay document, so the answer survives a reload and holds on the
-  // owner's other devices. Device-found 2026-11-05 (an approved-then-removed helper's stale request came back) and
+  // markHandled(pk, at) records "the owner answered this person's request of time `at`" — on approve (add), remove, and
+  // the × (decline) — in this browser AND in the church's sealed relay document, so the answer survives a reload and
+  // holds on the owner's other devices. add() and remove() record it only once the roster write has LANDED (audit of
+  // eb5c10eb, M1: a refused Approve used to hide the request on every device while the person was not a helper). Device-found 2026-11-05 (an approved-then-removed helper's stale request came back) and
   // owner-reported 2026-11-12 (the × was in-memory only, so a declined request came back on every reload).
-  const { pending, markHandled } = useHelperRequests();
+  const { pending, markHandled, answeredAt } = useHelperRequests();
   const [inviteQR, setInviteQR] = React.useState(false);
   const [copiedInvite, setCopiedInvite] = React.useState(false);
   const [approving, setApproving] = React.useState(null);   // pubkey awaiting PIN confirm
@@ -11223,13 +11250,18 @@ function DashStewardsPanel({ church }) {
   const PRESETS = (window.Steward.stewardPresets && window.Steward.stewardPresets()) || [];
   const hasPin = !!(window.Steward.hasPinLock && window.Steward.hasPinLock());
   const add = (pk, label, grants) => { setAdding(false); setScanning(false); setQ(''); setCode(''); setAddErr(''); setApproving(null);
-    markHandled(pk);   // approved: this request is answered and must never re-surface, even after a later removal
+    // APPROVED = ANSWERED, BUT ONLY ONCE IT LANDED (audit of eb5c10eb, M1). The request's own time is read NOW, while it
+    // is still listed (the stream drops roster members), and recorded only when setStewards answers truthy — a refusal
+    // (_requireTrustedView throws) or a write no relay accepted (false) leaves the request showing, on every device,
+    // because the person is not a helper. A write whose OK was lost also records nothing; they are on the roster, which
+    // hides them anyway, and remove() records the answer if they are ever taken off it.
+    const answered = answeredAt(pk);
     const nextNames = { ...labels }; if (label && label.trim()) nextNames[pk] = label.trim();
     // An explicit grant, always — including the explicit empty one. Leaving them out of `caps` would mean
     // "unscoped", which is the everything-by-accident this exists to remove.
     const nextCaps = { ...caps, [pk]: Array.isArray(grants) ? grants.slice() : [] };
     setNewLabel(''); setNewCaps([]);
-    try { window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); } catch (e) {}
+    try { Promise.resolve(window.Steward.setStewards([...stewards, pk], nextCaps, nextNames)).then((ok) => { if (ok) markHandled(pk, answered); }, () => {}); } catch (e) {}
     // CANCEL ANY PRIOR REVOKE (2026-11-05, helper-delegation). This is the single path every re-add runs through —
     // addByCode(), approve, and the member picker all call add(pk, …) — so a tombstone here covers them all. Without
     // it, a helper removed then re-added would still read their old stewardrevoke:<pk> notice and evict the church
@@ -11270,7 +11302,6 @@ function DashStewardsPanel({ church }) {
   const remove = (pk) => {
     if (pendingRemoval.has(pk)) return;   // already revoking this one — the control is spent until the write settles
     setConfirmRemove(null); setRemoveNote(null);
-    markHandled(pk);   // removed: keep their (never-consumed) old request out of "Requests to help" for good
     dropOptimistic(pk);   // the row leaves the board at once; restored below if the write did not land (no false "removed")
     const next = stewards.filter(p => p !== pk);
     const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
@@ -11299,6 +11330,11 @@ function DashStewardsPanel({ church }) {
       // removal that FAILED to land must not also evict their console. A church-signed notice at stewardrevoke:<pk>
       // is the one document they can still read; their subscribeStewardedChurches drops the ghost church on it.
       try { if (window.Steward.publishStewardRevoke) window.Steward.publishStewardRevoke(pk); } catch (e) {}
+      // REMOVED = ANSWERED, ONLY NOW IT LANDED (audit of eb5c10eb, M1) — keeps their never-consumed old request out of
+      // "Requests to help". The time is when they were put ON the roster (`since`, from the roster document): the
+      // request that got them there is older, and a genuine new one, made after this removal, is newer. Their request
+      // is not in the stream while they are a steward, so it cannot be read here; no `since` = record nothing.
+      try { markHandled(pk, Number(since[pk]) || 0); } catch (e) {}
       const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
       const known = spKr.approved(everyone);
       const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients
@@ -11407,7 +11443,7 @@ function DashStewardsPanel({ church }) {
               </div>
               {approving === r.pubkey ? null : <React.Fragment>
                 <button onClick={() => startApprove(r.pubkey, r.name)} className="sk-btn sk-btn--clay" style={{ padding: '6px 11px', fontSize: 12.5 }}>Approve…</button>
-                <button onClick={() => markHandled(r.pubkey)} title="Decline" aria-label="Decline this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
+                <button onClick={() => markHandled(r.pubkey, answeredAt(r.pubkey, r.ts))} title="Decline" aria-label="Decline this request" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={14} color="currentColor" /></button>
               </React.Fragment>}
             </div>
             {/* THE APPROVE SHEET. Captures the name the owner knows them by AND a permission preset, then grants

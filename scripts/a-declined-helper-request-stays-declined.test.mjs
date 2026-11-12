@@ -18,6 +18,18 @@
 // real × pressed. "Another device" is a SECOND chromium profile restored from the 12 words — it shares no
 // localStorage, so only the relay document can tell it about the decline. Nothing here matches text in app/*.jsx.
 // The live relays are blackholed (host-resolver-rules in new-church-session.mjs and below). Skips without chromium.
+//
+// AUDIT OF eb5c10eb (2026-11-12), the last four tests:
+//   M1 — an Approve whose roster write is REFUSED must not be recorded as answered. The refusal is real: the relay
+//        process is killed (SIGKILL) under the console, so setStewards meets its own _requireTrustedView refusal
+//        ("steward-write-blocked"), then the SAME box is started again on the same port and data. The owner then
+//        declines somebody else — which publishes the whole answers map — and the refused person's request must still
+//        show after a reload and on a fresh second profile.
+//   M2 — the answer is recorded as the created_at of the request answered (the requester's clock), not the owner's
+//        clock: a re-request signed with a created_at NEWER than the declined request but OLDER than the moment of the
+//        decline (a requester whose phone runs behind) still shows.
+//   L4 — readers fold every copy of the answers document by the later time per person: two church-signed copies are
+//        delivered in turn, the second carrying a SMALLER time for one person, and that person stays hidden.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -25,7 +37,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
-import { finalizeEvent, nip19, nip44 } from 'nostr-tools';
+import { finalizeEvent, getPublicKey, nip19, nip44 } from 'nostr-tools';
+import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { openNewChurch, CHROME, PIN, sleep, H, typeInto, typePh, rawReq } from './new-church-session.mjs';
 
 const STEWARDREQ_D = 'trinityone/stewardreq:';
@@ -37,6 +50,11 @@ let A = null, B = null;
 const RUTH = H.key();   // declined with the ×
 const SAM = H.key();    // left waiting
 const MEMBER = H.key(), STRANGER = H.key();
+const PAT = H.key();     // Approve pressed while the roster write is refused (M1)
+const QUINN = H.key();   // declined after the box is back — the write that carries the whole answers map
+const SKEW = H.key();    // declined, then asks again from a phone whose clock runs behind the owner's (M2)
+const FX = H.key(), FY = H.key();   // the two-copies fold (L4)
+let restarted = null;    // the gateway process this file started again after killing the first one
 let declinedAt = 0;
 
 const stewardReq = (who, cp, name, at) => finalizeEvent({ kind: 30078, created_at: at, tags: [['d', STEWARDREQ_D + cp], ['t', 'trinityone'], ['p', cp]],
@@ -122,7 +140,7 @@ before(async () => {
   await H.publishAll(A.relay, [stewardReq(RUTH, cp, 'Ruth Declined', at), stewardReq(SAM, cp, 'Sam Waiting', at)]);
   await A.waitFor(`!!(window.Steward && window.Steward.relayAuthed && window.Steward.relayAuthed())`, 60000, 'the console logged in');
 });
-after(() => { try { B && B.close(); } catch {} try { A && A.close(); } catch {} H.stopAll(); });
+after(() => { try { restarted && restarted.kill('SIGKILL'); } catch {} try { B && B.close(); } catch {} try { A && A.close(); } catch {} H.stopAll(); });
 const SKIP = !CHROME ? 'no chromium' : false;
 
 test('CONTROL: both requests reach the banner and the Helpers page before anything is declined', { skip: SKIP, timeout: 180000 }, async () => {
@@ -210,4 +228,132 @@ test('PRIVACY, measured on the relay: the record is sealed — a stranger gets n
   const own = A.rows(`kind = 30078 AND dtag = '${HANDLED_D + cp}'`);
   assert.ok(own.length && own.every(r => r.e.pubkey === cp), 'the document is not signed by the church key');
   assert.ok(own.every(r => !r.e.content.includes(RUTH.pub)), 'the stored document carries a requester pubkey in the clear');
+});
+
+// ── the audit of eb5c10eb: M1, M2, L4 ─────────────────────────────────────────────────────────────────────────────
+// Press "Approve…" on exactly this requester's row.
+const approveRow = (np) => `(() => { const xs=[...document.querySelectorAll('button')].filter(x=>/^Approve…$/.test((x.textContent||'').trim()));
+  const b=xs.find(x=>{ let n=x; for(let i=0;i<6&&n;i++){ n=n.parentElement; if(n&&(n.innerText||'').includes(${JSON.stringify(np)})&&(n.innerText.match(/npub1/g)||[]).length===1) return true; } return false; });
+  if(!b) return 'miss:'+xs.length; b.click(); return 'ok'; })()`;
+const handledRows = () => A.rows(`kind = 30078 AND dtag = '${HANDLED_D + A.churchPub}'`);
+const newestHandledAt = () => handledRows().reduce((m, r) => Math.max(m, r.e.created_at || 0), 0);
+async function waitHandledAfter(at, label) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < 30000) { if (newestHandledAt() > at) return; await sleep(400); }
+  throw new Error('the answers document was never rewritten on the relay after ' + label);
+}
+// The same box, started again: same entry, same port, same data directory, same environment as H.startRelay.
+async function restartBox(relay) {
+  const env = { ...process.env, TRINITY_DATA_DIR: relay.dataDir, RELAY_SYNC: '0', RELAY_MAX_EVENTS: '5000', ...(relay.env || {}) };
+  for (let i = 0; i < 3; i++) {
+    const proc = spawn(process.execPath, [relay.entry, String(relay.port)], { cwd: H.ROOT, stdio: 'ignore', env });
+    const t0 = Date.now();
+    while (Date.now() - t0 < 25000 && proc.exitCode === null) {
+      try { const r = await fetch(`${relay.base}/status`); if (r.ok) return proc; } catch {}
+      await sleep(150);
+    }
+    try { proc.kill('SIGKILL'); } catch {}
+    await sleep(1000);   // the port may still be held by the killed box for a moment
+  }
+  throw new Error('the box did not come back on port ' + relay.port);
+}
+async function reloadA() {
+  await A.ev(`(() => { location.reload(); return 1; })()`);
+  await sleep(2500);
+  await A.waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('Your PIN or passphrase'))`, 90000, 'the unlock screen');
+  await A.ev(typePh('Your PIN or passphrase', PIN));
+  await A.press(/^Unlock/);
+  await A.waitFor(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Settings')`, 90000, 'the dashboard after the reload');
+  await A.waitFor(`!!(window.Steward && window.Steward.relayAuthed && window.Steward.relayAuthed())`, 60000, 'the console logged in after the reload');
+}
+
+test('M1: an Approve whose roster write is REFUSED is not recorded — the request still shows, after a reload', { skip: SKIP, timeout: 360000 }, async () => {
+  const cp = A.churchPub;
+  const at = Math.floor(Date.now() / 1000) - 60;
+  await H.publishAll(A.relay, [stewardReq(PAT, cp, 'Pat Refused', at), stewardReq(QUINN, cp, 'Quinn Declined', at)]);
+  await toHelpers(A);
+  await A.waitFor(`${rowShown(npub(PAT))} && ${rowShown(npub(QUINN))}`, 45000, 'Pat\'s and Quinn\'s requests on the Helpers page');
+  // open Pat's approve sheet while the box is up; the PIN goes in now, so the click below is the whole Approve
+  assert.equal(await A.ev(approveRow(npub(PAT))), 'ok', 'could not find Approve… on Pat\'s row');
+  await A.waitFor(`[...document.querySelectorAll('button')].some(x=>/^Approve as helper$/.test((x.textContent||'').trim()))`, 15000, 'the approve sheet');
+  if (await A.ev(`!!document.querySelector('input[aria-label="Your console PIN, to confirm this"]')`)) await A.ev(typeInto('input[aria-label="Your console PIN, to confirm this"]', PIN));
+  await A.ev(`(() => { window.__blocked = []; window.addEventListener('steward-write-blocked', e => window.__blocked.push(e.detail)); return 1; })()`);
+  // THE REFUSAL: the box goes away under the console (its logger socket must not crash this process when it does)
+  try { A.logger && A.logger.w && A.logger.w.on('error', () => {}); } catch {}
+  const handledBefore = newestHandledAt();
+  const first = A.relay.proc;
+  first.kill('SIGKILL');
+  if (first.exitCode === null && first.signalCode === null) await new Promise(r => first.once('exit', r));
+  await A.waitFor(`!window.Steward.relayAuthed()`, 30000, 'the console to notice the box went away');
+  await A.press(/^Approve as helper$/, 'Approve as helper');
+  await sleep(1500);
+  const blocked = await A.ev(`JSON.stringify(window.__blocked || [])`);
+  assert.match(blocked, /steward roster/, 'staging: the roster write was not refused — this test proves nothing unless it is: ' + blocked);
+  assert.equal(await A.ev(rowShown(npub(PAT))), true, 'THE BUG (M1): a refused Approve hid Pat\'s request at once — he is not a helper');
+  // the same box comes back, and the owner answers somebody else: that write carries the whole answers map
+  restarted = await restartBox(A.relay);
+  assert.equal(await A.ev(declineRow(npub(QUINN))), 'ok', 'could not find the × on Quinn\'s row');
+  await waitHandledAfter(handledBefore, 'declining Quinn');
+  const rosters = A.rows(`kind = 30078 AND dtag = 'trinityone/stewards:${cp}'`);
+  assert.ok(rosters.every(r => !String(r.e.content || '').includes(PAT.pub)), 'staging: Pat reached the roster after all');
+  await reloadA();
+  await toHelpers(A);
+  await A.waitFor(rowShown(npub(SAM)), 45000, 'the request list after the reload');
+  await sleep(2000);
+  assert.equal(await A.ev(rowShown(npub(QUINN))), false, 'staging: Quinn\'s decline did not hold over the reload');
+  assert.equal(await A.ev(rowShown(npub(PAT))), true, 'THE BUG (M1): after a refused Approve and a reload, Pat\'s request is gone');
+});
+
+test('M2: a re-request signed with a time NEWER than the declined request but OLDER than the owner\'s clock at the decline still shows', { skip: SKIP, timeout: 240000 }, async () => {
+  const cp = A.churchPub;
+  const nowS = Math.floor(Date.now() / 1000);
+  await H.publishAll(A.relay, [stewardReq(SKEW, cp, 'Skew First', nowS - 600)]);   // a phone ten minutes behind
+  await toHelpers(A);
+  await A.waitFor(rowShown(npub(SKEW)), 45000, 'the first request from the slow-clock phone');
+  const before = newestHandledAt();
+  assert.equal(await A.ev(declineRow(npub(SKEW))), 'ok', 'could not find the × on the slow-clock row');
+  await waitHandledAfter(before, 'declining the slow-clock request');
+  await sleep(600);
+  assert.equal(await A.ev(rowShown(npub(SKEW))), false, 'staging: the × did not decline the slow-clock request');
+  // asks again five minutes later by its own clock — still five minutes BEFORE the owner's clock at the decline
+  const again = nowS - 300;
+  assert.ok(again < Math.floor(Date.now() / 1000) - 60, 'staging: the re-request must be older than the owner\'s clock at the decline');
+  await H.publishAll(A.relay, [stewardReq(SKEW, cp, 'Skew Again', again)]);
+  await A.waitFor(rowShown(npub(SKEW)), 45000,
+    'THE BUG (M2): a genuine re-request from a phone whose clock runs behind is hidden, because the decline was timed by the owner\'s clock');
+});
+
+test('L4: readers fold every copy of the answers document by the LATER time per person', { skip: SKIP, timeout: 240000 }, async () => {
+  const cp = A.churchPub;
+  const csk = privateKeyFromSeedWords(A.mnemonic);
+  assert.equal(getPublicKey(csk), cp, 'staging: the 12 words do not give the church key');
+  const ck = nip44.v2.utils.getConversationKey(csk, cp);
+  // what the relay holds now, opened with the church key — kept in both copies so this test hides nobody else
+  const cur = handledRows().sort((a, b) => b.e.created_at - a.e.created_at)[0];
+  const base = cur ? (JSON.parse(nip44.v2.decrypt(JSON.parse(cur.e.content).e, ck)).at || {}) : {};
+  const copy = (at, created) => finalizeEvent({ kind: 30078, created_at: created, tags: [['d', HANDLED_D + cp], ['t', 'trinityone']],
+    content: JSON.stringify({ e: nip44.v2.encrypt(JSON.stringify({ cp, at: { ...base, ...at } }), ck) }) }, csk);
+  const nowS = Math.floor(Date.now() / 1000);
+  await H.publishAll(A.relay, [stewardReq(FX, cp, 'Fold X', nowS - 100), stewardReq(FY, cp, 'Fold Y', nowS - 100)]);
+  await toHelpers(A);
+  await A.waitFor(`${rowShown(npub(FX))} && ${rowShown(npub(FY))}`, 45000, 'both fold requests on the Helpers page');
+  const t1 = Math.max(nowS, newestHandledAt()) + 1;
+  await H.publishAll(A.relay, [copy({ [FX.pub]: nowS - 50 }, t1)]);                                 // copy 1: X answered
+  await A.waitFor(`!${rowShown(npub(FX))}`, 30000, 'copy 1 to reach the console (X hidden)');
+  await H.publishAll(A.relay, [copy({ [FY.pub]: nowS - 50, [FX.pub]: nowS - 200 }, t1 + 1)]);   // copy 2: Y answered, X OLDER
+  await A.waitFor(`!${rowShown(npub(FY))}`, 30000, 'copy 2 to reach the console (Y hidden)');
+  await sleep(1500);
+  assert.equal(await A.ev(rowShown(npub(FX))), false,
+    'the reader took the LAST copy, not the later time: copy 2\'s older entry for X brought X\'s request back');
+});
+
+test('M1 + M2 on ANOTHER DEVICE (a fresh profile from the 12 words): the refused approve and the slow-clock re-request both show', { skip: SKIP, timeout: 300000 }, async () => {
+  try { B && B.close(); } catch {}
+  B = await secondConsole(A.relay, A.mnemonic);
+  await toHelpers(B);
+  await B.waitFor(rowShown(npub(SAM)), 60000, 'the request list on the fresh profile');
+  await sleep(3000);
+  assert.equal(await B.ev(rowShown(npub(QUINN))), false, 'staging: the fresh profile did not read the answers document (Quinn shows)');
+  assert.equal(await B.ev(rowShown(npub(PAT))), true, 'THE BUG (M1): a refused Approve hides the request on the owner\'s other device');
+  assert.equal(await B.ev(rowShown(npub(SKEW))), true, 'THE BUG (M2): the slow-clock re-request is hidden on the owner\'s other device');
 });

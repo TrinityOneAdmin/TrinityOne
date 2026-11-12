@@ -1070,7 +1070,10 @@ const STEWARDS_D = 'trinityone/stewards:';   // delegated, revocable steward ros
 const STEWARDREQ_D = 'trinityone/stewardreq:'; // a would-be steward's request to a church (requester-signed), d=stewardreq:<churchpub>; the owner approves it into the roster
 // THE OWNER'S ANSWERS TO "REQUESTS TO HELP" (2026-11-12, owner-reported on Living Word: a dismissed request "keeps
 // coming back", and other devices never knew it had been answered). d=stewardhandled:<churchpub>, CHURCH-KEY SIGNED,
-// one document per church holding { <requester pubkey>: <unix seconds the owner last declined/approved/removed them> }.
+// one document per church holding { <requester pubkey>: <unix seconds> }. Since the audit of eb5c10eb (M2) the value
+// is the created_at of the request the owner answered (the REQUESTER's clock) — or, for a removal, when that helper was
+// put on the roster — so the reader's `r.ts <= value` compares one clock with itself; copies eb5c10eb wrote hold the
+// owner's clock at the answer and are read the same way. The console records an approve/remove only once it LANDED (M1).
 // SEALED TO THE CHURCH'S OWN KEY (NIP-44, conversation key nip44ck(churchSk, churchPub) — the self-conversation the
 // legacy finance book uses): the relay serves a church-authored document's ENVELOPE to that church's members (canRead's
 // default member rule; there is no rule of its own), so the list of would-be helpers must not be in the clear. Only a
@@ -8543,7 +8546,8 @@ window.Steward = {
     });
     return () => { _hhListeners.delete(onMap); try { sub.close(); } catch {} };
   },
-  // RECORD AN ANSWER — the owner declined (×), approved, or removed this requester at `at` (unix seconds; default now).
+  // RECORD AN ANSWER — the owner declined (×), approved, or removed this requester; `at` is unix seconds (the answered
+  // request's created_at — see STEWARDHANDLED_D; default now).
   // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
   // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
   // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).

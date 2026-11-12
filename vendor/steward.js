@@ -21831,7 +21831,8 @@ zoo`.split("\n");
         }
       };
     },
-    // RECORD AN ANSWER — the owner declined (×), approved, or removed this requester at `at` (unix seconds; default now).
+    // RECORD AN ANSWER — the owner declined (×), approved, or removed this requester; `at` is unix seconds (the answered
+    // request's created_at — see STEWARDHANDLED_D; default now).
     // Owner-only (church key held, not acting for another church); anything else resolves false and writes nothing.
     // Before writing it reads every copy the relays hold and folds them in, so a device that has not yet heard another
     // device's answers does not publish a map without them. Resolves publish()'s answer (truthy = a relay accepted it).
