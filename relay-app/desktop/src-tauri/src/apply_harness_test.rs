@@ -1421,6 +1421,9 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
     // second route: recovery itself cannot put the main file back → still nothing starts. (The operator has
     // switched auto-update back on, so a fall-through would choose the v2 override and record "launch-slow".)
     write(&fx.data_dir.join("suite-autoupdate"), "00:00\n");
+    // …and with no quarantine record, so the installed override would be CHOSEN by a fall-through (the guard must
+    // hold whatever code would run, not only when the choice happens to be the shipped payload).
+    let _ = std::fs::remove_file(fx.suite_dir.join("quarantine-sha"));
     {
         let host = TestHost::new(fx.node.clone());
         RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = Some("relay.sqlite".into()));
@@ -1430,6 +1433,7 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
         assert!(fx.data_dir.join("relay.sqlite.restore-aside").exists(), "the held original was lost");
         assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"), "the stuck record was overwritten (route 2)");
     }
+    write(&fx.suite_dir.join("quarantine-sha"), &format!("{SHA3}\n")); // back as the shell left it
     // and a normal start then recovers and runs, with the "stuck" record replaced
     let host = TestHost::new(fx.node.clone());
     let _st = start_at(&host, &fx, &log, 840);
