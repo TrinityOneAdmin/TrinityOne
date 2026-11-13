@@ -3587,10 +3587,40 @@ function NewPostModal({ onClose }) {
 // THE VALUE ROW, not the label row: a 144px card leaves the label 80px beside a 26px icon, and "Announcements"
 // needs 102px at 12px (measured 2026-09-22; no padding or font nudge that stays legible closes 22px). With the
 // label on a row of its own it has the card's full width, and nothing on the card is dropped.
-function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
+// `pending` (2026-11-13): the value is a STATUS ("Checking…"), not a number. The 28px number slot drew that
+// one-word status 182px wide (measured, Sora 800), which at phone width painted past its card into the next.
+// A pending value is drawn small and muted, on one line, and is the ONLY value that may be cut with "…" — a
+// count is never ellipsed ("12…" reads as a smaller number). The outer box keeps the number's font-size, so its
+// line height holds and the card does not jump when the count arrives. Only DashOverview's Members tile passes it.
+//
+// EVERY OTHER VALUE IS ONE LINE, WHOLE, AND SHRUNK TO FIT (audit 2026-11-13). Wrapping was tried and was worse:
+// in the four-across band (~860px) "Down" broke mid-word onto two lines and grew the stat row 119 -> 152px, and
+// 99999 split into what read as two numbers. So the value sits in a nowrap inline span, and after layout (and on
+// resize, and once web fonts load) the span's font steps down 1px at a time from the slot size until it fits its
+// box, floor 12px. Only the SPAN shrinks; the box keeps the slot's font-size, so the line box — and the row
+// height — is the same whether the relay reads Live or Down.
+function StatCard({ label, value, sub, ic, tint, onClick, snug = false, pending = false }) {
   const t = SK_TINT[tint];
   const narrow = useStewNarrow();
   const pad = narrow ? 12 : snug ? 14 : 18, icn = narrow ? 24 : snug ? 26 : 30;
+  const fitRef = React.useRef(null);
+  const shown = pending
+    ? <span style={{ display: 'inline-block', maxWidth: '100%', verticalAlign: 'middle', fontFamily: 'var(--font-ui)', fontSize: narrow ? 14 : 15, fontWeight: 700, letterSpacing: 0, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+    : <span ref={fitRef} style={{ whiteSpace: 'nowrap' }}>{value}</span>;
+  React.useEffect(() => {
+    const el = fitRef.current, box = el && el.parentElement;
+    if (pending || !el || !box || typeof window === 'undefined' || !el.getBoundingClientRect) return;
+    const fit = () => {
+      let px = snug ? 26 : 28;
+      el.style.fontSize = '';
+      while (px > 12 && el.getBoundingClientRect().width > box.clientWidth + 0.5) { px -= 1; el.style.fontSize = px + 'px'; }
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    let live = true;
+    if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (live) fit(); });
+    return () => { live = false; window.removeEventListener('resize', fit); };
+  }, [value, pending, snug, narrow]);
   const icon = <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>;
   return (
     <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, minWidth: 0, padding: pad, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
@@ -3614,8 +3644,8 @@ function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
         {(onClick && !narrow && !snug) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
       {snug
-        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div></div>
-        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>}
+        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, whiteSpace: 'nowrap' }}>{shown}</div></div>
+        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12, minWidth: 0, whiteSpace: 'nowrap' }}>{shown}</div>}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -3916,7 +3946,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // stays for wider windows, where it was never the problem, and for the 760–849px band, where four cannot fit.
   const stat = (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : fourUp ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : snug ? 12 : 14 }}>
-      <StatCard label="Members" value={realCount == null ? 'Checking…' : realCount ? String(realCount) : '—'} sub={realCount == null ? 'reading your church…' : realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} onClick={() => onTab('members')} />
+      <StatCard label="Members" value={realCount == null ? 'Checking…' : realCount ? String(realCount) : '—'} sub={realCount == null ? 'reading your church…' : realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} pending={realCount == null} onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" snug={snug} onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" snug={snug} onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
       <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} snug={snug} onClick={() => goSettings('relays')} />
@@ -4113,7 +4143,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
                 );
               })() : null}
               {compact ? null : <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>}
-              {/* compact (APK / narrow mobile): the name + settings gear sit on the FIRST line; the member count
+              {/* compact (the APK, or any window under 760px — DashGroups passes isNative || stewNarrow): the name + settings gear sit on the FIRST line; the member count
                   / invite-only meta drops to a SECOND line below it. Before this, name + gear + meta shared one
                   line and the meta was flexShrink:0, so a long group name was truncated to make room for the
                   count — worst on a narrow phone (owner 2026-10-21). The gear still sits by the NAME and well
@@ -5084,7 +5114,12 @@ function DashGroups() {
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
-        compact={isNative}
+        /* compact on the APK AND in any window under useStewNarrow's 760px (2026-11-13): the web console on a
+           phone drew the desktop row — a kind tile plus a wrapping strip of tags and buttons that squeezed the
+           name to a few characters. 760px is wider than a phone, so a portrait tablet or a half-width desktop
+           window gets the compact row too; every control the strip carried is in the settings panel the gear
+           opens (scripts/the-group-row-is-compact-at-phone-width-on-the-web.test.mjs). */
+        compact={isNative || stewNarrow}
         /* The settings gear shows on EVERY row. ListPanel only renders renderInline in its compact (native)
            branch — on the APK the gear sits inline by the name — so the web/desktop row gets its own gear in
            renderRight below (ListPanel's web branch does not consume renderInline). */
