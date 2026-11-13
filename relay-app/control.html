@@ -390,6 +390,73 @@
   .rsw-step .si svg { width:17px; height:17px; }
   .rsw-step .st { display:block; font-weight:700; font-size:13.5px; }
   .rsw-step .sd { display:block; font-size:12px; color:var(--ink-2); margin-top:2px; }
+  /* STORAGE-BEGIN — the storage card (relay storage plan step 4; approved mockup MOCKUP-relay-storage-card-2026-11-13). */
+  .st-now { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; padding:11px 13px; border-radius:var(--r-sm);
+            background:var(--surface-2); border:1px solid var(--line); margin-bottom:12px; }
+  .st-now .k { font-size:11px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--ink-3); }
+  .st-path { font-size:13px; font-weight:600; overflow-wrap:anywhere; min-width:0; }
+  .st-path .sep { color:var(--ink-3); margin:0 3px; }
+  .st-size { font-size:12.5px; color:var(--ink-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .st-move { display:flex; gap:10px; align-items:stretch; flex-wrap:wrap; }
+  .st-select { flex:1; min-width:200px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px;
+               border:1px solid var(--line); border-radius:10px; background:var(--surface); font-size:13px; color:var(--ink); }
+  .st-select .chev { color:var(--ink-3); }
+  .st-list { border:1px solid var(--line); border-radius:12px; overflow:hidden; margin:8px 0 12px; background:var(--surface); }
+  .st-drive { display:flex; gap:11px; align-items:flex-start; padding:11px 13px; border-top:1px solid var(--line-2); }
+  .st-drive:first-child { border-top:none; }
+  .st-drive input[type=radio] { width:auto; margin:3px 0 0; accent-color:var(--clay); flex-shrink:0; }
+  .st-drive.sel { background:color-mix(in oklab, var(--clay) 6%, var(--surface)); }
+  .st-drive.off { color:var(--ink-3); }
+  .st-drive.off .st-dname { color:var(--ink-3); }
+  .st-dmain { flex:1; min-width:0; }
+  .st-dname { font-weight:700; font-size:13.5px; }
+  .st-dmeta { font-size:12px; color:var(--ink-2); margin-top:2px; }
+  .st-drive.off .st-dmeta { color:var(--ink-3); }
+  .st-why { font-size:12px; font-weight:700; color:var(--ink-3); margin-top:3px; }
+  .chip { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; padding:3px 8px; border-radius:999px; margin:5px 5px 0 0; }
+  .chip-fast { background:var(--sage-soft); color:var(--sage-ink); }
+  .chip-here { background:var(--surface-2); color:var(--ink-3); box-shadow:inset 0 0 0 1px var(--line); }
+  /* the STRONG warning (owner §8a): a full clay callout, not a chip — it is the one thing on this card that can
+     put a child's name in a stranger's pocket */
+  .st-strong { display:flex; gap:9px; margin-top:8px; padding:10px 12px; border-radius:10px; font-size:12.5px; line-height:1.45;
+               color:var(--clay-deep); font-weight:700; background:color-mix(in oklab, var(--clay) 10%, var(--surface));
+               border:1px solid color-mix(in oklab, var(--clay) 35%, transparent); border-left:4px solid var(--clay-deep); }
+  .st-strong svg { width:16px; height:16px; flex-shrink:0; margin-top:1px; }
+  .st-soft { display:flex; gap:8px; margin-top:6px; font-size:12.5px; line-height:1.45; color:var(--gold-ink); font-weight:600; }
+  .st-soft svg { width:15px; height:15px; flex-shrink:0; margin-top:1px; }
+  .st-explain { font-size:12.5px; color:var(--ink-2); line-height:1.5; margin-top:10px; }
+  .st-msg { font-size:12.5px; margin-top:9px; line-height:1.45; }
+  .st-steps { list-style:none; margin:4px 0 0; padding:0; }
+  .st-steps li { display:flex; align-items:center; gap:9px; font-size:13px; color:var(--ink-3); padding:6px 0; }
+  .st-steps li.done { color:var(--sage-ink); }
+  .st-steps li.now { color:var(--ink); font-weight:700; }
+  .st-steps .ic { width:16px; height:16px; display:flex; flex-shrink:0; }
+  .st-steps .ic svg { width:16px; height:16px; }
+  .st-result { display:flex; gap:10px; padding:12px 14px; border-radius:12px; font-size:13px; line-height:1.5; }
+  .st-result svg { width:18px; height:18px; flex-shrink:0; margin-top:1px; }
+  .st-result.ok { background:color-mix(in oklab, var(--sage) 12%, var(--surface)); border:1px solid color-mix(in oklab, var(--sage) 30%, transparent); color:var(--ink); }
+  .st-result.ok svg { color:var(--sage-ink); }
+  .st-result.bad { background:color-mix(in oklab, var(--clay) 8%, var(--surface)); border:1px solid color-mix(in oklab, var(--clay) 28%, transparent); color:var(--ink); }
+  .st-result.bad svg { color:var(--clay-ink); }
+  .st-result.info { background:var(--surface-2); border:1px solid var(--line); color:var(--ink); }
+  .st-result.info svg { color:var(--ink-3); }
+  .st-result b { font-weight:700; }
+  .st-sub { display:block; color:var(--ink-2); font-size:12.5px; margin-top:3px; }
+  .st-old { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--line-2); }
+  .st-old .txt { flex:1; min-width:200px; font-size:13px; color:var(--ink-2); line-height:1.45; }
+  .st-old .txt b { color:var(--ink); }
+  .st-remind { margin-top:12px; }
+  .st-select { cursor:pointer; font-family:var(--font-ui); text-align:left; font-weight:400; line-height:1.3; }
+  .st-select:hover:not(:disabled) { transform:none; box-shadow:none; border-color:var(--ink-3); }
+  .st-ackbox > .st-strong:first-child { margin-top:8px; }
+  .st-ackbox > .st-strong + .st-strong { margin-top:6px; }
+  .st-ack { display:flex; gap:9px; align-items:flex-start; margin-top:8px; font-size:13px; font-weight:700; color:var(--ink); cursor:pointer; }
+  .st-ack input { width:auto; margin:2px 0 0; accent-color:var(--clay-deep); flex-shrink:0; }
+  /* Backup + storage share the right-hand column beside Updates; whichever card is last fills it, so the row
+     still ends level (Settings C). */
+  .s-fill > #backupCard, .s-fill > #storageCard { flex:1 1 auto; }
+  .s-fill:has(> #storageCard:not([hidden])) > #backupCard { flex:0 0 auto; }
+  /* STORAGE-END */
 </style>
 </head>
 <body>
@@ -457,6 +524,13 @@
     <button class="btn-clay" id="goUnlock" title="Type your admin token to unlock the controls">Enter the admin token</button>
   </div>
 
+  <!-- STORAGE-BEGIN — the 7-day old-copy reminder on the Dashboard (owner §8b). Full width, so it is a row of its
+       own and the fixed grid's rows below keep equal heights. -->
+  <div class="card card--wide" id="storageRemindDash" hidden aria-label="Old copy of the relay's data">
+    <div class="sleepwarn" style="margin-top:0"><b id="stDashT"></b><span class="sw-sub">It still holds your church's records. Remove it once you're happy the move worked.</span></div>
+    <div style="margin-top:10px"><button type="button" class="btn btn-ghost btn-sm" id="stDashGo">Remove it in Settings</button></div>
+  </div>
+  <!-- STORAGE-END -->
   <div class="card" id="actCard">
     <h2>Activity <span class="muted" id="actRange" style="font-weight:600"></span></h2>
     <div class="spark" id="actBars"><div class="muted">Loading…</div></div>
@@ -711,6 +785,7 @@
         </details>
       </section>
 
+      <div class="s-stack s-fill">
       <section class="card" id="backupCard" style="display:none" aria-label="Back up and restore">
         <div class="card-head">
           <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0 5-5m-5 5-5-5"></path><path d="M4 21h16"></path></svg></span>
@@ -734,6 +809,21 @@
           </div>
         </details>
       </section>
+      <!-- STORAGE-BEGIN — "Where this relay keeps its data" (plan step 4). Hidden unless GET /storage answers; control.js
+           fills #stNow / #stBody (STORAGE-BEGIN..END there). -->
+      <section class="card" id="storageCard" hidden aria-label="Where this relay keeps its data">
+        <div class="card-head">
+          <span class="hd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M5 13 7.5 5h9L19 13"></path><circle cx="17" cy="16.5" r=".9"></circle></svg></span>
+          <div class="card-titles">
+            <div class="card-title">Where this relay keeps its data</div>
+            <div class="card-desc" id="stDesc"></div>
+          </div>
+        </div>
+        <div class="st-now" id="stNow"></div>
+        <div id="stBody" role="region" aria-live="polite"></div>
+      </section>
+      <!-- STORAGE-END -->
+      </div><!-- /s-stack s-fill -->
   </div><!-- /deck3 -->
 
   </div><!-- /setBody -->

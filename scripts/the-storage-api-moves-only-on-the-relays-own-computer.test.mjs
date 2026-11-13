@@ -411,3 +411,102 @@ test('request files never travel: a backup leaves them out and a restore never a
     } finally { await stop(g); }
   } finally { rmSync(base, { recursive: true, force: true }); }
 });
+
+// A preload that adds lines to what the gateway reads from /proc/self/mountinfo and replaces /etc/fstab, so a test
+// can present an exFAT drive or a mounted-but-not-in-fstab drive. Everything the gateway does with them is real.
+function fakeMountsPreload(base) {
+  const f = join(base, 'fake-mounts.mjs');
+  writeFileSync(f, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const add = process.env.TEST_MOUNTINFO_ADD || '', fstab = process.env.TEST_FSTAB;
+const orig = fs.promises.readFile;
+fs.promises.readFile = async function (p, ...a) {
+  if (String(p) === '/etc/fstab' && fstab !== undefined) return fstab;
+  const t = await orig.call(this, p, ...a);
+  return String(p) === '/proc/self/mountinfo' && add ? String(t) + add : t;
+};
+syncBuiltinESMExports();\n`);
+  return '--import ' + f;
+}
+
+test('owner §8b: a move to a drive with no file permissions is refused unless the request carries the acknowledgement', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-storage-ack-'));
+  try {
+    const { dir } = relayFolder(base);
+    const s = suiteEnv(base);
+    const g = await boot(dir, { ...s.env, NODE_OPTIONS: fakeMountsPreload(base), TEST_MOUNTINFO_ADD: `9999 1 0:999 / ${s.home} rw,relatime shared:999 - exfat /dev/sdz1 rw\n` });
+    try {
+      const d = (await http('GET', '/storage', { token: TOKEN })).json.drives.find(x => x.mountpoint === s.home);
+      assert.ok(d && d.eligible, 'precondition: the exFAT home drive is offered: ' + JSON.stringify(d));
+      assert.ok(d.warn.includes('no-permissions'), 'precondition: the exFAT drive carries the no-permissions warning');
+      for (const body of [{ drive: s.home }, { drive: s.home, acknowledge: [] }, { drive: s.home, acknowledge: 'no-permissions' }, { drive: s.home, acknowledge: ['removable'] }]) {
+        const r = await http('POST', '/storage/move', { token: TOKEN, body });
+        assert.equal(r.status, 409, `a move to an exFAT drive with ${JSON.stringify(body)} answered ${r.status}: ${r.body}`);
+        assert.deepEqual(r.json.refuse, ['no-permissions-not-acknowledged']);
+      }
+      assert.equal(existsSync(join(dir, '.move-request')), false, 'an unacknowledged exFAT move wrote a request');
+      assert.equal(g.code, undefined, 'an unacknowledged exFAT move stopped the relay');
+      const ok = await http('POST', '/storage/move', { token: TOKEN, body: { drive: s.home, acknowledge: ['no-permissions'] } });
+      assert.equal(ok.status, 200, 'the acknowledged move was refused: ' + ok.body);
+      assert.equal(await Promise.race([g.exited, sleep(15000).then(() => 'timeout')]), 0);
+      assert.equal(readJson(join(dir, '.move-request')).drive, s.home);
+    } finally { await stop(g); }
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('server mode: a drive mounted but not in /etc/fstab is listed, refused with not-in-fstab; an fstab one is not, and may be moved to THROUGH THE TUNNEL with the token', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-storage-fstab-'));
+  try {
+    const { dir } = relayFolder(base);
+    const inTab = join(base, 'disk-in-fstab'), loose = join(base, 'disk-by-hand');
+    mkdirSync(inTab); mkdirSync(loose);
+    const g = await boot(dir, { TRINITY_STORAGE_MODE: 'server', TRINITY_STORAGE_STATE: join(base, 'move-state.json'), NODE_OPTIONS: fakeMountsPreload(base),
+      TEST_MOUNTINFO_ADD: `9998 1 0:998 / ${inTab} rw,relatime shared:998 - ext4 /dev/sdy1 rw\n9999 1 0:999 / ${loose} rw,relatime shared:999 - ext4 /dev/sdz1 rw\n`,
+      TEST_FSTAB: `# test fstab\n/dev/sdy1 ${inTab} ext4 defaults 0 2\n/dev/sda2 none swap sw 0 0\n` });
+    try {
+      const r = (await http('GET', '/storage', { token: TOKEN })).json;
+      const a = r.drives.find(x => x.mountpoint === inTab), b = r.drives.find(x => x.mountpoint === loose);
+      assert.ok(a, 'the fstab drive is not listed: ' + JSON.stringify(r.drives.map(x => x.mountpoint)));
+      assert.equal(a.eligible, true, 'the fstab ext4 drive was refused: ' + JSON.stringify(a.refuse));
+      assert.ok(b, 'a mounted drive that is not in fstab is not listed at all (the steward cannot learn why)');
+      assert.ok(b.refuse.includes('not-in-fstab'), 'a drive not in fstab was offered on a server: ' + JSON.stringify(b));
+      const mv = await http('POST', '/storage/move', { token: TOKEN, body: { drive: loose } });
+      assert.equal(mv.status, 409, mv.body);
+      assert.equal(existsSync(join(dir, '.move-request')), false);
+      // owner §8b: on a SERVER a move may be started through the tunnel, with the admin token
+      const tunnelled = { 'X-Forwarded-For': '203.0.113.9', 'CF-Connecting-IP': '203.0.113.9', Host: 'quiet-river-1234.trycloudflare.com' };
+      assert.equal((await http('POST', '/storage/move', { headers: tunnelled, body: { drive: inTab } })).status, 401, 'a tunnelled move without the token was not refused');
+      const ok = await http('POST', '/storage/move', { token: TOKEN, headers: tunnelled, body: { drive: inTab } });
+      assert.equal(ok.status, 200, 'a server refused a tunnelled move with the token: ' + ok.body);
+      assert.equal(await Promise.race([g.exited, sleep(15000).then(() => 'timeout')]), 0);
+      assert.equal(readJson(join(dir, '.move-request')).drive, inTab);
+    } finally { await stop(g); }
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('owner §8b: a REMOVABLE drive (USB wear) needs its acknowledgement too, whatever its filesystem; a fixed one needs none', async () => {
+  for (const [fs, opts, need] of [['ext4', 'rw,removable', ['removable']], ['exfat', 'rw,removable', ['no-permissions', 'removable']], ['ext4', 'rw', []]]) {
+    const base = mkdtempSync(join(tmpdir(), 'trin-storage-usb-'));
+    try {
+      const { dir } = relayFolder(base);
+      const s = suiteEnv(base);
+      const g = await boot(dir, { ...s.env, NODE_OPTIONS: fakeMountsPreload(base), TEST_MOUNTINFO_ADD: `9999 1 0:999 / ${s.home} rw,relatime shared:999 - ${fs} /dev/sdz1 ${opts}\n` });
+      try {
+        const d = (await http('GET', '/storage', { token: TOKEN })).json.drives.find(x => x.mountpoint === s.home);
+        assert.ok(d && d.eligible, `precondition (${fs} ${opts}): the drive is offered: ` + JSON.stringify(d));
+        assert.equal(d.warn.includes('removable'), opts.includes('removable'), `${fs} ${opts}: removable warning wrong: ` + JSON.stringify(d.warn));
+        if (need.length) {
+          for (const partial of [[], need.slice(0, -1)]) {
+            const r = await http('POST', '/storage/move', { token: TOKEN, body: { drive: s.home, acknowledge: partial } });
+            assert.equal(r.status, 409, `${fs} ${opts} with acknowledge ${JSON.stringify(partial)} answered ${r.status}: ${r.body}`);
+            assert.ok(r.json.refuse.includes(need[need.length - 1] + '-not-acknowledged'), JSON.stringify(r.json));
+          }
+          assert.equal(existsSync(join(dir, '.move-request')), false, `${fs} ${opts}: an unacknowledged move wrote a request`);
+        }
+        const ok = await http('POST', '/storage/move', { token: TOKEN, body: { drive: s.home, acknowledge: need } });
+        assert.equal(ok.status, 200, `${fs} ${opts} with acknowledge ${JSON.stringify(need)} was refused: ${ok.body}`);
+        assert.equal(await Promise.race([g.exited, sleep(15000).then(() => 'timeout')]), 0);
+      } finally { await stop(g); }
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  }
+});

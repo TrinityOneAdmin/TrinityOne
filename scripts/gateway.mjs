@@ -7021,6 +7021,8 @@ const STORAGE_REMOVE_REQUEST = join(DATA_DIR, '.remove-old-request');
 const STORAGE_REMIND_DAYS = 7;                       // owner §8a: remind about a kept old copy after 7 days
 const STORAGE_SPACE_MARGIN = 512 * 1024 * 1024;     // the mover's own margin (relay-move.mjs SPACE_MARGIN)
 const STORAGE_SERVER_FS = new Set(['ext4', 'xfs', 'btrfs', 'zfs', 'f2fs']);   // plan §3 "Linux server"
+// filesystems that are a real drive (for listing a mounted-but-not-in-fstab drive on a server, greyed)
+const STORAGE_DRIVE_FS = new Set([...STORAGE_SERVER_FS, 'ext2', 'ext3', 'exfat', 'vfat', 'ntfs', 'ntfs3', 'fuseblk', 'hfsplus', 'apfs']);
 // A request that crossed a proxy or a tunnel. cloudflared delivers on a LOOPBACK socket, so the socket alone proves
 // nothing; the Cloudflare edge always adds X-Forwarded-For / CF-Connecting-IP / CF-Ray, which a client cannot strip.
 // A strict superset of the /local-token test (x-forwarded-for + forwarded), plus the same loopback Host check.
@@ -7085,6 +7087,13 @@ async function storageCandidates(mounts) {
       if (!mp.startsWith('/') || mp === '/' || f[2] === 'swap') continue;
       add(mp, basename(mp), 'fstab');
     }
+    // a real drive that is mounted but NOT in fstab is listed too, greyed, so the steward learns why it cannot be
+    // picked (plan §3: "add it to /etc/fstab first"; owner §8b took the mockup's answer). Never one a system path.
+    for (const m of mounts || []) {
+      if (!STORAGE_DRIVE_FS.has(String(m.fsType || '').toLowerCase()) || !m.mountpoint || m.mountpoint === '/') continue;
+      if (classifyTarget({ path: join(m.mountpoint, STORAGE_LEAF), fsType: m.fsType, mode: 'server', platform: pf }).refuse.includes('system-folder')) continue;
+      add(m.mountpoint, basename(m.mountpoint), 'not-fstab');
+    }
     return out;
   }
   if (pf === 'win32') { for (const m of mounts || []) add(m.mountpoint, m.mountpoint.replace(/\\$/, ''), 'drive'); return out; }
@@ -7112,6 +7121,7 @@ async function storageJudge(c, ctx) {
   const m = mountFor(real, ctx.mounts, pf);
   d.fsType = (m && m.fsType) || null;
   if (STORAGE_MODE === 'server') {
+    if (c.kind === 'not-fstab') d.refuse.push('not-in-fstab');
     if (!m || !samePath(m.mountpoint, real, pf)) d.refuse.push('not-mounted');
     else if (!STORAGE_SERVER_FS.has(String(m.fsType || '').toLowerCase())) d.refuse.push('filesystem-not-supported');
   }
@@ -7161,7 +7171,8 @@ async function storageReport(fresh) {
     move: j ? { state: j.state, mode: j.mode || null, from: j.from || null, to: j.to || null, code: j.code || null, detail: j.detail || null, note: j.note || null,
       startedAt: j.startedAt || null, switchedAt: j.switchedAt || null, checkedAt: j.checkedAt || null, endedAt: j.endedAt || null,
       totalBytes: j.totalBytes ?? null, copiedBytes: j.copiedBytes ?? null, counts: j.counts || null } : null,
-    oldCopy: old ? { path: old.path, since: old.since || null, exists: existsSync(old.path), ageDays, remind: ageDays !== null && ageDays >= STORAGE_REMIND_DAYS } : null,
+    oldCopy: old ? { path: old.path, since: old.since || null, exists: existsSync(old.path), ageDays, remind: ageDays !== null && ageDays >= STORAGE_REMIND_DAYS,
+      sizeBytes: j.totalBytes ?? null, mountpoint: (mountFor(old.path, mounts || [], pf) || {}).mountpoint || null } : null,
     // set-aside copies and rename tombstones the mover recorded (audit B N8); an entry the remover marked removedAt
     // is gone for good and not offered again (audit C C3 — the remover, step 5/6, must set it)
     leftovers: (j && Array.isArray(j.leftovers) ? j.leftovers : []).filter(l => l && l.path && !l.removedAt)
@@ -8206,6 +8217,12 @@ function serveStatic(req, res) {
           if (!d) { send(400, { error: 'drive-not-offered' }); return; }
           if (r.refuse.length) { send(409, { error: 'refused', refuse: r.refuse }); return; }
           if (!d.eligible) { send(409, { error: 'refused', refuse: d.refuse }); return; }
+          // owner §8b: a drive with no file permissions (exFAT/FAT), and any REMOVABLE drive (USB wear: it writes all
+          // day and can fail without warning), needs the steward's explicit acknowledgement — the panel's one tick box
+          // sends both; a request without it is refused here too, not only greyed in the page
+          const acked = Array.isArray(b.acknowledge) ? b.acknowledge : [];
+          const missing = ['no-permissions', 'removable'].filter(w => d.warn.includes(w) && !acked.includes(w));
+          if (missing.length) { send(409, { error: 'refused', refuse: missing.map(w => w + '-not-acknowledged') }); return; }
           const pub = relayKeyPubOnDisk();
           if (!pub) { send(409, { error: 'refused', refuse: ['source-has-no-key'] }); return; }
           let events = null; try { events = store.count(); } catch {}
