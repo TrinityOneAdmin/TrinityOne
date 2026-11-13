@@ -1221,54 +1221,56 @@ fn restore_reports_a_failed_put_back_and_keeps_the_original() {
 fn an_interrupted_restore_is_repaired_at_the_next_start_from_every_crash_point() {
     let root = std::env::temp_dir().join(format!("trin-restore-crash-{}", std::process::id()));
     let (data, backup, log) = (root.join("data"), root.join("backup"), root.join("log"));
-    let fresh = |with_wal: bool| {
-        let _ = std::fs::remove_dir_all(&root);
-        write(&data.join("relay.sqlite"), "BAD-MAIN");
-        write(&data.join("relay.sqlite-wal"), "BAD-WAL");
-        write(&data.join("relay.sqlite-shm"), "BAD-SHM");
-        write(&backup.join("relay.sqlite"), "GOOD-MAIN");
-        if with_wal {
-            write(&backup.join("relay.sqlite-wal"), "GOOD-WAL");
-        }
-    };
-    let old = vec![
-        ("relay.sqlite".to_string(), "BAD-MAIN".to_string()),
-        ("relay.sqlite-shm".to_string(), "BAD-SHM".to_string()),
-        ("relay.sqlite-wal".to_string(), "BAD-WAL".to_string()),
-    ];
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {})); // the simulated crashes are expected
-    for with_wal in [true, false] {
+    // (live has a -wal?, backup has a -wal?) — including a live store WITHOUT a -wal while the backup has one, the
+    // case where the backup's -wal can be brought in with no live -wal set aside.
+    for (live_wal, backup_wal) in [(true, true), (true, false), (false, true)] {
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&root);
+            write(&data.join("relay.sqlite"), "BAD-MAIN");
+            if live_wal {
+                write(&data.join("relay.sqlite-wal"), "BAD-WAL");
+            }
+            write(&data.join("relay.sqlite-shm"), "BAD-SHM");
+            write(&backup.join("relay.sqlite"), "GOOD-MAIN");
+            if backup_wal {
+                write(&backup.join("relay.sqlite-wal"), "GOOD-WAL");
+            }
+        };
+        fresh();
+        let old = store_snapshot(&data);
         let mut new = vec![("relay.sqlite".to_string(), "GOOD-MAIN".to_string())];
-        if with_wal {
+        if backup_wal {
             new.push(("relay.sqlite-wal".to_string(), "GOOD-WAL".to_string()));
         }
+        // how many renames a clean restore makes; the LAST one puts the backup's main file in place
+        RESTORE_RENAME_COUNT.with(|c| c.set(0));
+        assert!(restore_store(&data, &backup, &log).is_ok());
+        let renames = RESTORE_RENAME_COUNT.with(|c| c.get());
+        assert!(renames >= 3, "re-anchor: {renames} renames");
         // crash with only the temporary copies made
-        fresh(with_wal);
+        fresh();
         write(&data.join("relay.sqlite.restore-tmp"), "GOOD-MAIN");
         let _ = recover_interrupted_restore(&data, &log);
         assert_eq!(store_snapshot(&data), old, "temporary copies were not cleaned up / the store was touched");
-        // crash after each rename
-        let mut k = 0;
-        loop {
-            fresh(with_wal);
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // the simulated crashes are expected
+        for k in 0..renames {
+            fresh();
             RESTORE_RENAME_COUNT.with(|c| c.set(0));
             RESTORE_CRASH_AFTER.with(|c| c.set(Some(k)));
             let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| restore_store(&data, &backup, &log))).is_err();
             RESTORE_CRASH_AFTER.with(|c| c.set(None));
-            if !crashed {
-                break; // k is past the last rename
-            }
+            assert!(crashed, "re-anchor: no crash at rename #{k}");
             RESTORE_RENAME_COUNT.with(|c| c.set(0));
             let note = recover_interrupted_restore(&data, &log);
-            let snap = store_snapshot(&data);
-            assert!(snap == old || snap == new, "crash after rename #{k} (wal={with_wal}): recovery left {snap:?}");
+            // after the last rename the backup's main file was in place: the restore had happened → all-restored.
+            // Before it: nothing of the backup may stay → all-old.
+            let want = if k + 1 == renames { &new } else { &old };
+            assert_eq!(&store_snapshot(&data), want, "crash after rename #{k} of {renames} (live wal {live_wal}, backup wal {backup_wal})");
             assert!(note.is_some(), "crash after rename #{k}: recovery repaired something but reported nothing");
-            k += 1;
         }
-        assert!(k >= 4, "re-anchor: expected at least 4 crash points, got {k}");
+        std::panic::set_hook(prev_hook);
     }
-    std::panic::set_hook(prev_hook);
     let _ = std::fs::remove_dir_all(&root);
 }
 
