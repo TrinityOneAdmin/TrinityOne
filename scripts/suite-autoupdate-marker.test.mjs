@@ -9,7 +9,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,4 +98,19 @@ test('the marker route is admin-gated (no token ⇒ 401, no marker written)', as
   const r = await post({ autoUpdate: true, autoUpdateAt: '01:00' }, false);
   assert.equal(r.status, 401, 'an unauthenticated settings POST must be rejected');
   assert.ok(!existsSync(marker()), 'no marker may be written without admin auth');
+});
+
+// audit be258b42 LOW 2: a marker that cannot be written is not reported as saved. Here the marker path is a
+// directory with a file in it, so neither writing nor removing it can succeed.
+test('a marker that cannot be written answers 500 and leaves the switch OFF (not a false "saved")', async () => {
+  await post({ autoUpdate: false });
+  mkdirSync(join(marker(), 'blocker'), { recursive: true });
+  try {
+    const r = await post({ autoUpdate: true, autoUpdateAt: '02:15' });
+    assert.equal(r.status, 500, 'a failed marker write must not answer 200');
+    const j = await r.json();
+    assert.match(j.error, /auto-update switch/);
+    const g = await fetch(`http://127.0.0.1:${PORT}/settings`, { headers: { Authorization: 'Bearer ' + adminToken() } });
+    assert.equal((await g.json()).settings.autoUpdate, false, 'the relay must not record ON when the shell cannot see it');
+  } finally { rmSync(marker(), { recursive: true, force: true }); }
 });

@@ -698,6 +698,44 @@
   // apply, and a human line from lastOutcome/staged). On a failed save we show an inline hint and NEVER hide or
   // leave the control disabled — that was the sleep-button bug — so the operator can always retry. Deps
   // (doc/fetchFn/authFn) are injected so the exact behaviour runs headless against a fake DOM + fake fetch.
+  // What the panel says, from GET /update's `suite` (gateway.mjs suiteUpdateStatus). PURE. It must be TRUE
+  // (audit be258b42 H1, H3, M7, L1): when an update will install, which code is running, what the last check
+  // found, and that a failed update switched the feature off.
+  const SUITE_CHECK_REASON = {
+    'not-newer': 'this computer is up to date', 'already-staged': 'an update is downloaded',
+    staged: 'an update was downloaded', 'no-manifest': 'could not reach the update server',
+    'signature-missing': 'a new release is not fully published yet', 'download-failed': 'the download failed (it will retry)',
+    'too-large': 'the download was refused as too large', 'bad-signature': 'a release failed its signature check and was refused',
+    'not-a-suite-bundle': 'a release was not a Suite update and was refused', 'sha-mismatch': 'a release did not match its description and was refused',
+    'future-date': 'a release had an impossible date and was refused', 'anti-rollback': 'a release older than this one was refused',
+    'clock-looks-wrong': "this computer's clock looks wrong, so updates are paused", quarantined: 'the latest release failed here before and is skipped',
+    'url-origin-mismatch': 'a release pointed somewhere unexpected and was refused', error: 'the check failed (it will retry)',
+  };
+  function suiteAutoStatusText(suite) {
+    suite = suite || {};
+    const out = [];
+    const at = suite.at || '03:00', end = suite.windowEnd || '';
+    const win = end ? 'between ' + at + ' and ' + end : 'at ' + at;
+    if (suite.running === 'update') out.push('Running a downloaded update (' + (suite.runningVersion || suite.installedVersion || '?') + ')');
+    if (suite.lastOutcome === 'rolledback' || suite.lastOutcome === 'launch-failed') {
+      out.push((suite.lastOutcome === 'rolledback' ? 'The last update was rolled back' : 'The downloaded update would not start') +
+        (suite.lastReason ? ' (' + suite.lastReason + ')' : '') +
+        (suite.autoOff && !suite.enabled ? ', so automatic updates were turned off. Turn them on to try the next release.' : ''));
+    } else if (suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') {
+      out.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastApplied ? ' on ' + suite.lastApplied : '') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
+    }
+    if (suite.enabled) {
+      if (suite.staged && (suite.staged.version || suite.staged.sha)) out.push('Update ' + (suite.staged.version || String(suite.staged.sha).slice(0, 7)) + ' is downloaded and installs ' + win + ' if this computer is on — otherwise the next time the Suite starts');
+      else out.push('Checks every hour; installs ' + win);
+      if (suite.check && suite.check.reason) {
+        const t = new Date(suite.check.at), hm = isNaN(t) ? '' : ' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+        out.push('Last check' + hm + ': ' + (SUITE_CHECK_REASON[suite.check.reason] || suite.check.reason));
+      }
+    } else if (suite.running === 'update') {
+      out.push('Off: at the next start the Suite goes back to the version it came with' + (suite.shippedVersion ? ' (' + suite.shippedVersion + ')' : ''));
+    }
+    return out.join(' · ');
+  }
   function wireSuiteAutoUpdate(doc, fetchFn, authFn, suite) {
     suite = suite || {};
     const toggle = doc.getElementById('suiteAutoToggle');
@@ -706,13 +744,13 @@
     const hint   = doc.getElementById('suiteAutoHint');
     if (!toggle || !time) return;
 
-    // A late-evening apply may never fire: the apply runs at the next START past HH:MM, so a box that is off
-    // overnight can skip an evening time. An early-morning time (default 03:00) is safe for a daytime box.
+    // Since audit be258b42 H1 an update installs only between HH:MM and HH:MM+2h, or — if the computer was off
+    // then — the next time the Suite starts. An evening time therefore lands while people may still be using it.
     const timeNote = (v) => {
       const m = /^(\d{1,2}):(\d{2})$/.exec(v || '');
       if (!m) return '';
       const h = +m[1];
-      return (h >= 20 || h < 1) ? 'This runs at the next start after that time, so a late-evening time may be missed if the computer is off overnight — an early-morning time (e.g. 03:00) is safest.' : '';
+      return (h >= 7 && h < 23) ? 'Updates restart the relay for a minute or two, so a time when nobody is using it (e.g. 03:00) is best.' : '';
     };
     const setHint = (text, bad) => {
       if (!hint) return;
@@ -721,16 +759,7 @@
     };
 
     // Status line from the `suite` payload — re-rendered on every loadUpdate so it tracks the box.
-    const renderStatus = () => {
-      if (!status) return;
-      const parts = [];
-      if (suite.installedVersion) parts.push('Installed ' + suite.installedVersion + (suite.installedDate ? ' · ' + String(suite.installedDate).slice(0, 10) : ''));
-      if (suite.staged && (suite.staged.version || suite.staged.sha)) parts.push('An update is staged for tonight');
-      else if (suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') parts.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
-      else if (suite.lastOutcome === 'rolledback') parts.push('A bad update was rolled back');
-      if (suite.enabled && suite.nextAt) parts.push('Next update ' + suite.nextAt);
-      status.textContent = parts.join(' · ');
-    };
+    const renderStatus = () => { if (status) status.textContent = suiteAutoStatusText(suite); };
 
     // Reflect the box's current settings into the inputs — but never while a save is in flight (disabled) or
     // while the operator is editing the time field, so a 60s re-read can't clobber their choice.

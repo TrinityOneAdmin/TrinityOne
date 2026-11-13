@@ -55,9 +55,10 @@ function packagedTree() {
 const cleanups = [];
 after(() => { for (const f of cleanups.reverse()) { try { f(); } catch {} } });
 
-async function startGateway(root) {
+async function startGateway(root, seed) {
   const port = await freePort('the suite-update-control gateway');
   const dataDir = mkdtempSync(join(tmpdir(), 'trin-suite-panel-data-'));
+  if (seed) seed(dataDir);
   const preload = join(dataDir, 'blackhole.mjs');
   writeFileSync(preload, BLACKHOLE);
   const proc = spawn(process.execPath, [join(root, 'scripts/gateway.mjs'), String(port)], {
@@ -157,4 +158,46 @@ test('2: control case — on a plain checkout (not a Suite) the same page keeps 
   const s = JSON.parse(await c.evalIn(BLOCK_STATE));
   assert.equal(s.exists, true, 're-anchor: #suiteAutoBlock is not in the page');
   assert.equal(s.display, 'none', 'the Suite auto-update control shows on a box that is not a Suite');
+});
+
+// ── audit be258b42 MEDIUM 7 / HIGH 1 / LOW 1, at the point of use: what the real panel SAYS, on a real packaged
+//    gateway, from the files the Rust shell and the relay's check really write. ──────────────────────────────
+const STATUS = `JSON.stringify({ on: document.getElementById('suiteAutoToggle').checked, text: (document.getElementById('suiteAutoStatus') || {}).textContent || '' })`;
+
+test('3: after the shell rolled an update back and switched auto-update off, the panel shows OFF and says why',
+  { skip, timeout: 120000 }, async () => {
+  const root = packagedTree(); cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const gw = await startGateway(root, (d) => {
+    // the operator had it ON (saved setting) …
+    writeFileSync(join(d, 'relay-settings.json'), JSON.stringify({ autoUpdate: true, autoUpdateAt: '03:00' }));
+    // … then the shell rolled back, REMOVED the marker, and recorded why (main.rs rollback_and_restart).
+    mkdirSync(join(d, 'suite'), { recursive: true });
+    writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ installedSha: '', installedVersion: '', installedDate: '', lastApplied: '2026-11-13',
+      lastOutcome: 'rolledback', lastReason: 'the update started but reported the wrong version', autoOff: true }));
+  });
+  assert.equal((await gw.get('/settings')).settings.autoUpdate, false, 'the relay re-enabled auto-update the shell had switched off');
+  const c = await startChrome(gw.base);
+  const v = JSON.parse(await waitFor(c, STATUS, (x) => /rolled back/.test(JSON.parse(x).text)));
+  assert.equal(v.on, false, 'the switch shows ON although the shell switched it off');
+  assert.match(v.text, /rolled back \(the update started but reported the wrong version\), so automatic updates were turned off/, v.text);
+});
+
+test('4: with an update staged, the panel says WHEN it installs (the window, or the next start) and what the last check found',
+  { skip, timeout: 120000 }, async () => {
+  const root = packagedTree(); cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const gw = await startGateway(root, (d) => {
+    writeFileSync(join(d, 'relay-settings.json'), JSON.stringify({ autoUpdate: true, autoUpdateAt: '04:30' }));
+    writeFileSync(join(d, 'suite-autoupdate'), '04:30\n');
+    mkdirSync(join(d, 'suite', 'staging'), { recursive: true });
+    writeFileSync(join(d, 'suite', 'staging', 'READY'), JSON.stringify({ version: '0.9.9', sha: 'b'.repeat(40), date: '2026-11-01T00:00:00Z' }));
+    writeFileSync(join(d, 'suite', 'check.json'), JSON.stringify({ at: '2026-11-13T14:02:00Z', ok: true, reason: 'already-staged', sha: 'b'.repeat(40) }));
+    // L1: an old state.json from an earlier install carried a different time; it must not be shown
+    writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ lastOutcome: 'applied', installedVersion: '0.9.8', lastApplied: '2026-11-01', nextAt: '03:00' }));
+  });
+  const c = await startChrome(gw.base);
+  const v = JSON.parse(await waitFor(c, STATUS, (x) => /installs between/.test(JSON.parse(x).text)));
+  assert.equal(v.on, true);
+  assert.match(v.text, /0\.9\.9 is downloaded and installs between 04:30 and 06:30 if this computer is on — otherwise the next time the Suite starts/, v.text);
+  assert.match(v.text, /Last check \d\d:\d\d: an update is downloaded/, v.text);
+  assert.doesNotMatch(v.text, /03:00/, 'L1: a time saved at an earlier install is shown instead of the current setting');
 });

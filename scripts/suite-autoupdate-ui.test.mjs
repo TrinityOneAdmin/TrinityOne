@@ -75,9 +75,10 @@ test('the time field posts {autoUpdateAt:"HH:MM"}', async () => {
 
 test('status line renders a STAGED update from the /update suite payload', () => {
   const { doc, els } = fakeDom();
-  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '03:00', nextAt: '03:00', installedVersion: '1.2.3', staged: { version: '1.2.4' } });
-  assert.match(els.suiteAutoStatus.textContent, /staged for tonight/i);
-  assert.match(els.suiteAutoStatus.textContent, /1\.2\.3/, 'shows the installed version');
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '03:00', windowEnd: '05:00', installedVersion: '1.2.3', staged: { version: '1.2.4' } });
+  // audit be258b42 H1: the old "staged for tonight" is replaced by the real rule — the window, or the next start.
+  assert.match(els.suiteAutoStatus.textContent, /1\.2\.4 is downloaded and installs between 03:00 and 05:00/);
+  assert.match(els.suiteAutoStatus.textContent, /next time the Suite starts/);
 });
 
 test('status line renders an APPLIED update (incl. store-degraded note)', () => {
@@ -141,11 +142,11 @@ test('a THROWN fetch is handled, control stays visible, and a SECOND press retri
   assert.equal(calls.length, 2, 'both presses reached the gateway — the control was never disabled or hidden');
 });
 
-test('a late-evening time shows an inline warning; an early-morning time does not', () => {
+test('a daytime/evening time shows an inline warning; an early-morning time does not', () => {
   let { doc, els } = fakeDom();
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '22:00' });
   assert.equal(els.suiteAutoHint.style.display, 'inline');
-  assert.match(els.suiteAutoHint.textContent, /overnight|late-evening|missed/i, 'warns an evening time may never fire');
+  assert.match(els.suiteAutoHint.textContent, /nobody is using it/i, 'warns that an evening time restarts the relay while it may be in use');
   ({ doc, els } = fakeDom());
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '03:00' });
   assert.equal(els.suiteAutoHint.style.display, 'none', '03:00 is safe — no warning');

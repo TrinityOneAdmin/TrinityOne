@@ -151,7 +151,7 @@ function loadSettings() {
       // Suite JS auto-update: opt-in, default OFF; the apply time is a validated "HH:MM" (default 03:00). One
       // coercion, shared with POST /settings, lifted + run by scripts/suite-autoupdate-settings.test.mjs.
       coerceSuiteAutoUpdate(s, SETTINGS);
-      reconcileSuiteAutoUpdate(SETTINGS, existsSync(join(DATA_DIR, 'suite-autoupdate')));
+      reconcileSuiteAutoUpdate(SETTINGS, suiteMarkerOn());
     }
   } catch {}
 }
@@ -189,6 +189,8 @@ const mediaRequiresHost = () => SETTINGS.mediaRequiresHost === true || MEDIA_HOS
 const GUEST_ASSET_MAX = 4 * 1048576;   // a guest church may still upload a small NON-sermon asset (e.g. an image) up to this — the size backstop catches a big blob mislabeled to dodge the audio/video check
 const effMediaCap = () => SETTINGS.mediaCap || MEDIA_CAP;      // total media-storage cap (bytes), setting overrides env
 const effChurchCap = () => SETTINGS.churchCap || CHURCH_MEDIA_CAP;   // per-church media-storage cap (bytes)
+// Is the shell's auto-update marker in place? (A FILE: the shell reads it with read_to_string.)
+function suiteMarkerOn() { try { return statSync(join(DATA_DIR, 'suite-autoupdate')).isFile(); } catch { return false; } }
 function saveSettings() { try { const tmp = SETTINGS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SETTINGS, null, 2) + '\n'); renameSync(tmp, SETTINGS_FILE); } catch {} }
 loadSettings();
 
@@ -732,6 +734,38 @@ function suiteAutoUpdateDefaults() {
     packaged: PACKAGED, settings: SETTINGS, dataDir: DATA_DIR, build: BUILD, base: suiteUpdateBase(),
     verifier: join(payload, 'scripts', 'verify-suite-bundle.mjs'),
     pubkey: process.env.RELEASE_PUBKEY_PATH || join(payload, 'relay-app', 'release-pubkey.pem'),
+  };
+}
+// SUITE AUTO-UPDATE STATUS for the control panel (GET /update `suite`). Everything the panel needs to say
+// truthfully what will happen and what did (audit be258b42 H1/H3/M7/L1):
+//   enabled  — the switch AS THE SHELL SEES IT (setting AND marker; the shell removes the marker after a failure)
+//   at       — the CURRENT setting (L1: not a time saved at the last install), windowEnd — at + 2 h
+//   running  — 'update' when this relay runs a downloaded override (cwd ≠ PAYLOAD_DIR), else 'shipped';
+//              runningVersion/shippedVersion — short shas of each
+//   installed*/lastApplied/lastOutcome/lastReason/autoOff — what the shell recorded in suite/state.json
+//   staged   — the verified bundle waiting for the window;  check — the relay's last check (suite/check.json)
+function suiteUpdateStatus() {
+  const suiteDir = join(DATA_DIR, 'suite');
+  const rj = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')) || null; } catch { return null; } };
+  const st = rj(join(suiteDir, 'state.json')) || {};
+  const ready = rj(join(suiteDir, 'staging', 'READY'));
+  const check = rj(join(suiteDir, 'check.json'));
+  const at = SETTINGS.autoUpdateAt || '03:00';
+  const [h, m] = at.split(':').map(Number);
+  const endMin = ((h * 60 + m) + 120) % 1440;
+  const windowEnd = String(Math.floor(endMin / 60)).padStart(2, '0') + ':' + String(endMin % 60).padStart(2, '0');
+  const np = (x) => normalize(x).replace(/[\\/]+$/, '');
+  const runningUpdate = !!PAYLOAD_DIR && np(PAYLOAD_DIR) !== np(ROOT);
+  let shippedVersion = BUILD.short;
+  if (runningUpdate) { try { shippedVersion = readFileSync(join(PAYLOAD_DIR, 'version.txt'), 'utf8').split('\n')[0].trim().slice(0, 7); } catch { shippedVersion = ''; } }
+  return {
+    enabled: SETTINGS.autoUpdate === true && suiteMarkerOn(),
+    at, windowEnd,
+    running: runningUpdate ? 'update' : 'shipped', runningVersion: BUILD.short, shippedVersion,
+    installedVersion: st.installedVersion || st.installedSha || '', installedDate: st.installedDate || '',
+    lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '', lastReason: st.lastReason || '', autoOff: st.autoOff === true,
+    staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
+    check: check && typeof check === 'object' ? { at: check.at || '', ok: !!check.ok, reason: check.reason || '' } : null,
   };
 }
 // Hourly check (mirrors the relayAutoUpdate setInterval precedent above) + fire on enable (POST /settings).
@@ -8140,12 +8174,16 @@ function serveStatic(req, res) {
             // (the default). So keepAwake=true removes the marker; keepAwake=false writes it.
             try { const mk = join(DATA_DIR, 'keep-awake-off'); if (SETTINGS.keepAwake) rmSync(mk, { force: true }); else writeFileSync(mk, '1\n'); } catch {}
           }
+          let suiteMarkerError = '';
           if ('autoUpdate' in s || 'autoUpdateAt' in s) {
             // Coerce via the SAME helper loadSettings uses (one rule), then maintain the `suite-autoupdate`
             // marker the Rust app shell reads DIRECTLY from the data dir (it applies staged bundles, not this
             // gateway). Marker PRESENCE ⇒ enabled; its contents are "HH:MM\n" — the time the shell applies at.
             coerceSuiteAutoUpdate(s, SETTINGS);
-            try { const mk = join(DATA_DIR, 'suite-autoupdate'); if (SETTINGS.autoUpdate) writeFileSync(mk, (SETTINGS.autoUpdateAt || '03:00') + '\n'); else rmSync(mk, { force: true }); } catch {}
+            // [audit be258b42 LOW 2] A marker that cannot be written must not be reported as saved: the shell
+            // would never install anything while the panel showed ON. Record OFF (the truth) and answer 500.
+            try { const mk = join(DATA_DIR, 'suite-autoupdate'); if (SETTINGS.autoUpdate) writeFileSync(mk, (SETTINGS.autoUpdateAt || '03:00') + '\n'); else rmSync(mk, { force: true }); }
+            catch (e) { suiteMarkerError = 'could not save the auto-update switch on this computer (' + ((e && e.code) || 'error') + ')'; SETTINGS.autoUpdate = suiteMarkerOn(); }
           }
           if ('serveApp' in s) SETTINGS.serveApp = !!s.serveApp;
           if ('serveModules' in s) SETTINGS.serveModules = !!s.serveModules;
@@ -8169,6 +8207,7 @@ function serveStatic(req, res) {
           // Turning Suite auto-update ON acts NOW rather than at the next hourly tick, so a staged bundle can be
           // ready for tonight. Only a PACKAGED box does anything (suiteAutoUpdate re-checks internally too).
           if (PACKAGED && 'autoUpdate' in s && SETTINGS.autoUpdate) { suiteAutoUpdate('the operator turned it on', suiteAutoUpdateDefaults()).catch(() => {}); }
+          if (suiteMarkerError) { res.writeHead(500, H); res.end(JSON.stringify({ error: suiteMarkerError, settings: SETTINGS })); return; }
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, origin: ORIGIN, packaged: PACKAGED }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });
@@ -8352,18 +8391,7 @@ function serveStatic(req, res) {
         // bundle (if any) this box has downloaded + verified, and the last apply outcome the shell recorded in
         // DATA_DIR/suite/state.json. Read-only surface; the notify-only banner (/suite-update) is untouched.
         let suite = null;
-        try {
-          const suiteDir = join(DATA_DIR, 'suite');
-          let st = {}; try { st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8')) || {}; } catch {}
-          let ready = null; try { ready = JSON.parse(readFileSync(join(suiteDir, 'staging', 'READY'), 'utf8')); } catch {}
-          suite = {
-            enabled: SETTINGS.autoUpdate === true, at: SETTINGS.autoUpdateAt,
-            installedVersion: st.installedVersion || st.installedSha || '', installedDate: st.installedDate || '',
-            lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '',
-            nextAt: st.nextAt || SETTINGS.autoUpdateAt,
-            staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
-          };
-        } catch {}
+        try { suite = suiteUpdateStatus(); } catch {}
         res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, codeSource: codeSource(), releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest, suite }));
       })();
       return;
