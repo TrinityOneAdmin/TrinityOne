@@ -7727,6 +7727,7 @@ window.Steward = {
     if (mnemonicOverride) {
       // test hook — keep behaviour but force PIN setup so an injected key never persists plaintext past first boot
       lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
+      try { if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub); } catch (e) {}   // a key from words: not a helper key (see restoreKey)
       _setNeedsPin(true); window.Steward.locked = false; return true;
     }
     const boot = _bootKeyState();
@@ -8344,6 +8345,11 @@ window.Steward = {
     // itself. An ABANDONED restore now leaves the previous key intact and openable, which is the safe
     // outcome — the steward keeps the church they had instead of losing both.
     setKey(m);
+    // A KEY LOADED FROM WORDS IS NEVER A DISPOSABLE HELPER KEY (audit of 15dc0960 NIT 3; of 29a23952 NIT 1): a helper mark
+    // left on this device for the same key — words taken from a helper key and made a church elsewhere — must not let a
+    // removal notice discard it. Here, not in adoptChurch, so EVERY restore path is covered: the welcome screen's restore
+    // and ?adopt= (both via adoptChurch), Settings → Restore from a recovery phrase, and Restore from a file.
+    try { if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub); } catch (e) {}
     // The active church has just changed to a DIFFERENT one. Everything scoped to the old church must go with
     // it, or the roster effect republishes church A's name/care/media keys as church B's. `location.reload()`
     // used to do this by accident; nothing did it on purpose. See _resetChurchScopedState.
@@ -8366,11 +8372,7 @@ window.Steward = {
     m = m.replace(/^trinityone-church:/i, '').trim();
     // validates; throws on a bad phrase. Does NOT persist — the seed is memory-only until the forced-PIN
     // modal encrypts it (see restoreKey). Callers must NOT reload, or the restored key is lost.
-    const restored = window.Steward.restoreKey(m);
-    // A RESTORED KEY IS A CHURCH, NOT A DISPOSABLE HELPER KEY (audit of 15dc0960, NIT 3): a helper mark left on this device
-    // for the same key — words taken from a helper key and made a church elsewhere — must not let a removal notice discard it.
-    try { if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub); } catch (e) {}
-    return restored;
+    return window.Steward.restoreKey(m);   // restoreKey clears any helper mark for the key it loads (see there)
   },
   // ---- "Become a steward" handshake: a would-be steward shows this code to a church owner, who scans/pastes
   // it under Delegated stewards to add them. Unlike the church handoff this carries ONLY the public npub of

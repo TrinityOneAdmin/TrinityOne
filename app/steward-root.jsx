@@ -814,10 +814,12 @@ window.StewardAwaitingApproval = StewardAwaitingApproval;
 // 'your church' — it should tell the user they were removed and lead them back to the start a church screen").
 // StewardRoot shows this in place of the empty console only when Steward.removedNotices() holds a removal — written by
 // the engine after a SIGNED removal was read, never from a slow or failed read (subscribeStewardedChurches, noteGone) —
-// AND Steward.removedLeavesNothing() says this console's own key is the bare helper key with no other church, request or
-// network behind it. Continue clears the notice, and discards that key only when this device minted it as a bare helper
-// key (Steward.removedDiscardsKey, re-checked by acknowledgeRemoval); with no key StewardRoot shows the start screen. A key
-// without that mark is kept. A console with anything else left gets the dismissible banner, whose Dismiss never deletes.
+// AND Steward.removedLeavesNothing() says this console's own key is blank (never named or registered here) with no other
+// church, no LATEST request still waiting (PENDING — that console gets the banner over its waiting screen) and no network
+// key behind it. Continue clears the notice, and discards that key only when Steward.removedDiscardsKey() agrees (re-checked
+// by acknowledgeRemoval): this device minted it as a bare helper key AND no older request to any church is on its books.
+// With no key StewardRoot shows the start screen; any other key is kept. A console with anything else left gets the
+// dismissible banner, whose Dismiss never deletes.
 function removedNames(notes) {
   const names = (notes || []).map(n => (n && n.name) || '').filter(Boolean);
   return names.length ? names.join(' and ') : '';

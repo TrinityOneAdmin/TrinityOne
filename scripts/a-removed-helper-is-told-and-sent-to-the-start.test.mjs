@@ -23,7 +23,7 @@
 // (3) The owner's console never shows the notice.
 //
 // ⚠ NOT A CODE FAILURE: chromium here is a snap (see CLAUDE.md, "Browser tests leak 171MB"); run-tests sweeps it.
-import { test, before, after } from 'node:test';
+import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -177,6 +177,10 @@ before(async () => {
 });
 after(() => { try { THREE && THREE.close(); } catch {} try { ONE && ONE.close(); } catch {} try { TWO && TWO.close(); } catch {} try { OWNER && OWNER.close(); } catch {} H.stopAll(); });
 const SKIP = !CHROME ? 'no chromium' : false;
+// THE OWNER'S CONSOLE GOES BACK TO A KNOWN PAGE AFTER EVERY TEST, pass or fail (audit of 29a23952, NIT 2) — this is the
+// framework's `finally`. A test that failed mid-way used to leave it on the Helpers page, and every removal after it then
+// failed to find its Revoke control: one failed setup took out every later test.
+afterEach(async () => { if (!OWNER) return; try { await OWNER.press(/^Overview$/, 'Overview'); await sleep(600); } catch (e) {} });
 
 test('staging: three helpers ask through the welcome screen and the owner approves them', { skip: SKIP, timeout: 480000 }, async () => {
   ONE = await openConsole(OWNER.relay, 'one');
@@ -323,6 +327,9 @@ test('a removed helper waiting on another church gets the banner, and Dismiss ne
   await THREE.waitFor(`!!document.querySelector('[data-stew-removed-banner]')`, 60000, 'Tess\'s removal banner');
   assert.equal(await THREE.ev(`!!document.querySelector('[role="alertdialog"]')`), false, 'the full "nothing left" screen, though she is still waiting on another church');
   assert.ok((await THREE.text()).includes('You’ve been removed from ' + CHURCH_NAME), 'the banner does not name the church');
+  // …OVER HER WAITING SCREEN (audit of 29a23952, NIT 3): the latest request keeps the screen that says she is waiting
+  assert.ok(/Waiting for .* to approve you/.test(await THREE.ev(`document.body.innerText`)), 'the banner is not over the waiting screen: ' + String(await THREE.text()).slice(0, 400));
+  assert.equal(await THREE.ev(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Settings')`), false, 'the console dashboard is showing instead of the waiting screen');
   await THREE.ev(`(() => { localStorage.removeItem('trinityone.steward.pending-church'); return 1; })()`);
   assert.equal(await THREE.ev(`window.Steward.removedDiscardsKey()`), true, 'staging: the console should now be one whose key Continue WOULD discard');
   const r = await THREE.ev(`(() => { const b=[...document.querySelectorAll('[data-stew-removed-banner] button')].find(x=>/^Dismiss$/.test((x.textContent||'').trim())); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
@@ -347,4 +354,26 @@ test('an old request to another church still shows the full notice, but Continue
   await sleep(2500);
   assert.equal(await THREE.ev(`!!window.Steward.hasKey`), true, 'THE HAZARD: Continue discarded a key with a request still on its books');
   assert.ok(await THREE.ev(`!!localStorage.getItem('trinityone.steward.church-key.enc')`), 'the stored key was deleted');
+});
+
+// AUDIT OF 29a23952, NIT 1: the mark is cleared in restoreKey, so EVERY restore path clears it — not only the welcome
+// screen's (adoptChurch). Driven through Settings → Church key → Restore from a recovery phrase, which calls restoreKey directly.
+test('restoring from Settings → Church key also clears a helper mark for the restored key', { skip: SKIP, timeout: 120000 }, async () => {
+  const { generateSeedWords, privateKeyFromSeedWords } = await import('nostr-tools/nip06');
+  const { getPublicKey } = await import('nostr-tools');
+  const words = generateSeedWords(), pk = getPublicKey(privateKeyFromSeedWords(words));
+  await THREE.ev(`(() => { localStorage.setItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)}, '1'); window.confirm = () => true; return 1; })()`);
+  await THREE.press(/^Settings$/, 'Settings');
+  const ROW = `[...document.querySelectorAll('button')].some(x=>/^Church key\\s*Recovery phrase/.test((x.textContent||'').trim()))`;
+  if (!(await THREE.ev(ROW))) await THREE.ev(`(() => { const b=[...document.querySelectorAll('button')].find(x=>/^Master key/i.test((x.textContent||'').trim())); if(b) b.click(); return 1; })()`);
+  await THREE.waitFor(ROW, 30000, 'the Church key settings row');
+  await THREE.press(/^Church key\s*Recovery phrase/, 'the Church key row');
+  await THREE.waitFor(`[...document.querySelectorAll('button')].some(x=>/Restore from a recovery phrase/.test(x.textContent||''))`, 30000, 'Restore from a recovery phrase');
+  await THREE.press(/Restore from a recovery phrase/, 'Restore from a recovery phrase');
+  await THREE.waitFor(`[...document.querySelectorAll('textarea')].some(t => (t.placeholder||'').startsWith('word one'))`, 10000, 'the phrase box');
+  await THREE.ev(`(() => { const t=[...document.querySelectorAll('textarea')].find(t => (t.placeholder||'').startsWith('word one')); const set=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; set.call(t, ${JSON.stringify(words)}); t.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
+  await sleep(300);
+  await THREE.press(/^Restore church$/, 'Restore church');
+  await THREE.waitFor(`window.Steward.churchPub === ${JSON.stringify(pk)}`, 30000, 'the Settings restore loading the key from those words');
+  assert.equal(await THREE.ev(`localStorage.getItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)})`), null, 'THE HAZARD: a church restored from Settings still carries a helper mark');
 });

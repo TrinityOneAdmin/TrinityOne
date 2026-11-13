@@ -20967,6 +20967,10 @@ zoo`.split("\n");
       if (mnemonicOverride) {
         lsSet(KEY_LS, mnemonicOverride);
         setKey(mnemonicOverride);
+        try {
+          if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub);
+        } catch (e) {
+        }
         _setNeedsPin(true);
         window.Steward.locked = false;
         return true;
@@ -21531,6 +21535,10 @@ zoo`.split("\n");
       if (m.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
       if (!validateMnemonic(m, wordlist)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase \u2014 check the spelling of each word.");
       setKey(m);
+      try {
+        if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub);
+      } catch (e) {
+      }
       _resetChurchScopedState();
       _stay.clear();
       _setNeedsPin(true);
@@ -21555,12 +21563,7 @@ zoo`.split("\n");
         }
       }
       m = m.replace(/^trinityone-church:/i, "").trim();
-      const restored = window.Steward.restoreKey(m);
-      try {
-        if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub);
-      } catch (e) {
-      }
-      return restored;
+      return window.Steward.restoreKey(m);
     },
     // ---- "Become a steward" handshake: a would-be steward shows this code to a church owner, who scans/pastes
     // it under Delegated stewards to add them. Unlike the church handoff this carries ONLY the public npub of
