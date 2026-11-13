@@ -994,12 +994,15 @@ function InstalledBrowser({ ctx, category, force }) {
   // event clears it — chosen over a timer because a member may legitimately spend minutes picking a contact, and
   // a timer short enough to help would re-enable Share while the sheet is still up. If the share does settle
   // after this, its own `finally` just clears an already-clear state.
+  // ONLY ONCE THE SHARE SHEET WAS ASKED FOR (`opened`, set by shareOneFile's onOpen): a resume while the bytes are
+  // still being read or written is not the sheet going away, and clearing then would allow a second tap mid-prep.
+  const opened = React.useRef(null);
   React.useEffect(() => {
     let h = null, gone = false;
     try {
       const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
       if (AppP && AppP.addListener) {
-        Promise.resolve(AppP.addListener('appStateChange', (st) => { if (st && st.isActive) setSharing(null); }))
+        Promise.resolve(AppP.addListener('appStateChange', (st) => { if (st && st.isActive && opened.current) { opened.current = null; setSharing(null); } }))
           .then(x => { if (gone) { try { x && x.remove && x.remove(); } catch (e) {} } else h = x; }).catch(() => {});
       }
     } catch (e) {}
@@ -1008,14 +1011,15 @@ function InstalledBrowser({ ctx, category, force }) {
   const share = async (r) => {
     if (sharing) return;
     setSharing(r.url);
+    opened.current = null;
     try {
       let ex = null;
       try { ex = await window.Bible.exportModule(r.url); } catch (e) { ex = null; }
       if (!ex || !ex.bytes || !ex.bytes.length) { ctx.toast(`Couldn't share ${r.name} — it isn't saved on this phone`); return; }
       await window.shareOneFile({ bytes: ex.bytes, filename: ex.filename,
         mime: /\.zip$/i.test(ex.filename) ? 'application/zip' : 'application/octet-stream',
-        title: r.name, dialogTitle: 'Share ' + r.name }, ctx);
-    } finally { setSharing(null); }
+        title: r.name, dialogTitle: 'Share ' + r.name, onOpen: () => { opened.current = r.url; } }, ctx);
+    } finally { opened.current = null; setSharing(null); }
   };
 
   if (!rows.length) return (

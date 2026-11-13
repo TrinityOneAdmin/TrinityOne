@@ -13,7 +13,9 @@
 //
 // Point of use (rule 1), nothing text-matched in app/*.jsx (rule 3): the REAL ProfileSheet, ShareAppSheet,
 // shareTrinityOneApp and InstalledBrowser are compiled and drawn through scripts/render-jsx-screen.mjs with
-// Capacitor.getPlatform() stubbed to 'ios', 'android' and 'web'. NOT a device (rule 6).
+// Capacitor.getPlatform() stubbed to 'ios', 'android' and 'web', and — for iOS in a browser, where Capacitor says
+// 'web' — navigator stubbed as iPhone Safari, as an iPad that reports itself as a Mac, and as a real Mac. NOT a
+// device (rule 6); the user-agent strings are representative, not captured from these devices.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
@@ -41,9 +43,18 @@ function capacitor(platform) {
   return { Capacitor, shares, writes, fetches, fetch };
 }
 
+// navigator, as each browser presents itself
+const NAV = {
+  none: { userAgent: '', platform: '', maxTouchPoints: 0 },
+  iphoneSafari: { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1', platform: 'iPhone', maxTouchPoints: 5 },
+  ipadAsMac: { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15', platform: 'MacIntel', maxTouchPoints: 5 },
+  macDesktop: { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15', platform: 'MacIntel', maxTouchPoints: 0 },
+  android: { userAgent: 'Mozilla/5.0 (Linux; Android 12; CPH2477) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 5 },
+};
+
 const rowText = (tree, label) => find(tree, n => n.props && typeof n.props.onClick === 'function' && texts(n).join(' ').includes(label));
 
-function profile(platform) {
+function profile(platform, nav = NAV.none) {
   const { React, draw } = miniReact();
   const cap = capacitor(platform);
   const opened = [];
@@ -55,7 +66,7 @@ function profile(platform) {
       addEventListener() {}, removeEventListener() {}, dispatchEvent() {}, localStorage: ls, innerWidth: 390,
       matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) },
     document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
-    navigator: { userAgent: '', clipboard: { writeText: async () => {} } },
+    navigator: { ...nav, clipboard: { writeText: async () => {} } },
     localStorage: ls,
     setTimeout, clearTimeout, setInterval: () => 0, clearInterval: () => {}, console, fetch: async () => ({ ok: false }),
     Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), UserAvatar: Stub('UserAvatar'), AvatarPicker: Stub('AvatarPicker'),
@@ -66,6 +77,8 @@ function profile(platform) {
     safeCssColor: (c) => c, lsGet: (k, d) => d, lsSet: () => {},
     WALLET_ENABLED: false,
   };
+  // the real share-app.jsx sets window.shareAppOnIos, which the profile row asks — as in the app
+  loadScreen('app/share-app.jsx', ['shareAppOnIos'], { React, window: globals.window, navigator: nav, btoa });
   const { ProfileSheet } = loadScreen('app/identity.jsx', ['ProfileSheet'], globals);
   const ctx = {
     church: { id: 'c1', name: "St Chad's", npub: 'npub1' + 'c'.repeat(58) }, safeguard: {}, toast() {}, openHelp() {},
@@ -77,7 +90,7 @@ function profile(platform) {
   return { tree, opened };
 }
 
-function shareScreens(platform) {
+function shareScreens(platform, nav = NAV.none) {
   const { React, draw } = miniReact();
   const cap = capacitor(platform);
   const toasts = [];
@@ -91,7 +104,7 @@ function shareScreens(platform) {
     TrinityData: {}, addEventListener() {}, removeEventListener() {},
   };
   const Icon = Stub('Icon');
-  const shared = { React, window: win, Icon, btoa, fetch: cap.fetch, File, Blob, setTimeout: () => 0,
+  const shared = { React, window: win, Icon, btoa, fetch: cap.fetch, File, Blob, setTimeout: () => 0, navigator: nav,
     document: { createElement: () => ({ click() {}, remove() {} }), body: { appendChild() {} }, addEventListener() {}, removeEventListener() {} } };
   const S = loadScreen('app/share-app.jsx', ['ShareAppSheet', 'shareTrinityOneApp'], {
     ...shared, BottomSheet: ({ open, children }) => (open ? children : null), IconBtn: Stub('IconBtn') });
@@ -149,3 +162,30 @@ test('iPhone: Library → Installed still offers Share on a Bible, and it shares
   assert.match(s.cap.shares[0].files[0], /\/eng-kjv\.zip$/);
   assert.deepEqual(s.cap.fetches, [], 'sharing a Bible fetched the APK');
 });
+
+// ── iOS in a BROWSER (owner: off iPhone means off iPhone Safari and the Home-Screen web app too) ───────────────
+for (const [label, nav] of [['iPhone Safari', NAV.iphoneSafari], ['an iPad reporting itself as a Mac', NAV.ipadAsMac]]) {
+  test(`${label} (Capacitor says 'web'): no "Share the app" row, no sheet, no APK — and a Bible is still shared`, async () => {
+    const p = profile('web', nav);
+    assert.ok(texts(p.tree).join(' ').includes('Notifications'), 're-anchor: the profile did not render its settings');
+    assert.equal(rowText(p.tree, 'Share the app').length, 0, `${label} is offered "Share the app", which downloads the Android APK`);
+
+    const s = shareScreens('web', nav);
+    assert.equal(find(s.sheet(), n => n.type === 'button').length, 0, `${label}: the Share-the-app sheet still renders`);
+    const r = await s.S.shareTrinityOneApp(s.ctx, () => {});
+    assert.equal(r.ok, false, `${label}: shareTrinityOneApp did not refuse`);
+    assert.equal(s.toasts.length, 1, `${label}: the refusal said nothing`);
+
+    const btn = find(s.installed(), n => n.type === 'button' && texts(n).join(' ').includes('Share'));
+    assert.equal(btn.length, 1, `${label}: the Bible row lost its Share button`);
+  });
+}
+
+for (const [label, nav] of [['a Mac desktop browser', NAV.macDesktop], ['Android Chrome', NAV.android]]) {
+  test(`${label} (control): the "Share the app" row is there`, () => {
+    const p = profile('web', nav);
+    assert.ok(rowText(p.tree, 'Share the app').length >= 1, `${label} lost the "Share the app" row`);
+    const s = shareScreens('web', nav);
+    assert.ok(texts(s.sheet()).join(' ').includes('Share the app'), `${label}: the Share-the-app sheet renders nothing`);
+  });
+}

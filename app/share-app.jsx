@@ -29,20 +29,25 @@ function shareAppToBase64(u8) {
 }
 
 // SHARE EXACTLY ONE FILE. Returns 'shared' | 'dismissed' | 'failed'.
-//   opts: { bytes | uri, filename, mime, title, dialogTitle }   — `mime` is used on web only (see the header)
+//   opts: { bytes | uri, filename, mime, title, dialogTitle, onOpen }   — `mime` is used on web only (see the
+//   header); `onOpen()` is called just before the share sheet itself is asked for (after any file write)
 // Native: `bytes` are written to CACHE (the dir the app's FileProvider exposes) to get a uri; then ONE file goes
 // to the share sheet — never text or url alongside it (passing text makes Quick Share / Bluetooth send only the
 // text). Backing out of the sheet is not a failure: the plugin rejects "Share canceled" and that is 'dismissed',
 // with no toast. Anything else that fails says "Couldn't share {name}" — the plugin's own text goes to the log,
 // not in front of the member.
 // A copy this function WROTE (from `bytes`; never a `uri` it was handed, so never the APK's cache-once copy) is
-// deleted once the share settles — at once if it was dismissed or failed, since nothing is reading it; and if it
-// was shared, at the start of the NEXT module share, not straight away: Quick Share and Bluetooth hand the file
-// to a background transfer that reads it AFTER the share sheet has returned, so deleting it the moment the share
-// resolves could cut a transfer short. At most one shared copy is therefore left in CACHE (and the OS may clear
-// CACHE itself); the pointer is in memory, so a restart forgets it.
+// deleted at once ONLY if the share FAILED — then nothing was handed a uri. A 'shared' OR a 'dismissed' copy is
+// kept until the start of the NEXT module share: Quick Share and Bluetooth hand the file to a background transfer
+// that reads it AFTER the share sheet has returned, and "Share canceled" does not prove nothing is reading it —
+// the Android chooser reports it for a pick that opens an overlay, such as the Quick Share sheet. At most one such
+// copy is therefore left in CACHE (and the OS may clear CACHE itself); the pointer is in memory, so a restart
+// forgets it.
+// ACCEPTED, NOT FIXED (audit of 9e6c3b5c, LOW 2): sharing module B deletes A's copy, so if a slow Bluetooth
+// transfer of A is still running when B is shared, A's transfer can be cut short. Keeping every copy instead
+// would pile them up on a low-storage phone; the member can share A again.
 // Web / PWA: navigator.share with one File where the browser can, otherwise a download.
-let shareAppLastCopy = null;   // CACHE path of the last module copy that was SHARED (deleted at the next one)
+let shareAppLastCopy = null;   // CACHE path of the last module copy shared or dismissed (deleted at the next one)
 async function shareOneFile(opts, ctx) {
   const o = opts || {};
   const Cap = window.Capacitor, P = Cap && Cap.Plugins;
@@ -55,7 +60,7 @@ async function shareOneFile(opts, ctx) {
     try {
       const file = new File([o.bytes], o.filename, { type: o.mime || 'application/octet-stream' });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: name }); return 'shared'; }
+        try { try { o.onOpen && o.onOpen(); } catch (e) {} await navigator.share({ files: [file], title: name }); return 'shared'; }
         catch (e) { if (e && e.name === 'AbortError') return 'dismissed'; }
       }
     } catch (e) {}
@@ -85,6 +90,7 @@ async function shareOneFile(opts, ctx) {
   }
   let result;
   try {
+    try { o.onOpen && o.onOpen(); } catch (e) {}
     await P.Share.share({ title: name, files: [uri], dialogTitle: o.dialogTitle || ('Share ' + name) });
     result = 'shared';
   } catch (e) {
@@ -96,7 +102,7 @@ async function shareOneFile(opts, ctx) {
       result = 'failed';
     }
   }
-  if (wrote) { if (result === 'shared') shareAppLastCopy = wrote; else drop(wrote); }
+  if (wrote) { if (result === 'failed') drop(wrote); else shareAppLastCopy = wrote; }
   return result;
 }
 window.shareOneFile = shareOneFile;
@@ -121,10 +127,24 @@ window.isShareableModule = isShareableModule;
 
 // AN iPHONE CANNOT INSTALL WHAT THIS SHARES. The file is the Android APK and iOS has no way to install an app
 // from a file, so on iOS the app-share is not offered at all (identity.jsx hides the row, ShareAppSheet renders
-// nothing) and this refuses as a last guard. isNativePlatform() is true on iOS AND Android, so ask by name.
+// nothing) and this refuses as a last guard. Owner: that includes an iPhone or iPad in Safari or on the Home
+// Screen, where Capacitor says 'web'. So:
+//   · the iOS app: getPlatform() === 'ios' (isNativePlatform() is true on iOS AND Android, so ask by name);
+//   · iOS web: "iPhone" / "iPad" / "iPod" in the user agent or navigator.platform;
+//   · iPadOS 13+, which by default reports itself as a Mac ("Macintosh" UA, platform "MacIntel"): a Mac with a
+//     touch screen of more than one point. A real Mac reports maxTouchPoints 0, so a Mac desktop still sees it.
 function shareAppOnIos() {
-  try { const Cap = window.Capacitor; return !!(Cap && Cap.getPlatform && Cap.getPlatform() === 'ios'); } catch (e) { return false; }
+  try {
+    const Cap = window.Capacitor;
+    if (Cap && Cap.getPlatform && Cap.getPlatform() === 'ios') return true;
+    const nav = (typeof navigator !== 'undefined' && navigator) || window.navigator || {};
+    const ua = String(nav.userAgent || ''), plat = String(nav.platform || '');
+    if (/iPhone|iPad|iPod/.test(ua) || /^(iPhone|iPad|iPod)/.test(plat)) return true;
+    if (plat === 'MacIntel' && Number(nav.maxTouchPoints || 0) > 1) return true;
+    return false;
+  } catch (e) { return false; }
 }
+window.shareAppOnIos = shareAppOnIos;
 
 // Share the APK (cache-once), alone, via the OS share sheet.
 async function shareTrinityOneApp(ctx, onStatus) {

@@ -1756,9 +1756,9 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
 
         {/* share the app — pass it on hand to hand (Quick Share / Bluetooth), no internet needed.
             NOT ON AN iPHONE (owner, 2026-11-13): what it shares is the ANDROID APK, and iOS cannot install an app
-            from a file. isNativePlatform() is true on both, so the platform is asked by name. A Bible is still
-            shared from Library → Installed on every platform. */}
-        {!(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === 'ios') ? (
+            from a file — in the app or in Safari. share-app.jsx's shareAppOnIos decides (see there). A Bible is
+            still shared from Library → Installed on every platform. */}
+        {!(typeof window.shareAppOnIos === 'function' && window.shareAppOnIos()) ? (
           <React.Fragment>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SHARE</div>
             <Group>

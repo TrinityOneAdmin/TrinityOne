@@ -371,12 +371,17 @@ test('L2 — a share that really failed says "Couldn’t share {name}" and nothi
   assert.deepEqual(b.toasts, ['Couldn’t share TrinityOne'], `the member was shown ${JSON.stringify(b.toasts)}`);
 });
 
-test('L3 — a module copy written for a share is deleted once it settles; a shared one at the next share; the APK never', async () => {
-  // dismissed → deleted at once (nothing is reading it)
+test('L3 — a module copy is deleted at once only if the share FAILED; a shared or dismissed one at the next share; the APK never', async () => {
+  // dismissed → KEPT for now: the Android chooser reports "Share canceled" for a pick that opens an overlay (the
+  // Quick Share sheet), which may still be reading the file — then deleted when the next module is shared
   const c1 = fakeCapacitor({ shareRejects: 'Share canceled' });
   const a = app({ cap: c1 });
   await a.shareBtnOf(a.installed(), 'King James Version')[0].props.onClick();
-  assert.deepEqual(c1.deletes, [['eng-kjv.zip', 'CACHE']], 'a dismissed module share left its copy in CACHE');
+  await ticks();
+  assert.deepEqual(c1.deletes, [], 'a "dismissed" copy was deleted while Quick Share may still be reading it');
+  await a.shareBtnOf(a.installed(), 'Geneva Study Notes')[0].props.onClick();
+  await ticks();
+  assert.deepEqual(c1.deletes, [['eng-kjv.zip', 'CACHE']], 'the dismissed copy was not cleared by the next share');
 
   // failed → deleted at once
   const c2 = fakeCapacitor({ shareRejects: 'No Activity found to handle Intent' });
@@ -435,4 +440,23 @@ test('N6 — "Choose a Bible" is offered only when a shareable BIBLE is installe
   assert.equal(b.labelled(b.sheet(), 'Choose a Bible').length, 0, 'the pointer leads to a Bibles list with nothing to share');
   const c = app({ cap: fakeCapacitor(), records: [OFFERED[0], ...HELD_BACK] });
   assert.equal(c.labelled(c.sheet(), 'Choose a Bible').length, 1, 'a phone with a shareable Bible is not offered the pointer');
+});
+
+test('L4b — coming back to the app while the file is still being PREPARED does not unlock the rows', async () => {
+  // The share sheet has not been asked for yet (the export is still running), so a resume is not the sheet going
+  // away; clearing then would let a second tap start a second share mid-preparation.
+  const cap = fakeCapacitor();
+  let release = null;
+  const a = app({ cap, exportOverride: { 'modules/eng-kjv.zip': () => new Promise(r => { release = r; }) } });
+  a.installed();
+  const done = a.shareBtnOf(a.installed(), 'King James Version')[0].props.onClick();
+  await ticks();
+  assert.ok(release, 're-anchor: the export was never asked for');
+  cap.resume();
+  const tree = a.installed();
+  assert.equal(a.labelled(a.rowFor(tree, 'King James Version'), 'Preparing').length, 1, 'a resume mid-preparation cleared "Preparing…"');
+  assert.equal(a.shareBtnOf(tree, 'Geneva Study Notes')[0].props.disabled, true, 'a resume mid-preparation re-enabled the other rows');
+  release({ bytes: file('modules/eng-kjv.zip'), filename: 'eng-kjv.zip' });
+  await done;
+  assert.equal(cap.shares.length, 1, 'the share did not go ahead once prepared');
 });
