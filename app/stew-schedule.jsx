@@ -38,6 +38,24 @@ const SCH_BASE_STORE = {};
 const schBases = (church) => (SCH_BASE_STORE[church] = SCH_BASE_STORE[church] || {});
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+// HAS THIS SERVICE PASSED — FOR THE ROTA STRIP'S LOOK ONLY (owner decision 2026-11-13). A service is past two hours
+// after it STARTS, compared as real timestamps, so a 23:00 service is past at 01:00 the next day, not at midnight. A
+// service with no time, or one that cannot be read ("7pm" from an old document), is past from the local midnight that
+// ends its day. "7:05" is a valid time. No date: never guessed at (not past). A clock that cannot be read: not past.
+// ⚠ THIS IS NOT THE ENGINE'S RULE AND MUST NOT BECOME IT. src/steward.src.js _svcHasHappened (its one caller is
+// removeTeam) counts a service as happened from its start MINUTE, so a team removed mid-service keeps that service's
+// rota as a record and nobody serving is told they are not needed. The two differ on purpose for every timed service
+// between start and start + 2h; scripts/past-rota-services-fade-in-place.test.mjs pins both.
+function schSvcPast(s, now) {
+  if (!s || !now || typeof now.getTime !== 'function' || isNaN(now.getTime())) return false;
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s.date || ''));
+  if (!d) return false;
+  const t = /^(\d{1,2}):(\d{2})$/.exec(String(s.time || '').trim());
+  const at = (t && +t[1] < 24 && +t[2] < 60)
+    ? new Date(+d[1], +d[2] - 1, +d[3], +t[1], +t[2]).getTime() + 2 * 3600e3
+    : new Date(+d[1], +d[2] - 1, +d[3] + 1).getTime();
+  return now.getTime() >= at;
+}
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
 function schAddDays(iso, n) { const d = schDate(iso); d.setDate(d.getDate() + n); return schKey(d); }
 function schAddMonths(iso, n) { const d = schDate(iso); d.setMonth(d.getMonth() + n); return schKey(d); }
@@ -887,10 +905,50 @@ function DashRota({ onNewTeam }) {
   };
   const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
   const sortedSvcs = services.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const todayStr = schKey(new Date());
-  const defaultSvc = (sortedSvcs.find(s => (s.date || '') >= todayStr) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
+  // A CLOCK THAT MOVES WHILE THE PAGE IS OPEN: a chip fades within a minute of its service passing, and at once when
+  // a phone is woken or the window comes back. Started ONLY where window.setInterval and window.addEventListener
+  // exist — the Node harnesses that render this board have neither, and a real interval there would keep the
+  // test process alive for ever.
+  const [, setNowTick] = useSch(0);
+  useSchE(() => {
+    if (typeof window.setInterval !== 'function' || typeof window.addEventListener !== 'function') return undefined;
+    const bump = () => setNowTick(n => n + 1);
+    const timer = window.setInterval(bump, 60000);
+    window.addEventListener('focus', bump);
+    window.addEventListener('visibilitychange', bump);
+    return () => {
+      try { if (typeof window.clearInterval === 'function') window.clearInterval(timer); } catch (e) {}
+      try { if (typeof window.removeEventListener === 'function') { window.removeEventListener('focus', bump); window.removeEventListener('visibilitychange', bump); } } catch (e) {}
+    };
+  }, []);
+  const nowD = new Date();
+  // WHICH SERVICE THE BOARD OPENS ON: the first one not past, else the last. Judged against the moment services
+  // FIRST arrived, held in a ref, and never against the ticking clock: with nothing tapped, every per-service action
+  // (Assign, Copy last week, Auto-fill, Publish, the conflict checks) acts on this service, so a minute tick that
+  // moved it at start + 2h would land a steward's next pick on the wrong service (audit of the plan, doAssign).
+  // Services that arrive later are judged against the same moment.
+  const openAt = useSchR(0);
+  if (!openAt.current && sortedSvcs.length) openAt.current = nowD.getTime();
+  const openD = openAt.current ? new Date(openAt.current) : nowD;
+  const defaultSvc = (sortedSvcs.find(s => !schSvcPast(s, openD)) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
 
   const [sel, setSel] = useSch(null);
+  // OPEN SCROLLED TO THAT SERVICE. Once months of past services sit on the strip, a phone otherwise opens showing only
+  // past chips. Fires ONCE per visit to the page, when the chip first exists (services and teams usually arrive after
+  // the first paint), and never once the steward has picked a chip — so a later re-render can't yank the strip while
+  // they scroll it. Sets the STRIP's own scrollLeft, chip at the start: scrollIntoView would also scroll the page and
+  // every ancestor.
+  const stripRef = useSchR(null);
+  const stripScrolled = useSchR(false);
+  useSchE(() => {
+    if (stripScrolled.current || sel || !defaultSvc) return;
+    const strip = stripRef.current;
+    if (!strip || !strip.children || typeof strip.getBoundingClientRect !== 'function') return;
+    const chip = Array.prototype.find.call(strip.children, c => c.getAttribute && c.getAttribute('data-svc-id') === String(defaultSvc));
+    if (!chip) return;
+    stripScrolled.current = true;
+    strip.scrollLeft = Math.max(0, strip.scrollLeft + chip.getBoundingClientRect().left - strip.getBoundingClientRect().left);
+  }, [defaultSvc, sortedSvcs.length, teams.length > 0, sel]);
   const draftChurch = schDraftChurch();
   const [draft, setDraftState] = useSch(() => ({ ...(SCH_DRAFT_STORE[draftChurch] || {}) }));   // { svcId: assignMap } — local unsaved edits
   const setDraft = (v) => setDraftState(d => { const n = typeof v === 'function' ? v(d) : v; SCH_DRAFT_STORE[draftChurch] = n; return n; });
@@ -1251,14 +1309,20 @@ function DashRota({ onNewTeam }) {
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* service strip */}
-      <div className="no-scrollbar" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 14, flexShrink: 0 }}>
+      <div ref={stripRef} className="no-scrollbar" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 14, flexShrink: 0 }}>
         {sortedSvcs.map(s => {
           const on = s.id === svcId; const p = schParts(s.date);
+          // A PAST SERVICE STAYS WHERE IT IS, FADED, MARKED "Past", AND STILL SELECTABLE. Less faded while selected,
+          // so the selected border stays easy to see.
+          const past = schSvcPast(s, nowD);
           return (
-            <button key={s.id} onClick={() => setSel(s.id)} title="Show this service’s rota" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
+            <button key={s.id} data-svc-id={s.id} aria-pressed={on} onClick={() => setSel(s.id)} title={past ? 'This service has passed — show its rota' : 'Show this service’s rota'} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
               border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: past ? (on ? 0.75 : 0.5) : 1 }}>
               <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay-ink)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
               <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.mon} · {s.time}</div></div>
+              </div>
+              {past ? <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Past</span> : null}
             </button>
           );
         })}
@@ -1269,6 +1333,8 @@ function DashRota({ onNewTeam }) {
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)', fontSize: 14 }}>Add a service to start building a rota.</div>
       ) : (
         <React.Fragment>
+          {/* ONE LINE, and the team cards are not restyled: a past service can still be edited and published. */}
+          {schSvcPast(svc, nowD) ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 8px' }}>This service has passed</div> : null}
           {/* coverage bar + actions */}
           <div style={{ display: 'flex', flexDirection: narrow ? 'column' : 'row', alignItems: narrow ? 'stretch' : 'center', gap: narrow ? 12 : 16, padding: '14px 16px', borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: narrow ? 'none' : 1 }}>
