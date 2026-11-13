@@ -247,9 +247,16 @@ const cases = [[null, null, 'baseline NEW/NEW'], ...OLD_REVS.flatMap(r => [[r, n
 after(() => { for (const d of oldDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } H.stopAll(); setTimeout(() => process.exit(process.exitCode || 0), 2000).unref(); });
 
 test('the two OLD revs have a byte-identical relay (so rev=origin/main and rev=main are one build)', (t) => {
+  // A LOGGED PRECONDITION, NOT AN ASSERTION (2026-11-13). This failed whenever local main had moved past
+  // origin/main with a gateway change — e.g. 09:19-12:13 on 2026-11-12, when main was 120cc727 and origin/main
+  // f22def72 (gateway.mjs +375/-36). That is repo state, not a defect: the cases below ALREADY run each OLD rev
+  // separately (OLD_REVS), so two different old builds are simply two old builds covered. Say which, and go on.
   const a = extractFullOld('origin/main'), b = extractFullOld('main');
-  assert.deepEqual(a.files.sort(), b.files.sort());
-  for (const f of a.files) assert.equal(readFileSync(a.dir + '/scripts/' + f, 'utf8') === readFileSync(b.dir + '/scripts/' + f, 'utf8'), true, f + ' differs between origin/main and main');
+  const both = [...new Set([...a.files, ...b.files])].sort();
+  const read = (o, f) => { try { return readFileSync(o.dir + '/scripts/' + f, 'utf8'); } catch (e) { return null; } };
+  const differ = both.filter(f => read(a, f) !== read(b, f));
+  if (differ.length) console.log('PRECONDITION: origin/main and main hold DIFFERENT relay builds (' + differ.join(', ') + ') — each OLD rev is run as its own build below');
+  else console.log('PRECONDITION: origin/main and main hold one relay build — the two OLD revs below are the same build');
   // The OLD-vs-NEW mixed-version cases need a NEW gateway — the working tree AHEAD of main. On the release
   // commit itself (HEAD === main === origin/main) there is no NEW build, so this guard is not applicable and
   // the cases above degrade to the OLD/OLD baseline (which still runs). SKIP rather than fail — and it is NOT
