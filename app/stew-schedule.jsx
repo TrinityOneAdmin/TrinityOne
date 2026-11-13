@@ -932,6 +932,13 @@ function DashRota({ onNewTeam }) {
   // written date '' before) became the opening service — a "NaN" chip that Assign, Auto-fill and Publish then acted
   // on (audit of 4c47c063, M1). With no dated service at all, the last one, as before.
   const openAt = useSchR(0);
+  // A CHURCH SWITCH STARTS THE CHOICE AGAIN (re-audit of 59cd37eb, F1). DashRota stays mounted when a steward of two
+  // churches switches identity, so the frozen moment, the pinned selection and the once-only scroll all belong to the
+  // church they were made for. Reset here, during the render that first sees the new church.
+  const churchNow = schDraftChurch();
+  const churchSeen = useSchR(churchNow);
+  const churchChanged = churchSeen.current !== churchNow;
+  if (churchChanged) { churchSeen.current = churchNow; openAt.current = 0; }
   if (!openAt.current && sortedSvcs.length) openAt.current = nowD.getTime();
   const openD = openAt.current ? new Date(openAt.current) : nowD;
   const datedSvcs = sortedSvcs.filter(s => /^\d{4}-\d{2}-\d{2}$/.test(String((s && s.date) || '')));
@@ -945,6 +952,7 @@ function DashRota({ onNewTeam }) {
   // every ancestor.
   const stripRef = useSchR(null);
   const stripScrolled = useSchR(false);
+  if (churchChanged) { stripScrolled.current = false; if (sel) setSel(null); }
   useSchE(() => {
     if (stripScrolled.current || sel || !defaultSvc) return;
     const strip = stripRef.current;
@@ -1017,7 +1025,9 @@ function DashRota({ onNewTeam }) {
   const staleMsg = 'Someone else published this rota after you started. Reload to see theirs, or keep yours, which replaces theirs.';
   const skipNote = (n) => n ? ' - ' + n + ' skipped, changed by someone else (open each, reload)' : '';
 
-  const svcId = sel || defaultSvc;
+  // A selection that is no longer in the list (another church's service after a switch, or a service that went away)
+  // falls back to the opening service, never to "Add a service to start building a rota." (re-audit of 59cd37eb, F1).
+  const svcId = (sel && sortedSvcs.some(s => s.id === sel)) ? sel : defaultSvc;
   const svc = sortedSvcs.find(s => s.id === svcId);
   const assign = (svcId && draft[svcId] !== undefined) ? draft[svcId] : (persisted(svcId) ? persisted(svcId).assign : {});
   const setAssign = (next) => setDraft(d => ({ ...d, [svcId]: next }));
@@ -1035,7 +1045,8 @@ function DashRota({ onNewTeam }) {
   // PIN THE SERVICE ON THE FIRST ACTION (audit of 4c47c063, M2; owner 2026-11-13). With nothing tapped, svcId is the
   // OPENING service, which is recomputed from the list on every render — so a service syncing in with an earlier date
   // moved the board, and a pick or a Publish then landed on a service the steward never chose. The first time they act
-  // on a service (open a slot, apply a pod, Copy last week, Auto-fill, Publish, confirm a swap, reload, run sheet),
+  // on a service (open a slot, open the Auto-fill menu or the pod menu, apply a pod, Copy last week, Auto-fill, Publish,
+  // confirm a swap, reload, run sheet),
   // that service becomes the explicit selection, and only a tap on another chip moves it.
   const pinSel = () => { if (!sel && svcId) setSel(svcId); };
   // THE PICKER WRITES TO THE SERVICE IT WAS OPENED FOR: slot.service is the service on screen when the slot was
@@ -1375,7 +1386,7 @@ function DashRota({ onNewTeam }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0, flexWrap: 'wrap', justifyContent: narrow ? 'flex-end' : 'initial' }}>
             <button onClick={copyLastWeek} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="copy" size={15} color="currentColor" /> Copy last week</button>
             <div style={{ position: 'relative' }}>
-              <button onClick={() => setFillMenu(v => !v)} title="Let the app suggest people to fill the empty roles" aria-expanded={!!fillMenu} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
+              <button onClick={() => { pinSel(); setFillMenu(v => !v); }} title="Let the app suggest people to fill the empty roles" aria-expanded={!!fillMenu} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
               {fillMenu ? (
                 <React.Fragment>
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
@@ -1513,7 +1524,7 @@ function DashRota({ onNewTeam }) {
                       <button onClick={() => TeamRemoval.ask(t)} disabled={trs.careTeamId === t.id} title={trs.careTeamId === t.id ? (trs.careWhy || '') : 'Delete team'} aria-label={trs.careTeamId === t.id ? 'Delete team ' + m.name + ' — ' + (trs.careWhy || '') : 'Delete team ' + m.name} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: trs.careTeamId === t.id ? 'default' : 'pointer', opacity: trs.careTeamId === t.id ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', flexShrink: 0 }}><Icon name="trash" size={14} color="currentColor" /></button>
                     </div>
                     {(r.pods && r.pods.length) ? (
-                      <select value="" onChange={e => {
+                      <select value="" onFocus={pinSel} onMouseDown={pinSel} onChange={e => {
                         const v = e.target.value; e.target.value = '';
                         if (v === '__rotate__') { if (window.confirm('Rotate ' + r.pods.length + ' pods across all upcoming services for ' + m.name + '?\n\nEach pod serves every ' + r.pods.length + ' weeks. This publishes them and asks everyone assigned.')) rotatePods(t); }
                         else { const pod = (r.pods || []).find(p => p.id === v); if (pod) applyPod(t, pod); }
