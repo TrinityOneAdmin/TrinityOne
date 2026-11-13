@@ -1768,12 +1768,6 @@ fn startup(env: &ApplyEnv) -> RunState {
             }, env.log);
         }
     }
-    if data_held_aside(env.data_dir) {
-        // Recovery could not put the originals back: start NOTHING (audit 55c3b306 N1, second route). The window
-        // shows "relay not reachable"; relay-launch.log and recovered.txt say why and where the files are.
-        applog(env.log, "launch: the church's original data is still held aside; the relay is NOT started. Get help: see relay-launch.log");
-        return RunState { code_dir: env.payload.to_path_buf(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
-    }
     let choice = launch_code_dir(env.payload, env.suite_dir, env.data_dir, env.node, env.log);
     let mut st = RunState {
         code_dir: choice.dir.clone(),
@@ -1792,8 +1786,11 @@ fn startup(env: &ApplyEnv) -> RunState {
         }
     }
     if data_held_aside(env.data_dir) {
-        // the launch-time apply rolled back but could not put the data back: its "stuck" record stands; start nothing
-        applog(env.log, "launch: the church's original data is held aside after a failed restore; the relay is NOT started");
+        // The church's original data is held aside — either this start's recovery could not put it back, or the
+        // launch-time apply's rollback could not (audit 55c3b306 N1, both routes). Start NOTHING, and do not
+        // overwrite the "stuck" record. The window shows "relay not reachable"; relay-launch.log and recovered.txt
+        // say why and where the files are.
+        applog(env.log, "launch: the church's original data is held aside after a failed restore; the relay is NOT started. Get help: see relay-launch.log");
         return st;
     }
     if st.alive.load(Ordering::SeqCst) {
