@@ -336,38 +336,54 @@ fn repo_root() -> PathBuf {
     crate_dir.join("..").join("..").join("..").canonicalize().unwrap()
 }
 
-// Start the baked-in payload (v1) via the REAL spawn_and_wait, so cur_code_dir/cur_alive are set exactly as in
-// production. Returns (cur_code_dir, cur_alive). Asserts v1 is actually serving.
-fn start_v1(host: &TestHost, fx: &Fixture, log: &Path) -> (PathBuf, Arc<AtomicBool>) {
-    let mut cur_code_dir = fx.payload.clone();
-    let mut cur_alive = Arc::new(AtomicBool::new(true));
-    let up = spawn_and_wait(
-        host,
-        &fx.payload,
-        &fx.payload,
-        &fx.data_dir,
-        log,
-        &mut cur_code_dir,
-        &mut cur_alive,
-    );
-    assert!(up, "v1 payload relay failed to come up");
-    assert!(wait_for_served("v1", Duration::from_secs(10)), "v1 did not serve /status");
-    (cur_code_dir, cur_alive)
+// The test clock: a fixed local time-of-day (minutes) on 2026-11-13, at the REAL current epoch. The fixtures'
+// marker is "00:00", so 30 (00:30) is inside the window and 840 (14:00) is not.
+const IN_WINDOW: u32 = 30;
+fn clock_at(min: u32) -> impl Fn() -> Option<LocalNow> {
+    move || Some(LocalNow { min, today: "2026-11-13".into(), yesterday: "2026-11-12".into(), epoch: now_epoch() })
 }
 
-fn run_apply(host: &TestHost, fx: &Fixture, log: &Path, cur: &mut (PathBuf, Arc<AtomicBool>)) {
-    let mut cooldown: Option<Instant> = None;
-    maybe_apply(
+fn env_for<'a>(host: &'a dyn RelayHost, fx: &'a Fixture, log: &'a Path, clock: &'a dyn Fn() -> Option<LocalNow>) -> ApplyEnv<'a> {
+    ApplyEnv {
         host,
-        &fx.suite_dir,
-        &fx.payload,
-        &fx.data_dir,
+        suite_dir: &fx.suite_dir,
+        payload: &fx.payload,
+        data_dir: &fx.data_dir,
         log,
-        Some(fx.node.as_path()),
-        &mut cur.0,
-        &mut cur.1,
-        &mut cooldown,
-    );
+        node: Some(fx.node.as_path()),
+        clock,
+    }
+}
+
+// Start the baked-in payload (v1) via the REAL spawn_and_wait, so the RunState is set exactly as in production.
+// Asserts v1 is actually serving.
+fn start_v1(host: &dyn RelayHost, fx: &Fixture, log: &Path) -> RunState {
+    let clock = clock_at(IN_WINDOW);
+    let env = env_for(host, fx, log, &clock);
+    let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
+    let up = spawn_and_wait(&env, &mut st, &fx.payload);
+    assert!(up, "v1 payload relay failed to come up");
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "v1 did not serve /status");
+    st
+}
+
+// One controller tick at local time `min`.
+fn tick_at(host: &dyn RelayHost, fx: &Fixture, log: &Path, st: &mut RunState, min: u32) {
+    let clock = clock_at(min);
+    let env = env_for(host, fx, log, &clock);
+    maybe_apply(&env, st);
+}
+
+// One controller tick inside the window.
+fn run_apply(host: &dyn RelayHost, fx: &Fixture, log: &Path, st: &mut RunState) {
+    tick_at(host, fx, log, st, IN_WINDOW);
+}
+
+// A Suite START at local time `min` — the REAL startup(): code choice, missed-window apply, first spawn, launch check.
+fn start_at(host: &dyn RelayHost, fx: &Fixture, log: &Path, min: u32) -> RunState {
+    let clock = clock_at(min);
+    let env = env_for(host, fx, log, &clock);
+    startup(&env)
 }
 
 fn read_state_field(suite_dir: &Path, key: &str) -> Option<String> {
@@ -406,6 +422,18 @@ fn end_to_end_apply_harness() {
 
     scenario_k_far_future_signed_date_refused_and_does_not_freeze();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (k)");
+
+    scenario_l_staged_at_14_waits_for_the_window();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (l)");
+
+    scenario_m_missed_window_applies_at_the_next_start();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (m)");
+
+    scenario_n_newer_suite_installed_retires_the_override();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (n)");
+
+    scenario_o_damaged_active_is_repaired_or_falls_back();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (o)");
 
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
@@ -598,6 +626,142 @@ fn scenario_k_far_future_signed_date_refused_and_does_not_freeze() {
     eprintln!("   (k) OK — far-future signed date refused; poisoned floor ignored; signed date recorded");
 }
 
+// ══ audit be258b42 HIGH 1 / HIGH 3 / MEDIUM 1 — WHEN an update applies, and WHAT runs at a start ══════════════
+
+// Set a file's modification time (READY's mtime is when the relay staged it).
+fn set_mtime(path: &Path, epoch: i64) {
+    must(Command::new("touch").arg("-d").arg(format!("@{epoch}")).arg(path), "touch -d");
+}
+
+// (l) [H1] A bundle staged at 14:00 is NOT applied by the 14:00 tick, nor by a start at 14:00, nor at 23:59; it is
+//     applied by the first tick inside the next window (00:00–02:00 here). The panel's "tonight" is now true.
+fn scenario_l_staged_at_14_waits_for_the_window() {
+    eprintln!("── scenario (l): staged at 14:00 waits for the window ──");
+    let fx = fresh_box("l", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT); // staged "now"
+    let host = TestHost::new(fx.node.clone());
+    // A START at 14:00: the bundle arrived after today's 00:00 window → nothing missed → runs v1, applies nothing.
+    let mut st = start_at(&host, &fx, &log, 840);
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "a 14:00 start must run v1");
+    for min in [840u32, 900, 1439, 125] {
+        tick_at(&host, &fx, &log, &mut st, min);
+        assert_eq!(served_version().as_deref(), Some("v1"), "applied outside the window at minute {min}");
+        assert!(!fx.suite_dir.join("active").exists(), "active/ created outside the window at minute {min}");
+    }
+    assert!(fx.staging.join("READY").exists(), "the staged bundle must wait");
+    tick_at(&host, &fx, &log, &mut st, 5); // 00:05 — inside the window
+    assert!(wait_for_served("v2", Duration::from_secs(15)), "not applied inside the window");
+    host.stop_relay();
+    eprintln!("   (l) OK — 14:00/15:00/23:59/02:05 ticks and a 14:00 start left v1; 00:05 applied v2");
+}
+
+// (m) [H1 + owner decision Q3] The computer was OFF during the window with an update already waiting: the next
+//     START (at 09:00, outside any window) applies it before the relay first runs. And one that arrived AFTER the
+//     window is not applied at a start.
+fn scenario_m_missed_window_applies_at_the_next_start() {
+    eprintln!("── scenario (m): a missed window applies at the next start ──");
+    let fx = fresh_box("m", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    let now = now_epoch();
+    // clock says 09:00 → today's 00:00 window opened 9 h ago. Staged 10 h ago = before it: missed.
+    set_mtime(&fx.staging.join("READY"), now - 10 * 3600);
+    let host = TestHost::new(fx.node.clone());
+    let st = start_at(&host, &fx, &log, 540);
+    assert_eq!(st.code_dir, fx.suite_dir.join("active"), "a missed window must be applied at the next start");
+    assert!(wait_for_served("v2", Duration::from_secs(15)), "the start did not bring up the update");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastApplied").as_deref(), Some("2026-11-13"));
+    host.stop_relay();
+    assert!(wait_port_free(Duration::from_secs(10)));
+
+    // A second box: staged 8 h ago = AFTER the 00:00 window opened (9 h ago) → not missed → waits.
+    let fx2 = fresh_box("m2", "2026-01-01T00:00:00Z");
+    let log2 = fx2.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx2.node, &fx2.tools, &fx2.priv_key, &fx2.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx2.staging, "v2", SHA2, D_OCT);
+    set_mtime(&fx2.staging.join("READY"), now - 8 * 3600);
+    let host2 = TestHost::new(fx2.node.clone());
+    let st2 = start_at(&host2, &fx2, &log2, 540);
+    assert_eq!(st2.code_dir, fx2.payload, "an update that arrived after the window must not apply at a start");
+    assert!(wait_for_served("v1", Duration::from_secs(10)));
+    assert!(fx2.staging.join("READY").exists());
+    host2.stop_relay();
+    eprintln!("   (m) OK — missed window applied at the 09:00 start; a post-window arrival waited");
+}
+
+// (n) [H3] After an update was applied, the church installs a NEWER Suite by hand (its payload is dated after the
+//     override). The next start runs the new Suite's own code and deletes the obsolete override.
+fn scenario_n_newer_suite_installed_retires_the_override() {
+    eprintln!("── scenario (n): a newer Suite installed by hand wins over the downloaded update ──");
+    let fx = fresh_box("n", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    install_active(&fx, &fx.priv_key, "v2"); // signed 2026-10-01
+    // "Install" a newer Suite: the read-only payload is replaced by one dated 2026-11-01.
+    write(&fx.payload.join("version.txt"), &format!("{}\n2026-11-01T00:00:00Z\n", sha_of('4')));
+    write(&fx.payload.join("scripts").join("gateway.mjs"), &gateway_src("v4-installed", false));
+    let host = TestHost::new(fx.node.clone());
+    let st = start_at(&host, &fx, &log, 840);
+    assert_eq!(st.code_dir, fx.payload, "a newer installed Suite must run its own code");
+    assert!(wait_for_served("v4-installed", Duration::from_secs(10)), "the newly installed Suite is not what runs");
+    assert!(!fx.suite_dir.join("active").exists(), "the obsolete override must be deleted");
+    assert!(!fx.suite_dir.join("active.tgz").exists(), "its tarball must be deleted");
+    host.stop_relay();
+    eprintln!("   (n) OK — newer installed Suite runs; the older override was retired");
+}
+
+// (o) [M1] The unpacked override is damaged after it was applied. (1) A file deleted from active/ → the start
+//     re-extracts it from the verified tarball and runs the update. (2) The override boots but never answers as
+//     its signed build (here: it crashes at once) → the start returns to the shipped code, retires the override,
+//     switches auto-update off and records why — the relay is NOT left down.
+fn scenario_o_damaged_active_is_repaired_or_falls_back() {
+    eprintln!("── scenario (o): a damaged override is repaired, or the start falls back ──");
+    let fx = fresh_box("o", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    install_active(&fx, &fx.priv_key, "v2");
+    std::fs::remove_file(fx.suite_dir.join("active").join("scripts").join("gateway.mjs")).unwrap();
+    let host = TestHost::new(fx.node.clone());
+    let st = start_at(&host, &fx, &log, 840);
+    assert_eq!(st.code_dir, fx.suite_dir.join("active"));
+    assert!(wait_for_served("v2", Duration::from_secs(10)), "a damaged active/ was not repaired from its tarball");
+    assert!(fx.suite_dir.join("active").join("scripts").join("gateway.mjs").exists());
+    host.stop_relay();
+    assert!(wait_port_free(Duration::from_secs(10)));
+
+    // (2) a validly signed override that will not start
+    let fx2 = fresh_box("o2", "2026-01-01T00:00:00Z");
+    let log2 = fx2.data_dir.join("relay-launch.log");
+    let tmp = fx2.suite_dir.join(".mk");
+    std::fs::create_dir_all(&tmp).unwrap();
+    build_signed_bundle(&fx2.node, &fx2.tools, &fx2.priv_key, &tmp, &good("v2", SHA2, D_OCT));
+    // rebuild the tarball with a gateway that exits immediately, then sign it
+    let st_dir = tmp.join("st");
+    std::fs::create_dir_all(&st_dir).unwrap();
+    must(Command::new("tar").arg("-xzf").arg(tmp.join("bundle.tgz")).arg("-C").arg(&st_dir), "untar");
+    write(&st_dir.join("scripts").join("gateway.mjs"), "process.exit(3);\n");
+    must(Command::new("tar").arg("-czf").arg(tmp.join("bundle.tgz")).arg("-C").arg(&st_dir).arg("."), "retar");
+    must(Command::new(&fx2.node).arg(fx2.tools.join("signer.mjs")).arg(tmp.join("bundle.tgz")).arg(tmp.join("bundle.sig")).arg(&fx2.priv_key), "resign");
+    let active = fx2.suite_dir.join("active");
+    std::fs::create_dir_all(&active).unwrap();
+    must(Command::new("tar").arg("-xzf").arg(tmp.join("bundle.tgz")).arg("-C").arg(&active), "untar active");
+    std::fs::rename(tmp.join("bundle.tgz"), fx2.suite_dir.join("active.tgz")).unwrap();
+    std::fs::rename(tmp.join("bundle.sig"), fx2.suite_dir.join("active.sig")).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let host2 = TestHost::new(fx2.node.clone());
+    let t0 = Instant::now();
+    let st2 = start_at(&host2, &fx2, &log2, 840);
+    assert_eq!(st2.code_dir, fx2.payload, "an override that will not start must fall back to the shipped code");
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "the relay was left down");
+    assert!(!fx2.suite_dir.join("active").exists(), "the broken override must be retired");
+    assert!(!fx2.data_dir.join("suite-autoupdate").exists(), "auto-update must be switched off");
+    assert_eq!(read_state_field(&fx2.suite_dir, "lastOutcome").as_deref(), Some("launch-failed"));
+    eprintln!("   (o) took {:?}", t0.elapsed());
+    host2.stop_relay();
+    eprintln!("   (o) OK — a deleted file was re-extracted; a crashing override fell back to v1 and was retired");
+}
+
 // ══ Added 2026-11-13 (audit AUDIT-integration-all-1aa19150 MEDIUM 2): the LAUNCH choice, the toggle-off path,
 // a relaunch after an apply, rollback to LAST-GOOD (not just to payload), and a relay that will not stop. ══════
 
@@ -618,7 +782,7 @@ fn install_active(fx: &Fixture, key: &Path, gw_version: &str) {
 
 fn launch(fx: &Fixture, node: Option<&Path>) -> PathBuf {
     let log = fx.data_dir.join("relay-launch.log");
-    launch_code_dir(&fx.payload, &fx.suite_dir, node, &log)
+    launch_code_dir(&fx.payload, &fx.suite_dir, &fx.data_dir, node, &log).dir
 }
 
 // ── launch choice: real files, real signatures, the real verifier — no port needed, so these run in parallel ──
@@ -705,11 +869,10 @@ fn scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging() {
     build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
     write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
 
-    let code = launch(&fx, Some(&fx.node));
-    assert_eq!(code, fx.payload, "with nothing applied the launch must pick the shipped payload");
     let host = TestHost::new(fx.node.clone());
-    let mut cur = (code.clone(), Arc::new(AtomicBool::new(true)));
-    assert!(spawn_and_wait(&host, &code, &fx.payload, &fx.data_dir, &log, &mut cur.0, &mut cur.1), "relay did not start");
+    // A REAL start inside the window: with the switch off nothing is applied and the shipped code runs.
+    let mut cur = start_at(&host, &fx, &log, IN_WINDOW);
+    assert_eq!(cur.code_dir, fx.payload, "with nothing applied the start must run the shipped payload");
     assert!(wait_for_served("v1", Duration::from_secs(10)), "the shipped payload (v1) is not what the relay serves");
 
     run_apply(&host, &fx, &log, &mut cur);
@@ -720,8 +883,8 @@ fn scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging() {
     eprintln!("   (f) OK — payload launched and served, staged bundle left alone with the toggle off");
 }
 
-// (g) The Suite is quit and started again after a good apply: the launch now picks active/ (its retained tarball
-//     verifies) and the relay serves the update — the update survives a restart.
+// (g) The Suite is quit and started again after a good apply: the REAL startup picks active/ (its retained tarball
+//     verifies, it is newer than the payload, the switch is on, the tree matches) and the relay serves the update.
 fn scenario_g_relaunch_after_an_apply_runs_the_update() {
     eprintln!("── scenario (g): relaunch after a good apply runs the update ──");
     let fx = fresh_box("g", "2026-01-01T00:00:00Z");
@@ -736,12 +899,10 @@ fn scenario_g_relaunch_after_an_apply_runs_the_update() {
         host.stop_relay(); // quit the Suite
     }
     assert!(wait_port_free(Duration::from_secs(10)), "the relay did not stop");
-    let code = launch(&fx, Some(&fx.node));
-    assert_eq!(code, fx.suite_dir.join("active"), "after a good apply the next launch must run the update");
     let host = TestHost::new(fx.node.clone());
-    let mut cur = (code.clone(), Arc::new(AtomicBool::new(true)));
-    assert!(spawn_and_wait(&host, &code, &fx.payload, &fx.data_dir, &log, &mut cur.0, &mut cur.1), "relay did not start");
-    assert!(wait_for_served("v2", Duration::from_secs(10)), "the relaunched relay is not serving the update");
+    let cur = start_at(&host, &fx, &log, 840); // the next start, at 14:00
+    assert_eq!(cur.code_dir, fx.suite_dir.join("active"), "after a good apply the next start must run the update");
+    assert!(wait_for_served("v2", Duration::from_secs(10)), "the restarted relay is not serving the update");
     host.stop_relay();
     eprintln!("   (g) OK — relaunch picked active/ and serves v2");
 }
@@ -756,8 +917,8 @@ fn yesterday_in_state(suite_dir: &Path) {
 }
 
 // (h) A good v2 is running as the override; the next night's v3 boots but fails health. It must roll back to v2
-//     (LAST-GOOD — scenario (e) only covers rollback to the payload), keep v2's retained tarball so the NEXT launch
-//     still runs v2, quarantine v3, and record that it rolled back while still installed as v2.
+//     (LAST-GOOD — scenario (e) only covers rollback to the payload), keep v2's retained tarball, quarantine v3,
+//     record that it rolled back while still installed as v2, and switch auto-update off (audit M7).
 fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     eprintln!("── scenario (h): bad v3 over good v2 rolls back to last-good (≈45s health timeout) ──");
     let fx = fresh_box("h", "2026-01-01T00:00:00Z");
@@ -776,7 +937,7 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     run_apply(&host, &fx, &log, &mut cur);
 
     assert!(wait_for_served("v2", Duration::from_secs(15)), "after v3 failed health the relay must be back on v2, not the payload");
-    assert_eq!(cur.0, fx.suite_dir.join("active"), "the controller's current code dir must be active/ (holding v2)");
+    assert_eq!(cur.code_dir, fx.suite_dir.join("active"), "the controller's current code dir must be active/ (holding v2)");
     assert_eq!(std::fs::read(fx.suite_dir.join("active.tgz")).unwrap(), v2_tgz, "active.tgz must be v2's again");
     assert!(!fx.suite_dir.join("last-good").exists(), "last-good/ must have been moved back to active/");
     let q = std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default();
@@ -786,9 +947,17 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     assert!(!fx.staging.join("READY").exists(), "v3's staging must be discarded");
     host.stop_relay();
     assert!(wait_port_free(Duration::from_secs(10)), "the relay did not stop");
-    // and the next start still runs v2
-    assert_eq!(launch(&fx, Some(&fx.node)), fx.suite_dir.join("active"), "after the rollback the next launch must run v2");
-    eprintln!("   (h) OK — v3 rolled back to v2 (last-good), v2 retained for the next launch, sha-v3 quarantined");
+    // [audit M7] a rollback switches auto-update OFF, and says so in state.json …
+    assert!(!fx.data_dir.join("suite-autoupdate").exists(), "a rollback must switch auto-update off");
+    let raw = std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap();
+    assert!(raw.contains("\"autoOff\":true"), "state.json must record that auto-update was switched off: {raw}");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastReason").as_deref(), Some("the update started but reported the wrong version"));
+    // … so [audit H3] the next start returns to the shipped code; v2 stays on disk (it runs again if switched back on).
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "switched off → the next start runs the shipped code");
+    assert!(fx.suite_dir.join("active.tgz").exists(), "v2 is kept, not deleted, when merely switched off");
+    write(&fx.data_dir.join("suite-autoupdate"), "00:00\n");
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.suite_dir.join("active"), "switched back on → v2 runs again");
+    eprintln!("   (h) OK — v3 rolled back to v2 (last-good), sha-v3 quarantined, auto-update switched off");
 }
 
 // A host whose stop never lands (a wedged relay child). Each respawn parks the previous child so teardown can
@@ -826,26 +995,24 @@ fn scenario_i_relay_that_will_not_stop_backs_off() {
     build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
     write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
     let host = WedgedHost { inner: TestHost::new(fx.node.clone()), parked: Mutex::new(Vec::new()) };
-    let mut cur_code_dir = fx.payload.clone();
-    let mut cur_alive = Arc::new(AtomicBool::new(true));
-    assert!(spawn_and_wait(&host, &fx.payload, &fx.payload, &fx.data_dir, &log, &mut cur_code_dir, &mut cur_alive));
+    let clock = clock_at(IN_WINDOW);
+    let env = env_for(&host, &fx, &log, &clock);
+    let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
+    assert!(spawn_and_wait(&env, &mut st, &fx.payload));
     assert!(wait_for_served("v1", Duration::from_secs(10)), "v1 did not serve");
 
-    let mut cooldown: Option<Instant> = None;
     let t0 = Instant::now();
-    maybe_apply(&host, &fx.suite_dir, &fx.payload, &fx.data_dir, &log, Some(fx.node.as_path()),
-        &mut cur_code_dir, &mut cur_alive, &mut cooldown);
-    let until = cooldown.expect("a stop timeout must set the apply cooldown");
+    maybe_apply(&env, &mut st);
+    let until = st.cooldown_until.expect("a stop timeout must set the apply cooldown");
     assert!(until >= t0 + Duration::from_secs(50 * 60), "the back-off is shorter than ~1h");
     assert_eq!(served_version().as_deref(), Some("v1"), "the church must stay on the code it was running");
-    assert_eq!(cur_code_dir, fx.payload, "the current code dir must still be the payload");
+    assert_eq!(st.code_dir, fx.payload, "the current code dir must still be the payload");
     assert!(!fx.suite_dir.join("active").exists(), "nothing may be swapped when the relay did not stop");
     assert!(fx.staging.join("READY").exists(), "the staged bundle must be kept for a later attempt");
 
     // The next tick (a minute later in production) does nothing while the cooldown runs — returns at once.
     let t1 = Instant::now();
-    maybe_apply(&host, &fx.suite_dir, &fx.payload, &fx.data_dir, &log, Some(fx.node.as_path()),
-        &mut cur_code_dir, &mut cur_alive, &mut cooldown);
+    maybe_apply(&env, &mut st);
     assert!(t1.elapsed() < Duration::from_secs(5), "a tick inside the cooldown tried to apply again");
     assert!(fx.staging.join("READY").exists());
     eprintln!("   (i) OK — aborted without a swap, v1 still serving, staging kept, backed off ~1h");

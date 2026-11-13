@@ -14,7 +14,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, 'gateway.mjs'), 'utf8');
 const m = SRC.match(/\/\/ SUITE-AUTOUPDATE-SETTINGS-BEGIN[^\n]*\n([\s\S]*?)\/\/ SUITE-AUTOUPDATE-SETTINGS-END/);
 assert.ok(m, 'SUITE-AUTOUPDATE-SETTINGS markers are gone from gateway.mjs — the settings coercion was removed; re-anchor this test');
-const api = new Function(m[1] + '\nreturn { coerceHHMM, coerceSuiteAutoUpdate };')();
+const api = new Function(m[1] + '\nreturn { coerceHHMM, coerceSuiteAutoUpdate, reconcileSuiteAutoUpdate };')();
 
 test('defaults: absent keys ⇒ OFF and 03:00', () => {
   const out = {};
@@ -56,4 +56,10 @@ test('coerceHHMM validates the 24-hour clock', () => {
   for (const bad of ['24:00', '09:60', '9:00', '0900', '', null, undefined, '12:3']) {
     assert.equal(api.coerceHHMM(bad), '', JSON.stringify(bad) + ' is not a valid HH:MM');
   }
+});
+
+test('[audit M7] a saved ON with the shell\'s marker removed (switched off after a failed update) reads as OFF', () => {
+  assert.equal(api.reconcileSuiteAutoUpdate({ autoUpdate: true }, false).autoUpdate, false);
+  assert.equal(api.reconcileSuiteAutoUpdate({ autoUpdate: true }, true).autoUpdate, true);
+  assert.equal(api.reconcileSuiteAutoUpdate({ autoUpdate: false }, true).autoUpdate, false, 'a stray marker never turns it ON');
 });

@@ -151,6 +151,7 @@ function loadSettings() {
       // Suite JS auto-update: opt-in, default OFF; the apply time is a validated "HH:MM" (default 03:00). One
       // coercion, shared with POST /settings, lifted + run by scripts/suite-autoupdate-settings.test.mjs.
       coerceSuiteAutoUpdate(s, SETTINGS);
+      reconcileSuiteAutoUpdate(SETTINGS, existsSync(join(DATA_DIR, 'suite-autoupdate')));
     }
   } catch {}
 }
@@ -167,6 +168,13 @@ function coerceSuiteAutoUpdate(s, out) {
   else if (out.autoUpdate === undefined) out.autoUpdate = false;
   if (s && 'autoUpdateAt' in s) { const v = coerceHHMM(s.autoUpdateAt); if (v) out.autoUpdateAt = v; }
   if (!out.autoUpdateAt) out.autoUpdateAt = '03:00';
+  return out;
+}
+// The `suite-autoupdate` marker is what the Rust shell acts on, and the shell REMOVES it when it switches
+// auto-update off after a failed update (audit be258b42 MEDIUM 7). So a saved autoUpdate:true with no marker
+// means "switched off by the shell": the relay must show and behave as OFF, not re-enable it silently.
+function reconcileSuiteAutoUpdate(out, markerExists) {
+  if (out.autoUpdate === true && !markerExists) out.autoUpdate = false;
   return out;
 }
 // SUITE-AUTOUPDATE-SETTINGS-END

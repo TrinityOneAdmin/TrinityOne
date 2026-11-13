@@ -255,29 +255,43 @@ impl KeepAwake {
 // This shell is the trust root. The signed JS bundle is checked/downloaded/staged by the relay (P3,
 // gateway.mjs suiteAutoUpdate) into <TRINITY_DATA_DIR>/suite/, but it is NEVER activated there. The shell
 // decides what code the relay runs:
-//   • EVERY LAUNCH: run the activated override (suite/active) IFF its retained verified tarball
-//     (active.tgz/active.sig) still verifies against the READ-ONLY payload key; else run the baked-in payload.
-//   • TIMED APPLY: at the operator's HH:MM, once per calendar day, if a verified bundle is staged, re-verify
-//     it, enforce the anti-rollback floor, stop the relay, swap active/, restart from active/, health-check,
-//     and roll back to last-good (or payload) on any failure.
+//   • EVERY LAUNCH (startup): run the activated override (suite/active) only if auto-update is ON, its retained
+//     tarball (active.tgz/active.sig) verifies against the READ-ONLY payload key, its SIGNED date is newer than
+//     the installed Suite's own payload, and the unpacked tree matches it (repaired from the tarball if not) —
+//     and then only if it actually comes up; anything else runs the baked-in payload. An override older than
+//     (or as old as) the installed payload is deleted: a newer Suite was installed by hand. [audit H3, M1]
+//   • TIMED APPLY: inside the operator's window (HH:MM to HH:MM + 2 h), once per window, if a verified bundle
+//     is staged, re-verify it, enforce the anti-rollback floor, stop the relay, swap active/, restart from
+//     active/, health-check, and roll back to last-good (or payload) on any failure. A window missed because the
+//     computer was off or asleep is applied at the next START of the Suite, before the relay is first started
+//     (owner decision Q3, PLAN-suite-js-autoupdate §10). Never at any other time. [audit H1]
 // The verifier and the pinned release-pubkey.pem are ALWAYS taken from the read-only payload, never from the
 // (writable) override — see verify_tarball and the PAYLOAD_DIR invariant in spawn_relay.
 
-// Which code tree the relay runs.
+// The launch decision for an override that is on disk. Payload = run the shipped code, leave the files;
+// Active = run the override; Retire = run the shipped code AND delete the override (it can never run again).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CodeDir {
+enum LaunchPick {
     Payload,
     Active,
+    Retire,
 }
 
-// PURE launch decision (point-of-use, cargo-testable without a real verify). Run the override only when its
-// retained tarball + signature are both present AND verified against the read-only payload key; any failure,
-// corruption or absence falls back to the baked-in payload.
-fn choose_code_dir(active_tgz_exists: bool, active_sig_exists: bool, active_verify_ok: bool) -> CodeDir {
-    if active_tgz_exists && active_sig_exists && active_verify_ok {
-        CodeDir::Active
-    } else {
-        CodeDir::Payload
+// PURE launch decision (cargo-testable). `signed` is the identity of active.tgz as verified against the
+// read-only payload key (None = absent, unverifiable, or no node to verify with).
+//   • nothing verifiable on disk                        → Payload (never run unverified code)
+//   • its signed date is NOT after the payload's own    → Retire  (a newer — or the same — Suite was installed
+//                                                                  by hand; the override is obsolete) [audit H3]
+//   • auto-update switched OFF                          → Payload (switching off returns to the shipped code at
+//                                                                  the next start; the files are kept so
+//                                                                  switching back on resumes it) [audit H3]
+//   • otherwise                                         → Active
+fn launch_pick(enabled: bool, signed: Option<&SignedId>, payload_date: &str) -> LaunchPick {
+    match signed {
+        None => LaunchPick::Payload,
+        Some(id) if !date_after(&id.date, payload_date) => LaunchPick::Retire,
+        Some(_) if !enabled => LaunchPick::Payload,
+        Some(_) => LaunchPick::Active,
     }
 }
 
@@ -359,13 +373,49 @@ fn cooldown_elapsed(now: Instant, retry_at: Option<Instant>) -> bool {
 // stays ONLINE on its current code throughout, and a later tick retries once the window elapses.
 const APPLY_COOLDOWN: Duration = Duration::from_secs(3600);
 
-// PURE apply-window decision (cargo-testable). Apply when the local time-of-day has reached the operator's
-// HH:MM AND we have not already applied today. This also handles "missed while asleep" (we were off at HH:MM;
-// on the next start past HH:MM `now_min >= target_min` is still true and lastApplied is an earlier day → apply)
-// and "once per calendar day" (lastApplied == today → skip). The staged-READY-present and marker-enabled gates
-// are checked by the caller (they are I/O, not policy).
-fn due(now_min: u32, target_min: u32, today: &str, last_applied: &str) -> bool {
-    now_min >= target_min && last_applied != today
+// The local wall clock, as the operator set HH:MM in: minutes-of-day, today's and yesterday's dates, and the
+// epoch seconds of the same instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalNow {
+    min: u32,
+    today: String,
+    yesterday: String,
+    epoch: i64,
+}
+
+// How long after HH:MM an update may still be applied. [audit H1] The old rule ("any time after HH:MM today")
+// installed a bundle within a minute of it arriving — mid-afternoon, Sunday morning — while the panel said
+// "tonight". Two hours is enough for a computer that wakes a little late, and never reaches the working day
+// from an early-morning time.
+const APPLY_WINDOW_MIN: u32 = 120;
+
+// Minutes since the most recent HH:MM (0..1439). PURE.
+fn mins_into_window(now_min: u32, target_min: u32) -> u32 {
+    (now_min + 1440 - target_min % 1440) % 1440
+}
+
+// The calendar day the most recent window STARTED on (a window that opened at 23:30 yesterday is still
+// yesterday's at 00:15 today). Used to apply at most once per window. PURE.
+fn window_day(now: &LocalNow, target_min: u32) -> &str {
+    if now.min >= target_min {
+        &now.today
+    } else {
+        &now.yesterday
+    }
+}
+
+// PURE: is a running Suite inside its apply window, with nothing applied in this window yet? The
+// staged-READY-present and marker-enabled gates are checked by the caller (they are I/O, not policy).
+fn due(now: &LocalNow, target_min: u32, last_applied: &str) -> bool {
+    mins_into_window(now.min, target_min) < APPLY_WINDOW_MIN && last_applied != window_day(now, target_min)
+}
+
+// PURE: at a START of the Suite, was the most recent window missed while an update was already waiting? True
+// when the bundle was staged before that window opened and nothing was applied in it — the computer was off or
+// asleep then. (A bundle that arrived after the window waits for the next one.) Owner decision Q3.
+fn missed_window(now: &LocalNow, target_min: u32, staged_epoch: i64, last_applied: &str) -> bool {
+    let opened = now.epoch - now.epoch.rem_euclid(60) - (mins_into_window(now.min, target_min) as i64) * 60;
+    staged_epoch < opened && last_applied != window_day(now, target_min)
 }
 
 // Parse "HH:MM" (tolerating surrounding whitespace / trailing newline) to minutes-of-day.
@@ -607,39 +657,100 @@ fn signed_bundle_verdict(signed: &SignedId, ready_sha: &str, floor: &str, now: i
     Ok(())
 }
 
-// EVERY LAUNCH: which tree the relay starts from. Moved verbatim out of main()'s setup closure (2026-11-13, a pure
-// refactor, so the launch choice can be tested with real files — apply_harness_test.rs). The activated override
-// (suite/active) only if its retained tarball + signature are both present AND verify against the READ-ONLY payload
-// key with the bundled node; anything else — nothing ever downloaded, a missing/forged/corrupt tarball, no node
-// sidecar — is the baked-in payload.
-fn launch_code_dir(payload: &Path, suite_dir: &Path, node: Option<&Path>, log: &Path) -> PathBuf {
+// Does the unpacked override tree match the tarball it was unpacked from? [audit M1] Only the tarball is signed;
+// the folder that RUNS can be damaged afterwards (antivirus removing a file, a rename that failed mid-swap). A
+// cheap identity check: its version.txt names the signed sha, and the two files every Suite bundle has exist.
+fn active_tree_matches(dir: &Path, signed: &SignedId) -> bool {
+    let v = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_default();
+    v.lines().next().map(|l| l.trim() == signed.sha).unwrap_or(false)
+        && dir.join("scripts").join("gateway.mjs").is_file()
+        && dir.join("release-origin").is_file()
+}
+
+// Remove the override and everything that could bring it back at a launch (active/, its retained tarball, and
+// the last-good set). Used when it is obsolete (a newer Suite was installed) or would not start.
+fn retire_override(suite_dir: &Path, log: &Path) {
+    for d in ["active", "active.new", "last-good"] {
+        let _ = std::fs::remove_dir_all(suite_dir.join(d));
+    }
+    for f in ["active.tgz", "active.sig", "last-good.tgz", "last-good.sig"] {
+        let _ = std::fs::remove_file(suite_dir.join(f));
+    }
+    applog(log, "suite: override retired (active/, its tarball and last-good removed)");
+}
+
+// What the launch decided: the tree to run, and — when it is the override — its signed identity.
+struct LaunchChoice {
+    dir: PathBuf,
+    signed: Option<SignedId>,
+}
+
+// EVERY LAUNCH: which tree the relay starts from (I/O around the pure launch_pick). Verifies active.tgz with the
+// READ-ONLY payload verifier + key, compares its SIGNED date with the payload's own version.txt date, honours the
+// auto-update switch (the `suite-autoupdate` marker in `data_dir`), and for an override that will run checks the
+// unpacked tree against the signed identity, re-extracting it from the verified tarball if it does not match.
+// Anything that fails is the baked-in payload.
+fn launch_code_dir(payload: &Path, suite_dir: &Path, data_dir: &Path, node: Option<&Path>, log: &Path) -> LaunchChoice {
+    let shipped = LaunchChoice { dir: payload.to_path_buf(), signed: None };
     let active_dir = suite_dir.join("active");
     let active_tgz = suite_dir.join("active.tgz");
     let active_sig = suite_dir.join("active.sig");
-    let active_verify_ok = active_tgz.exists()
-        && active_sig.exists()
-        && node
-            .map(|n| verify_tarball(n, payload, &active_tgz, &active_sig, log).is_some())
-            .unwrap_or(false);
-    match choose_code_dir(active_tgz.exists(), active_sig.exists(), active_verify_ok) {
-        CodeDir::Active => {
-            applog(log, "launch: running activated override (suite/active)");
-            active_dir
+    if !active_tgz.exists() && !active_dir.exists() {
+        applog(log, "launch: running baked-in payload (no update applied)");
+        return shipped;
+    }
+    let signed = match node {
+        Some(n) if active_tgz.exists() && active_sig.exists() => verify_tarball(n, payload, &active_tgz, &active_sig, log),
+        _ => None,
+    };
+    let enabled = data_dir.join("suite-autoupdate").exists();
+    match launch_pick(enabled, signed.as_ref(), &read_version_date(payload)) {
+        LaunchPick::Payload => {
+            applog(log, &format!(
+                "launch: running baked-in payload ({})",
+                if signed.is_none() { "override not verifiable" } else { "auto-update is off" }
+            ));
+            shipped
         }
-        CodeDir::Payload => {
-            applog(log, "launch: running baked-in payload");
-            payload.to_path_buf()
+        LaunchPick::Retire => {
+            applog(log, "launch: the installed Suite is as new as or newer than the downloaded update; running it and retiring the update");
+            retire_override(suite_dir, log);
+            shipped
+        }
+        LaunchPick::Active => {
+            let id = signed.expect("Active implies a signed identity");
+            if !active_tree_matches(&active_dir, &id) {
+                // [audit M1] Re-extract the folder from the verified tarball rather than run a damaged one.
+                applog(log, "launch: suite/active does not match its signed tarball; re-extracting it");
+                let fresh = suite_dir.join("active.new");
+                let _ = std::fs::remove_dir_all(&fresh);
+                let ok = std::fs::create_dir_all(&fresh).is_ok()
+                    && untar(&active_tgz, &fresh, log)
+                    && active_tree_matches(&fresh, &id)
+                    && {
+                        let _ = std::fs::remove_dir_all(&active_dir);
+                        rename_retry(&fresh, &active_dir, log).is_ok()
+                    };
+                if !ok {
+                    let _ = std::fs::remove_dir_all(&fresh);
+                    applog(log, "launch: could not repair suite/active; running baked-in payload");
+                    return shipped;
+                }
+            }
+            applog(log, &format!("launch: running activated override (suite/active, {})", short_sha(&id.sha)));
+            LaunchChoice { dir: active_dir, signed: Some(id) }
         }
     }
 }
 
-// Local wall-clock, via the bundled node (the Rust std has no timezone-aware local time and we add no crate).
-// Returns (minutes-of-day, "YYYY-MM-DD") in the machine's local time — the clock the operator set HH:MM in.
-// Called only once an apply is actually plausible (marker on AND a bundle staged), so it is not a hot path.
-fn local_now(node: &Path) -> Option<(u32, String)> {
+// Local wall-clock, via the bundled node (the Rust std has no timezone-aware local time and we add no crate):
+// minutes-of-day, today's and yesterday's "YYYY-MM-DD" in the machine's local time — the clock the operator set
+// HH:MM in — and epoch seconds. Called only once an apply is actually plausible (marker on AND a bundle staged),
+// so it is not a hot path.
+fn local_now(node: &Path) -> Option<LocalNow> {
     let out = std::process::Command::new(node)
         .arg("-e")
-        .arg("const d=new Date();const p=n=>String(n).padStart(2,'0');process.stdout.write((d.getHours()*60+d.getMinutes())+' '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()))")
+        .arg("const p=n=>String(n).padStart(2,'0');const f=d=>d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());const n=Date.now();const d=new Date(n);const y=new Date(d.getFullYear(),d.getMonth(),d.getDate()-1);process.stdout.write((d.getHours()*60+d.getMinutes())+' '+f(d)+' '+f(y)+' '+Math.floor(n/1000))")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -650,8 +761,10 @@ fn local_now(node: &Path) -> Option<(u32, String)> {
     let s = String::from_utf8_lossy(&out.stdout);
     let mut it = s.split_whitespace();
     let min: u32 = it.next()?.parse().ok()?;
-    let ymd = it.next()?.to_string();
-    Some((min, ymd))
+    let today = it.next()?.to_string();
+    let yesterday = it.next()?.to_string();
+    let epoch: i64 = it.next()?.parse().ok()?;
+    Some(LocalNow { min, today, yesterday, epoch })
 }
 
 // PURE env assembly for a relay launch (cargo-testable). `code_dir` is the tree the relay's cwd will be set
@@ -855,28 +968,43 @@ fn write_file_atomic(path: &Path, contents: &str, log: &Path) -> std::io::Result
     r
 }
 
-// Record the apply outcome for the P3 status surface (GET /update reads these fields).
-#[allow(clippy::too_many_arguments)]
-fn write_state(
-    suite_dir: &Path,
-    sha: &str,
-    version: &str,
-    date: &str,
-    last_applied: &str,
-    outcome: &str,
-    next_at: &str,
-    log: &Path,
-) {
+// What state.json records (GET /update reads it for the control panel). installed* is the override the Suite is
+// running or will run at the next start (empty = the shipped payload); lastApplied is the window day of the last
+// attempt; lastOutcome is "applied" / "applied-store-degraded" / "rolledback" / "launch-failed"; lastReason
+// says why in plain words; autoOff is true when this shell switched auto-update off after a failure.
+struct StateRec<'a> {
+    sha: &'a str,
+    version: &'a str,
+    date: &'a str,
+    last_applied: &'a str,
+    outcome: &'a str,
+    reason: &'a str,
+    auto_off: bool,
+}
+
+fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
     let json = format!(
-        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"nextAt\":{}}}\n",
-        jstr(sha),
-        jstr(version),
-        jstr(date),
-        jstr(last_applied),
-        jstr(outcome),
-        jstr(next_at.trim()),
+        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{}}}\n",
+        jstr(r.sha),
+        jstr(r.version),
+        jstr(r.date),
+        jstr(r.last_applied),
+        jstr(r.outcome),
+        jstr(r.reason),
+        if r.auto_off { "true" } else { "false" },
     );
     let _ = write_file_atomic(&suite_dir.join("state.json"), &json, log);
+}
+
+// [audit M7] After a failed update the shell switches auto-update OFF (the design note: "a rollback should
+// switch it off and say so"): it removes the `suite-autoupdate` marker — the shell's only read of the setting —
+// and the relay, which is restarted right after, reads the marker's absence as "off" (gateway.mjs loadSettings).
+fn switch_auto_update_off(data_dir: &Path, log: &Path) {
+    match std::fs::remove_file(data_dir.join("suite-autoupdate")) {
+        Ok(_) => applog(log, "suite: auto-update switched OFF after a failed update"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => applog(log, &format!("suite: could not switch auto-update off: {e}")),
+    }
 }
 
 // Remove the staged bundle so a failed/consumed bundle is never reconsidered.
@@ -976,161 +1104,207 @@ fn read_version_date(payload: &Path) -> String {
     }
 }
 
-// Set `*cur_code_dir`, spawn the relay from it, update `*cur_alive`, and wait for the port to come up.
-// Returns whether the relay became reachable. Shared by apply-start, recover, and rollback.
-#[allow(clippy::too_many_arguments)]
-fn spawn_and_wait(
-    host: &dyn RelayHost,
-    dir: &Path,
-    payload: &Path,
-    data_dir: &Path,
-    log: &Path,
-    cur_code_dir: &mut PathBuf,
-    cur_alive: &mut Arc<AtomicBool>,
-) -> bool {
-    *cur_code_dir = dir.to_path_buf();
-    match host.spawn_relay(dir, payload, data_dir, log) {
+// Everything the apply/launch orchestration needs, bundled so the harness can drive the REAL functions: the relay
+// host seam, the four paths, the node sidecar (verify + clock), and the clock itself (injected so a test can say
+// "it is 14:00" without waiting for 14:00; production passes local_now on the node sidecar).
+struct ApplyEnv<'a> {
+    host: &'a dyn RelayHost,
+    suite_dir: &'a Path,
+    payload: &'a Path,
+    data_dir: &'a Path,
+    log: &'a Path,
+    node: Option<&'a Path>,
+    clock: &'a dyn Fn() -> Option<LocalNow>,
+}
+
+// What is running now: the code dir, the alive-flag of the current child (cleared by the pump when it exits),
+// and the stop-timeout back-off.
+struct RunState {
+    code_dir: PathBuf,
+    alive: Arc<AtomicBool>,
+    cooldown_until: Option<Instant>,
+}
+
+// Spawn the relay from `dir`, record it as current, and wait for the port. Returns whether it came up. Shared by
+// startup, apply-start, recover and rollback.
+fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> bool {
+    st.code_dir = dir.to_path_buf();
+    match env.host.spawn_relay(dir, env.payload, env.data_dir, env.log) {
         Some(a) => {
-            *cur_alive = a;
+            st.alive = a;
             wait_port_up(Duration::from_secs(45))
         }
         None => false,
     }
 }
 
-// Shared rollback-and-restart: restore active/ to last-good (or the baked-in payload), restart there, reload
-// the webview, and record a "rolledback" state that keeps the PREVIOUS installed identity. ASSUMES the relay
-// is already stopped. Keeps the church ONLINE on known-good code. Used by the health-fail path and by the
-// [AUDIT FIX #4] active.(tgz,sig) retain-failure path. Does NOT write quarantine — the caller decides that,
-// since a retain failure is a local-disk problem, not a bad bundle.
-#[allow(clippy::too_many_arguments)]
-fn rollback_and_restart(
-    host: &dyn RelayHost,
-    suite_dir: &Path,
-    payload: &Path,
-    data_dir: &Path,
-    log: &Path,
-    active: &Path,
-    last_good: &Path,
-    prev_state_raw: &str,
-    today: &str,
-    at_str: &str,
-    cur_code_dir: &mut PathBuf,
-    cur_alive: &mut Arc<AtomicBool>,
-) {
+// Shared rollback-and-restart: restore active/ to last-good (or the baked-in payload), restart there, reload the
+// webview, record a "rolledback" state that keeps the PREVIOUS installed identity, and switch auto-update off
+// (audit M7). ASSUMES the relay is already stopped. Keeps the church ONLINE on known-good code. Does NOT write
+// quarantine — the caller decides that, since a retain failure is a local-disk problem, not a bad bundle.
+fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str) {
+    let suite_dir = env.suite_dir;
+    let active = suite_dir.join("active");
+    let last_good = suite_dir.join("last-good");
     let dir = match rollback_target(false, last_good.exists()) {
         RollbackTarget::LastGood => {
-            let _ = std::fs::remove_dir_all(active);
-            let _ = rename_retry(last_good, active, log);
+            let _ = std::fs::remove_dir_all(&active);
+            let _ = rename_retry(&last_good, &active, env.log);
             let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
             let _ = std::fs::remove_file(suite_dir.join("active.sig"));
-            let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
-            let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
-            active.to_path_buf()
+            let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), env.log);
+            let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), env.log);
+            active.clone()
         }
-        RollbackTarget::Payload => {
-            let _ = std::fs::remove_dir_all(active);
+        RollbackTarget::Payload | RollbackTarget::Keep => {
+            let _ = std::fs::remove_dir_all(&active);
             let _ = std::fs::remove_file(suite_dir.join("active.tgz"));
             let _ = std::fs::remove_file(suite_dir.join("active.sig"));
-            payload.to_path_buf()
+            env.payload.to_path_buf()
         }
-        RollbackTarget::Keep => active.to_path_buf(), // unreachable (we only call with health_ok == false)
     };
-    spawn_and_wait(host, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
-    host.reload_webview();
-    // Keep the previous installed identity (we reverted); mark lastApplied=today so a bad bundle isn't retried
-    // in a hot loop, and record the rollback for the UI.
+    switch_auto_update_off(env.data_dir, env.log);
+    spawn_and_wait(env, st, &dir);
+    env.host.reload_webview();
+    // Keep the previous installed identity (we reverted); mark lastApplied so a bad bundle isn't retried in this
+    // window, and record the rollback + why for the UI.
     let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
     let prev_ver = json_str_value(prev_state_raw, "installedVersion").unwrap_or_default();
     let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
-    write_state(suite_dir, &prev_sha, &prev_ver, &prev_date, today, "rolledback", at_str, log);
+    write_state(suite_dir, &StateRec {
+        sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
+        outcome: "rolledback", reason, auto_off: true,
+    }, env.log);
     discard_staging(suite_dir);
 }
 
-// Decide (gate) whether to apply now, then run the apply. Reads the enable marker, the staged READY, and the
-// local clock; everything cryptographic/destructive lives in attempt_apply. Called from the controller tick,
-// OUTSIDE the keep-awake-off / token early-continues so turning keep-awake off never disables auto-update.
-#[allow(clippy::too_many_arguments)]
-fn maybe_apply(
-    host: &dyn RelayHost,
-    suite_dir: &Path,
-    payload: &Path,
-    data_dir: &Path,
-    log: &Path,
-    node: Option<&Path>,
-    cur_code_dir: &mut PathBuf,
-    cur_alive: &mut Arc<AtomicBool>,
-    cooldown_until: &mut Option<Instant>,
-) {
-    // [AUDIT FIX #3] After a stop-timeout we back off (see attempt_apply): skip apply attempts until the
-    // cooldown elapses so we don't thrash kill→20s-wait→respawn every minute against a wedged child. The
-    // church stays online on its current code throughout.
-    if !cooldown_elapsed(Instant::now(), *cooldown_until) {
-        return;
-    }
-    // Enabled? The marker is the shell's only read of the operator's setting (content = "HH:MM\n").
-    let at_raw = match std::fs::read_to_string(data_dir.join("suite-autoupdate")) {
-        Ok(s) => s,
-        Err(_) => return, // not enabled
-    };
+// The staged bundle, if there is one and the switch is on: (READY version label, READY sha, READY mtime epoch,
+// the HH:MM target in minutes, the marker text). None = nothing to do.
+fn staged_and_enabled(env: &ApplyEnv) -> Option<(String, String, i64, u32, String)> {
+    let at_raw = std::fs::read_to_string(env.data_dir.join("suite-autoupdate")).ok()?; // not enabled → None
     let target_min = parse_hhmm(&at_raw).unwrap_or(180); // default 03:00, matching the relay default
     // Anything staged? (P3 may leave an unverified .tmp with no READY after a crash — we act only on READY.)
-    let ready_raw = match std::fs::read_to_string(suite_dir.join("staging").join("READY")) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let node = match node {
-        Some(n) => n,
-        None => {
-            applog(log, "suite: apply gate — node sidecar not found; cannot verify/apply");
-            return;
-        }
-    };
+    let ready_path = env.suite_dir.join("staging").join("READY");
+    let ready_raw = std::fs::read_to_string(&ready_path).ok()?;
+    let staged_epoch = std::fs::metadata(&ready_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(i64::MAX);
     let r_version = json_str_value(&ready_raw, "version").unwrap_or_default();
     let r_sha = json_str_value(&ready_raw, "sha").unwrap_or_default();
     if r_sha.is_empty() {
-        applog(log, "suite: staged READY missing sha; discarding");
-        discard_staging(suite_dir);
-        return;
+        applog(env.log, "suite: staged READY missing sha; discarding");
+        discard_staging(env.suite_dir);
+        return None;
     }
-    let (now_min, today) = match local_now(node) {
-        Some(v) => v,
-        None => return,
-    };
-    let state_raw = std::fs::read_to_string(suite_dir.join("state.json")).unwrap_or_default();
-    let last_applied = json_str_value(&state_raw, "lastApplied").unwrap_or_default();
-    if !due(now_min, target_min, &today, &last_applied) {
-        return;
-    }
-    applog(log, &format!("suite: apply window reached ({today} {now_min}min >= {target_min}min); applying staged {r_version}"));
-    attempt_apply(
-        host, suite_dir, payload, data_dir, log, node, &r_version, &r_sha, &state_raw,
-        &today, at_raw.trim(), cur_code_dir, cur_alive, cooldown_until,
-    );
+    Some((r_version, r_sha, staged_epoch, target_min, at_raw.trim().to_string()))
 }
 
-// The 8-step apply, fail-closed at every step. Any failure leaves the Suite running a known-good tree (the
-// one it was already running, last-good, or the baked-in payload) and never leaves a half-applied active/.
-#[allow(clippy::too_many_arguments)]
-fn attempt_apply(
-    host: &dyn RelayHost,
-    suite_dir: &Path,
-    payload: &Path,
-    data_dir: &Path,
-    log: &Path,
-    node: &Path,
-    r_version: &str,
-    r_sha: &str,
-    prev_state_raw: &str,
-    today: &str,
-    at_str: &str,
-    cur_code_dir: &mut PathBuf,
-    cur_alive: &mut Arc<AtomicBool>,
-    cooldown_until: &mut Option<Instant>,
-) {
+// THE CONTROLLER TICK (about once a minute while the Suite runs). Applies a staged update only INSIDE the
+// operator's window and once per window [audit H1]. Called OUTSIDE the keep-awake-off / token early-continues so
+// turning keep-awake off never disables auto-update.
+fn maybe_apply(env: &ApplyEnv, st: &mut RunState) {
+    // [AUDIT FIX #3] After a stop-timeout we back off (see attempt_apply).
+    if !cooldown_elapsed(Instant::now(), st.cooldown_until) {
+        return;
+    }
+    let Some((r_version, r_sha, _staged, target_min, at)) = staged_and_enabled(env) else { return };
+    if env.node.is_none() {
+        applog(env.log, "suite: apply gate — node sidecar not found; cannot verify/apply");
+        return;
+    }
+    let Some(now) = (env.clock)() else { return };
+    let state_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
+    let last_applied = json_str_value(&state_raw, "lastApplied").unwrap_or_default();
+    if !due(&now, target_min, &last_applied) {
+        return;
+    }
+    let day = window_day(&now, target_min).to_string();
+    applog(env.log, &format!("suite: inside the apply window ({at}, now {}min); applying staged {r_version}", now.min));
+    attempt_apply(env, st, &r_version, &r_sha, &state_raw, &day);
+}
+
+// EVERY START of the Suite, before the relay first runs. (1) Choose the code tree (launch_code_dir: H3 + the
+// M1 tree repair). (2) If an update is waiting and its window is open now, or was missed while the computer was
+// off or asleep, apply it now — the relay is not running yet, so nobody is cut off (owner decision Q3). (3)
+// Start the relay if the apply did not, and when it is the override, confirm it really comes up and identifies
+// as the signed build; if not, return to the shipped code, retire the override and switch auto-update off
+// (audit M1 — "the relay stays down on every launch").
+fn startup(env: &ApplyEnv) -> RunState {
+    let choice = launch_code_dir(env.payload, env.suite_dir, env.data_dir, env.node, env.log);
+    let mut st = RunState {
+        code_dir: choice.dir.clone(),
+        alive: Arc::new(AtomicBool::new(false)), // nothing is running yet
+        cooldown_until: None,
+    };
+    if let (Some((r_version, r_sha, staged, target_min, _)), Some(_)) = (staged_and_enabled(env), env.node) {
+        if let Some(now) = (env.clock)() {
+            let state_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
+            let last_applied = json_str_value(&state_raw, "lastApplied").unwrap_or_default();
+            if due(&now, target_min, &last_applied) || missed_window(&now, target_min, staged, &last_applied) {
+                let day = window_day(&now, target_min).to_string();
+                applog(env.log, &format!("launch: an update ({r_version}) was waiting for a window this computer missed or is in; applying it before starting"));
+                attempt_apply(env, &mut st, &r_version, &r_sha, &state_raw, &day);
+            }
+        }
+    }
+    if st.alive.load(Ordering::SeqCst) {
+        return st; // the apply (or its rollback) already started the relay and health-checked it
+    }
+    let dir = st.code_dir.clone();
+    let up = spawn_and_wait(env, &mut st, &dir);
+    if let Some(id) = choice.signed.as_ref().filter(|_| dir == choice.dir) {
+        let (reachable, version_match, _, _) = if up {
+            health_probe(&id.sha, Duration::from_secs(30))
+        } else {
+            (false, false, false, false)
+        };
+        if !(reachable && version_match) {
+            applog(env.log, &format!(
+                "launch: the downloaded update did not come up (port={up} reachable={reachable} version_match={version_match}); returning to the shipped code"
+            ));
+            env.host.stop_relay();
+            let _ = wait_stopped(&st.alive, Duration::from_secs(20));
+            retire_override(env.suite_dir, env.log);
+            switch_auto_update_off(env.data_dir, env.log);
+            let prev_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
+            let la = json_str_value(&prev_raw, "lastApplied").unwrap_or_default();
+            write_state(env.suite_dir, &StateRec {
+                sha: "", version: "", date: "", last_applied: &la, outcome: "launch-failed",
+                reason: "the downloaded update would not start, so the Suite went back to the version it came with",
+                auto_off: true,
+            }, env.log);
+            let payload = env.payload.to_path_buf();
+            spawn_and_wait(env, &mut st, &payload);
+            env.host.reload_webview();
+        }
+    }
+    st
+}
+
+// The 8-step apply, fail-closed at every step. Any failure leaves the Suite running a known-good tree (the one it
+// was already running, last-good, or the baked-in payload) and never leaves a half-applied active/. When called
+// from startup nothing is running yet: the stop is then a no-op and every abort path that would "restart the
+// current code" leaves that to startup.
+fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str, prev_state_raw: &str, day: &str) {
+    let (suite_dir, payload, log) = (env.suite_dir, env.payload, env.log);
+    let node = match env.node {
+        Some(n) => n,
+        None => return,
+    };
     let staging = suite_dir.join("staging");
     let s_tgz = staging.join("bundle.tgz");
     let s_sig = staging.join("bundle.sig");
+    let was_running = st.alive.load(Ordering::SeqCst);
+    // Restart whatever was running before (only if something was).
+    let restart_prev = |st: &mut RunState| {
+        if was_running {
+            let prev = st.code_dir.clone();
+            spawn_and_wait(env, st, &prev);
+        }
+    };
 
     // 1. Authoritatively re-verify the staged tarball (don't trust READY alone). Payload verifier + key. The
     //    identity used from here on is the one INSIDE the signed bytes (audit HIGH 2) — READY is only a hint.
@@ -1173,15 +1347,15 @@ fn attempt_apply(
     }
 
     // 4. Stop the relay and confirm it is fully down (pid gone AND port free) before touching active/.
-    let prev_dir = cur_code_dir.clone();
     applog(log, "suite: stopping relay for code swap");
-    host.stop_relay();
-    if !wait_stopped(cur_alive, Duration::from_secs(20)) {
+    env.host.stop_relay();
+    if !wait_stopped(&st.alive, Duration::from_secs(20)) {
         // [AUDIT FIX #3] Back off before retrying so we don't kill→20s-wait→respawn every ~60s against a
-        // wedged child. The relay never swapped, so restarting prev_dir keeps the church online meanwhile.
-        *cooldown_until = Some(Instant::now() + APPLY_COOLDOWN);
+        // wedged child. The relay never swapped, so restarting prev keeps the church online meanwhile.
+        st.cooldown_until = Some(Instant::now() + APPLY_COOLDOWN);
         applog(log, "suite: APPLY aborted — relay did not stop cleanly; restarting current code, keeping staging; backing off apply ~1h");
-        spawn_and_wait(host, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        let prev = st.code_dir.clone();
+        spawn_and_wait(env, st, &prev);
         return;
     }
 
@@ -1192,13 +1366,13 @@ fn attempt_apply(
     let _ = std::fs::remove_dir_all(&active_new);
     if let Err(e) = std::fs::create_dir_all(&active_new) {
         applog(log, &format!("suite: APPLY aborted — mkdir active.new failed: {e}; restarting current"));
-        spawn_and_wait(host, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        restart_prev(st);
         return;
     }
     if !untar(&s_tgz, &active_new, log) {
         applog(log, "suite: APPLY aborted — unpack failed; restarting current");
         let _ = std::fs::remove_dir_all(&active_new);
-        spawn_and_wait(host, &prev_dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        restart_prev(st);
         return;
     }
     // Roll the previous override (if any) to last-good, including its retained verified tarball.
@@ -1215,8 +1389,11 @@ fn attempt_apply(
             let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
             let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
         }
-        let dir = if active.exists() { active.clone() } else { payload.to_path_buf() };
-        spawn_and_wait(host, &dir, payload, data_dir, log, cur_code_dir, cur_alive);
+        if was_running {
+            // Restart what was running; if that was the override and it could not be put back, the payload.
+            let dir = if st.code_dir == active && !active.exists() { payload.to_path_buf() } else { st.code_dir.clone() };
+            spawn_and_wait(env, st, &dir);
+        }
         return;
     }
     // The retained verified tarball the next launch re-checks against the payload key. [AUDIT FIX #4] A copy
@@ -1228,18 +1405,15 @@ fn attempt_apply(
         || std::fs::copy(&s_sig, suite_dir.join("active.sig")).is_err()
     {
         applog(log, "suite: APPLY FAILED — could not retain active.(tgz,sig); rolling back to last-good/payload");
-        rollback_and_restart(
-            host, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
-            cur_code_dir, cur_alive,
-        );
+        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not keep a copy of the update");
         applog(log, "suite: rollback complete (retain failure)");
         return;
     }
 
     // 6. Start from active/ (PAYLOAD_DIR=payload via spawn_relay), reload the webview.
     applog(log, "suite: starting relay from active/ (override)");
-    let came_up = spawn_and_wait(host, &active, payload, data_dir, log, cur_code_dir, cur_alive);
-    host.reload_webview();
+    let came_up = spawn_and_wait(env, st, &active);
+    env.host.reload_webview();
 
     // 7. Health: probe public /status for reachability, version identity, ok, and whether an ok:false is
     //    SOLELY a degraded store; decide via the pure matrix. [AUDIT FIX #1] A good bundle that boots and
@@ -1253,7 +1427,9 @@ fn attempt_apply(
         Outcome::Keep { store_degraded } => {
             // 8. Record success and clear staging. The new code booted and identifies as what we activated.
             let outcome = if store_degraded { "applied-store-degraded" } else { "applied" };
-            write_state(suite_dir, r_sha, r_version, r_date, today, outcome, at_str, log);
+            write_state(suite_dir, &StateRec {
+                sha: r_sha, version: r_version, date: r_date, last_applied: day, outcome, reason: "", auto_off: false,
+            }, log);
             discard_staging(suite_dir);
             let short = short_sha(r_sha);
             if store_degraded {
@@ -1261,7 +1437,6 @@ fn attempt_apply(
             } else {
                 applog(log, &format!("suite: APPLY OK — now running {r_version} ({short})"));
             }
-            return;
         }
         Outcome::Rollback { quarantine } => {
             applog(log, &format!(
@@ -1273,12 +1448,16 @@ fn attempt_apply(
                 let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
             }
             // Stop the freshly-started (bad) relay, then roll back and restart on known-good code.
-            host.stop_relay();
-            let _ = wait_stopped(cur_alive, Duration::from_secs(20));
-            rollback_and_restart(
-                host, suite_dir, payload, data_dir, log, &active, &last_good, prev_state_raw, today, at_str,
-                cur_code_dir, cur_alive,
-            );
+            env.host.stop_relay();
+            let _ = wait_stopped(&st.alive, Duration::from_secs(20));
+            let why = if !reachable {
+                "the update did not start"
+            } else if !version_match {
+                "the update started but reported the wrong version"
+            } else {
+                "the update started but reported a problem"
+            };
+            rollback_and_restart(env, st, prev_state_raw, day, why);
             applog(log, "suite: rollback complete");
         }
     }
@@ -1315,20 +1494,11 @@ fn main() {
             applog(&log, &format!("data_dir  = {data_dir:?}"));
             applog(&log, &format!("exe       = {:?}", std::env::current_exe()));
 
-            // EVERY LAUNCH (before the first spawn): choose the code tree. Run the activated override
-            // (suite/active) only if its retained verified tarball still checks out against the READ-ONLY
-            // payload key; otherwise run the baked-in payload. The verifier + release-pubkey.pem are ALWAYS
-            // taken from the payload, never from the (writable) active/ — see verify_tarball + spawn_relay.
-            // Any missing/corrupt/forged tarball falls back to payload. (P3 can leave an unverified .tmp with
-            // no READY after a crash; we never look at that here — only at active.tgz/active.sig.)
+            // EVERY LAUNCH: the code choice, a waiting update whose window was missed, and the first spawn all
+            // happen in startup(), run first thing on the controller thread below (so a launch-time apply never
+            // blocks the window from opening). The window thread just waits for the port, as before.
             let suite_dir = data_dir.join("suite");
             let node = node_sidecar_path();
-            let code_dir = launch_code_dir(&payload, &suite_dir, node.as_deref(), &log);
-            // start the relay (cwd = chosen code dir), data → writable dir, bound to loopback by default. All
-            // the env assembly (TRINITY_DATA_DIR / CLOUDFLARED_BIN / RELAY_HOST / RELAY_NO_OPEN / PAYLOAD_DIR)
-            // now lives in spawn_relay so the controller can respawn identically on an apply.
-            let app_handle = app.handle().clone();
-            let initial_alive = spawn_relay(&app_handle, &code_dir, &payload, &data_dir, &log);
 
             // wait for the relay to accept connections, then point the window at its control panel (127.0.0.1,
             // not localhost — on Windows localhost can resolve to IPv6 ::1 while the relay listens on IPv4).
@@ -1384,8 +1554,8 @@ fn main() {
             // both sides agree on where it lives.
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             let inhibitor_slot = app.state::<Inhibitor>().0.clone();
-            // Handed to the controller so it can drive the auto-update apply: a handle to spawn/kill the relay,
-            // the suite + payload dirs, and the node sidecar for verify + local-clock reads.
+            // Handed to the controller so it can start the relay and drive the auto-update apply: a handle to
+            // spawn/kill the relay, the suite + payload dirs, and the node sidecar for verify + local-clock reads.
             let app_ctrl = app.handle().clone();
             let suite_c = suite_dir.clone();
             let payload_c = payload.clone();
@@ -1393,12 +1563,23 @@ fn main() {
             {
                 let dd = data_dir.clone();
                 let lp = log.clone();
-                // The code dir currently running + the alive-flag of the current child, updated on every
-                // (re)spawn so the apply can stop-and-wait before a swap.
-                let mut cur_code_dir = code_dir.clone();
-                let mut cur_alive =
-                    initial_alive.clone().unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
                 thread::spawn(move || {
+                    // The production RelayHost: wraps this thread's AppHandle clone so the apply path can
+                    // spawn/stop the relay child and reload the webview (see TauriHost).
+                    let host = TauriHost { app: app_ctrl };
+                    let node_for_clock = node_c.clone();
+                    let clock = move || node_for_clock.as_deref().and_then(local_now);
+                    let env = ApplyEnv {
+                        host: &host,
+                        suite_dir: &suite_c,
+                        payload: &payload_c,
+                        data_dir: &dd,
+                        log: &lp,
+                        node: node_c.as_deref(),
+                        clock: &clock,
+                    };
+                    // FIRST: choose the code tree, apply a missed update, start the relay (see startup).
+                    let mut run = startup(&env);
                     let mut ka = KeepAwake::new(
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
                         inhibitor_slot,
@@ -1406,14 +1587,8 @@ fn main() {
                     let mut held = false;
                     let mut token_warned = false; // log the "no token yet" case once, not every 15s
                     // Throttle the auto-update apply check to ~once a minute (HH:MM is minute-resolution and
-                    // apply is once-per-day); the keep-awake policy below keeps its own 15s cadence.
-                    let mut last_apply_eval = Instant::now() - Duration::from_secs(120);
-                    // [AUDIT FIX #3] Set when an apply aborts on a stop-timeout; suppresses retries until it
-                    // elapses (see maybe_apply / attempt_apply). Owned by this long-lived controller thread.
-                    let mut apply_cooldown_until: Option<Instant> = None;
-                    // The production RelayHost: wraps this thread's AppHandle clone so the apply path can
-                    // spawn/stop the relay child and reload the webview exactly as before (see TauriHost).
-                    let host = TauriHost { app: app_ctrl };
+                    // apply is once per window); the keep-awake policy below keeps its own 15s cadence.
+                    let mut last_apply_eval = Instant::now();
                     loop {
                         // ── SUITE AUTO-UPDATE APPLY ─────────────────────────────────────────────────────
                         // Evaluated at the TOP of the tick, BEFORE the keep-awake-off and token early-continues
@@ -1423,17 +1598,7 @@ fn main() {
                         // PUBLIC /status — no admin token needed. [AUDIT#2 MEDIUM] [AUDIT FIX #4]
                         if last_apply_eval.elapsed() >= Duration::from_secs(60) {
                             last_apply_eval = Instant::now();
-                            maybe_apply(
-                                &host,
-                                &suite_c,
-                                &payload_c,
-                                &dd,
-                                &lp,
-                                node_c.as_deref(),
-                                &mut cur_code_dir,
-                                &mut cur_alive,
-                                &mut apply_cooldown_until,
-                            );
+                            maybe_apply(&env, &mut run);
                         }
                         // Off-switch FIRST, before any network GET: release if we were holding, then idle.
                         if dd.join("keep-awake-off").exists() {
@@ -1579,15 +1744,19 @@ mod tests {
 
     // ── Suite auto-update (P2) pure-decision tests ──────────────────────────────────────────────
 
+    // audit be258b42 HIGH 3: an override runs only when it verifies, is newer than the installed Suite, and the
+    // switch is on; one that is not newer is retired (a newer Suite was installed by hand).
     #[test]
-    fn choose_code_dir_picks_active_only_when_verified_and_present() {
-        // A valid, present, verified override → run it.
-        assert_eq!(choose_code_dir(true, true, true), CodeDir::Active);
-        // Any missing piece or a failed verify → fall back to the baked-in payload.
-        assert_eq!(choose_code_dir(true, true, false), CodeDir::Payload); // verify failed
-        assert_eq!(choose_code_dir(false, true, true), CodeDir::Payload); // no tgz
-        assert_eq!(choose_code_dir(true, false, true), CodeDir::Payload); // no sig
-        assert_eq!(choose_code_dir(false, false, false), CodeDir::Payload); // nothing staged
+    fn launch_pick_runs_an_override_only_when_signed_newer_and_switched_on() {
+        let pd = "2026-06-01T00:00:00Z";
+        let id = |d: &str| SignedId { sha: "2".repeat(40), date: d.into() };
+        assert_eq!(launch_pick(true, Some(&id("2026-10-01T00:00:00Z")), pd), LaunchPick::Active);
+        assert_eq!(launch_pick(true, None, pd), LaunchPick::Payload, "unverifiable → shipped code");
+        assert_eq!(launch_pick(false, None, pd), LaunchPick::Payload);
+        assert_eq!(launch_pick(false, Some(&id("2026-10-01T00:00:00Z")), pd), LaunchPick::Payload, "switched off → shipped code, files kept");
+        assert_eq!(launch_pick(true, Some(&id("2026-03-01T00:00:00Z")), pd), LaunchPick::Retire, "older than the installed Suite → retired");
+        assert_eq!(launch_pick(true, Some(&id(pd)), pd), LaunchPick::Retire, "as old as the installed Suite → retired");
+        assert_eq!(launch_pick(false, Some(&id("2026-03-01T00:00:00Z")), pd), LaunchPick::Retire, "obsolete even when switched off");
     }
 
     #[test]
@@ -1598,20 +1767,41 @@ mod tests {
         assert_eq!(rollback_target(false, false), RollbackTarget::Payload); // fail + none → payload
     }
 
+    // audit be258b42 HIGH 1: apply only inside HH:MM .. HH:MM+2h, once per window.
     #[test]
     fn due_window() {
-        let today = "2026-11-12";
-        // time-of-day reached, never applied → due.
-        assert!(due(180, 180, today, ""));
-        assert!(due(181, 180, today, ""));
-        // before the time → not due.
-        assert!(!due(120, 180, today, ""));
-        // already applied today → not due (once per calendar day).
-        assert!(!due(600, 180, today, "2026-11-12"));
-        // missed while asleep: woke at 10:00, 03:00 target, last applied an earlier day → due at next start.
-        assert!(due(600, 180, today, "2026-11-11"));
-        // off at the time then on later the same day, never applied → due.
-        assert!(due(200, 180, today, "2026-11-01"));
+        let at = |min: u32| LocalNow { min, today: "2026-11-12".into(), yesterday: "2026-11-11".into(), epoch: 0 };
+        assert!(due(&at(180), 180, ""), "03:00 with a 03:00 target");
+        assert!(due(&at(181), 180, ""));
+        assert!(due(&at(299), 180, ""), "04:59 is still inside 03:00–05:00");
+        assert!(!due(&at(300), 180, ""), "05:00 is outside the window");
+        assert!(!due(&at(120), 180, ""), "before the time");
+        assert!(!due(&at(600), 180, "2026-11-11"), "10:00 is NOT due, whatever was applied before (the old bug)");
+        assert!(!due(&at(840), 180, ""), "14:00 is not due");
+        assert!(!due(&at(200), 180, "2026-11-12"), "already applied in this window");
+        assert!(due(&at(200), 180, "2026-11-11"), "applied yesterday, today's window open");
+        // A window that crosses midnight: 23:30 → 01:30. At 00:15 the window is yesterday's.
+        assert!(due(&at(15), 1410, ""), "00:15 inside a 23:30 window");
+        assert!(!due(&at(15), 1410, "2026-11-11"), "…but not if yesterday's window already applied");
+        assert!(due(&at(1420), 1410, "2026-11-11"), "23:40 today: today's window");
+        assert!(!due(&at(100), 1410, ""), "01:40 is past a 23:30 window");
+        assert_eq!(window_day(&at(15), 1410), "2026-11-11");
+        assert_eq!(window_day(&at(200), 180), "2026-11-12");
+    }
+
+    // Owner decision Q3: a window missed while the computer was off is applied at the next START — only if the
+    // update was already waiting when that window opened.
+    #[test]
+    fn missed_window_at_start() {
+        // now = 2026-11-12 09:00:30 local-as-UTC (epoch chosen so seconds = 30); target 03:00 → window opened 03:00.
+        let nine = parse_instant("2026-11-12T09:00:30Z").unwrap();
+        let now = LocalNow { min: 540, today: "2026-11-12".into(), yesterday: "2026-11-11".into(), epoch: nine };
+        let staged_yesterday = parse_instant("2026-11-11T15:00:00Z").unwrap();
+        let staged_after_window = parse_instant("2026-11-12T08:00:00Z").unwrap();
+        assert!(missed_window(&now, 180, staged_yesterday, ""), "waiting since yesterday, off at 03:00 → apply now");
+        assert!(!missed_window(&now, 180, staged_after_window, ""), "arrived after the window → wait for the next");
+        assert!(!missed_window(&now, 180, staged_yesterday, "2026-11-12"), "the window already ran");
+        assert!(missed_window(&now, 180, staged_yesterday, "2026-11-11"), "only an earlier window ran");
     }
 
     #[test]
