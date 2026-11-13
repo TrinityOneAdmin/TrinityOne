@@ -987,6 +987,7 @@ enum Boot {
     Up,     // the port accepts connections
     Exited, // the process ended before it listened — the code is bad
     Silent, // still alive but nothing came up: no port, and no output for `quiet` past `base` (or `cap` hit)
+    NotStarted, // the host could not start a process at all (e.g. the node sidecar is missing) — says nothing about the code
 }
 
 // PURE: the verdict for one poll. None = keep waiting.
@@ -1339,7 +1340,7 @@ fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> Boot {
             st.alive = a;
             wait_boot(&st.alive)
         }
-        None => Boot::Exited,
+        None => Boot::NotStarted,
     }
 }
 
@@ -1462,28 +1463,52 @@ fn startup(env: &ApplyEnv) -> RunState {
         return st; // the apply (or its rollback) already started the relay and health-checked it
     }
     let dir = st.code_dir.clone();
-    let up = spawn_and_wait(env, &mut st, &dir) == Boot::Up;
+    // Something already answering on the port (e.g. an orphaned relay from a crashed session) would answer the
+    // health probe in the update's place; then nothing can be concluded about the update (audit 6630e30d M2).
+    let port_busy = port_reachable();
+    let boot = spawn_and_wait(env, &mut st, &dir);
     if let Some(id) = choice.signed.as_ref().filter(|_| dir == choice.dir) {
-        let (reachable, version_match, _, _) = if up {
+        if port_busy {
+            applog(env.log, "launch: the relay port was already in use before the start; cannot judge the downloaded update, leaving it in place");
+            return st;
+        }
+        let (reachable, version_match, _, _) = if boot == Boot::Up {
             health_probe(&id.sha, boot_timing().health)
         } else {
             (false, false, false, false)
         };
         if !(reachable && version_match) {
+            // Only EVIDENCE that the update's code is bad retires it and switches auto-update off: its process
+            // exited, or it answered as a different build. A slow or silent start (a big church, Defender) or a
+            // relay that could not be started at all (no sidecar) falls back for THIS run only and keeps the
+            // update and the switch — the next start tries again (audit 6630e30d MEDIUM 2).
+            let proven_bad = boot == Boot::Exited || (reachable && !version_match);
             applog(env.log, &format!(
-                "launch: the downloaded update did not come up (port={up} reachable={reachable} version_match={version_match}); returning to the shipped code"
+                "launch: the downloaded update did not come up (boot={boot:?} reachable={reachable} version_match={version_match}); running the shipped code{}",
+                if proven_bad { " and retiring the update" } else { " this time" }
             ));
             env.host.stop_relay();
             let _ = wait_stopped(&st.alive, Duration::from_secs(20));
-            retire_override(env.suite_dir, env.log);
-            switch_auto_update_off(env.data_dir, env.log);
             let prev_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
             let la = json_str_value(&prev_raw, "lastApplied").unwrap_or_default();
-            write_state(env.suite_dir, &StateRec {
-                sha: "", version: "", date: "", last_applied: &la, outcome: "launch-failed",
-                reason: "the downloaded update would not start, so the Suite went back to the version it came with",
-                auto_off: true, address_before: "",
-            }, env.log);
+            if proven_bad {
+                retire_override(env.suite_dir, env.log);
+                switch_auto_update_off(env.data_dir, env.log);
+                write_state(env.suite_dir, &StateRec {
+                    sha: "", version: "", date: "", last_applied: &la, outcome: "launch-failed",
+                    reason: "the downloaded update would not start, so the Suite went back to the version it came with",
+                    auto_off: true, address_before: "",
+                }, env.log);
+            } else {
+                write_state(env.suite_dir, &StateRec {
+                    sha: &json_str_value(&prev_raw, "installedSha").unwrap_or_default(),
+                    version: &json_str_value(&prev_raw, "installedVersion").unwrap_or_default(),
+                    date: &json_str_value(&prev_raw, "installedDate").unwrap_or_default(),
+                    last_applied: &la, outcome: "launch-slow",
+                    reason: "the downloaded update was too slow to start this time; it will be tried again at the next start",
+                    auto_off: false, address_before: "",
+                }, env.log);
+            }
             let payload = env.payload.to_path_buf();
             spawn_and_wait(env, &mut st, &payload);
             env.host.reload_webview();
@@ -1611,6 +1636,8 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     if !unpacked {
         applog(log, "suite: APPLY aborted — unpack failed or the unpacked tree is not the signed build; restarting current");
         let _ = std::fs::remove_dir_all(&active_new);
+        // Once per window: record the attempt so the next tick does not stop the relay again (audit 6630e30d M1).
+        keep_prev("not-applied", "the update could not be unpacked on this computer");
         finish_snapshot(suite_dir, r_sha);
         restart_prev(st);
         return;
@@ -1635,6 +1662,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
                 let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
             }
             let _ = std::fs::remove_dir_all(&active_new);
+            keep_prev("not-applied", "this computer could not set the current version aside to install the update");
             finish_snapshot(suite_dir, r_sha);
             restart_prev(st);
             return;

@@ -83,10 +83,10 @@ test('status line renders a STAGED update from the /update suite payload', () =>
 
 test('status line renders an APPLIED update (incl. store-degraded note)', () => {
   let { doc, els } = fakeDom();
-  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, installedVersion: '1.2.4', lastOutcome: 'applied' });
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, running: 'update', installedVersion: '1.2.4', lastOutcome: 'applied' });
   assert.match(els.suiteAutoStatus.textContent, /Updated to 1\.2\.4/i);
   ({ doc, els } = fakeDom());
-  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, installedVersion: '1.2.4', lastOutcome: 'applied-store-degraded' });
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, running: 'update', installedVersion: '1.2.4', lastOutcome: 'applied-store-degraded' });
   assert.match(els.suiteAutoStatus.textContent, /Updated to 1\.2\.4/i);
   assert.match(els.suiteAutoStatus.textContent, /store/i, 'subtle store-degraded note is shown');
 });
@@ -173,4 +173,22 @@ test('[audit H3] switched off while running a downloaded update: says it goes ba
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, running: 'update', runningVersion: 'bbbbbbb', shippedVersion: 'aaaaaaa' });
   assert.match(els.suiteAutoStatus.textContent, /Running a downloaded update \(bbbbbbb\)/);
   assert.match(els.suiteAutoStatus.textContent, /at the next start the Suite goes back to the version it came with \(aaaaaaa\)/);
+});
+
+test('[audit 6630e30d LOW 1] "Updated to X" is not claimed when the Suite is no longer running the update', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, running: 'shipped', installedVersion: '1.2.4', lastOutcome: 'applied' });
+  assert.doesNotMatch(els.suiteAutoStatus.textContent, /Updated to/);
+});
+
+test('[audit 6630e30d M2] a slow start that fell back says it will try again', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, running: 'shipped', lastOutcome: 'launch-slow' });
+  assert.match(els.suiteAutoStatus.textContent, /too slow to start.*tries the update again at the next start/);
+});
+
+test('[audit 6630e30d LOW 7] a 05:30 window (runs to 07:30) gets the daytime warning', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '05:30' });
+  assert.equal(els.suiteAutoHint.style.display, 'inline');
 });

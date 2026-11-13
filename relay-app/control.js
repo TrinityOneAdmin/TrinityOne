@@ -723,7 +723,9 @@
         (suite.autoOff && !suite.enabled ? ', so automatic updates were turned off. Turn them on to try the next release.' : ''));
     } else if (suite.lastOutcome === 'not-applied') {
       out.push('The last update was not installed' + (suite.lastReason ? ' (' + suite.lastReason + ')' : '') + '; it will try again');
-    } else if (suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') {
+    } else if (suite.lastOutcome === 'launch-slow') {
+      out.push('At the last start the downloaded update was too slow to start, so the Suite ran the version it came with; it tries the update again at the next start');
+    } else if ((suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') && suite.running === 'update') {
       out.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastApplied ? ' on ' + suite.lastApplied : '') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
     }
     if (suite.addressChanged && suite.addressChanged.to) out.push('After the update this relay\u2019s public address changed to ' + suite.addressChanged.to + ' — phones that use your relay\u2019s name follow it; anyone given the old address needs the new one');
@@ -748,12 +750,13 @@
     if (!toggle || !time) return;
 
     // Since audit be258b42 H1 an update installs only between HH:MM and HH:MM+2h, or — if the computer was off
-    // then — the next time the Suite starts. An evening time therefore lands while people may still be using it.
+    // then — the next time the Suite starts. A window that starts at 05:00 or later reaches the day, when people may
+    // be using the relay.
     const timeNote = (v) => {
       const m = /^(\d{1,2}):(\d{2})$/.exec(v || '');
       if (!m) return '';
       const h = +m[1];
-      return (h >= 7 && h < 23) ? 'Updates restart the relay for a minute or two, so a time when nobody is using it (e.g. 03:00) is best.' : '';
+      return (h >= 5 && h < 23) ? 'Updates restart the relay for a minute or two, so a time when nobody is using it (e.g. 03:00) is best.' : '';
     };
     const setHint = (text, bad) => {
       if (!hint) return;

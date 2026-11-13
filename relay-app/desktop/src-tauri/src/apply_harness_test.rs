@@ -480,6 +480,12 @@ fn end_to_end_apply_harness() {
     scenario_s_bundle_restaged_during_the_apply_is_not_mixed_in();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (s)");
 
+    scenario_t_slow_or_contested_start_keeps_the_update();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (t)");
+
+    scenario_u_failed_unpack_is_tried_once_per_window();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (u)");
+
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
 
@@ -861,6 +867,81 @@ fn scenario_q_silent_start_rolls_back_without_quarantine() {
     assert!(!fx.suite_dir.join("quarantine-sha").exists(), "a merely slow/silent start must not be quarantined");
     host.stop_relay();
     eprintln!("   (q) OK — rolled back, reason recorded, not quarantined");
+}
+
+// Put a signed override in place whose gateway runs `prelude` first (as install_active, with a custom bundle).
+fn install_active_with(fx: &Fixture, b: &Bundle) {
+    let tmp = fx.suite_dir.join(".mk-active");
+    std::fs::create_dir_all(&tmp).unwrap();
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &tmp, b);
+    let active = fx.suite_dir.join("active");
+    let _ = std::fs::remove_dir_all(&active);
+    std::fs::create_dir_all(&active).unwrap();
+    must(Command::new("tar").arg("-xzf").arg(tmp.join("bundle.tgz")).arg("-C").arg(&active), "untar active");
+    std::fs::rename(tmp.join("bundle.tgz"), fx.suite_dir.join("active.tgz")).unwrap();
+    std::fs::rename(tmp.join("bundle.sig"), fx.suite_dir.join("active.sig")).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// (t) [audit 6630e30d MEDIUM 2] At a start, only EVIDENCE retires an update. (1) An override that stays silent and
+//     never listens: the Suite runs the shipped code THIS time, keeps the update and the switch, records
+//     "launch-slow". (2) The port is already held by something else (an orphaned relay): nothing is concluded,
+//     nothing is deleted.
+fn scenario_t_slow_or_contested_start_keeps_the_update() {
+    eprintln!("── scenario (t): a slow or contested start keeps the update ──");
+    let fx = fresh_box("t", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    install_active_with(&fx, &Bundle { label: "v2-hang", sha: SHA2, date: D_OCT, lie: false, prelude: "await new Promise(() => { setInterval(() => {}, 1000); });" });
+    let host = TestHost::new(fx.node.clone());
+    let st = start_at(&host, &fx, &log, 840);
+    assert_eq!(st.code_dir, fx.payload, "a silent start must fall back to the shipped code for this run");
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "the relay was left down");
+    assert!(fx.suite_dir.join("active.tgz").exists(), "a merely slow update must NOT be deleted");
+    assert!(fx.data_dir.join("suite-autoupdate").exists(), "a merely slow update must NOT switch auto-update off");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("launch-slow"));
+    host.stop_relay();
+    assert!(wait_port_free(Duration::from_secs(10)));
+
+    // (2) the port is held by another relay before the start
+    let fx2 = fresh_box("t2", "2026-01-01T00:00:00Z");
+    let log2 = fx2.data_dir.join("relay-launch.log");
+    install_active(&fx2, &fx2.priv_key, "v2");
+    let squatter = TestHost::new(fx2.node.clone());
+    let _sq = start_v1(&squatter, &fx2, &log2); // v1 now holds the port, as an orphan would
+    let host2 = TestHost::new(fx2.node.clone());
+    let _st2 = start_at(&host2, &fx2, &log2, 840);
+    assert!(fx2.suite_dir.join("active").exists(), "an update was deleted because another process held the port");
+    assert!(fx2.data_dir.join("suite-autoupdate").exists(), "auto-update was switched off because another process held the port");
+    host2.stop_relay();
+    squatter.stop_relay();
+    eprintln!("   (t) OK — silent start: fell back this run, kept; contested port: nothing concluded");
+}
+
+// (u) [audit 6630e30d MEDIUM 1] An apply that aborts after stopping the relay (here: the unpack fails) must not
+//     stop the relay again on every tick of the window: it is recorded once ("not-applied") for the window.
+fn scenario_u_failed_unpack_is_tried_once_per_window() {
+    eprintln!("── scenario (u): a failed unpack is tried once per window ──");
+    let fx = fresh_box("u", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    write(&fx.suite_dir.join("active.new"), "a FILE where the unpack directory must go"); // unpack cannot happen
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "v1 must be restarted after the abort");
+    assert!(fx.data_dir.join("prepared-by-v1").exists(), "re-anchor: the first tick did stop the relay");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("not-applied"));
+    std::fs::remove_file(fx.data_dir.join("prepared-by-v1")).unwrap();
+    // the relay re-stages the same release an hour later; the next ticks in the same window leave it alone
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    run_apply(&host, &fx, &log, &mut cur);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(!fx.data_dir.join("prepared-by-v1").exists(), "the relay was stopped again inside the same window");
+    assert_eq!(served_version().as_deref(), Some("v1"));
+    host.stop_relay();
+    eprintln!("   (u) OK — one attempt per window");
 }
 
 // A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed
