@@ -229,9 +229,14 @@
     }
     restoreLocal(obj.local, MEMBER_PREFIXES, MEMBER_EXACT);
   }
+  const HELPERKEY_RX = /\.helperkey\./;
   function collectSteward() {
     let key = ''; try { key = (window.Steward && window.Steward.exportMnemonic && window.Steward.exportMnemonic()) || ''; } catch {}
-    return { v: 1, app: 'trinityone', kind: 'steward', createdAt: new Date().toISOString(), churchKey: key, local: snapshot(STEWARD_PREFIXES) };
+    const local = snapshot(STEWARD_PREFIXES);
+    // THE HELPER MARK NEVER TRAVELS (audit of 91a77fe7, NIT 1): trinityone.steward.helperkey.<key> means "THIS device minted
+    // that key as a bare helper key", which no other device — and no later restore — can truthfully say.
+    for (const k of Object.keys(local)) if (HELPERKEY_RX.test(k)) delete local[k];
+    return { v: 1, app: 'trinityone', kind: 'steward', createdAt: new Date().toISOString(), churchKey: key, local };
   }
   // DEFERRED RESTORE. A file restore must NOT write steward localStorage keys until the PIN is set.
   // Without this, "Keep my current church" leaves the file’s network-keys and active-id on this device,
@@ -255,7 +260,9 @@
     //  - trinityone.steward.church-key.removing: the removal breadcrumb. A crafted file carrying it
     //    puts this device into mid-removal state.
     const localFiltered = {};
-    const STEWARD_EXCLUDE = /\.church-key$|\.church-key\.removing$/;
+    //  - trinityone.steward.helperkey.<key>: "this device minted that key as a helper key" (audit of 91a77fe7, NIT 1).
+    //    restoreKey has just cleared it for the restored key; a file written by an older build must not put it back.
+    const STEWARD_EXCLUDE = /\.church-key$|\.church-key\.removing$|\.helperkey\./;
     for (const [k, v] of Object.entries(obj.local || {})) {
       if (!STEWARD_EXCLUDE.test(k)) localFiltered[k] = v;
     }

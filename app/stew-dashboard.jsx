@@ -3855,18 +3855,20 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // "5 people want to help" over a page that listed 4 (owner-reported 2026-11-12) — it counted people already
   // answered (declined, approved, removed) and people already on the roster.
   const stewardReqs = useHelperRequests().pending;
-  // Approving a steward is owner-only, and this banner renders for whoever is on Overview — including a
-  // delegate. Sending them to Settings → Security, which is owner-gated, is directions to a door that is not
-  // there for them (round 7: a steward followed it and found "no such page exists").
+  // NOT ON A HELPER'S CONSOLE (owner 2026-11-13: "hide it unless the helper has full permissions that include adding
+  // helpers. But the issue was that it was stale"). No helper can hold such a permission: the roster is church-key-only
+  // at the relay (gateway.mjs: a STEWARDS_D roster is accepted only when the church key signed it, so a helper's own-key
+  // signature is refused), no helper capability (STEWARD_CAPS) covers it, and DashStewardsPanel
+  // tells a delegate it "is not something a church can grant". And a helper's count was stale by construction: the owner's
+  // answers (stewardhandled:<church>) are sealed to the church key, so every request the owner declined kept counting on
+  // their console for ever (measured: owner 1, helper 2). So a delegate gets no banner at all; the owner's is unchanged.
   const _ovDelegated = !!(window.Steward && window.Steward.actingChurch);
-  const stewardReqBanner = stewardReqs.length ? (
+  const stewardReqBanner = (stewardReqs.length && !_ovDelegated) ? (
     <button onClick={() => goSettings('delegated')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, var(--gold) 38%, var(--line))', background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--gold)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={22} color="#fff" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 16, color: '#8a6717' }}>{stewardReqs.length} {stewardReqs.length === 1 ? 'person wants' : 'people want'} to help steward</div>
-        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{_ovDelegated
-          ? 'Only whoever holds the church key can approve them.'
-          : 'Approve them under Settings → Security → Helpers.'}</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Approve them under Settings → Security → Helpers.</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
