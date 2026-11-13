@@ -504,6 +504,9 @@ fn end_to_end_apply_harness() {
     scenario_aa_held_originals_are_not_built_over();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (aa)");
 
+    scenario_ab_a_start_never_builds_over_held_originals();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (ab)");
+
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
 
@@ -1210,12 +1213,17 @@ fn restore_reports_a_failed_put_back_and_keeps_the_original() {
     let logged = std::fs::read_to_string(&log).unwrap_or_default();
     assert!(!logged.contains("put back as it was"), "the log claims the store was put back: {logged}");
     assert_eq!(std::fs::read_to_string(data.join("relay.sqlite.restore-aside")).unwrap(), "BAD-MAIN", "the original must be kept");
-    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite-wal")).unwrap(), "BAD-WAL", "the side files that could be put back were");
+    // audit 55c3b306 N2: with the main file unable to come back, the side files STAY aside with it (an original -wal
+    // next to a missing main file would be taken for a brought-in one and deleted by the next recovery)
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite-wal.restore-aside")).unwrap(), "BAD-WAL");
     assert!(!data.join("relay.sqlite").exists());
+    assert!(why.contains("relay.sqlite-wal.restore-aside"), "the held -wal is not named: {why}");
     // the next start repairs it from the same names
     let note = recover_interrupted_restore(&data, &log).expect("recovery must report what it did");
     assert!(note.contains("put back exactly as it was"), "{note}");
     assert_eq!(std::fs::read_to_string(data.join("relay.sqlite")).unwrap(), "BAD-MAIN");
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite-wal")).unwrap(), "BAD-WAL", "the original -wal was lost");
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite-shm")).unwrap(), "BAD-SHM");
     assert!(!data.join("relay.sqlite.restore-aside").exists());
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1386,6 +1394,44 @@ fn scenario_aa_held_originals_are_not_built_over() {
     assert!(!fx.data_dir.join("relay.sqlite.restore-aside").exists());
     host.stop_relay();
     eprintln!("   (aa) OK — nothing built over the held originals; the next start put them back");
+}
+
+// (ab) [audit 55c3b306 N1] The same held-originals case, reached through a START (a missed window applied before the
+//      relay first runs): no relay may start; and a start whose recovery cannot put the originals back starts none.
+fn scenario_ab_a_start_never_builds_over_held_originals() {
+    eprintln!("── scenario (ab): a start never builds over held originals ──");
+    let fx = fresh_box("ab", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: D_OCT, lie: true, prelude: "" });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    set_mtime(&fx.staging.join("READY"), now_epoch() - 10 * 3600); // missed → applied at the start
+    write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
+    {
+        let host = TestHost::new(fx.node.clone());
+        RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = Some("relay.sqlite".into()));
+        let _st = start_at(&host, &fx, &log, 540);
+        RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = None);
+        assert!(wait_port_free(Duration::from_secs(5)), "a relay was started over the held originals (start-up route)");
+        assert!(!fx.data_dir.join("relay.sqlite").exists(), "a new store was created over the held originals");
+        assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"), "the stuck record was overwritten");
+    }
+    // second route: recovery itself cannot put the main file back → still nothing starts
+    {
+        let host = TestHost::new(fx.node.clone());
+        RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = Some("relay.sqlite".into()));
+        let _st = start_at(&host, &fx, &log, 840);
+        RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = None);
+        assert!(wait_port_free(Duration::from_secs(5)), "a relay was started although recovery could not put the data back");
+        assert!(fx.data_dir.join("relay.sqlite.restore-aside").exists(), "the held original was lost");
+    }
+    // and a normal start then recovers and runs, with the "stuck" record replaced
+    let host = TestHost::new(fx.node.clone());
+    let _st = start_at(&host, &fx, &log, 840);
+    assert!(wait_for_served("v1", Duration::from_secs(10)));
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("recovered"), "the stale stuck record stayed (N3)");
+    host.stop_relay();
+    eprintln!("   (ab) OK — no relay over held originals on either start route; recovered afterwards");
 }
 
 // A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed

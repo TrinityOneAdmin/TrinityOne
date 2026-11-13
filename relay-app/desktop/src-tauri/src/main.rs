@@ -1260,6 +1260,11 @@ fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Resul
     Ok(dir)
 }
 
+// Is any original store file held aside by an unfinished restore?
+fn data_held_aside(data_dir: &Path) -> bool {
+    store_paths(data_dir).iter().any(|l| aside_path(l).exists())
+}
+
 // The three store files and the names restore_store gives them while it works. Shared by restore_store and the
 // start-up recovery (recover_interrupted_restore), so both read the same names.
 fn store_paths(data_dir: &Path) -> [PathBuf; 3] {
@@ -1308,10 +1313,13 @@ fn restore_store(data_dir: &Path, backup: &Path, log: &Path) -> Result<(), Strin
     }
     // Put set-aside files back (reverse order, each with rename_retry inside restore_rename). Returns the asides
     // that could NOT be put back — those stay on disk.
+    // The main file was set aside LAST, so it comes back FIRST. If IT cannot come back, the side files stay aside
+    // too: putting the original -wal back next to a missing main file would make the next recovery take it for one
+    // brought in from the backup and delete it (audit 55c3b306 N2).
     let put_back = |aside: &Vec<(PathBuf, PathBuf)>| -> Vec<PathBuf> {
         let mut stuck = Vec::new();
         for (live, moved) in aside.iter().rev() {
-            if restore_rename(moved, live, log).is_err() {
+            if !stuck.is_empty() || restore_rename(moved, live, log).is_err() {
                 stuck.push(moved.clone());
             }
         }
@@ -1413,6 +1421,11 @@ fn recover_interrupted_restore(data_dir: &Path, log: &Path) -> Option<String> {
         let mut order: Vec<&PathBuf> = asides.clone();
         order.sort_by_key(|l| if **l == main { 0 } else { 1 });
         for l in order {
+            if !stuck.is_empty() {
+                // the main file could not come back: leave every side file aside with it (audit 55c3b306 N2)
+                stuck.push(aside_path(l).display().to_string());
+                continue;
+            }
             if l.exists() {
                 let _ = std::fs::remove_file(l); // a brought-in side file; the old one replaces it
             }
@@ -1577,6 +1590,13 @@ struct RunState {
 // startup, apply-start, recover and rollback.
 fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> Boot {
     st.code_dir = dir.to_path_buf();
+    // [audit 55c3b306 N1] NEVER start a relay while the church's original data files are held aside by a restore
+    // that could not finish or be undone: it would create a new relay.sqlite over them, and the next start's
+    // recovery would read that as a finished restore and delete the originals. Every start path goes through here.
+    if data_held_aside(env.data_dir) {
+        applog(env.log, "suite: NOT starting the relay — the church's original data files are held aside (*.restore-aside)");
+        return Boot::NotStarted;
+    }
     match env.host.spawn_relay(dir, env.payload, env.data_dir, env.log) {
         Some(a) => {
             st.alive = a;
@@ -1614,7 +1634,7 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
     // the next start's recovery would then mistake that for a finished restore. So: start nothing, touch no code
     // files, switch auto-update off, and say what to do. The next start's recovery (before any relay runs) puts the
     // originals back from the same names.
-    if store_paths(env.data_dir).iter().any(|l| aside_path(l).exists()) {
+    if data_held_aside(env.data_dir) {
         switch_auto_update_off(env.data_dir, env.log);
         let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
         let prev_ver = json_str_value(prev_state_raw, "installedVersion").unwrap_or_default();
@@ -1736,6 +1756,23 @@ fn startup(env: &ApplyEnv) -> RunState {
     // note for the panel (suite/recovered.txt; cleared when the operator acknowledges it, gateway.mjs).
     if let Some(note) = recover_interrupted_restore(env.data_dir, env.log) {
         let _ = write_file_atomic(&env.suite_dir.join("recovered.txt"), &format!("{note}\n"), env.log);
+        // a "stuck … NOT restarted" record from before this start is now out of date (audit 55c3b306 N3)
+        let prev = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
+        if json_str_value(&prev, "lastOutcome").as_deref() == Some("stuck") && !data_held_aside(env.data_dir) {
+            write_state(env.suite_dir, &StateRec {
+                sha: &json_str_value(&prev, "installedSha").unwrap_or_default(),
+                version: &json_str_value(&prev, "installedVersion").unwrap_or_default(),
+                date: &json_str_value(&prev, "installedDate").unwrap_or_default(),
+                last_applied: &json_str_value(&prev, "lastApplied").unwrap_or_default(),
+                outcome: "recovered", reason: &note, auto_off: true, address_before: "", restore_failed: "",
+            }, env.log);
+        }
+    }
+    if data_held_aside(env.data_dir) {
+        // Recovery could not put the originals back: start NOTHING (audit 55c3b306 N1, second route). The window
+        // shows "relay not reachable"; relay-launch.log and recovered.txt say why and where the files are.
+        applog(env.log, "launch: the church's original data is still held aside; the relay is NOT started. Get help: see relay-launch.log");
+        return RunState { code_dir: env.payload.to_path_buf(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
     }
     let choice = launch_code_dir(env.payload, env.suite_dir, env.data_dir, env.node, env.log);
     let mut st = RunState {
@@ -1753,6 +1790,11 @@ fn startup(env: &ApplyEnv) -> RunState {
                 attempt_apply(env, &mut st, &r_version, &r_sha, &state_raw, &day);
             }
         }
+    }
+    if data_held_aside(env.data_dir) {
+        // the launch-time apply rolled back but could not put the data back: its "stuck" record stands; start nothing
+        applog(env.log, "launch: the church's original data is held aside after a failed restore; the relay is NOT started");
+        return st;
     }
     if st.alive.load(Ordering::SeqCst) {
         return st; // the apply (or its rollback) already started the relay and health-checked it
