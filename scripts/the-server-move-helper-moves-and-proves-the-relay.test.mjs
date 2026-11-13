@@ -407,8 +407,10 @@ withRig('M1: killed between recording the switch and writing relay.env: recovery
   cleanDir(r);
   assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.data);
   assert.equal(r.journal().move.state, 'switched');
+  const mark = r.log('systemctl.log');
   const res = bootRecover(r); assert.equal(res.status, 0, res.stderr + r.lastOutput);
   assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.target);
+  assert.doesNotMatch(r.log('systemctl.log').slice(mark.length), /^(start|stop) /m, 'boot recovery started or stopped the relay (the unit is ordered after it: that would deadlock)');
   r.systemctl('start', 'trinityone-relay'); assert.ok(await up(), r.log('relay.log').slice(-1200));
   assert.equal(finishAfterBoot(r).status, 0);
   assert.equal(r.journal().move.state, 'awaiting-confirm'); assert.ok(await identityOK(pub));
