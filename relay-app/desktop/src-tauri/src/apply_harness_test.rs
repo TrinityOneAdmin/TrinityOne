@@ -1431,6 +1431,7 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
     write_ready(&fx.staging, "v4", &sha_of('4'), "2026-10-03T00:00:00Z");
     // staged 20 h ago: before today's 00:00 window opened (the start is at "14:00"), so it counts as MISSED
     set_mtime(&fx.staging.join("READY"), now_epoch() - 20 * 3600);
+    yesterday_in_state(&fx.suite_dir); // route 1 already used today's window; this is the next one
     let rf_before = read_state_field(&fx.suite_dir, "restoreFailed").unwrap_or_default();
     let backups_before = std::fs::read_dir(fx.suite_dir.join("db-backup")).map(|r| r.count()).unwrap_or(0);
     {
