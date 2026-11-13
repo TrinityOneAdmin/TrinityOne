@@ -357,6 +357,7 @@ test('C6 a key temp file whose writer is gone is deleted at start-up; one whose 
   writeFileSync(join(dir, 'relay-key.json.tmp-2147483646'), '{"sk":"dead writer"}');
   writeFileSync(join(dir, 'relay-key.json.tmp-' + process.pid), '{"sk":"live writer"}');   // this test process: alive
   writeFileSync(join(dir, '.trinity-data-dir.tmp-2147483646'), '{}');
+  writeFileSync(join(dir, 'relay-key.json.tmp-notes'), 'not a name the guard writes');   // audit D N-2
   const r = start(dir, {});
   try {
     let up = false;
@@ -372,14 +373,15 @@ test('C6 a key temp file whose writer is gone is deleted at start-up; one whose 
     const list = spawnSync('tar', ['tzf', f], { encoding: 'utf8' }); rmSync(f, { force: true });
     assert.equal(list.status, 0, list.stderr);
     assert.match(list.stdout, /relay-key\.json/, 'fixture: the backup does not list the key at all');
-    assert.doesNotMatch(list.stdout, /relay-key\.json\.tmp-/, 'a key temp file (a complete secret key) went into the backup');
+    assert.doesNotMatch(list.stdout, /relay-key\.json\.tmp-\d/, 'a key temp file (a complete secret key) went into the backup');
+    assert.match(list.stdout, /relay-key\.json\.tmp-notes/, 'the backup exclude is wider than the names the guard writes (audit D N-2)');
   } finally { if (r.code === undefined) { r.p.kill('SIGKILL'); await r.exited; } rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('C9 PINNED + a fresh folder an OS file browser has already littered (.DS_Store, Thumbs.db, desktop.ini): starts', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'trin-r1-c9-'));
   try {
-    for (const n of ['.DS_Store', 'Thumbs.db', 'desktop.ini', '._x']) writeFileSync(join(dir, n), 'x');
+    for (const n of ['.DS_Store', 'Thumbs.db', 'desktop.ini']) writeFileSync(join(dir, n), 'x');
     await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
     assert.ok(readJson(join(dir, 'relay-key.json')).pub);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -400,5 +402,33 @@ test('rule 4: PINNED + a folder holding only a .trinity-data-dir temp file count
     writeFileSync(join(dir, '.trinity-data-dir.tmp-' + process.pid), '{}');   // a LIVE pid, so start-up does not delete it first
     await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
     assert.ok(readJson(join(dir, 'relay-key.json')).pub);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── Audit D of 260c4fdb ──────────────────────────────────────────────────────────────────────────────────────
+// N-1: a gateway that is pid 1 in a container every time must still clear a temp its PREVIOUS boot left. A preload
+// writes, inside the gateway process before its code runs, a key temp named with the gateway's own pid and an old mtime.
+test('N-1 a key temp named with the gateway\'s OWN pid but older than this process is a previous boot\'s: deleted', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-r1-n1-'));
+  const dir = join(base, 'data'); mkdirSync(dir);
+  const pre = join(base, 'plant.mjs');
+  writeFileSync(pre, `
+    import fs from 'node:fs';
+    const f = ${JSON.stringify(dir)} + '/relay-key.json.tmp-' + process.pid;
+    fs.writeFileSync(f, '{"sk":"previous boot"}'); const t = new Date(Date.now() - 3600e3); fs.utimesSync(f, t, t);
+    fs.writeFileSync(${JSON.stringify(join(base, 'planted'))}, f);`);
+  try {
+    await expectBoot(dir, { NODE_OPTIONS: '--import ' + pre });
+    const planted = readFileSync(join(base, 'planted'), 'utf8');
+    assert.equal(existsSync(planted), false, 'a previous boot\'s key temp (a secret key) survived because it carries our pid');
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('N-3 PINNED + a folder holding only ._relay.sqlite (AppleDouble from a deleted relay) is NOT fresh: refused', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-n3-'));
+  try {
+    writeFileSync(join(dir, '._relay.sqlite'), 'x');
+    await expectRefusal(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    assert.equal(existsSync(join(dir, 'relay-key.json')), false, 'a new identity was minted next to a deleted relay\'s leftovers');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

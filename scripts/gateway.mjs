@@ -107,8 +107,11 @@ const DATA_DIR_TEMP_RE = /^(relay-key\.json|\.trinity-data-dir)\.tmp-(\d+)$/;
 try {
   for (const n of readdirSync(DATA_DIR)) {
     const m = DATA_DIR_TEMP_RE.exec(n); if (!m) continue;
-    const pid = Number(m[2]); let alive = pid === process.pid;
-    if (!alive) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
+    // Our OWN pid on a temp written before this process started is a previous boot's (a container gateway is often
+    // pid 1 every time — audit D N-1): dead. Judged by the file's mtime against this process's start.
+    const pid = Number(m[2]); let alive = false;
+    if (pid === process.pid) { try { alive = statSync(join(DATA_DIR, n)).mtimeMs >= Date.now() - process.uptime() * 1000 - 1000; } catch {} }
+    else { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
     if (!alive) { try { rmSync(join(DATA_DIR, n), { force: true }); } catch {} }
   }
 } catch {}
@@ -116,9 +119,10 @@ try {
 // folder) must be able to start. R1 stays closed: an unplugged drive cannot produce an existing <mount>/<leaf>,
 // and a folder with ANY file in it but no key is still refused. Measured before anything below writes into it.
 // Leftover temp files from a first boot killed while writing the key or stamp (below) do not count, nor does the
-// clutter an OS file browser drops into any folder it opens (audit C C9).
+// clutter an OS file browser drops into any folder it opens (audit C C9). NOT ._* AppleDouble files: a lone
+// ._relay.sqlite on exFAT is what a deleted relay leaves behind, so it must not read as "fresh" (audit D N-3).
 const OS_CLUTTER = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'ehthumbs.db', 'desktop.ini', '.directory', '.Spotlight-V100', '.Trashes', '.fseventsd', '.TemporaryItems']);
-let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => DATA_DIR_TEMP_RE.test(n) || OS_CLUTTER.has(n) || n.startsWith('._')); } catch {}
+let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => DATA_DIR_TEMP_RE.test(n) || OS_CLUTTER.has(n)); } catch {}
 // Called again after a staged restore is applied (below), when relay-key.json may have changed.
 function checkDataDirIdentity() {
   refuseIfMovedOut();
@@ -8113,7 +8117,8 @@ function serveStatic(req, res) {
       child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
         '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log',
         '--exclude=./rejected.log', '--exclude=./rejected.log.1', '--exclude=./.relay-lock',
-        '--exclude=./relay-key.json.tmp-*', '--exclude=./.trinity-data-dir.tmp-*', '.'],
+        // the names the guard writes (tmp-<pid>); a tar glob cannot say digits-only, so this is the closest match
+        '--exclude=./relay-key.json.tmp-[0-9]*', '--exclude=./.trinity-data-dir.tmp-[0-9]*', '.'],
         { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"tar not available on this box"}'); return; }
     res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + fname + '"', ...SEC_HEADERS });
