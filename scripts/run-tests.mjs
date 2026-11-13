@@ -44,6 +44,7 @@ import { availableParallelism } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tallyTap, formatTally } from './tap-tally.mjs';
 
 const CEILING = 24;
 const concurrency = Math.max(1, Math.min(CEILING, availableParallelism() - 1));
@@ -227,6 +228,16 @@ child.on('exit', (code, signal) => {
         }
       } catch {}
     }
+  } catch {}
+  // THE TALLY: which tests failed, by file — and, SEPARATELY, the known open findings (`not ok … # TODO`), which
+  // are red on purpose and are NEVER failures. A "58 failing" baseline was once counted by grepping this TAP for
+  // `not ok`, ten of which were TODO rows (scripts/tap-tally.mjs). Printed on every run, named or full, and kept
+  // beside the TAP so the list can be diffed against the previous run's.
+  try {
+    const t = tallyTap(readFileSync(tapFile, 'utf8'));
+    console.error('\n' + formatTally(t));
+    writeFileSync(join(tapDir, 'failing.txt'), t.failing.map(r => r.file + '\t' + r.name).join('\n') + '\n');
+    writeFileSync(join(tapDir, 'todo.txt'), t.todo.map(r => r.file + '\t' + r.name).join('\n') + '\n');
   } catch {}
   // KEEP THE TAP. It used to be deleted here, so the only durable record of what failed died with the run —
   // and a failure list you cannot diff against the previous one is a list you can only guess at. Prune to the
