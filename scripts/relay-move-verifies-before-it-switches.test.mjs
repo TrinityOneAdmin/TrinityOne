@@ -502,3 +502,26 @@ test('D-4 the "possibly cut short" rule is macOS-only', async () => {
     assert.equal(await relayLockHeld(dir, { platform: 'darwin', info }), true);
   } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ── Audit E of 045b5d6b ──────────────────────────────────────────────────────────────────────────────────────
+test('E-2 Linux: an unknown command line with a later (clock-recomputed) start time is still held', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-lock-e2-'));
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'ignore' });
+  try {
+    const lockAt = Date.now() - 3600e3;
+    writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid, startedAt: new Date(lockAt).toISOString() }));
+    const info = async () => ({ commandLine: null, startedAt: lockAt + 60000 });
+    assert.equal(await relayLockHeld(dir, { platform: 'linux', info }), true, 'on Linux a drifted start time alone released a lock');
+    assert.equal(await relayLockHeld(dir, { platform: 'win32', info }), false, 'Windows start times do not drift: a later start there is a reused pid');
+  } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('E-6 a lock whose pid is not a process id (-1, 0, 1.5, "abc") reads as not held', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-lock-e6-'));
+  try {
+    for (const pid of [-1, 0, 1.5, 'abc']) {
+      writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid }));
+      assert.equal(await relayLockHeld(dir, { platform: 'linux', info: async () => ({ commandLine: null, startedAt: null }) }), false, 'pid ' + JSON.stringify(pid) + ' read as held');
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

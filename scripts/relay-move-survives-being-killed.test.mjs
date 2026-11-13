@@ -8,7 +8,7 @@
 // The second half drives a real move end to end through the step-8 check: pass, fail -> rollback.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, cpSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, cpSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -482,5 +482,28 @@ test('N-4 only <leaf>.tombstone-tmp-<digits> folders are swept; anything else wi
     const notes = t.from + '.tombstone-tmp-notes'; mkdirSync(notes);
     await recoverMove(t);
     assert.ok(existsSync(notes), 'a folder the mover never wrote was deleted');
+  } finally { t.done(); }
+});
+
+// ── Audit E of 045b5d6b ──────────────────────────────────────────────────────────────────────────────────────
+test('E-3 a pointer whose relayPub() throws does not make recovery throw', async () => {
+  const t = rig('rename');
+  try {
+    const m = await run(t); assert.equal(m.ok, true);
+    assert.equal((await beginCheck(t)).ok, true); checkPassed(t);
+    const pointer = { read: () => t.pointer.read(), write: (d, p) => t.pointer.write(d, p), relayPub() { throw new Error('config unreadable'); } };
+    const r = await recoverMove({ journal: t.journal, pointer });
+    assert.equal(r.action, 'none'); assert.equal(r.dataDir, t.to);
+  } finally { t.done(); }
+});
+
+test('E-5 a tombstone temp carrying OUR pid but older than this process is a previous run\'s: swept', async () => {
+  const t = rig('rename');
+  try {
+    const m = await run(t); assert.equal(m.mode, 'rename');
+    const mine = t.from + '.tombstone-tmp-' + process.pid; mkdirSync(mine); writeFileSync(join(mine, MOVED_TO), 'x');
+    const old = new Date(Date.now() - 24 * 3600e3); utimesSync(mine, old, old);
+    await recoverMove(t);
+    assert.equal(existsSync(mine), false, 'a previous run\'s tombstone temp with our pid was kept for ever');
   } finally { t.done(); }
 });

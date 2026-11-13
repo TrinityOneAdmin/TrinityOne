@@ -381,7 +381,7 @@ test('C6 a key temp file whose writer is gone is deleted at start-up; one whose 
 test('C9 PINNED + a fresh folder an OS file browser has already littered (.DS_Store, Thumbs.db, desktop.ini): starts', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'trin-r1-c9-'));
   try {
-    for (const n of ['.DS_Store', 'Thumbs.db', 'desktop.ini']) writeFileSync(join(dir, n), 'x');
+    for (const n of ['.DS_Store', '._.DS_Store', 'Thumbs.db', 'desktop.ini']) writeFileSync(join(dir, n), 'x');   // ._.DS_Store: macOS AppleDouble on exFAT (audit E E-1)
     await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
     assert.ok(readJson(join(dir, 'relay-key.json')).pub);
   } finally { rmSync(dir, { recursive: true, force: true }); }

@@ -212,13 +212,15 @@ const START_SLACK_MS = 5000;   // ps lstart has 1 s resolution; clocks and the l
 export async function relayLockHeld(dir, { platform = process.platform, info = processInfo } = {}) {
   const l = readJson(join(dir, '.relay-lock'));
   const pid = l && Number(l.pid);
-  if (!pid || pid === process.pid) return false;
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;   // -1 / 0 / 1.5 are not a process (audit E E-6)
   try { process.kill(pid, 0); } catch (e) { if (!e || e.code !== 'EPERM') return false; }
   const p = await info(pid, platform) || {};
   const cmd = p.commandLine;
   if (cmd !== null && cmd !== undefined && /gateway\.mjs/.test(cmd)) return true;
   const lockAt = l && Date.parse(l.startedAt);
-  if (p.startedAt && lockAt && p.startedAt > lockAt + START_SLACK_MS) return false;   // a later, non-gateway process
+  // a later, NON-gateway process — but on Linux an unknown command line with a known (clock-recomputed) start time
+  // proves nothing, so that case stays held (audit E E-2)
+  if (p.startedAt && lockAt && p.startedAt > lockAt + START_SLACK_MS && !(platform === 'linux' && (cmd === null || cmd === undefined))) return false;
   if (cmd === null || cmd === undefined) return true;
   if (platform === 'darwin' && /node/i.test(cmd) && cmd.length >= 79) return true;   // possibly cut short by BSD ps
   return false;
@@ -336,7 +338,8 @@ export function jsonFieldStore(file, field) {
     write(v) { const o = readJson(file) || {}; if (v === null || v === undefined) delete o[field]; else o[field] = v; mkdirSync(dirname(file), { recursive: true }); writeAtomic(file, JSON.stringify(o, null, 2) + '\n'); },
   };
 }
-// pointer = { read(): dataDir|null, write(dataDir, relayPub) }
+// pointer = { read(): dataDir|null, write(dataDir, relayPub), relayPub?(): pub|null — the identity the pointer expects;
+//             optional, read through a try (a throwing pointer never makes recovery throw) }
 export function jsonPointer(file) {
   const d = jsonFieldStore(file, 'dataDir'), k = jsonFieldStore(file, 'relayPub');
   return { read: () => d.read(), write(dir, pub) { const o = readJson(file) || {}; o.dataDir = dir; if (pub) o.relayPub = pub; mkdirSync(dirname(file), { recursive: true }); writeAtomic(file, JSON.stringify(o, null, 2) + '\n'); }, relayPub: () => k.read() };
@@ -626,7 +629,10 @@ function sweepTombstoneTemps(j, journal, now) {
   for (const n of names) {
     if (!n.startsWith(pre) || !/^\d+$/.test(n.slice(pre.length))) continue;   // only names makeTombstoneDir writes (D N-4)
     const p = join(dirname(j.from), n), pid = Number(n.slice(pre.length));
-    let alive = pid === process.pid; if (!alive && pid) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
+    // our own pid on a temp older than this process is a previous run's (audit E E-5, as the gateway's N-1)
+    let alive = false;
+    if (pid === process.pid) { try { alive = statSync(p).mtimeMs >= Date.now() - process.uptime() * 1000 - 1000; } catch {} }
+    else if (pid) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
     if (alive) continue;
     if (isTombstoneOnly(p)) { try { rmSync(p, { recursive: true, force: true }); } catch {} }
     else if (!(j.leftovers || []).some(l => l.path === p)) rec = withLeftover({ leftovers: rec || j.leftovers }, p, 'tombstone-temp', now);
@@ -674,7 +680,8 @@ export async function recoverMove({ journal, pointer, rename = renameSync, now =
     // of another relay's backup, or a drive letter now naming another relay's drive). Not refused — that would lock
     // out a supported restore (C1) — but flagged, so the launcher compares it with the identity it PROVES via
     // /relay-identity and tells the steward (audit D D-2).
-    const expected = (typeof pointer.relayPub === 'function' && pointer.relayPub()) || j.relayPub;
+    let recorded = null; try { recorded = typeof pointer.relayPub === 'function' ? pointer.relayPub() : null; } catch {}   // audit E E-3
+    const expected = recorded || j.relayPub;
     const found = keyPubOf(dir);
     if (expected && found !== expected) return { dataDir: pr.v, action: 'none', identityChanged: true, expectedPub: expected, foundPub: found };
     return { dataDir: pr.v, action: 'none' };

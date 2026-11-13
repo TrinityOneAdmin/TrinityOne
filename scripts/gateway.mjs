@@ -122,7 +122,7 @@ try {
 // clutter an OS file browser drops into any folder it opens (audit C C9). NOT ._* AppleDouble files: a lone
 // ._relay.sqlite on exFAT is what a deleted relay leaves behind, so it must not read as "fresh" (audit D N-3).
 const OS_CLUTTER = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'ehthumbs.db', 'desktop.ini', '.directory', '.Spotlight-V100', '.Trashes', '.fseventsd', '.TemporaryItems']);
-let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => DATA_DIR_TEMP_RE.test(n) || OS_CLUTTER.has(n)); } catch {}
+let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => DATA_DIR_TEMP_RE.test(n) || OS_CLUTTER.has(n) || (n.startsWith('._') && OS_CLUTTER.has(n.slice(2)))); } catch {}   // ._.DS_Store yes, ._relay.sqlite no (audit E E-1)
 // Called again after a staged restore is applied (below), when relay-key.json may have changed.
 function checkDataDirIdentity() {
   refuseIfMovedOut();
