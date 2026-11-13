@@ -28,6 +28,7 @@ function fakeDom(active) {
     suiteAutoTime: el('suiteAutoTime', { value: '03:00' }),
     suiteAutoStatus: el('suiteAutoStatus'),
     suiteAutoHint: el('suiteAutoHint', { style: { display: 'none' } }),
+    suiteAutoAck: el('suiteAutoAck', { style: { display: 'none' } }),
   };
   const doc = { getElementById: (id) => (id in els ? els[id] : null), activeElement: active || null };
   return { doc, els };
@@ -198,4 +199,29 @@ test('[audit 5ad96e13] a rollback that could not put the data back is shown FIRS
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, autoOff: true, lastOutcome: 'rolledback',
     restoreFailed: "the church's data could not be put back (x); the safety copy is at /data/suite/db-backup/1" });
   assert.match(els.suiteAutoStatus.textContent, /^Attention: after the failed update the church's data could not be put back \(x\); the safety copy is at \/data\/suite\/db-backup\/1\. Ask for help/);
+});
+
+test('[audit a1cc6eff L4] while Attention shows, the panel does NOT invite turning updates back on; the ack button shows and clears it', async () => {
+  const { doc, els } = fakeDom();
+  const f = okFetch();
+  wireSuiteAutoUpdate(doc, f, noAuth, { enabled: false, autoOff: true, lastOutcome: 'rolledback', lastReason: 'x', restoreFailed: 'COPY AT /x/1' });
+  assert.match(els.suiteAutoStatus.textContent, /Attention/);
+  assert.doesNotMatch(els.suiteAutoStatus.textContent, /Turn them on/, 'contradicts "Ask for help"');
+  assert.equal(els.suiteAutoAck.style.display, 'inline-flex');
+  await els.suiteAutoAck.onclick();
+  assert.deepEqual(JSON.parse(f.calls[0].opts.body), { suiteAttentionDone: true });
+  assert.doesNotMatch(els.suiteAutoStatus.textContent, /Attention/);
+  assert.equal(els.suiteAutoAck.style.display, 'none');
+});
+
+test('[audit a1cc6eff L2] a start-up recovery note is an Attention line', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, recovered: 'a data restore was interrupted; put back' });
+  assert.match(els.suiteAutoStatus.textContent, /^Attention: a data restore was interrupted; put back/);
+});
+
+test('[audit a1cc6eff L3] a stuck update says so', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, lastOutcome: 'stuck', lastReason: 'it could not be stopped — Restart this computer' });
+  assert.match(els.suiteAutoStatus.textContent, /could not be stopped.*Restart this computer/);
 });

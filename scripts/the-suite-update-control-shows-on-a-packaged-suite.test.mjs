@@ -214,4 +214,12 @@ test('5: a rollback whose data restore failed is shown on the real panel, with w
   const c = await startChrome(gw.base);
   const v = JSON.parse(await waitFor(c, STATUS, (x) => /Attention/.test(JSON.parse(x).text)));
   assert.match(v.text, /Attention: after the failed update the church's data could not be put back .* the safety copy is at \/x\/db-backup\/1/, v.text);
+  // audit a1cc6eff L4: no "Turn them on" next to it; the real button clears it through the real gateway
+  assert.doesNotMatch(v.text, /Turn them on/, v.text);
+  await c.evalIn(`document.getElementById('suiteAutoAck').click()`);
+  let cleared = false;
+  for (let i = 0; i < 40 && !cleared; i++) { cleared = !(await gw.get('/update')).suite.restoreFailed; if (!cleared) await sleep(250); }
+  assert.ok(cleared, 'the button did not clear the warning on the relay');
+  const after = JSON.parse(await waitFor(c, STATUS, (x) => !/Attention/.test(JSON.parse(x).text)));
+  assert.doesNotMatch(after.text, /Attention/);
 });

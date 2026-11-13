@@ -717,12 +717,17 @@
     const at = suite.at || '03:00', end = suite.windowEnd || '';
     const win = end ? 'between ' + at + ' and ' + end : 'at ' + at;
     // A rollback that could not put the church's data back is the most important thing on this line, so it goes first.
+    const attention = !!(suite.restoreFailed || suite.recovered);
     if (suite.restoreFailed) out.push('Attention: after the failed update ' + suite.restoreFailed + '. Ask for help before changing anything');
+    if (suite.recovered) out.push('Attention: ' + suite.recovered);
     if (suite.running === 'update') out.push('Running a downloaded update (' + (suite.runningVersion || suite.installedVersion || '?') + ')');
     if (suite.lastOutcome === 'rolledback' || suite.lastOutcome === 'launch-failed') {
       out.push((suite.lastOutcome === 'rolledback' ? 'The last update was rolled back' : 'The downloaded update would not start') +
         (suite.lastReason ? ' (' + suite.lastReason + ')' : '') +
-        (suite.autoOff && !suite.enabled ? ', so automatic updates were turned off. Turn them on to try the next release.' : ''));
+        // while an Attention line shows, do not invite turning updates back on (audit a1cc6eff L4)
+        (suite.autoOff && !suite.enabled ? (attention ? ', so automatic updates were turned off.' : ', so automatic updates were turned off. Turn them on to try the next release.') : ''));
+    } else if (suite.lastOutcome === 'stuck') {
+      out.push('The last update went wrong and could not be stopped' + (suite.lastReason ? ' (' + suite.lastReason + ')' : ''));
     } else if (suite.lastOutcome === 'not-applied') {
       out.push('The last update was not installed' + (suite.lastReason ? ' (' + suite.lastReason + ')' : '') + '; it will try again');
     } else if (suite.lastOutcome === 'launch-slow') {
@@ -768,6 +773,20 @@
 
     // Status line from the `suite` payload — re-rendered on every loadUpdate so it tracks the box.
     const renderStatus = () => { if (status) status.textContent = suiteAutoStatusText(suite); };
+    // "I've dealt with this" — shown only while an Attention line is up; the ONLY way to clear it (audit a1cc6eff L4).
+    const ack = doc.getElementById('suiteAutoAck');
+    if (ack) {
+      ack.style.display = (suite.restoreFailed || suite.recovered) ? 'inline-flex' : 'none';
+      ack.onclick = async () => {
+        ack.disabled = true;
+        try {
+          const r = await fetchFn('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authFn() }, body: JSON.stringify({ suiteAttentionDone: true }) });
+          if (!(r && r.ok)) throw new Error('save failed');
+          suite = { ...suite, restoreFailed: '', recovered: '' }; ack.style.display = 'none'; renderStatus();
+        } catch (e) { setHint('Couldn’t save — check the relay and try again.', true); }
+        finally { ack.disabled = false; }
+      };
+    }
 
     // Reflect the box's current settings into the inputs — but never while a save is in flight (disabled) or
     // while the operator is editing the time field, so a 60s re-read can't clobber their choice.

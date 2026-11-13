@@ -498,6 +498,9 @@ fn end_to_end_apply_harness() {
     scenario_y_no_restore_while_the_bad_relay_may_still_run();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (y)");
 
+    scenario_z_a_start_repairs_an_interrupted_restore_before_the_relay_runs();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (z)");
+
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
 
@@ -1122,6 +1125,7 @@ struct StubbornOverrideHost {
     inner: TestHost,
     parked: Mutex<Vec<Child>>,
     current_is_active: AtomicBool,
+    spawns: std::sync::atomic::AtomicUsize,
 }
 impl RelayHost for StubbornOverrideHost {
     fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
@@ -1129,6 +1133,7 @@ impl RelayHost for StubbornOverrideHost {
             self.parked.lock().unwrap().push(c);
         }
         self.current_is_active.store(code_dir.ends_with("active"), Ordering::SeqCst);
+        self.spawns.fetch_add(1, Ordering::SeqCst);
         self.inner.spawn_relay(code_dir, payload, data_dir, log)
     }
     fn stop_relay(&self) {
@@ -1158,9 +1163,16 @@ fn scenario_y_no_restore_while_the_bad_relay_may_still_run() {
     write_ready(&fx.staging, "v2", SHA2, D_OCT);
     write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
     {
-        let host = StubbornOverrideHost { inner: TestHost::new(fx.node.clone()), parked: Mutex::new(Vec::new()), current_is_active: AtomicBool::new(false) };
+        let host = StubbornOverrideHost { inner: TestHost::new(fx.node.clone()), parked: Mutex::new(Vec::new()), current_is_active: AtomicBool::new(false), spawns: std::sync::atomic::AtomicUsize::new(0) };
         let mut cur = start_v1(&host, &fx, &log);
         run_apply(&host, &fx, &log, &mut cur);
+        // [audit a1cc6eff L3] nothing was started on top of the bad relay: v1 at start + the update = 2 spawns, and
+        // what serves is (truthfully) still the bad update; the state says it is stuck and what to do.
+        assert_eq!(host.spawns.load(Ordering::SeqCst), 2, "the shipped version was started on top of a relay that would not stop");
+        assert_eq!(served_version().as_deref(), Some("WRONG-not-v2"), "re-anchor: the bad relay should still be the one serving");
+        assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"));
+        assert!(read_state_field(&fx.suite_dir, "lastReason").unwrap_or_default().contains("Restart this computer"));
+        assert!(!fx.data_dir.join("suite-autoupdate").exists(), "auto-update must be switched off");
         let raw = std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap();
         let rf = json_str_value(&raw, "restoreFailed").unwrap_or_default();
         assert!(rf.contains("could not be stopped"), "the skipped restore is not reported: {raw}");
@@ -1168,6 +1180,139 @@ fn scenario_y_no_restore_while_the_bad_relay_may_still_run() {
             "the data was restored while the bad relay may still have been running");
     } // drop reaps every child
     eprintln!("   (y) OK — no restore under a live bad relay; reported");
+}
+
+// [audit a1cc6eff L1] Putting a set-aside file back can ALSO fail. Then the restore must not claim "put back as it
+// was": it reports it, names the *.restore-aside file, and leaves it on disk — and the next start's recovery puts it
+// back.
+#[test]
+fn restore_reports_a_failed_put_back_and_keeps_the_original() {
+    let root = std::env::temp_dir().join(format!("trin-restore-pb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (data, backup, log) = (root.join("data"), root.join("backup"), root.join("log"));
+    write(&data.join("relay.sqlite"), "BAD-MAIN");
+    write(&data.join("relay.sqlite-wal"), "BAD-WAL");
+    write(&data.join("relay.sqlite-shm"), "BAD-SHM");
+    write(&backup.join("relay.sqlite"), "GOOD-MAIN");
+    write(&backup.join("relay.sqlite-wal"), "GOOD-WAL");
+    // every rename INTO relay.sqlite fails: bringing the backup in, and putting the original back
+    RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = Some("relay.sqlite".into()));
+    let r = restore_store(&data, &backup, &log);
+    RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = None);
+    let why = r.expect_err("a restore that could not even be undone reported success");
+    assert!(why.contains("putting the original back ALSO failed") && why.contains("relay.sqlite.restore-aside"), "{why}");
+    let logged = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(!logged.contains("put back as it was"), "the log claims the store was put back: {logged}");
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite.restore-aside")).unwrap(), "BAD-MAIN", "the original must be kept");
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite-wal")).unwrap(), "BAD-WAL", "the side files that could be put back were");
+    assert!(!data.join("relay.sqlite").exists());
+    // the next start repairs it from the same names
+    let note = recover_interrupted_restore(&data, &log).expect("recovery must report what it did");
+    assert!(note.contains("put back exactly as it was"), "{note}");
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite")).unwrap(), "BAD-MAIN");
+    assert!(!data.join("relay.sqlite.restore-aside").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// [audit a1cc6eff L2] The computer stops part-way through a restore — after EACH of its renames in turn (and with
+// only the temporary copies made). The next start's recovery must leave the store all-old or all-restored — never
+// a mix, never without relay.sqlite — with no leftovers.
+#[test]
+fn an_interrupted_restore_is_repaired_at_the_next_start_from_every_crash_point() {
+    let root = std::env::temp_dir().join(format!("trin-restore-crash-{}", std::process::id()));
+    let (data, backup, log) = (root.join("data"), root.join("backup"), root.join("log"));
+    let fresh = |with_wal: bool| {
+        let _ = std::fs::remove_dir_all(&root);
+        write(&data.join("relay.sqlite"), "BAD-MAIN");
+        write(&data.join("relay.sqlite-wal"), "BAD-WAL");
+        write(&data.join("relay.sqlite-shm"), "BAD-SHM");
+        write(&backup.join("relay.sqlite"), "GOOD-MAIN");
+        if with_wal {
+            write(&backup.join("relay.sqlite-wal"), "GOOD-WAL");
+        }
+    };
+    let old = vec![
+        ("relay.sqlite".to_string(), "BAD-MAIN".to_string()),
+        ("relay.sqlite-shm".to_string(), "BAD-SHM".to_string()),
+        ("relay.sqlite-wal".to_string(), "BAD-WAL".to_string()),
+    ];
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {})); // the simulated crashes are expected
+    for with_wal in [true, false] {
+        let mut new = vec![("relay.sqlite".to_string(), "GOOD-MAIN".to_string())];
+        if with_wal {
+            new.push(("relay.sqlite-wal".to_string(), "GOOD-WAL".to_string()));
+        }
+        // crash with only the temporary copies made
+        fresh(with_wal);
+        write(&data.join("relay.sqlite.restore-tmp"), "GOOD-MAIN");
+        let _ = recover_interrupted_restore(&data, &log);
+        assert_eq!(store_snapshot(&data), old, "temporary copies were not cleaned up / the store was touched");
+        // crash after each rename
+        let mut k = 0;
+        loop {
+            fresh(with_wal);
+            RESTORE_RENAME_COUNT.with(|c| c.set(0));
+            RESTORE_CRASH_AFTER.with(|c| c.set(Some(k)));
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| restore_store(&data, &backup, &log))).is_err();
+            RESTORE_CRASH_AFTER.with(|c| c.set(None));
+            if !crashed {
+                break; // k is past the last rename
+            }
+            RESTORE_RENAME_COUNT.with(|c| c.set(0));
+            let note = recover_interrupted_restore(&data, &log);
+            let snap = store_snapshot(&data);
+            assert!(snap == old || snap == new, "crash after rename #{k} (wal={with_wal}): recovery left {snap:?}");
+            assert!(note.is_some(), "crash after rename #{k}: recovery repaired something but reported nothing");
+            k += 1;
+        }
+        assert!(k >= 4, "re-anchor: expected at least 4 crash points, got {k}");
+    }
+    std::panic::set_hook(prev_hook);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// [audit a1cc6eff L4] A restore warning survives later state writes, and the backup it names is never pruned.
+#[test]
+fn a_restore_warning_and_its_backup_survive_until_dealt_with() {
+    let root = std::env::temp_dir().join(format!("trin-warn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (data, suite, log) = (root.join("data"), root.join("data").join("suite"), root.join("log"));
+    std::fs::create_dir_all(&suite).unwrap();
+    let rec = |rf: &'static str| StateRec { sha: "", version: "", date: "", last_applied: "d", outcome: "x", reason: "", auto_off: false, address_before: "", restore_failed: rf };
+    write_state(&suite, &rec("COPY AT /x/1"), &log);
+    write_state(&suite, &rec(""), &log); // e.g. a later successful install
+    let raw = std::fs::read_to_string(suite.join("state.json")).unwrap();
+    assert_eq!(json_str_value(&raw, "restoreFailed").as_deref(), Some("COPY AT /x/1"), "a later write dropped the warning: {raw}");
+    // pruning: the oldest backup is pinned (KEEP) — it must survive two more backups
+    write(&suite.join("db-backup").join("100").join("relay.sqlite"), "PINNED");
+    write(&suite.join("db-backup").join("100").join("KEEP"), "warning");
+    write(&data.join("relay.sqlite"), "S");
+    backup_store(&data, &suite, &log).unwrap();
+    backup_store(&data, &suite, &log).unwrap();
+    backup_store(&data, &suite, &log).unwrap();
+    assert!(suite.join("db-backup").join("100").join("relay.sqlite").exists(), "the backup a warning points to was pruned");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// (z) [audit a1cc6eff L2] The computer stopped mid-restore (relay.sqlite already set aside, the backup's -wal
+//     brought in). The REAL startup() puts the original back BEFORE the relay starts, and leaves the panel a note.
+fn scenario_z_a_start_repairs_an_interrupted_restore_before_the_relay_runs() {
+    eprintln!("── scenario (z): a start repairs an interrupted restore before the relay runs ──");
+    let fx = fresh_box("z", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    write(&fx.data_dir.join("relay.sqlite.restore-aside"), "ORIGINAL-MAIN");
+    write(&fx.data_dir.join("relay.sqlite-wal.restore-aside"), "ORIGINAL-WAL");
+    write(&fx.data_dir.join("relay.sqlite-wal"), "BACKUP-WAL-HALF-IN");
+    let host = TestHost::new(fx.node.clone());
+    let _st = start_at(&host, &fx, &log, 840);
+    assert!(wait_for_served("v1", Duration::from_secs(10)));
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-MAIN");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite-wal")).unwrap(), "ORIGINAL-WAL", "a mix was left");
+    let note = std::fs::read_to_string(fx.suite_dir.join("recovered.txt")).unwrap_or_default();
+    assert!(note.contains("interrupted"), "no note for the panel: {note:?}");
+    host.stop_relay();
+    eprintln!("   (z) OK — repaired before the relay started; note left for the panel");
 }
 
 // A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed

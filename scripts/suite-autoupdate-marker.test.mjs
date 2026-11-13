@@ -9,7 +9,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -113,4 +113,25 @@ test('a marker that cannot be written answers 500 and leaves the switch OFF (not
     const g = await fetch(`http://127.0.0.1:${PORT}/settings`, { headers: { Authorization: 'Bearer ' + adminToken() } });
     assert.equal((await g.json()).settings.autoUpdate, false, 'the relay must not record ON when the shell cannot see it');
   } finally { rmSync(marker(), { recursive: true, force: true }); }
+});
+
+// audit a1cc6eff L2 + L4: the panel sees a start-up recovery note; "I've dealt with this" (suiteAttentionDone) is the
+// ONLY thing that clears the restore warning, the note, and the KEEP pins on backups.
+test('suiteAttentionDone clears the restore warning, the recovery note and the backup pins; /update shows them before', async () => {
+  const suite = join(dataDir, 'suite');
+  mkdirSync(join(suite, 'db-backup', '1'), { recursive: true });
+  writeFileSync(join(suite, 'state.json'), JSON.stringify({ lastOutcome: 'rolledback', restoreFailed: 'COPY AT /x/1', installedVersion: 'v9' }));
+  writeFileSync(join(suite, 'recovered.txt'), 'a data restore was interrupted\n');
+  writeFileSync(join(suite, 'db-backup', '1', 'KEEP'), 'pinned\n');
+  const get = async () => (await (await fetch(`http://127.0.0.1:${PORT}/update`, { headers: { Authorization: 'Bearer ' + adminToken() } })).json()).suite;
+  const s0 = await get();
+  assert.equal(s0.restoreFailed, 'COPY AT /x/1');
+  assert.equal(s0.recovered, 'a data restore was interrupted');
+  const r = await post({ suiteAttentionDone: true });
+  assert.equal(r.status, 200);
+  const s1 = await get();
+  assert.equal(s1.restoreFailed, '');
+  assert.equal(s1.recovered, '');
+  assert.ok(!existsSync(join(suite, 'db-backup', '1', 'KEEP')), 'the pin must be removed so pruning resumes');
+  assert.equal(JSON.parse(readFileSync(join(suite, 'state.json'), 'utf8')).installedVersion, 'v9', 'the rest of state.json is kept');
 });

@@ -1119,6 +1119,18 @@ struct StateRec<'a> {
 }
 
 fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
+    // [audit a1cc6eff L4] A restore warning stays until the operator says it has been dealt with (gateway.mjs clears
+    // it); later writes carry it over instead of silently dropping it.
+    let kept;
+    let restore_failed = if r.restore_failed.is_empty() {
+        kept = std::fs::read_to_string(suite_dir.join("state.json"))
+            .ok()
+            .and_then(|raw| json_str_value(&raw, "restoreFailed"))
+            .unwrap_or_default();
+        kept.as_str()
+    } else {
+        r.restore_failed
+    };
     let json = format!(
         "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{},\"addressBefore\":{},\"restoreFailed\":{}}}\n",
         jstr(r.sha),
@@ -1129,7 +1141,7 @@ fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
         jstr(r.reason),
         if r.auto_off { "true" } else { "false" },
         jstr(r.address_before),
-        jstr(r.restore_failed),
+        jstr(restore_failed),
     );
     let _ = write_file_atomic(&suite_dir.join("state.json"), &json, log);
 }
@@ -1206,6 +1218,9 @@ fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Resul
             .collect();
         names.sort_unstable();
         names.retain(|n| *n != name); // never the one just made
+        // never one a live warning points to (audit a1cc6eff L4): a failed/skipped restore pins its backup with a
+        // KEEP file, removed only when the operator says it has been dealt with (gateway.mjs).
+        names.retain(|n| !root.join(n.to_string()).join("KEEP").exists());
         while names.len() + 1 > DB_BACKUPS_KEPT && !names.is_empty() {
             let old = names.remove(0);
             let _ = std::fs::remove_dir_all(root.join(old.to_string()));
@@ -1215,6 +1230,18 @@ fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Resul
     Ok(dir)
 }
 
+// The three store files and the names restore_store gives them while it works. Shared by restore_store and the
+// start-up recovery (recover_interrupted_restore), so both read the same names.
+fn store_paths(data_dir: &Path) -> [PathBuf; 3] {
+    [data_dir.join("relay.sqlite-wal"), data_dir.join("relay.sqlite-shm"), data_dir.join("relay.sqlite")]
+}
+fn aside_path(live: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.restore-aside", live.display()))
+}
+fn tmp_path(live: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.restore-tmp", live.display()))
+}
+
 // Put the backed-up store back (relay STOPPED). [audit 5ad96e13 MEDIUM] All-or-nothing: the result is either the
 // whole backup (relay.sqlite + its -wal) or the live files exactly as they were — never a mix, such as a restored
 // main file with the bad update's -wal replayed onto it. Order:
@@ -1222,19 +1249,19 @@ fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Resul
 //   2. move the live -wal and -shm aside, then the live main file  (each move checked; failure → put back)
 //   3. bring in the backup's -wal (if it has one), then the main file LAST  (failure → undo everything)
 //   4. only now delete what was set aside. The -shm is never restored: SQLite rebuilds it from the -wal.
-// Ok(()) only when the restore really happened; Err(reason) otherwise, with the live store as it was.
+// Ok(()) only when the restore really happened. Err(reason) otherwise: then the live store is as it was — or, if
+// even putting a set-aside file back failed (retried), the reason says so and names the *.restore-aside files,
+// which are LEFT IN PLACE (never deleted) for the next start's recovery and for a person (audit a1cc6eff L1).
+// A crash anywhere in between is repaired at the next start by recover_interrupted_restore (audit a1cc6eff L2).
 fn restore_store(data_dir: &Path, backup: &Path, log: &Path) -> Result<(), String> {
-    let main = data_dir.join("relay.sqlite");
-    let wal = data_dir.join("relay.sqlite-wal");
-    let shm = data_dir.join("relay.sqlite-shm");
+    let [wal, shm, main] = store_paths(data_dir);
     if !backup.join("relay.sqlite").is_file() {
         // Never touch the live store unless the backup really holds one (audit 00aadeed N1).
         let why = format!("the safety copy at {} has no relay.sqlite", backup.display());
         applog(log, &format!("suite: NOT restoring the church's data: {why}"));
         return Err(why);
     }
-    let tmp_main = data_dir.join("relay.sqlite.restore-tmp");
-    let tmp_wal = data_dir.join("relay.sqlite-wal.restore-tmp");
+    let (tmp_main, tmp_wal) = (tmp_path(&main), tmp_path(&wal));
     let backup_has_wal = backup.join("relay.sqlite-wal").is_file();
     let cleanup_tmps = || {
         let _ = std::fs::remove_file(&tmp_main);
@@ -1249,25 +1276,38 @@ fn restore_store(data_dir: &Path, backup: &Path, log: &Path) -> Result<(), Strin
         applog(log, &format!("suite: NOT restoring the church's data: {why}; the live store is unchanged"));
         return Err(why);
     }
-    // 2. set the live files aside (side files first, main last); remember what moved so it can be put back
-    let mut aside: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let put_back = |aside: &Vec<(PathBuf, PathBuf)>| {
+    // Put set-aside files back (reverse order, each with rename_retry inside restore_rename). Returns the asides
+    // that could NOT be put back — those stay on disk.
+    let put_back = |aside: &Vec<(PathBuf, PathBuf)>| -> Vec<PathBuf> {
+        let mut stuck = Vec::new();
         for (live, moved) in aside.iter().rev() {
-            let _ = restore_rename(moved, live, log);
+            if restore_rename(moved, live, log).is_err() {
+                stuck.push(moved.clone());
+            }
+        }
+        stuck
+    };
+    let failed = |why: String, stuck: Vec<PathBuf>| -> String {
+        if stuck.is_empty() {
+            applog(log, &format!("suite: NOT restoring the church's data: {why}; the live store was put back as it was"));
+            why
+        } else {
+            let names: Vec<String> = stuck.iter().map(|p| p.display().to_string()).collect();
+            let full = format!("{why}, and putting the original back ALSO failed — the original files are kept as {}", names.join(", "));
+            applog(log, &format!("suite: RESTORE FAILED and NOT undone: {full}"));
+            full
         }
     };
+    // 2. set the live files aside (side files first, main last); remember what moved so it can be put back
+    let mut aside: Vec<(PathBuf, PathBuf)> = Vec::new();
     for live in [&wal, &shm, &main] {
         if live.exists() {
-            let moved = live.with_extension(format!(
-                "{}.restore-aside",
-                live.extension().map(|x| x.to_string_lossy().to_string()).unwrap_or_default()
-            ));
+            let moved = aside_path(live);
             if let Err(e) = restore_rename(live, &moved, log) {
-                put_back(&aside);
+                let stuck = put_back(&aside);
                 cleanup_tmps();
                 let why = format!("could not set the live {} aside ({e})", live.file_name().unwrap_or_default().to_string_lossy());
-                applog(log, &format!("suite: NOT restoring the church's data: {why}; the live store is unchanged"));
-                return Err(why);
+                return Err(failed(why, stuck));
             }
             aside.push((live.to_path_buf(), moved));
         }
@@ -1285,10 +1325,9 @@ fn restore_store(data_dir: &Path, backup: &Path, log: &Path) -> Result<(), Strin
         for p in &placed {
             let _ = std::fs::remove_file(p);
         }
-        put_back(&aside);
+        let stuck = put_back(&aside);
         cleanup_tmps();
-        applog(log, &format!("suite: NOT restoring the church's data: {why}; the live store was put back as it was"));
-        return Err(why);
+        return Err(failed(why, stuck));
     }
     // 4. done — drop what was set aside (the old -shm included: SQLite rebuilds it)
     for (_, moved) in &aside {
@@ -1298,23 +1337,95 @@ fn restore_store(data_dir: &Path, backup: &Path, log: &Path) -> Result<(), Strin
     Ok(())
 }
 
-// The renames restore_store makes, numbered so a test can make the Nth one fail (audit 5ad96e13 LOW: prove the
-// store is never left mixed). Production: rename_retry.
+// [audit a1cc6eff L2] EVERY START, before the relay first runs: finish or undo a restore that was interrupted
+// (power cut, crash) part-way through restore_store, using the same file names. The rule follows restore_store's
+// order — side files are set aside before the main file, and the main file is brought in LAST:
+//   • relay.sqlite.restore-aside exists AND relay.sqlite exists → the restore had completed (the backup's main
+//     file is in place); only the clean-up was missed → delete the asides.             (all-restored)
+//   • relay.sqlite.restore-aside exists, relay.sqlite missing    → it stopped before the backup's main file came
+//     in → remove any brought-in -wal, put every aside back.                            (all-old)
+//   • no main aside (it stopped while setting side files aside) → put those side files back.   (all-old)
+// Temporary copies are always removed. Returns a plain-words note when it repaired anything (shown on the panel).
+fn recover_interrupted_restore(data_dir: &Path, log: &Path) -> Option<String> {
+    let [wal, shm, main] = store_paths(data_dir);
+    let mut tmps = 0;
+    for live in [&wal, &main] {
+        if std::fs::remove_file(tmp_path(live)).is_ok() {
+            tmps += 1;
+        }
+    }
+    let asides: Vec<&PathBuf> = [&wal, &shm, &main].into_iter().filter(|l| aside_path(l).exists()).collect();
+    if asides.is_empty() {
+        return if tmps > 0 {
+            applog(log, "launch: removed copies left by an interrupted data restore (the live store was never touched)");
+            None
+        } else {
+            None
+        };
+    }
+    let note;
+    if aside_path(&main).exists() && main.exists() {
+        for l in &asides {
+            let _ = std::fs::remove_file(aside_path(l));
+        }
+        note = "a data restore was interrupted (the computer stopped) after the safety copy was already in place; it was completed at this start".to_string();
+    } else {
+        if aside_path(&main).exists() {
+            // the backup's -wal may have been brought in already: it must not stay next to the old main file
+            if !aside_path(&wal).exists() {
+                let _ = std::fs::remove_file(&wal);
+            }
+        }
+        let mut stuck = Vec::new();
+        for l in &asides {
+            if l.exists() {
+                let _ = std::fs::remove_file(l); // a brought-in side file; the old one replaces it
+            }
+            if restore_rename(&aside_path(l), l, log).is_err() {
+                stuck.push(aside_path(l).display().to_string());
+            }
+        }
+        note = if stuck.is_empty() {
+            "a data restore was interrupted (the computer stopped) before it finished; the church's data was put back exactly as it was before it began".to_string()
+        } else {
+            format!("a data restore was interrupted and its original files could not all be put back; they are kept as {}", stuck.join(", "))
+        };
+    }
+    applog(log, &format!("launch: {note}"));
+    Some(note)
+}
+
+// The renames restore_store and its recovery make, through one function so tests can inject failures and
+// crashes (audits 5ad96e13 LOW 3, a1cc6eff L1/L2). Production: rename_retry.
 #[cfg(test)]
 thread_local! {
     static RESTORE_RENAME_FAIL_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static RESTORE_RENAME_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    // fail EVERY rename whose destination has this file name (e.g. "relay.sqlite": both bringing the backup's
+    // main file in and putting the original back fail)
+    static RESTORE_RENAME_FAIL_TO: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    // simulate the computer stopping: panic right AFTER the Nth rename has happened
+    static RESTORE_CRASH_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 fn restore_rename(from: &Path, to: &Path, log: &Path) -> std::io::Result<()> {
     #[cfg(test)]
-    {
+    let n = {
         let n = RESTORE_RENAME_COUNT.with(|c| { let n = c.get(); c.set(n + 1); n });
-        if RESTORE_RENAME_FAIL_AT.with(|c| c.get()) == Some(n) {
+        let name = to.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+        if RESTORE_RENAME_FAIL_AT.with(|c| c.get()) == Some(n)
+            || RESTORE_RENAME_FAIL_TO.with(|c| c.borrow().as_deref() == Some(name.as_str()))
+        {
             return Err(std::io::Error::other("injected rename failure"));
         }
+        n
+    };
+    let r = rename_retry(from, to, log);
+    #[cfg(test)]
+    if RESTORE_CRASH_AFTER.with(|c| c.get()) == Some(n) {
+        panic!("simulated crash after rename #{n}");
     }
-    rename_retry(from, to, log)
+    r
 }
 
 // Health probe (I/O): poll public GET /status within the window and report the four facts health_outcome
@@ -1458,6 +1569,26 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
         } else if let Err(why) = restore_store(env.data_dir, b, env.log) {
             restore_failed = format!("the church's data could not be put back ({why}); the safety copy is at {}", b.display());
         }
+        if !restore_failed.is_empty() {
+            // pin the copy the warning names, so pruning can never delete it (audit a1cc6eff L4)
+            let _ = std::fs::write(b.join("KEEP"), format!("{restore_failed}\n"));
+        }
+    }
+    // [audit a1cc6eff L3] The bad relay did not stop: do NOT start the shipped version on top of it (it would fail to
+    // bind, or look started while the bad one keeps serving). Leave the files alone (the bad relay may hold them),
+    // switch auto-update off, and say plainly what to do. The next start runs the shipped code (switch off).
+    if !stopped {
+        switch_auto_update_off(env.data_dir, env.log);
+        let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
+        let prev_ver = json_str_value(prev_state_raw, "installedVersion").unwrap_or_default();
+        let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
+        let why = format!("{reason}, and it could not be stopped — it is still running. Restart this computer; the Suite will then start the version it came with");
+        write_state(suite_dir, &StateRec {
+            sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
+            outcome: "stuck", reason: &why, auto_off: true, address_before, restore_failed: &restore_failed,
+        }, env.log);
+        applog(env.log, "suite: ROLLBACK BLOCKED — the bad relay did not stop; nothing restarted on top of it");
+        return;
     }
     let active = suite_dir.join("active");
     let last_good = suite_dir.join("last-good");
@@ -1548,6 +1679,11 @@ fn maybe_apply(env: &ApplyEnv, st: &mut RunState) {
 // as the signed build; if not, return to the shipped code, retire the override and switch auto-update off
 // (audit M1 — "the relay stays down on every launch").
 fn startup(env: &ApplyEnv) -> RunState {
+    // [audit a1cc6eff L2] Before anything reads the church's data: repair a restore a crash interrupted, and leave a
+    // note for the panel (suite/recovered.txt; cleared when the operator acknowledges it, gateway.mjs).
+    if let Some(note) = recover_interrupted_restore(env.data_dir, env.log) {
+        let _ = write_file_atomic(&env.suite_dir.join("recovered.txt"), &format!("{note}\n"), env.log);
+    }
     let choice = launch_code_dir(env.payload, env.suite_dir, env.data_dir, env.node, env.log);
     let mut st = RunState {
         code_dir: choice.dir.clone(),

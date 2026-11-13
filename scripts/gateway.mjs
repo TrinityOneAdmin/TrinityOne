@@ -765,12 +765,26 @@ function suiteUpdateStatus() {
     installedVersion: st.installedVersion || st.installedSha || '', installedDate: st.installedDate || '',
     lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '', lastReason: st.lastReason || '', autoOff: st.autoOff === true,
     restoreFailed: typeof st.restoreFailed === 'string' ? st.restoreFailed : '',   // audit 5ad96e13: a rollback that could not put the data back
+    recovered: (() => { try { return readFileSync(join(suiteDir, 'recovered.txt'), 'utf8').trim(); } catch { return ''; } })(),   // audit a1cc6eff L2: a restore a crash interrupted was repaired at start-up
     staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
     check: check && typeof check === 'object' ? { at: check.at || '', ok: !!check.ok, reason: check.reason || '' } : null,
     // [audit M6] the quick-tunnel address before the last update vs now (a quick tunnel cannot keep its address
     // across a relay restart); the panel says when it changed.
     addressChanged: (st.addressBefore && CF_URL && st.addressBefore !== CF_URL) ? { from: st.addressBefore, to: CF_URL } : null,
   };
+}
+// The operator says the Attention line has been dealt with (audit a1cc6eff L4): drop restoreFailed from the shell's
+// state.json, the start-up recovery note, and the KEEP pins on backups, so normal pruning resumes. This is the ONLY
+// thing that clears them — the shell carries restoreFailed over on every later write.
+function suiteAttentionDone() {
+  const suiteDir = join(DATA_DIR, 'suite');
+  try {
+    const f = join(suiteDir, 'state.json');
+    const st = JSON.parse(readFileSync(f, 'utf8'));
+    if (st && st.restoreFailed) { delete st.restoreFailed; writeFileSync(f + '.ack', JSON.stringify(st) + '\n'); renameSync(f + '.ack', f); }
+  } catch {}
+  try { rmSync(join(suiteDir, 'recovered.txt'), { force: true }); } catch {}
+  try { for (const d of readdirSync(join(suiteDir, 'db-backup'))) { try { rmSync(join(suiteDir, 'db-backup', d, 'KEEP'), { force: true }); } catch {} } } catch {}
 }
 // Hourly check (mirrors the relayAutoUpdate setInterval precedent above) + fire on enable (POST /settings).
 setInterval(() => { if (PACKAGED && SETTINGS.autoUpdate) suiteAutoUpdate('periodic check', suiteAutoUpdateDefaults()).catch(() => {}); }, 3600 * 1000);
@@ -8193,6 +8207,7 @@ function serveStatic(req, res) {
             try { const mk = join(DATA_DIR, 'keep-awake-off'); if (SETTINGS.keepAwake) rmSync(mk, { force: true }); else writeFileSync(mk, '1\n'); } catch {}
           }
           let suiteMarkerError = '';
+          if (s.suiteAttentionDone === true) suiteAttentionDone();
           if ('autoUpdate' in s || 'autoUpdateAt' in s) {
             // Coerce via the SAME helper loadSettings uses (one rule), then maintain the `suite-autoupdate`
             // marker the Rust app shell reads DIRECTLY from the data dir (it applies staged bundles, not this
