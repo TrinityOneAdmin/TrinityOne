@@ -1391,6 +1391,8 @@ fn scenario_aa_held_originals_are_not_built_over() {
     let _st = start_at(&host, &fx, &log, 840);
     assert!(wait_for_served("v1", Duration::from_secs(10)));
     assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED", "the held original was not put back");
+    // audit b4e69a7c L1: the original -wal comes back with it (recovery must not take it for a brought-in one)
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite-wal")).unwrap(), "BAD-WAL", "the original -wal was lost");
     assert!(!fx.data_dir.join("relay.sqlite.restore-aside").exists());
     host.stop_relay();
     eprintln!("   (aa) OK — nothing built over the held originals; the next start put them back");
@@ -1424,6 +1426,12 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
     // …and with no quarantine record, so the installed override would be CHOSEN by a fall-through (the guard must
     // hold whatever code would run, not only when the choice happens to be the shipped payload).
     let _ = std::fs::remove_file(fx.suite_dir.join("quarantine-sha"));
+    // audit b4e69a7c L2: an update is waiting for a missed window too — it must NOT be applied while data is held
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v4", &sha_of('4'), "2026-10-03T00:00:00Z"));
+    write_ready(&fx.staging, "v4", &sha_of('4'), "2026-10-03T00:00:00Z");
+    set_mtime(&fx.staging.join("READY"), now_epoch() - 10 * 3600);
+    let rf_before = read_state_field(&fx.suite_dir, "restoreFailed").unwrap_or_default();
+    let backups_before = std::fs::read_dir(fx.suite_dir.join("db-backup")).map(|r| r.count()).unwrap_or(0);
     {
         let host = TestHost::new(fx.node.clone());
         RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = Some("relay.sqlite".into()));
@@ -1432,13 +1440,18 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
         assert!(wait_port_free(Duration::from_secs(5)), "a relay was started although recovery could not put the data back");
         assert!(fx.data_dir.join("relay.sqlite.restore-aside").exists(), "the held original was lost");
         assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"), "the stuck record was overwritten (route 2)");
+        assert!(fx.staging.join("READY").exists(), "an update was applied while the church's data was held aside");
+        assert_eq!(read_state_field(&fx.suite_dir, "restoreFailed").unwrap_or_default(), rf_before, "the warning was repointed");
+        assert_eq!(std::fs::read_dir(fx.suite_dir.join("db-backup")).map(|r| r.count()).unwrap_or(0), backups_before, "a backup was made or pruned while held");
     }
     write(&fx.suite_dir.join("quarantine-sha"), &format!("{SHA3}\n")); // back as the shell left it
+    discard_staging(&fx.suite_dir);
     // and a normal start then recovers and runs, with the "stuck" record replaced
     let host = TestHost::new(fx.node.clone());
     let _st = start_at(&host, &fx, &log, 840);
     assert!(served_version().is_some(), "the relay did not start after the recovery");
     assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite-wal")).unwrap(), "BAD-WAL", "the original -wal was lost (L1)");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("recovered"), "the stale stuck record stayed (N3)");
     host.stop_relay();
     eprintln!("   (ab) OK — no relay over held originals on either start route; recovered afterwards");

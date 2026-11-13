@@ -1774,7 +1774,10 @@ fn startup(env: &ApplyEnv) -> RunState {
         alive: Arc::new(AtomicBool::new(false)), // nothing is running yet
         cooldown_until: None,
     };
-    if let (Some((r_version, r_sha, staged, target_min, _)), Some(_)) = (staged_and_enabled(env), env.node) {
+    // No launch-time apply while the church's original data is held aside (audit b4e69a7c L2): it could not start a
+    // relay, but it would back up an empty store, prune a real backup and repoint the warning at the empty one.
+    let held = data_held_aside(env.data_dir);
+    if let (false, Some((r_version, r_sha, staged, target_min, _)), Some(_)) = (held, staged_and_enabled(env), env.node) {
         if let Some(now) = (env.clock)() {
             let state_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
             let last_applied = json_str_value(&state_raw, "lastApplied").unwrap_or_default();
