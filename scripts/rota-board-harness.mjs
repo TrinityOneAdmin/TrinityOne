@@ -78,6 +78,9 @@ export function mountBoard({
   services = [SERVICE],
   rotas = [{ id: 'svc1', service: 'svc1', published: true, assign: { 't1::r1': { id: 'p1', name: 'Ruth Bexley', pub: PUB_A } } }],
   requests = [], replies = [], unavail = {}, steward = {}, confirm, effects = false,
+  // scope: extra names for the compiled file (e.g. a fixed `Date`); win: extra window members (e.g. setInterval /
+  // addEventListener spies). Both default to nothing, so every existing caller draws exactly what it drew before.
+  scope = {}, win = {},
 } = {}) {
   let rotasNow = rotas;
   const calls = { publishRota: [], sendServingRequest: [], publishService: [] };
@@ -88,10 +91,10 @@ export function mountBoard({
     nameKeyReady: () => true,
     ...steward,
   };
-  const sch = loadSchedule({}, {
+  const sch = loadSchedule(scope, {
     useStewardGroups: () => teams, useStewardRosters: () => rosters, useStewardServices: () => services,
     useStewardRotas: () => rotasNow, useStewardRequests: () => requests, useStewardRequestReplies: () => replies,
-    useStewardUnavail: () => unavail, Steward, ...(confirm ? { confirm } : {}),
+    useStewardUnavail: () => unavail, Steward, ...(confirm ? { confirm } : {}), ...win,
   }, ['DashRota'], { effects });
   const draw = () => {
     sch.reset(); let tree = sch.mod.DashRota({ onNewTeam() {} });

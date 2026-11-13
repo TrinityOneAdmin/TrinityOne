@@ -38,6 +38,24 @@ const SCH_BASE_STORE = {};
 const schBases = (church) => (SCH_BASE_STORE[church] = SCH_BASE_STORE[church] || {});
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+// HAS THIS SERVICE PASSED — FOR THE ROTA STRIP'S LOOK ONLY (owner decision 2026-11-13). A service is past two hours
+// after it STARTS, compared as real timestamps, so a 23:00 service is past at 01:00 the next day, not at midnight. A
+// service with no time, or one that cannot be read ("7pm" from an old document), is past from the local midnight that
+// ends its day. "7:05" is a valid time. No date: never guessed at (not past). A clock that cannot be read: not past.
+// ⚠ THIS IS NOT THE ENGINE'S RULE AND MUST NOT BECOME IT. src/steward.src.js _svcHasHappened (its one caller is
+// removeTeam) counts a service as happened from its start MINUTE, so a team removed mid-service keeps that service's
+// rota as a record and nobody serving is told they are not needed. The two differ on purpose for every timed service
+// between start and start + 2h; scripts/past-rota-services-fade-in-place.test.mjs pins both.
+function schSvcPast(s, now) {
+  if (!s || !now || typeof now.getTime !== 'function' || isNaN(now.getTime())) return false;
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s.date || ''));
+  if (!d) return false;
+  const t = /^(\d{1,2}):(\d{2})$/.exec(String(s.time || '').trim());
+  const at = (t && +t[1] < 24 && +t[2] < 60)
+    ? new Date(+d[1], +d[2] - 1, +d[3], +t[1], +t[2]).getTime() + 2 * 3600e3
+    : new Date(+d[1], +d[2] - 1, +d[3] + 1).getTime();
+  return now.getTime() >= at;
+}
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
 function schAddDays(iso, n) { const d = schDate(iso); d.setDate(d.getDate() + n); return schKey(d); }
 function schAddMonths(iso, n) { const d = schDate(iso); d.setMonth(d.getMonth() + n); return schKey(d); }
@@ -887,10 +905,63 @@ function DashRota({ onNewTeam }) {
   };
   const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
   const sortedSvcs = services.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const todayStr = schKey(new Date());
-  const defaultSvc = (sortedSvcs.find(s => (s.date || '') >= todayStr) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
+  // A CLOCK THAT MOVES WHILE THE PAGE IS OPEN: a chip fades within a minute of its service passing, and at once when
+  // a phone is woken or the window comes back. Started ONLY where window.setInterval and window.addEventListener
+  // exist — the Node harnesses that render this board have neither, and a real interval there would keep the
+  // test process alive for ever.
+  const [, setNowTick] = useSch(0);
+  useSchE(() => {
+    if (typeof window.setInterval !== 'function' || typeof window.addEventListener !== 'function') return undefined;
+    const bump = () => setNowTick(n => n + 1);
+    const timer = window.setInterval(bump, 60000);
+    window.addEventListener('focus', bump);
+    window.addEventListener('visibilitychange', bump);
+    return () => {
+      try { if (typeof window.clearInterval === 'function') window.clearInterval(timer); } catch (e) {}
+      try { if (typeof window.removeEventListener === 'function') { window.removeEventListener('focus', bump); window.removeEventListener('visibilitychange', bump); } } catch (e) {}
+    };
+  }, []);
+  const nowD = new Date();
+  // WHICH SERVICE THE BOARD OPENS ON: the first one not past, else the last. Judged against the moment services
+  // FIRST arrived, held in a ref, and never against the ticking clock: with nothing tapped, every per-service action
+  // (Assign, Copy last week, Auto-fill, Publish, the conflict checks) acts on this service, so a minute tick that
+  // moved it at start + 2h would land a steward's next pick on the wrong service (audit of the plan, doAssign).
+  // Services that arrive later are judged against the same moment.
+  // ONLY SERVICES WITH A READABLE DATE ARE CANDIDATES. schSvcPast calls an undated service "not past" (never guessed
+  // at), and an undated one sorts first, so without this filter an old record with no date (publishService has
+  // written date '' before) became the opening service — a "NaN" chip that Assign, Auto-fill and Publish then acted
+  // on (audit of 4c47c063, M1). With no dated service at all, the last one, as before.
+  const openAt = useSchR(0);
+  // A CHURCH SWITCH STARTS THE CHOICE AGAIN (re-audit of 59cd37eb, F1). DashRota stays mounted when a steward of two
+  // churches switches identity, so the frozen moment, the pinned selection and the once-only scroll all belong to the
+  // church they were made for. Reset here, during the render that first sees the new church.
+  const churchNow = schDraftChurch();
+  const churchSeen = useSchR(churchNow);
+  const churchChanged = churchSeen.current !== churchNow;
+  if (churchChanged) { churchSeen.current = churchNow; openAt.current = 0; }
+  if (!openAt.current && sortedSvcs.length) openAt.current = nowD.getTime();
+  const openD = openAt.current ? new Date(openAt.current) : nowD;
+  const datedSvcs = sortedSvcs.filter(s => /^\d{4}-\d{2}-\d{2}$/.test(String((s && s.date) || '')));
+  const defaultSvc = (datedSvcs.find(s => !schSvcPast(s, openD)) || datedSvcs[datedSvcs.length - 1] || sortedSvcs[sortedSvcs.length - 1] || {}).id;
 
   const [sel, setSel] = useSch(null);
+  // OPEN SCROLLED TO THAT SERVICE. Once months of past services sit on the strip, a phone otherwise opens showing only
+  // past chips. Fires ONCE per visit to the page, when the chip first exists (services and teams usually arrive after
+  // the first paint), and never once the steward has picked a chip — so a later re-render can't yank the strip while
+  // they scroll it. Sets the STRIP's own scrollLeft, chip at the start: scrollIntoView would also scroll the page and
+  // every ancestor.
+  const stripRef = useSchR(null);
+  const stripScrolled = useSchR(false);
+  if (churchChanged) { stripScrolled.current = false; if (sel) setSel(null); }
+  useSchE(() => {
+    if (stripScrolled.current || sel || !defaultSvc) return;
+    const strip = stripRef.current;
+    if (!strip || !strip.children || typeof strip.getBoundingClientRect !== 'function') return;
+    const chip = Array.prototype.find.call(strip.children, c => c.getAttribute && c.getAttribute('data-svc-id') === String(defaultSvc));
+    if (!chip) return;
+    stripScrolled.current = true;
+    strip.scrollLeft = Math.max(0, strip.scrollLeft + chip.getBoundingClientRect().left - strip.getBoundingClientRect().left);
+  }, [defaultSvc, sortedSvcs.length, teams.length > 0, sel]);
   const draftChurch = schDraftChurch();
   const [draft, setDraftState] = useSch(() => ({ ...(SCH_DRAFT_STORE[draftChurch] || {}) }));   // { svcId: assignMap } — local unsaved edits
   const setDraft = (v) => setDraftState(d => { const n = typeof v === 'function' ? v(d) : v; SCH_DRAFT_STORE[draftChurch] = n; return n; });
@@ -954,7 +1025,9 @@ function DashRota({ onNewTeam }) {
   const staleMsg = 'Someone else published this rota after you started. Reload to see theirs, or keep yours, which replaces theirs.';
   const skipNote = (n) => n ? ' - ' + n + ' skipped, changed by someone else (open each, reload)' : '';
 
-  const svcId = sel || defaultSvc;
+  // A selection that is no longer in the list (another church's service after a switch, or a service that went away)
+  // falls back to the opening service, never to "Add a service to start building a rota." (re-audit of 59cd37eb, F1).
+  const svcId = (sel && sortedSvcs.some(s => s.id === sel)) ? sel : defaultSvc;
   const svc = sortedSvcs.find(s => s.id === svcId);
   const assign = (svcId && draft[svcId] !== undefined) ? draft[svcId] : (persisted(svcId) ? persisted(svcId).assign : {});
   const setAssign = (next) => setDraft(d => ({ ...d, [svcId]: next }));
@@ -969,13 +1042,30 @@ function DashRota({ onNewTeam }) {
 
   // Assigning only edits the draft — the member is NOT asked until you Publish (so you can move people
   // around freely first). Publish then sends a "Can you serve?" to anyone newly assigned.
+  // PIN THE SERVICE ON THE FIRST ACTION (audit of 4c47c063, M2; owner 2026-11-13). With nothing tapped, svcId is the
+  // OPENING service, which is recomputed from the list on every render — so a service syncing in with an earlier date
+  // moved the board, and a pick or a Publish then landed on a service the steward never chose. The first time they act
+  // on a service (open a slot, open the Auto-fill menu or the pod menu, apply a pod, Copy last week, Auto-fill, Publish,
+  // confirm a swap, reload, run sheet),
+  // that service becomes the explicit selection, and only a tap on another chip moves it.
+  const pinSel = () => { if (!sel && svcId) setSel(svcId); };
+  // THE PICKER WRITES TO THE SERVICE IT WAS OPENED FOR: slot.service is the service on screen when the slot was
+  // tapped, not whatever is selected when the person is chosen.
+  const slotSvcId = (slot) => (slot && slot.service && slot.service.id) || svcId;
+  const openSlot = (slot) => { pinSel(); setAssignSlot(slot); };
   const doAssign = (slot, person) => {
-    const next = { ...assign, [slot.key]: { name: person.name, pub: person.pub || '' } };
-    setAssign(next); setAssignSlot(null);
+    const id = slotSvcId(slot);
+    const next = { ...(assignFor(id) || {}), [slot.key]: { name: person.name, pub: person.pub || '' } };
+    setDraft(d => ({ ...d, [id]: next })); setAssignSlot(null);
   };
-  const clearSlot = (slot) => { const next = { ...assign }; delete next[slot.key]; setAssign(next); setAssignSlot(null); };
+  const clearSlot = (slot) => {
+    const id = slotSvcId(slot);
+    const next = { ...(assignFor(id) || {}) }; delete next[slot.key];
+    setDraft(d => ({ ...d, [id]: next })); setAssignSlot(null);
+  };
   // apply a serving pod: fill this team's role slots from the pod's saved role->person map, in one tap
   const applyPod = (team, pod) => {
+    pinSel();
     const r = rosterFor(team.id); const next = { ...assign };
     (r.roles || []).forEach(role => {
       const pid = pod.fills && pod.fills[role.id];
@@ -987,6 +1077,7 @@ function DashRota({ onNewTeam }) {
   // rotate a team's pods round-robin across UPCOMING services (Pod A,B,C,A…) and publish each, so each
   // pod serves every Nth week automatically. Preserves other teams' assignments on those services.
   const rotatePods = (team) => {
+    pinSel();
     const r = rosterFor(team.id); const pods = r.pods || []; if (!pods.length) return 0;
     const today = todayISO();
     const upcoming = (services || []).filter(s => (s.date || '') >= today).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -1138,7 +1229,7 @@ function DashRota({ onNewTeam }) {
     }
     return next;
   };
-  const autoFill = () => { setAssign(fillAssign(assign, svc.date, svc.id)); setFlash('Filled the gaps — including anyone who said no'); setTimeout(() => setFlash(''), 2200); };
+  const autoFill = () => { pinSel(); setAssign(fillAssign(assign, svc.date, svc.id)); setFlash('Filled the gaps — including anyone who said no'); setTimeout(() => setFlash(''), 2200); };
   // create + fill: generate weekly services for the period (if missing), then auto-fill & publish each
   //
   // TWO THINGS THIS CAN MEAN, and the menu now says which it is doing (sim 2026-10-02, item 33):
@@ -1147,6 +1238,7 @@ function DashRota({ onNewTeam }) {
   // The first used to be the only one, and it clones whatever is on screen — so a one-off (a Christmas service)
   // became a weekly service for a quarter with nothing but the word "weekly" in a confirm box.
   const autoFillAhead = async (months, opts) => {
+    pinSel();
     setFillMenu(false);
     const createCopies = !(opts && opts.existingOnly);
     const until = schAddMonths(svc.date, months);
@@ -1196,6 +1288,7 @@ function DashRota({ onNewTeam }) {
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
   const copyLastWeek = () => {
+    pinSel();
     // most recent earlier service that has any assignments (published OR draft)
     const earlier = sortedSvcs.filter(s => s.id !== svcId && (s.date || '') < (svc.date || '')).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const src = earlier.find(s => { const a = assignFor(s.id); return a && Object.values(a).some(x => x && x.name); });
@@ -1203,6 +1296,7 @@ function DashRota({ onNewTeam }) {
     setAssign({ ...assignFor(src.id) }); setFlash(`Copied ${schParts(src.date).day} ${schParts(src.date).mon}`); setTimeout(() => setFlash(''), 2200);
   };
   const publish = async () => {
+    pinSel();
     if (rotaBehind(svcId)) { setFlash('Not published - ' + staleMsg); setTimeout(() => setFlash(''), 5000); return; }
     const r = await window.Steward.publishRota({ service: svcId, published: true, assign });
     // Do NOT ask people to serve on a rota that was not saved: they would get the request and the rota would
@@ -1224,6 +1318,7 @@ function DashRota({ onNewTeam }) {
   // serve?" request (alreadyAsked is per person, so they have none for this slot yet). It sends nothing if the rota
   // did not save — the same rule publish() keeps — and says so.
   const confirmSwap = async (slot, from, mate) => {
+    pinSel();
     if (rotaBehind(svcId)) { setFlash('Not swapped - ' + staleMsg); setTimeout(() => setFlash(''), 5000); return; }
     const next = { ...assign, [slot.key]: { id: mate.id, name: mate.name, pub: mate.pub || '' } };
     setAssign(next);
@@ -1251,14 +1346,22 @@ function DashRota({ onNewTeam }) {
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* service strip */}
-      <div className="no-scrollbar" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 14, flexShrink: 0 }}>
+      <div ref={stripRef} className="no-scrollbar" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 14, flexShrink: 0 }}>
         {sortedSvcs.map(s => {
           const on = s.id === svcId; const p = schParts(s.date);
+          // A PAST SERVICE STAYS WHERE IT IS, FADED, MARKED "Past", AND STILL SELECTABLE. Less faded while selected,
+          // so the selected border stays easy to see. THE FADE IS KEPT READABLE: at .75 the smallest text (the
+          // --ink-3 month/time line) is 3.19:1 on --surface, and at .85 it is ~3.6:1 on the selected tint; at the
+          // first cut's .5 it was 2.05:1 (audit of 4c47c063, L3). The "Past" mark sits outside the fade.
+          const past = schSvcPast(s, nowD);
           return (
-            <button key={s.id} onClick={() => setSel(s.id)} title="Show this service’s rota" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
+            <button key={s.id} data-svc-id={s.id} aria-pressed={on} onClick={() => setSel(s.id)} title={past ? 'This service has passed — show its rota' : 'Show this service’s rota'} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
               border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: past ? (on ? 0.85 : 0.75) : 1 }}>
               <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay-ink)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
               <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.mon} · {s.time}</div></div>
+              </div>
+              {past ? <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Past</span> : null}
             </button>
           );
         })}
@@ -1269,6 +1372,8 @@ function DashRota({ onNewTeam }) {
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)', fontSize: 14 }}>Add a service to start building a rota.</div>
       ) : (
         <React.Fragment>
+          {/* ONE LINE, and the team cards are not restyled: a past service can still be edited and published. */}
+          {schSvcPast(svc, nowD) ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', margin: '0 0 8px' }}>This service has passed</div> : null}
           {/* coverage bar + actions */}
           <div style={{ display: 'flex', flexDirection: narrow ? 'column' : 'row', alignItems: narrow ? 'stretch' : 'center', gap: narrow ? 12 : 16, padding: '14px 16px', borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: narrow ? 'none' : 1 }}>
@@ -1281,7 +1386,7 @@ function DashRota({ onNewTeam }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0, flexWrap: 'wrap', justifyContent: narrow ? 'flex-end' : 'initial' }}>
             <button onClick={copyLastWeek} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="copy" size={15} color="currentColor" /> Copy last week</button>
             <div style={{ position: 'relative' }}>
-              <button onClick={() => setFillMenu(v => !v)} title="Let the app suggest people to fill the empty roles" aria-expanded={!!fillMenu} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
+              <button onClick={() => { pinSel(); setFillMenu(v => !v); }} title="Let the app suggest people to fill the empty roles" aria-expanded={!!fillMenu} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="sparkle" size={15} color="currentColor" /> Auto-fill <Icon name="chevD" size={13} color="currentColor" /></button>
               {fillMenu ? (
                 <React.Fragment>
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
@@ -1368,7 +1473,7 @@ function DashRota({ onNewTeam }) {
                 </React.Fragment>
               ) : null}
             </div>
-            <button onClick={() => setRunsheetOpen(true)} title="Plan the order of service — items, who leads each, and songs" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="note" size={15} color="currentColor" /> Run sheet</button>
+            <button onClick={() => { pinSel(); setRunsheetOpen(true); }} title="Plan the order of service — items, who leads each, and songs" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}><Icon name="note" size={15} color="currentColor" /> Run sheet</button>
             <button onClick={publish} className={isPublished ? 'sk-btn' : 'sk-btn sk-btn--clay'} style={{ padding: '9px 15px', fontSize: 13, background: isPublished ? 'var(--sage)' : undefined, color: 'var(--on-clay)' }}>
               <Icon name={isPublished ? 'check' : 'send'} size={15} color="#fff" /> {isPublished ? 'Published' : (pers && pers.published ? 'Publish changes' : 'Publish rota')}</button>
             </div>
@@ -1376,7 +1481,7 @@ function DashRota({ onNewTeam }) {
           {rotaConflict(svcId) ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, margin: '0 0 10px', padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, transparent)' }}>
             Someone else published this rota after you started. Reload to see theirs - or keep yours, which replaces theirs.
             <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => reloadRota(svcId)} className="sk-btn" style={{ padding: '7px 12px', fontSize: 12.5 }}>Reload their version</button>
+              <button onClick={() => { pinSel(); reloadRota(svcId); }} className="sk-btn" style={{ padding: '7px 12px', fontSize: 12.5 }}>Reload their version</button>
               <button onClick={publishMine} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Publish mine anyway</button>
             </div>
           </div> : null}
@@ -1419,7 +1524,7 @@ function DashRota({ onNewTeam }) {
                       <button onClick={() => TeamRemoval.ask(t)} disabled={trs.careTeamId === t.id} title={trs.careTeamId === t.id ? (trs.careWhy || '') : 'Delete team'} aria-label={trs.careTeamId === t.id ? 'Delete team ' + m.name + ' — ' + (trs.careWhy || '') : 'Delete team ' + m.name} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: trs.careTeamId === t.id ? 'default' : 'pointer', opacity: trs.careTeamId === t.id ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', flexShrink: 0 }}><Icon name="trash" size={14} color="currentColor" /></button>
                     </div>
                     {(r.pods && r.pods.length) ? (
-                      <select value="" onChange={e => {
+                      <select value="" onFocus={pinSel} onMouseDown={pinSel} onChange={e => {
                         const v = e.target.value; e.target.value = '';
                         if (v === '__rotate__') { if (window.confirm('Rotate ' + r.pods.length + ' pods across all upcoming services for ' + m.name + '?\n\nEach pod serves every ' + r.pods.length + ' weeks. This publishes them and asks everyone assigned.')) rotatePods(t); }
                         else { const pod = (r.pods || []).find(p => p.id === v); if (pod) applyPod(t, pod); }
@@ -1454,7 +1559,7 @@ function DashRota({ onNewTeam }) {
                         const vm = verdict === 'swap' ? { ...vmap.swap, label: swapLabel } : (vmap[verdict] || vmap['']);
                         return (
                           <React.Fragment key={role.id}>
-                          <button onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
+                          <button onClick={() => openSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
@@ -1469,7 +1574,7 @@ function DashRota({ onNewTeam }) {
                         );
                       }
                       return (
-                        <button key={role.id} onClick={() => setAssignSlot(slot)} aria-label={'Assign someone to ' + (role.name || 'this role')} title={'Assign someone to ' + role.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1.5px dashed color-mix(in oklab, var(--gold) 55%, var(--line))', background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))' }}>
+                        <button key={role.id} onClick={() => openSlot(slot)} aria-label={'Assign someone to ' + (role.name || 'this role')} title={'Assign someone to ' + role.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: '1.5px dashed color-mix(in oklab, var(--gold) 55%, var(--line))', background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))' }}>
                           <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: 'color-mix(in oklab, var(--gold) 20%, var(--surface))', color: '#8a6717', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="plus" size={15} /></div>
                           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}</div><div style={{ fontWeight: 700, fontSize: 13.5, color: '#8a6717' }}>Assign</div></div>
                         </button>
@@ -1487,7 +1592,7 @@ function DashRota({ onNewTeam }) {
 
       <TeamRemovalHost />
       {flash ? <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, boxShadow: 'var(--shadow-lg)', zIndex: 80 }}>{flash}</div> : null}
-      {assignSlot ? <AssignModal slot={assignSlot} roster={rosterFor(assignSlot.team.id)} assign={assign} unavail={unavail} onAssign={(p) => doAssign(assignSlot, p)} onClear={() => clearSlot(assignSlot)} onClose={() => setAssignSlot(null)} /> : null}
+      {assignSlot ? <AssignModal slot={assignSlot} roster={rosterFor(assignSlot.team.id)} assign={assignFor(slotSvcId(assignSlot)) || {}} unavail={unavail} onAssign={(p) => doAssign(assignSlot, p)} onClear={() => clearSlot(assignSlot)} onClose={() => setAssignSlot(null)} /> : null}
       {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterFor(rosterTeam.id)} members={members} onClose={() => setRosterTeam(null)} /> : null}
       {adding ? <SchAddServiceModal onClose={() => setAdding(false)} /> : null}
     </div>
