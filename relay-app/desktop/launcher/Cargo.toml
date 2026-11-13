@@ -1,0 +1,17 @@
+[package]
+name = "trinityone-launcher"
+version = "0.9.0"
+edition = "2021"
+description = "The Suite's relay launcher: where the data folder is, moving it, and checking the relay that comes back (relay storage plan step 5)"
+
+[lib]
+path = "src/lib.rs"
+
+# A headless host for the same launcher code, so scripts/the-suite-launcher-*.test.mjs can drive the REAL launcher
+# without a window. Not shipped: nothing in the Tauri bundle lists it.
+[[bin]]
+name = "launcher-sim"
+path = "src/bin/launcher-sim.rs"
+
+[dependencies]
+serde_json = "1"
