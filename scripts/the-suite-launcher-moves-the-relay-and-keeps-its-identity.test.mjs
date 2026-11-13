@@ -65,14 +65,7 @@ const mv = st.move || {};
 appendFileSync(env.TEST_STARTS_LOG, JSON.stringify({ dir: env.TRINITY_DATA_DIR, pinned: env.TRINITY_DATA_DIR_PINNED || '', mode: env.TRINITY_STORAGE_MODE, hasState: !!env.TRINITY_STORAGE_STATE,
   state: mv.state || null, preStart: !!mv.preStartCounts, at: Date.now() }) + '\\n');
 if (env.TEST_EXIT_CODE) process.exit(Number(env.TEST_EXIT_CODE));
-if (env.TEST_SLOW_START_MS) await new Promise(r => setTimeout(r, Number(env.TEST_SLOW_START_MS)));
-if (env.TEST_NO_PROOF) {   // a relay that serves its panel but cannot answer /relay-identity
-  const http = await import('node:http'); const { syncBuiltinESMExports } = await import('node:module');
-  const orig = http.default.createServer;
-  http.default.createServer = (...a) => { const sv = orig(...a); const emit = sv.emit; sv.emit = function (ev, req, res, ...r) { if (ev === 'request' && req.url.startsWith('/relay-identity')) { res.writeHead(404); res.end(); return true; } return emit.call(this, ev, req, res, ...r); }; return sv; };
-  syncBuiltinESMExports();
-}
-if (env.TEST_EXIT_CODE) process.exit(Number(env.TEST_EXIT_CODE));
+if (env.TEST_HANG_DIR && env.TEST_HANG_DIR === env.TRINITY_DATA_DIR) await new Promise(() => {});   // a relay that never opens its port
 if (env.TEST_SLOW_START_MS) await new Promise(r => setTimeout(r, Number(env.TEST_SLOW_START_MS)));
 if (env.TEST_NO_PROOF) {   // a relay that serves its panel but cannot answer /relay-identity
   const http = await import('node:http'); const { syncBuiltinESMExports } = await import('node:module');
@@ -114,10 +107,10 @@ const startsOf = fx => existsSync(fx.starts) ? readFileSync(fx.starts, 'utf8').t
 const stateOf = fx => { try { return JSON.parse(readFileSync(fx.state, 'utf8')); } catch { return {}; } };
 
 // ── the launcher, running ──────────────────────────────────────────────────────────────────────────────────
-async function startLauncher(fx, { env = {}, port, upSteps = 160 } = {}) {
+async function startLauncher(fx, { env = {}, port, upSteps = 160, extra = [] } = {}) {
   port = port || await freePort('the launcher test relay');
   const args = ['--config-file', fx.state, '--default-data', fx.data, '--payload', ROOT, '--node', process.execPath, '--port', String(port),
-    '--gateway', join(fx.base, 'wrapper.mjs'), '--up-steps', String(upSteps), '--log-file', join(fx.base, 'relay-launch.log')];
+    '--gateway', join(fx.base, 'wrapper.mjs'), '--up-steps', String(upSteps), '--log-file', join(fx.base, 'relay-launch.log'), ...extra];
   const E = { RELAY_SYNC: '0', RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + join(fx.base, 'preload.mjs'),
     HOME: fx.home, USER: 'nobody-launcher-test', TEST_STARTS_LOG: fx.starts, TEST_GATEWAY: join(ROOT, 'scripts/gateway.mjs'), ...env };
   for (const [k, v] of Object.entries(E)) args.push('--env', `${k}=${v}`);
@@ -569,4 +562,30 @@ test('L1: a relay whose proof only FAILED is shown as "couldn\'t prove", never a
     await c.open(l.base, 'set'); await waitFor(c, shown('storageCard'), v => v === true);
     assert.match(await waitFor(c, text('#stIdentityChanged'), v => !!v), /different identity key/);
   } finally { c.stop(); await l.stop(); }
+});
+
+test('N1: a mover that never finishes ends the wait with a clear splash message naming the log and the lock file (no freeze on "Moving")', { skip, timeout: 90000 }, async () => {
+  const fx = fixture({ events: 2 });
+  const h = fakeMover(); holdLock(fx, h); await sleep(300);
+  const l = await startLauncher(fx, { extra: ['--mover-wait-ms', '2000'] });
+  try {
+    assert.equal(await l.waitFor(/^SIM end /, 1, 30000), true, 'the launcher waited for ever. ' + l.lines.join('|'));
+    assert.match(l.lines.find(x => x.startsWith('SIM end ')), /Refused/);
+    const f = fragsOf(l.lines).at(-1);
+    assert.equal(f.k, 'bad'); assert.ok(f.s.includes('relay-launch.log') && f.s.includes('.mover-lock'), f.s);
+    assert.equal(startsOf(fx).length, 0);
+  } finally { await l.stop(); }
+});
+
+test('N6: after a move, a relay that hangs without opening its port is rolled back after a bounded wait (a normal slow start is not)', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 6 });
+  const newdir = await realCopyMove(fx, fx.home);
+  const l = await startLauncher(fx, { env: { TEST_HANG_DIR: newdir }, extra: ['--check-steps', '8'] });
+  try {
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 90000), true, 'the launcher never recovered from a hung relay. Log:\n' + l.log + JSON.stringify(stateOf(fx).move));
+    const starts = startsOf(fx);
+    assert.equal(starts[0].dir, newdir); assert.equal(starts.at(-1).dir, fx.data, 'after the hang the relay must run on the OLD folder');
+    assert.equal(stateOf(fx).move.state, 'rolled-back');
+    assert.equal((await proven(l)).relayPub, fx.pub); assert.equal(await events(l, fx.data), 6);
+  } finally { await l.stop(); }
 });

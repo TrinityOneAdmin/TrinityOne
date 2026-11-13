@@ -269,8 +269,15 @@ export async function moverLockHeld(file, { platform = process.platform, info = 
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
   try { process.kill(pid, 0); } catch (e) { if (!e || e.code !== 'EPERM') return false; }
   const p = await info(pid, platform) || {};
-  if (p.commandLine === null || p.commandLine === undefined) return true;   // cannot tell: waiting is the safe error
-  return /relay-move\.mjs/.test(p.commandLine);
+  const cmd = p.commandLine;
+  if (cmd !== null && cmd !== undefined) return /relay-move\.mjs/.test(cmd);
+  // The command line is unreadable (on Windows a reused pid is often a system process a normal user cannot inspect).
+  // A process that STARTED AFTER the lock was written cannot be the mover that wrote it: a reused pid, stale (audit N1).
+  // Linux is the exception, as in relayLockHeld: its `ps` recomputes a start time from the current clock, so an unknown
+  // command line with a later start proves nothing there (and /proc makes an unreadable one rare).
+  const lockAt = Date.parse(l.startedAt);
+  if (p.startedAt && lockAt && p.startedAt > lockAt + START_SLACK_MS && platform !== 'linux') return false;
+  return true;   // still cannot tell: held. The launcher's wait is bounded, so this can never freeze the Suite.
 }
 export async function acquireMoverLock(file) {
   mkdirSync(dirname(file), { recursive: true });

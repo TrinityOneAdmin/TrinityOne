@@ -19,7 +19,7 @@ import { promisify } from 'node:util';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { freePort } from './relay-network-harness.mjs';
 import { openStore } from './event-store.mjs';
-import { countRows } from './relay-move.mjs';
+import { countRows, moverLockHeld } from './relay-move.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MOVER = join(ROOT, 'scripts/relay-move.mjs');
@@ -119,4 +119,19 @@ test('begin-check: exact counts before the relay runs (more events than recorded
   journalOf(fx, { counts: { ...counts, events: counts.events - 1 } });
   const bad = await cli(['begin-check', '--pointer', fx.state]);
   assert.equal(bad.ok, false); assert.ok(bad.bad.includes('event-count'), JSON.stringify(bad));
+});
+
+test('N1: a live pid whose command line cannot be read, but which STARTED AFTER the lock was written, is a reused pid: the lock is stale', async () => {
+  const fx = folder();
+  const lock = join(fx.base, 'storage.json.mover-lock');
+  const t0 = Date.now();
+  writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: new Date(t0).toISOString() }));   // a live pid that is not us
+  const unreadable = startedAt => async () => ({ commandLine: null, startedAt });
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: unreadable(t0 + 60000) }), false, 'a process that started after the lock was taken for its holder');
+  // cannot tell and no later start: held (the launcher\'s bounded wait is what stops this freezing the Suite)
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: unreadable(t0 - 1000) }), true);
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: unreadable(null) }), true);
+  // a readable command line decides on its own: a mover is held, anything else is not
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: async () => ({ commandLine: 'node scripts/relay-move.mjs move', startedAt: t0 - 100 }) }), true);
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: async () => ({ commandLine: 'svchost.exe -k x', startedAt: t0 - 100 }) }), false);
 });

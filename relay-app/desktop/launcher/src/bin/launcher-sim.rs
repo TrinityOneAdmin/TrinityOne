@@ -167,6 +167,8 @@ fn main() {
         default_data: PathBuf::from(get("default-data")),
         port: get("port").parse().expect("--port"),
         up_steps: a.get("up-steps").and_then(|s| s.parse().ok()).unwrap_or(240),
+        mover_wait_ms: a.get("mover-wait-ms").and_then(|s| s.parse().ok()).unwrap_or(600_000),
+        check_steps: a.get("check-steps").and_then(|s| s.parse().ok()).unwrap_or(1200),
         log_path: PathBuf::from(a.get("log-file").cloned().unwrap_or_else(|| "relay-launch.log".into())),
     };
     let quit = Arc::new(AtomicBool::new(false));
