@@ -359,17 +359,23 @@ function screen(e) {
     },
     document: { addEventListener() {}, removeEventListener() {} },
   };
+  // The row's Share button (2026-11-13) is decided by share-app.jsx's real isShareableModule, so the rows here
+  // carry the second button exactly as they do in the app — which is why rowFor/removeBtn below pick the
+  // button LABELLED Remove rather than "the one button in the row".
+  g.window.isShareableModule = loadScreen('app/share-app.jsx', ['isShareableModule'], { React, window: {}, btoa }).isShareableModule;
   const { InstalledBrowser } = loadScreen('app/screens-library.jsx', ['InstalledBrowser'], g);
   const ctx = { toast: (t) => toasts.push(t), go() {}, closeStore() {} };
   let tree = draw(InstalledBrowser, { ctx, category: null, force: () => {} });
   const redraw = () => { tree = draw(InstalledBrowser, { ctx, category: null, force: () => {} }); return tree; };
-  // The row for a module is the one whose text carries its name; its Remove button is the button inside it.
+  // The row for a module is the one whose text carries its name and holds exactly one Remove button; its
+  // Remove button is the button inside it labelled Remove (a row may also carry Share).
+  const isRemove = (x) => x.type === 'button' && texts(x).join(' ').includes('Remove');
   const rowFor = (name) => {
-    const rows = find(tree, n => n.type === 'div' && texts(n).join(' ').includes(name) && find(n, x => x.type === 'button').length === 1);
+    const rows = find(tree, n => n.type === 'div' && texts(n).join(' ').includes(name) && find(n, isRemove).length === 1);
     assert.ok(rows.length >= 1, `no Installed row for ${name} — re-anchor this test`);
     return rows[rows.length - 1];
   };
-  const removeBtn = (name) => find(rowFor(name), n => n.type === 'button')[0];
+  const removeBtn = (name) => find(rowFor(name), isRemove)[0];
   return {
     toasts, redraw, removeBtn,
     tapRemove: async (name) => { const b = removeBtn(name); await b.props.onClick(); return redraw(); },

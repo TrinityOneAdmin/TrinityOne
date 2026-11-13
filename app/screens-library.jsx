@@ -958,6 +958,7 @@ function StoreRow({ item, catIcon, ctx }) {
 
 // "Installed" tier — everything downloaded onto this device, removable (except the active Bible)
 function InstalledBrowser({ ctx, category, force }) {
+  const [sharing, setSharing] = React.useState(null);   // url of the row whose Share is being prepared
   const map = window.Bible.installedMap();
   const active = window.Bible.activeVersion;
   // IS THIS ROW THE BIBLE BEING READ? Not "does it share a name with it". Names are unique within a
@@ -991,6 +992,46 @@ function InstalledBrowser({ ctx, category, force }) {
     else ctx.toast(`Couldn't remove ${r.name}`);
   };
 
+  // SHARE ONE MODULE, AS ONE FILE (share-app.jsx's shareOneFile). Offered only on a row isShareableModule allows
+  // — what a recipient's Library → Import can take. The bytes are the engine's own cached copy; if they are not
+  // there, say so and share nothing. Backing out of the share sheet is not an error and shows nothing.
+  const canShareRow = (r) => typeof window.isShareableModule === 'function' && window.isShareableModule(r);
+  // A SHARE THAT NEVER SETTLES MUST NOT LOCK EVERY ROW. If Android recreates the activity while the member is in
+  // the other app, Share.share may never resolve, and `sharing` would hold every Share button disabled until the
+  // Library is reopened. Coming back to the app is the moment the share sheet has gone, so the native foreground
+  // event clears it — chosen over a timer because a member may legitimately spend minutes picking a contact, and
+  // a timer short enough to help would re-enable Share while the sheet is still up. If the share does settle
+  // after this, its own `finally` usually just clears an already-clear state (not always: see N3 below).
+  // ONLY ONCE THE SHARE SHEET WAS ASKED FOR (`opened`, set by shareOneFile's onOpen): a resume while the bytes are
+  // still being read or written is not the sheet going away, and clearing then would allow a second tap mid-prep.
+  // Accepted (audit N3): so an export or write that NEVER settles keeps the rows locked until the Library is
+  // reopened; and a share A that settles late, after a resume let share B start, clears B's lock in its finally.
+  const opened = React.useRef(null);
+  React.useEffect(() => {
+    let h = null, gone = false;
+    try {
+      const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+      if (AppP && AppP.addListener) {
+        Promise.resolve(AppP.addListener('appStateChange', (st) => { if (st && st.isActive && opened.current) { opened.current = null; setSharing(null); } }))
+          .then(x => { if (gone) { try { x && x.remove && x.remove(); } catch (e) {} } else h = x; }).catch(() => {});
+      }
+    } catch (e) {}
+    return () => { gone = true; try { h && h.remove && h.remove(); } catch (e) {} };
+  }, []);
+  const share = async (r) => {
+    if (sharing) return;
+    setSharing(r.url);
+    opened.current = null;
+    try {
+      let ex = null;
+      try { ex = await window.Bible.exportModule(r.url); } catch (e) { ex = null; }
+      if (!ex || !ex.bytes || !ex.bytes.length) { ctx.toast(`Couldn't share ${r.name} — it isn't saved on this phone`); return; }
+      await window.shareOneFile({ bytes: ex.bytes, filename: ex.filename,
+        mime: /\.zip$/i.test(ex.filename) ? 'application/zip' : 'application/octet-stream',
+        title: r.name, dialogTitle: 'Share ' + r.name, onOpen: () => { opened.current = r.url; } }, ctx);
+    } finally { opened.current = null; setSharing(null); }
+  };
+
   if (!rows.length) return (
     <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-3)' }}>
       <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="library" size={24} /></div>
@@ -1020,12 +1061,24 @@ function InstalledBrowser({ ctx, category, force }) {
                 {[CAT_LABEL[r.category] || 'Module', r.abbr, isActive ? 'Active' : null].filter(Boolean).join('  ·  ')}
               </div>
             </div>
-            <button onClick={() => remove(r)} disabled={isActive} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5,
-              border: '1px solid var(--line)', background: 'var(--surface)', color: isActive ? 'var(--ink-3)' : 'var(--danger, #c0392b)',
-              borderRadius: 11, padding: '7px 11px', cursor: isActive ? 'default' : 'pointer', opacity: isActive ? 0.5 : 1,
-              fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
-              <Icon name="trash" size={14} stroke={2.2} /> Remove
-            </button>
+            {/* Share sits ABOVE Remove, not beside it: side by side, at 360px the name was left 69px and
+                "Septuagint" spilled under the buttons (measured — installed-row-share-fits-a-phone.test.mjs). */}
+            <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+              {canShareRow(r) ? (
+                <button onClick={() => share(r)} disabled={!!sharing} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                  border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay)',
+                  borderRadius: 11, padding: '7px 11px', cursor: sharing ? 'default' : 'pointer', opacity: sharing ? 0.6 : 1,
+                  fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
+                  <Icon name="share" size={14} stroke={2.2} /> {sharing === r.url ? 'Preparing…' : 'Share'}
+                </button>
+              ) : null}
+              <button onClick={() => remove(r)} disabled={isActive} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                border: '1px solid var(--line)', background: 'var(--surface)', color: isActive ? 'var(--ink-3)' : 'var(--danger, #c0392b)',
+                borderRadius: 11, padding: '7px 11px', cursor: isActive ? 'default' : 'pointer', opacity: isActive ? 0.5 : 1,
+                fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
+                <Icon name="trash" size={14} stroke={2.2} /> Remove
+              </button>
+            </div>
           </div>
         );
       })}
