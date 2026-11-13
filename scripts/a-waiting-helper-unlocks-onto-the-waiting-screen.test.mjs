@@ -95,7 +95,7 @@ before(async () => {
   await waitFor(`[...document.querySelectorAll('button')].some(x => /Help run a church/i.test((x.textContent||'').trim()))`, 90000, 'the welcome screen');
   // "Help run a church" -> paste the invite -> request sent -> set a PIN -> into the console (StewardWelcome's calls)
   helper = await evalIn(`(async () => { window.Steward.createKeyQuiet(); localStorage.setItem('trinityone.steward.wizard.done', '1');
-    const r = await window.Steward.requestSteward(${JSON.stringify('trinityone-stewardinvite:' + nip19.npubEncode(B.pub))});
+    const r = await window.Steward.requestSteward(${JSON.stringify('trinityone-stewardinvite:' + nip19.npubEncode(B.pub))}, 'Waiting Helper');
     if (!r || !r.ok) return 'request failed: ' + JSON.stringify(r);
     await window.Steward.setPin(${JSON.stringify(PIN)}); window.Steward.enterConsole(); return window.Steward.churchPub; })()`);
   assert.match(String(helper), /^[0-9a-f]{64}$/, 'CONTROL: the helper could not send its request: ' + helper);
