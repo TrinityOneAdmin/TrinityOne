@@ -993,9 +993,11 @@ function InstalledBrowser({ ctx, category, force }) {
   // Library is reopened. Coming back to the app is the moment the share sheet has gone, so the native foreground
   // event clears it — chosen over a timer because a member may legitimately spend minutes picking a contact, and
   // a timer short enough to help would re-enable Share while the sheet is still up. If the share does settle
-  // after this, its own `finally` just clears an already-clear state.
+  // after this, its own `finally` usually just clears an already-clear state (not always: see N3 below).
   // ONLY ONCE THE SHARE SHEET WAS ASKED FOR (`opened`, set by shareOneFile's onOpen): a resume while the bytes are
   // still being read or written is not the sheet going away, and clearing then would allow a second tap mid-prep.
+  // Accepted (audit N3): so an export or write that NEVER settles keeps the rows locked until the Library is
+  // reopened; and a share A that settles late, after a resume let share B start, clears B's lock in its finally.
   const opened = React.useRef(null);
   React.useEffect(() => {
     let h = null, gone = false;

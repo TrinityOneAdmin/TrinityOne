@@ -102,6 +102,8 @@ async function shareOneFile(opts, ctx) {
       result = 'failed';
     }
   }
+  // Accepted (audit N2): re-sharing the SAME module after a dismiss, and having that attempt fail, deletes the copy
+  // the first (Quick Share overlay) attempt may still be reading — the write overwrote it under the same name.
   if (wrote) { if (result === 'failed') drop(wrote); else shareAppLastCopy = wrote; }
   return result;
 }
@@ -136,10 +138,17 @@ window.isShareableModule = isShareableModule;
 function shareAppOnIos() {
   try {
     const Cap = window.Capacitor;
-    if (Cap && Cap.getPlatform && Cap.getPlatform() === 'ios') return true;
+    const p = Cap && Cap.getPlatform ? Cap.getPlatform() : '';
+    if (p === 'ios') return true;
+    // THE ANDROID APP IS NEVER iOS, whatever its user agent says: the WebView's UA carries the device model, and an
+    // Android tablet such as Chuwi's "HiPad X" contains "iPad" (audit of a7d5f406, N1).
+    if (p === 'android') return false;
     const nav = (typeof navigator !== 'undefined' && navigator) || window.navigator || {};
     const ua = String(nav.userAgent || ''), plat = String(nav.platform || '');
-    if (/iPhone|iPad|iPod/.test(ua) || /^(iPhone|iPad|iPod)/.test(plat)) return true;
+    // Whole words only, so "HiPad" in an Android browser's UA is not an iPad.
+    if (/\b(iPhone|iPad|iPod)\b/.test(ua) || /^(iPhone|iPad|iPod)/.test(plat)) return true;
+    // Accepted (audit N4, unverified): an Android browser in "desktop site" mode that reported MacIntel with touch
+    // points would be taken for an iPad here and lose the row — web only; Chrome reports Linux.
     if (plat === 'MacIntel' && Number(nav.maxTouchPoints || 0) > 1) return true;
     return false;
   } catch (e) { return false; }
