@@ -191,6 +191,38 @@ test('staging: two helpers ask through the welcome screen and the owner approves
 
 });
 
+// THE STALE "N PEOPLE WANT TO HELP" ON A HELPER'S CONSOLE (owner device test 2026-11-13). Owner: "hide it unless the
+// helper has full permissions that include adding helpers. But the issue was that it was stale and showing up in their
+// console". No helper can hold that permission (the roster is church-key-only), and the helper's count cannot be right:
+// the owner's answers are sealed to the church key. Measured before the fix: owner banner 1, helper banner 2.
+const BANNER_COUNT = `(() => { const b=[...document.querySelectorAll('button')].find(x=>/want(s)? to help steward/.test(x.textContent||'')); if(!b) return 0; const m=(b.textContent||'').match(/(\\d+)\\s+(person wants|people want) to help steward/); return m ? Number(m[1]) : -1; })()`;
+test('a helper\'s Overview shows NO "people want to help" banner, while the owner\'s shows the correct count', { skip: SKIP, timeout: 240000 }, async () => {
+  const { finalizeEvent, nip44, nip19 } = await import('nostr-tools');
+  const cp = OWNER.churchPub, at = Math.floor(Date.now() / 1000) - 60;
+  const req = (who, name) => finalizeEvent({ kind: 30078, created_at: at, tags: [['d', 'trinityone/stewardreq:' + cp], ['t', 'trinityone'], ['p', cp]], content: JSON.stringify({ n: nip44.v2.encrypt(JSON.stringify({ name }), nip44.v2.utils.getConversationKey(who.sk, cp)) }) }, who.sk);
+  const X = H.key(), Y = H.key();
+  await H.publishAll(OWNER.relay, [req(X, 'Xena Declined'), req(Y, 'Yann Waiting')]);
+  await toHelpers(OWNER);
+  const npx = nip19.npubEncode(X.pub);
+  await OWNER.waitFor(`document.body.innerText.includes(${JSON.stringify(npx)})`, 45000, 'Xena\'s request row on the owner\'s Helpers page');
+  const r = await OWNER.ev(`(() => { const xs=[...document.querySelectorAll('button[aria-label="Decline this request"]')]; const b=xs.find(x=>{ let n=x; for(let i=0;i<6&&n;i++){ n=n.parentElement; if(n&&(n.innerText||'').includes(${JSON.stringify(npx)})&&(n.innerText.match(/npub1/g)||[]).length===1) return true; } return false; }); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
+  assert.equal(r, 'ok', 'staging: no Decline control on Xena\'s row');
+  const t0 = Date.now(); let ok = false;
+  while (!ok && Date.now() - t0 < 20000) { ok = OWNER.rows(`kind = 30078 AND dtag = 'trinityone/stewardhandled:${cp}'`).length > 0; if (!ok) await sleep(400); }
+  assert.ok(ok, 'staging: the decline never reached the relay');
+  // STAGING, NOT VACUOUS: the helper's console really does receive both requests — the stream the stale count came from
+  const seen = await ONE.ev(`(() => new Promise(res => { let n = 0; const u = window.Steward.subscribeStewardRequests(l => { n = l.length; }); setTimeout(() => { try { u(); } catch (e) {} res(n); }, 5000); }))()`);
+  assert.ok(seen >= 2, 'staging: the helper console does not receive the requests at all (' + seen + '), so hiding proves nothing');
+  await OWNER.press(/^Overview$/, 'Overview');
+  await OWNER.waitFor(`${BANNER_COUNT} === 1`, 30000, 'the owner\'s banner counting Yann alone');
+  await ONE.press(/^Overview$/, 'Overview');
+  await ONE.waitFor(`document.body.innerText.includes(${JSON.stringify(CHURCH_NAME)})`, 30000, 'the helper\'s Overview');
+  await sleep(4000);
+  assert.equal(await ONE.ev(BANNER_COUNT), 0, 'THE BUG: a helper\'s console shows a "people want to help" banner (stale: it cannot see the owner\'s answers)');
+  assert.equal(await ONE.ev(`/Requests to help/i.test(document.body.innerText)`), false, 'a helper\'s console lists requests to help');
+  assert.equal(await OWNER.ev(BANNER_COUNT), 1, 'the owner\'s banner changed');
+});
+
 test('CONTROL setup: Sam\'s relay goes unreachable and his console reloads — it paints the church from cache and says nothing', { skip: SKIP, timeout: 240000 }, async () => {
   await TWO.blockRelay(true);
   await reloadAndUnlock(TWO);
