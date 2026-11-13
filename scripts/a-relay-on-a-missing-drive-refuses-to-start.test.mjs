@@ -100,9 +100,10 @@ test('PINNED + the folder is another relay\'s (stamp names a different key): ref
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('PINNED + the folder exists but holds no relay key: refuses, mints none', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-empty-'));
+test('PINNED + the folder has files but no relay key: refuses, mints none', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-nokey-'));
   try {
+    writeFileSync(join(dir, 'church.json'), JSON.stringify({ churches: [] }));
     await expectRefusal(dir, { TRINITY_DATA_DIR_PINNED: '1' });
     assert.equal(existsSync(join(dir, 'relay-key.json')), false, 'a NEW relay identity was minted in a pinned folder');
     assert.equal(existsSync(join(dir, 'admin.json')), false, 'an admin token was minted in a pinned folder');
@@ -184,5 +185,44 @@ test('a staged restore of ANOTHER relay\'s backup (no stamp in it) is not refuse
     assert.equal(readJson(join(dir, 'relay-key.json')).pub, newPub, 'the restore did not apply');
     assert.equal(readJson(join(dir, '.trinity-data-dir')).relayPub, newPub, 'the folder was not re-stamped to the restored key');
     assert.equal(existsSync(join(dir, 'MOVED-TO')), false, 'a backup imported a MOVED-TO tombstone');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Audit A finding 7: a launcher that pins on the very first run creates an EMPTY folder; that must start.
+test('PINNED + an existing, COMPLETELY EMPTY folder (first run): starts, makes its key, stamps it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-fresh-pinned-'));
+  try {
+    const { status } = await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    const pub = readJson(join(dir, 'relay-key.json')).pub;
+    assert.equal(status.relayPub, pub);
+    assert.equal(readJson(join(dir, '.trinity-data-dir')).relayPub, pub, 'the fresh pinned folder was not stamped');
+    await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });   // and starts again, pinned, on the stamped folder
+    assert.equal(readJson(join(dir, 'relay-key.json')).pub, pub, 'the second pinned boot changed the key');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Audit A finding 13: a backup carrying a .trinity-data-dir WITHOUT its matching key must not import that stamp.
+test('a staged restore with a foreign stamp and no key: the stamp is not imported, a pinned relay still starts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-restore-stamp-'));
+  try {
+    const pub = keyFile(dir);
+    writeFileSync(join(dir, '.trinity-data-dir'), JSON.stringify({ relayPub: pub }));
+    const staging = join(dir, '.restore-pending'); mkdirSync(staging);
+    writeFileSync(join(staging, 'church.json'), JSON.stringify({ churches: [] }));
+    writeFileSync(join(staging, '.trinity-data-dir'), JSON.stringify({ relayPub: getPublicKey(generateSecretKey()) }));
+    await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    assert.equal(readJson(join(dir, '.trinity-data-dir')).relayPub, pub, 'a foreign stamp was imported from the backup');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a staged restore whose key and stamp DISAGREE: the stamp is dropped and re-made from the restored key', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-restore-mismatch-'));
+  try {
+    keyFile(dir);
+    const staging = join(dir, '.restore-pending'); mkdirSync(staging);
+    const newPub = keyFile(staging);
+    writeFileSync(join(staging, '.trinity-data-dir'), JSON.stringify({ relayPub: getPublicKey(generateSecretKey()) }));
+    await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    assert.equal(readJson(join(dir, '.trinity-data-dir')).relayPub, newPub);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

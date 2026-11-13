@@ -100,11 +100,16 @@ if (!existsSync(DATA_DIR)) {
   try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 }
 refuseIfMovedOut();
+// A COMPLETELY EMPTY folder is a fresh one: a launcher that pins on the very first run (and has just created the
+// folder) must be able to start. R1 stays closed: an unplugged drive cannot produce an existing <mount>/<leaf>,
+// and a folder with ANY file in it but no key is still refused. Measured before anything below writes into it.
+let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).length === 0; } catch {}
 // Called again after a staged restore is applied (below), when relay-key.json may have changed.
 function checkDataDirIdentity() {
   refuseIfMovedOut();
   const keyPub = relayKeyPubOnDisk(), stampPub = stampPubOnDisk(), hasStamp = existsSync(DATA_DIR_STAMP);
   if (DATA_DIR_PINNED) {
+    if (!keyPub && DATA_DIR_WAS_EMPTY) { console.log('  data folder is new and empty: creating this relay\'s identity (pinned)'); return; }
     if (!keyPub) refuseDataDir('the data folder has no usable relay identity key (relay-key.json).',
       'This is not the relay\'s data folder, or it is incomplete. Point the relay at the folder that holds its data.');
     if (hasStamp && stampPub !== keyPub) refuseDataDir('the data folder belongs to a different relay (its .trinity-data-dir names ' + (stampPub || 'nothing readable') + ', its key is ' + keyPub + ').',
@@ -137,10 +142,17 @@ function stagingHasSymlink(p) {
     // DATA-DIR GUARD: a restored relay-key.json is a deliberate identity change, so the folder's old stamp goes
     // with it (re-stamped from the restored key below) unless the backup carries its own. A backup never imports
     // a MOVED-TO tombstone — that would make the restored relay refuse to start.
+    // A staged stamp is imported ONLY together with a staged key it matches; otherwise it is a foreign stamp
+    // (a hand-made tar, a stamp without its key) and would make a pinned relay refuse after a "successful" restore.
     const staged = readdirSync(staging);
-    if (staged.includes('relay-key.json') && !staged.includes('.trinity-data-dir')) { try { rmSync(DATA_DIR_STAMP, { force: true }); } catch {} }
+    let sk = null, ss = null;
+    try { const k = JSON.parse(readFileSync(join(staging, 'relay-key.json'), 'utf8')); if (k && k.sk && k.pub) sk = String(k.pub); } catch {}
+    try { const t = JSON.parse(readFileSync(join(staging, '.trinity-data-dir'), 'utf8')); if (t && typeof t.relayPub === 'string') ss = t.relayPub; } catch {}
+    const importStamp = !!(sk && ss && sk === ss);
+    if (staged.includes('relay-key.json') && !importStamp) { try { rmSync(DATA_DIR_STAMP, { force: true }); } catch {} }
     for (const name of staged) {
       if (name === 'MOVED-TO') { console.error('  restore-on-boot: skipped a MOVED-TO note in the backup'); continue; }
+      if (name === '.trinity-data-dir' && !importStamp) { console.error('  restore-on-boot: skipped a .trinity-data-dir that does not match the backup\'s key'); continue; }
       const dst = join(DATA_DIR, name);
       try { rmSync(dst, { recursive: true, force: true }); } catch {}
       renameSync(join(staging, name), dst);
@@ -1348,8 +1360,8 @@ const RELAY_KEY_FILE = join(DATA_DIR,'relay-key.json');
 let RELAY_SK = null, RELAY_PUB = '';
 try { const k = JSON.parse(readFileSync(RELAY_KEY_FILE, 'utf8')); if (k && k.sk && k.pub) { RELAY_SK = Uint8Array.from(Buffer.from(k.sk, 'hex')); RELAY_PUB = k.pub; } } catch {}
 if (!RELAY_SK || !RELAY_PUB) { RELAY_SK = generateSecretKey(); RELAY_PUB = getPublicKey(RELAY_SK); try { writeFileSync(RELAY_KEY_FILE, JSON.stringify({ sk: Buffer.from(RELAY_SK).toString('hex'), pub: RELAY_PUB }), { mode: 0o600 }); } catch {} }
-// DATA-DIR GUARD: a fresh folder gets its .trinity-data-dir stamp once its key exists (pinned folders were already
-// checked above and never reach a mint — checkDataDirIdentity refuses a pinned folder without a usable key).
+// DATA-DIR GUARD: a fresh folder gets its .trinity-data-dir stamp once its key exists. A pinned folder reaches a
+// mint only if it was completely empty at start-up (checkDataDirIdentity refuses any other pinned folder without a key).
 if (!existsSync(DATA_DIR_STAMP) && relayKeyPubOnDisk() === RELAY_PUB) writeDataDirStamp(RELAY_PUB);
 // a relay-signed NIP-98 (kind-27235) proof bound to url+method+church — how this relay authenticates to a peer's /sync.
 function relayProof(url, method, cp) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', method], ['church', cp]], content: '' }, RELAY_SK))).toString('base64'); }
