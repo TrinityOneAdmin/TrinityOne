@@ -6,7 +6,7 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync, accessSync, constants as fsConstants } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync, accessSync, openSync, fsyncSync, closeSync, constants as fsConstants } from 'fs';
 import { Transform } from 'stream';
 import { gzipSync } from 'node:zlib';
 import { extname, normalize, join, sep } from 'path';
@@ -100,11 +100,25 @@ if (!existsSync(DATA_DIR)) {
   try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 }
 refuseIfMovedOut();
+// Temp files this guard writes (relay-key.json.tmp-<pid>, .trinity-data-dir.tmp-<pid>) are left behind only by a
+// process killed mid-write. A key temp holds a complete secret key: delete any whose writer is gone (audit C C6).
+// They are also excluded from backups. Only these two exact patterns, only with a dead pid.
+const DATA_DIR_TEMP_RE = /^(relay-key\.json|\.trinity-data-dir)\.tmp-(\d+)$/;
+try {
+  for (const n of readdirSync(DATA_DIR)) {
+    const m = DATA_DIR_TEMP_RE.exec(n); if (!m) continue;
+    const pid = Number(m[2]); let alive = pid === process.pid;
+    if (!alive) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
+    if (!alive) { try { rmSync(join(DATA_DIR, n), { force: true }); } catch {} }
+  }
+} catch {}
 // A COMPLETELY EMPTY folder is a fresh one: a launcher that pins on the very first run (and has just created the
 // folder) must be able to start. R1 stays closed: an unplugged drive cannot produce an existing <mount>/<leaf>,
 // and a folder with ANY file in it but no key is still refused. Measured before anything below writes into it.
-// Leftover temp files from a first boot killed while writing the key or stamp (below) do not count.
-let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => /^(relay-key\.json|\.trinity-data-dir)\.tmp-\d+$/.test(n)); } catch {}
+// Leftover temp files from a first boot killed while writing the key or stamp (below) do not count, nor does the
+// clutter an OS file browser drops into any folder it opens (audit C C9).
+const OS_CLUTTER = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'ehthumbs.db', 'desktop.ini', '.directory', '.Spotlight-V100', '.Trashes', '.fseventsd', '.TemporaryItems']);
+let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => DATA_DIR_TEMP_RE.test(n) || OS_CLUTTER.has(n) || n.startsWith('._')); } catch {}
 // Called again after a staged restore is applied (below), when relay-key.json may have changed.
 function checkDataDirIdentity() {
   refuseIfMovedOut();
@@ -113,11 +127,18 @@ function checkDataDirIdentity() {
     if (!keyPub && DATA_DIR_WAS_EMPTY) {
       // Audit B N5: the identity is the FIRST thing written into a fresh pinned folder — before .relay-lock,
       // admin.json or the database — so a first boot killed part-way never leaves a folder that has files but no
-      // key (which every later pinned boot would refuse). Written to a temp name and renamed, so it is whole or absent.
+      // key (which every later pinned boot would refuse). Written to a temp name, fsynced, renamed, and the folder
+      // fsynced (audit C C5), so after a kill or a power cut it is whole or absent — as far as the filesystem honours
+      // fsync (exFAT/FAT journal nothing, so this narrows the window rather than closing it there).
       console.log('  data folder is new and empty: creating this relay\'s identity (pinned)');
       const sk = generateSecretKey(), pub = getPublicKey(sk);
       const kf = join(DATA_DIR, 'relay-key.json'), tmp = kf + '.tmp-' + process.pid;
-      try { writeFileSync(tmp, JSON.stringify({ sk: Buffer.from(sk).toString('hex'), pub }), { mode: 0o600 }); renameSync(tmp, kf); }
+      try {
+        const fd = openSync(tmp, 'w', 0o600);
+        try { writeFileSync(fd, JSON.stringify({ sk: Buffer.from(sk).toString('hex'), pub })); fsyncSync(fd); } finally { closeSync(fd); }
+        renameSync(tmp, kf);
+        try { const dfd = openSync(DATA_DIR, 'r'); try { fsyncSync(dfd); } finally { closeSync(dfd); } } catch {}   // Windows cannot open a directory
+      }
       catch (e) { try { rmSync(tmp, { force: true }); } catch {} refuseDataDir('could not write the relay identity into the new data folder: ' + ((e && e.code) || e), 'Check the drive is writable, then start the relay again.'); }
       writeDataDirStamp(pub);
       return;
@@ -176,8 +197,9 @@ function stagingHasSymlink(p) {
 checkDataDirIdentity();
 // A "this folder is in use" note for scripts/relay-move.mjs, which must never copy or rename a folder a live relay
 // is writing to (audit A #10: "the port I was told is closed" is not proof). It is advisory: the mover checks the
-// pid is alive (and, where /proc exists, that it is a gateway). Never removed by a signal kill, so a stale note is
-// normal — a dead pid means free. Excluded from backups and from a move's copy.
+// pid is alive and is a gateway started no later than this note (command line + start time, on every OS). Removed on
+// a normal exit and on SIGTERM/SIGINT; a SIGKILL or a crash leaves it, so a stale note is normal — a dead pid means
+// free. The gateway itself never reads it. Excluded from backups and from a move's copy.
 const DATA_DIR_LOCK = join(DATA_DIR, '.relay-lock');
 try { writeFileSync(DATA_DIR_LOCK, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n'); } catch {}
 function releaseDataDirLock() { try { const l = JSON.parse(readFileSync(DATA_DIR_LOCK, 'utf8')); if (l && l.pid === process.pid) unlinkSync(DATA_DIR_LOCK); } catch {} }
@@ -8090,7 +8112,8 @@ function serveStatic(req, res) {
     try {
       child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
         '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log',
-        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '--exclude=./.relay-lock', '.'],
+        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '--exclude=./.relay-lock',
+        '--exclude=./relay-key.json.tmp-*', '--exclude=./.trinity-data-dir.tmp-*', '.'],
         { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"tar not available on this box"}'); return; }
     res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + fname + '"', ...SEC_HEADERS });

@@ -10,8 +10,8 @@
 // The boot tests pin today's behaviour for every box that sets no TRINITY_DATA_DIR_PINNED (backward compat).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
@@ -296,4 +296,109 @@ test('a relay stopped with SIGTERM removes its .relay-lock', async () => {
     r.p.kill('SIGTERM'); await r.exited;
     assert.equal(existsSync(join(dir, '.relay-lock')), false, 'the lock outlived a SIGTERM stop (systemctl stop)');
   } finally { if (r.code === undefined) { r.p.kill('SIGKILL'); await r.exited; } rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── Audit C of fdba15d8 ──────────────────────────────────────────────────────────────────────────────────────
+// C1: a finished move, then the REAL gateway applies a restore of ANOTHER relay's backup: recovery must still start it.
+test('C1 after a move, restoring another relay\'s backup through the real gateway does not lock the box out', async () => {
+  const { moveRelayData, beginCheck, checkPassed, recoverMove, jsonPointer, jsonFieldStore, LEAF } = await import('./relay-move.mjs');
+  const base = mkdtempSync(join(tmpdir(), 'trin-r1-c1-'));
+  try {
+    const from = join(base, 'old', 'data'); mkdirSync(from, { recursive: true });
+    const pub = keyFile(from); writeFileSync(join(from, '.trinity-data-dir'), JSON.stringify({ relayPub: pub }));
+    mkdirSync(join(base, 'drive'));
+    const to = join(base, 'drive', LEAF), cfg = join(base, 'storage.json');
+    const pointer = jsonPointer(cfg), journal = jsonFieldStore(cfg, 'move'); pointer.write(from, pub);
+    const m = await moveRelayData({ from, to, pointer, journal, relayRunning: async () => false, mounts: null });
+    assert.equal(m.ok, true, JSON.stringify(m));
+    assert.equal((await beginCheck({ journal })).ok, true); checkPassed({ journal });
+    const staging = join(to, '.restore-pending'); mkdirSync(staging);
+    const newPub = keyFile(staging);
+    await expectBoot(to, { TRINITY_DATA_DIR_PINNED: '1' });          // the gateway applies the restore and re-stamps
+    assert.equal(readJson(join(to, 'relay-key.json')).pub, newPub, 'fixture: the restore did not apply');
+    const r = await recoverMove({ journal, pointer });
+    assert.equal(r.action, 'none', 'after a supported restore the box is refused at every start: ' + JSON.stringify(r));
+    assert.equal(r.dataDir, to);
+    await expectBoot(to, { TRINITY_DATA_DIR_PINNED: '1' });          // and the gateway agrees
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+function recorderPreload(base, dir, log) {
+  const pre = join(base, 'record-sync.mjs');
+  writeFileSync(pre, `
+    import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+    const DIR = ${JSON.stringify(dir)}, LOG = ${JSON.stringify(log)}, append = fs.appendFileSync, fds = new Map();
+    const rel = p => { const f = String(p); return f === DIR ? '.' : f.startsWith(DIR + '/') ? f.slice(DIR.length + 1) : null; };
+    const open = fs.openSync, fsync = fs.fsyncSync, rename = fs.renameSync;
+    fs.openSync = function (p, ...r) { const fd = open.call(this, p, ...r); const n = rel(p); if (n !== null) fds.set(fd, n); return fd; };
+    fs.fsyncSync = function (fd) { if (fds.has(fd)) append(LOG, 'fsync ' + fds.get(fd) + '\\n'); return fsync.call(this, fd); };
+    fs.renameSync = function (a, b) { const n = rel(a); if (n !== null) append(LOG, 'rename ' + n + '\\n'); return rename.call(this, a, b); };
+    syncBuiltinESMExports();`);
+  return pre;
+}
+test('C5 the first pinned key is fsynced before its rename, and the folder after it', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-r1-c5-'));
+  const dir = join(base, 'data'); mkdirSync(dir);
+  const log = join(base, 'sync.log');
+  try {
+    await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1', NODE_OPTIONS: '--import ' + recorderPreload(base, dir, log) });
+    const lines = readFileSync(log, 'utf8').trim().split('\n');
+    const syncKey = lines.findIndex(l => /^fsync relay-key\.json\.tmp-\d+$/.test(l));
+    const ren = lines.findIndex(l => /^rename relay-key\.json\.tmp-\d+$/.test(l));
+    assert.ok(ren >= 0, 'fixture: the key rename was not recorded: ' + lines.join(' | '));
+    assert.ok(syncKey >= 0 && syncKey < ren, 'the key file was not fsynced before it was renamed into place: ' + lines.join(' | '));
+    assert.ok(lines.slice(ren + 1).includes('fsync .'), 'the folder was not fsynced after the key rename: ' + lines.join(' | '));
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('C6 a key temp file whose writer is gone is deleted at start-up; one whose writer is alive never reaches a backup', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-c6-'));
+  await requireFreePort(PORT, 'a-relay-on-a-missing-drive-refuses-to-start.test.mjs');
+  writeFileSync(join(dir, 'relay-key.json.tmp-2147483646'), '{"sk":"dead writer"}');
+  writeFileSync(join(dir, 'relay-key.json.tmp-' + process.pid), '{"sk":"live writer"}');   // this test process: alive
+  writeFileSync(join(dir, '.trinity-data-dir.tmp-2147483646'), '{}');
+  const r = start(dir, {});
+  try {
+    let up = false;
+    for (let i = 0; i < 200 && r.code === undefined; i++) { try { if ((await fetch(BASE + '/status')).ok) { up = true; break; } } catch {} await sleep(150); }
+    assert.ok(up, r.log);
+    assert.equal(existsSync(join(dir, 'relay-key.json.tmp-2147483646')), false, 'a dead writer\'s key temp (a complete secret key) was left on disk');
+    assert.equal(existsSync(join(dir, '.trinity-data-dir.tmp-2147483646')), false);
+    assert.ok(existsSync(join(dir, 'relay-key.json.tmp-' + process.pid)), 'a LIVE writer\'s temp file was deleted');
+    const token = readJson(join(dir, 'admin.json')).token;
+    const { ticket } = await (await fetch(BASE + '/relay-backup-ticket', { method: 'POST', headers: { Authorization: 'Bearer ' + token } })).json();
+    const tgz = Buffer.from(await (await fetch(BASE + '/relay-backup?ticket=' + encodeURIComponent(ticket))).arrayBuffer());
+    const f = join(dir, '..', 'c6-backup-' + process.pid + '.tgz'); writeFileSync(f, tgz);
+    const list = spawnSync('tar', ['tzf', f], { encoding: 'utf8' }); rmSync(f, { force: true });
+    assert.equal(list.status, 0, list.stderr);
+    assert.match(list.stdout, /relay-key\.json/, 'fixture: the backup does not list the key at all');
+    assert.doesNotMatch(list.stdout, /relay-key\.json\.tmp-/, 'a key temp file (a complete secret key) went into the backup');
+  } finally { if (r.code === undefined) { r.p.kill('SIGKILL'); await r.exited; } rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('C9 PINNED + a fresh folder an OS file browser has already littered (.DS_Store, Thumbs.db, desktop.ini): starts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-c9-'));
+  try {
+    for (const n of ['.DS_Store', 'Thumbs.db', 'desktop.ini', '._x']) writeFileSync(join(dir, n), 'x');
+    await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    assert.ok(readJson(join(dir, 'relay-key.json')).pub);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('rule 4: PINNED + a fresh folder the relay cannot write -> exit 78 with the reason, no half key', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-ro-'));
+  try {
+    chmodSync(dir, 0o555);
+    const log = await expectRefusal(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    assert.match(log, /could not write the relay identity/);
+  } finally { try { chmodSync(dir, 0o755); } catch {} rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('rule 4: PINNED + a folder holding only a .trinity-data-dir temp file counts as empty: starts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-stamptmp-'));
+  try {
+    writeFileSync(join(dir, '.trinity-data-dir.tmp-' + process.pid), '{}');   // a LIVE pid, so start-up does not delete it first
+    await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    assert.ok(readJson(join(dir, 'relay-key.json')).pub);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
