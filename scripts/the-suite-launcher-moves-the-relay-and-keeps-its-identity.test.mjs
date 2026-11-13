@@ -16,7 +16,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, accessSync, renameSync, constants } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, accessSync, renameSync, symlinkSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -591,6 +591,28 @@ test('N6: after a move, a relay that hangs without opening its port is rolled ba
     assert.equal(stateOf(fx).move.state, 'rolled-back');
     assert.equal((await proven(l)).relayPub, fx.pub); assert.equal(await events(l, fx.data), 6);
   } finally { await l.stop(); }
+});
+
+test('storage fixes audit L-1: on a foreign folder a REFUSED restore (the real gateway removes its staging anyway) is not taken for a restore — the key is not adopted and the warning stays, start after start', { skip, timeout: 200000 }, async () => {
+  const fx = fixture({ events: 3 });
+  const mine = 'cd'.repeat(32);   // the key storage.json recorded; the folder holds and proves fx.pub (a foreign folder)
+  mkdirSync(join(fx.base, 'cfg'), { recursive: true }); writeFileSync(fx.state, JSON.stringify({ relayPub: mine }));
+  for (let start = 0; start < 2; start++) {
+    if (start === 0) {
+      // a restore the real gateway REFUSES (a symlink in the backup): it removes .restore-pending and changes nothing
+      const st = join(fx.data, '.restore-pending'); mkdirSync(st);
+      writeFileSync(join(st, 'church.json'), '{}'); symlinkSync('/etc/hostname', join(st, 'link'));
+    }
+    const l = await startLauncher(fx);
+    try {
+      assert.equal(await l.waitFor(/^SIM opened /), true, l.log);
+      assert.equal(existsSync(join(fx.data, '.restore-pending')), false, 'fixture: the gateway did not consume the staging');
+      const s = stateOf(fx);
+      assert.equal(s.relayPub, mine, 'start ' + start + ': a refused restore made a foreign folder\'s key "ours"');
+      assert.ok(s.launcher && s.launcher.identityChanged && s.launcher.identityChanged.provenPub === fx.pub, 'start ' + start + ': the warning was cleared: ' + JSON.stringify(s.launcher));
+      assert.equal((await proven(l)).relayPub, fx.pub, 'the relay still proves its own key (nothing was restored)');
+    } finally { await l.stop(); }
+  }
 });
 
 test('full audit M-1: after a move, a relay that is slow to open its port but keeps printing is NEVER rolled back (progress, not the clock)', { skip, timeout: 120000 }, async () => {

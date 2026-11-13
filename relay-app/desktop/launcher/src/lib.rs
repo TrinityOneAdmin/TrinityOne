@@ -458,10 +458,6 @@ fn prove_fresh(host: &dyn Host, cfg: &Config, relay: &dyn RelayHandle) -> Proof 
     loop {
         let r = prove_once(host, cfg);
         tries += 1;
-        if tries >= PROOF_MAX_TRIES && !matches!(r, Proof::Key(_)) {
-            // never three definite failures in a row, never a key: not evidence either way
-            return Proof::Inconclusive(format!("no-conclusive-proof-after-{tries}-tries"));
-        }
         match &r {
             Proof::Key(_) => return r,
             Proof::Definite(_) => {
@@ -483,6 +479,12 @@ fn prove_fresh(host: &dyn Host, cfg: &Config, relay: &dyn RelayHandle) -> Proof 
                     return r;
                 }
             }
+        }
+        // the cap comes AFTER the answer was read (fixes audit NIT-2): a key, or a third definite failure, on the last
+        // try still counts
+        if tries >= PROOF_MAX_TRIES {
+            // never three definite failures in a row, never a key: not evidence either way
+            return Proof::Inconclusive(format!("no-conclusive-proof-after-{tries}-tries"));
         }
         if relay.exit().is_some() || host.quitting() {
             return r;
@@ -716,7 +718,13 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
             //    staged restore: an update whose own boot rewrites the key file is a failed update too.
             // Did this boot carry out a staged restore? Seen by the launcher (staged before, gone after), or reported by
             // the host when the restore was staged and carried out inside its own tick (attempt_apply step 4c).
-            let restored = restore_consumed(&pre_boot, &dir) | host.restore_handed_to_boot();
+            // (fixes audit of 457541b0, L-1) …AND the key file actually changed across that boot. The gateway removes the
+            // staging also when it REFUSES a restore, when one fails part-way, and after a backup that carries no key — so
+            // "staged before, gone after" (or the host's "handed to the boot") alone is not proof. Nothing is lost: a
+            // restore of this relay's own backup leaves the key as it was, and there is then nothing to adopt or excuse.
+            // Both signals are read on every adoption (`|`, not `||`), so the host's flag can never go stale (NIT-1).
+            let handed = restore_consumed(&pre_boot, &dir) | host.restore_handed_to_boot();
+            let restored = handed && pre_boot.key != key_pub_of(&dir);
             if let Some(fp) = &fresh_proof {
                 let on_disk = key_pub_of(&dir);
                 let failed = fresh_update_failed(fp, pre_boot.key.as_deref(), on_disk.as_deref(), restored);
@@ -1461,10 +1469,12 @@ mod tests {
         handles: Mutex<Vec<std::sync::Arc<Mutex<Option<Exit>>>>>,
         // M-A / M-B: the relay's boot writes this key into its folder, consuming a staged restore if there is one
         on_spawn_key: Mutex<Option<String>>,
+        // L-3: the relay a tick puts in place writes this key into the folder
+        tick_rekey: Mutex<Option<String>>,
     }
     impl Fake {
         fn new(answers: Vec<(&'static str, Value)>, relays: Vec<(Option<Exit>, &str)>) -> Fake {
-            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]), idle_ticks: Mutex::new(0), chatty: Mutex::new(false), activity: Mutex::new(0), fresh: Mutex::new(vec![]), reject_stops: Mutex::new(false), handles: Mutex::new(vec![]), on_spawn_key: Mutex::new(None) }
+            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]), idle_ticks: Mutex::new(0), chatty: Mutex::new(false), activity: Mutex::new(0), fresh: Mutex::new(vec![]), reject_stops: Mutex::new(false), handles: Mutex::new(vec![]), on_spawn_key: Mutex::new(None), tick_rekey: Mutex::new(None) }
         }
         fn track(&self, e: Option<Exit>) -> std::sync::Arc<Mutex<Option<Exit>>> {
             let a = std::sync::Arc::new(Mutex::new(e));
@@ -1532,7 +1542,13 @@ mod tests {
             let what = t.remove(0);
             self.calls.lock().unwrap().push(format!("TICK:{what}"));
             match what {
-                "replace" => Tick::Replaced(Box::new(FakeRelay { exit: self.track(None), err: String::new() })),
+                "replace" => {
+                    // the relay the tick puts in place boots: it may rewrite the folder's key (an update that re-keys)
+                    if let Some(k) = self.tick_rekey.lock().unwrap().clone() {
+                        fs::write(_d.join("relay-key.json"), json!({"sk": "s", "pub": k}).to_string()).unwrap();
+                    }
+                    Tick::Replaced(Box::new(FakeRelay { exit: self.track(None), err: String::new() }))
+                }
                 _ => Tick::None,
             }
         }
@@ -2176,6 +2192,8 @@ mod tests {
             let _ = run(&f, &cfg);
             let c = f.calls();
             assert_eq!(c.contains(&"REJECT".to_string()), want_reject, "{tag}: {c:?}");
+            // NIT-3: a positive outcome too — the panel opened (exactly once: on the relay that stayed)
+            assert_eq!(c.iter().filter(|x| x.as_str() == "OPENED").count(), 1, "{tag}: {c:?}");
         }
     }
 
@@ -2222,6 +2240,63 @@ mod tests {
         *f.on_spawn_key.lock().unwrap() = Some("RESTORED".into());
         let _ = run(&f, &cfg);
         assert_eq!(read_state(&cfg.config_file)["relayPub"], "MINE");
+        // (4) fixes audit of 457541b0, L-1: a foreign folder with a staged restore the boot REFUSED (the gateway removes the
+        //     staging anyway; the key is unchanged): not a restore — never adopted, and the warning stays, two starts
+        let b = tmp("l1refused");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(data.join(RESTORE_PENDING)).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "FOREIGN"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"dataDir": data.to_string_lossy(), "relayPub": "MINE"})).unwrap();
+        for start in 0..2 {
+            let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "FOREIGN"}))], vec![(None, "")]);
+            *f.on_spawn_key.lock().unwrap() = Some("FOREIGN".into()); // the boot consumes the staging, the key stays
+            let _ = run(&f, &cfg);
+            let st = read_state(&cfg.config_file);
+            assert!(!data.join(RESTORE_PENDING).exists());
+            assert_eq!(st["relayPub"], "MINE", "start {start}: a refused restore made a foreign folder's key ours");
+            assert_eq!(st["launcher"]["identityChanged"]["provenPub"], "FOREIGN", "start {start}: the warning was cleared");
+        }
+    }
+
+    // Fixes audit of 457541b0, L-2 (restored): an update on a box whose recorded key differs from its folder's key (a
+    // foreign folder — since M-B its normal state) is judged by the FOLDER's key, not the recorded one: the relay a fresh
+    // update put in place that proves the folder's unchanged key is not a failed update.
+    #[test]
+    fn a_fresh_update_whose_key_file_and_proof_changed_together_is_not_rejected() {
+        let f = fresh_fake("h1together", "RESTORED", vec![json!({"ok": true, "relayPub": "RESTORED"})]);
+        let c = f.calls();
+        assert!(!c.contains(&"REJECT".to_string()), "an update was judged against the recorded key, not the folder's: {c:?}");
+        assert_eq!(c.iter().filter(|x| x.as_str() == "OPENED").count(), 1, "{c:?}");
+    }
+
+    // Fixes audit of 457541b0, L-3: each relay a TICK puts in place is judged against the folder as it was just before
+    // THAT boot. After a restore carried out on the first start, a later update in the same session that re-keys the
+    // folder must still be REJECTED — the first start's "restore staged" must not excuse it.
+    #[test]
+    fn after_a_restore_on_the_first_start_a_later_update_that_rekeys_is_still_rejected() {
+        let b = tmp("l3snap");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(data.join(RESTORE_PENDING)).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "aa"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+        let f = Fake::new(
+            vec![
+                ("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})),
+                ("prove", json!({"ok": true, "relayPub": "K2"})), // first start: the restore gave it K2
+                ("prove", json!({"ok": true, "relayPub": "K3"})), // the updated relay re-keyed the folder to K3
+                ("prove", json!({"ok": true, "relayPub": "K2"})), // after the rollback
+            ],
+            vec![(None, "")],
+        );
+        *f.on_spawn_key.lock().unwrap() = Some("K2".into());
+        *f.ticks.lock().unwrap() = vec!["replace"];
+        *f.tick_rekey.lock().unwrap() = Some("K3".into());
+        *f.fresh.lock().unwrap() = vec![false, true];
+        let _ = run(&f, &cfg);
+        let c = f.calls();
+        assert!(c.contains(&"REJECT".to_string()), "a re-keying update was excused by the first start's restore: {c:?}");
     }
 
     // Fixes audit LOW-1: after a move, a relay that keeps printing but never opens its port is rolled back once the

@@ -100,3 +100,28 @@ test('the real gateway: GET /storage names the update, and a move is refused wit
     }
   } finally { p.kill('SIGKILL'); await sleep(300); }
 });
+
+// Storage fixes audit of 457541b0, L-4: the REAL gateway's GET /update `suite.heldByRestore` — true only while an update
+// is staged (suite/staging/READY) AND a restore waits for the relay's next boot (.restore-pending); the panel's line
+// (suite-autoupdate-ui.test.mjs) is keyed on it. Both are created AFTER the boot (a boot consumes .restore-pending).
+test('the real gateway: GET /update says a staged update is held back by a waiting restore, and only then', async () => {
+  const PORT2 = 9072;
+  await requireFreePort(PORT2, 'the heldByRestore test');
+  const dir = tmp('hbr');
+  const env = { ...process.env, HOME: tmp('home2'), TRINITY_DATA_DIR: dir, RELAY_SYNC: '0', RELAY_HOST: '127.0.0.1', RELAY_NO_OPEN: '1',
+    RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale' };
+  const p = spawn(process.execPath, [join(ROOT, 'scripts/gateway.mjs'), String(PORT2)], { cwd: ROOT, env, stdio: 'ignore' }); procs.push(p);
+  for (let i = 0; i < 200; i++) { try { if ((await fetch(`http://127.0.0.1:${PORT2}/status`)).ok) break; } catch {} await sleep(150); }
+  const tok = JSON.parse(readFileSync(join(dir, 'admin.json'), 'utf8')).token;
+  const held = async () => { const j = await (await fetch(`http://127.0.0.1:${PORT2}/update`, { headers: { Authorization: 'Bearer ' + tok } })).json(); assert.ok(j.suite, 'no suite status: ' + JSON.stringify(j).slice(0, 200)); return j.suite.heldByRestore; };
+  try {
+    assert.equal(await held(), false, 'nothing staged, nothing waiting');
+    mkdirSync(join(dir, '.restore-pending'));
+    assert.equal(await held(), false, 'a restore waits but no update is staged');
+    mkdirSync(join(dir, 'suite', 'staging'), { recursive: true });
+    writeFileSync(join(dir, 'suite', 'staging', 'READY'), JSON.stringify({ version: 'v2', sha: '2'.repeat(40), date: '2026-10-01T00:00:00Z' }));
+    assert.equal(await held(), true, 'an update staged while a restore waits must say so');
+    rmSync(join(dir, '.restore-pending'), { recursive: true });
+    assert.equal(await held(), false, 'once the restore is done the update is no longer held');
+  } finally { p.kill('SIGKILL'); await sleep(300); }
+});
