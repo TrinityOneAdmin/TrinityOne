@@ -51,6 +51,9 @@ const NAV = {
   macDesktop: { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15', platform: 'MacIntel', maxTouchPoints: 0 },
   // An Android tablet whose MODEL contains "iPad" (Chuwi HiPad X) — representative strings, not captured from one.
   hipadWebView: { userAgent: 'Mozilla/5.0 (Linux; Android 11; HiPad X Build/RP1A.200720.011; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0 Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 10 },
+  // A knock-off Android phone whose MODEL is a whole-word "iPhone" — the word boundary cannot help here; only the
+  // platform does. Representative, not captured.
+  knockoffWebView: { userAgent: 'Mozilla/5.0 (Linux; Android 10; iPhone 15 Pro Max Build/QP1A.190711.020; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0 Mobile Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 5 },
   hipadChrome: { userAgent: 'Mozilla/5.0 (Linux; Android 11; HiPad X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 10 },
   android: { userAgent: 'Mozilla/5.0 (Linux; Android 12; CPH2477) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 5 },
 };
@@ -215,4 +218,11 @@ test('Android Chrome on a "HiPad" tablet (Capacitor says web) keeps the "Share t
   assert.ok(rowText(p.tree, 'Share the app').length >= 1, 'a browser whose UA says "HiPad" was taken for an iPad');
   const s = shareScreens('web', NAV.hipadChrome);
   assert.ok(texts(s.sheet()).join(' ').includes('Share the app'), 'the sheet renders nothing for a HiPad browser');
+});
+
+test('the Android APP on a knock-off whose model is called "iPhone" keeps "Share the app" (the platform decides)', () => {
+  const p = profile('android', NAV.knockoffWebView);
+  assert.ok(rowText(p.tree, 'Share the app').length >= 1, 'the APK hid "Share the app" because the device model says iPhone');
+  const s = shareScreens('android', NAV.knockoffWebView);
+  assert.ok(texts(s.sheet()).join(' ').includes('Share the app'), 'the sheet renders nothing in the APK on that phone');
 });
