@@ -18,7 +18,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody, stripComments } from './test-slice.mjs';
+import { fnBody } from './test-slice.mjs';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
 
 const CHAT = readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8');
@@ -180,13 +180,9 @@ test('POINT OF USE — ChatRoom keeps a just-sent message on screen through the 
 
 // ── wiring: both screens actually CALL the shared helper (so a deleted call is caught) ───────────────────────
 
-test('both ChatRoom and DMThread take their visible list from reconcileVisible', () => {
-  const src = stripComments(CHAT);
-  const calls = src.match(/reconcileVisible\(/g) || [];
-  // one definition + one call in ChatRoom + one call in DMThread
-  assert.equal(calls.length, 3, 'reconcileVisible must be defined once and called by BOTH screens (found ' + calls.length + ')');
-  assert.match(src, /const visibleMsgs = React\.useMemo\(\(\) => \{\s*const shown = msgs\.filter[^;]*;\s*const \{ visible, retainedNext \} = reconcileVisible\(shown, queued,/,
-    'ChatRoom.visibleMsgs must come from reconcileVisible');
-  assert.match(src, /const shownMsgs = React\.useMemo\(\(\) => \{\s*const \{ visible, retainedNext \} = reconcileVisible\(msgs, dmQueued,/,
-    'DMThread.shownMsgs must come from reconcileVisible');
-});
+// RETIRED 2026-11-13: "both ChatRoom and DMThread take their visible list from reconcileVisible" was a regex
+// over app/screens-chat.jsx (rule 3). It went stale when 3f4fa841 (pod-filtered chat) turned ChatRoom's
+// `const shown = msgs.filter…` into `let shown` plus a pod-filter line, though the call was unchanged. The two
+// POINT OF USE tests above render the real ChatRoom and DMThread through the ACK→echo gap and are the guard.
+// Sabotage-checked 2026-11-13, each scoped to one screen: replacing that screen's reconcileVisible call with
+// `[...msgs, ...queued]` (the pre-fix behaviour) reddens that screen's POINT OF USE test. Count: 8 -> 7.
