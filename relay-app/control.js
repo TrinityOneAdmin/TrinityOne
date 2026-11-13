@@ -1848,7 +1848,9 @@
     } else if (f && f.kind === 'remove-old') {
       h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>The old copy was not removed.</b> ' + esc(f.code === 'not-recorded' ? 'It is not on record as an old copy, so it was left alone.' : f.code === 'current-folder' ? 'It is the folder your relay is using now, so it was left alone.' : 'It was left alone (' + f.code + ').')) + '</div>';
     }
-    if (l.identityChanged) h += '<div style="margin-top:12px">' + note('stIdentityChanged', '<b>This relay is not the one it was before.</b><span class="st-sub">It proves a different identity key than the one recorded for it. If you restored another relay\'s backup, that is expected. If not, close the app and check which drive is connected.</span>') + '</div>';
+    // two different things, worded differently (audit C L1): the relay answered with ANOTHER key, or it could not be made to prove one at all
+    if (l.identityChanged && l.identityChanged.provenPub === null) h += '<div style="margin-top:12px">' + note('stIdentityChanged', '<b>This relay couldn\'t prove who it is.</b><span class="st-sub">It didn\'t answer the identity check, so it can\'t be confirmed as the relay it was before. Close and reopen the app. If this stays, check which drive is connected.</span>') + '</div>';
+    else if (l.identityChanged) h += '<div style="margin-top:12px">' + note('stIdentityChanged', '<b>This relay is not the one it was before.</b><span class="st-sub">It proves a different identity key than the one recorded for it. If you restored another relay\'s backup, that is expected. If not, close the app and check which drive is connected.</span>') + '</div>';
     return h;
   }
   function stOldCopy(r) {

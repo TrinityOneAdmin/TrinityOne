@@ -96,8 +96,11 @@ pub struct Config {
     /// <app data dir>/data — what an install that has never moved uses
     pub default_data: PathBuf,
     pub port: u16,
-    /// how long to wait for the relay to open its port, in 250 ms steps
+    /// after this many 250 ms steps without an open port the splash says the start is slow. The relay is NEVER killed
+    /// for being slow (audit C M5: a slow Windows first run is normal, and the old code never gave up on it)
     pub up_steps: u32,
+    /// relay-launch.log, named in every message that says the relay stopped
+    pub log_path: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -313,6 +316,12 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
         if host.quitting() {
             return RunEnd::Quit;
         }
+        // 0. A MOVER MAY STILL BE RUNNING (audit C M4): the sidecar is not killed when the app closes, so a window
+        //    closed mid-move and reopened finds the old mover still at work. Recovering now would delete its partial
+        //    copy from under it, and starting the relay would open the folder it is copying. Wait for it.
+        if !wait_for_mover(host, cfg) {
+            return RunEnd::Quit;
+        }
         // 1. CRASH RECOVERY, at every launch, before anything is spawned. The mover follows the pointer.
         let (dir, check, ic) = match mover(host, cfg, &["recover"], &[]).map(|v| read_recovery(&v)) {
             Some(Recovery::Start { dir, check, identity_changed }) => (dir.unwrap_or_else(|| resolve_from_file(cfg)), check, identity_changed),
@@ -358,9 +367,10 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                 return RunEnd::Stopped(None);
             }
         };
-        // 5. wait for the port (or an exit)
+        // 5. wait for the port, or for the relay to exit. A relay that is merely SLOW is never killed or abandoned.
         let mut up = false;
-        for _ in 0..cfg.up_steps {
+        let (mut steps, mut told) = (0u32, false);
+        loop {
             if relay.exit().is_some() {
                 break;
             }
@@ -372,10 +382,15 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                 up = true;
                 break;
             }
+            steps += 1;
+            if steps >= cfg.up_steps && !told {
+                told = true;
+                host.progress(&Progress::Notice(format!("Still starting. The first start can take a few minutes. If it never finishes, details are in {}", cfg.log_path.display())));
+            }
             host.sleep_ms(250);
         }
         if !up {
-            let exit = wait_exit(host, relay.as_ref());
+            let exit = relay.exit().unwrap_or(Exit::Other);
             if check {
                 // the relay did not come up from the new folder: take the move back
                 host.log(&format!("the relay did not start from the new folder (exit {:?}); rolling back", exit));
@@ -445,6 +460,24 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
     }
 }
 
+/// true = go on; false = the app is closing
+fn wait_for_mover(host: &dyn Host, cfg: &Config) -> bool {
+    loop {
+        let held = mover(host, cfg, &["lock-status"], &[]).and_then(|v| v.get("held").and_then(|b| b.as_bool())).unwrap_or(false);
+        if !held {
+            return true;
+        }
+        if host.quitting() {
+            return false;
+        }
+        let st = read_state(&cfg.config_file);
+        let m = st.get("move");
+        let (cp, tot) = (m.and_then(|m| m.get("copiedBytes")).and_then(|x| x.as_u64()).unwrap_or(0), m.and_then(|m| m.get("totalBytes")).and_then(|x| x.as_u64()).unwrap_or(0));
+        host.progress(&Progress::Moving { copied: cp, total: tot });
+        host.sleep_ms(1000);
+    }
+}
+
 fn ic_none(ic: &Option<(String, String)>) -> bool {
     ic.is_none()
 }
@@ -477,11 +510,20 @@ fn after_exit(host: &dyn Host, cfg: &Config, dir: &Path, exit: &Exit, relay: &dy
             host.progress(&Progress::Refused { title, reason: reason.clone() });
             Next::End(RunEnd::Refused(reason))
         }
+        // anything else: say so, with the log path. The window used to stay on "Starting…" with its probe off (audit C M5)
         Exit::Code(c) => {
             host.log(&format!("[exit] {c}"));
+            if !host.quitting() {
+                host.progress(&Progress::Refused { title: "Your relay stopped".into(), reason: format!("It stopped unexpectedly (exit {c}). Open the app again. Details are in {}", cfg.log_path.display()) });
+            }
             Next::End(RunEnd::Stopped(Some(*c)))
         }
-        Exit::Other => Next::End(RunEnd::Stopped(None)),
+        Exit::Other => {
+            if !host.quitting() {
+                host.progress(&Progress::Refused { title: "Your relay stopped".into(), reason: format!("It was ended unexpectedly. Open the app again. Details are in {}", cfg.log_path.display()) });
+            }
+            Next::End(RunEnd::Stopped(None))
+        }
     }
 }
 
@@ -1021,11 +1063,12 @@ mod tests {
         answers: Mutex<Vec<(&'static str, Value)>>,
         spawns: Mutex<Vec<(PathBuf, bool)>>,
         relays: Mutex<Vec<(Option<Exit>, String)>>,
-        port: bool,
+        port_after: Mutex<u32>,
+        progresses: Mutex<Vec<String>>,
     }
     impl Fake {
         fn new(answers: Vec<(&'static str, Value)>, relays: Vec<(Option<Exit>, &str)>) -> Fake {
-            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port: true }
+            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), progresses: Mutex::new(vec![]) }
         }
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
@@ -1050,7 +1093,7 @@ mod tests {
             Ok(Box::new(FakeRelay { exit: Mutex::new(e), err: s }))
         }
         fn progress(&self, p: &Progress) {
-            self.calls.lock().unwrap().push(format!("progress:{:?}", std::mem::discriminant(p) == std::mem::discriminant(&Progress::Checking)));
+            self.progresses.lock().unwrap().push(format!("{:?}", p));
         }
         fn opened(&self, _d: &Path) {
             self.calls.lock().unwrap().push("OPENED".into());
@@ -1060,12 +1103,17 @@ mod tests {
             self.calls.lock().unwrap().iter().any(|c| c == "OPENED")
         }
         fn port_open(&self, _p: u16) -> bool {
-            self.port
+            let mut n = self.port_after.lock().unwrap();
+            if *n > 0 {
+                *n -= 1;
+                return false;
+            }
+            true
         }
         fn sleep_ms(&self, _ms: u64) {}
     }
     fn cfg_in(b: &Path) -> Config {
-        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3 }
+        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3, log_path: b.join("relay-launch.log") }
     }
     fn first(calls: &[String], what: &str) -> usize {
         calls.iter().position(|c| c == what).unwrap_or_else(|| panic!("{what} never happened: {calls:?}"))
@@ -1271,5 +1319,51 @@ mod tests {
         );
         assert_eq!(run(&f3, &cfg), RunEnd::Quit);
         assert!(read_state(&cfg.config_file)["launcher"]["identityChanged"]["provenPub"].is_null());
+    }
+
+    #[test]
+    fn a_slow_start_is_never_killed_and_the_splash_is_told() {
+        let b = tmp("slow");
+        let cfg = cfg_in(&b); // up_steps 3
+        let data = b.join("data");
+        fs::create_dir_all(&data).unwrap();
+        let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "aa"}))], vec![(None, "")]);
+        *f.port_after.lock().unwrap() = 40; // the port opens only after 40 polls: far past up_steps
+        assert_eq!(run(&f, &cfg), RunEnd::Quit);
+        let c = f.calls();
+        assert!(c.contains(&"OPENED".to_string()), "a slow relay was abandoned: {c:?}");
+        assert_eq!(f.spawns.lock().unwrap().len(), 1, "a slow relay was restarted");
+        let p = f.progresses.lock().unwrap().join("|");
+        assert!(p.contains("Still starting") && p.contains("relay-launch.log"), "{p}");
+    }
+    #[test]
+    fn an_exit_that_is_not_78_says_so_with_the_log_path() {
+        let b = tmp("exit1");
+        let cfg = cfg_in(&b);
+        let f = Fake::new(vec![("recover", json!({"dataDir": null, "action": "none"}))], vec![(Some(Exit::Code(1)), "")]);
+        assert_eq!(run(&f, &cfg), RunEnd::Stopped(Some(1)));
+        let p = f.progresses.lock().unwrap().join("|");
+        assert!(p.contains("Refused") && p.contains("exit 1") && p.contains("relay-launch.log"), "{p}");
+    }
+    #[test]
+    fn a_running_mover_is_waited_for_before_recover_or_spawn() {
+        let b = tmp("lock");
+        let cfg = cfg_in(&b);
+        let f = Fake::new(
+            vec![
+                ("lock-status", json!({"held": true})),
+                ("lock-status", json!({"held": true})),
+                ("lock-status", json!({"held": false})),
+                ("recover", json!({"dataDir": null, "action": "none"})),
+                ("prove", json!({"ok": true, "relayPub": "aa"})),
+            ],
+            vec![(None, "")],
+        );
+        let _ = run(&f, &cfg);
+        let c = f.calls();
+        let last_lock = c.iter().rposition(|x| x == "lock-status").unwrap();
+        assert_eq!(c.iter().filter(|x| *x == "lock-status").count(), 3, "{c:?}");
+        assert!(last_lock < first(&c, "recover") && first(&c, "recover") < first(&c, "SPAWN"), "recover/spawn ran while a mover was held: {c:?}");
+        assert!(f.progresses.lock().unwrap().iter().any(|p| p.starts_with("Moving")), "the splash was not told");
     }
 }

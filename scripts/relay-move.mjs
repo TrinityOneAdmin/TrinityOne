@@ -258,6 +258,33 @@ export async function relayLockHeld(dir, { platform = process.platform, info = p
   if (platform === 'darwin' && /node/i.test(cmd) && cmd.length >= 79) return true;   // possibly cut short by BSD ps
   return false;
 }
+// THE MOVER LOCK (audit C M4). A mover run through the Suite's sidecar is NOT killed when the app closes, so a window
+// closed mid-move and reopened starts a second launcher beside a mover still copying. The mover therefore takes an
+// exclusive lockfile (pid + start time, like .relay-lock) next to the pointer for the whole of a move; a second mover is
+// refused, and a launcher WAITS while it is held (lock-status) before it recovers or starts anything. A holder is
+// "held" while its pid is alive and its command line is a relay-move.mjs; a dead or reused pid is stale and taken over.
+export const moverLockFile = pointerFile => pointerFile + '.mover-lock';
+export async function moverLockHeld(file, { platform = process.platform, info = processInfo } = {}) {
+  const l = readJson(file), pid = l && Number(l.pid);
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try { process.kill(pid, 0); } catch (e) { if (!e || e.code !== 'EPERM') return false; }
+  const p = await info(pid, platform) || {};
+  if (p.commandLine === null || p.commandLine === undefined) return true;   // cannot tell: waiting is the safe error
+  return /relay-move\.mjs/.test(p.commandLine);
+}
+export async function acquireMoverLock(file) {
+  mkdirSync(dirname(file), { recursive: true });
+  for (let i = 0; i < 2; i++) {
+    try {
+      const fd = openSync(file, 'wx');
+      try { writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); fsyncSync(fd); } finally { closeSync(fd); }
+      return { ok: true, release() { try { const l = readJson(file); if (l && l.pid === process.pid) rmSync(file, { force: true }); } catch {} } };
+    } catch (e) { if (!e || e.code !== 'EEXIST') return { ok: false, code: 'lock-unwritable' }; }
+    if (await moverLockHeld(file)) return { ok: false, code: 'mover-running' };
+    try { rmSync(file, { force: true }); } catch {}   // stale
+  }
+  return { ok: false, code: 'mover-running' };
+}
 export function keyPubOf(dir) { const k = readJson(join(dir, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
 // A folder the step-1 guard would start: this relay's key, no MOVED-TO, not a partial copy.
 export function startable(dir, pub) {
@@ -796,6 +823,7 @@ export async function recoverMove({ journal, pointer, rename = renameSync, now =
 //   node scripts/relay-move.mjs rollback --pointer FILE [--journal FILE]
 //   node scripts/relay-move.mjs classify --path DIR [--mode suite|server]
 //   node scripts/relay-move.mjs begin-check|check-passed --pointer FILE [--journal FILE]      (step 5, the Suite launcher)
+//   node scripts/relay-move.mjs lock-status --pointer FILE                                  (is a mover running? the launcher waits)
 //   node scripts/relay-move.mjs prove --port N                                              (rule 10: a signed nonce)
 //   node scripts/relay-move.mjs verify-restart --pointer FILE --port N --data-dir DIR
 // Prints one JSON object. Exit 0 = ok, 2 = refused / failed safely, 1 = usage or unexpected error.
@@ -832,8 +860,12 @@ async function cli(argv) {
   if (cmd === 'move') {
     if (!a.from || !a.drive || !a.port) throw new Error('move needs --from, --drive and --port');
     const port = Number(a.port);
-    return moveRelayData({ ...store(), from: a.from, to: targetFor(a.drive), mode: a.mode, codeDir: CODE_DIR, relayRunning: () => portOpen(port) });
+    const lock = await acquireMoverLock(moverLockFile(a.pointer));
+    if (!lock.ok) return { ok: false, code: lock.code };
+    try { return await moveRelayData({ ...store(), from: a.from, to: targetFor(a.drive), mode: a.mode, codeDir: CODE_DIR, relayRunning: () => portOpen(port) }); }
+    finally { lock.release(); }
   }
+  if (cmd === 'lock-status') { if (!a.pointer) throw new Error('--pointer required'); const f = moverLockFile(a.pointer); return { held: await moverLockHeld(f), pid: (readJson(f) || {}).pid || null }; }
   if (cmd === 'recover') { const r = await recoverMove(store()); return r.action === 'refuse' ? { ok: false, ...r } : r; }
   if (cmd === 'rollback') return rollbackMove(store());
   // The step-8 check, driven by the Suite launcher (relay storage plan step 5). The launcher calls begin-check BEFORE
