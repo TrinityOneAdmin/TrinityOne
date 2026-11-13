@@ -60,10 +60,26 @@ test('every relay launch takes RELAY_HOST from that decision', () => {
   const env = fnBody(MAIN, 'relay_env');
   assert.equal(env.split('bind_host::relay_bind_host(data_dir)').length - 1, 1, 'relay_env does not take the bind host from bind_host::relay_bind_host(data_dir)');
   assert.match(env, /\("RELAY_HOST"\.into\(\), relay_host\.to_string\(\)\)/, 'relay_env no longer sets RELAY_HOST from that decision — the gateway would fall back to 0.0.0.0');
-  const spawn = fnBody(MAIN, 'spawn_relay');
-  assert.match(spawn, /for \(k, v\) in relay_env\(/, 'spawn_relay no longer takes its environment from relay_env');
-  assert.doesNotMatch(spawn, /RELAY_HOST|lan-access/, 'spawn_relay decides the bind address itself again, bypassing the tested decision');
+  // Since the storage + auto-update integration (2026-11-13) the ONE process spawn is SuiteHost::spawn_proc, which
+  // builds the env from relay_env and hands it to the platform's Shell::start (TauriShell in the app). Neither may
+  // decide the bind address itself.
+  const spawn = methodBody(MAIN, 'spawn_proc');
+  assert.match(spawn, /relay_env\(code_dir, &self\.payload, data_dir, /, 'spawn_proc no longer takes its environment from relay_env');
+  assert.doesNotMatch(spawn, /RELAY_HOST|lan-access/, 'spawn_proc decides the bind address itself again, bypassing the tested decision');
+  const start = methodBody(MAIN, 'start');
+  assert.match(start, /for \(k, v\) in env \{/, 'Shell::start no longer passes on the env it was given');
+  assert.doesNotMatch(start, /RELAY_HOST|lan-access/, 'Shell::start decides the bind address itself, bypassing the tested decision');
+  assert.equal(MAIN.split('.sidecar("trinityone-relay-node")').length - 1, 2, 'a relay process is started somewhere other than TauriShell::start (the other sidecar use is the mover\'s node())');
 });
+// a method (4-space indent) with a body, defined exactly once in main.rs outside the tests (a trait's bodiless
+// declaration of the same name does not count)
+const methodBody = (src, name) => {
+  const code = src.slice(0, src.indexOf('#[cfg(test)]\nmod tests'));
+  const hits = [...code.matchAll(new RegExp('\\n    fn ' + name + '\\([^\\n]*\\{\\n', 'g'))];
+  assert.equal(hits.length, 1, 'fn ' + name + ' is missing or defined twice in main.rs — re-anchor');
+  const at = hits[0].index;
+  return code.slice(at, code.indexOf('\n    }\n', at) + 6);
+};
 
 test('the gateway persists the choice and writes the marker', () => {
   assert.match(GW, /lanAccess: false/, 'lanAccess must default to OFF in SETTINGS');
