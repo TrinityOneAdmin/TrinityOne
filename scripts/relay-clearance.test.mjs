@@ -21,6 +21,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
 import { requireFreePort } from './test-ports.mjs';
+import { loadScreen, miniReact } from './render-jsx-screen.mjs';
 
 const PORT = 8897;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -174,18 +175,69 @@ test('the console seals the whole roster, not only the member a steward just tog
   assert.match(body, /const roster = members\.map\(m => m\.pubkey\)/, 'the backfill must build that roster from the member list');
 });
 
-test('the backfill guard survives leaving the Members tab', () => {
+test('the backfill guard survives leaving the Members tab', async () => {
   // AUDIT-2026-07-28 F9. It was a React.useRef, and the dashboard renders tabs conditionally, so switching
   // away UNMOUNTS DashMembers and the ref resets — every return to the tab re-published a clearance for every
   // member. Combined with the burst defect above, that is a whole-roster storm on each visit.
-  const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  assert.match(D, /\{tab === 'members' && <DashMembers \/>\}/,
-    'the tab is no longer conditionally rendered — re-check whether the guard still needs module scope');
-  const at = D.indexOf('let clearanceBackfillDone');
-  assert.ok(at !== -1 && at < D.indexOf('function DashMembers()'),
-    'the guard must live OUTSIDE the component, or unmounting the tab resets it');
-  const body = D.slice(D.indexOf('if (!sg.loaded) return', at), D.indexOf('}, [sg.loaded', at));
-  assert.doesNotMatch(body, /_sealedAll/, 'the per-mount ref is still in use');
+  //
+  // RENDERED, not matched (rule 3; rewritten 2026-11-13). This was a regex over app/stew-dashboard.jsx anchored
+  // on `function DashMembers()`, which went stale when DashMembers gained a `{ dmConvos }` prop (8fe85f1d); its
+  // `{tab === 'members' && <DashMembers />}` match only passed because a COMMENT still held that text. Now the
+  // REAL DashMembers is loaded from the file, MOUNTED (the back-fill runs once, for the whole roster), UNMOUNTED
+  // the way leaving the tab does (miniReact({ unmounts: true }) drops its hook store, as React does), and
+  // MOUNTED AGAIN with the same roster: the back-fill must not run a second time. A guard kept in a ref or in
+  // state resets on the remount and runs twice.
+  const { React, draw } = miniReact({ unmounts: true });
+  const CH = 'a'.repeat(64), roster = ['b'.repeat(64), 'c'.repeat(64), 'd'.repeat(64)];
+  const members = roster.map((pubkey, i) => ({ pubkey, name: 'Member ' + i, joined: now() }));
+  const sg = { loaded: true, minors: [], approved: [], nophoto: [], guardians: {}, minorsKnown: true };
+  const sealed = [];
+  const listeners = new Map();
+  const Steward = new Proxy({
+    churchPub: CH, actingChurch: '', activePub: CH, npub: 'npub1x',
+    relayAuthed: () => true, listIsCurrent: () => true, listIsFresh: () => true, joinPolicyFresh: () => false,
+    refreshClearances: (who) => { sealed.push(who); return Promise.resolve({ failed: 0 }); },
+    stewardName: () => '', stewardLabels: () => ({}), stewardCaps: () => ({}), blockedHere: () => [], identities: () => [], photoSuppressed: () => false,
+  }, { get: (o, k) => (k in o ? o[k] : (typeof k === 'string' ? () => Promise.resolve(null) : undefined)) });
+  const hooks = {
+    useStewardMembers: () => members, useStewardSafeguard: () => sg, useStewardBlocked: () => [], useStewardAdmitted: () => roster,
+    useStewardJoinPolicy: () => false, useStewardStewards: () => [], useStewardGroups: () => [],
+    useStewardChurch: () => ({ name: 'St Aidan', features: {} }), useStewardIdv: () => 0, useStewardConn: () => 0,
+    useStewardGuardians: () => ({ links: {}, closed: {} }), useMealsSettings: () => ({}), useStewardRosters: () => [],
+    useStewardPickableMembers: (from) => (from || members),
+  };
+  const win = new Proxy({
+    Steward, ...hooks, dispatchEvent: (e) => { (listeners.get(e && e.type) || []).forEach(f => f(e)); return true; },
+    addEventListener: (t, f) => { (listeners.get(t) || listeners.set(t, []).get(t)).push(f); }, removeEventListener() {},
+  }, { get: (o, k) => (k in o ? o[k] : (typeof k === 'string' && /^use[A-Z]/.test(k) ? () => [] : undefined)) });
+  const Nil = () => null;
+  const store = new Map();
+  const mod = loadScreen('app/stew-dashboard.jsx', ['DashMembers'], {
+    React, window: win, setTimeout, clearTimeout, setInterval: () => 0, clearInterval: () => {},
+    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
+    document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible', querySelector: () => null, body: {} },
+    navigator: { onLine: true, clipboard: { writeText: async () => {} } }, location: { href: '', hash: '', search: '', hostname: 'x' },
+    useStewDialog: () => ({ current: null }), Icon: Nil, SkToggle: Nil, SkPill: Nil, SkBadge: Nil, DismissibleNote: Nil, DashMealsPanel: Nil, StewHelpLink: Nil,
+    SK_TINT: new Proxy({}, { get: () => ({}) }),
+    CustomEvent: class { constructor(t, i) { this.type = t; this.detail = (i || {}).detail; } },
+    Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, WeakSet, WeakMap, console, Promise, Error, RegExp, Intl, Symbol, parseInt, parseFloat, isNaN, encodeURIComponent, decodeURIComponent,
+  });
+  let onTab = true;
+  const Dashboard = () => (onTab ? React.createElement(mod.DashMembers, { dmConvos: [] }) : null);
+  const tick = async () => { for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0)); };
+  draw(Dashboard, {}); await tick();
+  assert.equal(sealed.length, 1, 'CONTROL: opening the Members tab did not back-fill the clearances at all: ' + sealed.length);
+  assert.deepEqual([...sealed[0]].sort(), [...roster].sort(), 'the back-fill did not seal the whole roster');
+  onTab = false; draw(Dashboard, {}); await tick();           // leave the Members tab: DashMembers unmounts
+  onTab = true; draw(Dashboard, {}); await tick();            // ...and come back to it, same roster
+  assert.equal(sealed.length, 1,
+    'returning to the Members tab re-published a clearance for every member: the back-fill guard did not ' +
+    'survive DashMembers unmounting, so each visit is a whole-roster storm');
+  // CONTROL: the module-scope guard is what held it, and it is releasable — a relay coming back clears it
+  // (`steward-relay-returned`), and the next visit then does re-read and repair.
+  win.dispatchEvent({ type: 'steward-relay-returned' });
+  onTab = false; draw(Dashboard, {}); onTab = true; draw(Dashboard, {}); await tick();
+  assert.equal(sealed.length, 2, 'CONTROL: after the guard was released, a fresh visit did not back-fill again — this test is not seeing the effect');
 });
 
 test('a partial backfill is not remembered as done', () => {
