@@ -376,8 +376,11 @@ test('M2/L3: requests whose name is a number, boolean, array, object or 500 char
   const at = Math.floor(Date.now() / 1000) - 30;
   await H.publishAll(A.relay, [...HOSTILE.map(h => stewardReq(h.k, cp, h.name, at)), ...CLEAR_HOSTILE.map(h => clearReq(h.k, cp, h.name, at))]);
   const all = [...HOSTILE, ...CLEAR_HOSTILE];
-  await toHelpers(A);
   const crashed = `/This screen stopped working/.test(document.body.innerText)`;
+  // The console may be on the Helpers page already (the tests above leave it there), so it can crash the moment the
+  // requests arrive — before anything is pressed. Say so, rather than "nothing matched Settings".
+  try { await toHelpers(A); }
+  catch (e) { throw new Error((await A.ev(crashed) ? 'THE BUG (M2): the console dropped to the crash card when the requests arrived. ' : '') + e.message); }
   try { await A.waitFor(all.map(h => rowShown(npub(h.k))).join(' && '), 45000, 'every hostile request row on the Helpers page'); }
   catch (e) {
     throw new Error((await A.ev(crashed) ? 'THE BUG (M2): the console dropped to the crash card on the Helpers page. ' : '') + e.message);
