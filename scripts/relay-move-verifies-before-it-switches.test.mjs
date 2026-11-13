@@ -358,6 +358,10 @@ test('N4 a failed fsync (EIO from a dying stick) fails the copy move; nothing is
     const res = await moveRelayData(t.opts({ rename: exdevOnce(), _fsync: () => false }));
     assertNothingSwitched(t, before, res, 'fsync failed');
     assert.equal(res.code, 'copy-not-durable');
+    // only ONE FILE fails to sync (directories fine): still not durable, still nothing switched
+    const res2 = await moveRelayData(t.opts({ rename: exdevOnce(), _fsync: p => !p.endsWith('cdef') }));
+    assertNothingSwitched(t, before, res2, 'one file fsync failed');
+    assert.equal(res2.code, 'copy-not-durable', 'a file that did not reach the disk was switched to');
   } finally { t.done(); }
 });
 
