@@ -766,6 +766,9 @@ function suiteUpdateStatus() {
     lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '', lastReason: st.lastReason || '', autoOff: st.autoOff === true,
     staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
     check: check && typeof check === 'object' ? { at: check.at || '', ok: !!check.ok, reason: check.reason || '' } : null,
+    // [audit M6] the quick-tunnel address before the last update vs now (a quick tunnel cannot keep its address
+    // across a relay restart); the panel says when it changed.
+    addressChanged: (st.addressBefore && CF_URL && st.addressBefore !== CF_URL) ? { from: st.addressBefore, to: CF_URL } : null,
   };
 }
 // Hourly check (mirrors the relayAutoUpdate setInterval precedent above) + fire on enable (POST /settings).
@@ -7504,6 +7507,19 @@ function serveStatic(req, res) {
     res.writeHead(404, H); res.end('{"error":"not found"}'); return;
   }
   // Cloudflare quick-tunnel control (desktop "go public", no account). Admin-gated.
+  // SUITE AUTO-UPDATE: the shell calls this (admin bearer from admin.json) just before it stops this relay to swap
+  // in an update (audit be258b42 MEDIUM 6). It closes the quick tunnel CLEANLY — killing the cloudflared child this
+  // relay started, which a hard kill of the relay would leave running (orphaned, on Windows for good) — but KEEPS
+  // the stay-public flag, so the restarted relay opens a tunnel again. It answers the address it was using so the
+  // shell can record it; the panel then says if the public address changed. Nothing else calls it.
+  if (route === '/suite/prepare-restart' && req.method === 'POST') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    const was = CF_URL;
+    try { tunnelTeardownForHeal(); } catch {}
+    res.writeHead(200, H); res.end(JSON.stringify({ ok: true, url: was }));
+    return;
+  }
   if (route === '/tunnel/up' || route === '/tunnel/state' || route === '/tunnel/down' || route === '/tunnel/log') {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', ...SEC_HEADERS };
     if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }

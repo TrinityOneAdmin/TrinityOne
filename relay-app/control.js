@@ -726,6 +726,7 @@
     } else if (suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') {
       out.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastApplied ? ' on ' + suite.lastApplied : '') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
     }
+    if (suite.addressChanged && suite.addressChanged.to) out.push('After the update this relay\u2019s public address changed to ' + suite.addressChanged.to + ' — phones that use your relay\u2019s name follow it; anyone given the old address needs the new one');
     if (suite.enabled) {
       if (suite.staged && (suite.staged.version || suite.staged.sha)) out.push('Update ' + (suite.staged.version || String(suite.staged.sha).slice(0, 7)) + ' is downloaded and installs ' + win + ' if this computer is on — otherwise the next time the Suite starts');
       else out.push('Checks every hour; installs ' + win);

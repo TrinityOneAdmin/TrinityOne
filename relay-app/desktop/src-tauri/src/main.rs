@@ -84,6 +84,45 @@ fn http_get_loopback(path: &str, token: Option<&str>) -> Option<String> {
     raw.split_once("\r\n\r\n").map(|(_, body)| body.to_string())
 }
 
+// POST to the relay on loopback (admin bearer). Same hand-written HTTP/1.0 as http_get_loopback; body = "".
+fn http_post_loopback(path: &str, token: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    let mut stream = TcpStream::connect(("127.0.0.1", PORT)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream.set_write_timeout(Some(Duration::from_secs(3))).ok()?;
+    let req = format!(
+        "POST {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).ok()?;
+    let (head, body) = raw.split_once("\r\n\r\n")?;
+    if !head.starts_with("HTTP/1.1 200") && !head.starts_with("HTTP/1.0 200") {
+        return None;
+    }
+    Some(body.to_string())
+}
+
+// [audit be258b42 MEDIUM 6] Before stopping the relay for an update, ask it to close its quick tunnel cleanly
+// (gateway.mjs POST /suite/prepare-restart): a hard kill of the relay would leave its cloudflared child running —
+// orphaned, on Windows until reboot. It keeps the stay-public flag, so the restarted relay opens a tunnel again;
+// a QUICK tunnel cannot keep its address across that, so the old address is returned and recorded for the panel.
+// Returns "" when there was no tunnel, no token, or no answer (the apply goes ahead regardless).
+fn prepare_restart(data_dir: &Path, log: &Path) -> String {
+    let Some(token) = read_admin_token(data_dir) else { return String::new() };
+    match http_post_loopback("/suite/prepare-restart", &token) {
+        Some(body) => {
+            let url = json_str_value(&body, "url").unwrap_or_default();
+            applog(log, &format!("suite: relay closed its tunnel for the restart (address was {url:?})"));
+            url
+        }
+        None => {
+            applog(log, "suite: relay did not answer prepare-restart; stopping it anyway");
+            String::new()
+        }
+    }
+}
+
 // Pull the admin bearer token out of `<data_dir>/admin.json`, read FRESH each tick: it's cheap, it
 // self-heals a token rotation, and it rides out the first-launch race where the gateway may not have
 // written the file yet on our first poll (we just skip that tick and try again 15s later).
@@ -1074,11 +1113,12 @@ struct StateRec<'a> {
     outcome: &'a str,
     reason: &'a str,
     auto_off: bool,
+    address_before: &'a str, // the quick-tunnel address before this apply restarted the relay ("" = none)
 }
 
 fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
     let json = format!(
-        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{}}}\n",
+        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{},\"addressBefore\":{}}}\n",
         jstr(r.sha),
         jstr(r.version),
         jstr(r.date),
@@ -1086,6 +1126,7 @@ fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
         jstr(r.outcome),
         jstr(r.reason),
         if r.auto_off { "true" } else { "false" },
+        jstr(r.address_before),
     );
     let _ = write_file_atomic(&suite_dir.join("state.json"), &json, log);
 }
@@ -1306,7 +1347,7 @@ fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> Boot {
 // webview, record a "rolledback" state that keeps the PREVIOUS installed identity, and switch auto-update off
 // (audit M7); with `backup`, first restore the church's data from it (audit M5). ASSUMES the relay is stopped. Keeps the church ONLINE on known-good code. Does NOT write
 // quarantine — the caller decides that, since a retain failure is a local-disk problem, not a bad bundle.
-fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str, backup: Option<&Path>) {
+fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str, backup: Option<&Path>, address_before: &str) {
     let suite_dir = env.suite_dir;
     // [audit M5] The new code ran against the church's data; put the pre-update copy back before anything reads it.
     if let Some(b) = backup {
@@ -1341,7 +1382,7 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
     let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
     write_state(suite_dir, &StateRec {
         sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
-        outcome: "rolledback", reason, auto_off: true,
+        outcome: "rolledback", reason, auto_off: true, address_before,
     }, env.log);
 }
 
@@ -1441,7 +1482,7 @@ fn startup(env: &ApplyEnv) -> RunState {
             write_state(env.suite_dir, &StateRec {
                 sha: "", version: "", date: "", last_applied: &la, outcome: "launch-failed",
                 reason: "the downloaded update would not start, so the Suite went back to the version it came with",
-                auto_off: true,
+                auto_off: true, address_before: "",
             }, env.log);
             let payload = env.payload.to_path_buf();
             spawn_and_wait(env, &mut st, &payload);
@@ -1476,7 +1517,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             version: &json_str_value(prev_state_raw, "installedVersion").unwrap_or_default(),
             date: &json_str_value(prev_state_raw, "installedDate").unwrap_or_default(),
             last_applied: day, outcome, reason,
-            auto_off: false,
+            auto_off: false, address_before: "",
         }, log);
     };
 
@@ -1525,7 +1566,9 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
         return;
     }
 
-    // 4. Stop the relay and confirm it is fully down (pid gone AND port free) before touching active/.
+    // 4. Stop the relay and confirm it is fully down (pid gone AND port free) before touching active/. First ask
+    //    it to close its tunnel cleanly (audit M6) — only if it is running.
+    let address_before = if was_running { prepare_restart(env.data_dir, log) } else { String::new() };
     applog(log, "suite: stopping relay for code swap");
     env.host.stop_relay();
     if !wait_stopped(&st.alive, Duration::from_secs(20)) {
@@ -1605,7 +1648,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     if !promoted {
         applog(log, "suite: APPLY FAILED — could not put the update in place; rolling back to last-good/payload");
         let _ = std::fs::remove_dir_all(&active_new);
-        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not put the update in place", None);
+        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not put the update in place", None, &address_before);
         finish_snapshot(suite_dir, r_sha);
         applog(log, "suite: rollback complete (promote failure)");
         return;
@@ -1632,6 +1675,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             let outcome = if store_degraded { "applied-store-degraded" } else { "applied" };
             write_state(suite_dir, &StateRec {
                 sha: r_sha, version: r_version, date: r_date, last_applied: day, outcome, reason: "", auto_off: false,
+                address_before: &address_before,
             }, log);
             finish_snapshot(suite_dir, r_sha);
             let short = short_sha(r_sha);
@@ -1661,7 +1705,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             } else {
                 "the update started but reported a problem"
             };
-            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup));
+            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup), &address_before);
             finish_snapshot(suite_dir, r_sha);
             applog(log, "suite: rollback complete");
         }

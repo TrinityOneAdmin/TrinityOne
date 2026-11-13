@@ -174,6 +174,12 @@ fn gateway_src_ex(label: &str, lie: bool, prelude: &str) -> String {
          if ({lie}) {{ V = 'f'.repeat(40); const dd = process.env.TRINITY_DATA_DIR; try {{ appendFileSync(dd + '/relay.sqlite', 'MANGLED'); writeFileSync(dd + '/relay.sqlite-wal', 'BAD-WAL'); }} catch {{}} }}\n\
          {prelude}\n\
          http.createServer((req,res)=>{{\n\
+           if (req.method === 'POST' && req.url === '/suite/prepare-restart') {{\n\
+             if (req.headers.authorization !== 'Bearer test-admin-token') {{ res.writeHead(401); res.end('{{}}'); return; }}\n\
+             try {{ writeFileSync(process.env.TRINITY_DATA_DIR + '/prepared-by-' + LABEL, '1'); }} catch {{}}\n\
+             res.writeHead(200,{{'content-type':'application/json'}}); res.end(JSON.stringify({{ok:true, url:'https://before-' + LABEL + '.trycloudflare.com'}}));\n\
+             return;\n\
+           }}\n\
            if ((req.url||'').startsWith('/status')) {{\n\
              res.writeHead(200,{{'content-type':'application/json'}});\n\
              res.end(JSON.stringify({{version:V, label:LABEL, ok:true}}));\n\
@@ -335,8 +341,10 @@ fn fresh_box(tag: &str, payload_date: &str) -> Fixture {
         "keygen",
     );
 
-    // Enable marker (apply window always open).
+    // Enable marker (window 00:00–02:00; the test clock says when "now" is).
     write(&data_dir.join("suite-autoupdate"), "00:00\n");
+    // The admin token the shell reads for prepare-restart (the test gateway checks it).
+    write(&data_dir.join("admin.json"), "{\"token\":\"test-admin-token\"}\n");
 
     Fixture {
         _root: TempRoot(root),
@@ -507,6 +515,10 @@ fn scenario_a_good_bundle_activates() {
     assert_eq!(read_state_field(&fx.suite_dir, "installedVersion").as_deref(), Some("v2"));
     // staging consumed
     assert!(!fx.staging.join("READY").exists(), "staging READY not cleared after apply");
+    // [audit M6] the running relay (v1) was asked to close its tunnel before the stop, with the admin token, and
+    // the address it had is recorded for the panel.
+    assert!(fx.data_dir.join("prepared-by-v1").exists(), "the relay was not asked to close its tunnel before the restart");
+    assert_eq!(read_state_field(&fx.suite_dir, "addressBefore").as_deref(), Some("https://before-v1.trycloudflare.com"));
     host.stop_relay();
     eprintln!("   (a) OK — relay serves v2, active/ + retained tarball present, state=applied");
 }
