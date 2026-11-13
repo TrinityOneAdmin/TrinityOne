@@ -336,9 +336,15 @@ enum Outcome {
 //     reason (no storage-degraded evidence)
 // Being conservative about the storage case is deliberate: today ok:false ⟺ STORE_DEGRADED ⟺ what=="storage",
 // but a future non-storage ok:false must still fail closed.
-fn health_outcome(reachable: bool, version_match: bool, ok: bool, degraded_storage: bool) -> Outcome {
-    if !reachable || !version_match {
-        // No boot, or the wrong code identified itself: the new bundle is genuinely bad.
+fn health_outcome(reachable: bool, version_match: bool, ok: bool, degraded_storage: bool, crashed: bool) -> Outcome {
+    if !reachable {
+        // [audit be258b42 M4] Never answered. Quarantine (never retry) only with evidence the CODE is bad — the
+        // process exited. A process still alive but slow (a big church replaying its history, Defender scanning
+        // fresh files) is rolled back for now but may be retried: a good release must not be banned for ever.
+        return Outcome::Rollback { quarantine: crashed };
+    }
+    if !version_match {
+        // The wrong code identified itself: the new bundle is genuinely bad.
         return Outcome::Rollback { quarantine: true };
     }
     if ok {
@@ -624,14 +630,9 @@ fn now_epoch() -> i64 {
 // the installed floor and freeze every later update (audit HIGH 2, "freeze all updates for good").
 const MAX_FUTURE_SKEW_SECS: i64 = 86_400;
 
-// The anti-rollback floor: the later of the shipped payload's own date and the recorded installed date. PURE. An
-// installedDate that is itself beyond the future-skew bound is IGNORED (it could only have come from a bad
-// record), so a stale far-future record cannot freeze updates either.
-fn anti_rollback_floor(payload_date: &str, installed_date: &str, now: i64) -> String {
-    let installed_sane = parse_instant(installed_date)
-        .map(|t| t <= now + MAX_FUTURE_SKEW_SECS)
-        .unwrap_or(false);
-    if installed_sane && date_after(installed_date, payload_date) {
+// The anti-rollback floor: the later of the shipped payload's own date and the recorded installed date. PURE.
+fn anti_rollback_floor(payload_date: &str, installed_date: &str) -> String {
+    if date_after(installed_date, payload_date) {
         installed_date.to_string()
     } else {
         payload_date.to_string()
@@ -641,10 +642,17 @@ fn anti_rollback_floor(payload_date: &str, installed_date: &str, now: i64) -> St
 // PURE accept/refuse for a VERIFIED bundle, using only its signed identity. Err(reason) on refusal:
 //   "sha-mismatch" — the signed sha is not the one staged as READY (what the relay said it downloaded);
 //   "future-date"  — the signed date is beyond the clock-skew bound;
+//   "clock-looks-wrong" — the floor is itself beyond the skew bound (this computer's clock went back);
 //   "not-newer"    — the signed date is not strictly after the floor (anti-rollback / downgrade floor).
 fn signed_bundle_verdict(signed: &SignedId, ready_sha: &str, floor: &str, now: i64) -> Result<(), &'static str> {
     if signed.sha != ready_sha {
         return Err("sha-mismatch");
+    }
+    // The floor itself beyond the skew bound: it came from a signed date that was within a day of the clock when
+    // it was installed, so this computer's clock went BACK. Refuse until it is right rather than drop the floor
+    // (dropping it would let an older bundle in — audit f4129a25 LOW 2; mirrors the relay's clock-looks-wrong).
+    if parse_instant(floor).map(|f| f > now + MAX_FUTURE_SKEW_SECS).unwrap_or(false) {
+        return Err("clock-looks-wrong");
     }
     match parse_instant(&signed.date) {
         Some(t) if t > now + MAX_FUTURE_SKEW_SECS => return Err("future-date"),
@@ -854,9 +862,11 @@ fn spawn_relay(
                 while let Some(ev) = rx.recv().await {
                     match ev {
                         CommandEvent::Stdout(b) => {
+                            note_relay_activity();
                             applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end()))
                         }
                         CommandEvent::Stderr(b) => {
+                            note_relay_activity();
                             applog(&lp, &format!("[err] {}", String::from_utf8_lossy(&b).trim_end()))
                         }
                         CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
@@ -884,7 +894,91 @@ fn port_reachable() -> bool {
     TcpStream::connect(("127.0.0.1", PORT)).is_ok()
 }
 
+// ── [audit be258b42 M4] waiting for a relay to come up: PROGRESS-based, not a fixed 45 s ─────────────────────
+// A big church's relay replays its whole history before it listens, and on Windows Defender scans freshly
+// unpacked files; the normal first launch already allows 2 minutes. A fixed 45 s rolled good updates back and
+// quarantined them for good. Now: wait at least `base` (the same 2 minutes); after that keep waiting while the
+// relay is still alive AND has printed something within `quiet` — it is working, not stuck — up to `cap`. A
+// relay that EXITS is a failure at once (no point waiting). "Churches run on small pipes": progress, not clocks.
+static RELAY_ACTIVITY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// Called by the relay's output pump for every line it prints.
+fn note_relay_activity() {
+    RELAY_ACTIVITY_MS.store(now_ms(), Ordering::SeqCst);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BootTiming {
+    base: Duration,
+    quiet: Duration,
+    cap: Duration,
+    health: Duration, // after the port is up: how long /status has to report the signed build
+}
+
+const BOOT_TIMING: BootTiming = BootTiming {
+    base: Duration::from_secs(120),
+    quiet: Duration::from_secs(30),
+    cap: Duration::from_secs(600),
+    health: Duration::from_secs(60),
+};
+
+#[cfg(test)]
+thread_local! {
+    // The harness shortens the waits (same rule, smaller numbers) so a slow-start scenario takes seconds.
+    static TEST_BOOT_TIMING: std::cell::Cell<Option<BootTiming>> = const { std::cell::Cell::new(None) };
+}
+
+fn boot_timing() -> BootTiming {
+    #[cfg(test)]
+    if let Some(t) = TEST_BOOT_TIMING.with(|c| c.get()) {
+        return t;
+    }
+    BOOT_TIMING
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boot {
+    Up,     // the port accepts connections
+    Exited, // the process ended before it listened — the code is bad
+    Silent, // still alive but nothing came up: no port, and no output for `quiet` past `base` (or `cap` hit)
+}
+
+// PURE: the verdict for one poll. None = keep waiting.
+fn boot_verdict(port_up: bool, alive: bool, elapsed: Duration, since_output: Duration, t: BootTiming) -> Option<Boot> {
+    if port_up {
+        return Some(Boot::Up);
+    }
+    if !alive {
+        return Some(Boot::Exited);
+    }
+    if elapsed >= t.cap || (elapsed >= t.base && since_output >= t.quiet) {
+        return Some(Boot::Silent);
+    }
+    None
+}
+
+fn wait_boot(alive: &Arc<AtomicBool>) -> Boot {
+    let t = boot_timing();
+    let start = Instant::now();
+    RELAY_ACTIVITY_MS.store(now_ms(), Ordering::SeqCst); // the spawn itself counts as activity
+    loop {
+        let since = Duration::from_millis(now_ms().saturating_sub(RELAY_ACTIVITY_MS.load(Ordering::SeqCst)));
+        if let Some(v) = boot_verdict(port_reachable(), alive.load(Ordering::SeqCst), start.elapsed(), since, t) {
+            return v;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
 // Wait until the port accepts connections (relay is up), or the timeout elapses.
+#[allow(dead_code)]
 fn wait_port_up(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
@@ -1015,6 +1109,76 @@ fn discard_staging(suite_dir: &Path) {
     let _ = std::fs::remove_file(staging.join("bundle.sig"));
 }
 
+// [audit be258b42 L9] The apply works on a SNAPSHOT of the staged pair, moved out of staging/ before it is
+// verified, so the relay's hourly check cannot swap a different bundle in between the verify and the stop. When
+// the apply is over, READY is removed only if it still names the sha we took (a newer bundle the relay staged
+// meanwhile is kept for the next window), and the snapshot is deleted.
+fn finish_snapshot(suite_dir: &Path, taken_sha: &str) {
+    let ready = suite_dir.join("staging").join("READY");
+    let still_ours = std::fs::read_to_string(&ready)
+        .ok()
+        .and_then(|r| json_str_value(&r, "sha"))
+        .map(|s| s == taken_sha)
+        .unwrap_or(false);
+    if still_ours {
+        let _ = std::fs::remove_file(&ready);
+    }
+    let _ = std::fs::remove_dir_all(suite_dir.join("applying"));
+}
+
+// [audit be258b42 M5] Copy the church's event store (relay.sqlite + its -wal/-shm side files) aside before an
+// automatic update, while the relay is STOPPED (so the three files are consistent). Keeps the newest
+// DB_BACKUPS_KEPT copies under suite/db-backup/<epoch>/. Returns the backup dir, or an error to abort the apply.
+const DB_BACKUPS_KEPT: usize = 2;
+const DB_FILES: [&str; 3] = ["relay.sqlite", "relay.sqlite-wal", "relay.sqlite-shm"];
+
+fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Result<PathBuf> {
+    let root = suite_dir.join("db-backup");
+    let dir = root.join(format!("{}", now_epoch()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    for f in DB_FILES {
+        let src = data_dir.join(f);
+        if src.is_file() {
+            if let Err(e) = std::fs::copy(&src, dir.join(f)) {
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(e);
+            }
+        }
+    }
+    // prune: keep the newest DB_BACKUPS_KEPT (names are epoch seconds)
+    if let Ok(rd) = std::fs::read_dir(&root) {
+        let mut names: Vec<i64> = rd
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_string_lossy().parse::<i64>().ok())
+            .collect();
+        names.sort_unstable();
+        while names.len() > DB_BACKUPS_KEPT {
+            let old = names.remove(0);
+            let _ = std::fs::remove_dir_all(root.join(old.to_string()));
+        }
+    }
+    applog(log, &format!("suite: church data backed up to {dir:?}"));
+    Ok(dir)
+}
+
+// Put the backed-up store back (relay STOPPED). The side files are removed first so a -wal written by the bad
+// code cannot be replayed over the restored main file.
+fn restore_store(data_dir: &Path, backup: &Path, log: &Path) {
+    for f in DB_FILES {
+        let _ = std::fs::remove_file(data_dir.join(f));
+    }
+    for f in DB_FILES {
+        let b = backup.join(f);
+        if b.is_file() {
+            if let Err(e) = std::fs::copy(&b, data_dir.join(f)) {
+                applog(log, &format!("suite: RESTORE of {f} failed: {e} (the backup is still at {backup:?})"));
+            }
+        }
+    }
+    applog(log, &format!("suite: church data restored from {backup:?}"));
+}
+
 // Health probe (I/O): poll public GET /status within the window and report the four facts health_outcome
 // needs — (reachable, version_match, ok, degraded_storage). "version" must equal the SIGNED sha of the bundle we
 // activated: the gateway reports BUILD.sha, which it reads from the same signed version.txt, so a match proves
@@ -1125,25 +1289,29 @@ struct RunState {
     cooldown_until: Option<Instant>,
 }
 
-// Spawn the relay from `dir`, record it as current, and wait for the port. Returns whether it came up. Shared by
+// Spawn the relay from `dir`, record it as current, and wait (progress-based, wait_boot) for the port. Shared by
 // startup, apply-start, recover and rollback.
-fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> bool {
+fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> Boot {
     st.code_dir = dir.to_path_buf();
     match env.host.spawn_relay(dir, env.payload, env.data_dir, env.log) {
         Some(a) => {
             st.alive = a;
-            wait_port_up(Duration::from_secs(45))
+            wait_boot(&st.alive)
         }
-        None => false,
+        None => Boot::Exited,
     }
 }
 
 // Shared rollback-and-restart: restore active/ to last-good (or the baked-in payload), restart there, reload the
 // webview, record a "rolledback" state that keeps the PREVIOUS installed identity, and switch auto-update off
-// (audit M7). ASSUMES the relay is already stopped. Keeps the church ONLINE on known-good code. Does NOT write
+// (audit M7); with `backup`, first restore the church's data from it (audit M5). ASSUMES the relay is stopped. Keeps the church ONLINE on known-good code. Does NOT write
 // quarantine — the caller decides that, since a retain failure is a local-disk problem, not a bad bundle.
-fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str) {
+fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str, backup: Option<&Path>) {
     let suite_dir = env.suite_dir;
+    // [audit M5] The new code ran against the church's data; put the pre-update copy back before anything reads it.
+    if let Some(b) = backup {
+        restore_store(env.data_dir, b, env.log);
+    }
     let active = suite_dir.join("active");
     let last_good = suite_dir.join("last-good");
     let dir = match rollback_target(false, last_good.exists()) {
@@ -1175,7 +1343,6 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
         sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
         outcome: "rolledback", reason, auto_off: true,
     }, env.log);
-    discard_staging(suite_dir);
 }
 
 // The staged bundle, if there is one and the switch is on: (READY version label, READY sha, READY mtime epoch,
@@ -1254,10 +1421,10 @@ fn startup(env: &ApplyEnv) -> RunState {
         return st; // the apply (or its rollback) already started the relay and health-checked it
     }
     let dir = st.code_dir.clone();
-    let up = spawn_and_wait(env, &mut st, &dir);
+    let up = spawn_and_wait(env, &mut st, &dir) == Boot::Up;
     if let Some(id) = choice.signed.as_ref().filter(|_| dir == choice.dir) {
         let (reachable, version_match, _, _) = if up {
-            health_probe(&id.sha, Duration::from_secs(30))
+            health_probe(&id.sha, boot_timing().health)
         } else {
             (false, false, false, false)
         };
@@ -1284,10 +1451,10 @@ fn startup(env: &ApplyEnv) -> RunState {
     st
 }
 
-// The 8-step apply, fail-closed at every step. Any failure leaves the Suite running a known-good tree (the one it
-// was already running, last-good, or the baked-in payload) and never leaves a half-applied active/. When called
-// from startup nothing is running yet: the stop is then a no-op and every abort path that would "restart the
-// current code" leaves that to startup.
+// The apply, fail-closed at every step. Any failure leaves the Suite running a known-good tree (the one it was
+// already running, last-good, or the baked-in payload) and never leaves a half-applied active/. When called from
+// startup nothing is running yet: the stop is then a no-op and every abort path that would "restart the current
+// code" leaves that to startup.
 fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str, prev_state_raw: &str, day: &str) {
     let (suite_dir, payload, log) = (env.suite_dir, env.payload, env.log);
     let node = match env.node {
@@ -1295,8 +1462,6 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
         None => return,
     };
     let staging = suite_dir.join("staging");
-    let s_tgz = staging.join("bundle.tgz");
-    let s_sig = staging.join("bundle.sig");
     let was_running = st.alive.load(Ordering::SeqCst);
     // Restart whatever was running before (only if something was).
     let restart_prev = |st: &mut RunState| {
@@ -1305,19 +1470,33 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             spawn_and_wait(env, st, &prev);
         }
     };
-
-    // 1. Authoritatively re-verify the staged tarball (don't trust READY alone). Payload verifier + key. The
-    //    identity used from here on is the one INSIDE the signed bytes (audit HIGH 2) — READY is only a hint.
-    let signed = if s_tgz.exists() && s_sig.exists() {
-        verify_tarball(node, payload, &s_tgz, &s_sig, log)
-    } else {
-        None
+    let keep_prev = |outcome: &str, reason: &str| {
+        write_state(suite_dir, &StateRec {
+            sha: &json_str_value(prev_state_raw, "installedSha").unwrap_or_default(),
+            version: &json_str_value(prev_state_raw, "installedVersion").unwrap_or_default(),
+            date: &json_str_value(prev_state_raw, "installedDate").unwrap_or_default(),
+            last_applied: day, outcome, reason,
+            auto_off: false,
+        }, log);
     };
+
+    // 0. [audit L9] Take the staged pair out of staging/ into suite/applying/ BEFORE verifying it.
+    let applying = suite_dir.join("applying");
+    let _ = std::fs::remove_dir_all(&applying);
+    let a_tgz = applying.join("bundle.tgz");
+    let a_sig = applying.join("bundle.sig");
+    let took = std::fs::create_dir_all(&applying).is_ok()
+        && rename_retry(&staging.join("bundle.tgz"), &a_tgz, log).is_ok()
+        && rename_retry(&staging.join("bundle.sig"), &a_sig, log).is_ok();
+
+    // 1. Authoritatively re-verify the snapshot (don't trust READY alone). Payload verifier + key. The identity
+    //    used from here on is the one INSIDE the signed bytes (audit HIGH 2) — READY is only a hint.
+    let signed = if took { verify_tarball(node, payload, &a_tgz, &a_sig, log) } else { None };
     let signed = match signed {
         Some(id) => id,
         None => {
-            applog(log, "suite: APPLY aborted — staged bundle failed signature verify; discarding staging");
-            discard_staging(suite_dir);
+            applog(log, "suite: APPLY aborted — staged bundle missing or failed signature verify; discarding it");
+            finish_snapshot(suite_dir, r_sha);
             return;
         }
     };
@@ -1326,13 +1505,13 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     //    strictly after MAX(payload date, installed date) by INSTANT.
     let installed_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
     let now = now_epoch();
-    let floor = anti_rollback_floor(&read_version_date(payload), &installed_date, now);
+    let floor = anti_rollback_floor(&read_version_date(payload), &installed_date);
     if let Err(why) = signed_bundle_verdict(&signed, r_sha, &floor, now) {
         applog(log, &format!(
             "suite: APPLY aborted — {why} (signed {} {} vs READY {r_sha}, floor {floor}); discarding",
             short_sha(&signed.sha), signed.date
         ));
-        discard_staging(suite_dir);
+        finish_snapshot(suite_dir, r_sha);
         return;
     }
     let r_sha: &str = &signed.sha;
@@ -1342,7 +1521,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     let q = std::fs::read_to_string(suite_dir.join("quarantine-sha")).unwrap_or_default();
     if q.trim() == r_sha {
         applog(log, "suite: APPLY aborted — staged sha is quarantined; discarding staging");
-        discard_staging(suite_dir);
+        finish_snapshot(suite_dir, r_sha);
         return;
     }
 
@@ -1351,86 +1530,110 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     env.host.stop_relay();
     if !wait_stopped(&st.alive, Duration::from_secs(20)) {
         // [AUDIT FIX #3] Back off before retrying so we don't kill→20s-wait→respawn every ~60s against a
-        // wedged child. The relay never swapped, so restarting prev keeps the church online meanwhile.
+        // wedged child. The relay never swapped, so restarting prev keeps the church online meanwhile. The
+        // snapshot goes back to staging/ (unless the relay has staged another one meanwhile) for a later try.
         st.cooldown_until = Some(Instant::now() + APPLY_COOLDOWN);
         applog(log, "suite: APPLY aborted — relay did not stop cleanly; restarting current code, keeping staging; backing off apply ~1h");
+        if !staging.join("bundle.tgz").exists() {
+            let _ = rename_retry(&a_tgz, &staging.join("bundle.tgz"), log);
+            let _ = rename_retry(&a_sig, &staging.join("bundle.sig"), log);
+        }
+        let _ = std::fs::remove_dir_all(&applying);
         let prev = st.code_dir.clone();
         spawn_and_wait(env, st, &prev);
         return;
     }
 
-    // 5. Unpack to active.new, then promote: active -> last-good, active.new -> active (same-fs renames).
+    // 5. [audit M5] Back the church's data up while nothing is writing it. No backup → no update.
+    let backup = match backup_store(env.data_dir, suite_dir, log) {
+        Ok(b) => b,
+        Err(e) => {
+            applog(log, &format!("suite: APPLY aborted — could not back up the church's data first ({e}); restarting current"));
+            keep_prev("not-applied", "this computer could not make a safety copy of the church's data first");
+            finish_snapshot(suite_dir, r_sha);
+            restart_prev(st);
+            return;
+        }
+    };
+
+    // 6. Unpack to active.new and check it IS the signed build, then promote: active -> last-good,
+    //    active.new -> active. [audit L4] Every rename is checked; a failure puts things back and aborts.
     let active = suite_dir.join("active");
     let active_new = suite_dir.join("active.new");
     let last_good = suite_dir.join("last-good");
     let _ = std::fs::remove_dir_all(&active_new);
-    if let Err(e) = std::fs::create_dir_all(&active_new) {
-        applog(log, &format!("suite: APPLY aborted — mkdir active.new failed: {e}; restarting current"));
-        restart_prev(st);
-        return;
-    }
-    if !untar(&s_tgz, &active_new, log) {
-        applog(log, "suite: APPLY aborted — unpack failed; restarting current");
+    let unpacked = std::fs::create_dir_all(&active_new).is_ok()
+        && untar(&a_tgz, &active_new, log)
+        && active_tree_matches(&active_new, &signed);
+    if !unpacked {
+        applog(log, "suite: APPLY aborted — unpack failed or the unpacked tree is not the signed build; restarting current");
         let _ = std::fs::remove_dir_all(&active_new);
+        finish_snapshot(suite_dir, r_sha);
         restart_prev(st);
         return;
     }
-    // Roll the previous override (if any) to last-good, including its retained verified tarball.
     let _ = std::fs::remove_dir_all(&last_good);
-    if active.exists() {
-        let _ = rename_retry(&active, &last_good, log);
-        let _ = rename_retry(&suite_dir.join("active.tgz"), &suite_dir.join("last-good.tgz"), log);
-        let _ = rename_retry(&suite_dir.join("active.sig"), &suite_dir.join("last-good.sig"), log);
-    }
-    if let Err(e) = rename_retry(&active_new, &active, log) {
-        applog(log, &format!("suite: APPLY FAILED at swap ({e}); restoring and restarting"));
-        if last_good.exists() && !active.exists() {
-            let _ = rename_retry(&last_good, &active, log);
-            let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
-            let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
+    let _ = std::fs::remove_file(suite_dir.join("last-good.tgz"));
+    let _ = std::fs::remove_file(suite_dir.join("last-good.sig"));
+    let had_active = active.exists();
+    if had_active {
+        let moved = rename_retry(&active, &last_good, log).is_ok()
+            && rename_retry(&suite_dir.join("active.tgz"), &suite_dir.join("last-good.tgz"), log).is_ok()
+            && rename_retry(&suite_dir.join("active.sig"), &suite_dir.join("last-good.sig"), log).is_ok();
+        if !moved {
+            applog(log, "suite: APPLY aborted — could not set the current update aside; putting it back");
+            if !active.exists() {
+                let _ = rename_retry(&last_good, &active, log);
+            }
+            if !suite_dir.join("active.tgz").exists() {
+                let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), log);
+            }
+            if !suite_dir.join("active.sig").exists() {
+                let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), log);
+            }
+            let _ = std::fs::remove_dir_all(&active_new);
+            finish_snapshot(suite_dir, r_sha);
+            restart_prev(st);
+            return;
         }
-        if was_running {
-            // Restart what was running; if that was the override and it could not be put back, the payload.
-            let dir = if st.code_dir == active && !active.exists() { payload.to_path_buf() } else { st.code_dir.clone() };
-            spawn_and_wait(env, st, &dir);
-        }
-        return;
     }
-    // The retained verified tarball the next launch re-checks against the payload key. [AUDIT FIX #4] A copy
-    // failure is FATAL to the apply: active/ is the new code, so a missing/partial active.(tgz,sig) would make
-    // the NEXT launch verify a stale or absent pair and silently fall back — active/ and its retained tarball
-    // must never disagree. The relay is still stopped here (step 6 hasn't run), so roll back and restart on
-    // known-good code. NOT quarantined: the bundle is fine, only this box's local copy failed.
-    if std::fs::copy(&s_tgz, suite_dir.join("active.tgz")).is_err()
-        || std::fs::copy(&s_sig, suite_dir.join("active.sig")).is_err()
-    {
-        applog(log, "suite: APPLY FAILED — could not retain active.(tgz,sig); rolling back to last-good/payload");
-        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not keep a copy of the update");
-        applog(log, "suite: rollback complete (retain failure)");
+    // Promote the new tree AND its verified tarball + signature (the pair the next start re-verifies). Any
+    // failure: the relay is still stopped and the new code never ran → roll back, no data restore, no quarantine.
+    let promoted = rename_retry(&active_new, &active, log).is_ok()
+        && rename_retry(&a_tgz, &suite_dir.join("active.tgz"), log).is_ok()
+        && rename_retry(&a_sig, &suite_dir.join("active.sig"), log).is_ok();
+    if !promoted {
+        applog(log, "suite: APPLY FAILED — could not put the update in place; rolling back to last-good/payload");
+        let _ = std::fs::remove_dir_all(&active_new);
+        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not put the update in place", None);
+        finish_snapshot(suite_dir, r_sha);
+        applog(log, "suite: rollback complete (promote failure)");
         return;
     }
 
-    // 6. Start from active/ (PAYLOAD_DIR=payload via spawn_relay), reload the webview.
+    // 7. Start from active/ (PAYLOAD_DIR=payload via spawn_relay), reload the webview.
     applog(log, "suite: starting relay from active/ (override)");
-    let came_up = spawn_and_wait(env, st, &active);
+    let boot = spawn_and_wait(env, st, &active);
     env.host.reload_webview();
 
-    // 7. Health: probe public /status for reachability, version identity, ok, and whether an ok:false is
+    // 8. Health: probe public /status for reachability, version identity, ok, and whether an ok:false is
     //    SOLELY a degraded store; decide via the pure matrix. [AUDIT FIX #1] A good bundle that boots and
     //    identifies correctly is NOT rolled back/quarantined just because the store is transiently degraded.
-    let (reachable, version_match, ok, degraded_storage) = if came_up {
-        health_probe(r_sha, Duration::from_secs(45))
+    //    [audit M4] Only a relay that EXITED counts as a crash when nothing answered.
+    let (reachable, version_match, ok, degraded_storage) = if boot == Boot::Up {
+        health_probe(r_sha, boot_timing().health)
     } else {
-        (false, false, false, false) // never bound the port → no boot
+        (false, false, false, false)
     };
-    match health_outcome(reachable, version_match, ok, degraded_storage) {
+    let crashed = boot == Boot::Exited || !st.alive.load(Ordering::SeqCst);
+    match health_outcome(reachable, version_match, ok, degraded_storage, crashed) {
         Outcome::Keep { store_degraded } => {
-            // 8. Record success and clear staging. The new code booted and identifies as what we activated.
+            // 9. Record success and clear staging. The new code booted and identifies as what we activated.
             let outcome = if store_degraded { "applied-store-degraded" } else { "applied" };
             write_state(suite_dir, &StateRec {
                 sha: r_sha, version: r_version, date: r_date, last_applied: day, outcome, reason: "", auto_off: false,
             }, log);
-            discard_staging(suite_dir);
+            finish_snapshot(suite_dir, r_sha);
             let short = short_sha(r_sha);
             if store_degraded {
                 applog(log, &format!("suite: APPLY OK (store degraded — kept, not quarantined) — now running {r_version} ({short})"));
@@ -1440,24 +1643,26 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
         }
         Outcome::Rollback { quarantine } => {
             applog(log, &format!(
-                "suite: APPLY health check FAILED (reachable={reachable} version_match={version_match} ok={ok}) — rolling back{}",
-                if quarantine { " and quarantining sha" } else { "" }
+                "suite: APPLY health check FAILED (boot={boot:?} reachable={reachable} version_match={version_match} ok={ok}) — rolling back{}",
+                if quarantine { " and quarantining sha" } else { " (not quarantined: it may only have been slow)" }
             ));
-            // Quarantine the sha so it is never auto-applied again (always true for a genuine health failure).
             if quarantine {
                 let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
             }
-            // Stop the freshly-started (bad) relay, then roll back and restart on known-good code.
+            // Stop the freshly-started (bad) relay, then roll back, restore the data, restart on known-good code.
             env.host.stop_relay();
             let _ = wait_stopped(&st.alive, Duration::from_secs(20));
-            let why = if !reachable {
-                "the update did not start"
+            let why = if boot == Boot::Exited {
+                "the update stopped as soon as it started"
+            } else if !reachable {
+                "the update did not answer in time"
             } else if !version_match {
                 "the update started but reported the wrong version"
             } else {
                 "the update started but reported a problem"
             };
-            rollback_and_restart(env, st, prev_state_raw, day, why);
+            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup));
+            finish_snapshot(suite_dir, r_sha);
             applog(log, "suite: rollback complete");
         }
     }
@@ -1911,25 +2116,32 @@ mod tests {
     // ok:false) rolls back + quarantines.
     #[test]
     fn health_outcome_matrix() {
-        // reachable + version match + ok:true → keep, not degraded, no quarantine.
-        assert_eq!(health_outcome(true, true, true, false), Outcome::Keep { store_degraded: false });
-        // reachable + version match + ok:false SOLELY because the store is degraded → keep (note degraded),
-        // do NOT roll back, do NOT quarantine. This is the whole point of the fix.
-        assert_eq!(health_outcome(true, true, false, true), Outcome::Keep { store_degraded: true });
-        // reachable + version match + ok:false for a NON-storage reason → roll back + quarantine (fail-closed).
-        assert_eq!(health_outcome(true, true, false, false), Outcome::Rollback { quarantine: true });
-        // reachable but the WRONG code identified itself (version mismatch) → roll back + quarantine, even if
-        // ok and even if a storage flag happened to be set.
-        assert_eq!(health_outcome(true, false, true, false), Outcome::Rollback { quarantine: true });
-        assert_eq!(health_outcome(true, false, false, true), Outcome::Rollback { quarantine: true });
-        // not reachable → the new code never booted → roll back + quarantine (other flags irrelevant).
-        assert_eq!(health_outcome(false, false, false, false), Outcome::Rollback { quarantine: true });
-        assert_eq!(health_outcome(false, true, true, true), Outcome::Rollback { quarantine: true });
+        // (reachable, version_match, ok, degraded_storage, crashed)
+        assert_eq!(health_outcome(true, true, true, false, false), Outcome::Keep { store_degraded: false });
+        assert_eq!(health_outcome(true, true, false, true, false), Outcome::Keep { store_degraded: true });
+        assert_eq!(health_outcome(true, true, false, false, false), Outcome::Rollback { quarantine: true });
+        assert_eq!(health_outcome(true, false, true, false, false), Outcome::Rollback { quarantine: true });
+        assert_eq!(health_outcome(true, false, false, true, false), Outcome::Rollback { quarantine: true });
+        // audit be258b42 M4: never answered → quarantine ONLY if the process exited.
+        assert_eq!(health_outcome(false, false, false, false, true), Outcome::Rollback { quarantine: true });
+        assert_eq!(health_outcome(false, false, false, false, false), Outcome::Rollback { quarantine: false },
+            "a relay still alive but slow must not be banned for ever");
     }
 
-    // [AUDIT FIX #2] The short-sha helper must never panic on a non-ASCII / multibyte sha and must truncate on
-    // CHARACTER boundaries. `&r_sha[..7]` would panic here because byte 7 falls inside a multibyte char.
-    // audit be258b42 HIGH 2: the identity printed by the verifier is the only one trusted.
+    // audit be258b42 M4: the boot wait is progress-based.
+    #[test]
+    fn boot_verdict_waits_while_the_relay_makes_progress() {
+        let t = BOOT_TIMING;
+        let s = Duration::from_secs;
+        assert_eq!(boot_verdict(true, true, s(1), s(0), t), Some(Boot::Up));
+        assert_eq!(boot_verdict(false, false, s(1), s(0), t), Some(Boot::Exited), "an exit is a failure at once");
+        assert_eq!(boot_verdict(false, true, s(45), s(45), t), None, "45 s is no longer a deadline");
+        assert_eq!(boot_verdict(false, true, s(119), s(60), t), None, "the 2-minute launch allowance always applies");
+        assert_eq!(boot_verdict(false, true, s(300), s(5), t), None, "still printing at 5 min → still waiting");
+        assert_eq!(boot_verdict(false, true, s(130), s(31), t), Some(Boot::Silent), "silent past the allowance");
+        assert_eq!(boot_verdict(false, true, s(600), s(1), t), Some(Boot::Silent), "the hard cap");
+    }
+
     #[test]
     fn parse_signed_id_reads_only_a_wellformed_identity() {
         let sha = "a".repeat(40);
@@ -1955,13 +2167,15 @@ mod tests {
     }
 
     #[test]
-    fn anti_rollback_floor_ignores_a_far_future_record() {
+    fn anti_rollback_floor_is_the_later_date_and_a_clock_that_went_back_refuses() {
         let now = parse_instant("2026-11-13T00:00:00Z").unwrap();
-        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", "2026-10-01T00:00:00Z", now), "2026-10-01T00:00:00Z");
-        assert_eq!(anti_rollback_floor("2026-06-01T00:00:00Z", "2026-03-01T00:00:00Z", now), "2026-06-01T00:00:00Z");
-        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", "", now), "2026-01-01T00:00:00Z");
-        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z", now), "2026-01-01T00:00:00Z",
-            "a far-future installedDate must not become the floor");
+        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", "2026-10-01T00:00:00Z"), "2026-10-01T00:00:00Z");
+        assert_eq!(anti_rollback_floor("2026-06-01T00:00:00Z", "2026-03-01T00:00:00Z"), "2026-06-01T00:00:00Z");
+        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", ""), "2026-01-01T00:00:00Z");
+        // audit f4129a25 LOW 2: a floor beyond the clock (the clock went back) refuses — it is NOT dropped.
+        let floor = anti_rollback_floor("2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z");
+        let id = SignedId { sha: "2".repeat(40), date: "2026-10-01T00:00:00Z".into() };
+        assert_eq!(signed_bundle_verdict(&id, &"2".repeat(40), &floor, now), Err("clock-looks-wrong"));
     }
 
     #[test]

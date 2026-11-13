@@ -55,9 +55,19 @@ impl RelayHost for TestHost {
         for (k, v) in relay_env(code_dir, payload, data_dir, "/nonexistent/cloudflared") {
             cmd.env(k, v);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
         match cmd.spawn() {
-            Ok(ch) => {
+            Ok(mut ch) => {
+                // The TestHost twin of production's output pump: every line the relay prints is "activity" for the
+                // progress-based boot wait (audit M4).
+                if let Some(out) = ch.stdout.take() {
+                    thread::spawn(move || {
+                        use std::io::BufRead;
+                        for _ in std::io::BufReader::new(out).lines() {
+                            note_relay_activity();
+                        }
+                    });
+                }
                 *self.child.lock().unwrap() = Some(ch);
                 let alive = Arc::new(AtomicBool::new(true));
                 let alive2 = alive.clone();
@@ -148,13 +158,21 @@ fn must(cmd: &mut Command, what: &str) {
 // to tell trees apart. A `lie` gateway reports a version that is NOT its version.txt — the "wrong code answering"
 // health failure.
 fn gateway_src(label: &str, lie: bool) -> String {
+    gateway_src_ex(label, lie, "")
+}
+
+// `prelude` runs before the server listens (e.g. a slow start, or a crash). A LYING gateway also "mangles" the
+// church's store (appends to relay.sqlite and writes a -wal) — what a bad release replaying history might do —
+// so the rollback's data restore (audit M5) has something to undo.
+fn gateway_src_ex(label: &str, lie: bool, prelude: &str) -> String {
     format!(
         "import http from 'node:http';\n\
-         import {{readFileSync}} from 'node:fs';\n\
+         import {{readFileSync, appendFileSync, writeFileSync}} from 'node:fs';\n\
          const PORT = Number(process.argv[2]);\n\
          const LABEL = {l:?};\n\
          let V = ''; try {{ V = readFileSync('version.txt','utf8').split('\\n')[0].trim(); }} catch {{}}\n\
-         if ({lie}) V = 'f'.repeat(40);\n\
+         if ({lie}) {{ V = 'f'.repeat(40); const dd = process.env.TRINITY_DATA_DIR; try {{ appendFileSync(dd + '/relay.sqlite', 'MANGLED'); writeFileSync(dd + '/relay.sqlite-wal', 'BAD-WAL'); }} catch {{}} }}\n\
+         {prelude}\n\
          http.createServer((req,res)=>{{\n\
            if ((req.url||'').startsWith('/status')) {{\n\
              res.writeHead(200,{{'content-type':'application/json'}});\n\
@@ -164,7 +182,8 @@ fn gateway_src(label: &str, lie: bool) -> String {
            res.writeHead(404); res.end('no');\n\
          }}).listen(PORT,'127.0.0.1');\n",
         l = label,
-        lie = if lie { "true" } else { "false" }
+        lie = if lie { "true" } else { "false" },
+        prelude = prelude
     )
 }
 
@@ -196,6 +215,7 @@ struct Bundle<'a> {
     sha: &'a str,
     date: &'a str,
     lie: bool,
+    prelude: &'a str,
 }
 
 // Build a real Suite-shaped .tgz (version.txt, release-origin, scripts/gateway.mjs — what the real verifier
@@ -206,7 +226,7 @@ struct Bundle<'a> {
 fn build_signed_bundle(node: &Path, tools: &Path, signing_key: &Path, staging: &Path, b: &Bundle) {
     let stage = staging.join(".build");
     let _ = std::fs::remove_dir_all(&stage);
-    write(&stage.join("scripts").join("gateway.mjs"), &gateway_src(b.label, b.lie));
+    write(&stage.join("scripts").join("gateway.mjs"), &gateway_src_ex(b.label, b.lie, b.prelude));
     write(&stage.join("version.txt"), &format!("{}\n{}\n", b.sha, b.date));
     write(&stage.join("release-origin"), "https://example.invalid\n");
     let tgz = staging.join("bundle.tgz");
@@ -221,7 +241,7 @@ fn build_signed_bundle(node: &Path, tools: &Path, signing_key: &Path, staging: &
 
 // The common case: a well-behaved bundle labelled `label`, signed sha `sha`, signed date `date`.
 fn good<'a>(label: &'a str, sha: &'a str, date: &'a str) -> Bundle<'a> {
-    Bundle { label, sha, date, lie: false }
+    Bundle { label, sha, date, lie: false, prelude: "" }
 }
 
 fn write_ready(staging: &Path, version: &str, sha: &str, date: &str) {
@@ -362,7 +382,7 @@ fn start_v1(host: &dyn RelayHost, fx: &Fixture, log: &Path) -> RunState {
     let env = env_for(host, fx, log, &clock);
     let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
     let up = spawn_and_wait(&env, &mut st, &fx.payload);
-    assert!(up, "v1 payload relay failed to come up");
+    assert_eq!(up, Boot::Up, "v1 payload relay failed to come up");
     assert!(wait_for_served("v1", Duration::from_secs(10)), "v1 did not serve /status");
     st
 }
@@ -402,6 +422,14 @@ fn end_to_end_apply_harness() {
          Kill it and re-run. (This is NOT a code failure.)"
     );
 
+    // The same progress rule as production, with small numbers (production: 120 s / 30 s / 600 s / 60 s).
+    TEST_BOOT_TIMING.with(|c| c.set(Some(BootTiming {
+        base: Duration::from_secs(3),
+        quiet: Duration::from_secs(2),
+        cap: Duration::from_secs(30),
+        health: Duration::from_secs(6),
+    })));
+
     scenario_a_good_bundle_activates();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (a)");
 
@@ -434,6 +462,15 @@ fn end_to_end_apply_harness() {
 
     scenario_o_damaged_active_is_repaired_or_falls_back();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (o)");
+
+    scenario_p_slow_but_progressing_start_is_kept();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (p)");
+
+    scenario_q_silent_start_rolls_back_without_quarantine();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (q)");
+
+    scenario_s_bundle_restaged_during_the_apply_is_not_mixed_in();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (s)");
 
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
@@ -560,8 +597,14 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     let log = fx.data_dir.join("relay-launch.log");
     // The bundle verifies + beats the floor, so it IS applied — but its gateway reports a version that does
     // NOT match READY, i.e. the "wrong code answering" health failure. Health must roll it back + quarantine.
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: "2026-10-01T00:00:00Z", lie: true });
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: "2026-10-01T00:00:00Z", lie: true, prelude: "" });
     write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
+    // [audit M5] the church's store before the update (and three older backups, to prove pruning to 2)
+    write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
+    write(&fx.data_dir.join("relay.sqlite-wal"), "ORIGINAL-WAL");
+    for old in ["100", "200", "300"] {
+        write(&fx.suite_dir.join("db-backup").join(old).join("relay.sqlite"), "old");
+    }
 
     let host = TestHost::new(fx.node.clone());
     let mut cur = start_v1(&host, &fx, &log);
@@ -574,8 +617,14 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     assert_eq!(quarantined.trim(), SHA2, "the failed sha must be quarantined");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"), "state not 'rolledback'");
     assert!(!fx.staging.join("READY").exists(), "staging must be discarded after a rollback");
+    // [audit M5] the bad code wrote to the store; the rollback put the pre-update copy back
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STORE", "the store was not restored");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite-wal")).unwrap(), "ORIGINAL-WAL", "the bad -wal was not replaced");
+    let kept: Vec<_> = std::fs::read_dir(fx.suite_dir.join("db-backup")).unwrap().filter_map(|e| e.ok()).collect();
+    assert_eq!(kept.len(), DB_BACKUPS_KEPT, "backups must be pruned to the newest {DB_BACKUPS_KEPT}");
+    assert!(!fx.suite_dir.join("db-backup").join("100").exists(), "the oldest backup must be pruned");
     host.stop_relay();
-    eprintln!("   (e) OK — wrong-version v2 rolled back to v1, sha-v2 quarantined, state=rolledback");
+    eprintln!("   (e) OK (+ store restored, backups pruned) — wrong-version v2 rolled back to v1, sha-v2 quarantined, state=rolledback");
 }
 
 // (j) READY names one sha, the signed bundle is another (e.g. the relay staged a different release than the
@@ -597,7 +646,7 @@ fn scenario_j_signed_sha_must_match_ready() {
 }
 
 // (k) A validly signed bundle dated far in the future (a bogus commit date) — audit HIGH 2's "freeze all updates
-//     for good". Refused; and a far-future installedDate already on disk does not block a genuine newer release.
+//     for good". Refused; and a recorded installedDate beyond the clock (the clock went back) refuses too.
 fn scenario_k_far_future_signed_date_refused_and_does_not_freeze() {
     eprintln!("── scenario (k): far-future signed date refused; a far-future record cannot freeze updates ──");
     let fx = fresh_box("k", "2026-01-01T00:00:00Z");
@@ -611,8 +660,8 @@ fn scenario_k_far_future_signed_date_refused_and_does_not_freeze() {
     assert!(!fx.suite_dir.join("active").exists());
     assert!(fx.suite_dir.join("state.json").is_file() == false, "a refused bundle must not record an installed date");
 
-    // A record poisoned with a far-future installedDate (e.g. written before this fix) must not freeze updates:
-    // a genuine, newer, validly signed release still applies.
+    // A record with an installedDate beyond the clock means this computer's clock went BACK: refuse (and say so)
+    // rather than drop the floor, which would let an older bundle in (audit f4129a25 LOW 2).
     write(
         &fx.suite_dir.join("state.json"),
         "{\"installedSha\":\"x\",\"installedVersion\":\"vx\",\"installedDate\":\"2099-01-01T00:00:00Z\",\"lastApplied\":\"2000-01-01\"}\n",
@@ -620,10 +669,10 @@ fn scenario_k_far_future_signed_date_refused_and_does_not_freeze() {
     build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
     write_ready(&fx.staging, "v2", SHA2, D_OCT);
     run_apply(&host, &fx, &log, &mut cur);
-    assert!(wait_for_served("v2", Duration::from_secs(15)), "a far-future installedDate froze a genuine update");
-    assert_eq!(read_state_field(&fx.suite_dir, "installedDate").as_deref(), Some(D_OCT), "installedDate must be the SIGNED date");
+    assert_eq!(served_version().as_deref(), Some("v1"), "with the clock behind the floor nothing may apply");
+    assert!(!fx.suite_dir.join("active").exists());
     host.stop_relay();
-    eprintln!("   (k) OK — far-future signed date refused; poisoned floor ignored; signed date recorded");
+    eprintln!("   (k) OK — far-future signed date refused; a clock behind the recorded floor refuses");
 }
 
 // ══ audit be258b42 HIGH 1 / HIGH 3 / MEDIUM 1 — WHEN an update applies, and WHAT runs at a start ══════════════
@@ -760,6 +809,95 @@ fn scenario_o_damaged_active_is_repaired_or_falls_back() {
     eprintln!("   (o) took {:?}", t0.elapsed());
     host2.stop_relay();
     eprintln!("   (o) OK — a deleted file was re-extracted; a crashing override fell back to v1 and was retired");
+}
+
+// (p) [M4] A good update whose relay takes LONGER than the base allowance to listen, but keeps printing while it
+//     works (a big church replaying its history). Old rule: 45 s and out, rolled back and banned. Now: kept.
+fn scenario_p_slow_but_progressing_start_is_kept() {
+    eprintln!("── scenario (p): a slow start that keeps printing is waited for ──");
+    let fx = fresh_box("p", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    // listens after ~6 s (test base allowance is 3 s), printing every 0.5 s (test quiet window is 2 s)
+    let slow = "for (let i = 0; i < 12; i++) { console.log('replaying history ' + i); await new Promise(r => setTimeout(r, 500)); }";
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "v2-slow", sha: SHA2, date: D_OCT, lie: false, prelude: slow });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v2-slow", Duration::from_secs(10)), "a slow but working start was rolled back");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("applied"));
+    assert!(!fx.suite_dir.join("quarantine-sha").exists());
+    host.stop_relay();
+    eprintln!("   (p) OK — a 6 s start that kept printing was kept (base allowance 3 s)");
+}
+
+// (q) [M4] An update whose relay stays alive but never listens and prints nothing: rolled back, but NOT
+//     quarantined (it may only have been slow on this computer), with the reason recorded.
+fn scenario_q_silent_start_rolls_back_without_quarantine() {
+    eprintln!("── scenario (q): a silent, never-listening start rolls back without a ban ──");
+    let fx = fresh_box("q", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    let hang = "await new Promise(() => { setInterval(() => {}, 1000); });";
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "v2-hang", sha: SHA2, date: D_OCT, lie: false, prelude: hang });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "not back on v1 after a silent start");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    assert_eq!(read_state_field(&fx.suite_dir, "lastReason").as_deref(), Some("the update did not answer in time"));
+    assert!(!fx.suite_dir.join("quarantine-sha").exists(), "a merely slow/silent start must not be quarantined");
+    host.stop_relay();
+    eprintln!("   (q) OK — rolled back, reason recorded, not quarantined");
+}
+
+// A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed
+// bundle (v3) — the audit L9 race between the shell's verify and its stop.
+struct RacingHost {
+    inner: TestHost,
+    restage: Box<dyn Fn()>,
+}
+impl RelayHost for RacingHost {
+    fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
+        self.inner.spawn_relay(code_dir, payload, data_dir, log)
+    }
+    fn stop_relay(&self) {
+        (self.restage)();
+        self.inner.stop_relay();
+    }
+    fn reload_webview(&self) {}
+}
+
+// (s) [L9] v2 is verified and being applied when the relay stages v3. The apply must install exactly v2 (the
+//     bytes it verified), and leave v3 staged for the next window — never a v2/v3 mix.
+fn scenario_s_bundle_restaged_during_the_apply_is_not_mixed_in() {
+    eprintln!("── scenario (s): a bundle restaged during the apply is not mixed in ──");
+    let fx = fresh_box("s", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    let (node, tools, key, staging) = (fx.node.clone(), fx.tools.clone(), fx.priv_key.clone(), fx.staging.clone());
+    let fired = Arc::new(AtomicBool::new(false));
+    let f2 = fired.clone();
+    let host = RacingHost {
+        inner: TestHost::new(fx.node.clone()),
+        restage: Box::new(move || {
+            if !f2.swap(true, Ordering::SeqCst) {
+                build_signed_bundle(&node, &tools, &key, &staging, &good("v3", SHA3, "2026-10-02T00:00:00Z"));
+                write_ready(&staging, "v3", SHA3, "2026-10-02T00:00:00Z");
+            }
+        }),
+    };
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(fired.load(Ordering::SeqCst), "re-anchor: the race never fired");
+    assert!(wait_for_served("v2", Duration::from_secs(10)), "the apply did not install the bundle it verified");
+    assert_eq!(read_state_field(&fx.suite_dir, "installedSha").as_deref(), Some(SHA2));
+    let ready = std::fs::read_to_string(fx.staging.join("READY")).unwrap_or_default();
+    assert!(ready.contains(SHA3), "the newer v3 staged meanwhile must be kept for the next window: {ready}");
+    assert!(fx.staging.join("bundle.tgz").exists(), "v3's tarball must be kept");
+    host.inner.stop_relay();
+    eprintln!("   (s) OK — installed the verified v2; v3 left staged");
 }
 
 // ══ Added 2026-11-13 (audit AUDIT-integration-all-1aa19150 MEDIUM 2): the LAUNCH choice, the toggle-off path,
@@ -932,7 +1070,7 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     let v2_tgz = std::fs::read(fx.suite_dir.join("active.tgz")).unwrap();
 
     yesterday_in_state(&fx.suite_dir);
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v3", sha: SHA3, date: "2026-10-02T00:00:00Z", lie: true });
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v3", sha: SHA3, date: "2026-10-02T00:00:00Z", lie: true, prelude: "" });
     write_ready(&fx.staging, "v3", SHA3, "2026-10-02T00:00:00Z");
     run_apply(&host, &fx, &log, &mut cur);
 
@@ -998,7 +1136,7 @@ fn scenario_i_relay_that_will_not_stop_backs_off() {
     let clock = clock_at(IN_WINDOW);
     let env = env_for(&host, &fx, &log, &clock);
     let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
-    assert!(spawn_and_wait(&env, &mut st, &fx.payload));
+    assert_eq!(spawn_and_wait(&env, &mut st, &fx.payload), Boot::Up);
     assert!(wait_for_served("v1", Duration::from_secs(10)), "v1 did not serve");
 
     let t0 = Instant::now();

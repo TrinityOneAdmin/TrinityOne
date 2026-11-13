@@ -721,6 +721,8 @@
       out.push((suite.lastOutcome === 'rolledback' ? 'The last update was rolled back' : 'The downloaded update would not start') +
         (suite.lastReason ? ' (' + suite.lastReason + ')' : '') +
         (suite.autoOff && !suite.enabled ? ', so automatic updates were turned off. Turn them on to try the next release.' : ''));
+    } else if (suite.lastOutcome === 'not-applied') {
+      out.push('The last update was not installed' + (suite.lastReason ? ' (' + suite.lastReason + ')' : '') + '; it will try again');
     } else if (suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') {
       out.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastApplied ? ' on ' + suite.lastApplied : '') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
     }

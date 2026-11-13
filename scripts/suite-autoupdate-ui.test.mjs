@@ -160,3 +160,17 @@ test('wiring is idempotent — a second wire keeps the single handler but re-ren
   assert.equal(els.suiteAutoToggle.onchange, first, 'already-wired toggle keeps its single handler (_wired guard)');
   assert.match(els.suiteAutoStatus.textContent, /rolled back/i, 'but the status re-renders from the fresh payload');
 });
+
+test('[audit M5/M7] an update skipped because the data could not be backed up says so', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '03:00', windowEnd: '05:00', lastOutcome: 'not-applied',
+    lastReason: "this computer could not make a safety copy of the church's data first" });
+  assert.match(els.suiteAutoStatus.textContent, /not installed \(this computer could not make a safety copy of the church's data first\); it will try again/);
+});
+
+test('[audit H3] switched off while running a downloaded update: says it goes back to the shipped version at the next start', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, running: 'update', runningVersion: 'bbbbbbb', shippedVersion: 'aaaaaaa' });
+  assert.match(els.suiteAutoStatus.textContent, /Running a downloaded update \(bbbbbbb\)/);
+  assert.match(els.suiteAutoStatus.textContent, /at the next start the Suite goes back to the version it came with \(aaaaaaa\)/);
+});
