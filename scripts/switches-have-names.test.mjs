@@ -21,9 +21,14 @@
 // one control that takes her out of a list of named members.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { stripComments } from './test-slice.mjs';
 
-const files = ['../app/identity.jsx', '../app/screens-extras.jsx', '../app/stew-dashboard.jsx'];
+// EVERY app/*.jsx (audit 2026-11-13, N2): the list was three files, so the switches in stew-meals.jsx and
+// stew-schedule.jsx were never checked. Comments are stripped first (offsets and line numbers kept), because a
+// comment that mentions role="switch" is not a switch — stew-meals.jsx has one.
+const APP = new URL('../app/', import.meta.url);
+const files = readdirSync(APP).filter(f => f.endsWith('.jsx')).sort().map(f => '../app/' + f);
 
 // THE WHOLE OPENING TAG, not the line. This used to require `role="switch"` and `aria-label` on the SAME LINE,
 // so the relay-sync switch (136df470), whose attributes sit one per line, was reported unnamed although it
@@ -65,13 +70,15 @@ test('the scanner reads the whole opening tag — named across lines, unnamed ac
     'an UNNAMED multi-line switch was passed — or it borrowed the name of the element after it');
   assert.deepEqual(unnamedSwitches('<button role="switch" aria-label="" />'), [1], 'an EMPTY aria-label is no name');
   assert.deepEqual(unnamedSwitches('<button role="switch" aria-labelledby={id} />'), [], 'aria-labelledby names it too');
+  assert.deepEqual(unnamedSwitches(stripComments('// a comment that says role="switch"\n<button role="switch" aria-label="Real" />')), [],
+    'a role="switch" inside a COMMENT was read as an unnamed switch');
 });
 
 test('no switch is announced without a name', () => {
   const unnamed = [];
   let seen = 0;
   for (const rel of files) {
-    const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
+    const src = stripComments(readFileSync(new URL(rel, import.meta.url), 'utf8'));
     seen += (src.match(/role="switch"/g) || []).length;
     for (const line of unnamedSwitches(src)) unnamed.push(`${rel.replace('../app/', '')}:${line}`);
   }

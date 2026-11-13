@@ -246,7 +246,7 @@ const cases = [[null, null, 'baseline NEW/NEW'], ...OLD_REVS.flatMap(r => [[r, n
 
 after(() => { for (const d of oldDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } H.stopAll(); setTimeout(() => process.exit(process.exitCode || 0), 2000).unref(); });
 
-test('the two OLD revs have a byte-identical relay (so rev=origin/main and rev=main are one build)', (t) => {
+test('precondition: log whether origin/main and main are one relay build (and NEW differs from main)', (t) => {
   // A LOGGED PRECONDITION, NOT AN ASSERTION (2026-11-13). This failed whenever local main had moved past
   // origin/main with a gateway change — e.g. 09:19-12:13 on 2026-11-12, when main was 120cc727 and origin/main
   // f22def72 (gateway.mjs +375/-36). That is repo state, not a defect: the cases below ALREADY run each OLD rev

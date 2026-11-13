@@ -130,11 +130,16 @@ async function boot(path, { ms = 15000, seed = null, drive = null, tag = '' } = 
     // POLLED, NOT SLEPT (2026-11-13). This was a fixed `sleep(ms)` (15 s, 18 s with a church), and the suite run
     // on 120cc727 recorded "the member app mounts and throws nothing" with #root at 0 nodes: in-browser Babel
     // transpiles every JSX file before the first screen exists, and under full-suite load that took longer than
-    // the sleep. Now: wait (up to 90 s) for the app to MOUNT, then for the tree to SETTLE — the node count
-    // unchanged for 3 s — within at most `ms` more, so the subscriptions that run once a screen is up get their
-    // chance to throw. A white screen still fails, at the budget, with the same assertion as before.
+    // the sleep. Now: wait (up to 90 s) for the app to MOUNT; then keep watching for errors for AT LEAST
+    // max(3 s, ms/2) after the mount (7.5 s for a plain boot, 9 s with a church, 4.5 s before a console drive), and
+    // beyond that until the tree SETTLES (node count unchanged for 3 s) or `ms` after the mount. The floor matters:
+    // a screen can look still while a subscription is waiting on the relay, and its error lands seconds later.
+    // A white screen still fails, at the 90 s budget, with the same assertion as before.
     await settles(rootNodes, n => n > 20, 90000);
+    const mountedAt = Date.now();
     await settled(rootNodes, { quiet: 3000, budget: ms });
+    const floor = Math.max(3000, ms / 2) - (Date.now() - mountedAt);
+    if (floor > 0) await sleep(floor);
     // WALK FURTHER IN, when a caller needs a screen that a first load never reaches. `drive` gets a small
     // helper that evaluates JS in the page and waits — enough to press through a wizard. Errors thrown while
     // driving are collected exactly like errors thrown at boot, which is the entire point: the screens behind

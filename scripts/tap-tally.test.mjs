@@ -86,11 +86,23 @@ test('directive parsing: lower-case `# todo`, an escaped `\\#` in a name, and a 
   assert.equal(t.skipped.length, 1);
 });
 
+test('a TRUNCATED TAP (run killed or crashed: no `# fail` summary) says the tally is not reliable — never "0 failing"', () => {
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...files], { cwd: dir, encoding: 'utf8', env: cleanEnv() });
+  const full = r.stdout;
+  const cut = full.slice(0, full.indexOf('# Subtest: a real failure'));   // killed before the real failure was written
+  assert.ok(cut.length > 0 && !/^# fail/m.test(cut), 're-anchor: could not cut the TAP before its summary');
+  const out = formatTally(tallyTap(cut));
+  assert.match(out, /TAP incomplete — tally not reliable/, 'a truncated TAP was not flagged:\n' + out);
+  assert.doesNotMatch(out, /0 failing test\(s\)/, 'A TRUNCATED RUN WAS SUMMARISED AS "0 failing" — it reads as clean');
+  // CONTROL: the complete TAP still gets the real counts
+  assert.match(formatTally(tallyTap(full)), /run-tests: 2 failing test\(s\) in 2 file\(s\)/);
+});
+
 test('POINT OF USE: run-tests.mjs prints the failures and, separately, the known findings — a finding is never in the failure list', () => {
   const priv = join(dir, 'tmp'); mkdirSync(priv, { recursive: true });
   const r = spawnSync(process.execPath, [RUNNER, ...files], {
     cwd: dir, encoding: 'utf8', timeout: 180000,
-    env: cleanEnv({ TMPDIR: priv, TRINITYONE_SUITE_LOCK: '' }),
+    env: cleanEnv({ TMPDIR: priv, TRINITYONE_SUITE_LOCK: '', TRINITYONE_SKIP_SWEEP: '1' }),
   });
   const err = r.stderr || '';
   const failHead = err.indexOf('failing test(s) in');
@@ -107,4 +119,7 @@ test('POINT OF USE: run-tests.mjs prints the failures and, separately, the known
   assert.match(todoBlock, /findings-only\.test\.mjs — FINDING: an old relay mislabels/);
   assert.match(todoBlock, /mixed\.test\.mjs — a finding red on purpose/);
   assert.equal(r.status, 1, 'CONTROL: run-tests must still exit non-zero over the real failure');
+  // the chromium sweep is box-wide (not TMPDIR-scoped): a nested run must not run it, and must say it did not
+  assert.match(err, /run-tests: chromium sweep skipped \(TRINITYONE_SKIP_SWEEP=1\)/, 'the nested run did not skip the chromium sweep');
+  assert.doesNotMatch(err, /^sweep: /m, 'THE NESTED RUN RAN THE BOX-WIDE CHROMIUM SWEEP — it can delete a concurrent suite\'s profiles');
 });

@@ -150,10 +150,17 @@ process.on('exit', releaseLock);
 // its real 171MB sits in /tmp/snap-private-tmp/ where nothing can see it. Measured 2026-10-09:
 // 44GB in 2,394 dirs, root at 94%. The owner had cleared ~50GB of the same thing that morning.
 // Never fatal: a failed sweep must not stop a suite.
-try {
-  const sweep = fileURLToPath(new URL('./sweep-chromium-tmp.mjs', import.meta.url));
-  spawnSync(process.execPath, [sweep], { stdio: 'inherit', timeout: 60000 });
-} catch {}
+// TRINITYONE_SKIP_SWEEP=1 turns it off — for a NESTED run (scripts/tap-tally.test.mjs drives this runner over
+// throwaway files): the sweep is not scoped by TMPDIR, it may start a probe chromium at the fixed /tmp/sweep-probe,
+// and it deletes any stale profile on the box — a concurrent suite's included. A nested run has no business there.
+if (process.env.TRINITYONE_SKIP_SWEEP === '1') {
+  console.error('run-tests: chromium sweep skipped (TRINITYONE_SKIP_SWEEP=1)');
+} else {
+  try {
+    const sweep = fileURLToPath(new URL('./sweep-chromium-tmp.mjs', import.meta.url));
+    spawnSync(process.execPath, [sweep], { stdio: 'inherit', timeout: 60000 });
+  } catch {}
+}
 
 // Write a TAP stream to a temp file so the count floor can read it after the run, without piping
 // stdout through this process (which deadlocks under the suite's output volume).

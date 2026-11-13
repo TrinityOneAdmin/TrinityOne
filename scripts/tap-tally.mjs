@@ -60,13 +60,22 @@ export function tallyTap(tap) {
     if (status === 'not ok' && failureType !== 'subtestsFailed') failing.push(row);
   }
   const files = (rows) => [...new Set(rows.map(r => r.file || '(unknown file)'))].sort();
-  return { failing, todo, skipped, todoPassing, failingFiles: files(failing), todoFiles: files(todo) };
+  // node writes `# fail N` only at the very END of a run. Without it the run was killed or crashed and the TAP is
+  // truncated: whatever was parsed is a partial list, and "0 failing" would read as a clean run.
+  const complete = /^# fail\s+\d+/m.test(String(tap || ''));
+  return { complete, failing, todo, skipped, todoPassing, failingFiles: files(failing), todoFiles: files(todo) };
 }
 
 // The block run-tests.mjs prints. Kept here so the wording is tested with the parser.
 export function formatTally(t) {
   const out = [];
   const row = (r) => `  ${r.file || '(unknown file)'} — ${r.name}${r.reason ? '  [' + r.reason.slice(0, 120) + ']' : ''}`;
+  if (!t.complete) {
+    out.push('run-tests: TAP incomplete — tally not reliable (no `# fail` summary: the run was killed or crashed before it finished)');
+    if (t.failing.length) out.push(`  failures seen before it stopped (${t.failing.length}, NOT a full count):`);
+    for (const r of t.failing) out.push(row(r));
+    return out.join('\n');
+  }
   out.push(`run-tests: ${t.failing.length} failing test(s) in ${t.failingFiles.length} file(s) — # TODO and # SKIP rows are NOT counted as failures`);
   for (const r of t.failing) out.push(row(r));
   out.push(`run-tests: ${t.todo.length} known open finding(s) (todo — red on purpose, not failures) in ${t.todoFiles.length} file(s)`);
