@@ -262,7 +262,9 @@ export async function relayLockHeld(dir, { platform = process.platform, info = p
 // closed mid-move and reopened starts a second launcher beside a mover still copying. The mover therefore takes an
 // exclusive lockfile (pid + start time, like .relay-lock) next to the pointer for the whole of a move; a second mover is
 // refused, and a launcher WAITS while it is held (lock-status) before it recovers or starts anything. A holder is
-// "held" while its pid is alive and its command line is a relay-move.mjs; a dead or reused pid is stale and taken over.
+// "held" while its pid is alive and its command line is a relay-move.mjs. A DEAD pid is stale; a REUSED pid is stale per
+// the rules in moverLockHeld below (readable command line that is not a mover, or a start time later than the lock's,
+// except on Linux); both are taken over.
 export const moverLockFile = pointerFile => pointerFile + '.mover-lock';
 export async function moverLockHeld(file, { platform = process.platform, info = processInfo } = {}) {
   const l = readJson(file), pid = l && Number(l.pid);
@@ -872,7 +874,9 @@ async function cli(argv) {
     try { return await moveRelayData({ ...store(), from: a.from, to: targetFor(a.drive), mode: a.mode, codeDir: CODE_DIR, relayRunning: () => portOpen(port) }); }
     finally { lock.release(); }
   }
-  if (cmd === 'lock-status') { if (!a.pointer) throw new Error('--pointer required'); const f = moverLockFile(a.pointer); return { held: await moverLockHeld(f), pid: (readJson(f) || {}).pid || null }; }
+  if (cmd === 'lock-status') { if (!a.pointer) throw new Error('--pointer required'); const f = moverLockFile(a.pointer); const pid = (readJson(f) || {}).pid || null; let alive = false;
+    if (pid) { try { process.kill(Number(pid), 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
+    return { held: await moverLockHeld(f), pid, alive }; }
   if (cmd === 'recover') { const r = await recoverMove(store()); return r.action === 'refuse' ? { ok: false, ...r } : r; }
   if (cmd === 'rollback') return rollbackMove(store());
   // The step-8 check, driven by the Suite launcher (relay storage plan step 5). The launcher calls begin-check BEFORE

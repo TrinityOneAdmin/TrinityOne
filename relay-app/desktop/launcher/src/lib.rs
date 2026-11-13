@@ -101,7 +101,8 @@ pub struct Config {
     pub up_steps: u32,
     /// relay-launch.log, named in every message that says the relay stopped
     pub log_path: PathBuf,
-    /// how long a launcher waits for a running mover before it says the move looks stuck (audit N1)
+    /// how long a launcher waits for a running mover that makes NO PROGRESS (its journal state / copiedBytes unchanged)
+    /// before it says the move looks stuck. Progress resets the clock: a long copy is never "stuck" (audit N1, M-1)
     pub mover_wait_ms: u64,
     /// after a MOVE, how many 250 ms steps the relay on the new folder gets to open its port before the check is
     /// treated as failed and rolled back (audit N6). A normal start has no such bound.
@@ -327,13 +328,21 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
         match wait_for_mover(host, cfg) {
             Waited::Free => {}
             Waited::Quit => return RunEnd::Quit,
-            Waited::Stuck => {
+            Waited::Stuck(alive) => {
                 let lock = format!("{}.mover-lock", cfg.config_file.display());
-                let reason = format!(
-                    "A move of your relay's data has been running for a long time and has not finished. Close the app and open it again to keep waiting. If it is really stuck, close the app, delete the file {} and open it again: the launcher then recovers the move or undoes it. Details are in {}",
-                    lock,
-                    cfg.log_path.display()
-                );
+                // NEVER suggest deleting the lock while a mover process may still be there: that is the M4 hazard (a
+                // second launcher recovering under a mover that is still copying). Only when the holder is confirmed gone.
+                let reason = match alive {
+                    Some(false) => format!(
+                        "A move of your relay's data did not finish and its process is gone. Close the app, delete the file {} and open it again: the launcher then recovers the move or undoes it. Details are in {}",
+                        lock,
+                        cfg.log_path.display()
+                    ),
+                    _ => format!(
+                        "A move of your relay's data is still running but has made no progress for a long time. Close the app and open it again to keep waiting; do not delete anything. Details are in {}",
+                        cfg.log_path.display()
+                    ),
+                };
                 record_refusal(cfg, "start", "mover-stuck", None);
                 host.progress(&Progress::Refused { title: "Your relay's move looks stuck".into(), reason: reason.clone() });
                 return RunEnd::Refused(reason);
@@ -490,28 +499,38 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
 enum Waited {
     Free,
     Quit,
-    /// still held after cfg.mover_wait_ms: never wait for ever behind a splash that says "Moving"
-    Stuck,
+    /// no progress for cfg.mover_wait_ms: never wait for ever behind a splash that says "Moving". Carries whether the
+    /// holder's process is confirmed alive (Some(true)), confirmed gone (Some(false)) or unknown (None).
+    Stuck(Option<bool>),
 }
 fn wait_for_mover(host: &dyn Host, cfg: &Config) -> Waited {
-    let mut waited = 0u64;
+    let mut idle = 0u64;
+    let mut last: Option<(String, u64, u64)> = None;
     loop {
-        let held = mover(host, cfg, &["lock-status"], &[]).and_then(|v| v.get("held").and_then(|b| b.as_bool())).unwrap_or(false);
+        let ls = mover(host, cfg, &["lock-status"], &[]);
+        let held = ls.as_ref().and_then(|v| v.get("held").and_then(|b| b.as_bool())).unwrap_or(false);
+        let alive = ls.as_ref().and_then(|v| v.get("alive").and_then(|b| b.as_bool()));
         if !held {
             return Waited::Free;
         }
         if host.quitting() {
             return Waited::Quit;
         }
-        if waited >= cfg.mover_wait_ms {
-            return Waited::Stuck;
-        }
         let st = read_state(&cfg.config_file);
         let m = st.get("move");
         let (cp, tot) = (m.and_then(|m| m.get("copiedBytes")).and_then(|x| x.as_u64()).unwrap_or(0), m.and_then(|m| m.get("totalBytes")).and_then(|x| x.as_u64()).unwrap_or(0));
+        // PROGRESS, not the clock: any change of the move's state or copied bytes restarts the count
+        let sig = (m.and_then(|m| m.get("state")).and_then(|x| x.as_str()).unwrap_or("").to_string(), cp, tot);
+        if last.as_ref() != Some(&sig) {
+            last = Some(sig);
+            idle = 0;
+        }
+        if idle >= cfg.mover_wait_ms {
+            return Waited::Stuck(alive);
+        }
         host.progress(&Progress::Moving { copied: cp, total: tot });
         host.sleep_ms(1000);
-        waited += 1000;
+        idle += 1000;
     }
 }
 
@@ -1101,11 +1120,12 @@ mod tests {
         spawns: Mutex<Vec<(PathBuf, bool)>>,
         relays: Mutex<Vec<(Option<Exit>, String)>>,
         port_after: Mutex<u32>,
+        bump: Mutex<Option<(PathBuf, u64)>>,
         progresses: Mutex<Vec<String>>,
     }
     impl Fake {
         fn new(answers: Vec<(&'static str, Value)>, relays: Vec<(Option<Exit>, &str)>) -> Fake {
-            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), progresses: Mutex::new(vec![]) }
+            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), progresses: Mutex::new(vec![]) }
         }
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
@@ -1147,10 +1167,18 @@ mod tests {
             }
             true
         }
-        fn sleep_ms(&self, _ms: u64) {}
+        fn sleep_ms(&self, _ms: u64) {
+            // a mover that is making progress: its journal's copiedBytes grows each second
+            if let Some((f, n)) = self.bump.lock().unwrap().as_mut() {
+                *n += 1;
+                update_state(f, |o| {
+                    o.insert("move".into(), json!({"state": "copying", "copiedBytes": *n, "totalBytes": 1000}));
+                });
+            }
+        }
     }
     fn cfg_in(b: &Path) -> Config {
-        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3, log_path: b.join("relay-launch.log"), mover_wait_ms: 600_000, check_steps: 1_000_000 }
+        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3, log_path: b.join("relay-launch.log"), mover_wait_ms: 600_000, check_steps: 2 }
     }
     fn first(calls: &[String], what: &str) -> usize {
         calls.iter().position(|c| c == what).unwrap_or_else(|| panic!("{what} never happened: {calls:?}"))
@@ -1412,10 +1440,47 @@ mod tests {
         let held: Vec<(&'static str, Value)> = (0..10).map(|_| ("lock-status", json!({"held": true}))).collect();
         let f = Fake::new(held, vec![]);
         match run(&f, &cfg) {
-            RunEnd::Refused(r) => assert!(r.contains("mover-lock") && r.contains("relay-launch.log"), "{r}"),
+            RunEnd::Refused(r) => assert!(r.contains("relay-launch.log") && !r.contains("delete the file"), "{r}"),
             other => panic!("{other:?}"),
         }
         assert!(!f.calls().contains(&"SPAWN".to_string()) && !f.calls().contains(&"recover".to_string()), "{:?}", f.calls());
         assert_eq!(read_state(&cfg.config_file)["launcher"]["lastRefusal"]["code"], "mover-stuck");
+    }
+
+    #[test]
+    fn a_slow_but_progressing_move_is_never_called_stuck_and_one_without_progress_is() {
+        let b = tmp("prog");
+        let mut cfg = cfg_in(&b);
+        cfg.mover_wait_ms = 3000;
+        // 12 seconds held, far past 3 s, but the journal's copiedBytes moves every second -> never stuck
+        let mut a: Vec<(&'static str, Value)> = (0..12).map(|_| ("lock-status", json!({"held": true, "alive": true}))).collect();
+        a.push(("lock-status", json!({"held": false})));
+        a.push(("recover", json!({"dataDir": null, "action": "none"})));
+        a.push(("prove", json!({"ok": true, "relayPub": "aa"})));
+        let f = Fake::new(a, vec![(None, "")]);
+        *f.bump.lock().unwrap() = Some((cfg.config_file.clone(), 0));
+        assert_eq!(run(&f, &cfg), RunEnd::Quit, "a progressing move was called stuck: {:?}", f.progresses.lock().unwrap());
+        assert!(f.calls().contains(&"SPAWN".to_string()));
+        // the same 12 seconds with NO progress is stuck
+        let b2 = tmp("noprog");
+        let mut cfg2 = cfg_in(&b2);
+        cfg2.mover_wait_ms = 3000;
+        let a2: Vec<(&'static str, Value)> = (0..12).map(|_| ("lock-status", json!({"held": true, "alive": true}))).collect();
+        let f2 = Fake::new(a2, vec![]);
+        assert!(matches!(run(&f2, &cfg2), RunEnd::Refused(_)));
+        assert!(!f2.calls().contains(&"SPAWN".to_string()));
+    }
+    #[test]
+    fn the_stuck_message_never_says_delete_the_lock_while_the_mover_may_be_alive() {
+        for (alive, delete) in [(Some(true), false), (None, false), (Some(false), true)] {
+            let b = tmp("msg");
+            let mut cfg = cfg_in(&b);
+            cfg.mover_wait_ms = 2000;
+            let ls = match alive { Some(a) => json!({"held": true, "alive": a}), None => json!({"held": true}) };
+            let f = Fake::new((0..8).map(|_| ("lock-status", ls.clone())).collect(), vec![]);
+            let r = match run(&f, &cfg) { RunEnd::Refused(r) => r, o => panic!("{o:?}") };
+            assert_eq!(r.contains("delete the file"), delete, "alive={alive:?}: {r}");
+            assert!(r.contains("relay-launch.log"));
+        }
     }
 }

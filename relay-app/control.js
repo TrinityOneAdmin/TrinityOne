@@ -1815,6 +1815,9 @@
   function stRecent(m) { const t = Date.parse(m.endedAt || m.checkedAt || m.switchedAt || m.startedAt || 0); return t && Date.now() - t < ST_RECENT_MS; }
   function stOutcome(r) {
     const m = r.move; if (!m) return '';
+    // a removal that stopped part-way is the news now: an old failed move's "nothing was changed" would contradict it (audit L-3)
+    const lr = r.launcher && r.launcher.lastRefusal;
+    if (lr && lr.kind === 'remove-old' && /^(delete-failed|read-failed)/.test(lr.code || '') && (m.state === 'failed' || m.state === 'rolled-back')) return '';
     const events = m.counts && typeof m.counts.events === 'number' ? ' Same relay, same records — ' + m.counts.events.toLocaleString('en-GB') + ' events checked.' : ' Same relay, same records.';
     const here = stPlace(r, r.current.realPath || r.current.path, r.current.drive && r.current.drive.mountpoint);
     const onHere = here.kind === 'home' ? 'in your Home folder' : 'on ' + esc(here.label);
@@ -1846,7 +1849,7 @@
       const why = f.code === 'target-ineligible' && f.detail ? String(f.detail).split(',')[0] : f.code;
       h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>The move was refused, so nothing was changed.</b> ' + esc(stReason(why))) + '</div>';
     } else if (f && f.kind === 'remove-old') {
-      h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>The old copy was not removed.</b> ' + esc(f.code === 'not-recorded' ? 'It is not on record as an old copy, so it was left alone.' : f.code === 'current-folder' ? 'It is the folder your relay is using now, so it was left alone.' : 'It was left alone (' + f.code + ').')) + '</div>';
+      h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>' + (/^(delete-failed|read-failed)/.test(f.code || '') ? 'The old copy was only partly removed.' : 'The old copy was not removed.') + '</b> ' + esc(f.code === 'not-recorded' ? 'It is not on record as an old copy, so it was left alone.' : f.code === 'current-folder' ? 'It is the folder your relay is using now, so it was left alone.' : /^(delete-failed|read-failed)/.test(f.code || '') ? 'The removal stopped part-way — see the log. Some of the old copy may be left; try again.' : 'It was left alone (' + f.code + ').')) + '</div>';
     }
     // two different things, worded differently (audit C L1): the relay answered with ANOTHER key, or it could not be made to prove one at all
     if (l.identityChanged && l.identityChanged.provenPub === null) h += '<div style="margin-top:12px">' + note('stIdentityChanged', '<b>This relay couldn\'t prove who it is.</b><span class="st-sub">It didn\'t answer the identity check, so it can\'t be confirmed as the relay it was before. Close and reopen the app. If this stays, check which drive is connected.</span>') + '</div>';

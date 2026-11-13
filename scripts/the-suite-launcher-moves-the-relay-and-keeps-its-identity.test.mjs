@@ -16,7 +16,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, accessSync, constants } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, accessSync, renameSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -572,7 +572,7 @@ test('N1: a mover that never finishes ends the wait with a clear splash message 
     assert.equal(await l.waitFor(/^SIM end /, 1, 30000), true, 'the launcher waited for ever. ' + l.lines.join('|'));
     assert.match(l.lines.find(x => x.startsWith('SIM end ')), /Refused/);
     const f = fragsOf(l.lines).at(-1);
-    assert.equal(f.k, 'bad'); assert.ok(f.s.includes('relay-launch.log') && f.s.includes('.mover-lock'), f.s);
+    assert.equal(f.k, "bad"); assert.ok(f.s.includes("relay-launch.log") && !/delete the file/i.test(f.s), "a live mover must never be told to be deleted around: " + f.s);
     assert.equal(startsOf(fx).length, 0);
   } finally { await l.stop(); }
 });
@@ -588,4 +588,46 @@ test('N6: after a move, a relay that hangs without opening its port is rolled ba
     assert.equal(stateOf(fx).move.state, 'rolled-back');
     assert.equal((await proven(l)).relayPub, fx.pub); assert.equal(await events(l, fx.data), 6);
   } finally { await l.stop(); }
+});
+
+test('M-1: a mover that keeps making progress is never called stuck, however long it takes; the launcher carries on when it ends', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 2 });
+  const h = fakeMover(); holdLock(fx, h); await sleep(300);
+  const l = await startLauncher(fx, { extra: ['--mover-wait-ms', '2000'] });
+  const journal = n => { const tmp = fx.state + '.t'; writeFileSync(tmp, JSON.stringify({ move: { state: 'copying', copiedBytes: n, totalBytes: 100 } })); renameSync(tmp, fx.state); };
+  try {
+    for (let i = 1; i <= 14; i++) { journal(i); await sleep(500); }   // 7 s with a 2 s no-progress limit
+    assert.equal(l.count(/^SIM end /), 0, 'a move that was still copying was called stuck: ' + l.lines.join('|'));
+    assert.equal(startsOf(fx).length, 0);
+    writeFileSync(fx.state, '{}');   // the (pretend) mover ends and leaves no move behind
+    h.kill('SIGKILL');
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, 'the launcher never carried on. Log:\n' + l.log);
+  } finally { await l.stop(); }
+});
+
+test('L-2: a normal start (no move behind it) is never killed or rolled back for being slow, even with a tiny check bound', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 3 });
+  const l = await startLauncher(fx, { env: { TEST_SLOW_START_MS: '4000' }, upSteps: 4, extra: ['--check-steps', '4'] });   // the post-move bound would be 1 s; this is no post-move start
+  try {
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, 'a slow normal start was cut off by the post-move bound. Log:\n' + l.log);
+    assert.equal(startsOf(fx).length, 1, 'the relay was restarted');
+    assert.equal(stateOf(fx).move, undefined, 'a rollback ran on a start that followed no move');
+  } finally { await l.stop(); }
+});
+
+test('L-1 / L-3: a removal that stopped part-way is worded as part-way on the card (no "(delete-failed: …)"), and an old failed move\'s "nothing was changed" is not shown beside it', { skip: skipBrowser, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 2 });
+  mkdirSync(join(fx.base, 'cfg'), { recursive: true });
+  writeFileSync(fx.state, JSON.stringify({ move: { state: 'failed', code: 'copy-failed', mode: 'copy', from: fx.data, to: join(fx.base, 'x'), endedAt: new Date().toISOString() },
+    launcher: { lastRefusal: { kind: 'remove-old', code: 'delete-failed: EBUSY something', detail: '/old', at: new Date().toISOString() } } }));
+  const l = await startLauncher(fx);
+  const c = await startChrome(1280);
+  try {
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, l.log);
+    await c.open(l.base, 'set'); await waitFor(c, shown('storageCard'), v => v === true);
+    const t = await waitFor(c, text('#stLauncherRefusal'), v => !!v);
+    assert.match(t, /only partly removed/); assert.match(t, /stopped part-way — see the log/); assert.doesNotMatch(t, /delete-failed|EBUSY/);
+    const body = await c.evalIn(text('#stBody'));
+    assert.doesNotMatch(body, /The move didn't work, so nothing was changed/, 'the card contradicts itself: ' + body);
+  } finally { c.stop(); await l.stop(); }
 });
