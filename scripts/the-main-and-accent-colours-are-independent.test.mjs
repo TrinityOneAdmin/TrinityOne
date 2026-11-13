@@ -8,7 +8,7 @@
 // Cause (reproduced in this harness before 4c2e359e): the SAVED values were already independent, but with no main
 // colour saved the Main colour control DISPLAYED the accent (`mainShown = mainCol || acc`), and its picker opened
 // on the accent. Owner decision (after audit AUDIT-colour-independent-4c2e359e): Main is opt-in behind a
-// "Use a separate main colour" switch — OFF by default when no mainColor is saved, ON reveals the controls and
+// "Use a different main colour" switch — OFF by default when no mainColor is saved, ON reveals the controls and
 // saves nothing until a colour is chosen, OFF clears mainColor like Reset. A picker event equal to the picker's
 // starting value while Main is unset is ignored (audit finding 1).
 //
@@ -36,7 +36,7 @@ const PIN = 'cedar-harbour-lamp-42';
 const ACCENT_DEFAULT = '#c25a38';   // what the Accent control shows when no accent is set
 const SWATCHES = ['#c25a38', '#3b6fb0', '#5e8c6a', '#7a4fa3', '#b0853b', '#1f2a37'];
 const NAME = { accent: 'Accent', mainColor: 'Main' };
-const SWITCH = 'button[role="switch"][aria-label="Use a separate main colour"]';
+const SWITCH = 'button[role="switch"][aria-label="Use a different main colour"]';
 
 let relay, chr, ws, prof, send, evalIn, churchPub = '';
 
@@ -208,7 +208,7 @@ test('Main is OFF for a church with no main colour: no Main controls, a note say
   assert.deepEqual([k0.accent, k0.mainColor], ['', ''], `CONTROL: the new church already has colours ${JSON.stringify(k0)}`);
   assert.equal(await switchOn(), 'false', 'a church with no main colour shows the switch ON');
   assert.deepEqual(await mainControlsPresent(), [false, false, false], 'Main controls are on screen with the switch OFF');
-  assert.equal(await evalIn(`!!document.querySelector('[data-main-off-note]')`), true, 'no note says what members see with Main OFF');
+  assert.match(await evalIn(`(document.querySelector('[data-main-off-note]') || {}).textContent || ''`), /same as your accent/i, 'no note says Main uses the accent with the switch OFF');
   await clearCalls();
   await pick('accent', '#3b6fb0');
   await published(x => x.accent === '#3b6fb0', 'accent picked with Main OFF');
@@ -236,7 +236,12 @@ test('audit finding 1: with Main unset, a picker event carrying the picker\'s ow
   const before = kind0();
   const start = (await shown('mainColor')).picker;
   await clearCalls();
-  await pick('mainColor', start);   // what a phone picker sends when it is closed on its starting colour
+  // What a phone picker sends when it is closed on its starting colour. React drops an input event whose value
+  // equals the value it last tracked, so a plain dispatch never reaches the screen's handler and would prove
+  // nothing (measured: with the guard deleted, a plain dispatch still passed). The tracker is set to another
+  // value first, so React DOES deliver this event — the case of a picker reporting its start colour as a change.
+  assert.equal(await evalIn(`(() => { const i = document.querySelector('input[aria-label="Main colour picker"]'); if (!i || !i._valueTracker) return 'no tracker'; i._valueTracker.setValue('#000001'); return 'ok'; })()`), 'ok', 'cannot reach React\'s value tracker on the Main picker');
+  await pick('mainColor', start);
   await sleep(1200);
   assert.deepEqual(await calls(), [], `the picker's starting value ${start} was sent: ${JSON.stringify(await calls())}`);
   assert.equal(kind0().id, before.id, 'the picker\'s starting value published a kind-0');

@@ -50,8 +50,8 @@ async function panel(church) {
   const render = () => draw(mod.DashBrandingPanel, { church });
   render();
   const by = (label) => find(render(), n => n.props && n.props['aria-label'] === label)[0];
-  // the "Use a separate main colour" switch (owner 2026-11-13: Main is opt-in)
-  const toggle = () => { const sw = by('Use a separate main colour'); assert.ok(sw, 'there is no "Use a separate main colour" switch'); sw.props.onClick(); };
+  // the "Use a different main colour" switch (owner 2026-11-13: Main is opt-in)
+  const toggle = () => { const sw = by('Use a different main colour'); assert.ok(sw, 'there is no "Use a different main colour" switch'); sw.props.onClick(); };
   return { published, render, by, toggle };
 }
 
@@ -97,11 +97,11 @@ test('a Main colour swatch publishes it, and Reset publishes { mainColor: "" }',
 test('an unset main colour is OFF: no Main controls, nothing published; switching it ON publishes nothing and offers no Reset', async () => {
   const p = await panel({ name: 'Grace', accent: '#3B6FB0' });
   await sleep(450);
-  assert.equal(p.by('Use a separate main colour').props['aria-checked'], false, 'an unset main colour loaded with the switch ON');
+  assert.equal(p.by('Use a different main colour').props['aria-checked'], false, 'an unset main colour loaded with the switch ON');
   for (const l of ['Main colour picker', 'Main colour hex code', 'Main colour #3B6FB0', 'Reset main colour']) assert.equal(p.by(l), undefined, `"${l}" is on screen with the switch OFF`);
   p.toggle();
   await sleep(450);
-  assert.equal(p.by('Use a separate main colour').props['aria-checked'], true);
+  assert.equal(p.by('Use a different main colour').props['aria-checked'], true);
   assert.ok(p.by('Main colour picker') && p.by('Main colour hex code') && p.by('Main colour #3B6FB0'), 'switching ON did not reveal the Main controls');
   assert.deepEqual(p.published, [], 'switching ON published ' + JSON.stringify(p.published));
   assert.equal(p.by('Reset main colour'), undefined);
@@ -124,10 +124,10 @@ test('audit finding 1: with Main unset, a picker event carrying the picker\'s ow
 
 test('a saved main colour loads with the switch ON; switching OFF publishes { mainColor: "" } and hides the controls; ON-then-OFF with nothing chosen publishes nothing', async () => {
   const p = await panel({ name: 'Grace', accent: '#3B6FB0', mainColor: '#1f4e79' });
-  assert.equal(p.by('Use a separate main colour').props['aria-checked'], true, 'a saved main colour loaded with the switch OFF');
+  assert.equal(p.by('Use a different main colour').props['aria-checked'], true, 'a saved main colour loaded with the switch OFF');
   p.toggle();
   assert.deepEqual(p.published, [{ mainColor: '' }], 'switching OFF did not publish the removal: ' + JSON.stringify(p.published));
-  assert.equal(p.by('Use a separate main colour').props['aria-checked'], false);
+  assert.equal(p.by('Use a different main colour').props['aria-checked'], false);
   assert.equal(p.by('Main colour picker'), undefined, 'the Main controls stayed on screen after switching OFF');
   const q = await panel({ name: 'Grace', accent: '#3B6FB0' });
   q.toggle(); q.toggle();

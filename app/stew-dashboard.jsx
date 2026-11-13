@@ -13180,7 +13180,8 @@ function DashBrandingPanel({ church }) {
   // members' church header (no banner), the badge (no picture), and the verse-of-the-day / featured-sermon
   // cards. Same pattern as the accent: sync only from a DEFINED value (2026-07-07), 400ms debounce, publish
   // through publishProfile. Unset ('') until the steward picks one.
-  // OPT-IN (owner 2026-11-13): a "Use a separate main colour" switch. OFF — the default whenever no mainColor is
+  // OPT-IN (owner 2026-11-13): a "Use a different main colour" switch (owner: "the Main color would be the accent, unless a second
+  // color was selected"). OFF — the default whenever no mainColor is
   // saved — shows no Main controls and publishes nothing for Main; members keep today's look (plain header; the
   // badge and the verse/sermon cards in the accent). ON reveals the controls and saves nothing until a colour is
   // CHOSEN. Turning it OFF clears mainColor exactly as Reset does. A saved mainColor loads with it ON.
@@ -13306,14 +13307,14 @@ function DashBrandingPanel({ church }) {
 
       <div style={lbl}>Main colour</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Fills your church’s header when there is no banner, your badge when there is no picture, and the verse of the day and featured sermon cards in members’ apps.</div>
-      <button type="button" role="switch" aria-checked={useMain} aria-label="Use a separate main colour" onClick={() => setMainOn(!useMain)}
+      <button type="button" role="switch" aria-checked={useMain} aria-label="Use a different main colour" onClick={() => setMainOn(!useMain)}
         style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', border: 'none', background: 'none', padding: '4px 0', marginBottom: useMain ? 12 : 6, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', textAlign: 'left' }}>
         <span style={{ position: 'relative', width: 40, height: 24, borderRadius: 999, flexShrink: 0, background: useMain ? 'var(--clay)' : 'var(--line)', transition: 'background .15s' }}>
           <span style={{ position: 'absolute', top: 3, left: useMain ? 19 : 3, width: 18, height: 18, borderRadius: 999, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,.3)', transition: 'left .15s' }} />
         </span>
-        Use a separate main colour
+        Use a different main colour
       </button>
-      {!useMain ? <div data-main-off-note="1" style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, marginBottom: 18 }}>Off: members see a plain header, and your accent colour on the badge and the verse and sermon cards.</div> : null}
+      {!useMain ? <div data-main-off-note="1" style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, marginBottom: 18 }}>Main colour: same as your accent — on your badge and the verse and sermon cards. Without a banner, members’ header stays plain.</div> : null}
       {useMain ? <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: mainCol || NOT_SET, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
