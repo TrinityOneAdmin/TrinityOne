@@ -523,7 +523,8 @@ function readerPanel(e) {
     ScreenScroll: (p) => p.children,
     safeCssColor: (c) => c || 'var(--clay)',
     window: {
-      Bible: { getCommentary: e.getCommentary, subscribe: e.subscribe, commentaryList: () => Object.keys(e.commentaries) },
+      // engine.js's commentaryList returns {abbr, name} objects (not bare abbrs) — mirrored in that shape
+      Bible: { getCommentary: e.getCommentary, subscribe: e.subscribe, commentaryList: () => Object.keys(e.commentaries).map(a => ({ abbr: a, name: e.commentaries[a].name })) },
       sanitizeHtml: (h) => h,
       TrinityData: {}, addEventListener() {}, removeEventListener() {},
     },
@@ -546,8 +547,8 @@ test('A COMMENTARY REMOVED WHILE THE NOTES PANEL IS OPEN LEAVES THE PANEL', asyn
   const e = await phone();
   e.commentaries[CMT.abbr].getComment = () => [{ v: 1, vTo: 1, html: '<p>In the beginning was the Word.</p>' }];
   const panel = readerPanel(e);
-  assert.ok(panel.words().includes(CMT.name),
-    'the open panel is not showing the commentary at all — re-anchor this test');
+  // No name re-anchor: since f7f3cdaa / 44dc4568 the panel prints a commentary's NAME only in the dropdown that
+  // appears when more than one is installed. With one installed the body is the only thing on it — anchored here.
   assert.ok(panel.bodies().includes('In the beginning was the Word.'),
     'the commentary\'s words are not on the panel — re-anchor this test');
 
