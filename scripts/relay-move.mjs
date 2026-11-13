@@ -795,10 +795,35 @@ export async function recoverMove({ journal, pointer, rename = renameSync, now =
 //   node scripts/relay-move.mjs recover  --pointer FILE [--journal FILE]
 //   node scripts/relay-move.mjs rollback --pointer FILE [--journal FILE]
 //   node scripts/relay-move.mjs classify --path DIR [--mode suite|server]
+//   node scripts/relay-move.mjs begin-check|check-passed --pointer FILE [--journal FILE]      (step 5, the Suite launcher)
+//   node scripts/relay-move.mjs prove --port N                                              (rule 10: a signed nonce)
+//   node scripts/relay-move.mjs verify-restart --pointer FILE --port N --data-dir DIR
 // Prints one JSON object. Exit 0 = ok, 2 = refused / failed safely, 1 = usage or unexpected error.
 const CODE_DIR = fileURLToPath(new URL('..', import.meta.url));   // the app's own code: never a target
 function portOpen(port) {
   return new Promise(res => { const s = createConnection({ host: '127.0.0.1', port }); const done = v => { try { s.destroy(); } catch {} res(v); }; s.once('connect', () => done(true)); s.once('error', () => done(false)); setTimeout(() => done(true), 3000); });
+}
+// Ask a relay on this machine to PROVE its identity (rule 10): GET /relay-identity?nonce=<32 hex> returns a kind-27235
+// event signed by the relay's key binding OUR nonce. The pubkey in /status or NIP-11 is an unauthenticated string and
+// is never used here. Checks the signature, that the nonce is ours, that it is fresh, and that the address it signed
+// is the loopback one we dialled. Never throws: { ok:false, code } when it cannot be proven.
+export async function proveIdentity(port, { host = '127.0.0.1', timeoutMs = 5000 } = {}) {
+  try {
+    const { verifyEvent } = await import('nostr-tools/pure');
+    const { randomBytes } = await import('node:crypto');
+    const nonce = randomBytes(16).toString('hex');
+    const r = await fetch(`http://${host}:${port}/relay-identity?nonce=${nonce}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return { ok: false, code: 'no-proof-' + r.status };
+    const ev = (await r.json()).proof;
+    const tag = k => { const t = ((ev && ev.tags) || []).find(x => x[0] === k); return t ? t[1] : null; };
+    if (!ev || ev.kind !== 27235 || !/^[0-9a-f]{64}$/.test(String(ev.pubkey || ''))) return { ok: false, code: 'bad-proof' };
+    if (!verifyEvent(ev)) return { ok: false, code: 'bad-signature' };
+    if (tag('nonce') !== nonce || tag('u') !== 'relay-identity') return { ok: false, code: 'wrong-nonce' };
+    if (Math.abs(Math.floor(Date.now() / 1000) - ev.created_at) > 300) return { ok: false, code: 'stale-proof' };
+    let signed; try { signed = new URL(String(tag('relay')).replace(/^ws/, 'http')); } catch { return { ok: false, code: 'bad-address' }; }
+    if (signed.hostname !== host || Number(signed.port || 80) !== Number(port)) return { ok: false, code: 'wrong-address' };
+    return { ok: true, relayPub: ev.pubkey };
+  } catch (e) { return { ok: false, code: 'unreachable', detail: String(e && e.message || e) }; }
 }
 async function cli(argv) {
   const cmd = argv[0]; const a = {};
@@ -811,6 +836,30 @@ async function cli(argv) {
   }
   if (cmd === 'recover') { const r = await recoverMove(store()); return r.action === 'refuse' ? { ok: false, ...r } : r; }
   if (cmd === 'rollback') return rollbackMove(store());
+  // The step-8 check, driven by the Suite launcher (relay storage plan step 5). The launcher calls begin-check BEFORE
+  // it spawns the relay on the new folder, verify-restart once the relay answers, then check-passed or rollback.
+  if (cmd === 'begin-check') { const { journal } = store(); return beginCheck({ journal }); }
+  if (cmd === 'check-passed') { const { journal } = store(); const n = checkPassed({ journal }); return n ? { ok: true, journal: n } : { ok: false, code: 'nothing-to-confirm' }; }
+  if (cmd === 'prove') { if (!a.port) throw new Error('prove needs --port'); return proveIdentity(Number(a.port)); }
+  if (cmd === 'verify-restart') {
+    if (!a.port || !a['data-dir']) throw new Error('verify-restart needs --port and --data-dir');
+    const { journal } = store(); const j = journal.read();
+    if (!j) return { ok: false, bad: ['no-move-to-check'] };
+    const pr = await proveIdentity(Number(a.port));
+    // the live count of events, read from the relay itself (the database is open there): /status with the admin token
+    let events = null;
+    try {
+      const token = (readJson(join(a['data-dir'], 'admin.json')) || {}).token;
+      const r = await fetch(`http://127.0.0.1:${Number(a.port)}/status`, { headers: token ? { Authorization: 'Bearer ' + token } : {}, signal: AbortSignal.timeout(5000) });
+      const s = await r.json(); if (s && s.counts && Number.isFinite(s.counts.events)) events = Number(s.counts.events);
+    } catch {}
+    // beginCheck already compared every table EXACTLY before the relay ran; here only events can be read live, so the
+    // other tables carry their recorded value (they can only have grown)
+    const counts = events === null ? null : { ...(j.counts || {}), events };
+    const bad = compareAfterRestart(j, { relayPub: pr.ok ? pr.relayPub : null, counts });
+    if (events === null && j.counts && j.counts.events !== null) bad.push('event-count-unreadable');
+    return { ok: bad.length === 0, bad, relayPub: pr.ok ? pr.relayPub : null, proof: pr.ok ? 'verified' : pr.code, events };
+  }
   if (cmd === 'classify') {
     if (!a.path) throw new Error('classify needs --path');
     const ms = systemMounts(); let real = resolve(a.path); try { real = realpathSync(a.path); } catch {}
