@@ -1402,8 +1402,11 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
     eprintln!("── scenario (ab): a start never builds over held originals ──");
     let fx = fresh_box("ab", "2026-01-01T00:00:00Z");
     let log = fx.data_dir.join("relay-launch.log");
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: D_OCT, lie: true, prelude: "" });
-    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    // a good v2 is already installed as the override (so a wrong fall-through would pick it and write over "stuck")
+    install_active(&fx, &fx.priv_key, "v2");
+    write(&fx.suite_dir.join("state.json"), &format!("{{\"installedSha\":\"{SHA2}\",\"installedVersion\":\"v2\",\"installedDate\":\"{D_OCT}\",\"lastApplied\":\"2000-01-01\"}}\n"));
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v3", sha: SHA3, date: "2026-10-02T00:00:00Z", lie: true, prelude: "" });
+    write_ready(&fx.staging, "v3", SHA3, "2026-10-02T00:00:00Z");
     set_mtime(&fx.staging.join("READY"), now_epoch() - 10 * 3600); // missed → applied at the start
     write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
     {
@@ -1415,7 +1418,9 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
         assert!(!fx.data_dir.join("relay.sqlite").exists(), "a new store was created over the held originals");
         assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"), "the stuck record was overwritten");
     }
-    // second route: recovery itself cannot put the main file back → still nothing starts
+    // second route: recovery itself cannot put the main file back → still nothing starts. (The operator has
+    // switched auto-update back on, so a fall-through would choose the v2 override and record "launch-slow".)
+    write(&fx.data_dir.join("suite-autoupdate"), "00:00\n");
     {
         let host = TestHost::new(fx.node.clone());
         RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = Some("relay.sqlite".into()));
@@ -1423,15 +1428,40 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
         RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = None);
         assert!(wait_port_free(Duration::from_secs(5)), "a relay was started although recovery could not put the data back");
         assert!(fx.data_dir.join("relay.sqlite.restore-aside").exists(), "the held original was lost");
+        assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"), "the stuck record was overwritten (route 2)");
     }
     // and a normal start then recovers and runs, with the "stuck" record replaced
     let host = TestHost::new(fx.node.clone());
     let _st = start_at(&host, &fx, &log, 840);
-    assert!(wait_for_served("v1", Duration::from_secs(10)));
+    assert!(served_version().is_some(), "the relay did not start after the recovery");
     assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("recovered"), "the stale stuck record stayed (N3)");
     host.stop_relay();
     eprintln!("   (ab) OK — no relay over held originals on either start route; recovered afterwards");
+}
+
+// [audit 55c3b306 N1] The one function every start goes through refuses while original data is held aside — no
+// process is even started.
+#[test]
+fn spawn_refuses_while_original_data_is_held_aside() {
+    struct CountingHost(std::sync::atomic::AtomicUsize);
+    impl RelayHost for CountingHost {
+        fn spawn_relay(&self, _: &Path, _: &Path, _: &Path, _: &Path) -> Option<Arc<AtomicBool>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new(AtomicBool::new(false)))
+        }
+        fn stop_relay(&self) {}
+        fn reload_webview(&self) {}
+    }
+    let fx = fresh_box("spawn-held", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    write(&fx.data_dir.join("relay.sqlite.restore-aside"), "ORIGINAL");
+    let host = CountingHost(std::sync::atomic::AtomicUsize::new(0));
+    let clock = clock_at(IN_WINDOW);
+    let env = env_for(&host, &fx, &log, &clock);
+    let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
+    assert_eq!(spawn_and_wait(&env, &mut st, &fx.payload), Boot::NotStarted);
+    assert_eq!(host.0.load(Ordering::SeqCst), 0, "a relay process was started over held original data");
 }
 
 // A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed
