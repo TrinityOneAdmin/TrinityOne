@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { recoverMove, rollbackMove, moveRelayData, beginCheck, checkPassed, compareAfterRestart, jsonPointer, jsonFieldStore, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
+import { recoverMove, rollbackMove, moveRelayData, beginCheck, checkPassed, compareAfterRestart, jsonPointer, jsonFieldStore, startable, keyPubOf, isTombstoneOnly, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
 
 function makeRelay(dir, pub, sk) {
   mkdirSync(dir, { recursive: true });
@@ -326,4 +326,73 @@ test('#15 a check interrupted twice is NOT rolled back if the new folder has tak
     const r = await recoverMove(u);
     assert.equal(r.dataDir, u.to, 'rolled back an hour after the move');
   } finally { u.done(); }
+});
+
+// ── Audit B of ba306e52 ──────────────────────────────────────────────────────────────────────────────────────
+test('N1 same drive: the switch fails AND the rename back fails -> the journal stays active; recovery finishes the undo', async () => {
+  const t = rig('rename');
+  try {
+    let cur = t.from;
+    const pointer = { read: () => cur, write(d) { if (d === t.to) throw new Error('ENOSPC writing pointer'); cur = d; } };
+    let n = 0; const rename = (a, b) => { n++; if (n === 2) { const e = new Error('EPERM rename back'); e.code = 'EPERM'; throw e; } renameSync(a, b); };
+    const m = await moveRelayData({ from: t.from, to: t.to, pointer, journal: t.journal, relayRunning: async () => false, mounts: null, rename });
+    assert.equal(m.ok, false);
+    assert.equal(t.journal.read().state, 'switching', 'the journal says the move is over although the data is still in the new folder');
+    const r = await recoverMove({ journal: t.journal, pointer });
+    assert.equal(r.dataDir, t.from);
+    assert.ok(startable(t.from, t.pub), 'RECOVERY HANDED BACK A FOLDER THAT DOES NOT EXIST — a launcher would start a stranger relay there');
+  } finally { t.done(); }
+});
+
+test('N1 a finished move whose folder has since vanished -> refuse, not "start there"', async () => {
+  const t = rig('copy');
+  try {
+    t.j('failed');
+    rmSync(t.from, { recursive: true, force: true });
+    const r = await recoverMove(t);
+    assert.equal(r.action, 'refuse', 'recovery passed a missing folder through because the journal was not active: ' + JSON.stringify(r));
+  } finally { t.done(); }
+});
+
+for (const leftover of ['empty', 'tmpfile']) {
+  test(`N2 killed while the rename tombstone was being made (${leftover}) -> recovery renames back`, async () => {
+    const t = rig('rename');
+    try {
+      t.j('renaming'); renameSync(t.from, t.to); mkdirSync(t.from);
+      if (leftover === 'tmpfile') writeFileSync(join(t.from, MOVED_TO + '.tmp-123'), 'x');
+      const r = await recoverMove(t);
+      assertStartable(t, r.dataDir, 'N2 ' + leftover); assert.equal(r.dataDir, t.from);
+    } finally { t.done(); }
+  });
+}
+
+test('N3 copy move killed before MOVED-TO, old drive unplugged at the next start: the old copy is still recorded and re-tombstoned when it returns', async () => {
+  const t = rig('copy');
+  try {
+    const m = await run(t, { rename: exdev() }); assert.equal(m.ok, true);
+    const j = t.journal.read(); delete j.oldCopy; t.journal.write({ ...j, state: 'switching' }); rmSync(join(t.from, MOVED_TO));
+    const oldParent = dirname(t.from); renameSync(oldParent, oldParent + '-UNPLUGGED');
+    const r = await recoverMove(t); assert.equal(r.action, 'check');
+    assert.equal((await beginCheck(t)).ok, true);
+    const done = checkPassed(t);
+    assert.equal(done.oldCopy && done.oldCopy.path, t.from, 'the old copy was forgotten because its drive was unplugged');
+    renameSync(oldParent + '-UNPLUGGED', oldParent);
+    const r2 = await recoverMove(t);
+    assert.equal(r2.dataDir, t.to);
+    assert.ok(existsSync(join(t.from, MOVED_TO)), 'the returned old copy is a startable identity clone');
+  } finally { t.done(); }
+});
+
+test('N8 leftovers are recorded and carried: the rename tombstone, and a set-aside copy after a rollback', async () => {
+  const a = rig('rename');
+  try {
+    const m = await run(a); assert.equal(m.mode, 'rename');
+    assert.ok(m.journal.leftovers.some(l => l.path === a.from && l.kind === 'tombstone'), 'the rename tombstone is not recorded');
+  } finally { a.done(); }
+  const b = rig('copy');
+  try {
+    const m = await run(b, { rename: exdev() }); assert.equal(m.ok, true);
+    const r = rollbackMove(b); assert.equal(r.ok, true);
+    assert.ok(r.journal.leftovers.some(l => l.kind === 'set-aside' && l.path.startsWith(b.to + '-failed-')), 'the set-aside copy is not recorded');
+  } finally { b.done(); }
 });

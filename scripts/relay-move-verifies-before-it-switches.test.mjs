@@ -16,8 +16,8 @@ import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { moveRelayData, jsonPointer, jsonFieldStore, classifyTarget, parseMountinfo, parseMacMount, parseWinLogicalDisks, mountFor, checkPassed, beginCheck, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
-import { spawnSync } from 'node:child_process';
+import { moveRelayData, jsonPointer, jsonFieldStore, classifyTarget, parseMountinfo, parseMacMount, parseWinLogicalDisks, mountFor, checkPassed, beginCheck, relayLockHeld, processCommandLine, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
+import { spawnSync, spawn } from 'node:child_process';
 
 function makeRelay(dir) {
   mkdirSync(dir, { recursive: true });
@@ -347,4 +347,57 @@ test('#12 the CLI refuses a target inside the app\'s own code folder', () => {
   const r = spawnSync(process.execPath, ['scripts/relay-move.mjs', 'classify', '--path', join(ROOT, 'scripts')], { cwd: ROOT, encoding: 'utf8' });
   const out = JSON.parse(r.stdout);
   assert.ok(out.refuse.includes('inside-app'), 'the CLI does not pass codeDir: ' + r.stdout);
+});
+
+// ── Audit B of ba306e52 ──────────────────────────────────────────────────────────────────────────────────────
+test('N4 a failed fsync (EIO from a dying stick) fails the copy move; nothing is switched', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    const before = snapshot(t.from);
+    const res = await moveRelayData(t.opts({ rename: exdevOnce(), _fsync: () => false }));
+    assertNothingSwitched(t, before, res, 'fsync failed');
+    assert.equal(res.code, 'copy-not-durable');
+  } finally { t.done(); }
+});
+
+test('N4 a same-drive rename fsyncs both parent folders before the pointer is switched', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    const synced = new Set(); let atSwitch = null;
+    const realWrite = t.pointer.write.bind(t.pointer);
+    const pointer = { read: () => t.pointer.read(), write: (d, p) => { if (d === t.to) atSwitch = new Set(synced); return realWrite(d, p); } };
+    const res = await moveRelayData(t.opts({ pointer, _fsync: p => { synced.add(p); return true; } }));
+    assert.equal(res.mode, 'rename');
+    assert.ok(atSwitch && atSwitch.has(t.drive), 'the new parent was not fsynced after the rename');
+    assert.ok(atSwitch.has(join(t.base, 'app-data')), 'the old parent was not fsynced after the rename');
+  } finally { t.done(); }
+});
+
+test('N8 a target holding only an old MOVED-TO tombstone counts as empty', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    mkdirSync(t.to); writeFileSync(join(t.to, MOVED_TO), 'moved somewhere else long ago');
+    const res = await moveRelayData(t.opts({}));
+    assert.equal(res.ok, true, 'a drive that once held this relay refuses every later move: ' + JSON.stringify(res));
+  } finally { t.done(); }
+});
+
+test('N6 a reused pid is not a relay: the lock is held only when the live process runs gateway.mjs (all three OS paths)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-lock-'));
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'ignore' });
+  try {
+    writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid }));
+    for (const platform of ['linux', 'darwin', 'win32']) {
+      assert.equal(relayLockHeld(dir, { platform, commandLine: () => 'C:\\\\Windows\\\\notepad.exe' }), false, platform + ': an unrelated process that reused the pid blocked a move');
+      assert.equal(relayLockHeld(dir, { platform, commandLine: () => 'node scripts/gateway.mjs 8090' }), true, platform);
+      assert.equal(relayLockHeld(dir, { platform, commandLine: () => null }), true, platform + ': unknown must count as held');
+    }
+    // the real lookups this box can run: /proc and `ps -p PID -o command=` (the macOS path)
+    assert.match(processCommandLine(child.pid, 'linux'), /setTimeout/);
+    assert.match(processCommandLine(child.pid, 'darwin') || '', /setTimeout/, 'ps -p PID -o command= did not return the command line');
+    assert.equal(relayLockHeld(dir, { platform: 'darwin' }), false, 'a live non-gateway process was taken for a relay');
+  } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
 });
