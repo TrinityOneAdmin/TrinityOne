@@ -15,7 +15,7 @@
 // one test with a message if the machine has only one. No assertion reads control.js / main.rs source text (rule 3).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, accessSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -64,6 +64,22 @@ let st = {}; try { st = JSON.parse(readFileSync(env.TRINITY_STORAGE_STATE, 'utf8
 const mv = st.move || {};
 appendFileSync(env.TEST_STARTS_LOG, JSON.stringify({ dir: env.TRINITY_DATA_DIR, pinned: env.TRINITY_DATA_DIR_PINNED || '', mode: env.TRINITY_STORAGE_MODE, hasState: !!env.TRINITY_STORAGE_STATE,
   state: mv.state || null, preStart: !!mv.preStartCounts, at: Date.now() }) + '\\n');
+if (env.TEST_EXIT_CODE) process.exit(Number(env.TEST_EXIT_CODE));
+if (env.TEST_SLOW_START_MS) await new Promise(r => setTimeout(r, Number(env.TEST_SLOW_START_MS)));
+if (env.TEST_NO_PROOF) {   // a relay that serves its panel but cannot answer /relay-identity
+  const http = await import('node:http'); const { syncBuiltinESMExports } = await import('node:module');
+  const orig = http.default.createServer;
+  http.default.createServer = (...a) => { const sv = orig(...a); const emit = sv.emit; sv.emit = function (ev, req, res, ...r) { if (ev === 'request' && req.url.startsWith('/relay-identity')) { res.writeHead(404); res.end(); return true; } return emit.call(this, ev, req, res, ...r); }; return sv; };
+  syncBuiltinESMExports();
+}
+if (env.TEST_EXIT_CODE) process.exit(Number(env.TEST_EXIT_CODE));
+if (env.TEST_SLOW_START_MS) await new Promise(r => setTimeout(r, Number(env.TEST_SLOW_START_MS)));
+if (env.TEST_NO_PROOF) {   // a relay that serves its panel but cannot answer /relay-identity
+  const http = await import('node:http'); const { syncBuiltinESMExports } = await import('node:module');
+  const orig = http.default.createServer;
+  http.default.createServer = (...a) => { const sv = orig(...a); const emit = sv.emit; sv.emit = function (ev, req, res, ...r) { if (ev === 'request' && req.url.startsWith('/relay-identity')) { res.writeHead(404); res.end(); return true; } return emit.call(this, ev, req, res, ...r); }; return sv; };
+  syncBuiltinESMExports();
+}
 if (env.TEST_EXIT0_FIRST && !existsSync(env.TEST_EXIT0_FIRST)) { writeFileSync(env.TEST_EXIT0_FIRST, '1'); process.exit(0); }
 if (env.TEST_LOOKALIKE_DIR && env.TEST_LOOKALIKE_DIR === env.TRINITY_DATA_DIR) {
   // a program on the relay's port that says the right key in /status and cannot prove it
@@ -98,10 +114,10 @@ const startsOf = fx => existsSync(fx.starts) ? readFileSync(fx.starts, 'utf8').t
 const stateOf = fx => { try { return JSON.parse(readFileSync(fx.state, 'utf8')); } catch { return {}; } };
 
 // ── the launcher, running ──────────────────────────────────────────────────────────────────────────────────
-async function startLauncher(fx, { env = {}, port } = {}) {
+async function startLauncher(fx, { env = {}, port, upSteps = 160 } = {}) {
   port = port || await freePort('the launcher test relay');
   const args = ['--config-file', fx.state, '--default-data', fx.data, '--payload', ROOT, '--node', process.execPath, '--port', String(port),
-    '--gateway', join(fx.base, 'wrapper.mjs'), '--up-steps', '160'];
+    '--gateway', join(fx.base, 'wrapper.mjs'), '--up-steps', String(upSteps), '--log-file', join(fx.base, 'relay-launch.log')];
   const E = { RELAY_SYNC: '0', RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + join(fx.base, 'preload.mjs'),
     HOME: fx.home, USER: 'nobody-launcher-test', TEST_STARTS_LOG: fx.starts, TEST_GATEWAY: join(ROOT, 'scripts/gateway.mjs'), ...env };
   for (const [k, v] of Object.entries(E)) args.push('--env', `${k}=${v}`);
@@ -451,4 +467,106 @@ test('crash recovery: a move killed mid-copy leaves a partial copy; the next lau
     assert.equal(stateOf(fx).move.state, 'failed');
     assert.equal(await events(l, fx.data), 5);
   } finally { await l.stop(); }
+});
+
+// ═══ 8. AUDIT C: M4 (mover lock), M5 (slow start, non-78 exit), L1 (unproven wording) ═══════════════════════
+const MOVER_CLI = join(ROOT, 'scripts/relay-move.mjs');
+// a live process whose command line names relay-move.mjs, standing in for a mover that outlived its launcher
+function fakeMover() { const p = spawn(process.execPath, ['-e', 'setTimeout(()=>{},120000)', 'relay-move.mjs'], { stdio: 'ignore' }); cleanups.push(() => { try { p.kill('SIGKILL'); } catch {} }); return p; }
+const lockFile = fx => fx.state + '.mover-lock';
+function holdLock(fx, p) { mkdirSync(join(fx.base, 'cfg'), { recursive: true }); writeFileSync(lockFile(fx), JSON.stringify({ pid: p.pid, startedAt: new Date().toISOString() })); }
+const fragsOf = lines => lines.filter(x => x.startsWith('SIM progress ')).map(x => decodeFrag(x.slice('SIM progress '.length)));
+
+test('M4: a second mover is refused while one holds the lock, and moves nothing', { skip, timeout: 60000 }, async () => {
+  const fx = fixture({ events: 3 });
+  const h = fakeMover(); holdLock(fx, h); await sleep(300);
+  const r = spawnSync(process.execPath, [MOVER_CLI, 'move', '--from', fx.data, '--drive', fx.home, '--pointer', fx.state, '--port', String(await freePort('m4')), '--mode', 'suite'], { encoding: 'utf8' });
+  const a = JSON.parse(r.stdout.trim().split('\n').pop());
+  assert.equal(a.ok, false); assert.equal(a.code, 'mover-running', JSON.stringify(a));
+  assert.ok(existsSync(join(fx.data, 'relay.sqlite')) && !existsSync(join(fx.home, 'trinityone-relay')), 'a second mover moved the data');
+  // a dead holder is stale: the lock is taken over
+  h.kill('SIGKILL'); await sleep(500);
+  const r2 = spawnSync(process.execPath, [MOVER_CLI, 'lock-status', '--pointer', fx.state], { encoding: 'utf8' });
+  assert.equal(JSON.parse(r2.stdout.trim().split('\n').pop()).held, false, 'a dead mover still holds the lock');
+});
+
+test('M4: a launcher that finds a mover still running WAITS (says so, starts nothing, recovers nothing) and carries on when it is gone', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 3 });
+  const h = fakeMover(); holdLock(fx, h); await sleep(300);
+  const l = await startLauncher(fx);
+  try {
+    await sleep(4000);
+    assert.equal(startsOf(fx).length, 0, 'the relay was started while a mover held the folder');
+    assert.ok(fragsOf(l.lines).some(f => /^Moving/.test(f.t)), 'the splash was told nothing while the launcher waited: ' + l.lines.join('|'));
+    h.kill('SIGKILL');
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, 'the launcher never carried on after the mover went. Log:\n' + l.log);
+    assert.equal(startsOf(fx).length, 1);
+  } finally { await l.stop(); }
+});
+
+test('M4: the window is closed mid-move (the launcher dies, the mover lives on); the next launch waits for it, then checks the move and starts on the new folder with the same identity', { skip, timeout: 280000 }, async (t) => {
+  const drive = otherFsDir();
+  if (!drive) { t.skip('needs a second filesystem'); return; }
+  const fx = fixture({ events: 9 }); fx.home = join(drive, 'home'); mkdirSync(fx.home);
+  writeFileSync(join(fx.data, 'big.bin'), Buffer.alloc(500 * 1024 * 1024, 7));   // long enough to kill the launcher in the middle
+  const target = join(fx.home, 'trinityone-relay');
+  const l = await startLauncher(fx);
+  assert.equal(await l.waitFor(/^SIM opened /), true, l.log);
+  assert.equal((await post(l, fx.data, '/storage/move', { drive: fx.home })).status, 200);
+  assert.equal(await l.waitFor(/^SIM progress #t=Moving/, 1, 60000), true, 'the move never started');
+  l.proc.kill('SIGKILL'); await l.exited;   // the app closes: the launcher is gone, its child mover is not
+  for (const p of l.pids) { try { process.kill(p, 'SIGKILL'); } catch {} }
+  const l2 = await startLauncher(fx, { port: l.port });
+  try {
+    assert.equal(await l2.waitFor(/^SIM opened /, 1, 200000), true, 'the second launch never opened the relay. Log:\n' + l2.log + JSON.stringify(stateOf(fx).move));
+    const last = startsOf(fx).at(-1);
+    assert.equal(last.dir, target, 'after the interrupted launcher the relay did not end up on the new folder: ' + JSON.stringify(startsOf(fx)));
+    assert.equal(last.state, 'checking');
+    assert.equal((await proven(l2)).relayPub, fx.pub); assert.equal(await events(l2, target), 9);
+    assert.ok(existsSync(join(target, 'big.bin')), 'the big file did not arrive');
+    assert.equal(existsSync(lockFile(fx)), false, 'the mover lock was left behind');
+  } finally { await l2.stop(); }
+});
+
+test('M5: a slow start is never killed (the relay is given as long as it needs), and the splash says it is still starting', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 3 });
+  const l = await startLauncher(fx, { env: { TEST_SLOW_START_MS: '4000' }, upSteps: 4 });   // gives up waiting after ~1 s, relay needs ~4 s
+  try {
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, 'a slow-starting relay was abandoned or killed. Log:\n' + l.log + l.lines.join('|'));
+    assert.equal(startsOf(fx).length, 1, 'the relay was restarted');
+    assert.ok(fragsOf(l.lines).some(f => /still starting/i.test(f.s)), 'the splash never said the start was slow: ' + l.lines.join('|'));
+    assert.equal((await proven(l)).relayPub, fx.pub);
+  } finally { await l.stop(); }
+});
+
+test('M5: a relay that exits at start-up with anything but 78 leaves a clear message with the log path (not a splash stuck on "Starting…")', { skip: skipBrowser, timeout: 90000 }, async () => {
+  const fx = fixture({ events: 2 });
+  const l = await startLauncher(fx, { env: { TEST_EXIT_CODE: '3' } });
+  const c = await startChrome(900);
+  try {
+    assert.equal(await l.waitFor(/^SIM end /, 1, 60000), true, l.log);
+    const f = fragsOf(l.lines).at(-1);
+    assert.equal(f.k, 'bad'); assert.match(f.s, /exit 3|code 3/i); assert.ok(f.s.includes(join(fx.base, 'relay-launch.log')), 'the message does not name the log file: ' + f.s);
+    await c.goto(pathToFileURL(SPLASH).href + frag(l.lines));
+    assert.match(await c.evalIn(text('#sub')), /relay-launch\.log/); assert.notEqual(await c.evalIn(text('#title')), 'Starting your relay…');
+  } finally { c.stop(); await l.stop(); }
+});
+
+test('L1: a relay whose proof only FAILED is shown as "couldn\'t prove", never as "a different identity key"; a really different key keeps the old wording', { skip: skipBrowser, timeout: 150000 }, async () => {
+  const fx = fixture({ events: 2 });
+  mkdirSync(join(fx.base, 'cfg'), { recursive: true }); writeFileSync(fx.state, JSON.stringify({ relayPub: fx.pub }));
+  let l = await startLauncher(fx, { env: { TEST_NO_PROOF: '1' } });
+  const c = await startChrome(1280);
+  try {
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, l.log);
+    await c.open(l.base, 'set'); await waitFor(c, shown('storageCard'), v => v === true);
+    const t1 = await waitFor(c, text('#stIdentityChanged'), v => !!v);
+    assert.match(t1, /couldn't prove/i, t1); assert.doesNotMatch(t1, /different identity key/, 'a failed proof was described as a different key: ' + t1);
+    await l.stop();
+    writeFileSync(fx.state, JSON.stringify({ relayPub: 'ab'.repeat(32) }));
+    l = await startLauncher(fx);
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, l.log);
+    await c.open(l.base, 'set'); await waitFor(c, shown('storageCard'), v => v === true);
+    assert.match(await waitFor(c, text('#stIdentityChanged'), v => !!v), /different identity key/);
+  } finally { c.stop(); await l.stop(); }
 });

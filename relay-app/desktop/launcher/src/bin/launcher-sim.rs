@@ -167,6 +167,7 @@ fn main() {
         default_data: PathBuf::from(get("default-data")),
         port: get("port").parse().expect("--port"),
         up_steps: a.get("up-steps").and_then(|s| s.parse().ok()).unwrap_or(240),
+        log_path: PathBuf::from(a.get("log-file").cloned().unwrap_or_else(|| "relay-launch.log".into())),
     };
     let quit = Arc::new(AtomicBool::new(false));
     let live: Arc<Mutex<Option<Arc<Mutex<Child>>>>> = Arc::new(Mutex::new(None));
