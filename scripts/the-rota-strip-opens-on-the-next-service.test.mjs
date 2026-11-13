@@ -301,10 +301,11 @@ test('at 360px the strip opens on next Sunday, scrolled so its chip is at the st
     // …and next Sunday's chip is wholly inside the strip's visible box, at its start
     assert.ok(next.left >= m.strip[0] - 1 && next.right <= m.strip[1] + 1, `next Sunday's chip (${next.left}..${next.right}) is not inside the strip (${m.strip[0]}..${m.strip[1]})`);
     assert.ok(next.left - m.strip[0] <= 2, `next Sunday's chip is not at the start of the strip (it sits ${next.left - m.strip[0]}px in)`);
-    // the page itself was not scrolled to get there. Precondition first: the strip is below the viewport, so
-    // scrollIntoView WOULD have had to move something (otherwise this check could not fail)
-    assert.ok(m.stripTop > m.viewportH, `the strip is on screen (top ${m.stripTop}px, viewport ${m.viewportH}px), so the no-other-scroll check below proves nothing — re-anchor the test stylesheet`);
+    // the page itself was not scrolled to get there: the window and every ancestor of the strip are unscrolled…
     assert.deepEqual(m.moved, [], 'opening the Rota scrolled something other than the strip (the window or an ancestor)');
+    // …and that could have failed: with nothing scrolled, the strip sits below the viewport, so scrollIntoView WOULD
+    // have had to move something to reach it
+    assert.ok(m.stripTop > m.viewportH, `the strip is on screen (top ${m.stripTop}px, viewport ${m.viewportH}px), so the no-other-scroll check above proves nothing — re-anchor the test stylesheet`);
 
     // the past chips are faded and marked; next Sunday is neither
     const past = m.list.filter(c => seeded.past.includes(c.id));
