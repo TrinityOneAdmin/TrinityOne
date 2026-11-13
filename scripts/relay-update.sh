@@ -51,8 +51,11 @@ rm -f "$FLAG"   # consume the flag first so the path-unit doesn't immediately re
 # update that finds a move running refuses (the flag is already consumed; press Update now again afterwards): its restart
 # could otherwise start the relay on the old folder in the middle of a copy.
 mkdir -p "$STATE_DIR" 2>/dev/null || true
-exec 8>"$STATE_DIR/update-move.lock"
-if ! flock -n 8; then fail "a data move is running on this relay, so the update did not start. Press Update now again when the move has finished."; fi
+# (where the lock file cannot be opened at all -- a test run as an ordinary user, never a root box -- the update goes ahead as before)
+if ( : >> "$STATE_DIR/update-move.lock" ) 2>/dev/null; then
+  exec 8>>"$STATE_DIR/update-move.lock"
+  if ! flock -n 8; then fail "a data move is running on this relay, so the update did not start. Press Update now again when the move has finished."; fi
+fi
 
 # A RELAY THAT REFUSED ITS DATA FOLDER MUST NOT BE RESTARTED (storage plan step 6, audit A finding 8). The gateway
 # exits 78 when its folder is missing / moved out / foreign, and the unit has Restart=always, so without
