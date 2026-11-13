@@ -67,10 +67,12 @@ test('blocking a member rotates every encrypted group they could read', () => {
   assert.match(fn, /g\.encrypted/, 'the rotation must iterate the encrypted groups');
 });
 
-test('DashMembers actually has the groups it rotates', () => {
-  // A silent `typeof groups === "undefined"` would make the loop above a no-op that still matches every regex.
-  const i = DASH.indexOf('function DashMembers()');
-  assert.notEqual(i, -1);
-  assert.match(fnBody(DASH, i), /const groups = window\.useStewardGroups/,
-    'block() iterates `groups`, so DashMembers must actually subscribe to them');
-});
+// RETIRED 2026-11-13: "DashMembers actually has the groups it rotates" was a regex over app/stew-dashboard.jsx
+// (rule 3), anchored on `function DashMembers()` — an anchor that went stale when DashMembers gained a
+// `{ dmConvos }` prop (8fe85f1d), so it read -1 and failed. The behaviour it guarded (DashMembers subscribes to the
+// groups that Block rotates) is proven by RUNNING the real screen in
+//   every-key-path-gives-keys-to-approved-members-only.test.mjs
+//   "Block rotates the care, sermon and room keys to the APPROVED members"
+// which renders the real DashMembers, presses its real Block, and fails "CONTROL: the open room was not rotated"
+// if DashMembers' `groups` is emptied (sabotage-checked 2026-11-13). Count here: 5 -> 4.
+

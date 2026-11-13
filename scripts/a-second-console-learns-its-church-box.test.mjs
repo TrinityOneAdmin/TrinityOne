@@ -279,6 +279,9 @@ function makeConsole({ church, origin, canonical = [], pins = {}, extra = [], bo
     fnBody(src, 'function setNamedRelays', 'setNamedRelays'),
     stmt(src, 'var NAMES_LS = ', 'NAMES_LS'),
     fnBody(src, 'async function retireDeadAdoptedRows', 'retireDeadAdoptedRows'),
+    // 6fe7da13 (relay self-heal): adoptNetDocAddresses remembers each adopted box's NAME too
+    stmt(src, 'var _RELAY_NAME_RE = ', '_RELAY_NAME_RE'),
+    fnBody(src, 'function _rememberAdoptedName', '_rememberAdoptedName'),
     fnBody(src, 'async function adoptNetDocAddresses', 'adoptNetDocAddresses'),
     // THE POINT OF USE
     fnBody(src, 'function setKey(mnemonic) {', 'setKey'),
@@ -809,20 +812,28 @@ test('two adopted rows whose boxes are gone no longer wedge the church\'s relay 
   // relay at all that guard refuses every removal, so the jam could never be shown to clear. Served by a
   // real relay, the guard is satisfied honestly and the only thing left that can refuse is _readCovers.
   const ORIGIN = { protocol: 'http:', host: '127.0.0.1:' + SHARED.port };
+  // g1/g2 also admit `other` (the second real church): see con2 below.
   const [g1, g2] = await Promise.all([
-    H.startRelay({ name: 'tunnel-1', churches: [church.pub] }),
-    H.startRelay({ name: 'tunnel-2', churches: [church.pub] }),
+    H.startRelay({ name: 'tunnel-1', churches: [church.pub, other.pub] }),
+    H.startRelay({ name: 'tunnel-2', churches: [church.pub, other.pub] }),
   ]);
   const con = makeConsole({ church, origin: ORIGIN, canonical: [SHARED.wsUrl], boxHostsUs: true });
+  // A SECOND console, staged the same way but for the OTHER church, so its removal changes only that church's
+  // signed list and the retire half below still runs against `church`'s untouched list. It never runs the retire
+  // ticks, so it still holds both dead rows when it removes — that is where FIX 4 (6fe7da13, `_readCovers`'
+  // droppable set) is proven.
+  const con2 = makeConsole({ church: other, origin: ORIGIN, canonical: [SHARED.wsUrl], boxHostsUs: true });
   let t1 = null, t2 = null;
   try {
-    // The church signs its box at three addresses over the life of the tunnel. All three are real boxes.
-    await H.publishAll(SHARED, [relayNetDocFor(church, [BOX, g1, g2].map(r =>
+    // Each church signs its box at three addresses over the life of the tunnel. All three are real boxes.
+    for (const ch of [church, other]) await H.publishAll(SHARED, [relayNetDocFor(ch, [BOX, g1, g2].map(r =>
       ({ pubkey: r.relayPub, alwaysOn: true, url: r.wsUrl })))]);
-    con.setKey('x '.repeat(12).trim());
-    for (let i = 0; i < 240 && con.extraRelays().length < 3; i++) await sleep(250);
-    assert.equal(con.extraRelays().length, 3, 'staging fault: the three boxes were not all adopted — ' + JSON.stringify(con.extraRelays()));
-    assert.equal(con.adopted().length, 3, 'the rows this path added are not recorded as its own, so none can retire');
+    for (const c of [con, con2]) {
+      c.setKey('x '.repeat(12).trim());
+      for (let i = 0; i < 240 && c.extraRelays().length < 3; i++) await sleep(250);
+      assert.equal(c.extraRelays().length, 3, 'staging fault: the three boxes were not all adopted — ' + JSON.stringify(c.extraRelays()));
+      assert.equal(c.adopted().length, 3, 'the rows this path added are not recorded as its own, so none can retire');
+    }
 
     // Two tunnels are torn down. RESTAGED 2026-10-23 with FIX 1: this used to be `g1.stop(); g2.stop()`,
     // which closes the port, and a closed port is `reached: false` -- the shape of a box switched off for an
@@ -830,11 +841,19 @@ test('two adopted rows whose boxes are gone no longer wedge the church\'s relay 
     // resolves to Cloudflare and Cloudflare answers 530 at it. See tunnelTornDown.
     t1 = await tunnelTornDown(g1); t2 = await tunnelTornDown(g2);
     assert.equal(await con.readCovers(), false, 'staging fault: two dead rows did not make the read incomplete');
+    assert.equal(await con2.readCovers(), false, 'staging fault: two dead rows did not make the OTHER church\'s read incomplete');
 
-    // THE JAM, on the product's own path. The steward is trying to remove the box that IS answering.
-    const jam = await con.unsignRelay(BOX.wsUrl);
-    assert.equal(jam.removed, false, 'staging fault: the removal was not blocked, so there is no jam to clear');
-    assert.equal(jam.unknown, true, 'the removal failed for some other reason than the incomplete read: ' + JSON.stringify(jam));
+    // THE FORMER JAM, on the product's own path, NO LONGER JAMS. RESTAGED 2026-11-13: until 6fe7da13 this
+    // removal came back { removed: false, unknown: true } — removing A waited on dead B and removing B on dead
+    // A. FIX 4 lets unenrolRelayNet treat rows this console added itself (extraRelays) that do not answer as
+    // droppable from _readCovers' "every relay asked has answered" rule, so the steward is no longer wedged
+    // even BEFORE the dead rows retire. This is the point-of-use proof of FIX 4: it fails if the droppable set
+    // is removed. Done on con2 (the other church, still holding both dead rows), so `church`'s signed list is
+    // untouched for the retire half below.
+    const jam = await con2.unsignRelay(BOX.wsUrl);
+    assert.equal(jam.removed, true,
+      'two dead rows this console added itself STILL wedge the church\'s relay list: ' + JSON.stringify(jam) +
+      '. Removing A waits on B and removing B waits on A, and the advice the card gives is circular.');
 
     // THE UNLOCK TICKS CLEAR IT. Same call the console makes on boot with a key and on every unlock, and
     // there are TWO of them because FIX 1 requires two consecutive answered failures: one unlock is a
@@ -861,7 +880,7 @@ test('two adopted rows whose boxes are gone no longer wedge the church\'s relay 
     assert.equal(freed.removed, true,
       'the church\'s relay list STILL cannot be changed: ' + JSON.stringify(freed) + '. Retiring the dead ' +
       'rows was the whole point — a row nobody typed must be able to leave again by itself.');
-  } finally { if (t1) await t1.close(); if (t2) await t2.close(); con.close(); g1.stop(); g2.stop(); }
+  } finally { if (t1) await t1.close(); if (t2) await t2.close(); con.close(); con2.close(); g1.stop(); g2.stop(); }
 });
 
 test('a row that is still answering is never retired, and nothing is retired without a read', async () => {

@@ -24,6 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fnBody, stripComments } from './test-slice.mjs';
+import { miniReact } from './render-jsx-screen.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const CHAT   = readFileSync(new URL('../app/screens-chat.jsx', import.meta.url), 'utf8');
@@ -248,15 +249,31 @@ test('the screens can see the reconnect signal at all', () => {
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 
 test('the console DM inbox re-subscribes on reconnect', () => {
-  const src = stripComments(DASH);
-  const at = src.indexOf('subscribeDMConvos(setDmConvos)');
+  // LIFTED AND RUN, not matched (rule 3; rewritten 2026-11-13). 8fe85f1d moved this subscription from
+  // DashMembers up to StewDashboard (so the DM badge shows on every tab) and renamed its dependency
+  // `_dmConnTop`; the old regex wanted `[_dmConn]` and failed over a refactor that kept the behaviour.
+  // Now the REAL statements — the inbox state, the useStewardConn() read and the subscribing effect, sliced
+  // from StewDashboard by their own text — are run inside a probe component under miniReact (effects really
+  // run, deps compared the way React does). A reconnect is a new useStewardConn() value: it must subscribe
+  // again; a redraw with the same value must not.
+  const body = fnBody(DASH, 'function StewDashboard(', 'StewDashboard');
+  const from = body.indexOf('const [dmConvos, setDmConvos] = React.useState(');
+  assert.notEqual(from, -1, 'the console DM inbox state is gone from StewDashboard — re-anchor this test');
+  const at = body.indexOf('subscribeDMConvos(setDmConvos)', from);
   assert.notEqual(at, -1, 'the console DM inbox subscription is gone — re-anchor this test');
-  const deps = src.slice(at, src.indexOf(');', at) + 30);
-  assert.match(deps, /\[_dmConn\]/,
+  const lifted = body.slice(from, body.indexOf('\n', at));
+  const { React, draw } = miniReact();
+  let conn = 0, subs = 0;
+  const window = { useStewardConn: () => conn, Steward: { subscribeDMConvos: () => { subs++; return () => {}; } } };
+  const Probe = new Function('React', 'window', `return function Probe() { ${lifted}\n return null; };`)(React, window);
+  draw(Probe, {});
+  assert.equal(subs, 1, 'CONTROL: the console DM inbox did not subscribe at mount');
+  draw(Probe, {});
+  assert.equal(subs, 1, 'the inbox re-subscribed on a plain redraw — it would churn a REQ on every render');
+  conn = 1; draw(Probe, {});
+  assert.equal(subs, 2,
     'the console DM inbox subscribes once at mount and never again — a dropped socket leaves every private ' +
     'message preview frozen for the session, which is A1 on the owner\'s priority list');
-  assert.match(src.slice(src.lastIndexOf('useStewardConn', at), at), /useStewardConn/,
-    'useStewardConn must be called in the same component to provide the dependency');
 });
 
 test('an open console DM thread re-subscribes on reconnect', () => {

@@ -1115,6 +1115,7 @@ test('THE SCREEN: a cadence the relay accepted is adopted, and the church docume
 // CLAUDE.md rule 1: THREE markers are asserted here — `aria-disabled`, the padlock glyph and the tooltip —
 // because F3 in the same audit showed that a marker no test can see is a marker that can be deleted with
 // the suite green. Rule 3: the panel is compiled and RENDERED; nothing matches text in app/*.jsx.
+const SWITCH = 'Keep your relays in sync';
 async function syncPanel({ delegated, boxes = 2, syncOn = false }) {
   const { React, draw } = miniReact();
   const order = [];
@@ -1149,13 +1150,19 @@ async function syncPanel({ delegated, boxes = 2, syncOn = false }) {
   // THREE DRAWS AND A TICK: `backup` arrives through an async effect (useRelayBackupState → backupState),
   // and the two sync buttons do not exist at all until it says the church has two boxes.
   let tree = render(); tree = render(); await ticks(10); tree = render();
+  // 136df470 replaced the two buttons ("Turn on sync" / "Turn off") with ONE role=switch bound to
+  // backup.syncOn (aria-label "Keep your relays in sync"), plus a "Re-sync now" nudge while sync is on.
+  // SWITCH names the switch; any other label is a button found by its text.
   const btn = (label) => {
-    const hits = find(tree, n => n.type === 'button' && reads(n).trim() === label);
-    assert.equal(hits.length, 1, `re-anchor this test: expected exactly one "${label}" button, found ${hits.length}`);
+    const hits = label === SWITCH
+      ? find(tree, n => n.type === 'button' && n.props && n.props.role === 'switch' && n.props['aria-label'] === SWITCH)
+      : find(tree, n => n.type === 'button' && reads(n).trim() === label);
+    assert.equal(hits.length, 1, `re-anchor this test: expected exactly one "${label}" control, found ${hits.length}`);
     return hits[0];
   };
   return {
     order,
+    checked: () => btn(SWITCH).props['aria-checked'],
     press: async (label) => { btn(label).props.onClick(); await ticks(20); tree = render(); },
     marked: (label) => !!(btn(label).props || {})['aria-disabled'],
     // THE PADLOCK, read off the tree rather than off the source. Icon is stubbed to render nothing, but the
@@ -1167,47 +1174,55 @@ async function syncPanel({ delegated, boxes = 2, syncOn = false }) {
 }
 
 test('THE SCREEN: a delegated console cannot turn relay sync on or off, and reaches the engine zero times', async () => {
-  const p = await syncPanel({ delegated: true });
-  for (const label of ['Turn on sync', 'Turn off']) {
-    assert.equal(p.marked(label), true,
-      `"${label}" IS STILL OFFERED UNMARKED on a console that can never write trinityone/relays. That ` +
-      'document decides which relay boxes exchange this congregation’s whole corpus (CLAUDE.md rule 10), ' +
-      'so it is church-key-only and this press can reach nothing.');
-    assert.equal(p.padlocked(label), 1,
-      `"${label}" carries no padlock. On a phone there is no hover, so the glyph is the only marking a ` +
+  // Both directions: with sync OFF the switch would turn it on; with sync ON it would turn it off (the press
+  // that matters while a church is decommissioning a box), and the "Re-sync now" nudge is shown too.
+  for (const syncOn of [false, true]) {
+    const p = await syncPanel({ delegated: true, syncOn });
+    assert.equal(p.checked(), syncOn, 'CONTROL: the switch does not show the church\u2019s real sync state (' + syncOn + ')');
+    for (const label of syncOn ? [SWITCH, 'Re-sync now'] : [SWITCH]) {
+      assert.equal(p.marked(label), true,
+        `"${label}" IS STILL OFFERED UNMARKED on a console that can never write trinityone/relays. That ` +
+        'document decides which relay boxes exchange this congregation’s whole corpus (CLAUDE.md rule 10), ' +
+        'so it is church-key-only and this press can reach nothing.');
+      assert.match(p.tip(label), /Only the church’s own console can turn relay sync on or off/,
+        `"${label}" lost its tooltip, so on a desktop console nothing says why it is locked. Tooltip: ` + p.tip(label));
+    }
+    assert.equal(p.padlocked(SWITCH), 1,
+      'the sync switch carries no padlock. On a phone there is no hover, so the glyph is the only marking a ' +
       'steward sees before they press.');
-    assert.match(p.tip(label), /Only the church’s own console can turn relay sync on or off/,
-      `"${label}" lost its tooltip, so on a desktop console nothing says why it is locked. Tooltip: ` + p.tip(label));
+    await p.press(SWITCH);
+    assert.deepEqual(p.order, [],
+      'PRESSING THE SYNC SWITCH REACHED THE ENGINE on a delegated console (sync was ' + (syncOn ? 'on' : 'off') + '): ' + JSON.stringify(p.order));
+    assert.match(p.said(), /Only the church’s own console can turn relay sync on or off/,
+      'the locked sync switch said nothing when it was pressed. Screen read: ' + p.said());
+    assert.doesNotMatch(p.said(), /try again/i,
+      'THE STEWARD IS BEING TOLD TO TRY AGAIN at something that can never succeed. Screen read: ' + p.said());
+    assert.doesNotMatch(p.said(), /STILL mirroring each other/,
+      'THE WORST SENTENCE ON THIS SCREEN WAS SHOWN TO SOMEBODY WHO CANNOT ACT ON IT. Turning sync off is pressed ' +
+      'while a church is decommissioning a relay or reacting to a seizure; telling a delegated steward their ' +
+      'relays are still mirroring, and to try again, is a dead end. Screen read: ' + p.said());
+    if (syncOn) {
+      await p.press('Re-sync now');
+      assert.deepEqual(p.order, [], 'PRESSING "Re-sync now" REACHED THE ENGINE on a delegated console: ' + JSON.stringify(p.order));
+    }
   }
-  await p.press('Turn on sync');
-  assert.deepEqual(p.order, [],
-    'PRESSING "Turn on sync" REACHED THE ENGINE on a delegated console: ' + JSON.stringify(p.order));
-  assert.match(p.said(), /Only the church’s own console can turn relay sync on or off/,
-    'the locked "Turn on sync" button said nothing when it was pressed. Screen read: ' + p.said());
-  assert.doesNotMatch(p.said(), /try again/i,
-    'THE STEWARD IS BEING TOLD TO TRY AGAIN at something that can never succeed. Screen read: ' + p.said());
-  await p.press('Turn off');
-  assert.deepEqual(p.order, [],
-    'PRESSING "Turn off" REACHED THE ENGINE on a delegated console: ' + JSON.stringify(p.order));
-  assert.doesNotMatch(p.said(), /STILL mirroring each other/,
-    'THE WORST SENTENCE ON THIS SCREEN WAS SHOWN TO SOMEBODY WHO CANNOT ACT ON IT. "Turn off" is pressed ' +
-    'while a church is decommissioning a relay or reacting to a seizure; telling a delegated steward their ' +
-    'relays are still mirroring, and to try again, is a dead end. Screen read: ' + p.said());
 });
 
 test('THE SCREEN: the OWNER console still turns relay sync on and off — the other direction', async () => {
   // Without this, a "fix" that locked the panel for everybody would pass every assertion above while taking
   // cross-relay sync away from every church that runs two boxes.
   const p = await syncPanel({ delegated: false });
-  assert.equal(p.marked('Turn on sync'), false, 'the OWNER console has had "Turn on sync" locked');
-  assert.equal(p.marked('Turn off'), false, 'the OWNER console has had "Turn off" locked');
-  assert.equal(p.padlocked('Turn on sync'), 0, 'the OWNER console shows a padlock on a control it may use');
-  await p.press('Turn on sync');
+  assert.equal(p.marked(SWITCH), false, 'the OWNER console has had the sync switch locked');
+  assert.equal(p.padlocked(SWITCH), 0, 'the OWNER console shows a padlock on a control it may use');
+  assert.equal(p.checked(), false, 'CONTROL: the switch does not read OFF for a church whose sync is off');
+  await p.press(SWITCH);
   assert.deepEqual(p.order, ['syncEnable'], 'the owner console no longer switches sync on: ' + JSON.stringify(p.order));
   assert.match(p.said(), /✓ Sync on/, 'the owner console no longer reports a successful switch-on. Screen read: ' + p.said());
-  await p.press('Turn off');
+  assert.equal(p.checked(), true, 'the switch did not follow the successful switch-on');
+  await p.press(SWITCH);
   assert.deepEqual(p.order, ['syncEnable', 'syncDisable'], 'the owner console no longer switches sync off: ' + JSON.stringify(p.order));
   assert.match(p.said(), /Sync turned off/, 'the owner console no longer reports a successful switch-off. Screen read: ' + p.said());
+  assert.equal(p.checked(), false, 'the switch did not follow the successful switch-off');
 });
 
 // ── A REFUSED BACKGROUND WRITE MUST NOT REPEAT FOR EVER ──────────────────────────────────────────────────

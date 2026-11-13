@@ -49,11 +49,37 @@ before(async () => {
 });
 after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
+// Polls instead of sleeping a fixed time. In-browser Babel has to transpile every JSX file before the first
+// screen exists, and on a busy box (the whole suite running) that is far longer than the 9s this used to
+// assume: both dashboard tests passed alone and failed in the suite for that reason alone. `settles` returns
+// the LAST value it saw, so when the budget runs out the caller's own assertion still runs and still reports
+// what it always reported; a screen that really never arrives still fails, just at the budget.
+async function settles(probe, ok, budget = 90000) {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await probe();
+    if (ok(v) || Date.now() - t0 > budget) return v;
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+// …and the other half: wait until a value STOPS changing (unchanged for `quiet` ms), or `budget` runs out.
+async function settled(probe, { quiet = 3000, budget = 15000 } = {}) {
+  const t0 = Date.now();
+  let last = await probe(), since = Date.now();
+  while (Date.now() - t0 < budget && Date.now() - since < quiet) {
+    await new Promise(r => setTimeout(r, 250));
+    const v = await probe();
+    if (v !== last) { last = v; since = Date.now(); }
+  }
+  return last;
+}
+
 // Load one page and report what mounted + every uncaught error it produced.
 // `seed` is localStorage written BEFORE the app's real load: booting a first-run app with no church exercises
 // almost none of the subscription code, so the shallow version of this test missed the very ReferenceError it
 // was written for. We seed a followed+active church so the church-doc subscriptions actually run.
 async function boot(path, { ms = 15000, seed = null, drive = null, tag = '' } = {}) {
+  // `ms` is no longer a fixed sleep (see `settled` below): it caps the quiet window after the app has MOUNTED.
   // `tag` gives a boot its OWN profile. Two boots of the same path share a name otherwise, and measured
   // 2026-09-07: the second steward boot in one run woke up to the first's localStorage — a console already
   // holding a PIN-locked key — and landed on "Console locked" instead of the dashboard, every run. With its
@@ -84,26 +110,41 @@ async function boot(path, { ms = 15000, seed = null, drive = null, tag = '' } = 
     });
     const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
     await send('Runtime.enable');
+    const evalIn = async (expression) => {
+      const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+      return rr && rr.result && rr.result.result ? rr.result.result.value : undefined;
+    };
+    const rootNodes = () => evalIn(`document.querySelectorAll('#root *').length`);
     if (seed) {
-      // write the state, then reload so the app mounts WITH it (and drop errors from the throwaway first load)
-      await sleep(2500);
+      // write the state, then reload so the app mounts WITH it (and drop errors from the throwaway first load).
+      // Wait for the throwaway load to have an origin to write to — polled, not a fixed 2.5 s.
+      await settles(() => evalIn(`document.readyState`), v => v === 'complete', 60000);
       await send('Runtime.evaluate', { expression: `(() => { ${Object.entries(seed).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(JSON.stringify(v))});`).join('')} })()`, returnByValue: true });
       errors.length = 0;
       await send('Page.enable');
+      const firstLoad = await evalIn(`performance.timeOrigin`);
       await send('Page.reload', { ignoreCache: false });
+      // the mount poll below must read the RELOADED page, not the throwaway one still on screen
+      await settles(() => evalIn(`performance.timeOrigin`), v => v != null && v !== firstLoad, 60000);
     }
-    await sleep(ms);
+    // POLLED, NOT SLEPT (2026-11-13). This was a fixed `sleep(ms)` (15 s, 18 s with a church), and the suite run
+    // on 120cc727 recorded "the member app mounts and throws nothing" with #root at 0 nodes: in-browser Babel
+    // transpiles every JSX file before the first screen exists, and under full-suite load that took longer than
+    // the sleep. Now: wait (up to 90 s) for the app to MOUNT; then keep watching for errors for AT LEAST
+    // max(3 s, ms/2) after the mount (7.5 s for a plain boot, 9 s with a church, 4.5 s before a console drive), and
+    // beyond that until the tree SETTLES (node count unchanged for 3 s) or `ms` after the mount. The floor matters:
+    // a screen can look still while a subscription is waiting on the relay, and its error lands seconds later.
+    // A white screen still fails, at the 90 s budget, with the same assertion as before.
+    await settles(rootNodes, n => n > 20, 90000);
+    const mountedAt = Date.now();
+    await settled(rootNodes, { quiet: 3000, budget: ms });
+    const floor = Math.max(3000, ms / 2) - (Date.now() - mountedAt);
+    if (floor > 0) await sleep(floor);
     // WALK FURTHER IN, when a caller needs a screen that a first load never reaches. `drive` gets a small
     // helper that evaluates JS in the page and waits — enough to press through a wizard. Errors thrown while
     // driving are collected exactly like errors thrown at boot, which is the entire point: the screens behind
     // a login are the ones nothing else in this suite ever renders.
-    if (drive) {
-      const evalIn = async (expression) => {
-        const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-        return rr && rr.result && rr.result.result ? rr.result.result.value : undefined;
-      };
-      await drive({ evalIn, wait: sleep });
-    }
+    if (drive) await drive({ evalIn, wait: sleep });
     const r = await send('Runtime.evaluate', {
       expression: `JSON.stringify({ nodes: document.querySelectorAll('#root *').length, body: document.querySelectorAll('body *').length, text: (document.body.innerText||'').trim().slice(0,80) })`,
       returnByValue: true,
@@ -159,19 +200,7 @@ const type = (ph, val) => `(() => { const i=[...document.querySelectorAll('input
   if(!i) return 'miss';
   const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
   set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
-// Polls instead of sleeping a fixed time. In-browser Babel has to transpile every JSX file before the first
-// screen exists, and on a busy box (the whole suite running) that is far longer than the 9s this used to
-// assume: both dashboard tests passed alone and failed in the suite for that reason alone. `settles` returns
-// the LAST value it saw, so when the budget runs out the caller's own assertion still runs and still reports
-// what it always reported; a screen that really never arrives still fails, just at the budget.
-const settles = async (probe, ok, budget = 90000) => {
-  const t0 = Date.now();
-  for (;;) {
-    const v = await probe();
-    if (ok(v) || Date.now() - t0 > budget) return v;
-    await new Promise(r => setTimeout(r, 250));
-  }
-};
+// `settles` (the poll used throughout) is defined above boot().
 const toDashboard = async ({ evalIn, wait }) => {
   await settles(() => evalIn(click('/Start a new church/i')), v => v === 'ok');
   await settles(() => evalIn(type('At least 8', 'cedar-harbour-lamp-42')), v => v === 'ok');
@@ -221,19 +250,18 @@ test('a steward can open Help from the dashboard, read a guide, and Escape out o
     await settles(() => evalIn(`!![...document.querySelectorAll('button')].find(x=>x.getAttribute('aria-label')==='Help')`), v => v === true);
     seen.pressed = await evalIn(`(() => { const b=[...document.querySelectorAll('button')].find(x=>x.getAttribute('aria-label')==='Help'); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
     seen.screen = await evalIn(`(document.body.innerText||'').trim().slice(0,240)`);
-    await wait(800);
+    await settles(() => evalIn(`!!${dialog} && ${dialog}.querySelectorAll('[data-help-id]').length`), v => v > 0, 30000);
     seen.list = await evalIn(`(() => { const d=${dialog}; if(!d) return null;
       const ids=[...d.querySelectorAll('[data-help-id]')].map(e=>e.getAttribute('data-help-id'));
       const known=new Set(((window.HelpData||{}).articles||[]).map(a=>a.id));
       return { ids, unknown: ids.filter(i=>!known.has(i)) }; })()`);
     await evalIn(`(() => { const b=document.querySelector('[data-help-id="console"]'); if(b) b.click(); })()`);
-    await wait(800);
+    await settles(() => evalIn(`(() => { const d=${dialog}; const a=((window.HelpData||{}).articles||[]).find(x=>x.id==='console'); const p=a&&(a.blocks||[]).find(b=>b.type==='p'); return !d || (!!p && (d.innerText||'').includes(p.text.slice(0,60))); })()`), v => v === true, 30000);
     seen.guide = await evalIn(`(() => { const d=${dialog}; if(!d) return null;
       const a=(window.HelpData.articles||[]).find(x=>x.id==='console'); const p=(a.blocks||[]).find(b=>b.type==='p');
       return { hasFirstParagraph: !!p && (d.innerText||'').includes(p.text.slice(0,60)), title: (d.querySelector('h2')||{}).textContent||'' }; })()`);
     await evalIn(`(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); })()`);
-    await wait(500);
-    seen.afterEscape = await evalIn(`!!${dialog}`);
+    seen.afterEscape = await settles(() => evalIn(`!!${dialog}`), v => v === false, 10000);
   } });
   assert.deepEqual(r.errors, [], `the console threw while opening Help:\n  ${r.errors.join('\n  ')}`);
   assert.equal(seen.pressed, 'ok', `no control with the accessible name "Help" on the dashboard. Screen text: ${JSON.stringify(seen.screen)}`);

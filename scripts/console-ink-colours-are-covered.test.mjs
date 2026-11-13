@@ -260,8 +260,10 @@ test('the keep-your-relays-in-sync result is legible whether it worked or failed
       steward: { syncEnable: enable },
     });
     const tree = await paint(card);
-    const go = button(tree, 'Turn on sync');
-    assert.equal(go.length, 1, 'the "Turn on sync" button did not render for a church with two relay boxes');
+    // 136df470 replaced the "Turn on sync" button with a real role=switch bound to backup.syncOn
+    const go = find(tree, n => n.type === 'button' && n.props && n.props.role === 'switch' && n.props['aria-label'] === 'Keep your relays in sync');
+    assert.equal(go.length, 1, 'the "Keep your relays in sync" switch did not render for a church with two relay boxes');
+    assert.equal(go[0].props['aria-checked'], false, 'CONTROL: the switch should read OFF for a church whose sync is off');
     go[0].props.onClick();
     await settle();
     const msg = smallest(card.draw(), re);
@@ -415,6 +417,8 @@ const BARE_INVENTORY = [
     [4, "background: 'var(--sage)'"],
     [1, "background: allUp ? 'var(--sage)' : 'var(--clay)'"],
     [1, "background: approval ? 'var(--clay)' : 'var(--line)'"],
+    [1, "background: on ? 'var(--sage)' : 'var(--line)'"],   // the 42x24 keep-relays-in-sync role=switch TRACK (136df470); no text on it — same kind as autoConfirm's track
+    [1, "background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)'"],   // the 8px per-relay sync status DOT (c071323b); non-text
     [1, "background: church.giving ? 'var(--sage)' : 'var(--line)'"],
     [1, "background: composeEvt ? 'var(--clay-soft)' : 'var(--clay)'"],
     [1, "background: encOn ? 'var(--clay)' : 'var(--line)'"],

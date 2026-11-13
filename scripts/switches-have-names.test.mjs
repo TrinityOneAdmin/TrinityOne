@@ -21,20 +21,68 @@
 // one control that takes her out of a list of named members.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { stripComments } from './test-slice.mjs';
 
-const files = ['../app/identity.jsx', '../app/screens-extras.jsx', '../app/stew-dashboard.jsx'];
+// EVERY app/*.jsx (audit 2026-11-13, N2): the list was three files, so the switches in stew-meals.jsx and
+// stew-schedule.jsx were never checked. Comments are stripped first (offsets and line numbers kept), because a
+// comment that mentions role="switch" is not a switch — stew-meals.jsx has one.
+const APP = new URL('../app/', import.meta.url);
+const files = readdirSync(APP).filter(f => f.endsWith('.jsx')).sort().map(f => '../app/' + f);
+
+// THE WHOLE OPENING TAG, not the line. This used to require `role="switch"` and `aria-label` on the SAME LINE,
+// so the relay-sync switch (136df470), whose attributes sit one per line, was reported unnamed although it
+// carries aria-label="Keep your relays in sync" three lines down. Walk back from `role="switch"` to the tag's
+// `<Name`, forward to the `>` that closes it at brace depth 0 (a `>` inside `{…}`, such as an arrow function,
+// does not end the tag; nor does one inside a string), and look for a non-empty name in that span.
+//
+// Rule 3 note: this still reads .jsx as TEXT. It checks that an attribute is present on the element, not a
+// behaviour, so a `false &&` in front of a condition cannot fake it — but it is not a render. A rendered check
+// would be stronger; it would need every switch's screen mounted, which is out of proportion for an attribute.
+export function openingTag(src, at) {
+  let s = at;
+  while (s > 0 && !(src[s] === '<' && /[A-Za-z]/.test(src[s + 1]))) s--;
+  let depth = 0, q = null;
+  for (let i = s; i < src.length; i++) {
+    const c = src[i];
+    if (q) { if (c === q && src[i - 1] !== '\\') q = null; continue; }
+    if (c === '"' || c === "'" || c === '`') q = c;
+    else if (c === '{') depth++;
+    else if (c === '}') depth--;
+    else if (c === '>' && depth === 0) return src.slice(s, i + 1);
+  }
+  return src.slice(s);
+}
+const NAMED = /\baria-label(?:ledby)?=(?:"[^"]+"|'[^']+'|\{[^}]+\})/;
+export function unnamedSwitches(src) {
+  const out = [];
+  for (const m of src.matchAll(/role="switch"/g)) {
+    if (!NAMED.test(openingTag(src, m.index))) out.push(src.slice(0, m.index).split('\n').length);
+  }
+  return out;
+}
+
+test('the scanner reads the whole opening tag — named across lines, unnamed across lines, and a neighbour\'s name is not borrowed', () => {
+  assert.deepEqual(unnamedSwitches('<button role="switch" aria-checked={on} aria-label="Dark mode" />'), [], 'one-line named switch');
+  assert.deepEqual(unnamedSwitches('<button\n  onClick={() => go(a > b)}\n  role="switch" aria-checked={on}\n  aria-label="Keep your relays in sync"\n  style={{ x: 1 }}>'), [],
+    'a switch whose aria-label is on a LATER line of the same tag was reported unnamed');
+  assert.deepEqual(unnamedSwitches('<button\n  role="switch"\n  aria-checked={on}\n  onClick={() => x > 1}>\n  <span aria-label="not mine" />'), [2],
+    'an UNNAMED multi-line switch was passed — or it borrowed the name of the element after it');
+  assert.deepEqual(unnamedSwitches('<button role="switch" aria-label="" />'), [1], 'an EMPTY aria-label is no name');
+  assert.deepEqual(unnamedSwitches('<button role="switch" aria-labelledby={id} />'), [], 'aria-labelledby names it too');
+  assert.deepEqual(unnamedSwitches(stripComments('// a comment that says role="switch"\n<button role="switch" aria-label="Real" />')), [],
+    'a role="switch" inside a COMMENT was read as an unnamed switch');
+});
 
 test('no switch is announced without a name', () => {
   const unnamed = [];
+  let seen = 0;
   for (const rel of files) {
-    const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
-    src.split('\n').forEach((line, i) => {
-      if (!/role="switch"/.test(line)) return;
-      if (/aria-label/.test(line)) return;
-      unnamed.push(`${rel.replace('../app/', '')}:${i + 1}`);
-    });
+    const src = stripComments(readFileSync(new URL(rel, import.meta.url), 'utf8'));
+    seen += (src.match(/role="switch"/g) || []).length;
+    for (const line of unnamedSwitches(src)) unnamed.push(`${rel.replace('../app/', '')}:${line}`);
   }
+  assert.ok(seen >= 10, 're-anchor: only ' + seen + ' role="switch" found in the scanned files — this is measuring nothing');
   assert.deepEqual(unnamed, [],
     'these switches have role="switch" and aria-checked but no accessible name, so a screen reader ' +
     'announces them as an unnamed switch: ' + unnamed.join(', '));

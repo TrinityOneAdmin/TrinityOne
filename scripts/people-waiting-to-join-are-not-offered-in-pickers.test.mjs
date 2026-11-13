@@ -42,7 +42,7 @@ const MEMBERS = [
 function pickableHook({ joinApproval = true, loaded = true, admitted = [ALICE, CARL], blocked = [BOB] } = {}) {
   const win = {
     useStewardMembers: () => MEMBERS, useStewardAdmitted: () => admitted, useStewardBlocked: () => blocked,
-    useStewardJoinPolicy: () => joinApproval, useStewardIdv: () => 1, stewardStreamLoaded: () => loaded,
+    useStewardJoinPolicy: () => joinApproval, useStewardIdv: () => 1, rosterReadyFrom: () => loaded,   // 78d0e813: the hook reads rosterReadyFrom now (stewardStreamLoaded is retired)
   };
   const src = fnBody(ROOT_JSX, 'function useStewardPickableMembers(', 'useStewardPickableMembers');
   win.useStewardPickableMembers = new Function('window', `${src}\nreturn useStewardPickableMembers;`)(win);

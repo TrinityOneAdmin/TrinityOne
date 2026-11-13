@@ -23,7 +23,7 @@ import { requireFreePort } from './test-ports.mjs';
 import { D } from './trinity-doc-types.mjs';
 import { PUB_IMG_MAX } from './public-calendar.mjs';   // the defensive cap the endpoint re-checks
 
-const PORT = 19918;   // a HIGH port (19900-19999), unique across the suite, so a concurrent run cannot collide
+const PORT = 19920;   // was 19918, which the-embed-page-is-framable-cross-origin also claims (moved 2026-11-13). A HIGH port (19900-19999), unique across the suite, so a concurrent run cannot collide
 const HTTP = `http://127.0.0.1:${PORT}`;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const NET = 'trinityone';

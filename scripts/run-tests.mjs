@@ -44,6 +44,7 @@ import { availableParallelism } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tallyTap, formatTally } from './tap-tally.mjs';
 
 const CEILING = 24;
 const concurrency = Math.max(1, Math.min(CEILING, availableParallelism() - 1));
@@ -149,10 +150,17 @@ process.on('exit', releaseLock);
 // its real 171MB sits in /tmp/snap-private-tmp/ where nothing can see it. Measured 2026-10-09:
 // 44GB in 2,394 dirs, root at 94%. The owner had cleared ~50GB of the same thing that morning.
 // Never fatal: a failed sweep must not stop a suite.
-try {
-  const sweep = fileURLToPath(new URL('./sweep-chromium-tmp.mjs', import.meta.url));
-  spawnSync(process.execPath, [sweep], { stdio: 'inherit', timeout: 60000 });
-} catch {}
+// TRINITYONE_SKIP_SWEEP=1 turns it off — for a NESTED run (scripts/tap-tally.test.mjs drives this runner over
+// throwaway files): the sweep is not scoped by TMPDIR, it may start a probe chromium at the fixed /tmp/sweep-probe,
+// and it deletes any stale profile on the box — a concurrent suite's included. A nested run has no business there.
+if (process.env.TRINITYONE_SKIP_SWEEP === '1') {
+  console.error('run-tests: chromium sweep skipped (TRINITYONE_SKIP_SWEEP=1)');
+} else {
+  try {
+    const sweep = fileURLToPath(new URL('./sweep-chromium-tmp.mjs', import.meta.url));
+    spawnSync(process.execPath, [sweep], { stdio: 'inherit', timeout: 60000 });
+  } catch {}
+}
 
 // Write a TAP stream to a temp file so the count floor can read it after the run, without piping
 // stdout through this process (which deadlocks under the suite's output volume).
@@ -227,6 +235,16 @@ child.on('exit', (code, signal) => {
         }
       } catch {}
     }
+  } catch {}
+  // THE TALLY: which tests failed, by file — and, SEPARATELY, the known open findings (`not ok … # TODO`), which
+  // are red on purpose and are NEVER failures. A "58 failing" baseline was once counted by grepping this TAP for
+  // `not ok`, ten of which were TODO rows (scripts/tap-tally.mjs). Printed on every run, named or full, and kept
+  // beside the TAP so the list can be diffed against the previous run's.
+  try {
+    const t = tallyTap(readFileSync(tapFile, 'utf8'));
+    console.error('\n' + formatTally(t));
+    writeFileSync(join(tapDir, 'failing.txt'), t.failing.map(r => r.file + '\t' + r.name).join('\n') + '\n');
+    writeFileSync(join(tapDir, 'todo.txt'), t.todo.map(r => r.file + '\t' + r.name).join('\n') + '\n');
   } catch {}
   // KEEP THE TAP. It used to be deleted here, so the only durable record of what failed died with the run —
   // and a failure list you cannot diff against the previous one is a list you can only guess at. Prune to the

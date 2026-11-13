@@ -295,11 +295,19 @@ test('(g) removing the lock, removing the church, and restoring from 12 words ea
   }
   {
     const { dev, stay } = await deviceWithRecord();
+    // removeKey also clears the device's plaintext/sealed caches: the children lists (fix/child-safety-leaks), the
+    // Overview clearance seed (acd21e73), the Finance book seed (8c3e8edb) and every other seed (240fb134). Each is
+    // recorded here, so a removal that stopped wiping one of them fails too — not only a missing stub.
+    const cleared = [];
+    const rec = (name) => (arg) => { cleared.push([name, arg]); };
     const o = liftMethod('removeKey() {', { localStorage: { removeItem() {} }, KEY_LS: 'k', encBlobRemove: async () => true, _stay: stay,
-      _minorsLastClear: () => {},   // fix/child-safety-leaks' sealed children lists — inert here; that file tests its own clear
+      _minorsLastClear: rec('_minorsLastClear'), _sgClearClear: rec('_sgClearClear'), _finBookClear: rec('_finBookClear'), _seedSweep: rec('_seedSweep'),
       window: { Steward: {}, dispatchEvent() {} }, CustomEvent: class {} });
     await o.removeKey(); await new Promise(r => setImmediate(r));
     assert.equal(dev.hw.map[SS_KEY], undefined, 'removeKey ("Remove this church from this device") left the stay-open record');
+    assert.deepEqual(cleared.map(c => c[0]).sort(), ['_finBookClear', '_minorsLastClear', '_seedSweep', '_sgClearClear'],
+      'removing the church from this device left a cached copy of its data behind: ' + JSON.stringify(cleared));
+    assert.ok(cleared.every(c => c[1] === ''), 'a device-remove clear was scoped to one church instead of all ("")');
   }
   {
     const { dev, stay } = await deviceWithRecord();

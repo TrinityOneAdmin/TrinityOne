@@ -98,7 +98,7 @@ test('normalising did not make it block people it should not', () => {
 test('the block-and-rotate path uses the helper, not its own lookup', () => {
   const block = SRC.slice(SRC.indexOf('const block = (pk) =>'));
   // the group-key loop is in rotateChurchKeys (shared with removing a delegate); the rule is read over both
-  const rotate = SRC.slice(SRC.indexOf('function rotateChurchKeys('), SRC.indexOf('function DashMembers()'));
+  const rotate = SRC.slice(SRC.indexOf('function rotateChurchKeys('), SRC.indexOf('function DashMembers('));
   assert.ok(rotate.includes('function rotateChurchKeys('), 'rotateChurchKeys is gone — block() has no rotation');
   const body = block.slice(0, block.indexOf('\n  };')) + '\n' + rotate;
   assert.ok(body.length > 200 && body.includes('publishGroupKey'),
@@ -127,7 +127,7 @@ function liftBlock() {
   const rotateAt = SRC.indexOf('function rotateChurchKeys(');
   assert.notEqual(rotateAt, -1, 'rotateChurchKeys is gone — block() has no rotation');
   // …and takeOffEveryTeam (the roster / care-team / rota half of Block), which sits beside it
-  const rotateSrc = SRC.slice(rotateAt, SRC.indexOf('function DashMembers()', rotateAt));
+  const rotateSrc = SRC.slice(rotateAt, SRC.indexOf('function DashMembers(', rotateAt));
   const setLine = SRC.match(SET_LINE_RE)[0];
   const filterSrc = ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted'].map(n => fnBody(SRC, 'function ' + n + '(', n)).join('\n');
   const fnLine = (SRC.match(/^\s*const isBlocked = .*$/m) || { 0: '  const isBlocked = (pk) => blockedSet.has(pk);' })[0];
