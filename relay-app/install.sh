@@ -359,8 +359,10 @@ UNIT
   # Boot recovery (audit C M1). Before the relay starts: finish or undo a move that was interrupted (a helper killed mid-copy
   # would otherwise leave the card "under way" for ever; a crash between the switch and relay.env would leave the old folder
   # marked MOVED-TO and the relay refusing it). It never starts or stops the relay. After the relay is up: finish the check
-  # recovery left. The finish unit REQUIRES the relay to be up (Requisite=, not Wants=: an admin who disabled the relay must not
-  # have it started at boot by this) and is bounded. Neither blocks the relay if it fails. The move and update units are ordered
+  # recovery left. The finish unit has NO dependency on the relay beyond After= (not Wants=, which starts a relay an admin
+  # disabled; not Requisite=, which makes stopping the relay stop this unit, so a rollback run from inside it was killed part-way
+  # and left the relay down): the script itself exits if the relay is not running. It is bounded (TimeoutStartSec=900 > its
+  # lock wait of TRINITYONE_FINISH_LOCK_WAIT=600 plus the identity proof). Neither blocks the relay if it fails. The move and update units are ordered
   # After= the recover unit, so a request left from before shutdown cannot take the lock first (audit N2).
   cat > "/etc/systemd/system/trinityone-move-recover.service" <<UNIT
 [Unit]
@@ -379,7 +381,6 @@ UNIT
 [Unit]
 Description=TrinityOne relay data move: finish the check of a recovered move
 After=$SVC.service
-Requisite=$SVC.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes

@@ -87,7 +87,8 @@ exec 9>"$LOCK"
 # BOOT RECOVERY NEVER WAITS (audit N2): it is ordered Before= the relay, so a wait here holds the relay back. If another root job
 # already has the lock, that job is a move helper (which recovers an interrupted move itself, at its start) or an update (which
 # touches no move state); either way recovery has nothing to add right now.
-FLOCK_ARGS=(-w "$LOCK_WAIT"); [ "$MODE" = --recover-only ] && FLOCK_ARGS=(-n)
+# --finish-check is killed by its unit at 900 s, so it waits for the lock less than that (600 s) whatever LOCK_WAIT says
+FLOCK_ARGS=(-w "$LOCK_WAIT"); [ "$MODE" = --recover-only ] && FLOCK_ARGS=(-n); [ "$MODE" = --finish-check ] && FLOCK_ARGS=(-w "${TRINITYONE_FINISH_LOCK_WAIT:-600}")
 if ! flock "${FLOCK_ARGS[@]}" 9 2>/dev/null; then
   log "another root job holds $LOCK${MODE:+ (mode $MODE: not waiting)}"
   if [ -z "$MODE" ]; then
@@ -165,6 +166,20 @@ recover_boot() {
 finish_after_boot() {
   local cur pub
   [ -f "$STATE" ] && [ "$(srv active --state "$STATE" | jget state)" = checking ] || return 0
+  # A relay that is not running is not started from here when an admin DISABLED it, and (H-1) the unit has no Requisite= on the relay:
+  # a rollback stops the relay from inside this script, which must not kill this script.
+  if ! relay_active; then
+    if ! systemctl is-enabled --quiet "$SVC" 2>/dev/null; then
+      log "after boot: the relay is not running and is not enabled, so there is nothing to check (and it is not started from here)"; return 0
+    fi
+    # ENABLED but not running after a boot that left a check: the new folder was refused (exit 78: drive missing, key missing...)
+    # or the relay would not start on it. Put the relay back on the old folder -- unless that is impossible or would lose records,
+    # in which case it is left refused and the reason is written where GET /storage shows it.
+    local rp; rp="$(srv rollback-possible --state "$STATE")" || {
+      log "after boot: the relay is enabled but not running, and the move cannot be rolled back ($rp); leaving it refused"
+      srv refuse --state "$STATE" --code finish-no-rollback --detail "$(printf '%s' "$rp" | jget reason)" >/dev/null; return 0; }
+    rollback_flow "the relay did not start on the new folder after boot (it is enabled but not running)"; return 0
+  fi
   cur="$(srv pointer --state "$STATE" | jget dataDir)"; pub="$(srv current-pub --dir "$cur" | jget pub)"
   log "after boot: finishing the check of a recovered move"
   verify_started "$cur" "$pub"

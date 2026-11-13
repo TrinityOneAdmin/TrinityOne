@@ -292,6 +292,17 @@ export async function cli(argv) {
     }
     case 'pass': { const r = checkPassed(stores()); return r ? { ok: true, state: r.state } : { ok: false, code: 'nothing-to-pass' }; }
     case 'rollback': return rollbackMove(stores());
+    case 'rollback-possible': {      // may a failed check be rolled back from here, without losing anything or making two startable copies?
+      const j = jsonFieldStore(a.state, 'move').read();
+      if (!j || !['switched', 'checking'].includes(j.state)) return { ok: false, reason: 'no-check-pending' };
+      // the data the relay must come back to: a copy move's old folder, or (rename) the folder the data was renamed into
+      const back = j.mode === 'rename' ? j.to : j.from;
+      if (keyPubOf(back) !== j.relayPub) return { ok: false, reason: j.mode === 'rename' ? 'drive-missing-and-data-not-here' : 'old-folder-unusable' };
+      // a new folder that has since taken writes must not be rolled back over (they would be lost)
+      let c = null; try { c = await countRows(j.to, { readOnly: true }); } catch {}
+      if (c && j.counts && Object.keys(j.counts).some(k => j.counts[k] !== null && c[k] > j.counts[k])) return { ok: false, reason: 'new-folder-has-newer-records' };
+      return { ok: true, newFolder: c ? 'readable' : 'unreadable' };
+    }
     case 'recover': { const r = await recoverMove(stores()); return r.action === 'refuse' ? { ok: false, ...r } : { ok: true, ...r }; }
     case 'prove': { need(a, 'port', 'pub'); return proveIdentity({ port: Number(a.port), pub: a.pub, tries: Number(a.tries || 60), intervalMs: Number(a.interval || 2) * 1000 }); }
     case 'remove-old': {
