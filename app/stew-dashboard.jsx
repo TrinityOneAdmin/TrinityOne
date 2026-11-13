@@ -4113,7 +4113,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInl
                 );
               })() : null}
               {compact ? null : <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>}
-              {/* compact (APK / narrow mobile): the name + settings gear sit on the FIRST line; the member count
+              {/* compact (the APK, or any window under 760px — DashGroups passes isNative || stewNarrow): the name + settings gear sit on the FIRST line; the member count
                   / invite-only meta drops to a SECOND line below it. Before this, name + gear + meta shared one
                   line and the meta was flexShrink:0, so a long group name was truncated to make room for the
                   count — worst on a narrow phone (owner 2026-10-21). The gear still sits by the NAME and well
@@ -5084,7 +5084,12 @@ function DashGroups() {
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
-        compact={isNative}
+        /* compact on the APK AND in any window under useStewNarrow's 760px (2026-11-13): the web console on a
+           phone drew the desktop row — a kind tile plus a wrapping strip of tags and buttons that squeezed the
+           name to a few characters. 760px is wider than a phone, so a portrait tablet or a half-width desktop
+           window gets the compact row too; every control the strip carried is in the settings panel the gear
+           opens (scripts/the-group-row-is-compact-at-phone-width-on-the-web.test.mjs). */
+        compact={isNative || stewNarrow}
         /* The settings gear shows on EVERY row. ListPanel only renders renderInline in its compact (native)
            branch — on the APK the gear sits inline by the name — so the web/desktop row gets its own gear in
            renderRight below (ListPanel's web branch does not consume renderInline). */
