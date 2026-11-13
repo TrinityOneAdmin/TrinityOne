@@ -18,7 +18,7 @@ import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';
 import { createTunnelWatchdog } from './relay-selfheal.mjs';
 // Relay storage plan step 3: the panel API reuses the mover's OWN checks (audit B: same realpath/symlink/classify path).
-import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath, blockDeviceIsUsbOrRemovable } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
+import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath, blockDeviceIsUsbOrRemovable, nodeCanMove } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
 // The names this relay gates by, from the ONE declared list (ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
@@ -7155,6 +7155,8 @@ async function storageReport(fresh) {
   // reasons the FOLDER cannot be moved right now, whatever drive is picked (audit A #11, #14; audit B)
   const refuse = [];
   if (err) refuse.push(err);
+  // the mover needs node:sqlite (Node 22.5+); the knob is only for the test that proves the card is told
+  if (!nodeCanMove(process.env.TRINITY_STORAGE_NODE_VERSION || process.versions.node)) refuse.push('node-too-old');
   if (j && MOVE_ACTIVE.has(j.state)) refuse.push('move-in-progress');
   if (j && j.state === 'awaiting-confirm') refuse.push('old-copy-awaiting-removal');
   if (existsSync(join(DATA_DIR, '.restore-pending'))) refuse.push('restore-pending');

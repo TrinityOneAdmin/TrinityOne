@@ -72,11 +72,11 @@ case "$cmd" in
   *) exit 0;;
 esac
 `;
-const STUB_RUNUSER = '#!/usr/bin/env bash\nshift 3\nexec "$@"\n';
+const STUB_RUNUSER = '#!/usr/bin/env bash\necho "$*" >> "$TRIN_BOX/runuser.log"\nshift 3\nexec "$@"\n';
 const STUB_CHOWN = '#!/usr/bin/env bash\necho "$*" >> "$TRIN_BOX/chown.log"\nexit 0\n';
 
-function rig() {
-  const driveBase = otherDeviceBase();
+function rig(same = false) {
+  const driveBase = same ? mkdtempSync(join(tmpdir(), 'trin-helper-same-')) : otherDeviceBase();
   if (!driveBase) return null;
   const box = mkdtempSync(join(tmpdir(), 'trin-helper-box-'));
   cleanups.push(() => { rmSync(box, { recursive: true, force: true }); rmSync(driveBase, { recursive: true, force: true }); });
@@ -151,9 +151,9 @@ async function adminGet(r, path) {
 }
 const eventCount = dir => { const db = new DatabaseSync(join(dir, 'relay.sqlite'), { readOnly: true }); try { return Number(db.prepare('SELECT count(*) AS n FROM events').get().n); } finally { db.close(); } };
 
-function withRig(name, fn) {
+function withRig(name, fn, same = false) {
   test(name, async t => {
-    const r = rig();
+    const r = rig(same);
     if (!r) { t.skip('no second filesystem on this machine to act as the drive'); return; }
     try { await fn(r); } finally { killRelay(r); await sleep(300); }
   });
@@ -289,4 +289,46 @@ withRig('the move helper refuses to act when the relay unit will not stop (nothi
   assert.equal(existsSync(join(r.data, 'MOVED-TO')), false);
   assert.equal(existsSync(join(r.drive, 'trinityone-relay')), false);
   assert.equal(r.journal().move.code, 'could-not-stop');
+});
+
+// ── SAME VOLUME: one atomic rename (owner, plan 8a item 5), done by the helper as root ───────────────────────────
+withRig('same drive: the helper renames the folder instantly (as root, the mover only), leaves a MOVED-TO-only tombstone, proves the same relay, keeps no old copy', async r => {
+  const { pub, events } = await seedAndRun(r);
+  writeMoveRequest(r, { sameDrive: true });
+  const res = r.helper(); assert.equal(res.status, 0, res.stderr);
+  assert.notEqual(r.journal() && r.journal().move.code, 'same-volume-unsupported', 'a same-drive move was refused: the owner decided it is an instant rename');
+  assert.equal(r.journal().move.mode, 'rename');
+  assert.equal(r.log('runuser.log'), '', 'the same-volume rename ran as the service user, which cannot rename a folder in a root-owned parent');
+  assert.ok(await up(), 'the relay is not running after the rename:\n' + r.log('relay.log').slice(-1500));
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.target);
+  assert.ok(await identityOK(pub));
+  assert.ok(eventCount(r.target) >= events);
+  assert.deepEqual(readdirSync(r.data), ['MOVED-TO'], 'the old path must hold ONLY the tombstone (no data, no old copy)');
+  assert.equal(r.journal().move.state, 'done'); assert.equal(r.journal().move.oldCopy, null);
+  assert.equal(statSync(r.target).mode & 0o777, 0o700);
+  assert.equal(statSync(join(r.target, 'relay-key.json')).mode & 0o777, 0o600);
+  const starts = r.log('starts.log').split('\n').filter(l => l.includes('datadir=' + r.target));
+  assert.match(starts[0], /journal=checking/, 'the relay started before beginCheck');
+  assert.equal(existsSync(join(r.target, '.move-request')), false);
+}, true);
+
+withRig('same drive, failed check: rolled back by renaming back; the old path is the relay again', async r => {
+  const { pub, events } = await seedAndRun(r);
+  writeFileSync(join(r.box, 'dont-start-on-new'), '');
+  r.env.PROVE_TRIES = '2'; r.env.PROVE_SLEEP = '0.2';
+  writeMoveRequest(r, { sameDrive: true });
+  assert.equal(r.helper().status, 0);
+  rmSync(join(r.box, 'dont-start-on-new'));
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.data);
+  assert.equal(existsSync(join(r.data, 'MOVED-TO')), false, 'the tombstone is still at the old path');
+  assert.equal(existsSync(r.target), false, 'the relay\'s data is still at the new path');
+  assert.ok(await up()); assert.ok(await identityOK(pub)); assert.equal(eventCount(r.data), events);
+  assert.equal(r.journal().move.state, 'rolled-back');
+}, true);
+
+withRig('a cross-drive copy still runs the mover as the service user', async r => {
+  await seedAndRun(r);
+  writeMoveRequest(r);
+  assert.equal(r.helper().status, 0);
+  assert.match(r.log('runuser.log'), /-u nobody -- .*relay-move\.mjs move/, 'the copy did not run through runuser');
 });

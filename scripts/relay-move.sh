@@ -159,14 +159,13 @@ handle_move() {
   # the target folder: ours, 0700, the service user's. The parents are root-owned, so only root can make it.
   if [ ! -e "$target" ]; then mkdir -m 0700 "$target" || { refuse_and_restart target-unwritable; return; }; created=1; fi
   chown "$SVC_USER:$SVC_USER" "$target" 2>/dev/null || true; chmod 0700 "$target"
-  # a same-volume move is a rename of a folder the service user cannot rename (root-owned parents): not offered here
-  if [ "$(stat -c %d "$target")" = "$(stat -c %d "$DATA")" ]; then
-    [ "$created" = 1 ] && rmdir "$target" 2>/dev/null
-    refuse_and_restart same-volume-unsupported "the data is already on that drive"; return
-  fi
-
+  # SAME VOLUME = ONE ATOMIC RENAME (owner, plan 8a item 5). The service user cannot rename its own folder (the parents are
+  # root-owned), so for that case ONLY the mover runs as root. A cross-volume copy still runs as the service user.
+  # Either way the journal is the scratch one and is checked before it is believed.
+  AS_USER=(runuser -u "$SVC_USER" --)
+  if [ "$(stat -c %d "$target")" = "$(stat -c %d "$DATA")" ]; then AS_USER=(); log "same volume: the rename runs as root, nothing else does"; fi
   srv seed --state "$STATE" --work "$WORK" --from "$DATA" >/dev/null && chown -R "$SVC_USER:$SVC_USER" "$WORK" 2>/dev/null
-  out="$(runuser -u "$SVC_USER" -- "$NODE" "$MV" move --from "$DATA" --drive "$drive" --pointer "$WORK/state.json" --port "$PORT" --mode server)"; rc=$?
+  out="$(${AS_USER[@]+"${AS_USER[@]}"} "$NODE" "$MV" move --from "$DATA" --drive "$drive" --pointer "$WORK/state.json" --port "$PORT" --mode server)"; rc=$?
   log "mover (exit $rc): $out"
   ab="$(srv absorb --state "$STATE" --work "$WORK" --from "$DATA" --target "$target")"; local abrc=$?
   if [ "$abrc" != 0 ]; then

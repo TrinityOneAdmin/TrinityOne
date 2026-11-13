@@ -1729,6 +1729,7 @@
       case 'move-in-progress': case 'move-already-requested': return 'A move is already under way.';
       case 'source-has-symlink': return 'This folder links to somewhere else, so it can\'t be moved safely.';
       case 'drives-unknown': return 'Couldn\'t list this computer\'s drives. Try again in a moment.';
+      case 'node-too-old': return 'This relay\'s Node is too old to move data. Update Node (22.5 or newer) on the relay\'s computer first.';
       case 'storage-state-unknown': case 'storage-state-unreadable': return 'This relay can\'t move its data. Reinstall the app, or ask for help.';
       case 'no-permissions-not-acknowledged': return 'Tick the box to say you understand this drive has no file permissions.';
       case 'removable-not-acknowledged': return 'Tick the box to say you understand this drive can wear out and fail.';

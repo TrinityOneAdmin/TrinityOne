@@ -164,17 +164,19 @@ BUNDLE_BASE="$(release_bundle_base "$SRC")"
 say "TrinityOne Relay installer"
 ok "release key sha256 $(printf '%s\n' "$RELEASE_PUBKEY_PEM" | sha256sum | cut -c1-64)"
 
-# ── Node (>=18) ────────────────────────────────────────────────────────────────
+# ── Node (>=22.5) ────────────────────────────────────────────────────────────────
 NODE_OK=0
 if command -v node >/dev/null 2>&1; then
-  case "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" in
-    1[89]|2[0-9]|[3-9][0-9]) NODE_OK=1;;
+  # 22.5 is when node:sqlite arrived; the relay's event store and the data mover both need it, so an older Node
+  # (this said 18+, and installed 20) could never run the gateway at all.
+  case "$(node -p 'const [a,b]=process.versions.node.split(".").map(Number);(a>22||(a===22&&b>=5))?"ok":"old"' 2>/dev/null || echo old)" in
+    ok) NODE_OK=1;;
   esac
 fi
 if [ "$NODE_OK" = 1 ]; then ok "Node $(node -v) already present"
 else
-  say "Installing Node.js 20 (NodeSource)"
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null
+  say "Installing Node.js 22 (NodeSource)"
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
   apt-get install -y nodejs >/dev/null
   ok "Node $(node -v) installed"
 fi
@@ -308,7 +310,7 @@ Description=TrinityOne relay data move (root helper)
 [Service]
 Type=oneshot
 TimeoutStartSec=infinity
-Environment=TRINITYONE_DIR=$DIR TRINITYONE_SVC=$SVC TRINITYONE_PORT=$PORT TRINITYONE_USER=$SVC_USER
+Environment=TRINITYONE_DIR=$DIR TRINITYONE_SVC=$SVC TRINITYONE_PORT=$PORT TRINITYONE_USER=$SVC_USER TRINITYONE_NODE=$NODE_BIN
 ExecStart=/bin/bash $DIR/scripts/relay-move.sh
 UNIT
   cat > "/etc/systemd/system/trinityone-move.path" <<UNIT
