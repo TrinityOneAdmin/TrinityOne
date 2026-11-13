@@ -117,6 +117,16 @@ for (const [name, go] of PATHS) {
   });
 }
 
+test('publish (N-b): a write of ANOTHER KIND under the same d-tag does not supersede it', async () => {
+  // keyed kind + signer + d-tag: a different kind is a different document, so its failure is not this one's outcome
+  const L = lift((id, n) => (id === 'o' ? (n === 0 ? RL : 'ok') : 'blocked: not permitted'));
+  const older = L.fns.publish(ev('o', 10));
+  const other = L.fns.publish({ ...ev('k', 11), kind: 30079 });
+  const [ro, rk] = await Promise.all([older, other]);
+  assert.equal(rk, false, 'CONTROL: the other-kind write was not refused');
+  assert.ok(ro && ro.id === 'o', 'a write was abandoned because a write of ANOTHER KIND with the same d-tag failed — it was never asked again');
+});
+
 test('publish: the per-second limiter is retried at most three more times, and is not remembered as a refusal', async () => {
   const L = lift(() => RL);
   const o = {};

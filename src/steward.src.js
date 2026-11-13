@@ -4729,8 +4729,9 @@ const _stay = makeStayOpen({
 async function publish(evt, opts) {
   const _bg = !!(opts && opts.background);
   // ── WHICH CALL IS THE NEWEST FOR THIS DOCUMENT, AND HOW IT ENDED (audit of 651db3cb: M1, M2, N1) ───────────────────
-  // Registered FIRST, before any await, so call order is the order the steward acted in. Keyed by SIGNER + d-tag: a
-  // church-signed and a network-signed document that share a d-tag are different documents. `done` settles true when
+  // Registered FIRST, before any await, so call order is the order the steward acted in. Keyed by KIND + SIGNER + d-tag
+  // (audit of 536bcc80, N-b): a church-signed and a network-signed document that share a d-tag are different documents,
+  // and so are two kinds that share one. `done` settles true when
   // this call's write landed and false otherwise, exactly once (the `finally` at the end settles any path that did not).
   // The rate-limited retry below reads it: an OLDER call that is still asking when a newer one exists stops asking and
   // takes the NEWER call's outcome as its own — success only if that newer copy was really accepted, never merely
@@ -4740,7 +4741,7 @@ async function publish(evt, opts) {
   let _pk = '', _settle = null;
   try {
     const _dd = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
-    if (_dd) { _pk = (evt.pubkey || '') + '|' + _dd; let s0 = null; const done = new Promise(r => { s0 = r; }); _settle = s0; _pubLatest.set(_pk, { id: evt.id, done }); }
+    if (_dd) { _pk = (evt.kind | 0) + '|' + (evt.pubkey || '') + '|' + _dd; let s0 = null; const done = new Promise(r => { s0 = r; }); _settle = s0; _pubLatest.set(_pk, { id: evt.id, done }); }
   } catch (x) { _pk = ''; _settle = null; }
   const _fin = (v) => { try { if (_settle) _settle(!!v); } catch (x) {} return v; };
   try {
@@ -5070,7 +5071,7 @@ async function _publishToRelays(evt, urls) {
   let _pk = '', _settle = null;
   try {
     const _dd = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
-    if (_dd) { _pk = (evt.pubkey || '') + '|' + _dd; let s0 = null; const done = new Promise(r => { s0 = r; }); _settle = s0; _pubLatest.set(_pk, { id: evt.id, done }); }
+    if (_dd) { _pk = (evt.kind | 0) + '|' + (evt.pubkey || '') + '|' + _dd; let s0 = null; const done = new Promise(r => { s0 = r; }); _settle = s0; _pubLatest.set(_pk, { id: evt.id, done }); }
   } catch (x) { _pk = ''; _settle = null; }
   const _fin = (v) => { try { if (_settle) _settle(!!v); } catch (x) {} return v; };
   try {
@@ -5337,7 +5338,7 @@ const _lastStamp = new Map();   // d-tag -> the created_at we last published for
 // (rotaChangedSince) must be answered from this map; a failed write of our own must never read as somebody else's change.
 const _seenStamp = new Map();
 const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
-const _pubLatest = new Map();   // "<signer>|<d-tag>" -> { id, done } of the most recent publish()/_publishToRelays() call (its rate-limited retry stops once superseded)
+const _pubLatest = new Map();   // "<kind>|<signer>|<d-tag>" -> { id, done } of the most recent publish()/_publishToRelays() call (its rate-limited retry stops once superseded)
 // ── A COPY WE CANNOT OPEN IS NOT AN EMPTY DOCUMENT (the roster wipe, 2026-10-12) ─────────────────────────
 // A console that opens before the church name key arrives sees every sealed calendar document as `_locked`.
 // The screens then showed a locked team as an EMPTY team, and any save — a roster edit, the care panel's effect,
