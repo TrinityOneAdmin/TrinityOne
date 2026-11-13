@@ -7484,6 +7484,9 @@ async function storageReport(fresh) {
   if (j && MOVE_ACTIVE.has(j.state)) refuse.push('move-in-progress');
   if (j && j.state === 'awaiting-confirm') refuse.push('old-copy-awaiting-removal');
   if (existsSync(join(DATA_DIR, '.restore-pending'))) refuse.push('restore-pending');
+  // The Suite's code auto-update and a data move never overlap (storage + auto-update integration, 2026-11-13). The
+  // shell refuses a move itself too (launcher move_blocked); this tells the steward why before they try.
+  for (const r of suiteUpdateBlocksMove(DATA_DIR, new Date())) refuse.push(r);
   // A request is live only if THIS run of the relay wrote it (it stops right after writing). One older than this
   // process, with no move under way, is a leftover the launcher never consumed (audit B M-1): it is reported as
   // stale and not treated as "under way". The mover consumes the request as its first act, so this is a backstop.
@@ -7516,6 +7519,34 @@ async function storageReport(fresh) {
     refuse, drives,
   };
 }
+// SUITE-UPDATE-BLOCKS-MOVE-BEGIN — lifted & run by scripts/a-move-and-a-suite-update-never-overlap.test.mjs
+// Why a data move must wait for the Suite's code auto-update, read from the data folder alone (the shell's files):
+//   suite-update-applying — the shell holds suite/apply-in-progress for the whole of an apply (stop, backup, swap,
+//                           health check, any restore of the church's data);
+//   suite-data-held-aside — an update's restore could not finish and the original store files are set aside
+//                           (relay.sqlite*.restore-aside): the data is not whole, and moving it would split it;
+//   suite-update-due      — an update is staged, the switch is on and its window is open now, and nothing was applied
+//                           in this window yet: the shell is about to stop the relay for it. The SAME rule as the shell's
+//                           due() (main.rs): minutes since HH:MM < 120, and lastApplied is not this window's day.
+function suiteUpdateBlocksMove(dataDir, now) {
+  const out = [];
+  const suiteDir = join(dataDir, 'suite');
+  if (existsSync(join(suiteDir, 'apply-in-progress'))) out.push('suite-update-applying');
+  if (['relay.sqlite', 'relay.sqlite-wal', 'relay.sqlite-shm'].some(f => existsSync(join(dataDir, f + '.restore-aside')))) out.push('suite-data-held-aside');
+  let at = null; try { at = readFileSync(join(dataDir, 'suite-autoupdate'), 'utf8'); } catch {}
+  if (at !== null && existsSync(join(suiteDir, 'staging', 'READY'))) {
+    const m = /^\s*(\d{1,2})\s*:\s*(\d{1,2})\s*$/.exec(at);
+    const target = m && Number(m[1]) <= 23 && Number(m[2]) <= 59 ? Number(m[1]) * 60 + Number(m[2]) : 180;   // the shell's default 03:00
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const p = n => String(n).padStart(2, '0');
+    const day = d => d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    const windowDay = nowMin >= target ? day(now) : day(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+    let lastApplied = ''; try { lastApplied = String(JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8')).lastApplied || ''); } catch {}
+    if ((nowMin + 1440 - target) % 1440 < 120 && lastApplied !== windowDay) out.push('suite-update-due');
+  }
+  return out;
+}
+// SUITE-UPDATE-BLOCKS-MOVE-END
 const STORAGE_STARTED_AT = Date.now();
 function storageRequestIsStale(j) {
   if (j && MOVE_ACTIVE.has(j.state)) return false;

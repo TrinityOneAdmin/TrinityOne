@@ -1863,6 +1863,9 @@
       case 'drives-unknown': return 'Couldn\'t list this computer\'s drives. Try again in a moment.';
       case 'node-too-old': return 'This relay\'s Node is too old to move data. Update Node (22.13 or newer) on the relay\'s computer first.';
       case 'update-in-progress': return 'An update is running. Try again when it has finished.';
+      case 'suite-update-applying': return 'The app is installing an update. Try again when it has finished.';
+      case 'suite-update-due': return 'An update is about to be installed. Try again in a couple of hours, or after it has been installed.';
+      case 'suite-data-held-aside': return 'Your church\'s data needs attention after an update. Restart this computer first, then move.';
       case 'storage-state-unknown': case 'storage-state-unreadable': return 'This relay can\'t move its data. Reinstall the app, or ask for help.';
       case 'no-permissions-not-acknowledged': return 'Tick the box to say you understand this drive has no file permissions.';
       case 'removable-not-acknowledged': return 'Tick the box to say you understand this drive can wear out and fail.';
