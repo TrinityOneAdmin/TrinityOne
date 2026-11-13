@@ -559,10 +559,32 @@ fn date_after(a: &str, b: &str) -> bool {
 fn json_str_value(body: &str, key: &str) -> Option<String> {
     for open in [format!("\"{key}\":\""), format!("\"{key}\": \"")] {
         if let Some(i) = body.find(&open) {
-            let rest = &body[i + open.len()..];
-            if let Some(end) = rest.find('"') {
-                return Some(rest[..end].to_string());
-            }
+            return json_unescape_until_quote(&body[i + open.len()..]);
+        }
+    }
+    None
+}
+
+// Read a JSON string body up to its closing (unescaped) quote, DECODING the escapes jstr writes (\\ \" \n \r \t)
+// and \uXXXX. [audit 6f9b2ec0 M2] Returning the text still escaped made every carried-over value (a Windows path in
+// restoreFailed) double its backslashes on each state write. Values with no escapes (shas, dates) are unchanged.
+fn json_unescape_until_quote(rest: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut it = rest.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match it.next()? {
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'u' => {
+                    let hex: String = it.by_ref().take(4).collect();
+                    out.push(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).unwrap_or('\u{fffd}'));
+                }
+                other => out.push(other), // \\ \" \/
+            },
+            _ => out.push(c),
         }
     }
     None
@@ -766,6 +788,14 @@ fn launch_code_dir(payload: &Path, suite_dir: &Path, data_dir: &Path, node: Opti
         }
         LaunchPick::Active => {
             let id = signed.expect("Active implies a signed identity");
+            // [audit 6f9b2ec0 L-a] A build that failed its health check (quarantined) never runs again — not even
+            // when it is still installed because its rollback was blocked ("stuck") and the switch is turned back on.
+            let q = std::fs::read_to_string(suite_dir.join("quarantine-sha")).unwrap_or_default();
+            if q.trim() == id.sha {
+                applog(log, "launch: the installed update is the build that failed its check (quarantined); retiring it");
+                retire_override(suite_dir, log);
+                return shipped;
+            }
             if !active_tree_matches(&active_dir, &id) {
                 // [audit M1] Re-extract the folder from the verified tarball rather than run a damaged one.
                 applog(log, "launch: suite/active does not match its signed tarball; re-extracting it");
@@ -1376,8 +1406,13 @@ fn recover_interrupted_restore(data_dir: &Path, log: &Path) -> Option<String> {
                 let _ = std::fs::remove_file(&wal);
             }
         }
+        // MAIN FIRST (audit 6f9b2ec0 L-b): once relay.sqlite is back, a crash during this recovery leaves a state the
+        // next recovery reads as "only side files set aside" and finishes correctly; side files first would let the
+        // next recovery mistake the just-restored original -wal for a brought-in one and delete it.
         let mut stuck = Vec::new();
-        for l in &asides {
+        let mut order: Vec<&PathBuf> = asides.clone();
+        order.sort_by_key(|l| if **l == main { 0 } else { 1 });
+        for l in order {
             if l.exists() {
                 let _ = std::fs::remove_file(l); // a brought-in side file; the old one replaces it
             }
@@ -1573,6 +1608,24 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
             // pin the copy the warning names, so pruning can never delete it (audit a1cc6eff L4)
             let _ = std::fs::write(b.join("KEEP"), format!("{restore_failed}\n"));
         }
+    }
+    // [audit 6f9b2ec0 M1] If the restore could not even put the original files back, they are held as
+    // *.restore-aside and relay.sqlite may be missing. Starting ANY relay now would create a new store over them and
+    // the next start's recovery would then mistake that for a finished restore. So: start nothing, touch no code
+    // files, switch auto-update off, and say what to do. The next start's recovery (before any relay runs) puts the
+    // originals back from the same names.
+    if store_paths(env.data_dir).iter().any(|l| aside_path(l).exists()) {
+        switch_auto_update_off(env.data_dir, env.log);
+        let prev_sha = json_str_value(prev_state_raw, "installedSha").unwrap_or_default();
+        let prev_ver = json_str_value(prev_state_raw, "installedVersion").unwrap_or_default();
+        let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
+        let why = format!("{reason}; the church's data could not be put back or undone, so the relay was NOT restarted. Restart this computer: the Suite puts the original data back before it starts");
+        write_state(suite_dir, &StateRec {
+            sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
+            outcome: "stuck", reason: &why, auto_off: true, address_before, restore_failed: &restore_failed,
+        }, env.log);
+        applog(env.log, "suite: ROLLBACK HELD — original data files are set aside; no relay started until the next start's recovery");
+        return;
     }
     // [audit a1cc6eff L3] The bad relay did not stop: do NOT start the shipped version on top of it (it would fail to
     // bind, or look started while the bad one keeps serving). Leave the files alone (the bad relay may hold them),
@@ -2386,6 +2439,11 @@ mod tests {
         assert_eq!(json_str_value(ready, "date"), Some("2026-11-12T03:00:00Z".to_string()));
         assert_eq!(json_str_value("{\"sha\": \"spaced\"}", "sha"), Some("spaced".to_string())); // one space
         assert_eq!(json_str_value(ready, "missing"), None);
+        // audit 6f9b2ec0 M2: escapes are DECODED, so a value written by jstr reads back exactly (no doubling)
+        let path = r#"C:\Users\Church "A"\data"#;
+        let body = format!("{{\"restoreFailed\":{}}}", jstr(path));
+        assert_eq!(json_str_value(&body, "restoreFailed").as_deref(), Some(path));
+        assert_eq!(json_str_value("{\"k\":\"a\\u00e9b\"}", "k").as_deref(), Some("a\u{e9}b"));
     }
 
     #[test]

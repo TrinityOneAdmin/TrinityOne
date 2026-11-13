@@ -501,6 +501,9 @@ fn end_to_end_apply_harness() {
     scenario_z_a_start_repairs_an_interrupted_restore_before_the_relay_runs();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (z)");
 
+    scenario_aa_held_originals_are_not_built_over();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (aa)");
+
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
 
@@ -1113,6 +1116,9 @@ fn scenario_x_a_failed_restore_is_reported_and_leaves_the_store_whole() {
     let raw = std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap();
     let rf = json_str_value(&raw, "restoreFailed").unwrap_or_default();
     assert!(rf.contains("could not be put back") && rf.contains("db-backup"), "the failed restore is not reported with the copy's place: {raw}");
+    // audit 6f9b2ec0 L-d: the backup the warning names is pinned against pruning
+    let pinned = std::fs::read_dir(fx.suite_dir.join("db-backup")).unwrap().filter_map(|e| e.ok()).any(|e| e.path().join("KEEP").exists());
+    assert!(pinned, "the backup the warning points to was not pinned");
     assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED", "the store must be exactly what the bad update left");
     assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite-wal")).unwrap(), "BAD-WAL", "the store must not be a mix");
     host.stop_relay();
@@ -1268,6 +1274,25 @@ fn an_interrupted_restore_is_repaired_at_the_next_start_from_every_crash_point()
             let want = if k + 1 == renames { &new } else { &old };
             assert_eq!(&store_snapshot(&data), want, "crash after rename #{k} of {renames} (live wal {live_wal}, backup wal {backup_wal})");
             assert!(note.is_some(), "crash after rename #{k}: recovery repaired something but reported nothing");
+            // audit 6f9b2ec0 L-b: the computer stops AGAIN, during the recovery itself (after each of its renames);
+            // the recovery at the start after that must still end on the same side.
+            let mut j = 0;
+            loop {
+                fresh();
+                RESTORE_RENAME_COUNT.with(|c| c.set(0));
+                RESTORE_CRASH_AFTER.with(|c| c.set(Some(k)));
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| restore_store(&data, &backup, &log)));
+                RESTORE_RENAME_COUNT.with(|c| c.set(0));
+                RESTORE_CRASH_AFTER.with(|c| c.set(Some(j)));
+                let crashed_again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recover_interrupted_restore(&data, &log))).is_err();
+                RESTORE_CRASH_AFTER.with(|c| c.set(None));
+                if !crashed_again {
+                    break;
+                }
+                let _ = recover_interrupted_restore(&data, &log);
+                assert_eq!(&store_snapshot(&data), want, "crash after restore rename #{k}, then after recovery rename #{j}");
+                j += 1;
+            }
         }
         std::panic::set_hook(prev_hook);
     }
@@ -1282,10 +1307,13 @@ fn a_restore_warning_and_its_backup_survive_until_dealt_with() {
     let (data, suite, log) = (root.join("data"), root.join("data").join("suite"), root.join("log"));
     std::fs::create_dir_all(&suite).unwrap();
     let rec = |rf: &'static str| StateRec { sha: "", version: "", date: "", last_applied: "d", outcome: "x", reason: "", auto_off: false, address_before: "", restore_failed: rf };
-    write_state(&suite, &rec("COPY AT /x/1"), &log);
-    write_state(&suite, &rec(""), &log); // e.g. a later successful install
+    // a Windows path with backslashes (audit 6f9b2ec0 M2: each carry-over used to double them)
+    write_state(&suite, &rec(r"COPY AT C:\Users\x\db-backup\1"), &log);
+    for _ in 0..3 {
+        write_state(&suite, &rec(""), &log); // e.g. later installs
+    }
     let raw = std::fs::read_to_string(suite.join("state.json")).unwrap();
-    assert_eq!(json_str_value(&raw, "restoreFailed").as_deref(), Some("COPY AT /x/1"), "a later write dropped the warning: {raw}");
+    assert_eq!(json_str_value(&raw, "restoreFailed").as_deref(), Some(r"COPY AT C:\Users\x\db-backup\1"), "a later write dropped or mangled the warning: {raw}");
     // pruning: the oldest backup is pinned (KEEP) — it must survive two more backups
     write(&suite.join("db-backup").join("100").join("relay.sqlite"), "PINNED");
     write(&suite.join("db-backup").join("100").join("KEEP"), "warning");
@@ -1315,6 +1343,49 @@ fn scenario_z_a_start_repairs_an_interrupted_restore_before_the_relay_runs() {
     assert!(note.contains("interrupted"), "no note for the panel: {note:?}");
     host.stop_relay();
     eprintln!("   (z) OK — repaired before the relay started; note left for the panel");
+}
+
+// [audit 6f9b2ec0 L-a] An installed update whose build is quarantined (it failed its check; its rollback may have
+// been blocked) never runs at a start, even with the switch on: it is retired.
+#[test]
+fn launch_never_runs_a_quarantined_update() {
+    let fx = fresh_box("launch-quar", "2026-01-01T00:00:00Z");
+    install_active(&fx, &fx.priv_key, "v2");
+    write(&fx.suite_dir.join("quarantine-sha"), &format!("{SHA2}\n"));
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload);
+    assert!(!fx.suite_dir.join("active").exists(), "a quarantined update must be retired");
+}
+
+// (aa) [audit 6f9b2ec0 M1] A rollback whose restore cannot even put the original data back: the relay is NOT started
+//      (it would create a new store over the held originals), the state says so; the NEXT start's recovery puts the
+//      originals back before the relay runs.
+fn scenario_aa_held_originals_are_not_built_over() {
+    eprintln!("── scenario (aa): held originals are not built over ──");
+    let fx = fresh_box("aa", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: D_OCT, lie: true, prelude: "" });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
+    {
+        let host = TestHost::new(fx.node.clone());
+        let mut cur = start_v1(&host, &fx, &log);
+        RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = Some("relay.sqlite".into())); // restore AND its undo fail
+        run_apply(&host, &fx, &log, &mut cur);
+        RESTORE_RENAME_FAIL_TO.with(|c| *c.borrow_mut() = None);
+        assert!(wait_port_free(Duration::from_secs(5)), "a relay was started over the held original data");
+        assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"));
+        assert!(read_state_field(&fx.suite_dir, "lastReason").unwrap_or_default().contains("NOT restarted"));
+        assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite.restore-aside")).unwrap(), "ORIGINAL-STOREMANGLED");
+        assert!(!fx.data_dir.join("relay.sqlite").exists());
+    }
+    // the next start: recovery first, then the relay
+    let host = TestHost::new(fx.node.clone());
+    let _st = start_at(&host, &fx, &log, 840);
+    assert!(wait_for_served("v1", Duration::from_secs(10)));
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED", "the held original was not put back");
+    assert!(!fx.data_dir.join("relay.sqlite.restore-aside").exists());
+    host.stop_relay();
+    eprintln!("   (aa) OK — nothing built over the held originals; the next start put them back");
 }
 
 // A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed
