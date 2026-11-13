@@ -67,9 +67,13 @@ function harness(store) {
     'let _restoreSnap = null;',
     grab(SRC, 'function applySteward(obj)'),
     "const STEWARD_PREFIXES = ['trinityone.steward'];",
+    // collectSteward — what the Settings "Back up to a file" button writes (audit of 91a77fe7, NIT 1) — and its filter
+    (SRC.match(/const HELPERKEY_RX = [^\n]*;/) || ['/* HELPERKEY_RX is gone from app/backup.jsx */'])[0],
+    grab(SRC, 'function collectSteward()'),
   ].join('\n');
-  const fn = new Function('localStorage', 'window', body + '\nreturn { applySteward };')(localStorage, { Steward });
-  return { applySteward: fn.applySteward, get: (k) => (map.has(k) ? map.get(k) : null), restored, map };
+  Steward.exportMnemonic = () => 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  const fn = new Function('localStorage', 'window', body + '\nreturn { applySteward, collectSteward };')(localStorage, { Steward });
+  return { applySteward: fn.applySteward, collectSteward: fn.collectSteward, get: (k) => (map.has(k) ? map.get(k) : null), restored, map };
 }
 
 // The backup file carries the OTHER device's wrap, because snapshot() takes the whole
@@ -108,4 +112,24 @@ test('the rest of the backup still restores', () => {
   h.applySteward(backup());
   assert.equal(h.get('trinityone.steward.name'), 'Test Church',
     'excluding the key wrap must not stop ordinary steward settings being restored');
+});
+
+// THE HELPER MARK NEVER TRAVELS IN A BACKUP (audit of 91a77fe7, NIT 1). trinityone.steward.helperkey.<key> says "THIS device
+// minted that key as a bare helper key" — the one thing that lets a removal notice's Continue discard a key. restoreKey
+// clears it for the key it loads; a file must neither carry it out nor put it back. These run the SHIPPED collectSteward
+// and applySteward — the two functions Settings → "Back up to a file" / "Restore from a file" call.
+const MARK = 'trinityone.steward.helperkey.' + 'ab'.repeat(32);
+test('a backup file never carries the helper mark', () => {
+  const h = harness({ [MARK]: '1', 'trinityone.steward.name': 'Test Church' });
+  const file = h.collectSteward();
+  assert.equal(file.local[MARK], undefined, 'the backup file carries this device\'s helper mark');
+  assert.equal(file.local['trinityone.steward.name'], 'Test Church', 'the rest of the steward settings stopped being backed up');
+  assert.equal(h.get(MARK), '1', 'making a backup removed the mark from this device');
+});
+test('restoring a file never writes a helper mark, even one an older build put in it', () => {
+  const h = harness({});
+  const file = backup(); file.local[MARK] = '1';
+  h.applySteward(file);
+  assert.equal(h.get(MARK), null, 'THE HAZARD: a file restore put a helper mark back, so a removal notice could discard the restored key');
+  assert.equal(h.get('trinityone.steward.name'), 'Test Church', 'excluding the mark stopped the rest restoring');
 });

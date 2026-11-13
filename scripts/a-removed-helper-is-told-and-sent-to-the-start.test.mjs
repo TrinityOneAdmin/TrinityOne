@@ -222,8 +222,8 @@ test('a helper\'s Overview shows NO "people want to help" banner, while the owne
   // STAGING, NOT VACUOUS: the helper's console really does receive both requests — the stream the stale count came from
   // (waited for, not a fixed sleep — audit of 15dc0960, NIT 6: a busy machine delivered only one in 5 s)
   await ONE.ev(`(() => { window.__reqN = 0; window.__reqU = window.Steward.subscribeStewardRequests(l => { window.__reqN = Math.max(window.__reqN, l.length); }); return 1; })()`);
-  await ONE.waitFor(`window.__reqN >= 2`, 90000, 'the helper console receiving both requests (if it never does, hiding the banner proves nothing)');
-  await ONE.ev(`(() => { try { window.__reqU(); } catch (e) {} return 1; })()`);
+  try { await ONE.waitFor(`window.__reqN >= 2`, 90000, 'the helper console receiving both requests (if it never does, hiding the banner proves nothing)'); }
+  finally { await ONE.ev(`(() => { try { window.__reqU(); } catch (e) {} return 1; })()`); }   // closed even when the wait fails (audit of 91a77fe7, NIT 3)
   await OWNER.press(/^Overview$/, 'Overview');
   await OWNER.waitFor(`${BANNER_COUNT} === 1`, 30000, 'the owner\'s banner counting Yann alone');
   await ONE.press(/^Overview$/, 'Overview');
@@ -237,6 +237,8 @@ test('a helper\'s Overview shows NO "people want to help" banner, while the owne
 test('CONTROL setup: Sam\'s relay goes unreachable and his console reloads — it paints the church from cache and says nothing', { skip: SKIP, timeout: 240000 }, async () => {
   await TWO.blockRelay(true);
   await reloadAndUnlock(TWO);
+  // A NORMAL BOOT LEAVES THE HELPER MARK ALONE (audit of 91a77fe7, NIT 2): only a key loaded from words clears it
+  assert.equal(await TWO.ev(`localStorage.getItem('trinityone.steward.helperkey.' + ${JSON.stringify(TWO.pub)})`), '1', 'a reload and unlock cleared the helper mark of the key it loaded');
   TWO.relayFramesIn = 0;
   await sleep(8000);
   assert.equal(TWO.relayFramesIn, 0, 'staging: the block is not real — Sam\'s console still hears the relay');
@@ -281,6 +283,18 @@ test('restoring a church from its 12 words clears any helper mark this device he
   await ONE.waitFor(`!!document.querySelector('input[aria-label="Choose a console PIN or passphrase"]')`, 60000, 'the PIN gate after the restore');
   assert.equal(await ONE.ev(`window.Steward.churchPub`), pk, 'staging: the restore did not load the key from those words');
   assert.equal(await ONE.ev(`localStorage.getItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)})`), null, 'THE HAZARD: a restored church still carries a helper mark, so a removal notice could discard it');
+});
+
+// AUDIT OF 91a77fe7, NIT 2: the dev-only ?churchkey= hook (init with a phrase) is a key loaded from words, so it clears a mark
+// too. Ruth's console holds no saved key here (the restore above is unsaved, in memory only), so the hook applies on load.
+test('the ?churchkey= dev hook clears a helper mark for the key it loads', { skip: SKIP, timeout: 120000 }, async () => {
+  const { generateSeedWords, privateKeyFromSeedWords } = await import('nostr-tools/nip06');
+  const { getPublicKey } = await import('nostr-tools');
+  const words = generateSeedWords(), pk = getPublicKey(privateKeyFromSeedWords(words));
+  await ONE.ev(`(() => { localStorage.setItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)}, '1'); location.href = ${JSON.stringify(OWNER.relay.base + '/steward.html?churchkey=')} + encodeURIComponent(${JSON.stringify(words)}); return 1; })()`);
+  await sleep(2500);
+  await ONE.waitFor(`!!(window.Steward && window.Steward.churchPub === ${JSON.stringify(pk)})`, 60000, 'the ?churchkey= hook loading the key');
+  assert.equal(await ONE.ev(`localStorage.getItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)})`), null, 'the ?churchkey= hook left a helper mark on the key it loaded');
 });
 
 test('CONTROL: Sam is removed while his relay is unreachable — a reload paints the church and tells him NOTHING', { skip: SKIP, timeout: 240000 }, async () => {
