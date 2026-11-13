@@ -65,7 +65,7 @@ const mv = st.move || {};
 appendFileSync(env.TEST_STARTS_LOG, JSON.stringify({ dir: env.TRINITY_DATA_DIR, pinned: env.TRINITY_DATA_DIR_PINNED || '', mode: env.TRINITY_STORAGE_MODE, hasState: !!env.TRINITY_STORAGE_STATE,
   state: mv.state || null, preStart: !!mv.preStartCounts, at: Date.now() }) + '\\n');
 if (env.TEST_EXIT_CODE) process.exit(Number(env.TEST_EXIT_CODE));
-if (env.TEST_HANG_DIR && env.TEST_HANG_DIR === env.TRINITY_DATA_DIR) await new Promise(() => {});   // a relay that never opens its port
+if (env.TEST_HANG_DIR && env.TEST_HANG_DIR === env.TRINITY_DATA_DIR) { setInterval(() => {}, 1000); await new Promise(() => {}); }   // a relay that stays alive and never opens its port
 if (env.TEST_SLOW_START_MS) await new Promise(r => setTimeout(r, Number(env.TEST_SLOW_START_MS)));
 if (env.TEST_NO_PROOF) {   // a relay that serves its panel but cannot answer /relay-identity
   const http = await import('node:http'); const { syncBuiltinESMExports } = await import('node:module');
