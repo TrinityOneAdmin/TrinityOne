@@ -3587,10 +3587,19 @@ function NewPostModal({ onClose }) {
 // THE VALUE ROW, not the label row: a 144px card leaves the label 80px beside a 26px icon, and "Announcements"
 // needs 102px at 12px (measured 2026-09-22; no padding or font nudge that stays legible closes 22px). With the
 // label on a row of its own it has the card's full width, and nothing on the card is dropped.
-function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
+// `pending` (2026-11-13): the value is a STATUS ("Checking…"), not a number. The 28px number slot drew that
+// one-word status 182px wide (measured, Sora 800), which at phone width painted past its card into the next.
+// A pending value is drawn small and muted, on one line, and is the ONLY value that may be cut with "…" — a
+// count is never ellipsed ("12…" reads as a smaller number); it may wrap instead (overflow-wrap:anywhere),
+// so a long one still cannot paint out of its card. The outer box keeps the number's font-size, so its line
+// height holds and the card does not jump when the count arrives. Only DashOverview's Members tile passes it.
+function StatCard({ label, value, sub, ic, tint, onClick, snug = false, pending = false }) {
   const t = SK_TINT[tint];
   const narrow = useStewNarrow();
   const pad = narrow ? 12 : snug ? 14 : 18, icn = narrow ? 24 : snug ? 26 : 30;
+  const shown = pending
+    ? <span style={{ display: 'inline-block', maxWidth: '100%', verticalAlign: 'middle', fontFamily: 'var(--font-ui)', fontSize: narrow ? 14 : 15, fontWeight: 700, letterSpacing: 0, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+    : value;
   const icon = <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>;
   return (
     <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, minWidth: 0, padding: pad, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
@@ -3614,8 +3623,8 @@ function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
         {(onClick && !narrow && !snug) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
       {snug
-        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div></div>
-        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>}
+        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, overflowWrap: 'anywhere' }}>{shown}</div></div>
+        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12, minWidth: 0, overflowWrap: 'anywhere' }}>{shown}</div>}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -3916,7 +3925,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // stays for wider windows, where it was never the problem, and for the 760–849px band, where four cannot fit.
   const stat = (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : fourUp ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : snug ? 12 : 14 }}>
-      <StatCard label="Members" value={realCount == null ? 'Checking…' : realCount ? String(realCount) : '—'} sub={realCount == null ? 'reading your church…' : realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} onClick={() => onTab('members')} />
+      <StatCard label="Members" value={realCount == null ? 'Checking…' : realCount ? String(realCount) : '—'} sub={realCount == null ? 'reading your church…' : realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} pending={realCount == null} onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" snug={snug} onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" snug={snug} onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
       <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} snug={snug} onClick={() => goSettings('relays')} />
