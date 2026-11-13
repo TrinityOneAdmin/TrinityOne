@@ -376,7 +376,19 @@ fn end_to_end_apply_harness() {
     scenario_e_health_fail_rolls_back_and_quarantines();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (e)");
 
-    eprintln!("ALL 5 apply-harness scenarios passed");
+    scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
+
+    scenario_g_relaunch_after_an_apply_runs_the_update();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (g)");
+
+    scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (h)");
+
+    scenario_i_relay_that_will_not_stop_backs_off();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (i)");
+
+    eprintln!("ALL 9 apply-harness scenarios passed");
 }
 
 // (a) good, newer, validly-signed bundle → activates; relay serves v2.
@@ -503,4 +515,257 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     assert!(!fx.staging.join("READY").exists(), "staging must be discarded after a rollback");
     host.stop_relay();
     eprintln!("   (e) OK — wrong-version v2 rolled back to v1, sha-v2 quarantined, state=rolledback");
+}
+
+// ══ Added 2026-11-13 (audit AUDIT-integration-all-1aa19150 MEDIUM 2): the LAUNCH choice, the toggle-off path,
+// a relaunch after an apply, rollback to LAST-GOOD (not just to payload), and a relay that will not stop. ══════
+
+// Put a signed `gw_version` override in place exactly as a finished apply leaves it: suite/active/ unpacked from the
+// tarball, and the tarball + signature retained as suite/active.tgz + active.sig (what launch_code_dir re-verifies).
+fn install_active(fx: &Fixture, key: &Path, gw_version: &str) {
+    let tmp = fx.suite_dir.join(".mk-active");
+    std::fs::create_dir_all(&tmp).unwrap();
+    build_signed_bundle(&fx.node, &fx.tools, key, &tmp, gw_version);
+    let active = fx.suite_dir.join("active");
+    let _ = std::fs::remove_dir_all(&active);
+    std::fs::create_dir_all(&active).unwrap();
+    must(Command::new("tar").arg("-xzf").arg(tmp.join("bundle.tgz")).arg("-C").arg(&active), "untar active");
+    std::fs::rename(tmp.join("bundle.tgz"), fx.suite_dir.join("active.tgz")).unwrap();
+    std::fs::rename(tmp.join("bundle.sig"), fx.suite_dir.join("active.sig")).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+fn launch(fx: &Fixture, node: Option<&Path>) -> PathBuf {
+    let log = fx.data_dir.join("relay-launch.log");
+    launch_code_dir(&fx.payload, &fx.suite_dir, node, &log)
+}
+
+// ── launch choice: real files, real signatures, the real verifier — no port needed, so these run in parallel ──
+
+#[test]
+fn launch_with_nothing_downloaded_runs_the_shipped_payload() {
+    let fx = fresh_box("launch-none", "2026-01-01T00:00:00Z");
+    // A box that never turned auto-update on has no suite/ dir at all.
+    std::fs::remove_dir_all(&fx.suite_dir).unwrap();
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "no update downloaded must run the shipped payload");
+    // A bundle that is only STAGED (downloaded, verified, waiting for the apply time) is never run at launch.
+    std::fs::create_dir_all(&fx.staging).unwrap();
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
+    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "a staged-but-not-applied bundle must not be launched");
+}
+
+#[test]
+fn launch_runs_an_applied_override_whose_tarball_verifies() {
+    let fx = fresh_box("launch-ok", "2026-01-01T00:00:00Z");
+    install_active(&fx, &fx.priv_key, "v2");
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.suite_dir.join("active"));
+}
+
+#[test]
+fn launch_refuses_a_tampered_retained_tarball() {
+    let fx = fresh_box("launch-tamper", "2026-01-01T00:00:00Z");
+    install_active(&fx, &fx.priv_key, "v2");
+    let tgz = fx.suite_dir.join("active.tgz");
+    let mut b = std::fs::read(&tgz).unwrap();
+    let mid = b.len() / 2;
+    b[mid] ^= 0xff;
+    std::fs::write(&tgz, b).unwrap();
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "a corrupted active.tgz must fall back to the payload");
+}
+
+#[test]
+fn launch_refuses_an_override_signed_by_another_key_even_with_its_own_key_planted() {
+    let fx = fresh_box("launch-forged", "2026-01-01T00:00:00Z");
+    let wrong_pub = fx.tools.join("wrong-pub.pem");
+    let wrong_priv = fx.tools.join("wrong-priv.pem");
+    must(Command::new(&fx.node).arg(fx.tools.join("keygen.mjs")).arg(&wrong_pub).arg(&wrong_priv), "wrong keygen");
+    install_active(&fx, &wrong_priv, "v2");
+    // The attacker also plants their own key AND a verifier that always says yes inside the writable override.
+    // The launch must still verify with the READ-ONLY payload's verifier and key.
+    let a = fx.suite_dir.join("active");
+    write(&a.join("relay-app").join("release-pubkey.pem"), &std::fs::read_to_string(&wrong_pub).unwrap());
+    write(&a.join("scripts").join("verify-suite-bundle.mjs"), "process.exit(0);\n");
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "an override signed by a key the payload does not pin must not run");
+}
+
+#[test]
+fn launch_refuses_an_override_missing_its_signature_or_tarball() {
+    let fx = fresh_box("launch-missing", "2026-01-01T00:00:00Z");
+    install_active(&fx, &fx.priv_key, "v2");
+    let sig = fx.suite_dir.join("active.sig");
+    let tgz = fx.suite_dir.join("active.tgz");
+    std::fs::rename(&sig, fx.suite_dir.join("held.sig")).unwrap();
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "no active.sig must run the payload");
+    std::fs::rename(fx.suite_dir.join("held.sig"), &sig).unwrap();
+    std::fs::remove_file(&tgz).unwrap();
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "no active.tgz must run the payload");
+}
+
+#[test]
+fn launch_without_the_node_sidecar_runs_the_payload() {
+    let fx = fresh_box("launch-nonode", "2026-01-01T00:00:00Z");
+    install_active(&fx, &fx.priv_key, "v2");
+    assert_eq!(launch(&fx, None), fx.payload, "with no node to verify with, nothing unverified may run");
+    // and a node path that does not exist is the same as none (the verifier cannot run)
+    assert_eq!(launch(&fx, Some(Path::new("/nonexistent/node"))), fx.payload);
+}
+
+// ── port-binding scenarios (run in sequence by end_to_end_apply_harness) ─────────────────────────────────────
+
+// (f) TOGGLE OFF — what every Suite does on every start unless the operator opted in. Nothing applied → the launch
+//     runs the shipped payload and the relay serves it; and even a bundle sitting in staging is NOT applied by
+//     the controller tick, because the enable marker is absent.
+fn scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging() {
+    eprintln!("── scenario (f): toggle off — launch runs shipped code, staging ignored ──");
+    let fx = fresh_box("f", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    std::fs::remove_file(fx.data_dir.join("suite-autoupdate")).unwrap(); // the toggle is OFF
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
+    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+
+    let code = launch(&fx, Some(&fx.node));
+    assert_eq!(code, fx.payload, "with nothing applied the launch must pick the shipped payload");
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = (code.clone(), Arc::new(AtomicBool::new(true)));
+    assert!(spawn_and_wait(&host, &code, &fx.payload, &fx.data_dir, &log, &mut cur.0, &mut cur.1), "relay did not start");
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "the shipped payload (v1) is not what the relay serves");
+
+    run_apply(&host, &fx, &log, &mut cur);
+    assert_eq!(served_version().as_deref(), Some("v1"), "toggle OFF but the staged bundle was applied");
+    assert!(!fx.suite_dir.join("active").exists(), "toggle OFF but active/ was created");
+    assert!(fx.staging.join("READY").exists(), "toggle OFF must leave staging alone");
+    host.stop_relay();
+    eprintln!("   (f) OK — payload launched and served, staged bundle left alone with the toggle off");
+}
+
+// (g) The Suite is quit and started again after a good apply: the launch now picks active/ (its retained tarball
+//     verifies) and the relay serves the update — the update survives a restart.
+fn scenario_g_relaunch_after_an_apply_runs_the_update() {
+    eprintln!("── scenario (g): relaunch after a good apply runs the update ──");
+    let fx = fresh_box("g", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
+    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    {
+        let host = TestHost::new(fx.node.clone());
+        let mut cur = start_v1(&host, &fx, &log);
+        run_apply(&host, &fx, &log, &mut cur);
+        assert!(wait_for_served("v2", Duration::from_secs(15)), "precondition: the apply did not take");
+        host.stop_relay(); // quit the Suite
+    }
+    assert!(wait_port_free(Duration::from_secs(10)), "the relay did not stop");
+    let code = launch(&fx, Some(&fx.node));
+    assert_eq!(code, fx.suite_dir.join("active"), "after a good apply the next launch must run the update");
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = (code.clone(), Arc::new(AtomicBool::new(true)));
+    assert!(spawn_and_wait(&host, &code, &fx.payload, &fx.data_dir, &log, &mut cur.0, &mut cur.1), "relay did not start");
+    assert!(wait_for_served("v2", Duration::from_secs(10)), "the relaunched relay is not serving the update");
+    host.stop_relay();
+    eprintln!("   (g) OK — relaunch picked active/ and serves v2");
+}
+
+// Pretend a day has passed: the apply runs once per calendar day (due()), so a second apply needs an earlier
+// lastApplied. Only that one field is changed.
+fn yesterday_in_state(suite_dir: &Path) {
+    let p = suite_dir.join("state.json");
+    let raw = std::fs::read_to_string(&p).unwrap();
+    let la = json_str_value(&raw, "lastApplied").expect("state.json has lastApplied");
+    std::fs::write(&p, raw.replace(&format!("\"lastApplied\":\"{la}\""), "\"lastApplied\":\"2000-01-01\"")).unwrap();
+}
+
+// (h) A good v2 is running as the override; the next night's v3 boots but fails health. It must roll back to v2
+//     (LAST-GOOD — scenario (e) only covers rollback to the payload), keep v2's retained tarball so the NEXT launch
+//     still runs v2, quarantine v3, and record that it rolled back while still installed as v2.
+fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
+    eprintln!("── scenario (h): bad v3 over good v2 rolls back to last-good (≈45s health timeout) ──");
+    let fx = fresh_box("h", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
+    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v2", Duration::from_secs(15)), "precondition: v2 did not apply");
+    let v2_tgz = std::fs::read(fx.suite_dir.join("active.tgz")).unwrap();
+
+    yesterday_in_state(&fx.suite_dir);
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "WRONG-not-v3");
+    write_ready(&fx.staging, "v3", "sha-v3", "2026-10-02T00:00:00Z");
+    run_apply(&host, &fx, &log, &mut cur);
+
+    assert!(wait_for_served("v2", Duration::from_secs(15)), "after v3 failed health the relay must be back on v2, not the payload");
+    assert_eq!(cur.0, fx.suite_dir.join("active"), "the controller's current code dir must be active/ (holding v2)");
+    assert_eq!(std::fs::read(fx.suite_dir.join("active.tgz")).unwrap(), v2_tgz, "active.tgz must be v2's again");
+    assert!(!fx.suite_dir.join("last-good").exists(), "last-good/ must have been moved back to active/");
+    let q = std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default();
+    assert_eq!(q.trim(), "sha-v3", "v3 must be quarantined");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    assert_eq!(read_state_field(&fx.suite_dir, "installedVersion").as_deref(), Some("v2"), "installed identity must stay v2");
+    assert!(!fx.staging.join("READY").exists(), "v3's staging must be discarded");
+    host.stop_relay();
+    assert!(wait_port_free(Duration::from_secs(10)), "the relay did not stop");
+    // and the next start still runs v2
+    assert_eq!(launch(&fx, Some(&fx.node)), fx.suite_dir.join("active"), "after the rollback the next launch must run v2");
+    eprintln!("   (h) OK — v3 rolled back to v2 (last-good), v2 retained for the next launch, sha-v3 quarantined");
+}
+
+// A host whose stop never lands (a wedged relay child). Each respawn parks the previous child so teardown can
+// still reap it; the drop kills everything.
+struct WedgedHost {
+    inner: TestHost,
+    parked: Mutex<Vec<Child>>,
+}
+impl RelayHost for WedgedHost {
+    fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
+        if let Some(c) = self.inner.child.lock().unwrap().take() {
+            self.parked.lock().unwrap().push(c);
+        }
+        self.inner.spawn_relay(code_dir, payload, data_dir, log)
+    }
+    fn stop_relay(&self) {}
+    fn reload_webview(&self) {}
+}
+impl Drop for WedgedHost {
+    fn drop(&mut self) {
+        for mut c in self.parked.lock().unwrap().drain(..) {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        self.inner.stop_relay();
+    }
+}
+
+// (i) The relay will not stop for the swap. The apply must abort WITHOUT touching active/, keep the church on the
+//     code it was running, keep the staged bundle for later, and back off (~1h) instead of retrying every minute.
+fn scenario_i_relay_that_will_not_stop_backs_off() {
+    eprintln!("── scenario (i): a relay that will not stop — abort, stay up, back off (≈20s stop timeout) ──");
+    let fx = fresh_box("i", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
+    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    let host = WedgedHost { inner: TestHost::new(fx.node.clone()), parked: Mutex::new(Vec::new()) };
+    let mut cur_code_dir = fx.payload.clone();
+    let mut cur_alive = Arc::new(AtomicBool::new(true));
+    assert!(spawn_and_wait(&host, &fx.payload, &fx.payload, &fx.data_dir, &log, &mut cur_code_dir, &mut cur_alive));
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "v1 did not serve");
+
+    let mut cooldown: Option<Instant> = None;
+    let t0 = Instant::now();
+    maybe_apply(&host, &fx.suite_dir, &fx.payload, &fx.data_dir, &log, Some(fx.node.as_path()),
+        &mut cur_code_dir, &mut cur_alive, &mut cooldown);
+    let until = cooldown.expect("a stop timeout must set the apply cooldown");
+    assert!(until >= t0 + Duration::from_secs(50 * 60), "the back-off is shorter than ~1h");
+    assert_eq!(served_version().as_deref(), Some("v1"), "the church must stay on the code it was running");
+    assert_eq!(cur_code_dir, fx.payload, "the current code dir must still be the payload");
+    assert!(!fx.suite_dir.join("active").exists(), "nothing may be swapped when the relay did not stop");
+    assert!(fx.staging.join("READY").exists(), "the staged bundle must be kept for a later attempt");
+
+    // The next tick (a minute later in production) does nothing while the cooldown runs — returns at once.
+    let t1 = Instant::now();
+    maybe_apply(&host, &fx.suite_dir, &fx.payload, &fx.data_dir, &log, Some(fx.node.as_path()),
+        &mut cur_code_dir, &mut cur_alive, &mut cooldown);
+    assert!(t1.elapsed() < Duration::from_secs(5), "a tick inside the cooldown tried to apply again");
+    assert!(fx.staging.join("READY").exists());
+    eprintln!("   (i) OK — aborted without a swap, v1 still serving, staging kept, backed off ~1h");
 }

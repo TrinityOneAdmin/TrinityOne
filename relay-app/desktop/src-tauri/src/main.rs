@@ -528,6 +528,32 @@ fn verify_tarball(node: &Path, payload: &Path, tgz: &Path, sig: &Path, log: &Pat
     }
 }
 
+// EVERY LAUNCH: which tree the relay starts from. Moved verbatim out of main()'s setup closure (2026-11-13, a pure
+// refactor, so the launch choice can be tested with real files — apply_harness_test.rs). The activated override
+// (suite/active) only if its retained tarball + signature are both present AND verify against the READ-ONLY payload
+// key with the bundled node; anything else — nothing ever downloaded, a missing/forged/corrupt tarball, no node
+// sidecar — is the baked-in payload.
+fn launch_code_dir(payload: &Path, suite_dir: &Path, node: Option<&Path>, log: &Path) -> PathBuf {
+    let active_dir = suite_dir.join("active");
+    let active_tgz = suite_dir.join("active.tgz");
+    let active_sig = suite_dir.join("active.sig");
+    let active_verify_ok = active_tgz.exists()
+        && active_sig.exists()
+        && node
+            .map(|n| verify_tarball(n, payload, &active_tgz, &active_sig, log))
+            .unwrap_or(false);
+    match choose_code_dir(active_tgz.exists(), active_sig.exists(), active_verify_ok) {
+        CodeDir::Active => {
+            applog(log, "launch: running activated override (suite/active)");
+            active_dir
+        }
+        CodeDir::Payload => {
+            applog(log, "launch: running baked-in payload");
+            payload.to_path_buf()
+        }
+    }
+}
+
 // Local wall-clock, via the bundled node (the Rust std has no timezone-aware local time and we add no crate).
 // Returns (minutes-of-day, "YYYY-MM-DD") in the machine's local time — the clock the operator set HH:MM in.
 // Called only once an apply is actually plausible (marker on AND a bundle staged), so it is not a hot path.
@@ -1209,26 +1235,7 @@ fn main() {
             // no READY after a crash; we never look at that here — only at active.tgz/active.sig.)
             let suite_dir = data_dir.join("suite");
             let node = node_sidecar_path();
-            let active_dir = suite_dir.join("active");
-            let active_tgz = suite_dir.join("active.tgz");
-            let active_sig = suite_dir.join("active.sig");
-            let active_verify_ok = active_tgz.exists()
-                && active_sig.exists()
-                && node
-                    .as_deref()
-                    .map(|n| verify_tarball(n, &payload, &active_tgz, &active_sig, &log))
-                    .unwrap_or(false);
-            let code_dir =
-                match choose_code_dir(active_tgz.exists(), active_sig.exists(), active_verify_ok) {
-                    CodeDir::Active => {
-                        applog(&log, "launch: running activated override (suite/active)");
-                        active_dir.clone()
-                    }
-                    CodeDir::Payload => {
-                        applog(&log, "launch: running baked-in payload");
-                        payload.clone()
-                    }
-                };
+            let code_dir = launch_code_dir(&payload, &suite_dir, node.as_deref(), &log);
             // start the relay (cwd = chosen code dir), data → writable dir, bound to loopback by default. All
             // the env assembly (TRINITY_DATA_DIR / CLOUDFLARED_BIN / RELAY_HOST / RELAY_NO_OPEN / PAYLOAD_DIR)
             // now lives in spawn_relay so the controller can respawn identically on an apply.
