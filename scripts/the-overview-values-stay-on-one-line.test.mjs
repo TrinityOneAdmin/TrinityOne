@@ -222,9 +222,14 @@ for (const vp of cases) {
     const down = await measure('off', 'Down');
     console.log('measured ' + vp.w + ' live: ' + JSON.stringify(live));
     console.log('measured ' + vp.w + ' down: ' + JSON.stringify(down));
+    // The relay tile and the row height first, then every card: so a failure names the relay defect (the
+    // audit's MEDIUM) even when a 5-digit count is also broken, instead of stopping at the count.
+    const relayOf = (m) => ({ ...m, cards: m.cards.filter(k => k.label === 'Your relay') });
+    assertOneLineInside(relayOf(live), vp.w + 'px Live');
+    assertOneLineInside(relayOf(down), vp.w + 'px Down');
+    assert.equal(down.rowH, live.rowH, `THE DEFECT (${vp.w}px): the stat row is ${live.rowH}px with the relay Live and ${down.rowH}px with it Down`);
     assertOneLineInside(live, vp.w + 'px Live');
     assertOneLineInside(down, vp.w + 'px Down');
-    assert.equal(down.rowH, live.rowH, `THE DEFECT (${vp.w}px): the stat row is ${live.rowH}px with the relay Live and ${down.rowH}px with it Down`);
     assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
   });
 }
