@@ -193,12 +193,11 @@ jobs:
               *)   cp "$f" "dist-installers/TrinityOne-Suite-${{ matrix.stable }}.$ext" ;;
             esac
           done
-          # The Suite JS AUTO-UPDATE bundle (PLAN-suite-js-autoupdate-2026-11-09): the JS layer a packaged Suite
-          # can download and run in place of its shipped payload. Built here UNSIGNED, from the SAME ref the
-          # payload was stamped with; the release host then signs it (scripts/publish-relay-bundle.sh §3b) and
-          # its --clobber upload REPLACES this copy and adds suite-js-bundle.sig — exactly as for bundle.tgz.
-          bash scripts/build-suite-js-bundle.sh dist-installers/suite-js-bundle.tgz "$RELEASE_REF"
-          SUITE_SHA256="$(sha256sum dist-installers/suite-js-bundle.tgz | cut -c1-64)"
+          # The Suite JS AUTO-UPDATE bundle is NOT built or uploaded here (audit be258b42 MEDIUM 3). CI used to
+          # attach an UNSIGNED suite-js-bundle.tgz from each matrix job; if the release host had already uploaded
+          # the signed one, a later job's upload replaced it and every church's check failed the signature. Only
+          # scripts/publish-relay-bundle.sh (on the release host, with the key) ever uploads that file + its .sig.
+          # scripts/suite-latest-manifest-schema.test.mjs fails if a step here builds or attaches it again.
 
           # Version manifest for the in-app update check. sha MUST match the payload's version.txt so
           # /suite-update compares like-for-like — so resolve the SAME ref build-relay-payload.sh stamped
@@ -209,17 +208,16 @@ jobs:
           # banner still parses):
           #   date   — ISO commit date, REQUIRED by the pre-download anti-rollback gate (§3): the bundle's own
           #            version.txt date isn't visible until after download, so the gate needs it in the manifest.
-          #   url    — where to fetch the signed bundle; sig — its detached signature.
-          #   sha256 — of the bundle THIS job built. CAVEAT: build-strict-tgz is not byte-reproducible and the
-          #            release host REBUILDS + re-signs the tgz, so this sha256 (and across matrix jobs, the
-          #            clobber winner) is PROVISIONAL. The authoritative integrity check is the detached Ed25519
-          #            signature over the downloaded bytes, verified against the read-only release key (§2).
+          #   url    — where to fetch the signed bundle; sig — its detached signature. Both are uploaded by
+          #            publish-relay-bundle.sh. Nothing here is trusted: the Suite verifies the signature and reads
+          #            sha + date from the bundle's own signed version.txt (audit be258b42 HIGH 2). (The old
+          #            advisory sha256 field is gone with the CI-built bundle it described; nothing read it.)
           SHA="$(git rev-parse --verify "${RELEASE_REF}^{commit}")"
           DATE="$(git show -s --format=%cI "${RELEASE_REF}^{commit}")"
           BASE="https://github.com/TrinityOneAdmin/TrinityOne/releases/download/${GITHUB_REF_NAME}"
-          printf '{"sha":"%s","version":"%s","tag":"%s","date":"%s","url":"%s","sha256":"%s","sig":"%s"}\n' \
+          printf '{"sha":"%s","version":"%s","tag":"%s","date":"%s","url":"%s","sig":"%s"}\n' \
             "$SHA" "${GITHUB_REF_NAME#relay-v}" "${GITHUB_REF_NAME}" "$DATE" \
-            "$BASE/suite-js-bundle.tgz" "$SUITE_SHA256" "$BASE/suite-js-bundle.sig" \
+            "$BASE/suite-js-bundle.tgz" "$BASE/suite-js-bundle.sig" \
             > dist-installers/suite-latest.json
           ls -la dist-installers || true
 

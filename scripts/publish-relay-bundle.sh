@@ -24,8 +24,8 @@
 #   install.sh    relay-app/install.sh as of the tag, so the installer a church downloads matches the bundle
 #   suite-js-bundle.tgz  the Suite JS AUTO-UPDATE bundle of the tagged commit (scripts/build-suite-js-bundle.sh):
 #                 the JS layer a packaged Suite's gateway runs, WITH node_modules and release-origin, WITHOUT
-#                 the node/cloudflared sidecars or the native app. CI attaches an UNSIGNED copy to the Release
-#                 (relay-desktop.yml); this rebuilds it from the tag and the --clobber upload replaces it.
+#                 the node/cloudflared sidecars or the native app. ONLY this script uploads it — CI does not
+#                 (relay-desktop.yml; audit be258b42 MEDIUM 3), so nothing can later replace the signed copy.
 #   suite-js-bundle.sig  detached Ed25519 signature over suite-js-bundle.tgz's exact bytes, by the SAME key.
 #                 The Suite JS auto-update path (PLAN-suite-js-autoupdate-2026-11-09) verifies this against the
 #                 read-only release-pubkey.pem before it ever runs a downloaded override.
@@ -121,9 +121,8 @@ ok "bundle.tgz $(du -h "$TMP/bundle.tgz" | cut -f1) · sha256 ${SHA256:0:12}… 
 
 # ── 3b. the Suite JS auto-update bundle — SAME tag, SAME key, self-verified HERE before anything leaves the box
 # Mirrors the relay-bundle block above exactly (build from the tag → raw-Ed25519 sign → verify against the
-# committed pubkey). CI (relay-desktop.yml) attaches an UNSIGNED suite-js-bundle.tgz to the Release; this
-# rebuilds it from the tagged commit and signs it, and the --clobber upload in §4 replaces CI's unsigned copy
-# with this signed pair. A church's Suite JS auto-update never runs a downloaded override until it verifies
+# committed pubkey). This is the ONLY producer of the Release's suite-js-bundle.tgz/.sig — CI no longer attaches
+# an unsigned copy that could overwrite this signed pair (audit be258b42 MEDIUM 3). A church's Suite JS auto-update never runs a downloaded override until it verifies
 # against the read-only release-pubkey.pem, so an unsigned or wrongly-signed bundle simply isn't applied.
 say "building the Suite JS auto-update bundle for $TAG"
 RELEASE_REF="$TAG" bash "$DIR/scripts/build-suite-js-bundle.sh" "$TMP/suite-js-bundle.tgz" "$TAG" >&2 || die "the Suite JS bundle build failed"

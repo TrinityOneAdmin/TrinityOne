@@ -53,7 +53,6 @@ test('the workflow emits a suite-latest.json that both the old and new consumers
   // new consumer (Suite JS auto-update gate)
   assert.ok('date' in j, 'suite-latest.json has no "date" — the pre-download anti-rollback gate cannot decide "newer" before downloading');
   assert.ok('url' in j, 'suite-latest.json has no "url" — nothing says where to fetch the bundle');
-  assert.ok('sha256' in j, 'suite-latest.json has no "sha256"');
   assert.ok(('sig' in j) || ('sigUrl' in j), 'suite-latest.json has neither "sig" nor "sigUrl" — nothing points at the signature');
 
   // date is an ISO instant
@@ -63,4 +62,13 @@ test('the workflow emits a suite-latest.json that both the old and new consumers
   // …and the VALUE the workflow actually puts there is an ISO commit date — %cI, not %cd/%ct — so the real
   // emitted manifest is ISO even though the sample above is what we parsed.
   assert.match(YAML, /DATE="\$\(git show -s --format=%cI[^)]*\)"/, 'the workflow does not compute the date with git --format=%cI, so the real manifest date may not be ISO');
+});
+
+// audit be258b42 MEDIUM 3: CI must never build or attach the Suite JS bundle. Its unsigned copy, uploaded by a
+// matrix job that finished after the release host had published, replaced the signed one by name and broke
+// every church's signature check. Only publish-relay-bundle.sh (with the key) uploads suite-js-bundle.*.
+test('the release workflow does not build or attach a suite-js-bundle (only the signing host does)', () => {
+  const steps = YAML.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');   // ignore comment lines
+  assert.doesNotMatch(steps, /build-suite-js-bundle\.sh/, 'a workflow step builds the Suite JS bundle again');
+  assert.doesNotMatch(steps, /suite-js-bundle\.tgz["']?\s*$|>\s*\S*suite-js-bundle|cp\s+\S*suite-js-bundle/m, 'a workflow step writes a suite-js-bundle file into what gets uploaded');
 });
