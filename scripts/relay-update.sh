@@ -16,15 +16,29 @@ DIR="${TRINITYONE_DIR:-/opt/trinityone}"
 SVC="${TRINITYONE_SVC:-trinityone-relay}"
 PORT="${TRINITYONE_PORT:-8000}"
 SVC_USER="${TRINITYONE_USER:-trinityone}"
-FLAG="$DIR/relay/.update-request"
-LOG="$DIR/relay/update.log"
+# WHERE THE DATA LIVES (relay storage plan step 6). Until a steward moves it, this is $DIR/relay and nothing below
+# differs from before. After a move the root helper (scripts/relay-move.sh) records the new folder in
+# /etc/trinityone/relay.env as TRINITY_DATA_DIR=...; every data path below follows it, so "Update now" reads the
+# update flag, origin and code-source from -- and writes update-status.json, update.log and the APKs to -- the folder
+# the relay is actually using. With no relay.env (a8 today) DATA is $DIR/relay, exactly as before.
+# The file is parsed, never sourced: it is read by root.
+RELAY_ENV="${TRINITYONE_RELAY_ENV:-/etc/trinityone/relay.env}"
+DATA="$DIR/relay"
+if [ -r "$RELAY_ENV" ]; then
+  _dd="$(sed -n 's/^TRINITY_DATA_DIR=//p' "$RELAY_ENV" 2>/dev/null | head -n1)"
+  case "$_dd" in /*) DATA="$_dd";; esac
+fi
+STATE_DIR="${TRINITYONE_STATE_DIR:-/var/lib/trinityone}"
+SYSD="${TRINITYONE_SYSTEMD_DIR:-/etc/systemd/system}"
+FLAG="$DATA/.update-request"
+LOG="$DATA/update.log"
 log() { printf '%s  %s\n' "$(date -Is)" "$*" | tee -a "$LOG" >&2; }
 # RELAY-UX-2026-07-20 H2/H7: a persisted outcome. The dashboard could only report success if the browser
 # happened to be watching the exact moment the version changed — reload the page, close the app, or take
 # longer than its 2-minute poll and the operator was told nothing. A FAILED update reported nothing at
 # all, ever: the reason existed only in this log, reachable only by terminal, on a product whose whole
 # promise is that you do not need one. Now every exit path records why, and /update serves it back.
-STATUS="$DIR/relay/update-status.json"
+STATUS="$DATA/update-status.json"
 status() {   # status <state> <reason>
   printf '{"state":"%s","reason":"%s","at":%s,"from":"%s","to":"%s"}\n' \
     "$1" "$(printf '%s' "${2:-}" | sed 's/[\\"]/ /g' | tr -d '\n' | cut -c1-300)" "$(date +%s)" "${CUR_SHA:-}" "${NEW_SHA:-}" > "$STATUS" 2>/dev/null || true
@@ -32,8 +46,27 @@ status() {   # status <state> <reason>
 fail() { log "$1"; status failed "$1"; exit 1; }
 
 rm -f "$FLAG"   # consume the flag first so the path-unit doesn't immediately re-trigger
-ORIGIN="$(tr -d '[:space:]' < "$DIR/relay/origin" 2>/dev/null || true)"
-CODE_SRC="$(tr -d '[:space:]' < "$DIR/relay/code-source" 2>/dev/null || true)"
+
+# A RELAY THAT REFUSED ITS DATA FOLDER MUST NOT BE RESTARTED (storage plan step 6, audit A finding 8). The gateway
+# exits 78 when its folder is missing / moved out / foreign, and the unit has Restart=always, so without
+# RestartPreventExitStatus=78 systemd would loop it every 3 s. install.sh writes that line into the unit, but a box
+# installed BEFORE it did (a8) never re-runs install.sh -- so every update adds it as a drop-in, here, before
+# anything on the box can write a MOVED-TO. Idempotent; a failure is logged, never fatal to the update.
+ensure_refusal_is_final() {
+  local d="$SYSD/$SVC.service.d" f="$SYSD/$SVC.service.d/10-refused-data-folder.conf"
+  if [ -f "$f" ] && grep -qx 'RestartPreventExitStatus=78' "$f" 2>/dev/null; then return 0; fi
+  if mkdir -p "$d" && printf '[Service]\nRestartPreventExitStatus=78\n' > "$f.tmp" && mv "$f.tmp" "$f"; then
+    systemctl daemon-reload 2>/dev/null || true
+    log "added the restart-prevent-78 drop-in for $SVC"
+  else
+    log "could not add the restart-prevent-78 drop-in for $SVC (continuing)"
+  fi
+  return 0
+}
+ensure_refusal_is_final
+
+ORIGIN="$(tr -d '[:space:]' < "$DATA/origin" 2>/dev/null || true)"
+CODE_SRC="$(tr -d '[:space:]' < "$DATA/code-source" 2>/dev/null || true)"
 [ -n "$CODE_SRC" ] || CODE_SRC="$ORIGIN"
 [ -n "$CODE_SRC" ] || { fail "no update source is configured for this relay"; }
 
@@ -124,7 +157,12 @@ else
 fi
 
 # back up the current CODE (not relay/ data — that's preserved in place) so a bad build can roll back
-BACKUP="$DIR/relay/.code-backup.tgz"
+# The backup lives OUTSIDE the data folder (storage plan step 6): the data folder may be on a removable drive that
+# is gone when a rollback needs this, it is included in the panel's "Back up" download, and it must not be moved
+# or copied with the church's records. The old in-folder copy is cleared.
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+BACKUP="$STATE_DIR/code-backup.tgz"
+rm -f "$DATA/.code-backup.tgz"
 tar -czf "$BACKUP" -C "$DIR" --exclude='./relay' --exclude='./node_modules' . 2>/dev/null || true
 
 # swap in the new code; --exclude keeps this box's relay/ secrets + data untouched.
@@ -148,7 +186,7 @@ tar -xzf "$TARBALL" -C "$DIR" --no-same-owner --exclude='relay/*' || { log "unpa
 # First run after this ships: MANIFEST does not exist, so nothing is deleted and the manifest is written.
 # From the next update onwards it converges. Leftovers installed before manifests existed are NOT cleaned up
 # by this — see the explicit sweep below for the classes that must never be present at all.
-MANIFEST="$DIR/relay/installed-files.txt"
+MANIFEST="${DATA:-$DIR/relay}/installed-files.txt"
 NEWLIST="$(mktemp)"; trap 'rm -f "$TARBALL" "$SIGFILE" "$NEWLIST"' EXIT
 if tar -tzf "$TARBALL" 2>/dev/null | sed 's#^\./##' | grep -v '/$' | grep -v '^relay/' | sort -u > "$NEWLIST"; then
   if [ -s "$MANIFEST" ]; then
@@ -228,7 +266,7 @@ true   # a zero count is a normal outcome, not a failure — do not leave it as 
 # (Previously a separate, easily-forgotten "Fetch latest APK" dashboard step → manifest said vN but the APK file
 #  lagged at vN-1, so members got no update or a stale one. One .update-request now deploys everything.)
 # From the APP origin, not the code source: a GitHub release carries no APKs.
-APKDIR="$DIR/relay/apks"; mkdir -p "$APKDIR"
+APKDIR="$DATA/apks"; mkdir -p "$APKDIR"
 for f in trinityone.apk trinityone-steward.apk; do
   if [ -n "$ORIGIN" ] && curl -fsSL "$ORIGIN/$f" -o "$APKDIR/$f.part" 2>/dev/null && [ "$(stat -c%s "$APKDIR/$f.part" 2>/dev/null || echo 0)" -gt 1000000 ]; then
     mv "$APKDIR/$f.part" "$APKDIR/$f"; log "fetched APK $f ($(stat -c%s "$APKDIR/$f") bytes)"
@@ -245,7 +283,7 @@ done
 # pubkey and hijack the whole fleet's next signed update. Only relay/ needs to be service-writable (the systemd
 # unit's ReadWritePaths=$DIR/relay already confines the relay's writes there); keep code + scripts + pubkey
 # root-owned (world-readable, so the service still reads them).
-chown -R "$SVC_USER:$SVC_USER" "$DIR/relay"
+chown -R "$SVC_USER:$SVC_USER" "$DATA"
 chown -R root:root "$DIR/scripts" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
 chmod 0644 "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
 
@@ -319,7 +357,7 @@ probe_declared_addresses() {   # 0 = this relay can be reached where it says it 
       return 0
     fi
     log "THIS RELAY DECLARES NO PUBLIC ADDRESS, so it will refuse every member who is not on this machine"
-    log "set RELAY_PUBLIC_URL=wss://your.host/relay in the service environment, or list the addresses in $DIR/relay/relay-addresses.json"
+    log "set RELAY_PUBLIC_URL=wss://your.host/relay in the service environment, or list the addresses in ${DATA:-$DIR/relay}/relay-addresses.json"
     log "if it really is loopback/LAN-only, set RELAY_LOOPBACK_ONLY=1 and request the update again"
     return 1
   fi
@@ -401,7 +439,7 @@ if [ "$ok" = 1 ]; then
 else
   log "new build did not come up — rolling back"
   tar -xzf "$BACKUP" -C "$DIR" --no-same-owner 2>/dev/null
-  chown -R "$SVC_USER:$SVC_USER" "$DIR/relay"
+  chown -R "$SVC_USER:$SVC_USER" "$DATA"
   chown -R root:root "$DIR/scripts" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
   systemctl restart "$SVC"
   status rolledback "the new build did not start, so the previous one was put back"
