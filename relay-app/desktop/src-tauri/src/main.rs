@@ -1115,11 +1115,12 @@ struct StateRec<'a> {
     reason: &'a str,
     auto_off: bool,
     address_before: &'a str, // the quick-tunnel address before this apply restarted the relay ("" = none)
+    restore_failed: &'a str, // non-empty when a rollback could not put the church's data back (why + where the copy is)
 }
 
 fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
     let json = format!(
-        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{},\"addressBefore\":{}}}\n",
+        "{{\"installedSha\":{},\"installedVersion\":{},\"installedDate\":{},\"lastApplied\":{},\"lastOutcome\":{},\"lastReason\":{},\"autoOff\":{},\"addressBefore\":{},\"restoreFailed\":{}}}\n",
         jstr(r.sha),
         jstr(r.version),
         jstr(r.date),
@@ -1128,6 +1129,7 @@ fn write_state(suite_dir: &Path, r: &StateRec, log: &Path) {
         jstr(r.reason),
         if r.auto_off { "true" } else { "false" },
         jstr(r.address_before),
+        jstr(r.restore_failed),
     );
     let _ = write_file_atomic(&suite_dir.join("state.json"), &json, log);
 }
@@ -1213,48 +1215,106 @@ fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Resul
     Ok(dir)
 }
 
-// Put the backed-up store back (relay STOPPED). The side files are removed first so a -wal written by the bad
-// code cannot be replayed over the restored main file.
-fn restore_store(data_dir: &Path, backup: &Path, log: &Path) {
-    // Never delete the live store unless the backup really holds one (audit 00aadeed N1): a missing or emptied
-    // backup leaves the data as it is, and says so.
-    let has_main = backup.join("relay.sqlite").is_file();
-    if !has_main && data_dir.join("relay.sqlite").is_file() {
-        applog(log, &format!("suite: NOT restoring the church's data: the backup at {backup:?} has no relay.sqlite"));
-        return;
+// Put the backed-up store back (relay STOPPED). [audit 5ad96e13 MEDIUM] All-or-nothing: the result is either the
+// whole backup (relay.sqlite + its -wal) or the live files exactly as they were — never a mix, such as a restored
+// main file with the bad update's -wal replayed onto it. Order:
+//   1. copy the backup's files to *.restore-tmp            (nothing live touched yet)
+//   2. move the live -wal and -shm aside, then the live main file  (each move checked; failure → put back)
+//   3. bring in the backup's -wal (if it has one), then the main file LAST  (failure → undo everything)
+//   4. only now delete what was set aside. The -shm is never restored: SQLite rebuilds it from the -wal.
+// Ok(()) only when the restore really happened; Err(reason) otherwise, with the live store as it was.
+fn restore_store(data_dir: &Path, backup: &Path, log: &Path) -> Result<(), String> {
+    let main = data_dir.join("relay.sqlite");
+    let wal = data_dir.join("relay.sqlite-wal");
+    let shm = data_dir.join("relay.sqlite-shm");
+    if !backup.join("relay.sqlite").is_file() {
+        // Never touch the live store unless the backup really holds one (audit 00aadeed N1).
+        let why = format!("the safety copy at {} has no relay.sqlite", backup.display());
+        applog(log, &format!("suite: NOT restoring the church's data: {why}"));
+        return Err(why);
     }
-    // Copy every backed-up file to a temporary name FIRST; only when all copies succeeded are the live files
-    // replaced (rename), so a copy that fails half-way leaves the live store untouched.
-    let mut staged = Vec::new();
-    for f in DB_FILES {
-        let b = backup.join(f);
-        if b.is_file() {
-            let tmp = data_dir.join(format!("{f}.restore-tmp"));
-            if let Err(e) = std::fs::copy(&b, &tmp) {
-                applog(log, &format!("suite: NOT restoring the church's data: copying {f} failed: {e} (the backup is still at {backup:?})"));
-                for (_, t) in staged {
-                    let _ = std::fs::remove_file(t);
-                }
-                let _ = std::fs::remove_file(&tmp);
-                return;
+    let tmp_main = data_dir.join("relay.sqlite.restore-tmp");
+    let tmp_wal = data_dir.join("relay.sqlite-wal.restore-tmp");
+    let backup_has_wal = backup.join("relay.sqlite-wal").is_file();
+    let cleanup_tmps = || {
+        let _ = std::fs::remove_file(&tmp_main);
+        let _ = std::fs::remove_file(&tmp_wal);
+    };
+    // 1. copies
+    let copied = std::fs::copy(backup.join("relay.sqlite"), &tmp_main)
+        .and_then(|_| if backup_has_wal { std::fs::copy(backup.join("relay.sqlite-wal"), &tmp_wal).map(|_| ()) } else { Ok(()) });
+    if let Err(e) = copied {
+        cleanup_tmps();
+        let why = format!("copying the safety copy failed ({e})");
+        applog(log, &format!("suite: NOT restoring the church's data: {why}; the live store is unchanged"));
+        return Err(why);
+    }
+    // 2. set the live files aside (side files first, main last); remember what moved so it can be put back
+    let mut aside: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let put_back = |aside: &Vec<(PathBuf, PathBuf)>| {
+        for (live, moved) in aside.iter().rev() {
+            let _ = restore_rename(moved, live, log);
+        }
+    };
+    for live in [&wal, &shm, &main] {
+        if live.exists() {
+            let moved = live.with_extension(format!(
+                "{}.restore-aside",
+                live.extension().map(|x| x.to_string_lossy().to_string()).unwrap_or_default()
+            ));
+            if let Err(e) = restore_rename(live, &moved, log) {
+                put_back(&aside);
+                cleanup_tmps();
+                let why = format!("could not set the live {} aside ({e})", live.file_name().unwrap_or_default().to_string_lossy());
+                applog(log, &format!("suite: NOT restoring the church's data: {why}; the live store is unchanged"));
+                return Err(why);
             }
-            staged.push((f, tmp));
+            aside.push((live.to_path_buf(), moved));
         }
     }
-    // Rename each copy straight OVER its live file (std::fs::rename replaces the target on Windows too), with the
-    // short retry for a file Defender is still scanning; only side files the backup does not have are deleted.
-    // The live store is therefore never gone before its replacement is in place (audit 3e4ffed4 L1).
-    for f in DB_FILES {
-        if !staged.iter().any(|(g, _)| *g == f) {
-            let _ = std::fs::remove_file(data_dir.join(f));
+    // 3. bring the backup in: -wal first, main LAST
+    let mut placed: Vec<PathBuf> = Vec::new();
+    let step = |from: &Path, to: &Path, placed: &mut Vec<PathBuf>| -> Result<(), String> {
+        restore_rename(from, to, log).map_err(|e| format!("could not put {} in place ({e})", to.file_name().unwrap_or_default().to_string_lossy()))?;
+        placed.push(to.to_path_buf());
+        Ok(())
+    };
+    let brought = (if backup_has_wal { step(&tmp_wal, &wal, &mut placed) } else { Ok(()) })
+        .and_then(|_| step(&tmp_main, &main, &mut placed));
+    if let Err(why) = brought {
+        for p in &placed {
+            let _ = std::fs::remove_file(p);
         }
+        put_back(&aside);
+        cleanup_tmps();
+        applog(log, &format!("suite: NOT restoring the church's data: {why}; the live store was put back as it was"));
+        return Err(why);
     }
-    for (f, tmp) in staged {
-        if let Err(e) = rename_retry(&tmp, &data_dir.join(f), log) {
-            applog(log, &format!("suite: RESTORE of {f} failed at the final rename: {e} (the backup is still at {backup:?})"));
-        }
+    // 4. done — drop what was set aside (the old -shm included: SQLite rebuilds it)
+    for (_, moved) in &aside {
+        let _ = std::fs::remove_file(moved);
     }
     applog(log, &format!("suite: church data restored from {backup:?}"));
+    Ok(())
+}
+
+// The renames restore_store makes, numbered so a test can make the Nth one fail (audit 5ad96e13 LOW: prove the
+// store is never left mixed). Production: rename_retry.
+#[cfg(test)]
+thread_local! {
+    static RESTORE_RENAME_FAIL_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static RESTORE_RENAME_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn restore_rename(from: &Path, to: &Path, log: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    {
+        let n = RESTORE_RENAME_COUNT.with(|c| { let n = c.get(); c.set(n + 1); n });
+        if RESTORE_RENAME_FAIL_AT.with(|c| c.get()) == Some(n) {
+            return Err(std::io::Error::other("injected rename failure"));
+        }
+    }
+    rename_retry(from, to, log)
 }
 
 // Health probe (I/O): poll public GET /status within the window and report the four facts health_outcome
@@ -1384,11 +1444,20 @@ fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> Boot {
 // webview, record a "rolledback" state that keeps the PREVIOUS installed identity, and switch auto-update off
 // (audit M7); with `backup`, first restore the church's data from it (audit M5). ASSUMES the relay is stopped. Keeps the church ONLINE on known-good code. Does NOT write
 // quarantine — the caller decides that, since a retain failure is a local-disk problem, not a bad bundle.
-fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str, backup: Option<&Path>, address_before: &str) {
+#[allow(clippy::too_many_arguments)]
+fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, day: &str, reason: &str, backup: Option<&Path>, stopped: bool, address_before: &str) {
     let suite_dir = env.suite_dir;
-    // [audit M5] The new code ran against the church's data; put the pre-update copy back before anything reads it.
+    // [audit M5] The new code ran against the church's data; put the pre-update copy back before anything reads it
+    // — but only once the bad relay is confirmed stopped (audit 5ad96e13 LOW). A restore that does not happen, or
+    // fails, is recorded (restoreFailed) and shown on the panel with where the safety copy is.
+    let mut restore_failed = String::new();
     if let Some(b) = backup {
-        restore_store(env.data_dir, b, env.log);
+        if !stopped {
+            restore_failed = format!("the update could not be stopped, so the church's data was not put back; the safety copy is at {}", b.display());
+            applog(env.log, &format!("suite: NOT restoring the church's data: {restore_failed}"));
+        } else if let Err(why) = restore_store(env.data_dir, b, env.log) {
+            restore_failed = format!("the church's data could not be put back ({why}); the safety copy is at {}", b.display());
+        }
     }
     let active = suite_dir.join("active");
     let last_good = suite_dir.join("last-good");
@@ -1420,7 +1489,7 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
     let prev_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
     write_state(suite_dir, &StateRec {
         sha: &prev_sha, version: &prev_ver, date: &prev_date, last_applied: day,
-        outcome: "rolledback", reason, auto_off: true, address_before,
+        outcome: "rolledback", reason, auto_off: true, address_before, restore_failed: &restore_failed,
     }, env.log);
 }
 
@@ -1537,7 +1606,7 @@ fn startup(env: &ApplyEnv) -> RunState {
                 write_state(env.suite_dir, &StateRec {
                     sha: "", version: "", date: "", last_applied: &la, outcome: "launch-failed",
                     reason: "the downloaded update would not start, so the Suite went back to the version it came with",
-                    auto_off: true, address_before: "",
+                    auto_off: true, address_before: "", restore_failed: "",
                 }, env.log);
             } else {
                 write_state(env.suite_dir, &StateRec {
@@ -1546,7 +1615,7 @@ fn startup(env: &ApplyEnv) -> RunState {
                     date: &json_str_value(&prev_raw, "installedDate").unwrap_or_default(),
                     last_applied: &la, outcome: "launch-slow",
                     reason: "the downloaded update was too slow to start this time; it will be tried again at the next start",
-                    auto_off: false, address_before: "",
+                    auto_off: false, address_before: "", restore_failed: "",
                 }, env.log);
             }
             let payload = env.payload.to_path_buf();
@@ -1582,7 +1651,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             version: &json_str_value(prev_state_raw, "installedVersion").unwrap_or_default(),
             date: &json_str_value(prev_state_raw, "installedDate").unwrap_or_default(),
             last_applied: day, outcome, reason,
-            auto_off: false, address_before: "",
+            auto_off: false, address_before: "", restore_failed: "",
         }, log);
     };
 
@@ -1716,7 +1785,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     if !promoted {
         applog(log, "suite: APPLY FAILED — could not put the update in place; rolling back to last-good/payload");
         let _ = std::fs::remove_dir_all(&active_new);
-        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not put the update in place", None, &address_before);
+        rollback_and_restart(env, st, prev_state_raw, day, "this computer could not put the update in place", None, true, &address_before);
         finish_snapshot(suite_dir, r_sha);
         applog(log, "suite: rollback complete (promote failure)");
         return;
@@ -1745,7 +1814,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             let outcome = if store_degraded { "applied-store-degraded" } else { "applied" };
             write_state(suite_dir, &StateRec {
                 sha: r_sha, version: r_version, date: r_date, last_applied: day, outcome, reason: "", auto_off: false,
-                address_before: &address_before,
+                address_before: &address_before, restore_failed: "",
             }, log);
             finish_snapshot(suite_dir, r_sha);
             let short = short_sha(r_sha);
@@ -1769,7 +1838,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
                 let _ = prepare_restart(env.data_dir, log);
             }
             env.host.stop_relay();
-            let _ = wait_stopped(&st.alive, Duration::from_secs(20));
+            let stopped = wait_stopped(&st.alive, Duration::from_secs(20));
             let why = if boot == Boot::Exited {
                 "the update stopped as soon as it started"
             } else if !reachable {
@@ -1779,7 +1848,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             } else {
                 "the update started but reported a problem"
             };
-            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup), &address_before);
+            rollback_and_restart(env, st, prev_state_raw, day, why, Some(&backup), stopped, &address_before);
             finish_snapshot(suite_dir, r_sha);
             applog(log, "suite: rollback complete");
         }

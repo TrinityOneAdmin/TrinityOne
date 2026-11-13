@@ -492,6 +492,12 @@ fn end_to_end_apply_harness() {
     scenario_w_rollback_to_an_unusable_last_good_runs_the_shipped_code();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (w)");
 
+    scenario_x_a_failed_restore_is_reported_and_leaves_the_store_whole();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (x)");
+
+    scenario_y_no_restore_while_the_bad_relay_may_still_run();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (y)");
+
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
 
@@ -1001,14 +1007,14 @@ fn scenario_w_rollback_to_an_unusable_last_good_runs_the_shipped_code() {
     let clock = clock_at(IN_WINDOW);
     let env = env_for(&host, &fx, &log, &clock);
     let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
-    rollback_and_restart(&env, &mut st, "", "2026-11-13", "test", None, "");
+    rollback_and_restart(&env, &mut st, "", "2026-11-13", "test", None, true, "");
     assert_eq!(st.code_dir, fx.payload, "rolled back into an empty folder");
     assert!(wait_for_served("v1", Duration::from_secs(10)), "the relay was left down");
     host.stop_relay();
     eprintln!("   (w) OK — empty last-good → shipped code");
 }
 
-// [audit 00aadeed N1] restore_store never deletes the live store unless the backup really holds one.
+// [audit 00aadeed N1] restore_store never touches the live store unless the backup really holds one.
 #[test]
 fn restore_refuses_a_backup_without_the_store() {
     let root = std::env::temp_dir().join(format!("trin-restore-{}", std::process::id()));
@@ -1017,15 +1023,151 @@ fn restore_refuses_a_backup_without_the_store() {
     write(&data.join("relay.sqlite"), "LIVE");
     write(&data.join("relay.sqlite-wal"), "LIVE-WAL");
     std::fs::create_dir_all(&backup).unwrap(); // emptied backup
-    restore_store(&data, &backup, &log);
-    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite")).unwrap(), "LIVE", "the live store was deleted with nothing to put back");
+    assert!(restore_store(&data, &backup, &log).is_err(), "an empty backup must be reported as a failed restore");
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite")).unwrap(), "LIVE", "the live store was touched with nothing to put back");
     assert_eq!(std::fs::read_to_string(data.join("relay.sqlite-wal")).unwrap(), "LIVE-WAL");
-    // and a good backup is restored, side files included
+    // and a good backup without a -wal is restored; the live -wal must not survive (it would replay onto it)
     write(&backup.join("relay.sqlite"), "BACKUP");
-    restore_store(&data, &backup, &log);
+    assert!(restore_store(&data, &backup, &log).is_ok());
     assert_eq!(std::fs::read_to_string(data.join("relay.sqlite")).unwrap(), "BACKUP");
     assert!(!data.join("relay.sqlite-wal").exists(), "a -wal not in the backup must not survive the restore");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// What is in the data dir, as (file -> contents), for the three store files and any restore leftovers.
+fn store_snapshot(data: &Path) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = std::fs::read_dir(data)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| (e.file_name().to_string_lossy().to_string(), std::fs::read_to_string(e.path()).unwrap_or_default()))
+        .collect();
+    v.sort();
+    v
+}
+
+// [audit 5ad96e13 MEDIUM + LOW 3] The restore is ALL-OR-NOTHING: make each of its renames fail in turn and the store
+// must be exactly as it was (all old: main, -wal and -shm of the bad update untouched) with no leftovers, and the
+// failure reported; with no failure it is exactly the backup (main + -wal, no stale -shm).
+#[test]
+fn restore_is_all_or_nothing_at_every_failure_point() {
+    let root = std::env::temp_dir().join(format!("trin-restore-aon-{}", std::process::id()));
+    let (data, backup, log) = (root.join("data"), root.join("backup"), root.join("log"));
+    let fresh = |with_backup_wal: bool| {
+        let _ = std::fs::remove_dir_all(&root);
+        write(&data.join("relay.sqlite"), "BAD-MAIN");
+        write(&data.join("relay.sqlite-wal"), "BAD-WAL");
+        write(&data.join("relay.sqlite-shm"), "BAD-SHM");
+        write(&backup.join("relay.sqlite"), "GOOD-MAIN");
+        if with_backup_wal {
+            write(&backup.join("relay.sqlite-wal"), "GOOD-WAL");
+        }
+    };
+    let set = |fail_at: Option<usize>| {
+        RESTORE_RENAME_FAIL_AT.with(|c| c.set(fail_at));
+        RESTORE_RENAME_COUNT.with(|c| c.set(0));
+    };
+    for with_wal in [true, false] {
+        fresh(with_wal);
+        let before = store_snapshot(&data);
+        // how many renames a clean restore makes
+        set(None);
+        assert!(restore_store(&data, &backup, &log).is_ok());
+        let renames = RESTORE_RENAME_COUNT.with(|c| c.get());
+        let mut want = vec![("relay.sqlite".to_string(), "GOOD-MAIN".to_string())];
+        if with_wal {
+            want.push(("relay.sqlite-wal".to_string(), "GOOD-WAL".to_string()));
+        }
+        assert_eq!(store_snapshot(&data), want, "a clean restore must leave exactly the backup (no stale -wal/-shm, no leftovers)");
+        assert!(renames >= 4, "re-anchor: expected the side files and main to be set aside and brought in ({renames})");
+        for k in 0..renames {
+            fresh(with_wal);
+            set(Some(k));
+            let r = restore_store(&data, &backup, &log);
+            assert!(r.is_err(), "rename #{k} failed but the restore reported success");
+            assert_eq!(store_snapshot(&data), before, "rename #{k} failed and the store is not exactly as it was (mixed or leftovers)");
+        }
+    }
+    set(None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// (x) [audit 5ad96e13] A rollback whose data restore fails: the store is left whole (exactly what the bad update
+//     left, not a mix), the relay is back on known-good code, and state.json says so with where the safety copy is.
+fn scenario_x_a_failed_restore_is_reported_and_leaves_the_store_whole() {
+    eprintln!("── scenario (x): a failed restore is reported and leaves the store whole ──");
+    let fx = fresh_box("x", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: D_OCT, lie: true, prelude: "" });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    RESTORE_RENAME_FAIL_AT.with(|c| c.set(Some(1))); // the 2nd rename of the restore fails
+    RESTORE_RENAME_COUNT.with(|c| c.set(0));
+    run_apply(&host, &fx, &log, &mut cur);
+    RESTORE_RENAME_FAIL_AT.with(|c| c.set(None));
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "not back on v1");
+    let raw = std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap();
+    let rf = json_str_value(&raw, "restoreFailed").unwrap_or_default();
+    assert!(rf.contains("could not be put back") && rf.contains("db-backup"), "the failed restore is not reported with the copy's place: {raw}");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED", "the store must be exactly what the bad update left");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite-wal")).unwrap(), "BAD-WAL", "the store must not be a mix");
+    host.stop_relay();
+    eprintln!("   (x) OK — restore failure reported; store whole");
+}
+
+// A host whose stop does nothing for the override (a bad relay that will not die). Children are parked and reaped
+// on drop.
+struct StubbornOverrideHost {
+    inner: TestHost,
+    parked: Mutex<Vec<Child>>,
+    current_is_active: AtomicBool,
+}
+impl RelayHost for StubbornOverrideHost {
+    fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
+        if let Some(c) = self.inner.child.lock().unwrap().take() {
+            self.parked.lock().unwrap().push(c);
+        }
+        self.current_is_active.store(code_dir.ends_with("active"), Ordering::SeqCst);
+        self.inner.spawn_relay(code_dir, payload, data_dir, log)
+    }
+    fn stop_relay(&self) {
+        if !self.current_is_active.load(Ordering::SeqCst) {
+            self.inner.stop_relay();
+        }
+    }
+    fn reload_webview(&self) {}
+}
+impl Drop for StubbornOverrideHost {
+    fn drop(&mut self) {
+        for mut c in self.parked.lock().unwrap().drain(..) {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        self.inner.stop_relay();
+    }
+}
+
+// (y) [audit 5ad96e13 LOW 2] The bad relay does not stop for the rollback: the data must NOT be restored under a
+//     process that may still be writing it, and that is reported.
+fn scenario_y_no_restore_while_the_bad_relay_may_still_run() {
+    eprintln!("── scenario (y): no restore while the bad relay may still run (≈20s stop timeout) ──");
+    let fx = fresh_box("y", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: D_OCT, lie: true, prelude: "" });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
+    {
+        let host = StubbornOverrideHost { inner: TestHost::new(fx.node.clone()), parked: Mutex::new(Vec::new()), current_is_active: AtomicBool::new(false) };
+        let mut cur = start_v1(&host, &fx, &log);
+        run_apply(&host, &fx, &log, &mut cur);
+        let raw = std::fs::read_to_string(fx.suite_dir.join("state.json")).unwrap();
+        let rf = json_str_value(&raw, "restoreFailed").unwrap_or_default();
+        assert!(rf.contains("could not be stopped"), "the skipped restore is not reported: {raw}");
+        assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "ORIGINAL-STOREMANGLED",
+            "the data was restored while the bad relay may still have been running");
+    } // drop reaps every child
+    eprintln!("   (y) OK — no restore under a live bad relay; reported");
 }
 
 // A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed

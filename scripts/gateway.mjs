@@ -764,6 +764,7 @@ function suiteUpdateStatus() {
     running: runningUpdate ? 'update' : 'shipped', runningVersion: BUILD.short, shippedVersion,
     installedVersion: st.installedVersion || st.installedSha || '', installedDate: st.installedDate || '',
     lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '', lastReason: st.lastReason || '', autoOff: st.autoOff === true,
+    restoreFailed: typeof st.restoreFailed === 'string' ? st.restoreFailed : '',   // audit 5ad96e13: a rollback that could not put the data back
     staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
     check: check && typeof check === 'object' ? { at: check.at || '', ok: !!check.ok, reason: check.reason || '' } : null,
     // [audit M6] the quick-tunnel address before the last update vs now (a quick tunnel cannot keep its address

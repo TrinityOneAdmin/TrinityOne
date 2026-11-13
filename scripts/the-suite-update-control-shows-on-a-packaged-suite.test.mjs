@@ -201,3 +201,17 @@ test('4: with an update staged, the panel says WHEN it installs (the window, or 
   assert.match(v.text, /Last check \d\d:\d\d: an update is downloaded/, v.text);
   assert.doesNotMatch(v.text, /03:00/, 'L1: a time saved at an earlier install is shown instead of the current setting');
 });
+
+test('5: a rollback whose data restore failed is shown on the real panel, with where the safety copy is',
+  { skip, timeout: 120000 }, async () => {
+  const root = packagedTree(); cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const gw = await startGateway(root, (d) => {
+    mkdirSync(join(d, 'suite'), { recursive: true });
+    writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ lastApplied: '2026-11-13', lastOutcome: 'rolledback',
+      lastReason: 'the update started but reported the wrong version', autoOff: true,
+      restoreFailed: "the church's data could not be put back (could not put relay.sqlite in place); the safety copy is at /x/db-backup/1" }));
+  });
+  const c = await startChrome(gw.base);
+  const v = JSON.parse(await waitFor(c, STATUS, (x) => /Attention/.test(JSON.parse(x).text)));
+  assert.match(v.text, /Attention: after the failed update the church's data could not be put back .* the safety copy is at \/x\/db-backup\/1/, v.text);
+});

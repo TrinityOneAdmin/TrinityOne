@@ -192,3 +192,10 @@ test('[audit 6630e30d LOW 7] a 05:30 window (runs to 07:30) gets the daytime war
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '05:30' });
   assert.equal(els.suiteAutoHint.style.display, 'inline');
 });
+
+test('[audit 5ad96e13] a rollback that could not put the data back is shown FIRST, with where the copy is', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, autoOff: true, lastOutcome: 'rolledback',
+    restoreFailed: "the church's data could not be put back (x); the safety copy is at /data/suite/db-backup/1" });
+  assert.match(els.suiteAutoStatus.textContent, /^Attention: after the failed update the church's data could not be put back \(x\); the safety copy is at \/data\/suite\/db-backup\/1\. Ask for help/);
+});

@@ -716,6 +716,8 @@
     const out = [];
     const at = suite.at || '03:00', end = suite.windowEnd || '';
     const win = end ? 'between ' + at + ' and ' + end : 'at ' + at;
+    // A rollback that could not put the church's data back is the most important thing on this line, so it goes first.
+    if (suite.restoreFailed) out.push('Attention: after the failed update ' + suite.restoreFailed + '. Ask for help before changing anything');
     if (suite.running === 'update') out.push('Running a downloaded update (' + (suite.runningVersion || suite.installedVersion || '?') + ')');
     if (suite.lastOutcome === 'rolledback' || suite.lastOutcome === 'launch-failed') {
       out.push((suite.lastOutcome === 'rolledback' ? 'The last update was rolled back' : 'The downloaded update would not start') +
