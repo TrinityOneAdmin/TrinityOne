@@ -226,6 +226,9 @@ WorkingDirectory=$DIR
 ExecStart=$NODE_BIN scripts/gateway.mjs $PORT
 Restart=always
 RestartSec=3
+# exit 78 = the relay REFUSED its data folder (missing drive / moved / foreign). Restarting cannot fix
+# that and would loop every 3s; stop and leave the refusal line at the end of the journal.
+RestartPreventExitStatus=78
 # hardening: the relay only needs its own dir
 NoNewPrivileges=true
 ProtectSystem=strict

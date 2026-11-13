@@ -6,5 +6,8 @@ WorkingDirectory=/mnt/storage/projects/TrinityOne
 ExecStart=/home/adminl/.nvm/versions/node/v22.22.2/bin/node scripts/gateway.mjs 8000
 Restart=always
 RestartSec=3
+# exit 78 = the relay REFUSED its data folder (missing drive / moved / foreign). Restarting cannot fix
+# that and would loop every 3s; stop and leave the refusal line at the end of the journal.
+RestartPreventExitStatus=78
 [Install]
 WantedBy=default.target
