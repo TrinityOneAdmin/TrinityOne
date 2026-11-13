@@ -451,3 +451,17 @@ withRig('M3: root never chmods through a link the relay planted (the file a link
   assert.equal(statSync(victim).mode & 0o777, 0o644, 'A LINK THE RELAY PLANTED MADE THE HELPER CHMOD A FILE OUTSIDE ITS FOLDER');
   assert.equal(statSync(join(r.target, 'relay-key.json')).mode & 0o777, 0o600, 'the real files were still fixed');
 });
+
+// ── second audit N2: boot recovery never waits on the lock ──────────────────────────────────────────────────────────
+withRig('N2: boot recovery returns at once when another root job holds the lock (it is ordered Before= the relay, so waiting would hold the relay back)', async r => {
+  await seedAndRun(r);
+  const holder = spawn('flock', [join(r.state, 'update-move.lock'), 'sleep', '30'], { stdio: 'ignore' });
+  try {
+    await sleep(500);
+    r.env.TRINITYONE_LOCK_WAIT = '25';                 // an old (waiting) recovery would sit here for the whole 25 s
+    const t0 = Date.now(); const res = bootRecover(r); const took = Date.now() - t0;
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(took < 8000, 'boot recovery waited ' + took + ' ms on the lock while the relay unit was ordered after it');
+    assert.match(r.lastOutput, /not waiting/);
+  } finally { holder.kill('SIGKILL'); }
+});

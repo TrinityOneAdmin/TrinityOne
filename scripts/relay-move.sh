@@ -84,8 +84,12 @@ DATA="$(datadir)"
 # update; an update that finds a move running refuses. Without it the update's restart could start the relay on the old
 # folder in the middle of a copy and the move would "stand" with the live relay writing into a folder marked MOVED-TO.
 exec 9>"$LOCK"
-if ! flock -w "$LOCK_WAIT" 9 2>/dev/null; then
-  log "another root job (an update?) still holds $LOCK after ${LOCK_WAIT}s"
+# BOOT RECOVERY NEVER WAITS (audit N2): it is ordered Before= the relay, so a wait here holds the relay back. If another root job
+# already has the lock, that job is a move helper (which recovers an interrupted move itself, at its start) or an update (which
+# touches no move state); either way recovery has nothing to add right now.
+FLOCK_ARGS=(-w "$LOCK_WAIT"); [ "$MODE" = --recover-only ] && FLOCK_ARGS=(-n)
+if ! flock "${FLOCK_ARGS[@]}" 9 2>/dev/null; then
+  log "another root job holds $LOCK${MODE:+ (mode $MODE: not waiting)}"
   if [ -z "$MODE" ]; then
     # consume whatever was asked, say why in the journal, touch nothing else
     for f in .move-request .remove-old-request; do
@@ -216,7 +220,7 @@ handle_move() {
     || { rm -f "$REQ"; refuse_and_restart "$(printf '%s' "$r" | jget code)" "$(printf '%s' "$r" | jget detail)"; return; }
   rm -f "$REQ"
   drive="$(printf '%s' "$r" | jget drive)"; target="$(printf '%s' "$r" | jget target)"
-  "$NODE" -e 'require("node:sqlite")' >/dev/null 2>&1 || { refuse_and_restart node-too-old "this box's Node cannot open the relay database the way the mover needs (Node 22.5 or newer)"; return; }
+  "$NODE" -e 'require("node:sqlite")' >/dev/null 2>&1 || { refuse_and_restart node-too-old "this box's Node cannot open the relay database the way the mover needs (Node 22.13 or newer)"; return; }
 
   # the target folder: ours, 0700, the service user's. The parents are root-owned, so only root can make it.
   if [ ! -e "$target" ]; then mkdir -m 0700 "$target" || { refuse_and_restart target-unwritable; return; }; created=1; fi

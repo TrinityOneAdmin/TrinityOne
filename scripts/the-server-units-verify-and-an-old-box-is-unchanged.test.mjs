@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,7 +104,7 @@ test('L4: an installer re-run with the drive unplugged refuses and creates nothi
     const bin = join(w, 'bin'); mkdirSync(bin);
     const run = ({ hadEnv = 1, data, mountOk }) => {
       writeFileSync(join(bin, 'mountpoint'), `#!/bin/sh\nexit ${mountOk ? 0 : 1}\n`, { mode: 0o755 });
-      return spawnSync('bash', ['-c', `die() { echo "DIE: $*" >&2; exit 1; }\nHAD_ENV=${hadEnv}; DATA=${data}\n${lift('check_data_folder_present() {')}\ncheck_data_folder_present && echo PASSED`],
+      return spawnSync('bash', ['-c', `die() { echo "DIE: $*" >&2; exit 1; }\nHAD_ENV=${hadEnv}; ENV_PINNED=0; DIR=/opt/none-here; DATA=${data}\n${lift('is_mounted() {')}\n${lift('check_data_folder_present() {')}\ncheck_data_folder_present && echo PASSED`],
         { encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH } });
     };
     const missing = join(w, 'drive/trinityone-relay');
@@ -136,5 +136,55 @@ test('L3: the data folder is recorded BEFORE the relay first starts, so the card
     const fresh = run(false, join(w, 'fresh'));
     assert.match(fresh, /TRINITY_STORAGE_MODE=server/); assert.doesNotMatch(fresh, /PINNED/, 'a folder with no key yet must be recorded unpinned');
     assert.match(run(true, join(w, 'keyed')), /TRINITY_DATA_DIR_PINNED=1/);
+  } finally { rmSync(w, { recursive: true, force: true }); }
+});
+
+// ── second audit: N2 (boot ordering), N4 (L4 over-broad / missing mountpoint tool), N5 (finish unit) ───────────────────
+test('N2/N5: the move and update units are ordered After= the recover unit; the finish unit needs the relay up (Requisite, not Wants) and is bounded — and the whole set has no ordering cycle', () => {
+  const w = mkdtempSync(join(tmpdir(), 'trin-ord-'));
+  try {
+    const t = n => render(`/etc/systemd/system/${n}`, PRE);
+    const move = t('trinityone-move.service'), upd = t('trinityone-update.service'), rec = t('trinityone-move-recover.service'), fin = t('trinityone-move-finish.service'), relay = t('$SVC.service');
+    for (const [n, u] of [['move', move], ['update', upd]]) assert.match(u, /^After=trinityone-move-recover\.service$/m, n + ' service can run before boot recovery: a request left from before shutdown could take the lock first and start the relay');
+    assert.match(rec, /^Before=trinityone-relay\.service$/m);
+    assert.match(fin, /^After=trinityone-relay\.service$/m); assert.match(fin, /^Requisite=trinityone-relay\.service$/m);
+    assert.doesNotMatch(fin, /^Wants=/m, 'the finish unit pulls in (starts) a relay an admin had disabled');
+    const to = /^TimeoutStartSec=(.*)$/m.exec(fin); assert.ok(to && /^\d+$/.test(to[1]) && Number(to[1]) <= 1800, 'the finish unit has no bound: boot waits on it for ever (' + (to && to[1]) + ')');
+    assert.doesNotMatch(relay, /move-recover|move-finish/, 'the relay unit must not depend on the recovery units');
+    // systemd itself: every unit together, with a real parser, finds no ordering cycle and no unknown directive
+    const sysd = join(w, 'systemd'); mkdirSync(sysd);
+    for (const n of ['trinityone-move.service', 'trinityone-update.service', 'trinityone-move-recover.service', 'trinityone-move-finish.service']) writeFileSync(join(sysd, n), t(n));
+    writeFileSync(join(sysd, 'trinityone-relay.service'), relay);
+    const v = spawnSync('systemd-analyze', ['verify', ...readdirSync(sysd).map(n => join(sysd, n))], { encoding: 'utf8' });
+    assert.doesNotMatch(v.stderr || '', /ordering cycle|Found dependency|Unknown (key|section)|Failed to parse|Unknown lvalue/i, 'systemd rejected the units: ' + v.stderr);
+  } finally { rmSync(w, { recursive: true, force: true }); }
+});
+
+test('N4: the reinstall check refuses only a PINNED folder, or a non-default one on an unmounted drive; a missing mountpoint tool falls back to findmnt, then /proc/mounts', () => {
+  const w = mkdtempSync(join(tmpdir(), 'trin-n4-'));
+  try {
+    const bin = join(w, 'bin'); mkdirSync(bin);
+    const fns = lift('is_mounted() {') + lift('check_data_folder_present() {');
+    const tool = (name, code) => { writeFileSync(join(bin, name), `#!/bin/sh\nexit ${code}\n`, { mode: 0o755 }); };
+    const run = (vars, { path = bin + ':' + process.env.PATH } = {}) => spawnSync('/bin/bash', ['-c', `die() { echo "DIE: $*" >&2; exit 1; }\n${vars}\n${fns}\ncheck_data_folder_present && echo PASSED`], { encoding: 'utf8', env: { ...process.env, PATH: path } });
+    // (a) unpinned relay.env naming the default folder, which is missing (reinstall after rm -rf /opt/trinityone): NOT refused
+    let r = run(`HAD_ENV=1; ENV_PINNED=0; DIR=${w}/opt; DATA=${w}/opt/relay`); assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /PASSED/);
+    // (b) the same but PINNED: refused
+    r = run(`HAD_ENV=1; ENV_PINNED=1; DIR=${w}/opt; DATA=${w}/opt/relay`); assert.notEqual(r.status, 0); assert.match(r.stderr, /missing/);
+    // (c) a non-default folder that is missing is refused even unpinned
+    r = run(`HAD_ENV=1; ENV_PINNED=0; DIR=${w}/opt; DATA=${w}/drive/trinityone-relay`); assert.notEqual(r.status, 0);
+    // (d) tool fallbacks with the folder present: no mountpoint tool -> findmnt decides
+    mkdirSync(join(w, 'drive/trinityone-relay'), { recursive: true });
+    const only = join(w, 'only'); mkdirSync(only);
+    for (const t of ['awk', 'dirname', 'sed', 'cat']) { const p = spawnSync('/bin/bash', ['-c', `command -v ${t}`], { encoding: 'utf8' }).stdout.trim(); if (p) spawnSync('ln', ['-sf', p, join(only, t)]); }
+    const vars = `HAD_ENV=1; ENV_PINNED=1; DIR=${w}/opt; DATA=${w}/drive/trinityone-relay`;
+    writeFileSync(join(only, 'findmnt'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    r = run(vars, { path: only }); assert.notEqual(r.status, 0, 'findmnt said not mounted, yet the installer went on'); assert.match(r.stderr, /not mounted/);
+    writeFileSync(join(only, 'findmnt'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    r = run(vars, { path: only }); assert.equal(r.status, 0, r.stderr + ' (findmnt said mounted)');
+    // (e) neither tool: /proc/mounts decides. /proc is a real mountpoint; the folder two levels in is not.
+    rmSync(join(only, 'findmnt'));
+    const probe = spawnSync('/bin/bash', ['-c', `${lift('is_mounted() {')}\nis_mounted /proc && echo yes-proc; is_mounted ${w}/drive || echo no-drive`], { encoding: 'utf8', env: { ...process.env, PATH: only } });
+    assert.match(probe.stdout, /yes-proc/, 'with no mountpoint and no findmnt, a real mount was reported as not mounted: ' + probe.stderr); assert.match(probe.stdout, /no-drive/);
   } finally { rmSync(w, { recursive: true, force: true }); }
 });

@@ -3,7 +3,9 @@
 // only the top folder, then deleted by path, so a subfolder swapped for a link to some other folder was followed and that
 // folder's files were deleted. This reproduces it with the REAL removeRecorded: a second process swaps `blobs/` for a link to
 // a victim folder as fast as it can while the remover runs. The victim must come through whole, every trial.
-// (On 98220a4e, where the delete was rmSync, the victim loses files on the first trial.)
+// HONEST SCOPE (second audit, N3): this race is a SMOKE test. The old rmSync is unsafe only inside its own recursion, so it
+// loses victim files in some runs (the first audit saw it) and none in others (the second saw 0 of 48); this test is green
+// against the old code most of the time. The deterministic proof of the fix is the `rm` shape test below.
 // Also: the CLI's remove-old runs the deletion AS THE SERVICE USER (runuser delete-tree), root keeping only the journal.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,7 +35,7 @@ function fixture() {
   return { w, old, live, victim };
 }
 
-test('a subfolder swapped for a link to another folder, while the remover runs, costs that folder nothing (3 trials)', async () => {
+test('SMOKE: a subfolder swapped for a link to another folder, while the remover runs, costs that folder nothing (3 trials)', async () => {
   for (let trial = 0; trial < 3; trial++) {
     const f = fixture();
     const sw = spawn(process.execPath, ['-e', SWAPPER, f.old, f.victim], { stdio: 'ignore' });
@@ -79,5 +81,39 @@ test('the CLI deletes through runuser (the service user), root only keeps the jo
     const r2 = spawnSync(process.execPath, [join(ROOT, 'scripts/relay-move-server.mjs'), 'remove-old', '--state', state, '--request', join(f.w, 'req.json'), '--live', f.live, '--run-as-user', 'nobody'],
       { encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH } });
     assert.equal(r2.status, 2); assert.ok(existsSync(join(f.live, 'relay-key.json')));
+  } finally { rmSync(f.w, { recursive: true, force: true }); }
+});
+
+// ── N3 (second audit): what actually tells the new delete from the old one ───────────────────────────────────────────
+// The race above is a SMOKE TEST, not proof. The old rmSync is unsafe only in a window INSIDE its own recursion (between its
+// lstat of a subfolder and its readdir), which no outside caller can hit on demand: measured, the old delete lost victim files
+// in some runs and none in 48 others, so this test passes against the old code most of the time. What can be asserted
+// deterministically is HOW the delete is done: every entry goes through GNU `rm -rf --one-file-system -- <entry>`, which
+// walks by open directory descriptor. A `rm` on PATH that records its argv shows that; rmSync never calls it.
+test('the delete of every entry is handed to `rm -rf --one-file-system --` (the descriptor-walking delete), not done by path in node', () => {
+  const f = fixture();
+  const bin = join(f.w, 'bin'); mkdirSync(bin);
+  const log = join(f.w, 'rm.log');
+  writeFileSync(join(bin, 'rm'), '#!/bin/sh\necho "$@" >> "' + log + '"\nexec /bin/rm "$@"\n', { mode: 0o755 });
+  const saved = process.env.PATH; process.env.PATH = bin + ':' + saved;
+  try {
+    const r = removeRecorded({ path: f.old, liveDirs: [f.live], relayPub: 'P' });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const lines = readFileSync(log, 'utf8').trim().split('\n').sort();
+    assert.deepEqual(lines, [`-rf --one-file-system -- ${join(f.old, 'blobs')}`, `-rf --one-file-system -- ${join(f.old, 'relay-key.json')}`], 'THE DELETE IS NOT BY rm -rf --one-file-system: it is the by-path delete again');
+    assert.deepEqual(readdirSync(f.old), ['MOVED-TO']);
+  } finally { process.env.PATH = saved; rmSync(f.w, { recursive: true, force: true }); }
+});
+test('links planted at depth BEFORE the delete (not a race) are unlinked and their targets are untouched', () => {
+  const f = fixture();
+  try {
+    rmSync(join(f.old, 'blobs'), { recursive: true });
+    mkdirSync(join(f.old, 'blobs/deep/deeper'), { recursive: true });
+    for (const where of ['blobs/l1', 'blobs/deep/l2', 'blobs/deep/deeper/l3']) spawnSync('ln', ['-s', f.victim, join(f.old, where)]);
+    writeFileSync(join(f.old, 'blobs/deep/deeper/real'), 'x');
+    const r = removeRecorded({ path: f.old, liveDirs: [f.live], relayPub: 'P' });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(readdirSync(f.victim).length, 50, 'a link planted at depth was followed');
+    assert.deepEqual(readdirSync(f.old), ['MOVED-TO']);
   } finally { rmSync(f.w, { recursive: true, force: true }); }
 });

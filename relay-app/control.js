@@ -1852,11 +1852,19 @@
     else act = stState.removeArmed === o.path ? '<button type="button" class="btn btn-danger" id="stRemoveOld">Remove the old copy?</button>' : '<button type="button" class="btn btn-ghost btn-caution" id="stRemoveOld">' + ST_TRASH_SVG + 'Remove old copy</button>';
     h += '<div class="st-old"><div class="txt">' + txt + '</div>' + act + '</div>';
     if (stState.removeArmed === o.path) h += '<div class="st-msg err-text">This can\'t be undone. Click again to remove it, or click anywhere else to keep it.</div>';
-    return h;
+    return h + stRemoveNote(r);
+  }
+  // a Remove the helper stopped or refused (move.refusal, code remove-*). "delete-failed" means the delete began and stopped
+  // part-way, so the folder is NOT untouched (audit N8); the other codes were refused before anything was deleted.
+  function stRemoveNote(r) {
+    const f = r && r.move && r.move.refusal; if (!f || !/^remove-/.test(String(f.code || ''))) return '';
+    if (f.code === 'remove-delete-failed') return '<div class="st-msg err-text"><b>Removing it stopped part-way.</b> Some of the old copy may already be gone. See the log (move.log in the relay\'s state folder) for what is left.</div>';
+    return '<div class="st-msg err-text">It couldn\'t be removed, and was left alone (' + esc(String(f.code).slice(7)) + ').</div>';
   }
   function stLeftovers(r) {
     const pend = r.requests && r.requests.removeOld && r.requests.removeOld.path;
-    return (r.leftovers || []).filter(l => l.exists).map(l => {
+    const note = r.oldCopy ? '' : stRemoveNote(r);   // with an old copy on the card, stOldCopy shows it
+    return note + (r.leftovers || []).filter(l => l.exists).map(l => {
       const place = stPlace(r, l.path, null);
       const when = l.since ? ' on ' + new Date(l.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
       const txt = l.kind === 'set-aside'
