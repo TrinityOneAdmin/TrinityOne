@@ -815,14 +815,18 @@ window.StewardAwaitingApproval = StewardAwaitingApproval;
 // StewardRoot shows this in place of the empty console only when Steward.removedNotices() holds a removal — written by
 // the engine after a SIGNED removal was read, never from a slow or failed read (subscribeStewardedChurches, noteGone) —
 // AND Steward.removedLeavesNothing() says this console's own key is the bare helper key with no other church, request or
-// network behind it. Continue clears the notice and that key (acknowledgeRemoval re-checks before it discards anything),
-// and with no key StewardRoot shows the start screen. A console with anything else left gets the dismissible banner.
+// network behind it. Continue clears the notice, and discards that key only when this device minted it as a bare helper
+// key (Steward.removedDiscardsKey, re-checked by acknowledgeRemoval); with no key StewardRoot shows the start screen. A key
+// without that mark is kept. A console with anything else left gets the dismissible banner, whose Dismiss never deletes.
 function removedNames(notes) {
   const names = (notes || []).map(n => (n && n.name) || '').filter(Boolean);
   return names.length ? names.join(' and ') : '';
 }
 function StewardRemoved({ notes }) {
   const name = removedNames(notes);
+  // Continue discards the key ONLY when this device minted it as a bare helper key (audit of 496b8b21, MEDIUM 1). Any other
+  // key — one from before that mark existed, or a real church that has not loaded here yet — is kept, and the words say so.
+  const discards = !!(window.Steward.removedDiscardsKey && window.Steward.removedDiscardsKey());
   const [busy, setBusy] = useSt(false);
   const go = () => {
     setBusy(true);
@@ -836,7 +840,9 @@ function StewardRemoved({ notes }) {
           <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={26} color="currentColor" /></div>
           <h1 id="stew-removed-title" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, margin: 0, letterSpacing: '-.3px' }}>{name ? 'You’ve been removed from ' + name : 'You’ve been removed as a helper'}</h1>
           <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>{(name ? 'The owner of ' + name : 'The church’s owner') + ' has removed you as a helper, so this console can no longer open that church. What you did while helping stays with the church.'}</div>
-          <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55 }}>This console has no church of its own, so it goes back to the start, where you can start a church or ask to help run one. Continuing clears this helper sign-in from this device; if the church wants you back, ask again with Help run a church.</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55 }}>{discards
+            ? 'This console has no church of its own, so it goes back to the start, where you can start a church or ask to help run one. Continuing clears this helper sign-in from this device; if the church wants you back, ask again with Help run a church.'
+            : 'Continuing keeps this console’s sign-in on this device, so nothing stored here is lost.'}</div>
         </div>
         <button onClick={go} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 18, opacity: busy ? .6 : 1 }}>{busy ? 'One moment…' : 'Continue'}</button>
       </div>
@@ -1287,7 +1293,7 @@ function StewardRoot() {
         {removedOpen && !removedFull ? (
           <div role="status" data-stew-removed-banner="1" style={{ padding: '10px 14px', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <span style={{ flex: 1 }}><b>{removedNames(removedNotes) ? 'You’ve been removed from ' + removedNames(removedNotes) + '.' : 'You’ve been removed as a helper from a church.'}</b> Its owner removed you as a helper, so this console can no longer open it.</span>
-            <button onClick={() => { Promise.resolve(window.Steward.acknowledgeRemoval && window.Steward.acknowledgeRemoval()).catch(() => {}); }}
+            <button onClick={() => { try { if (window.Steward.dismissRemovalNotice) window.Steward.dismissRemovalNotice(); } catch (e) {} }}
               style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
           </div>
         ) : null}

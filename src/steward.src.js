@@ -1709,6 +1709,7 @@ const ACTIVE_ID_KEY = 'trinityone.steward.active-id';   // which church this con
 // It carries a DELIBERATE choice, so unlike the blank-helper auto-land it DOES persist (via setActiveIdentity's
 // default) — returning to that church on the next open is correct. See the restore + grant blocks below.
 const PENDING_CHURCH_KEY = 'trinityone.steward.pending-church';
+const HELPERKEY_LS = 'trinityone.steward.helperkey.';   // + pubkey: '1' when createKeyQuiet minted that key on THIS device (see there)
 const NAMES_LS = 'trinityone.steward.relay-names';
 const DIRECTORY_URL = CANONICAL_RELAY.replace(/^ws/i, 'http').replace(/\/relay\/?$/i, '');   // wss://app…/relay → https://app…
 // The directory is MIRRORED across relays, so resolve/discover against several — this church's own relay first
@@ -7955,6 +7956,11 @@ window.Steward = {
   createKeyQuiet() {
     // Same posture as createKey: memory only, no plaintext on disk.
     const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
+    // A DURABLE MARK THAT THIS DEVICE MINTED THIS KEY AS A BARE HELPER KEY (audit of 496b8b21, MEDIUM 1). It is the only
+    // thing that lets acknowledgeRemoval() discard a key: _ownKeyBlank() alone also describes a real church restored on
+    // a device that has not yet read its name, so "looks blank" is never enough. A key minted before this mark existed
+    // has none, and is kept.
+    try { if (churchPub) localStorage.setItem(HELPERKEY_LS + churchPub, '1'); } catch (e) {}
     return { npub: window.Steward.npub, code: window.Steward.becomeStewardPayload() };
   },
   enterConsole() { window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } })); },
@@ -8451,9 +8457,12 @@ window.Steward = {
         } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
   },
   // A REMOVED HELPER IS TOLD (owner device test 2026-11-13). [{ cp, name, at }] — the churches whose owner removed this
-  // console's own key, written by subscribeStewardedChurches ONLY after a signed removal was read and every relay in that
-  // read had answered (see noteGone there), and cleared if the church puts us back. Never written on a slow, failed or
-  // absent read. Shown by StewardRoot until acknowledgeRemoval().
+  // console's own key, written by subscribeStewardedChurches only after a removal signed by that church was delivered and
+  // every relay dialled in that read had ended its answer (see noteGone there), and cleared if the church puts us back.
+  // Nothing is written when no removal is delivered. It is NOT proof against every relay: a relay that was down, or not
+  // connected within the library's ~4.4 s, is not waited for, so a stale relay can deliver a removal that a re-add on the
+  // missing relay would have cancelled (audit of 496b8b21, finding 2). That is why nothing here deletes a key that this
+  // device did not itself mint as a helper key. Shown by StewardRoot until acknowledgeRemoval() or dismissRemovalNotice().
   removedNotices() {
     try {
       if (!churchPub) return [];
@@ -8469,17 +8478,34 @@ window.Steward = {
     try {
       if (!churchPub || actingChurch || !_ownKeyBlank() || stewardedChurches.size) return false;
       if (localStorage.getItem(PENDING_CHURCH_KEY)) return false;
+      // EVERY church this key has asked to help, not only the latest (audit of 496b8b21, LOW 3): asked B, then A; A approved
+      // (which clears PENDING) and later removed us — B's request still waits on this key.
+      let reqd = []; try { reqd = JSON.parse(localStorage.getItem('trinityone.steward.requested.' + churchPub) || '[]'); } catch (e) { reqd = []; }
+      if (Array.isArray(reqd) && reqd.some(x => x && x !== churchPub)) return false;
       return !_netKeysRaw().length;
     } catch (e) { return false; }
   },
-  // The person pressed the button on the notice. Forget the notice; and when the removal left nothing to run
-  // (removedLeavesNothing — re-checked here, not trusted from the screen), discard the disposable helper key through the
-  // proper removal path, exactly as a withdrawn request does (withdrawStewardRequest), so StewardRoot shows the start
-  // screen. Resolves { cleared, keyRemoved }.
+  // Will Continue discard this console's key? Only when the removal left nothing to run AND this device minted the key as
+  // a bare helper key (HELPERKEY_LS, set by createKeyQuiet). Without that mark — a key from before it existed, or a real
+  // church that merely looks blank here — the key is kept (audit of 496b8b21, MEDIUM 1).
+  removedDiscardsKey() {
+    try { return !!churchPub && window.Steward.removedLeavesNothing() && localStorage.getItem(HELPERKEY_LS + churchPub) === '1'; }
+    catch (e) { return false; }
+  },
+  // The banner's Dismiss: forget the notice, and nothing else — it never deletes (audit of 496b8b21, NIT 5).
+  dismissRemovalNotice() {
+    try { if (churchPub) localStorage.removeItem('trinityone.steward.removed-from.' + churchPub); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent('steward-removed')); } catch (e) {}
+    return true;
+  },
+  // The full-screen notice's Continue. Forget the notice; and when removedDiscardsKey() — re-checked here, not trusted
+  // from the screen — discard the disposable helper key through the proper removal path, exactly as a withdrawn request
+  // does (withdrawStewardRequest), so StewardRoot shows the start screen. Otherwise the key stays and the console carries
+  // on with it. Resolves { cleared, keyRemoved }.
   acknowledgeRemoval() {
     try {
       if (!churchPub) return Promise.resolve({ cleared: false, keyRemoved: false });
-      const leaves = window.Steward.removedLeavesNothing();
+      const leaves = window.Steward.removedDiscardsKey();
       try { localStorage.removeItem('trinityone.steward.removed-from.' + churchPub); } catch (e) {}
       try { window.dispatchEvent(new CustomEvent('steward-removed')); } catch (e) {}
       if (!leaves) return Promise.resolve({ cleared: true, keyRemoved: false });
