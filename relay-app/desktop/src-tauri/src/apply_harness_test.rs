@@ -1443,6 +1443,11 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
         assert!(fx.data_dir.join("relay.sqlite.restore-aside").exists(), "the held original was lost");
         assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("stuck"), "the stuck record was overwritten (route 2)");
         assert!(fx.staging.join("READY").exists(), "an update was applied while the church's data was held aside");
+        // audit d1a4f921 L2b: the Suite stays open into the update window — the minute tick must not apply it either
+        let mut run = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
+        yesterday_in_state(&fx.suite_dir);
+        tick_at(&host, &fx, &log, &mut run, IN_WINDOW);
+        assert!(fx.staging.join("READY").exists(), "the minute tick applied an update while the church's data was held aside");
         assert_eq!(read_state_field(&fx.suite_dir, "restoreFailed").unwrap_or_default(), rf_before, "the warning was repointed");
         assert_eq!(std::fs::read_dir(fx.suite_dir.join("db-backup")).map(|r| r.count()).unwrap_or(0), backups_before, "a backup was made or pruned while held");
     }

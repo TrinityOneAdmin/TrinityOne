@@ -1729,6 +1729,11 @@ fn maybe_apply(env: &ApplyEnv, st: &mut RunState) {
     if !cooldown_elapsed(Instant::now(), st.cooldown_until) {
         return;
     }
+    // Never while the church's original data is held aside by an unfinished restore (audit d1a4f921 L2b): an apply
+    // would back up an empty store, prune a real backup and repoint the warning. The next start recovers first.
+    if data_held_aside(env.data_dir) {
+        return;
+    }
     let Some((r_version, r_sha, _staged, target_min, at)) = staged_and_enabled(env) else { return };
     if env.node.is_none() {
         applog(env.log, "suite: apply gate — node sidecar not found; cannot verify/apply");
