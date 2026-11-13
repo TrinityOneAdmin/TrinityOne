@@ -364,7 +364,7 @@ test('a burst of subscriptions past the relay\'s per-second limit is spread out 
     return { closed: window.__rlClosed, sent: a.length, most, span: a.length ? Math.round(a[a.length - 1] - a[0]) : 0 }; })()`);
   assert.ok(r.sent >= N, `CONTROL: only ${r.sent} REQs left the page for ${N} subscriptions — this row proves nothing`);
   assert.equal(r.closed, 0, `THE RELAY CLOSED ${r.closed} OF THE CONSOLE'S SUBSCRIPTIONS AS RATE-LIMITED — ${r.sent} REQs, ${r.most} of them inside one second (the relay takes 100)`);
-  assert.ok(r.most <= 100, `the console sent ${r.most} REQs inside one second on its socket — over the relay's 100`);
+  assert.ok(r.most <= 80, `the console sent ${r.most} REQs inside one second on its socket — its own pacer allows 80 (the relay takes 100)`);
   assert.notEqual(got, null, `only some of the ${N} subscriptions ever answered`);
 });
 

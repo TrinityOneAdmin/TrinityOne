@@ -17101,46 +17101,142 @@ zoo`.split("\n");
   }
   var _PACE_MAX = 80;
   var _PACE_SPAN = 1250;
+  var _PACE_STALL_MS = 250;
   function _paceSocket(r) {
     if (!r || r.__t1Paced || typeof r.send !== "function") return;
     r.__t1Paced = true;
     const send = r.send.bind(r);
     const sent = [], q = [];
-    let timer = null;
-    const counted = (m) => !/^\[\s*"(CLOSE|AUTH)"/.test(String(m).slice(0, 12));
+    let timer = null, stallPolls = 0;
+    const head = (m) => String(m).slice(0, 12);
+    const counted = (m) => !/^\[\s*"(CLOSE|AUTH)"/.test(head(m));
+    const subId = (m) => {
+      const x = /^\[\s*"(?:REQ|CLOSE|CLOSED|EOSE)"\s*,\s*"((?:[^"\\]|\\.)*)"/.exec(String(m).slice(0, 300));
+      return x ? x[1] : null;
+    };
+    const unsent = () => {
+      try {
+        return r.ws && r.ws.bufferedAmount || 0;
+      } catch (e) {
+        return 0;
+      }
+    };
+    const trim = (now2) => {
+      while (sent.length && now2 - sent[0] >= _PACE_SPAN) sent.shift();
+    };
+    const gone = () => {
+      try {
+        return !!r.ws && r.ws.readyState > 1;
+      } catch (e) {
+        return false;
+      }
+    };
     const pump = () => {
       timer = null;
+      if (gone()) {
+        while (q.length) {
+          try {
+            q.shift().ok();
+          } catch (e) {
+          }
+        }
+        return;
+      }
+      if (unsent() > 0) {
+        stallPolls++;
+        timer = setTimeout(pump, _PACE_STALL_MS);
+        return;
+      }
       const now2 = Date.now();
-      while (sent.length && now2 - sent[0] >= _PACE_SPAN) sent.shift();
+      if (stallPolls >= 2) {
+        for (let i3 = 0; i3 < sent.length; i3++) sent[i3] = now2;
+      }
+      stallPolls = 0;
+      trim(now2);
       while (q.length) {
         const it = q[0];
         if (counted(it.m) && sent.length >= _PACE_MAX) break;
         q.shift();
         if (counted(it.m)) sent.push(now2);
         try {
-          Promise.resolve(send(it.m)).then(it.ok, it.no);
+          Promise.resolve(send(it.m)).then(it.ok, () => it.ok());
         } catch (e) {
-          it.no(e);
+          it.ok();
         }
       }
-      if (q.length) timer = setTimeout(pump, Math.max(20, sent[0] + _PACE_SPAN - now2));
+      if (q.length) timer = setTimeout(pump, Math.max(20, sent.length ? sent[0] + _PACE_SPAN - now2 : 0));
     };
-    r.send = function(m) {
-      if (/^\[\s*"AUTH"/.test(String(m).slice(0, 12))) return send(m);
-      if (!q.length) {
+    const paced = (m) => {
+      if (!q.length && !timer) {
         const now2 = Date.now();
-        while (sent.length && now2 - sent[0] >= _PACE_SPAN) sent.shift();
+        trim(now2);
         if (!counted(m)) return send(m);
         if (sent.length < _PACE_MAX) {
           sent.push(now2);
           return send(m);
         }
       }
-      return new Promise((ok, no) => {
-        q.push({ m, ok, no });
+      return new Promise((ok) => {
+        q.push({ m, ok });
         if (!timer) timer = setTimeout(pump, Math.max(20, sent.length ? sent[0] + _PACE_SPAN - Date.now() : 0));
       });
     };
+    const reqs = /* @__PURE__ */ new Map();
+    r.send = function(m) {
+      if (/^\[\s*"AUTH"/.test(head(m))) return send(m);
+      try {
+        if (/^\[\s*"REQ"/.test(head(m))) {
+          const id = subId(m);
+          if (id !== null) {
+            const o = reqs.get(id);
+            if (o && o.t) clearTimeout(o.t);
+            reqs.set(id, { m, tries: 0, t: null });
+          }
+        } else if (/^\[\s*"CLOSE"/.test(head(m))) {
+          const id = subId(m);
+          const o = id !== null && reqs.get(id);
+          if (o && o.t) clearTimeout(o.t);
+          if (id !== null) reqs.delete(id);
+        }
+      } catch (e) {
+      }
+      return paced(m);
+    };
+    try {
+      const ws = r.ws, om = ws && ws.onmessage;
+      if (ws && typeof om === "function") {
+        ws.onmessage = function(ev) {
+          try {
+            const d = ev && ev.data;
+            if (typeof d === "string" && /^\[\s*"(EOSE|CLOSED)"/.test(d.slice(0, 12))) {
+              const id = subId(d), o = id !== null ? reqs.get(id) : null;
+              if (o && /^\[\s*"EOSE"/.test(d.slice(0, 12))) reqs.delete(id);
+              else if (o && d.indexOf("rate-limited: too many messages") > 0) {
+                if (o.tries < 3 && r.openSubs && r.openSubs.has(id)) {
+                  const wait = 1100 * (1 << o.tries) + Math.floor(Math.random() * 400);
+                  o.tries++;
+                  o.t = setTimeout(() => {
+                    o.t = null;
+                    if (reqs.get(id) === o && r.openSubs && r.openSubs.has(id)) {
+                      try {
+                        Promise.resolve(paced(o.m)).catch(() => {
+                        });
+                      } catch (e) {
+                      }
+                    }
+                  }, wait);
+                  return;
+                }
+                reqs.delete(id);
+              }
+            }
+          } catch (e) {
+          }
+          return om.call(this, ev);
+        };
+      }
+    } catch (e) {
+    }
   }
   try {
     const _ensure = pool.ensureRelay.bind(pool);
@@ -18858,107 +18954,139 @@ zoo`.split("\n");
   });
   async function publish(evt, opts) {
     const _bg = !!(opts && opts.background);
-    await _waitForRegistration();
-    const _targets = relays();
-    if (!_targets.length) {
-      const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
-      console.warn("[steward] publish blocked \u2014", reason);
-      try {
-        if (opts && typeof opts === "object") opts.refused = false;
-      } catch (x) {
-      }
-      try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, background: _bg } }));
-      } catch (x) {
-      }
-      return false;
-    }
-    let _d0 = "";
+    let _pk = "", _settle = null;
     try {
-      _d0 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
-      if (_d0) _pubLatest.set(_d0, evt.id);
+      const _dd = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+      if (_dd) {
+        _pk = (evt.pubkey || "") + "|" + _dd;
+        let s0 = null;
+        const done = new Promise((r) => {
+          s0 = r;
+        });
+        _settle = s0;
+        _pubLatest.set(_pk, { id: evt.id, done });
+      }
     } catch (x) {
+      _pk = "";
+      _settle = null;
     }
+    const _fin = (v) => {
+      try {
+        if (_settle) _settle(!!v);
+      } catch (x) {
+      }
+      return v;
+    };
     try {
-      const _ans = _targets.map(() => void 0);
-      let _ask = _targets.map((u, i3) => i3);
-      for (let _try = 0; ; _try++) {
-        const _urls = _ask.map((i3) => _targets[i3]);
+      await _waitForRegistration();
+      const _targets = relays();
+      if (!_targets.length) {
+        const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
+        console.warn("[steward] publish blocked \u2014", reason);
         try {
-          await Promise.any(pool.publish(_urls, evt).map((p, i3) => p.then((v) => {
-            if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
-            try {
-              window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: _urls[i3] } }));
-            } catch (x) {
-            }
-            return v;
-          })));
-          break;
-        } catch (e1) {
-          const errs = e1 && e1.errors || [];
-          _ask.forEach((t, j) => {
-            _ans[t] = errs[j];
-          });
-          const _again = _ask.filter((t, j) => /^rate-limited/i.test(String(errs[j] && (errs[j].message || errs[j]) || "")));
-          let _newer = false;
+          if (opts && typeof opts === "object") opts.refused = false;
+        } catch (x) {
+        }
+        try {
+          window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, background: _bg } }));
+        } catch (x) {
+        }
+        return _fin(false);
+      }
+      try {
+        const _ans = _targets.map(() => void 0);
+        let _ask = _targets.map((u, i3) => i3);
+        for (let _try = 0; ; _try++) {
+          const _urls = _ask.map((i3) => _targets[i3]);
           try {
-            _newer = !!_d0 && _pubLatest.has(_d0) && _pubLatest.get(_d0) !== evt.id;
-          } catch (x) {
-          }
-          if (_newer && _again.length) return evt;
-          if (!_again.length || _try >= 3) {
+            await Promise.any(pool.publish(_urls, evt).map((p, i3) => p.then((v) => {
+              if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+              try {
+                window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: _urls[i3] } }));
+              } catch (x) {
+              }
+              return v;
+            })));
+            break;
+          } catch (e1) {
+            const errs = e1 && e1.errors || [];
+            _ask.forEach((t, j) => {
+              _ans[t] = errs[j];
+            });
+            const _again = _ask.filter((t, j) => {
+              const w = String(errs[j] && (errs[j].message || errs[j]) || "");
+              return /^rate-limited/i.test(w) && !/^rate-limited: document limit reached/i.test(w);
+            });
             const all = new Error("every relay refused");
             all.errors = _ans;
-            throw all;
+            if (!_again.length || _try >= 3) throw all;
+            const _sup = () => {
+              try {
+                const L = _pk ? _pubLatest.get(_pk) : null;
+                return L && L.id !== evt.id ? L : null;
+              } catch (x) {
+                return null;
+              }
+            };
+            let _L = _sup();
+            if (!_L) {
+              await new Promise((r) => setTimeout(r, 1100 * (1 << _try) + Math.floor(Math.random() * 400)));
+              _L = _sup();
+            }
+            if (_L) {
+              if (await _L.done) return _fin(evt);
+              throw all;
+            }
+            _ask = _again;
           }
-          _ask = _again;
-          await new Promise((r) => setTimeout(r, 1100 * (1 << _try)));
         }
-      }
-    } catch (e) {
-      console.warn("[steward] publish failed", e);
-      let refused = [];
-      try {
-        const errs = e && e.errors || [];
-        refused = _targets.map((u, i3) => ({ url: u, error: errs[i3] && (errs[i3].message || String(errs[i3])) || "" }));
-      } catch (x) {
-        refused = [];
-      }
-      const _spoke = refused.find((r) => r && r.error && !/^connection failure/i.test(String(r.error)));
-      let reason = _spoke && _spoke.error || refused[0] && refused[0].error || "";
-      try {
-        const d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
-        if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
-      } catch (x) {
-      }
-      let _saidNo = false;
-      try {
-        _saidNo = refused.some((r) => /^(blocked|invalid|restricted|auth-required)/i.test(String(r && r.error || "")));
-      } catch (x) {
-      }
-      try {
-        if (opts && typeof opts === "object") {
-          opts.refused = _saidNo;
-          opts.reason = reason;
+      } catch (e) {
+        console.warn("[steward] publish failed", e);
+        let refused = [];
+        try {
+          const errs = e && e.errors || [];
+          refused = _targets.map((u, i3) => ({ url: u, error: errs[i3] && (errs[i3].message || String(errs[i3])) || "" }));
+        } catch (x) {
+          refused = [];
         }
+        const _spoke = refused.find((r) => r && r.error && !/^connection failure/i.test(String(r.error)));
+        let reason = _spoke && _spoke.error || refused[0] && refused[0].error || "";
+        try {
+          const d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
+          if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return _fin(evt);
+        } catch (x) {
+        }
+        let _saidNo = false;
+        try {
+          _saidNo = refused.some((r) => /^(blocked|invalid|restricted|auth-required|rate-limited: document limit reached)/i.test(String(r && r.error || "")));
+        } catch (x) {
+        }
+        try {
+          if (opts && typeof opts === "object") {
+            opts.refused = _saidNo;
+            opts.reason = reason;
+          }
+        } catch (x) {
+        }
+        try {
+          window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused, background: _bg } }));
+        } catch (x) {
+        }
+        return _fin(false);
+      }
+      try {
+        const d0 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
+        if (d0) _lastOk.set(d0, evt.created_at || 0);
       } catch (x) {
       }
       try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused, background: _bg } }));
+        window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
       } catch (x) {
       }
-      return false;
+      return _fin(evt);
+    } finally {
+      _fin(false);
     }
-    try {
-      const d0 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
-      if (d0) _lastOk.set(d0, evt.created_at || 0);
-    } catch (x) {
-    }
-    try {
-      window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
-    } catch (x) {
-    }
-    return evt;
   }
   var S_OUTBOX_MAX = 200;
   var _dmEncrypt = (sk2, peerPub, text) => encrypt2(text, getConversationKey(sk2, peerPub));
@@ -19072,113 +19200,149 @@ zoo`.split("\n");
   } catch (e) {
   }
   async function _publishToRelays(evt, urls) {
-    await _waitForRegistration();
-    let _d1 = "";
+    let _pk = "", _settle = null;
     try {
-      _d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
-      if (_d1) _pubLatest.set(_d1, evt.id);
+      const _dd = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+      if (_dd) {
+        _pk = (evt.pubkey || "") + "|" + _dd;
+        let s0 = null;
+        const done = new Promise((r) => {
+          s0 = r;
+        });
+        _settle = s0;
+        _pubLatest.set(_pk, { id: evt.id, done });
+      }
     } catch (x) {
+      _pk = "";
+      _settle = null;
     }
-    const live = _connectedRelays();
-    const targets = urls && urls.length ? urls : live.length ? live : relays();
-    if (!targets.length) {
-      const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
-      console.warn("[steward] all-relay publish blocked \u2014", reason);
+    const _fin = (v) => {
       try {
-        _noteSpread(evt, [], []);
+        if (_settle) _settle(!!v);
       } catch (x) {
       }
-      try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
-      } catch (x) {
-      }
-      return false;
-    }
+      return v;
+    };
     try {
-      for (const u of targets) {
-        const r = pool.relays && pool.relays.get(u);
-        if (r && r.publishTimeout < 12e3) r.publishTimeout = 12e3;
-      }
-    } catch (e) {
-    }
-    let rs = [];
-    try {
-      rs = await Promise.allSettled(pool.publish(targets, evt).map((p, i3) => p.then((v) => {
-        if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+      await _waitForRegistration();
+      const live = _connectedRelays();
+      const targets = urls && urls.length ? urls : live.length ? live : relays();
+      if (!targets.length) {
+        const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
+        console.warn("[steward] all-relay publish blocked \u2014", reason);
         try {
-          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: targets[i3] } }));
+          _noteSpread(evt, [], []);
         } catch (x) {
         }
-        return v;
-      })));
-    } catch (e) {
-      try {
-        _noteSpread(evt, [], targets.slice());
-      } catch (x) {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+        } catch (x) {
+        }
+        return _fin(false);
       }
-      return false;
-    }
-    for (let _try = 0; _try < 3; _try++) {
-      const again = targets.map((u, i3) => i3).filter((i3) => rs[i3] && rs[i3].status === "rejected" && /^rate-limited/i.test(String(rs[i3].reason && (rs[i3].reason.message || rs[i3].reason) || "")));
-      if (!again.length) break;
-      let newer = false;
       try {
-        newer = !!_d1 && _pubLatest.has(_d1) && _pubLatest.get(_d1) !== evt.id;
-      } catch (x) {
+        for (const u of targets) {
+          const r = pool.relays && pool.relays.get(u);
+          if (r && r.publishTimeout < 12e3) r.publishTimeout = 12e3;
+        }
+      } catch (e) {
       }
-      if (newer) break;
-      await new Promise((r) => setTimeout(r, 1100 * (1 << _try)));
-      const urls2 = again.map((i3) => targets[i3]);
-      let rs2 = [];
+      let rs = [];
       try {
-        rs2 = await Promise.allSettled(pool.publish(urls2, evt).map((p, j) => p.then((v) => {
+        rs = await Promise.allSettled(pool.publish(targets, evt).map((p, i3) => p.then((v) => {
           if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
           try {
-            window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: urls2[j] } }));
+            window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: targets[i3] } }));
           } catch (x) {
           }
           return v;
         })));
       } catch (e) {
-        break;
+        try {
+          _noteSpread(evt, [], targets.slice());
+        } catch (x) {
+        }
+        return _fin(false);
       }
-      again.forEach((i3, j) => {
-        if (rs2[j]) rs[i3] = rs2[j];
-      });
-    }
-    const accepted = rs.filter((r) => r.status === "fulfilled").length;
-    try {
-      _noteSpread(
-        evt,
-        targets.filter((u, i3) => rs[i3] && rs[i3].status === "fulfilled"),
-        targets.filter((u, i3) => !rs[i3] || rs[i3].status !== "fulfilled")
-      );
-    } catch (x) {
-    }
-    if (!accepted) {
-      let reason = "";
+      let _supL = null;
+      for (let _try = 0; _try < 3; _try++) {
+        const again = targets.map((u, i3) => i3).filter((i3) => {
+          if (!rs[i3] || rs[i3].status !== "rejected") return false;
+          const w = String(rs[i3].reason && (rs[i3].reason.message || rs[i3].reason) || "");
+          return /^rate-limited/i.test(w) && !/^rate-limited: document limit reached/i.test(w);
+        });
+        if (!again.length) break;
+        const _sup = () => {
+          try {
+            const L = _pk ? _pubLatest.get(_pk) : null;
+            return L && L.id !== evt.id ? L : null;
+          } catch (x) {
+            return null;
+          }
+        };
+        _supL = _sup();
+        if (!_supL) {
+          await new Promise((r) => setTimeout(r, 1100 * (1 << _try) + Math.floor(Math.random() * 400)));
+          _supL = _sup();
+        }
+        if (_supL) break;
+        const urls2 = again.map((i3) => targets[i3]);
+        let rs2 = [];
+        try {
+          rs2 = await Promise.allSettled(pool.publish(urls2, evt).map((p, j) => p.then((v) => {
+            if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+            try {
+              window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: urls2[j] } }));
+            } catch (x) {
+            }
+            return v;
+          })));
+        } catch (e) {
+          break;
+        }
+        again.forEach((i3, j) => {
+          if (rs2[j]) rs[i3] = rs2[j];
+        });
+      }
+      if (_supL && rs.some((r) => !r || r.status !== "fulfilled")) {
+        if (await _supL.done) return _fin(evt);
+      }
+      const accepted = rs.filter((r) => r.status === "fulfilled").length;
       try {
-        const f = rs.find((r) => r.status === "rejected");
-        reason = f && f.reason && (f.reason.message || String(f.reason)) || "";
+        _noteSpread(
+          evt,
+          targets.filter((u, i3) => rs[i3] && rs[i3].status === "fulfilled"),
+          targets.filter((u, i3) => !rs[i3] || rs[i3].status !== "fulfilled")
+        );
       } catch (x) {
       }
-      let refused = [];
-      try {
-        refused = targets.map((u, i3) => rs[i3] && rs[i3].status === "rejected" ? { url: u, error: rs[i3].reason && (rs[i3].reason.message || String(rs[i3].reason)) || "" } : null).filter(Boolean);
-      } catch (x) {
-        refused = [];
+      if (!accepted) {
+        let reason = "";
+        try {
+          const f = rs.find((r) => r.status === "rejected");
+          reason = f && f.reason && (f.reason.message || String(f.reason)) || "";
+        } catch (x) {
+        }
+        let refused = [];
+        try {
+          refused = targets.map((u, i3) => rs[i3] && rs[i3].status === "rejected" ? { url: u, error: rs[i3].reason && (rs[i3].reason.message || String(rs[i3].reason)) || "" } : null).filter(Boolean);
+        } catch (x) {
+          refused = [];
+        }
+        try {
+          window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused } }));
+        } catch (x) {
+        }
+        return _fin(false);
       }
       try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused } }));
+        window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
       } catch (x) {
       }
-      return false;
+      return _fin(accepted === targets.length ? evt : false);
+    } finally {
+      _fin(false);
     }
-    try {
-      window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
-    } catch (x) {
-    }
-    return accepted === targets.length ? evt : false;
   }
   function skFor(asPub) {
     if (!asPub || asPub === pub) return sk;

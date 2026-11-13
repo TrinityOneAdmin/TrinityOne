@@ -2617,52 +2617,122 @@ function _loginCheck(url, inst, tries) {
 }
 // ── ONE SOCKET NEVER SENDS FASTER THAN ITS RELAY WILL LISTEN (2026-11-13) ─────────────────────────────────────────
 // The shipped relay answers every REQ/EVENT past the 100th in a second on one connection with `rate-limited:`
-// (scripts/gateway.mjs, the per-connection limiter; CLOSE and AUTH are not counted). MEASURED: a console reopened
-// with no saved member list re-opens all its subscriptions on its new socket inside one second — ~105 REQs — so
-// the relay CLOSED the last few REQs as rate-limited, and an Approve sent in that second was refused. A CLOSED
-// subscription is never asked again by most readers here (nostr-tools counts the CLOSED as that relay's EOSE, and
-// a reader that delivers from `oneose` then shows what it had — often nothing — until the next reconnect).
+// (scripts/gateway.mjs, the per-connection limiter: a FIXED one-second window; CLOSE and AUTH are not counted).
+// MEASURED: a console reopened with no saved member list re-opens all its subscriptions on its new socket inside one
+// second — ~105 REQs, and 106–112 frames when a login heal re-subscribes twice ~500 ms apart (steward-root.jsx: the
+// heal's bump, then the steward-relay-returned kick) — so the relay CLOSED the last REQs as rate-limited, and an
+// Approve sent in that second was refused.
 //
 // So the frames the relay counts are paced per socket: at most _PACE_MAX in any _PACE_SPAN ms, the rest queued IN
 // ORDER and sent as the window frees. A CLOSE waits behind a queued REQ of its own (sent the other way round, the
 // relay would open a subscription nobody closes). AUTH is never held: the login is what every private read waits
 // for, and the relay gives it its own budget. Below the limit — every ordinary moment — a frame goes straight
 // through exactly as before; only a burst that would have been refused is spread out instead. 80 in 1.25 s, not
-// 100 in 1 s: any one-second window the relay counts then sees at most 80, with margin for network jitter.
+// 100 in 1 s: any one-second window then sees at most 80 at send time, with margin for jitter.
+//
+// A STALL (audit of 651db3cb, L2). Frames the page handed to the socket but that have not left it yet
+// (`ws.bufferedAmount` > 0 — a radio or TCP stall) all leave together when it drains, so a batch counted 1.25 s ago
+// and the next one could reach the relay in the same second: 160. While a burst is queued and the socket still holds
+// unsent bytes, nothing more from the queue is released (looked at again every _PACE_STALL_MS); once that has lasted
+// a whole poll it is a stall, and when it drains every frame still in the window is counted as leaving NOW, so the
+// next batch waits a whole window after the stalled one has gone. A moment's buffering right after a send is normal
+// and is NOT a stall (taking it for one held every frame for a whole window — measured: no key was ever ready).
+// Limits: a frame sent with the queue empty and room in the window goes straight out, stall or not (at most one
+// window's worth), and a stall the browser cannot see (bytes already in the kernel) can still bunch frames. The two
+// nets below catch what gets through: publish()'s rate-limited retry for a write, and the re-ask here for a read.
+//
+// A SUBSCRIPTION THE RELAY CLOSED AS RATE-LIMITED IS ASKED AGAIN (audit L2). nostr-tools takes the relay's CLOSED as
+// that relay's end of stored events and drops the subscription, and most readers here deliver from `oneose` and never
+// ask again — a list shown empty until the next reconnect. So the per-second limiter's CLOSED ("rate-limited: too
+// many messages") for a REQ this socket sent, on a subscription still open, is held back from the library and the
+// SAME REQ is sent again through the pacer: at most three times, ~1.1 s, 2.2 s, 4.4 s apart plus jitter. A CLOSE
+// from our side cancels it; a third refusal is delivered as it always was. NOT the relay's 256-subscriptions-per-
+// connection cap ("rate-limited: too many subscriptions", MAX_SUBS_PER_CONN) — asking again cannot help with that,
+// and the pacer does not either: it is the next ceiling (audit N4).
+//
+// CEILING (audit L3): a frame queued behind N others waits about ⌈N/80⌉ × 1.25 s. Measured bursts (105–212 frames)
+// wait 1.25–2.5 s. From about 280 queued frames a queued EVENT can outlive nostr-tools' 4.4 s publish timer ("publish
+// timed out", which is final, not retried), and from about 400 a queued REQ is sent after its own 4.4 s EOSE timer
+// has fired (events still arrive; the reader has already been told "end of stored events").
 // This sends nothing new and opens nothing: it changes only WHEN frames already being sent leave.
-// Limit: nostr-tools arms a subscription's 4.4 s EOSE timer when the REQ is handed to send(), so a burst large enough
-// to queue a REQ for seconds can still see that timer — no worse than the CLOSED it replaces.
-const _PACE_MAX = 80, _PACE_SPAN = 1250;
+const _PACE_MAX = 80, _PACE_SPAN = 1250, _PACE_STALL_MS = 250;
 function _paceSocket(r) {
   if (!r || r.__t1Paced || typeof r.send !== 'function') return;
   r.__t1Paced = true;
   const send = r.send.bind(r);
   const sent = [], q = [];
-  let timer = null;
-  const counted = (m) => !/^\[\s*"(CLOSE|AUTH)"/.test(String(m).slice(0, 12));
+  let timer = null, stallPolls = 0;
+  const head = (m) => String(m).slice(0, 12);
+  const counted = (m) => !/^\[\s*"(CLOSE|AUTH)"/.test(head(m));
+  const subId = (m) => { const x = /^\[\s*"(?:REQ|CLOSE|CLOSED|EOSE)"\s*,\s*"((?:[^"\\]|\\.)*)"/.exec(String(m).slice(0, 300)); return x ? x[1] : null; };
+  const unsent = () => { try { return (r.ws && r.ws.bufferedAmount) || 0; } catch (e) { return 0; } };
+  const trim = (now) => { while (sent.length && now - sent[0] >= _PACE_SPAN) sent.shift(); };
+  const gone = () => { try { return !!r.ws && r.ws.readyState > 1; } catch (e) { return false; } };
   const pump = () => {
     timer = null;
+    // THE SOCKET HAS CLOSED: what is still queued belongs to subscriptions that died with it (they are re-opened on the
+    // next socket), so it is dropped quietly — sending it would only raise nostr-tools' SendingOnClosedConnection as an
+    // unhandled rejection, which nothing here asked for.
+    if (gone()) { while (q.length) { try { q.shift().ok(); } catch (e) {} } return; }
+    // Bytes the socket has not sent yet. A moment's worth is normal right after a send; still there a whole poll
+    // later is a stall, and then everything in the window is counted as leaving when it drains.
+    if (unsent() > 0) { stallPolls++; timer = setTimeout(pump, _PACE_STALL_MS); return; }
     const now = Date.now();
-    while (sent.length && now - sent[0] >= _PACE_SPAN) sent.shift();
+    if (stallPolls >= 2) { for (let i = 0; i < sent.length; i++) sent[i] = now; }
+    stallPolls = 0;
+    trim(now);
     while (q.length) {
       const it = q[0];
       if (counted(it.m) && sent.length >= _PACE_MAX) break;
       q.shift();
       if (counted(it.m)) sent.push(now);
-      try { Promise.resolve(send(it.m)).then(it.ok, it.no); } catch (e) { it.no(e); }
+      try { Promise.resolve(send(it.m)).then(it.ok, () => it.ok()); } catch (e) { it.ok(); }   // nobody awaits send(): a refusal here must not surface as an unhandled rejection
     }
-    if (q.length) timer = setTimeout(pump, Math.max(20, sent[0] + _PACE_SPAN - now));
+    if (q.length) timer = setTimeout(pump, Math.max(20, sent.length ? sent[0] + _PACE_SPAN - now : 0));
   };
-  r.send = function (m) {
-    if (/^\[\s*"AUTH"/.test(String(m).slice(0, 12))) return send(m);   // the login is never held behind a burst
-    if (!q.length) {
+  const paced = (m) => {
+    if (!q.length && !timer) {
       const now = Date.now();
-      while (sent.length && now - sent[0] >= _PACE_SPAN) sent.shift();
+      trim(now);
       if (!counted(m)) return send(m);
       if (sent.length < _PACE_MAX) { sent.push(now); return send(m); }
     }
-    return new Promise((ok, no) => { q.push({ m, ok, no }); if (!timer) timer = setTimeout(pump, Math.max(20, sent.length ? sent[0] + _PACE_SPAN - Date.now() : 0)); });
+    // queued: looked at again when the window frees (or after a stall poll, when one is in progress)
+    return new Promise((ok) => { q.push({ m, ok }); if (!timer) timer = setTimeout(pump, Math.max(20, sent.length ? sent[0] + _PACE_SPAN - Date.now() : 0)); });
   };
+  const reqs = new Map();   // sub id -> { m: its REQ frame, tries, t: pending re-ask timer }
+  r.send = function (m) {
+    if (/^\[\s*"AUTH"/.test(head(m))) return send(m);   // the login is never held behind a burst
+    try {
+      if (/^\[\s*"REQ"/.test(head(m))) { const id = subId(m); if (id !== null) { const o = reqs.get(id); if (o && o.t) clearTimeout(o.t); reqs.set(id, { m, tries: 0, t: null }); } }
+      else if (/^\[\s*"CLOSE"/.test(head(m))) { const id = subId(m); const o = id !== null && reqs.get(id); if (o && o.t) clearTimeout(o.t); if (id !== null) reqs.delete(id); }
+    } catch (e) {}
+    return paced(m);
+  };
+  try {
+    const ws = r.ws, om = ws && ws.onmessage;
+    if (ws && typeof om === 'function') {
+      ws.onmessage = function (ev) {
+        try {
+          const d = ev && ev.data;
+          if (typeof d === 'string' && /^\[\s*"(EOSE|CLOSED)"/.test(d.slice(0, 12))) {
+            const id = subId(d), o = id !== null ? reqs.get(id) : null;
+            if (o && /^\[\s*"EOSE"/.test(d.slice(0, 12))) reqs.delete(id);   // answered: nothing left to re-ask
+            else if (o && d.indexOf('rate-limited: too many messages') > 0) {
+              if (o.tries < 3 && r.openSubs && r.openSubs.has(id)) {
+                const wait = 1100 * (1 << o.tries) + Math.floor(Math.random() * 400);
+                o.tries++;
+                o.t = setTimeout(() => { o.t = null; if (reqs.get(id) === o && r.openSubs && r.openSubs.has(id)) { try { Promise.resolve(paced(o.m)).catch(() => {}); } catch (e) {} } }, wait);
+                return;   // held back from the library: the same REQ is asked again
+              }
+              reqs.delete(id);
+            }
+          }
+        } catch (e) {}
+        return om.call(this, ev);
+      };
+    }
+  } catch (e) {}
 }
 // THE ONE DOOR EVERY POOL PATH GOES THROUGH — subscribe, publish, querySync, and the ticker's own probe — so it
 // is where a socket can be seen whichever path opened it. A socket our subscriptions are not on is a return
@@ -4658,6 +4728,22 @@ const _stay = makeStayOpen({
 // for a write nobody asked for, which is the defect the care key was given this for).
 async function publish(evt, opts) {
   const _bg = !!(opts && opts.background);
+  // ── WHICH CALL IS THE NEWEST FOR THIS DOCUMENT, AND HOW IT ENDED (audit of 651db3cb: M1, M2, N1) ───────────────────
+  // Registered FIRST, before any await, so call order is the order the steward acted in. Keyed by SIGNER + d-tag: a
+  // church-signed and a network-signed document that share a d-tag are different documents. `done` settles true when
+  // this call's write landed and false otherwise, exactly once (the `finally` at the end settles any path that did not).
+  // The rate-limited retry below reads it: an OLDER call that is still asking when a newer one exists stops asking and
+  // takes the NEWER call's outcome as its own — success only if that newer copy was really accepted, never merely
+  // because it started (M1). _publishToRelays() registers in the same map the same way, so the two paths agree (N1).
+  // Guarded: a test that lifts this function alone has no `_pubLatest`; the throw is swallowed and the retry then
+  // never sees itself superseded.
+  let _pk = '', _settle = null;
+  try {
+    const _dd = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    if (_dd) { _pk = (evt.pubkey || '') + '|' + _dd; let s0 = null; const done = new Promise(r => { s0 = r; }); _settle = s0; _pubLatest.set(_pk, { id: evt.id, done }); }
+  } catch (x) { _pk = ''; _settle = null; }
+  const _fin = (v) => { try { if (_settle) _settle(!!v); } catch (x) {} return v; };
+  try {
   // WAIT FOR THE RELAY TO KNOW THIS CHURCH EXISTS. seedNewChurch() fires selfRegister() without awaiting it
   // and starts writing immediately, so the founding documents raced an HTTP round-trip and were refused as
   // "not a member or not permitted for this group". Bounded: a relay that never answers must not stop a
@@ -4678,13 +4764,8 @@ async function publish(evt, opts) {
     // NOBODY READ THIS EVENT, so nobody refused it — see the note on `opts.refused` in the catch below.
     try { if (opts && typeof opts === 'object') opts.refused = false; } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, background: _bg } })); } catch (x) {}
-    return false;
+    return _fin(false);
   }
-  // WHICH CALL IS THE NEWEST FOR THIS DOCUMENT — read only by the rate-limited retry below. Guarded: a test that
-  // lifts this function alone has no `_pubLatest`, and the throw is swallowed (the retry then simply never sees
-  // itself superseded, which is the pre-existing behaviour).
-  let _d0 = '';
-  try { _d0 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || ''; if (_d0) _pubLatest.set(_d0, evt.id); } catch (x) {}
   try {
     // ── "rate-limited:" IS "ASK AGAIN IN A MOMENT", SO ASK AGAIN (2026-11-13) ─────────────────────────────────────
     // NIP-01's `rate-limited:` is the one refusal that says nothing about THIS event — only that the socket sent too
@@ -4697,13 +4778,19 @@ async function publish(evt, opts) {
     //
     // So: the relays that said `rate-limited` are asked again, with the SAME signed event — the same id, so a relay
     // that did store it the first time answers `duplicate` (OK true) and nothing is written twice, whatever the
-    // kind. BOUNDED: at most three more asks, 1.1 s, 2.2 s and 4.4 s apart — the first is already past the relay's
+    // kind. BOUNDED: at most three more asks, about 1.1 s, 2.2 s and 4.4 s apart (plus up to 0.4 s of random jitter,
+    // so writes refused together do not all come back together — N2) — the first is already past the relay's
     // one-second window. Any other answer (a rule, a dead socket) is final exactly as before. A relay that accepts
     // on a retry is a success exactly as if it had accepted first time.
     //
-    // NOT WHEN A NEWER CALL FOR THE SAME DOCUMENT HAS STARTED: re-sending an older copy then could replace it (a
-    // same-second tie goes to the lower id — scripts/event-store.mjs). The newer call reports its own outcome, so
-    // this one stops asking and is handled like the "a newer version is already stored" answer below.
+    // NOT `rate-limited: document limit reached` (audit L1). The gateway's per-member document cap uses the prefix
+    // for a refusal that will not change in a moment, so it is final and still counts as a refusal (`_saidNo`).
+    //
+    // A NEWER CALL FOR THE SAME DOCUMENT ENDS THE ASKING, checked before AND after every wait (M2). The newer copy
+    // carries the steward's latest intent, so this call stops re-sending and reports the newer call's OUTCOME as its
+    // own: saved only if that copy was accepted, otherwise the ordinary failure below (M1). Re-sending the older copy
+    // could not overwrite the newer one anyway — _monotonic() stamps a second write of a d-tag later, and the store
+    // refuses an older created_at — so this is about telling the truth, not about the store.
     //
     // ⚠ WRITTEN INLINE for the reason the notes above give: the tests lift this function out of the bundle.
     const _ans = _targets.map(() => undefined);   // each relay's LAST answer, index-aligned with _targets
@@ -4721,13 +4808,15 @@ async function publish(evt, opts) {
       } catch (e1) {
         const errs = (e1 && e1.errors) || [];
         _ask.forEach((t, j) => { _ans[t] = errs[j]; });
-        const _again = _ask.filter((t, j) => /^rate-limited/i.test(String((errs[j] && (errs[j].message || errs[j])) || '')));
-        let _newer = false;
-        try { _newer = !!_d0 && _pubLatest.has(_d0) && _pubLatest.get(_d0) !== evt.id; } catch (x) {}
-        if (_newer && _again.length) return evt;   // superseded while it waited — see above
-        if (!_again.length || _try >= 3) { const all = new Error('every relay refused'); all.errors = _ans; throw all; }
+        const _again = _ask.filter((t, j) => { const w = String((errs[j] && (errs[j].message || errs[j])) || '');
+          return /^rate-limited/i.test(w) && !/^rate-limited: document limit reached/i.test(w); });
+        const all = new Error('every relay refused'); all.errors = _ans;
+        if (!_again.length || _try >= 3) throw all;
+        const _sup = () => { try { const L = _pk ? _pubLatest.get(_pk) : null; return (L && L.id !== evt.id) ? L : null; } catch (x) { return null; } };
+        let _L = _sup();
+        if (!_L) { await new Promise(r => setTimeout(r, 1100 * (1 << _try) + Math.floor(Math.random() * 400))); _L = _sup(); }
+        if (_L) { if (await _L.done) return _fin(evt); throw all; }   // superseded: the newer call's outcome is ours
         _ask = _again;
-        await new Promise(r => setTimeout(r, 1100 * (1 << _try)));
       }
     }
   }
@@ -4762,7 +4851,7 @@ async function publish(evt, opts) {
     // telling us something we already know, and there is nothing for the steward to do about it.
     try {
       const d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1];
-      if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
+      if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return _fin(evt);
     } catch (x) {}
     // ── `opts.refused` — DID A BOX ACTUALLY READ THIS EVENT AND SAY NO? ──────────────────────────────────
     //
@@ -4804,19 +4893,22 @@ async function publish(evt, opts) {
     // `rate-limited` is NOT a refusal here (2026-11-13). It used to be ("a box did speak"), and the media-key memo
     // then remembered a resubscribe burst's "try again in a moment" as a rule for the session: sermons stayed locked
     // for those members until a reload. It never says anything about THIS event — the retry above has already asked
-    // again three times, and the next roster emit must be free to ask again after that.
+    // again three times, and the next roster emit must be free to ask again after that. ONE EXCEPTION (audit L1):
+    // `rate-limited: document limit reached` is the gateway's per-member document cap, a rule that will refuse the
+    // same write again, so it still counts.
     let _saidNo = false;
-    try { _saidNo = refused.some(r => /^(blocked|invalid|restricted|auth-required)/i.test(String((r && r.error) || ''))); } catch (x) {}
+    try { _saidNo = refused.some(r => /^(blocked|invalid|restricted|auth-required|rate-limited: document limit reached)/i.test(String((r && r.error) || ''))); } catch (x) {}
     // …and the relay's OWN WORDS with it, so a caller that reports the refusal can quote them instead of
     // inventing an explanation — the rule publishErrorMessage already follows in app/stew-dashboard.jsx.
     try { if (opts && typeof opts === 'object') { opts.refused = _saidNo; opts.reason = reason; } } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused, background: _bg } })); } catch (x) {}
-    return false;   // total failure — every relay rejected; callers that await the result can surface it
+    return _fin(false);   // total failure — every relay rejected; callers that await the result can surface it
   }
   // a write landed → the relays are accepting our posts, so any "a relay is refusing us" alarm can clear
   try { const d0 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1]; if (d0) _lastOk.set(d0, evt.created_at || 0); } catch (x) {}
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
-  return evt;
+  return _fin(evt);
+  } finally { _fin(false); }   // settles `done` on any path that did not (a no-op after the first settle)
 }
 
 // ── the console's outbox ─────────────────────────────────────────────────────────────────────────────────
@@ -4974,10 +5066,15 @@ try {
 // member into the unconfirmed list and sends them through the verify read — where the truth is established by
 // looking rather than asserted by the writer.
 async function _publishToRelays(evt, urls) {
+  // which call is the newest for this document, and how it ended — the same register as publish() (see the note there)
+  let _pk = '', _settle = null;
+  try {
+    const _dd = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+    if (_dd) { _pk = (evt.pubkey || '') + '|' + _dd; let s0 = null; const done = new Promise(r => { s0 = r; }); _settle = s0; _pubLatest.set(_pk, { id: evt.id, done }); }
+  } catch (x) { _pk = ''; _settle = null; }
+  const _fin = (v) => { try { if (_settle) _settle(!!v); } catch (x) {} return v; };
+  try {
   await _waitForRegistration();   // same gate as publish(): a church the relay has never heard of writes nothing
-  // which call is the newest for this document — read only by the rate-limited retry below (see publish())
-  let _d1 = '';
-  try { _d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || ''; if (_d1) _pubLatest.set(_d1, evt.id); } catch (x) {}
   // CONNECTED, not configured. With the all-must-accept rule below, targeting every CONFIGURED relay means a
   // single unreachable one makes `accepted < targets.length` for every member, always — a full-roster
   // safeguarding alarm while every record is safely stored. That is not hypothetical: CANONICAL_RELAYS ships a
@@ -5024,7 +5121,7 @@ async function _publishToRelays(evt, urls) {
     // enclosing IIFE is undefined — the same reason _lastOk is guarded inside publish().
     try { _noteSpread(evt, [], []); } catch (x) {}   // nowhere to write: nothing landed, and nothing refused either
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
-    return false;
+    return _fin(false);
   }
   // GIVE A SLOW RELAY TIME TO SAY YES. The vendored library waits 4.4s for each relay's acknowledgement
   // (vendor publishTimeout) and then reports failure — but a late OK is not a refusal, and the EVENT has
@@ -5042,21 +5139,24 @@ async function _publishToRelays(evt, urls) {
       try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: targets[i] } })); } catch (x) {}
       return v;
     })));
-  } catch (e) { try { _noteSpread(evt, [], targets.slice()); } catch (x) {} return false; }
+  } catch (e) { try { _noteSpread(evt, [], targets.slice()); } catch (x) {} return _fin(false); }
   // "rate-limited:" IS "ASK AGAIN IN A MOMENT" — the same rule and bounds as publish() (see the note there, 2026-11-13).
   // This is the path a Block takes (setBlocked), and a group, a clearance, the minors list: each relay that answered
   // `rate-limited` is asked again with the SAME signed event (same id, so nothing is ever stored twice), at most three
-  // more times, 1.1 s, 2.2 s and 4.4 s apart; every other answer stands. It stops asking once a newer call for the
-  // same document has started (a same-second tie goes to the lower id), and this copy is then reported as it stood.
+  // more times, about 1.1 s, 2.2 s and 4.4 s apart plus jitter; every other answer stands, and so does `rate-limited:
+  // document limit reached` (a cap, not a moment — audit L1). A newer call for the same document, checked before and
+  // after each wait, ends the asking, and this call then reports THAT call's outcome — exactly as publish() does (N1).
   // Inline, for the reason the note above this function gives.
+  let _supL = null;
   for (let _try = 0; _try < 3; _try++) {
-    const again = targets.map((u, i) => i).filter(i => rs[i] && rs[i].status === 'rejected'
-      && /^rate-limited/i.test(String((rs[i].reason && (rs[i].reason.message || rs[i].reason)) || '')));
+    const again = targets.map((u, i) => i).filter(i => { if (!rs[i] || rs[i].status !== 'rejected') return false;
+      const w = String((rs[i].reason && (rs[i].reason.message || rs[i].reason)) || '');
+      return /^rate-limited/i.test(w) && !/^rate-limited: document limit reached/i.test(w); });
     if (!again.length) break;
-    let newer = false;
-    try { newer = !!_d1 && _pubLatest.has(_d1) && _pubLatest.get(_d1) !== evt.id; } catch (x) {}
-    if (newer) break;
-    await new Promise(r => setTimeout(r, 1100 * (1 << _try)));
+    const _sup = () => { try { const L = _pk ? _pubLatest.get(_pk) : null; return (L && L.id !== evt.id) ? L : null; } catch (x) { return null; } };
+    _supL = _sup();
+    if (!_supL) { await new Promise(r => setTimeout(r, 1100 * (1 << _try) + Math.floor(Math.random() * 400))); _supL = _sup(); }
+    if (_supL) break;
     const urls2 = again.map(i => targets[i]);
     let rs2 = [];
     try {
@@ -5068,6 +5168,9 @@ async function _publishToRelays(evt, urls) {
     } catch (e) { break; }
     again.forEach((i, j) => { if (rs2[j]) rs[i] = rs2[j]; });
   }
+  // SUPERSEDED (above): the newer call's outcome is this one's. Landed → saved, quietly, as publish() reports it;
+  // not landed → this copy's own failure is reported below as it stood.
+  if (_supL && rs.some(r => !r || r.status !== 'fulfilled')) { if (await _supL.done) return _fin(evt); }
   const accepted = rs.filter(r => r.status === 'fulfilled').length;
   // RECORD THE SPREAD BEFORE ANY OF THE RETURNS BELOW, so the two failure shapes are told apart by the
   // callers that have a sentence to write about them. See the note above _lastSpread; the return values
@@ -5087,7 +5190,7 @@ async function _publishToRelays(evt, urls) {
         ? { url: u, error: (rs[i].reason && (rs[i].reason.message || String(rs[i].reason))) || '' } : null).filter(Boolean);
     } catch (x) { refused = []; }
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused } })); } catch (x) {}
-    return false;
+    return _fin(false);
   }
   // ⚠ THIS FIRES ON A PARTIAL WRITE TOO, AND THAT IS DELIBERATE — checked rather than assumed, 2026-09-17.
   // Its one listener (DashRelaysCard in app/stew-dashboard.jsx) asks a narrower question than "did this save":
@@ -5096,7 +5199,8 @@ async function _publishToRelays(evt, urls) {
   // The write is still reported as NOT DONE on the next line, and the spread recorded above is what lets a
   // caller say which of the two failures it was.
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
-  return accepted === targets.length ? evt : false;
+  return _fin(accepted === targets.length ? evt : false);
+  } finally { _fin(false); }
 }
 
 // resolve the signing key for a chosen publishing identity. asPub === church pub (or empty) -> church key;
@@ -5233,7 +5337,7 @@ const _lastStamp = new Map();   // d-tag -> the created_at we last published for
 // (rotaChangedSince) must be answered from this map; a failed write of our own must never read as somebody else's change.
 const _seenStamp = new Map();
 const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
-const _pubLatest = new Map();   // d-tag -> the id of the event the most recent publish() call was asked to send (its rate-limited retry stops once superseded)
+const _pubLatest = new Map();   // "<signer>|<d-tag>" -> { id, done } of the most recent publish()/_publishToRelays() call (its rate-limited retry stops once superseded)
 // ── A COPY WE CANNOT OPEN IS NOT AN EMPTY DOCUMENT (the roster wipe, 2026-10-12) ─────────────────────────
 // A console that opens before the church name key arrives sees every sealed calendar document as `_locked`.
 // The screens then showed a locked team as an EMPTY team, and any save — a roster edit, the care panel's effect,
