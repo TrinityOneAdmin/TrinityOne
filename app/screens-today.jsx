@@ -2347,6 +2347,8 @@ function TodayScreen({ ctx }) {
   // deliberate: an unreadable or unrecognised value falls to the default, never to the old one.
   const [votdMin, setVotdMin] = React.useState(() => { try { return localStorage.getItem('trinityone.votd-min') !== '0'; } catch { return true; } });
   const toggleVotd = () => setVotdMin(v => { const nv = !v; try { localStorage.setItem('trinityone.votd-min', nv ? '1' : '0'); } catch {} return nv; });
+  // This phone's "another verse" pick, { day, ref } — validated where the verse is chosen, below.
+  const [votdPick, setVotdPick] = React.useState(() => { try { return lsGet('trinityone.votd-pick', null); } catch (e) { return null; } });
   // "Your church is reading" folds to one line behind a chevron and remembers it (owner 2026-10-15). Its own key:
   // it is NOT the "What's happening" card's dismiss key and does not touch it.
   const [churchReadingFolded, setChurchReadingFolded] = useStateT(() => { try { return lsGet('trinityone.churchReadingFolded', false) === true; } catch (e) { return false; } });
@@ -2385,7 +2387,33 @@ function TodayScreen({ ctx }) {
 
   // verse of the day — rotate by day-of-year; render from the active translation when possible
   const doy = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 864e5);
-  const pick = D.VOTD_POOL[doy % D.VOTD_POOL.length];
+  const dayPick = D.VOTD_POOL[doy % D.VOTD_POOL.length];
+  // "ANOTHER VERSE" (owner 2026-11-13): a tap swaps in a random pool verse, kept on THIS phone for the rest of
+  // the day under trinityone.votd-pick = { day, ref }. The REF is stored, not an index, so a later edit of the
+  // pool cannot shift a pick onto a different verse. It is trusted only when it is an object, its day is today
+  // (local day) and its ref is still in the pool — anything else (a corrupt value, yesterday's pick, a verse
+  // since removed) falls back to the day's verse. Nothing is deleted at midnight; yesterday's pick is ignored.
+  const votdToday = (typeof todayISO === 'function') ? todayISO() : '';
+  const pickedVerse = (votdPick && typeof votdPick === 'object' && votdToday && votdPick.day === votdToday)
+    ? D.VOTD_POOL.find(p => p.ref === votdPick.ref) : null;
+  const pick = pickedVerse || dayPick;
+  // A random verse DIFFERENT from the one showing (an immediate repeat is skipped; A→B→A is allowed, which is
+  // fine for "random"). stopPropagation: the card behind this button opens the share sheet, and this tap must
+  // not. If the write fails the pick still holds for this session through state.
+  const anotherVerse = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    const pool = D.VOTD_POOL;
+    if (!pool.some(p => p.ref !== pick.ref)) return;
+    // Draw over the whole pool and draw again on the verse showing. Bounded: after 20 draws (only plausible
+    // with a broken Math.random) take the next verse along, so a tap always changes the verse and never spins.
+    let i = -1;
+    for (let n = 0; n < 20; n++) { const j = Math.floor(Math.random() * pool.length) % pool.length; if (pool[j] && pool[j].ref !== pick.ref) { i = j; break; } }
+    if (i < 0) i = (pool.findIndex(p => p.ref === pick.ref) + 1) % pool.length;
+    const next = pool[i];
+    const val = { day: votdToday, ref: next.ref };
+    setVotdPick(val);
+    try { lsSet('trinityone.votd-pick', val); } catch (err) {}
+  };
   let votd = { ref: pick.ref, text: pick.text, version: 'WEB' };
   const vloc = Bible.parseRef(pick.ref);
   if (vloc && Bible.loaded && Bible.books().includes(vloc.book)) {
@@ -2806,7 +2834,17 @@ function TodayScreen({ ctx }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
               <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
             </div>
-            <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: onMain, width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color={onMain} /></button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              {/* ANOTHER VERSE: the same 28px disc and ink rule as Minimise, so it stays readable on whatever main
+                  colour the church picked. The BUTTON is a 36px transparent hit area (28px is under the touch
+                  minimum) pulled in by -4px margins so the row keeps its 28px rhythm. Hidden with a pool of one. */}
+              {D.VOTD_POOL.length > 1 ? (
+                <button type="button" onClick={anotherVerse} aria-label="Another verse" title="Another verse" style={{ border: 'none', background: 'transparent', color: onMain, width: 36, height: 36, margin: -4, padding: 0, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <span style={{ width: 28, height: 28, borderRadius: 999, background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="refresh" size={15} color={onMain} /></span>
+                </button>
+              ) : null}
+              <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: onMain, width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color={onMain} /></button>
+            </div>
           </div>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
             {votdQ.open}{votd.text}{votdQ.close}
