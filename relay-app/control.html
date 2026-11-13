@@ -667,6 +667,25 @@
             </div>
             <input type="checkbox" class="sw" id="keepRelayCurrent" title="On: install new relay versions automatically" aria-label="Update relay software automatically">
           </div>
+          <!-- SUITE JS AUTO-UPDATE (P4) — revealed by control.js loadUpdate ONLY on a packaged Suite box. The
+               relay-software controls above are for server installs; this keeps the SUITE's own JS layer current
+               without a reinstall. Wired + rendered by wireSuiteAutoUpdate (control.js), which POSTs /settings
+               {autoUpdate}/{autoUpdateAt} and reads GET /update's `suite` object. -->
+          <div id="suiteAutoBlock" style="display:none; margin-top:12px; padding-top:12px; border-top:1px solid var(--line-2)">
+            <div class="toggle-row">
+              <div class="toggle-main">
+                <div class="toggle-t">Keep the Suite up to date automatically</div>
+                <div class="toggle-s" id="suiteAutoStatus"></div>
+              </div>
+              <input type="checkbox" class="sw" id="suiteAutoToggle" title="On: install new Suite builds automatically" aria-label="Keep the Suite up to date automatically">
+            </div>
+            <div class="ch-add" style="margin-top:8px; align-items:center">
+              <label for="suiteAutoTime" class="hint" style="margin:0">Apply updates at</label>
+              <input id="suiteAutoTime" type="time" value="03:00" class="mono" style="max-width:8em" aria-label="Time of day to apply Suite updates" />
+            </div>
+            <button class="btn btn-ghost" id="suiteAutoAck" style="display:none; margin-top:6px" title="Clear the warning once the church's data has been checked">I've dealt with this</button>
+            <div class="hint" id="suiteAutoHint" role="status" aria-live="polite" style="min-height:1.2em; display:none"></div>
+          </div>
         </div>
         <!-- THE PHONE APP INSTALLER THIS BOX HANDS OUT (was its own card, "Let members install the app from this
              box"). It once served a two-day-old installer for four days with every screen looking healthy, so

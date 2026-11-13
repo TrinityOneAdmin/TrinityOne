@@ -121,7 +121,11 @@ const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // keepApkCurrent: refresh the APKs this box hands out whenever the update source has different ones.
 // DEFAULT OFF on purpose — see the "KEEPING IT CURRENT WITHOUT A HUMAN" note below. A church on a metered
 // or thin pipe must not be given two 40 MB downloads it never asked for; it gets the warning instead.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false, keepRelayCurrent: false, showChurchNames: false, keepAwake: true };
+// autoUpdate / autoUpdateAt: the Suite JS auto-update toggle (opt-in, DEFAULT OFF) and the local "HH:MM" time
+// the Rust app shell applies a staged bundle at. Only a PACKAGED Suite box acts on them (see suiteAutoUpdate +
+// the `suite-autoupdate` marker the /settings handler maintains for the shell). A server-install relay ignores
+// them entirely — its software comes from relay-update.sh, not this path.
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false, keepRelayCurrent: false, showChurchNames: false, keepAwake: true, autoUpdate: false, autoUpdateAt: '03:00' };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -144,9 +148,36 @@ function loadSettings() {
       // default (owner decision) — only an explicit false disables it. The Tauri Rust controller does not read
       // this SETTINGS value; it reads the `keep-awake-off` marker the /settings handler maintains (see below).
       SETTINGS.keepAwake = s.keepAwake !== false;
+      // Suite JS auto-update: opt-in, default OFF; the apply time is a validated "HH:MM" (default 03:00). One
+      // coercion, shared with POST /settings, lifted + run by scripts/suite-autoupdate-settings.test.mjs.
+      coerceSuiteAutoUpdate(s, SETTINGS);
+      reconcileSuiteAutoUpdate(SETTINGS, suiteMarkerOn());
     }
   } catch {}
 }
+// SUITE-AUTOUPDATE-SETTINGS-BEGIN — lifted & run by scripts/suite-autoupdate-settings.test.mjs (CLAUDE.md rule 1/3)
+// Coerce the two Suite-auto-update settings into `out` from a parsed settings object OR a POST body `s`.
+// Opt-in: autoUpdate is true ONLY for an explicit boolean true. autoUpdateAt must be a valid 24h "HH:MM"; a
+// missing/invalid value leaves the existing value (or the 03:00 default) in place rather than corrupting it.
+function coerceHHMM(v) {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(v == null ? '' : v).trim());
+  return m ? m[0] : '';
+}
+function coerceSuiteAutoUpdate(s, out) {
+  if (s && 'autoUpdate' in s) out.autoUpdate = s.autoUpdate === true;
+  else if (out.autoUpdate === undefined) out.autoUpdate = false;
+  if (s && 'autoUpdateAt' in s) { const v = coerceHHMM(s.autoUpdateAt); if (v) out.autoUpdateAt = v; }
+  if (!out.autoUpdateAt) out.autoUpdateAt = '03:00';
+  return out;
+}
+// The `suite-autoupdate` marker is what the Rust shell acts on, and the shell REMOVES it when it switches
+// auto-update off after a failed update (audit be258b42 MEDIUM 7). So a saved autoUpdate:true with no marker
+// means "switched off by the shell": the relay must show and behave as OFF, not re-enable it silently.
+function reconcileSuiteAutoUpdate(out, markerExists) {
+  if (out.autoUpdate === true && !markerExists) out.autoUpdate = false;
+  return out;
+}
+// SUITE-AUTOUPDATE-SETTINGS-END
 // Media-hosting policy for a SHARED/community relay: sermon media (audio/video, or any large blob) may only be
 // uploaded by a church GRANTED media hosting here (MEDIA_HOSTS — a self-hoster, or one the operator vouches for).
 // A church can be provisioned for conversations + text resources (those are Nostr events, never blobs, so this
@@ -158,6 +189,8 @@ const mediaRequiresHost = () => SETTINGS.mediaRequiresHost === true || MEDIA_HOS
 const GUEST_ASSET_MAX = 4 * 1048576;   // a guest church may still upload a small NON-sermon asset (e.g. an image) up to this — the size backstop catches a big blob mislabeled to dodge the audio/video check
 const effMediaCap = () => SETTINGS.mediaCap || MEDIA_CAP;      // total media-storage cap (bytes), setting overrides env
 const effChurchCap = () => SETTINGS.churchCap || CHURCH_MEDIA_CAP;   // per-church media-storage cap (bytes)
+// Is the shell's auto-update marker in place? (A FILE: the shell reads it with read_to_string.)
+function suiteMarkerOn() { try { return statSync(join(DATA_DIR, 'suite-autoupdate')).isFile(); } catch { return false; } }
 function saveSettings() { try { const tmp = SETTINGS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SETTINGS, null, 2) + '\n'); renameSync(tmp, SETTINGS_FILE); } catch {} }
 loadSettings();
 
@@ -193,6 +226,12 @@ const RELEASE_ORIGIN_SEED = join(ROOT, 'release-origin');
 // Suite's software updates when a newer Suite is installed (/suite-update, home.js). The panel reads this
 // and shows that sentence instead of a button that would queue a flag nothing consumes.
 const PACKAGED = existsSync(RELEASE_ORIGIN_SEED);
+// WHERE THE TRUST ROOT LIVES when this relay is running as an auto-update OVERRIDE. The Rust app shell launches
+// an activated override from DATA_DIR/suite/active and passes PAYLOAD_DIR pointing at the read-only, OS-signed
+// payload. The pinned release key + the verifier are read from THERE, never from the (writable) override tree,
+// so a tampered override cannot supply its own key or verifier. Unset on a normal payload/checkout launch, in
+// which case ROOT (this tree) is the payload and already holds both files.
+const PAYLOAD_DIR = (process.env.PAYLOAD_DIR || '').trim();
 // '' for blank, the normalised origin for a valid one, null for something that is not an http(s) origin.
 // Only scheme + host[:port] survive: the readers append fixed paths, and credentials or a path in here would
 // be silently prepended to every fetch.
@@ -470,6 +509,285 @@ async function relayAutoUpdate(why) {
   finally { _relayAutoBusy = false; }
 }
 setInterval(() => { if (SETTINGS.keepRelayCurrent) relayAutoUpdate('periodic check').catch(() => {}); }, 3600 * 1000);
+
+// ── SUITE JS AUTO-UPDATE (P3): CHECK + DOWNLOAD + STAGE. Does NOT apply — the Rust app shell does (P2). ──────
+// This is the PACKAGED-Suite counterpart to relayAutoUpdate (which stays OFF for packaged boxes). It is gated on
+// PACKAGED && SETTINGS.autoUpdate, polls for a newer SIGNED JS bundle, downloads it into DATA_DIR/suite/staging,
+// pre-verifies the detached Ed25519 signature over the EXACT tarball bytes, enforces anti-rollback by date, and
+// writes staging/READY for the shell to act on at the operator's chosen time. It never swaps or restarts code.
+//
+// INTEGRITY = THE SIGNATURE OVER THE BYTES, NEVER manifest.sha256 (that hash is advisory and will not match the
+// host-rebuilt tgz — gating on it would reject every valid release). `sha`(git) is used only for newness and
+// `date` only for anti-rollback. Verification runs the shared verifier (scripts/verify-suite-bundle.mjs) with
+// the pinned read-only key, so the stage-time and apply-time checks are one implementation.
+//
+// SUITE-AUTOUPDATE-BEGIN — lifted & run by scripts/suite-autoupdate-stage.test.mjs (CLAUDE.md rule 1/3)
+function suiteUpdateBase() {
+  // Where to fetch suite-latest.json + the bundle from. SUITE_UPDATE_BASE lets a test redirect this to a
+  // localhost fixture so no test ever touches the network (the relay-bundle-publish network trap).
+  const o = String(process.env.SUITE_UPDATE_BASE || '').trim().replace(/\/+$/, '');
+  if (o) return o;
+  return 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download';
+}
+// [AUDIT FIX #4 — date] Strictly-after by INSTANT, not by lexicographic string. git %cI stamps carry a
+// timezone offset, so two instants can order the opposite way as strings ("…+01:00" vs "…Z"). Date.parse →
+// epoch ms. An unparseable remote date is treated as NOT after (refuse); an unparseable/empty floor as
+// "remote is after" (there is nothing valid to beat).
+function suiteDateAfter(a, b) {
+  const ta = Date.parse(a);
+  if (!Number.isFinite(ta)) return false;
+  const tb = Date.parse(b);
+  if (!Number.isFinite(tb)) return true;
+  return ta > tb;
+}
+// [AUDIT FIX #2 — DoS] Hard ceilings on the download. A controlled suite-latest.json must never make the relay
+// buffer more than a JS bundle could ever be: ws + nostr-tools + web-push are pure JS (a few MB today), so
+// 100 MiB is generous headroom and still caps OOM on a phone-class box. The detached Ed25519 signature is a
+// few hundred bytes → 64 KiB is ample.
+const SUITE_BUNDLE_MAX_BYTES = 100 * 1024 * 1024;
+const SUITE_SIG_MAX_BYTES = 64 * 1024;
+// A release is dated by its commit, which is in the past; one day covers clock skew. A signed date later than
+// that is refused (mirrors MAX_FUTURE_SKEW_SECS in the Rust shell).
+const SUITE_MAX_FUTURE_MS = 24 * 3600 * 1000;
+// Read a fetch body under a hard ceiling: refuse on an over-cap Content-Length, AND abort mid-stream if the
+// streamed bytes exceed the cap even when Content-Length lied or was absent — never buffer an unbounded body.
+async function suiteReadCapped(resp, maxBytes, label) {
+  const clen = Number(resp.headers.get('content-length'));
+  if (Number.isFinite(clen) && clen > maxBytes) throw new Error(label + ' content-length ' + clen + ' > cap ' + maxBytes);
+  if (!resp.body) { const b = Buffer.from(await resp.arrayBuffer()); if (b.length > maxBytes) throw new Error(label + ' ' + b.length + ' > cap ' + maxBytes); return b; }
+  const reader = resp.body.getReader();
+  const chunks = []; let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) { try { await reader.cancel(); } catch {} throw new Error(label + ' exceeded cap (' + total + ' > ' + maxBytes + ')'); }
+      chunks.push(Buffer.from(value));
+    }
+  } finally { try { reader.releaseLock(); } catch {} }
+  return Buffer.concat(chunks, total);
+}
+// Pure decision: is the remote bundle NEWER than what this box runs? sha (git) is not orderable, so "newer"
+// means a different valid sha; `date` (ISO) carries the ordering and gives anti-rollback at the pre-download
+// gate. Same sha → no-op; older/equal date (by INSTANT) → refused.
+function suiteIsNewer(remote, mine) {
+  if (!remote || typeof remote.sha !== 'string' || !/^[0-9a-f]{40}$/.test(remote.sha)) return false;
+  if (typeof remote.date !== 'string' || !remote.date) return false;
+  if (remote.sha === (mine && mine.sha)) return false;
+  const md = (mine && mine.date) || '';
+  if (!suiteDateAfter(remote.date, md)) return false;
+  return true;
+}
+let _suiteAutoBusy = false;
+// [AUDIT be258b42 MEDIUM 2] Refusals that the SAME release will give again (its signature, its kind, its signed
+// identity) are remembered in suite/check.json, and that sha is not downloaded again for this long. Churches run
+// on small pipes: without this, a bad release cost a full bundle download every hour until the next release.
+const SUITE_KNOWN_BAD_MS = 6 * 3600 * 1000;
+const SUITE_HARD_REFUSALS = ['bad-signature', 'not-a-suite-bundle', 'sha-mismatch', 'future-date', 'anti-rollback'];
+// opts carries everything so the function can be lifted and driven in a test with no module globals:
+//   { packaged, settings, dataDir, build, base, verifier, pubkey, node, now }
+// Every run that gets past the gate records its outcome in DATA_DIR/suite/check.json {at, ok, reason, sha} —
+// the control panel shows it (audit MEDIUM 7: "the panel never says why nothing happened").
+async function suiteAutoUpdate(why, opts = {}) {
+  // GATE: only a packaged Suite box with the toggle on ever runs. Checked before any network/disk touch so a
+  // non-packaged box (every server install, every test-spawned gateway) is provably inert.
+  if (!opts.packaged || (opts.settings || {}).autoUpdate !== true) return { ok: false, skipped: 'disabled' };
+  if (_suiteAutoBusy) return { ok: false, skipped: 'busy' };
+  _suiteAutoBusy = true;
+  let r;
+  try { r = await suiteAutoUpdateRun(opts); }
+  catch (e) { r = { ok: false, reason: 'error', error: String((e && e.message) || e) }; }
+  finally { _suiteAutoBusy = false; }
+  // A known-bad skip leaves check.json exactly as it is: rewriting its time on every hourly skip would push the
+  // back-off forward for ever, and the release would never be retried (audit f4129a25 MEDIUM 1).
+  if (r && r.skipped === 'known-bad') return r;
+  try {
+    const suiteDir = join(opts.dataDir, 'suite');
+    mkdirSync(suiteDir, { recursive: true });
+    const rec = { at: new Date(opts.now || Date.now()).toISOString(), ok: !!r.ok, reason: r.reason || (r.staged ? 'staged' : ''), sha: r.sha || '' };
+    writeFileSync(join(suiteDir, 'check.json.tmp'), JSON.stringify(rec) + '\n'); renameSync(join(suiteDir, 'check.json.tmp'), join(suiteDir, 'check.json'));
+  } catch {}
+  return r;
+}
+async function suiteAutoUpdateRun(opts) {
+  const dataDir  = opts.dataDir;
+  const build    = opts.build || {};
+  const base     = opts.base;
+  const verifier = opts.verifier;
+  const pubkey   = opts.pubkey;
+  const node     = opts.node || process.execPath;
+  const vTimeout = opts.verifyTimeoutMs || 15000;
+  const suiteDir = join(dataDir, 'suite');
+  const staging  = join(suiteDir, 'staging');
+  const stTgz    = join(staging, 'bundle.tgz');
+  const stSig    = join(staging, 'bundle.sig');
+  const stReady  = join(staging, 'READY');
+  const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
+  {
+    // 1. fetch the manifest
+    let remote = null;
+    try {
+      const r = await fetch(base + '/suite-latest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (r.ok) remote = await r.json();
+    } catch {}
+    if (!remote || typeof remote !== 'object') return { ok: false, reason: 'no-manifest' };
+    // 2. newer than mine (sha differs AND date strictly newer)?
+    if (!suiteIsNewer(remote, build)) return { ok: false, reason: 'not-newer' };
+    const rsha = remote.sha;
+    // 2b. [AUDIT be258b42 MEDIUM 2] Nothing to fetch if this exact release is already staged and waiting for the
+    //     apply time, was marked bad by a failed install (quarantine-sha — never auto-applied again), or was
+    //     refused for a reason it will give again within SUITE_KNOWN_BAD_MS. Checked BEFORE any download.
+    const q = (() => { try { return readFileSync(join(suiteDir, 'quarantine-sha'), 'utf8').trim(); } catch { return ''; } })();
+    if (q && q === rsha) return { ok: false, reason: 'quarantined', sha: rsha };
+    const staged = readJson(stReady);
+    if (staged && staged.sha === rsha && existsSync(stTgz) && existsSync(stSig)) return { ok: true, staged: true, already: true, reason: 'already-staged', sha: rsha };
+    const last = readJson(join(suiteDir, 'check.json'));
+    const nowMs0 = opts.now || Date.now();
+    if (last && last.sha === rsha && SUITE_HARD_REFUSALS.includes(last.reason) && nowMs0 - Date.parse(last.at) < SUITE_KNOWN_BAD_MS) {
+      return { ok: false, reason: last.reason, sha: rsha, skipped: 'known-bad' };
+    }
+    // 3. [AUDIT FIX #1 — SSRF] Pin BOTH downloads to the SAME origin the manifest was fetched from. A
+    // controlled/MITM'd suite-latest.json must not be able to aim the relay's fetch at an arbitrary (e.g.
+    // internal) host — that would be a probe primitive. `url`/`sig`, when present, must share scheme+host+port
+    // with `base`; when absent they are constructed from `base`. Either mismatch → refuse, fetch nothing.
+    let baseOrigin;
+    try { baseOrigin = new URL(base).origin; } catch { return { ok: false, reason: 'bad-base' }; }
+    const pinUrl = (v, fallbackPath) => {
+      if (typeof v !== 'string' || !v) return base + fallbackPath;     // absent → build from the pinned base
+      if (!/^https?:\/\//i.test(v)) return null;
+      let o; try { o = new URL(v).origin; } catch { return null; }
+      return o === baseOrigin ? v : null;                               // foreign origin → refuse
+    };
+    const tgzUrl = pinUrl(remote.url, '/suite-js-bundle.tgz');
+    const sigUrl = pinUrl(remote.sig, '/suite-js-bundle.sig');   // [L3] the name publish-relay-bundle.sh uploads
+    if (tgzUrl === null || sigUrl === null) return { ok: false, reason: 'url-origin-mismatch', sha: rsha };
+    // 4. [AUDIT FIX #3 — update-DoS] download tgz + sig to staging/.tmp and VERIFY THERE; nothing is promoted
+    // over a previously-good staged bundle until the NEW bytes pass signature + anti-rollback. A forged
+    // newer-dated manifest with bad bytes therefore cannot wipe a good staged bundle. Downloads are size-capped
+    // ([AUDIT FIX #2 — DoS]) so a lying/huge Content-Length or body cannot OOM the box.
+    const tmp = join(staging, '.tmp');
+    const cleanTmp = () => { try { rmSync(tmp, { recursive: true, force: true }); } catch {} };
+    cleanTmp();
+    mkdirSync(tmp, { recursive: true });
+    const maxTgz = opts.maxBundleBytes || SUITE_BUNDLE_MAX_BYTES;   // test hook; defaults used in production
+    const maxSig = opts.maxSigBytes || SUITE_SIG_MAX_BYTES;
+    const tmpTgz = join(tmp, 'bundle.tgz'), tmpSig = join(tmp, 'bundle.sig');
+    // [AUDIT be258b42 MEDIUM 2] The few-hundred-byte signature FIRST: a release whose .sig is not up yet costs
+    // one tiny request, not a full bundle download, every hour.
+    try {
+      const sr = await fetch(sigUrl, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
+      if (!sr.ok) { cleanTmp(); return { ok: false, reason: 'signature-missing', sha: rsha, error: 'HTTP ' + sr.status + ' for the signature' }; }
+      const sigBuf = await suiteReadCapped(sr, maxSig, 'signature');
+      const tr = await fetch(tgzUrl, { cache: 'no-store', signal: AbortSignal.timeout(900000) });
+      if (!tr.ok) throw new Error('HTTP ' + tr.status + ' for the bundle');
+      const tgzBuf = await suiteReadCapped(tr, maxTgz, 'bundle');
+      if (tgzBuf.length < 512) throw new Error('bundle too small (' + tgzBuf.length + ' bytes)');
+      writeFileSync(tmpTgz, tgzBuf); writeFileSync(tmpSig, sigBuf);
+    } catch (e) {
+      cleanTmp();
+      const msg = String((e && e.message) || e);
+      const reason = /\bcap\b|content-length/i.test(msg) ? 'too-large' : 'download-failed';
+      return { ok: false, reason, error: msg, sha: rsha };
+    }
+    // 5. pre-verify the detached Ed25519 signature over the EXACT .tmp bytes, with the shared verifier + key. On
+    //    success the verifier prints the build identity read from version.txt INSIDE those signed bytes.
+    const vr = spawnSync(node, [verifier, tmpTgz, tmpSig, pubkey], { timeout: vTimeout, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (!vr || vr.status !== 0) { cleanTmp(); return { ok: false, reason: vr && vr.status === 7 ? 'not-a-suite-bundle' : 'bad-signature', status: vr && vr.status, sha: rsha }; }
+    let signed = null;
+    try { signed = JSON.parse(String(vr.stdout || '').trim()); } catch {}
+    if (!signed || typeof signed.sha !== 'string' || typeof signed.date !== 'string') { cleanTmp(); return { ok: false, reason: 'bad-signature', error: 'verifier gave no identity', sha: rsha }; }
+    // 6. [AUDIT be258b42 HIGH 2] Every ordering decision uses the SIGNED identity, never the manifest (which
+    //    nobody signs): the signed sha must be the one the manifest named; the signed date must not be in the
+    //    future (a bogus far-future date would otherwise become the floor and freeze every later update); and it
+    //    must be strictly after MAX(my build date, a sane recorded installed date), compared by INSTANT.
+    if (signed.sha !== remote.sha) { cleanTmp(); return { ok: false, reason: 'sha-mismatch', sha: rsha }; }
+    const nowMs = opts.now || Date.now();
+    if (!(Date.parse(signed.date) <= nowMs + SUITE_MAX_FUTURE_MS)) { cleanTmp(); return { ok: false, reason: 'future-date', sha: rsha }; }
+    let floor = (build && build.date) || '';
+    const st = readJson(join(suiteDir, 'state.json'));
+    const inst = st && typeof st.installedDate === 'string' ? st.installedDate : '';
+    // installedDate only ever comes from a signed date that was within a day of the clock when it was installed;
+    // one that is now beyond that means this computer's clock went BACK. Refuse until it is right rather than
+    // drop the floor (dropping it would let an older bundle in — audit f4129a25 LOW 2).
+    if (inst && !(Date.parse(inst) <= nowMs + SUITE_MAX_FUTURE_MS)) { cleanTmp(); return { ok: false, reason: 'clock-looks-wrong', sha: rsha }; }
+    if (inst && suiteDateAfter(inst, floor)) floor = inst;
+    if (!suiteDateAfter(signed.date, floor)) { cleanTmp(); return { ok: false, reason: 'anti-rollback', sha: rsha }; }
+    // 7. PROMOTE the verified .tmp bytes and write READY (does NOT apply — the shell reads this at the chosen
+    //    time). Only now is a pre-existing good bundle replaced; READY is cleared first so it never points at a
+    //    mix, then rewritten atomically. sha/date are the SIGNED ones; `version` is only a display label.
+    try { rmSync(stReady, { force: true }); } catch {}
+    renameSync(tmpTgz, stTgz); renameSync(tmpSig, stSig);
+    cleanTmp();
+    const ready = { version: String(remote.version || signed.sha), sha: signed.sha, date: signed.date };
+    const tmpReady = stReady + '.tmp';
+    writeFileSync(tmpReady, JSON.stringify(ready) + '\n'); renameSync(tmpReady, stReady);
+    return { ok: true, staged: true, ready, sha: signed.sha };
+  }
+}
+// SUITE-AUTOUPDATE-END
+// The module-level defaults handed to suiteAutoUpdate from the real call sites (the test passes its own opts).
+// The verifier + key are read from the read-only PAYLOAD_DIR when running as an override, else from this tree.
+function suiteAutoUpdateDefaults() {
+  const payload = PAYLOAD_DIR || ROOT;
+  return {
+    packaged: PACKAGED, settings: SETTINGS, dataDir: DATA_DIR, build: BUILD, base: suiteUpdateBase(),
+    verifier: join(payload, 'scripts', 'verify-suite-bundle.mjs'),
+    pubkey: process.env.RELEASE_PUBKEY_PATH || join(payload, 'relay-app', 'release-pubkey.pem'),
+  };
+}
+// SUITE AUTO-UPDATE STATUS for the control panel (GET /update `suite`). Everything the panel needs to say
+// truthfully what will happen and what did (audit be258b42 H1/H3/M7/L1):
+//   enabled  — the switch AS THE SHELL SEES IT (setting AND marker; the shell removes the marker after a failure)
+//   at       — the CURRENT setting (L1: not a time saved at the last install), windowEnd — at + 2 h
+//   running  — 'update' when this relay runs a downloaded override (cwd ≠ PAYLOAD_DIR), else 'shipped';
+//              runningVersion/shippedVersion — short shas of each
+//   installed*/lastApplied/lastOutcome/lastReason/autoOff — what the shell recorded in suite/state.json
+//   staged   — the verified bundle waiting for the window;  check — the relay's last check (suite/check.json)
+function suiteUpdateStatus() {
+  const suiteDir = join(DATA_DIR, 'suite');
+  const rj = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')) || null; } catch { return null; } };
+  const st = rj(join(suiteDir, 'state.json')) || {};
+  const ready = rj(join(suiteDir, 'staging', 'READY'));
+  const check = rj(join(suiteDir, 'check.json'));
+  const at = SETTINGS.autoUpdateAt || '03:00';
+  const [h, m] = at.split(':').map(Number);
+  const endMin = ((h * 60 + m) + 120) % 1440;
+  const windowEnd = String(Math.floor(endMin / 60)).padStart(2, '0') + ':' + String(endMin % 60).padStart(2, '0');
+  const np = (x) => normalize(x).replace(/[\\/]+$/, '');
+  const runningUpdate = !!PAYLOAD_DIR && np(PAYLOAD_DIR) !== np(ROOT);
+  let shippedVersion = BUILD.short;
+  if (runningUpdate) { try { shippedVersion = readFileSync(join(PAYLOAD_DIR, 'version.txt'), 'utf8').split('\n')[0].trim().slice(0, 7); } catch { shippedVersion = ''; } }
+  return {
+    enabled: SETTINGS.autoUpdate === true && suiteMarkerOn(),
+    at, windowEnd,
+    running: runningUpdate ? 'update' : 'shipped', runningVersion: BUILD.short, shippedVersion,
+    installedVersion: st.installedVersion || st.installedSha || '', installedDate: st.installedDate || '',
+    lastApplied: st.lastApplied || '', lastOutcome: st.lastOutcome || '', lastReason: st.lastReason || '', autoOff: st.autoOff === true,
+    restoreFailed: typeof st.restoreFailed === 'string' ? st.restoreFailed : '',   // audit 5ad96e13: a rollback that could not put the data back
+    recovered: (() => { try { return readFileSync(join(suiteDir, 'recovered.txt'), 'utf8').trim(); } catch { return ''; } })(),   // audit a1cc6eff L2: a restore a crash interrupted was repaired at start-up
+    staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
+    check: check && typeof check === 'object' ? { at: check.at || '', ok: !!check.ok, reason: check.reason || '' } : null,
+    // [audit M6] the quick-tunnel address before the last update vs now (a quick tunnel cannot keep its address
+    // across a relay restart); the panel says when it changed.
+    addressChanged: (st.addressBefore && CF_URL && st.addressBefore !== CF_URL) ? { from: st.addressBefore, to: CF_URL } : null,
+  };
+}
+// The operator says the Attention line has been dealt with (audit a1cc6eff L4): drop restoreFailed from the shell's
+// state.json, the start-up recovery note, and the KEEP pins on backups, so normal pruning resumes. This is the ONLY
+// thing that clears them — the shell carries restoreFailed over on every later write.
+function suiteAttentionDone() {
+  const suiteDir = join(DATA_DIR, 'suite');
+  try {
+    const f = join(suiteDir, 'state.json');
+    const st = JSON.parse(readFileSync(f, 'utf8'));
+    if (st && st.restoreFailed) { delete st.restoreFailed; writeFileSync(f + '.ack', JSON.stringify(st) + '\n'); renameSync(f + '.ack', f); }
+  } catch {}
+  try { rmSync(join(suiteDir, 'recovered.txt'), { force: true }); } catch {}
+  try { for (const d of readdirSync(join(suiteDir, 'db-backup'))) { try { rmSync(join(suiteDir, 'db-backup', d, 'KEEP'), { force: true }); } catch {} } } catch {}
+}
+// Hourly check (mirrors the relayAutoUpdate setInterval precedent above) + fire on enable (POST /settings).
+setInterval(() => { if (PACKAGED && SETTINGS.autoUpdate) suiteAutoUpdate('periodic check', suiteAutoUpdateDefaults()).catch(() => {}); }, 3600 * 1000);
 
 // The absolute address to send a member to. SETTINGS.appUrl is what the operator has TOLD this box it is
 // reachable at (behind a tunnel the Host header can be anything); fall back to the host the asker used.
@@ -7221,6 +7539,20 @@ function serveStatic(req, res) {
     res.writeHead(404, H); res.end('{"error":"not found"}'); return;
   }
   // Cloudflare quick-tunnel control (desktop "go public", no account). Admin-gated.
+  // SUITE AUTO-UPDATE: the shell calls this (admin bearer from admin.json) just before it stops this relay to swap
+  // in an update (audit be258b42 MEDIUM 6). It closes the quick tunnel CLEANLY — killing the cloudflared child this
+  // relay started, which a hard kill of the relay would leave running (orphaned, on Windows for good) — but KEEPS
+  // the stay-public flag, so the restarted relay opens a tunnel again. It answers the address it was using so the
+  // shell can record it; the panel then says if the public address changed. Nothing else calls it.
+  // Packaged Suite only: a server relay keeps exactly the routes it had (audit 00aadeed N4).
+  if (PACKAGED && route === '/suite/prepare-restart' && req.method === 'POST') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    const was = CF_URL;
+    try { tunnelTeardownForHeal(); } catch {}
+    res.writeHead(200, H); res.end(JSON.stringify({ ok: true, url: was }));
+    return;
+  }
   if (route === '/tunnel/up' || route === '/tunnel/state' || route === '/tunnel/down' || route === '/tunnel/log') {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', ...SEC_HEADERS };
     if (req.method === 'OPTIONS') { res.writeHead(204, H); res.end(); return; }
@@ -7891,6 +8223,18 @@ function serveStatic(req, res) {
             // (the default). So keepAwake=true removes the marker; keepAwake=false writes it.
             try { const mk = join(DATA_DIR, 'keep-awake-off'); if (SETTINGS.keepAwake) rmSync(mk, { force: true }); else writeFileSync(mk, '1\n'); } catch {}
           }
+          let suiteMarkerError = '';
+          if (s.suiteAttentionDone === true) suiteAttentionDone();
+          if ('autoUpdate' in s || 'autoUpdateAt' in s) {
+            // Coerce via the SAME helper loadSettings uses (one rule), then maintain the `suite-autoupdate`
+            // marker the Rust app shell reads DIRECTLY from the data dir (it applies staged bundles, not this
+            // gateway). Marker PRESENCE ⇒ enabled; its contents are "HH:MM\n" — the time the shell applies at.
+            coerceSuiteAutoUpdate(s, SETTINGS);
+            // [audit be258b42 LOW 2] A marker that cannot be written must not be reported as saved: the shell
+            // would never install anything while the panel showed ON. Record OFF (the truth) and answer 500.
+            try { const mk = join(DATA_DIR, 'suite-autoupdate'); if (SETTINGS.autoUpdate) writeFileSync(mk, (SETTINGS.autoUpdateAt || '03:00') + '\n'); else rmSync(mk, { force: true }); }
+            catch (e) { suiteMarkerError = 'could not save the auto-update switch on this computer (' + ((e && e.code) || 'error') + ')'; SETTINGS.autoUpdate = suiteMarkerOn(); }
+          }
           if ('serveApp' in s) SETTINGS.serveApp = !!s.serveApp;
           if ('serveModules' in s) SETTINGS.serveModules = !!s.serveModules;
           if ('serveAudio' in s) SETTINGS.serveAudio = !!s.serveAudio;
@@ -7910,6 +8254,10 @@ function serveStatic(req, res) {
           // ticks the box because the panel just told them they are behind must not be left still behind.
           if ('keepApkCurrent' in s && SETTINGS.keepApkCurrent) { apkAutoRefresh('the operator turned it on', true).catch(() => {}); }
           if ('keepRelayCurrent' in s && SETTINGS.keepRelayCurrent) { relayAutoUpdate('the operator turned it on').catch(() => {}); }
+          // Turning Suite auto-update ON acts NOW rather than at the next hourly tick, so a staged bundle can be
+          // ready for tonight. Only a PACKAGED box does anything (suiteAutoUpdate re-checks internally too).
+          if (PACKAGED && 'autoUpdate' in s && SETTINGS.autoUpdate) { suiteAutoUpdate('the operator turned it on', suiteAutoUpdateDefaults()).catch(() => {}); }
+          if (suiteMarkerError) { res.writeHead(500, H); res.end(JSON.stringify({ error: suiteMarkerError, settings: SETTINGS })); return; }
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, origin: ORIGIN, packaged: PACKAGED }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });
@@ -8089,7 +8437,12 @@ function serveStatic(req, res) {
         // payload (updates with the Suite), and a box that was simply never told where to get things from.
         // `codeSource` is the file as written (blank when the origin doubles as it), so the panel can say
         // where the software comes from when that is not where the installers do.
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, codeSource: codeSource(), releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest }));
+        // SUITE AUTO-UPDATE STATUS (P3) — for the P4 control-panel card. Reports the live toggle, the staged
+        // bundle (if any) this box has downloaded + verified, and the last apply outcome the shell recorded in
+        // DATA_DIR/suite/state.json. Read-only surface; the notify-only banner (/suite-update) is untouched.
+        let suite = null;
+        try { suite = suiteUpdateStatus(); } catch {}
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, codeSource: codeSource(), releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest, suite }));
       })();
       return;
     }

@@ -678,6 +678,131 @@
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
 
+  // SUITE-AUTOUPDATE-UI-BEGIN — lifted & run by scripts/suite-autoupdate-ui.test.mjs (CLAUDE.md rule 1/3)
+  // The Suite JS auto-update control (P4), shown by loadUpdate in place of the old "updates when you reinstall"
+  // message on a PACKAGED Suite box. The toggle POSTs /settings {autoUpdate}; the HH:MM time POSTs
+  // {autoUpdateAt}; the status line is rendered from GET /update's `suite` object (installed version, next
+  // apply, and a human line from lastOutcome/staged). On a failed save we show an inline hint and NEVER hide or
+  // leave the control disabled — that was the sleep-button bug — so the operator can always retry. Deps
+  // (doc/fetchFn/authFn) are injected so the exact behaviour runs headless against a fake DOM + fake fetch.
+  // What the panel says, from GET /update's `suite` (gateway.mjs suiteUpdateStatus). PURE. It must be TRUE
+  // (audit be258b42 H1, H3, M7, L1): when an update will install, which code is running, what the last check
+  // found, and that a failed update switched the feature off.
+  const SUITE_CHECK_REASON = {
+    'not-newer': 'this computer is up to date', 'already-staged': 'an update is downloaded',
+    staged: 'an update was downloaded', 'no-manifest': 'could not reach the update server',
+    'signature-missing': 'a new release is not fully published yet', 'download-failed': 'the download failed (it will retry)',
+    'too-large': 'the download was refused as too large', 'bad-signature': 'a release failed its signature check and was refused',
+    'not-a-suite-bundle': 'a release was not a Suite update and was refused', 'sha-mismatch': 'a release did not match its description and was refused',
+    'future-date': 'a release had an impossible date and was refused', 'anti-rollback': 'a release older than this one was refused',
+    'clock-looks-wrong': "this computer's clock looks wrong, so updates are paused", quarantined: 'the latest release failed here before and is skipped',
+    'url-origin-mismatch': 'a release pointed somewhere unexpected and was refused', error: 'the check failed (it will retry)',
+  };
+  function suiteAutoStatusText(suite) {
+    suite = suite || {};
+    const out = [];
+    const at = suite.at || '03:00', end = suite.windowEnd || '';
+    const win = end ? 'between ' + at + ' and ' + end : 'at ' + at;
+    // A rollback that could not put the church's data back is the most important thing on this line, so it goes first.
+    const attention = !!(suite.restoreFailed || suite.recovered);
+    if (suite.restoreFailed) out.push('Attention: after the failed update ' + suite.restoreFailed + '. Ask for help before changing anything');
+    if (suite.recovered) out.push('Attention: ' + suite.recovered);
+    if (suite.running === 'update') out.push('Running a downloaded update (' + (suite.runningVersion || suite.installedVersion || '?') + ')');
+    if (suite.lastOutcome === 'rolledback' || suite.lastOutcome === 'launch-failed') {
+      out.push((suite.lastOutcome === 'rolledback' ? 'The last update was rolled back' : 'The downloaded update would not start') +
+        (suite.lastReason ? ' (' + suite.lastReason + ')' : '') +
+        // while an Attention line shows, do not invite turning updates back on (audit a1cc6eff L4)
+        (suite.autoOff && !suite.enabled ? (attention ? ', so automatic updates were turned off.' : ', so automatic updates were turned off. Turn them on to try the next release.') : ''));
+    } else if (suite.lastOutcome === 'stuck') {
+      out.push('The last update went wrong and could not be stopped' + (suite.lastReason ? ' (' + suite.lastReason + ')' : ''));
+    } else if (suite.lastOutcome === 'not-applied') {
+      out.push('The last update was not installed' + (suite.lastReason ? ' (' + suite.lastReason + ')' : '') + '; it will try again');
+    } else if (suite.lastOutcome === 'launch-slow') {
+      out.push('At the last start the downloaded update was too slow to start, so the Suite ran the version it came with; it tries the update again at the next start');
+    } else if ((suite.lastOutcome === 'applied' || suite.lastOutcome === 'applied-store-degraded') && suite.running === 'update') {
+      out.push('Updated to ' + (suite.installedVersion || 'the latest build') + (suite.lastApplied ? ' on ' + suite.lastApplied : '') + (suite.lastOutcome === 'applied-store-degraded' ? ' (app store not refreshed)' : ''));
+    }
+    if (suite.addressChanged && suite.addressChanged.to) out.push('After the update this relay\u2019s public address changed to ' + suite.addressChanged.to + ' — phones that use your relay\u2019s name follow it; anyone given the old address needs the new one');
+    if (suite.enabled) {
+      if (suite.staged && (suite.staged.version || suite.staged.sha)) out.push('Update ' + (suite.staged.version || String(suite.staged.sha).slice(0, 7)) + ' is downloaded and installs ' + win + ' if this computer is on — otherwise the next time the Suite starts');
+      else out.push('Checks every hour; installs ' + win);
+      if (suite.check && suite.check.reason) {
+        const t = new Date(suite.check.at), hm = isNaN(t) ? '' : ' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+        out.push('Last check' + hm + ': ' + (SUITE_CHECK_REASON[suite.check.reason] || suite.check.reason));
+      }
+    } else if (suite.running === 'update') {
+      out.push('Off: at the next start the Suite goes back to the version it came with' + (suite.shippedVersion ? ' (' + suite.shippedVersion + ')' : ''));
+    }
+    return out.join(' · ');
+  }
+  function wireSuiteAutoUpdate(doc, fetchFn, authFn, suite) {
+    suite = suite || {};
+    const toggle = doc.getElementById('suiteAutoToggle');
+    const time   = doc.getElementById('suiteAutoTime');
+    const status = doc.getElementById('suiteAutoStatus');
+    const hint   = doc.getElementById('suiteAutoHint');
+    if (!toggle || !time) return;
+
+    // Since audit be258b42 H1 an update installs only between HH:MM and HH:MM+2h, or — if the computer was off
+    // then — the next time the Suite starts. A window that starts at 05:00 or later reaches the day, when people may
+    // be using the relay.
+    const timeNote = (v) => {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(v || '');
+      if (!m) return '';
+      const h = +m[1];
+      return (h >= 5 && h < 23) ? 'Updates restart the relay for a minute or two, so a time when nobody is using it (e.g. 03:00) is best.' : '';
+    };
+    const setHint = (text, bad) => {
+      if (!hint) return;
+      if (text) { hint.style.display = 'inline'; hint.style.color = bad ? 'var(--clay-ink)' : 'var(--ink-3)'; hint.textContent = text; }
+      else { hint.style.display = 'none'; hint.textContent = ''; }
+    };
+
+    // Status line from the `suite` payload — re-rendered on every loadUpdate so it tracks the box.
+    const renderStatus = () => { if (status) status.textContent = suiteAutoStatusText(suite); };
+    // "I've dealt with this" — shown only while an Attention line is up; the ONLY way to clear it (audit a1cc6eff L4).
+    const ack = doc.getElementById('suiteAutoAck');
+    if (ack) {
+      ack.style.display = (suite.restoreFailed || suite.recovered) ? 'inline-flex' : 'none';
+      ack.onclick = async () => {
+        ack.disabled = true;
+        try {
+          const r = await fetchFn('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authFn() }, body: JSON.stringify({ suiteAttentionDone: true }) });
+          if (!(r && r.ok)) throw new Error('save failed');
+          suite = { ...suite, restoreFailed: '', recovered: '' }; ack.style.display = 'none'; renderStatus();
+        } catch (e) { setHint('Couldn’t save — check the relay and try again.', true); }
+        finally { ack.disabled = false; }
+      };
+    }
+
+    // Reflect the box's current settings into the inputs — but never while a save is in flight (disabled) or
+    // while the operator is editing the time field, so a 60s re-read can't clobber their choice.
+    if (!toggle.disabled) toggle.checked = suite.enabled === true;
+    if (!time.disabled && doc.activeElement !== time) time.value = suite.at || '03:00';
+    renderStatus();
+    setHint(timeNote(time.value), false);
+
+    if (toggle._wired) return;   // wire the handlers once; the render above still runs on every call
+    toggle._wired = true;
+
+    const post = async (payload) => {
+      toggle.disabled = true; time.disabled = true;   // DISABLED WHILE SAVING
+      try {
+        const r = await fetchFn('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authFn() }, body: JSON.stringify(payload) });
+        if (!(r && r.ok)) throw new Error('save failed');
+        setHint(timeNote(time.value), false);   // success: clear the error, keep any time guidance
+      } catch (e) {
+        setHint('Couldn’t save — check the relay and try again.', true);   // hint, and NEVER hide the control
+      } finally {
+        toggle.disabled = false; time.disabled = false;   // RE-ENABLED so a retry is always possible
+      }
+    };
+
+    toggle.onchange = () => post({ autoUpdate: !!toggle.checked });
+    time.onchange = () => { setHint(timeNote(time.value), false); return post({ autoUpdateAt: time.value }); };
+  }
+  // SUITE-AUTOUPDATE-UI-END
+
   // ── relay software updates (version check + one-click "Update now") via /update + /status ──
   let relayVersion = '';
   async function loadUpdate() {
@@ -710,7 +835,14 @@
       // fresh box. A Suite's code is read-only inside the installed app and nothing there consumes the
       // update flag, so its software moves with the Suite itself; a box with no source is told so and given
       // the field above rather than a button that would fail underneath.
-      if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: it updates when you install a newer Suite. The launcher (Back) says when one is out.'; return; }
+      if (cur.packaged) {
+        // P4: the real Suite JS auto-update control replaces the old "updates when you reinstall" sentence.
+        // The launcher (home.js /suite-update banner) remains the fallback for boxes with this turned OFF.
+        body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>. Keep its software up to date automatically below, or leave it off and the launcher (Back) tells you when a newer Suite is out.';
+        const blk = document.getElementById('suiteAutoBlock'); if (blk) blk.style.display = 'block';
+        wireSuiteAutoUpdate(document, (...a) => fetch(...a), authHeaders, cur.suite);
+        return;
+      }
       // WHERE THE CODE COMES FROM is its own answer (cur.codeSource, relay/code-source — a GitHub release on
       // a box installed since 2026-09-21) and is what "Update now" pulls; the update source above is where
       // the installers come from. A box without a code source pulls from its update source, as before.
