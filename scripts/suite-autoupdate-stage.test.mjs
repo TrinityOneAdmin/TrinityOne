@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
+import { generateKeyPairSync, sign as cryptoSign, randomBytes } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const VERIFIER = join(HERE, 'verify-suite-bundle.mjs');
@@ -38,8 +38,22 @@ const api = new Function('join', 'mkdirSync', 'writeFileSync', 'readFileSync', '
 // ── Throwaway key + bundle bytes. ────────────────────────────────────────────────────────────────────────
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 const PUBKEY_PATH = join(tmpdir(), 'trin-suite-stage-pub-' + process.pid + '.pem');
-const TGZ = Buffer.alloc(2048, 0x42); TGZ.write('a stand-in gzipped tarball of the Suite JS layer — v2');   // >512B floor; signature is over these exact bytes
-const SIG = cryptoSign(null, TGZ, privateKey);
+// A REAL Suite-shaped bundle (gzipped tar with version.txt, release-origin, scripts/gateway.mjs), because the
+// verifier now reads the SIGNED identity out of it (audit be258b42 HIGH 2). A 4 KiB random pad keeps it over the
+// 512-byte floor. `files` overrides let a test build a server-shaped (no release-origin) bundle.
+function suiteTgz(sha, date, files = {}) {
+  const st = mkdtempSync(join(tmpdir(), 'trin-suite-tgz-'));
+  const all = { 'version.txt': sha + '\n' + date + '\n', 'release-origin': 'https://example.invalid\n', 'scripts/gateway.mjs': '// ' + sha + '\n', 'pad.bin': randomBytes(4096), ...files };
+  for (const [rel, body] of Object.entries(all)) { if (body == null) continue; mkdirSync(dirname(join(st, rel)), { recursive: true }); writeFileSync(join(st, rel), body); }
+  const out = st + '.tgz';
+  const r = spawnSync('tar', ['-czf', out, '-C', st, '.']);
+  assert.equal(r.status, 0, 'tar failed');
+  const b = readFileSync(out); rmSync(st, { recursive: true, force: true }); rmSync(out, { force: true });
+  return b;
+}
+const signTgz = (tgz) => cryptoSign(null, tgz, privateKey);
+const TGZ = suiteTgz('a'.repeat(40), '2026-06-01T00:00:00Z');   // what the default manifest (sha a…, 2026-06-01) names
+const SIG = signTgz(TGZ);
 
 const BUILD = { sha: 'b'.repeat(40), date: '2026-01-01T00:00:00Z' };   // what this box "runs"
 
@@ -162,9 +176,9 @@ test('anti-rollback: a recorded installedDate newer than the remote is refused e
   const d = freshDataDir();
   try {
     // sha differs and date (2026-06) > BUILD.date (2026-01) so suiteIsNewer passes the pre-download gate,
-    // but a previously-installed bundle dated 2026-12 (state.json) must still veto it at step 5.
+    // but a previously-installed bundle dated 2026-09 (state.json) must still veto it at step 6.
     mkdirSync(join(d, 'suite'), { recursive: true });
-    writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ installedDate: '2026-12-01T00:00:00Z' }));
+    writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ installedDate: '2026-09-01T00:00:00Z' }));
     manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
     serveTgz = TGZ; serveSig = SIG;
     const r = await api.suiteAutoUpdate('test', opts(d));
@@ -271,4 +285,82 @@ test('suiteIsNewer is a pure decision; suiteUpdateBase honours the env override'
     delete process.env.SUITE_UPDATE_BASE;
     assert.ok(api.suiteUpdateBase().startsWith('https://github.com/'), 'default is the GitHub release');
   } finally { if (saved === undefined) delete process.env.SUITE_UPDATE_BASE; else process.env.SUITE_UPDATE_BASE = saved; }
+});
+
+// ── audit AUDIT-suite-autoupdate-be258b42 HIGH 2: ordering comes from the SIGNED version.txt, not the manifest ──
+// suite-latest.json is unsigned. Each case below has a manifest that passes the pre-download gate; only the
+// identity inside the signed bytes can (and must) refuse it. Each goes red if step 6 reads the manifest again.
+
+const NOW = Date.parse('2026-11-13T00:00:00Z');
+
+test('[signed date] a manifest claiming a NEW date over an OLD signed bundle is refused (forged-manifest rollback)', async () => {
+  const d = freshDataDir();
+  try {
+    // The attacker re-points the manifest at an old genuine bundle (signed date 2025-12, older than this box's
+    // 2026-01 build) and writes a fresh date so the pre-download gate passes.
+    const old = suiteTgz('c'.repeat(40), '2025-12-01T00:00:00Z');
+    manifest = { sha: 'c'.repeat(40), date: '2026-11-01T00:00:00Z', version: 'looks-new' };
+    serveTgz = old; serveSig = signTgz(old);
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(r.reason, 'anti-rollback', 'an old signed bundle under a forged new date must be refused: ' + JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY');
+  } finally { manifest = null; serveTgz = TGZ; serveSig = SIG; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[signed sha] a manifest naming one sha over a bundle signed as another is refused', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'd'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };   // the bytes are sha a…
+    serveTgz = TGZ; serveSig = SIG;
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(r.reason, 'sha-mismatch', JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY');
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[future date] a validly signed bundle dated far in the future is refused (it would freeze updates)', async () => {
+  const d = freshDataDir();
+  try {
+    const fut = suiteTgz('e'.repeat(40), '2099-01-01T00:00:00Z');
+    manifest = { sha: 'e'.repeat(40), date: '2099-01-01T00:00:00Z', version: 'v2099' };
+    serveTgz = fut; serveSig = signTgz(fut);
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(r.reason, 'future-date', JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY');
+  } finally { manifest = null; serveTgz = TGZ; serveSig = SIG; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[future date] a far-future installedDate already on disk does not freeze a genuine update', async () => {
+  const d = freshDataDir();
+  try {
+    mkdirSync(join(d, 'suite'), { recursive: true });
+    writeFileSync(join(d, 'suite', 'state.json'), JSON.stringify({ installedDate: '2099-01-01T00:00:00Z' }));
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = SIG;
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.ok(r.ok && r.staged, 'a poisoned far-future record must be ignored: ' + JSON.stringify(r));
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[bundle kind] a validly signed SERVER-shaped bundle (no release-origin) is refused', async () => {
+  const d = freshDataDir();
+  try {
+    const server = suiteTgz('a'.repeat(40), '2026-06-01T00:00:00Z', { 'release-origin': null });
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = server; serveSig = signTgz(server);
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(r.reason, 'not-a-suite-bundle', JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY');
+  } finally { manifest = null; serveTgz = TGZ; serveSig = SIG; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[READY] carries the SIGNED sha + date even when the manifest date differs', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'a'.repeat(40), date: '2026-10-30T00:00:00Z', version: 'v2' };   // manifest says Oct; bytes say June
+    serveTgz = TGZ; serveSig = SIG;
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.ok(r.ok && r.staged, JSON.stringify(r));
+    assert.deepEqual(JSON.parse(readFileSync(readyPath(d), 'utf8')), { version: 'v2', sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z' });
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
 });

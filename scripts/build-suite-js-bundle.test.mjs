@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { execFileSync } from 'node:child_process';
+import { bundleIdentity } from './verify-suite-bundle.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const BUILDER = join(ROOT, 'scripts', 'build-suite-js-bundle.sh');
@@ -77,6 +78,10 @@ test('build-suite-js-bundle.sh produces a bundle that unpacks, satisfies the con
   assert.match((sha || '').trim(), /^[0-9a-f]{40}$/, 'version.txt line 1 is not a 40-char commit sha: ' + sha);
   assert.match((date || '').trim(), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, 'version.txt line 2 is not an ISO commit date: ' + date);
   assert.equal(sha.trim(), HEAD, 'the bundle was stamped with a commit other than the ref it was built from');
+  // audit be258b42 HIGH 2: the verifier reads the identity out of the REAL tarball this builder writes (GNU tar,
+  // "./" prefix) — if it could not, every genuine release would be refused as "not a Suite bundle".
+  assert.deepEqual(bundleIdentity(readFileSync(tgz)), { sha: sha.trim(), date: date.trim() },
+    'the verifier cannot read the signed identity out of a real built bundle');
 
   // node_modules present for the three deps, with NO compiled native addon anywhere.
   for (const dep of ['ws', 'nostr-tools', 'web-push']) {

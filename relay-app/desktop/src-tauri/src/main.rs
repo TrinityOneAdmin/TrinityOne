@@ -504,10 +504,30 @@ fn node_sidecar_path() -> Option<PathBuf> {
     Some(dir.join(name))
 }
 
-// Authoritatively verify a retained/staged tarball against the READ-ONLY payload verifier + key. The verifier
-// (scripts/verify-suite-bundle.mjs) and the pinned release-pubkey.pem are ALWAYS taken from `payload`, never
-// from a (writable) override, so a tampered active/ cannot supply its own verifier or key. Exit 0 = good.
-fn verify_tarball(node: &Path, payload: &Path, tgz: &Path, sig: &Path, log: &Path) -> bool {
+// The build identity read from INSIDE a verified bundle (its signed version.txt): the 40-hex git sha and the ISO
+// commit date. [AUDIT be258b42 HIGH 2] This — never READY or suite-latest.json, which nobody signs — is what every
+// "is this newer?", quarantine and installed-identity decision uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SignedId {
+    sha: String,
+    date: String,
+}
+
+// Read the verifier's stdout line {"sha":"…","date":"…"}. PURE. None unless both are present and well-formed.
+fn parse_signed_id(stdout: &str) -> Option<SignedId> {
+    let sha = json_str_value(stdout, "sha")?;
+    let date = json_str_value(stdout, "date")?;
+    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) || parse_instant(&date).is_none() {
+        return None;
+    }
+    Some(SignedId { sha, date })
+}
+
+// Authoritatively verify a retained/staged tarball against the READ-ONLY payload verifier + key, and return the
+// identity INSIDE the verified bytes. The verifier (scripts/verify-suite-bundle.mjs) and the pinned
+// release-pubkey.pem are ALWAYS taken from `payload`, never from a (writable) override, so a tampered active/
+// cannot supply its own verifier or key. Exit 0 + a well-formed identity line = good; anything else = None.
+fn verify_tarball(node: &Path, payload: &Path, tgz: &Path, sig: &Path, log: &Path) -> Option<SignedId> {
     let verifier = payload.join("scripts").join("verify-suite-bundle.mjs");
     let key = payload.join("relay-app").join("release-pubkey.pem");
     match std::process::Command::new(node)
@@ -516,16 +536,75 @@ fn verify_tarball(node: &Path, payload: &Path, tgz: &Path, sig: &Path, log: &Pat
         .arg(sig)
         .arg(&key)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .stderr(Stdio::piped())
+        .output()
     {
-        Ok(s) => s.success(),
+        Ok(o) if o.status.success() => {
+            let id = parse_signed_id(&String::from_utf8_lossy(&o.stdout));
+            if id.is_none() {
+                applog(log, "suite: verifier passed but printed no usable identity; refusing");
+            }
+            id
+        }
+        Ok(o) => {
+            applog(log, &format!(
+                "suite: verify refused {tgz:?} ({:?}): {}",
+                o.status.code(),
+                String::from_utf8_lossy(&o.stderr).trim()
+            ));
+            None
+        }
         Err(e) => {
             applog(log, &format!("suite: verifier spawn failed: {e}"));
-            false
+            None
         }
     }
+}
+
+// Seconds since the Unix epoch, from the system clock (no timezone needed — instants only).
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// How far ahead of this computer's clock a signed build date may be. A release is dated by its commit, which is
+// in the past; a day covers clock skew. Anything later is refused, so a bogus far-future date can never become
+// the installed floor and freeze every later update (audit HIGH 2, "freeze all updates for good").
+const MAX_FUTURE_SKEW_SECS: i64 = 86_400;
+
+// The anti-rollback floor: the later of the shipped payload's own date and the recorded installed date. PURE. An
+// installedDate that is itself beyond the future-skew bound is IGNORED (it could only have come from a bad
+// record), so a stale far-future record cannot freeze updates either.
+fn anti_rollback_floor(payload_date: &str, installed_date: &str, now: i64) -> String {
+    let installed_sane = parse_instant(installed_date)
+        .map(|t| t <= now + MAX_FUTURE_SKEW_SECS)
+        .unwrap_or(false);
+    if installed_sane && date_after(installed_date, payload_date) {
+        installed_date.to_string()
+    } else {
+        payload_date.to_string()
+    }
+}
+
+// PURE accept/refuse for a VERIFIED bundle, using only its signed identity. Err(reason) on refusal:
+//   "sha-mismatch" — the signed sha is not the one staged as READY (what the relay said it downloaded);
+//   "future-date"  — the signed date is beyond the clock-skew bound;
+//   "not-newer"    — the signed date is not strictly after the floor (anti-rollback / downgrade floor).
+fn signed_bundle_verdict(signed: &SignedId, ready_sha: &str, floor: &str, now: i64) -> Result<(), &'static str> {
+    if signed.sha != ready_sha {
+        return Err("sha-mismatch");
+    }
+    match parse_instant(&signed.date) {
+        Some(t) if t > now + MAX_FUTURE_SKEW_SECS => return Err("future-date"),
+        Some(_) => {}
+        None => return Err("not-newer"),
+    }
+    if !date_after(&signed.date, floor) {
+        return Err("not-newer");
+    }
+    Ok(())
 }
 
 // EVERY LAUNCH: which tree the relay starts from. Moved verbatim out of main()'s setup closure (2026-11-13, a pure
@@ -540,7 +619,7 @@ fn launch_code_dir(payload: &Path, suite_dir: &Path, node: Option<&Path>, log: &
     let active_verify_ok = active_tgz.exists()
         && active_sig.exists()
         && node
-            .map(|n| verify_tarball(n, payload, &active_tgz, &active_sig, log))
+            .map(|n| verify_tarball(n, payload, &active_tgz, &active_sig, log).is_some())
             .unwrap_or(false);
     match choose_code_dir(active_tgz.exists(), active_sig.exists(), active_verify_ok) {
         CodeDir::Active => {
@@ -809,13 +888,14 @@ fn discard_staging(suite_dir: &Path) {
 }
 
 // Health probe (I/O): poll public GET /status within the window and report the four facts health_outcome
-// needs — (reachable, version_match, ok, degraded_storage). Version matches on either READY.sha (the git sha
-// /status reports as `version`) or READY.version, so a manifest that labels its version separately still
-// passes. `degraded_storage` is read from the `what` field of gateway.mjs's `degraded` object — emitted ONLY
-// when STORE_DEGRADED, and then always `"storage"` (gateway.mjs L7161); it is the only `what` key in /status.
+// needs — (reachable, version_match, ok, degraded_storage). "version" must equal the SIGNED sha of the bundle we
+// activated: the gateway reports BUILD.sha, which it reads from the same signed version.txt, so a match proves
+// the code answering is the code we verified (audit HIGH 2 — the unsigned READY label no longer counts).
+// `degraded_storage` is read from the `what` field of gateway.mjs's `degraded` object — emitted ONLY when
+// STORE_DEGRADED, and then always `"storage"`; it is the only `what` key in /status.
 // Returns as soon as it sees a fully-healthy state (version match + ok:true) so a clean apply is not labelled
 // degraded over a transient blip; otherwise reports the best facts observed up to the deadline.
-fn health_probe(ready_sha: &str, ready_version: &str, timeout: Duration) -> (bool, bool, bool, bool) {
+fn health_probe(signed_sha: &str, timeout: Duration) -> (bool, bool, bool, bool) {
     let deadline = Instant::now() + timeout;
     let mut reachable = false;
     let mut version_match = false;
@@ -824,10 +904,7 @@ fn health_probe(ready_sha: &str, ready_version: &str, timeout: Duration) -> (boo
         if let Some(body) = http_get_loopback("/status", None) {
             reachable = true;
             let v_match = json_str_value(&body, "version")
-                .map(|v| {
-                    (!ready_sha.is_empty() && v == ready_sha)
-                        || (!ready_version.is_empty() && v == ready_version)
-                })
+                .map(|v| !signed_sha.is_empty() && v == signed_sha)
                 .unwrap_or(false);
             if v_match {
                 version_match = true;
@@ -1011,9 +1088,8 @@ fn maybe_apply(
     };
     let r_version = json_str_value(&ready_raw, "version").unwrap_or_default();
     let r_sha = json_str_value(&ready_raw, "sha").unwrap_or_default();
-    let r_date = json_str_value(&ready_raw, "date").unwrap_or_default();
-    if r_sha.is_empty() || r_date.is_empty() {
-        applog(log, "suite: staged READY missing sha/date; discarding");
+    if r_sha.is_empty() {
+        applog(log, "suite: staged READY missing sha; discarding");
         discard_staging(suite_dir);
         return;
     }
@@ -1028,7 +1104,7 @@ fn maybe_apply(
     }
     applog(log, &format!("suite: apply window reached ({today} {now_min}min >= {target_min}min); applying staged {r_version}"));
     attempt_apply(
-        host, suite_dir, payload, data_dir, log, node, &r_version, &r_sha, &r_date, &state_raw,
+        host, suite_dir, payload, data_dir, log, node, &r_version, &r_sha, &state_raw,
         &today, at_raw.trim(), cur_code_dir, cur_alive, cooldown_until,
     );
 }
@@ -1045,7 +1121,6 @@ fn attempt_apply(
     node: &Path,
     r_version: &str,
     r_sha: &str,
-    r_date: &str,
     prev_state_raw: &str,
     today: &str,
     at_str: &str,
@@ -1057,24 +1132,37 @@ fn attempt_apply(
     let s_tgz = staging.join("bundle.tgz");
     let s_sig = staging.join("bundle.sig");
 
-    // 1. Authoritatively re-verify the staged tarball (don't trust READY alone). Payload verifier + key.
-    if !s_tgz.exists() || !s_sig.exists() || !verify_tarball(node, payload, &s_tgz, &s_sig, log) {
-        applog(log, "suite: APPLY aborted — staged bundle failed signature verify; discarding staging");
-        discard_staging(suite_dir);
-        return;
-    }
+    // 1. Authoritatively re-verify the staged tarball (don't trust READY alone). Payload verifier + key. The
+    //    identity used from here on is the one INSIDE the signed bytes (audit HIGH 2) — READY is only a hint.
+    let signed = if s_tgz.exists() && s_sig.exists() {
+        verify_tarball(node, payload, &s_tgz, &s_sig, log)
+    } else {
+        None
+    };
+    let signed = match signed {
+        Some(id) => id,
+        None => {
+            applog(log, "suite: APPLY aborted — staged bundle failed signature verify; discarding staging");
+            discard_staging(suite_dir);
+            return;
+        }
+    };
 
-    // 2. Anti-rollback floor: staged date must be strictly after MAX(payload date, installed date), by INSTANT.
-    let mut floor = read_version_date(payload);
+    // 2. Anti-rollback, from the SIGNED identity: it must be what READY named, not dated in the future, and
+    //    strictly after MAX(payload date, installed date) by INSTANT.
     let installed_date = json_str_value(prev_state_raw, "installedDate").unwrap_or_default();
-    if date_after(&installed_date, &floor) {
-        floor = installed_date;
-    }
-    if !date_after(r_date, &floor) {
-        applog(log, &format!("suite: APPLY aborted — anti-rollback (staged {r_date} not after floor {floor}); discarding"));
+    let now = now_epoch();
+    let floor = anti_rollback_floor(&read_version_date(payload), &installed_date, now);
+    if let Err(why) = signed_bundle_verdict(&signed, r_sha, &floor, now) {
+        applog(log, &format!(
+            "suite: APPLY aborted — {why} (signed {} {} vs READY {r_sha}, floor {floor}); discarding",
+            short_sha(&signed.sha), signed.date
+        ));
         discard_staging(suite_dir);
         return;
     }
+    let r_sha: &str = &signed.sha;
+    let r_date: &str = &signed.date;
 
     // 3. Quarantine: a sha that already failed health is never auto-applied again.
     let q = std::fs::read_to_string(suite_dir.join("quarantine-sha")).unwrap_or_default();
@@ -1157,7 +1245,7 @@ fn attempt_apply(
     //    SOLELY a degraded store; decide via the pure matrix. [AUDIT FIX #1] A good bundle that boots and
     //    identifies correctly is NOT rolled back/quarantined just because the store is transiently degraded.
     let (reachable, version_match, ok, degraded_storage) = if came_up {
-        health_probe(r_sha, r_version, Duration::from_secs(45))
+        health_probe(r_sha, Duration::from_secs(45))
     } else {
         (false, false, false, false) // never bound the port → no boot
     };
@@ -1651,6 +1739,41 @@ mod tests {
 
     // [AUDIT FIX #2] The short-sha helper must never panic on a non-ASCII / multibyte sha and must truncate on
     // CHARACTER boundaries. `&r_sha[..7]` would panic here because byte 7 falls inside a multibyte char.
+    // audit be258b42 HIGH 2: the identity printed by the verifier is the only one trusted.
+    #[test]
+    fn parse_signed_id_reads_only_a_wellformed_identity() {
+        let sha = "a".repeat(40);
+        let good = format!("{{\"sha\":\"{sha}\",\"date\":\"2026-10-01T00:00:00Z\"}}\n");
+        assert_eq!(parse_signed_id(&good), Some(SignedId { sha: sha.clone(), date: "2026-10-01T00:00:00Z".into() }));
+        assert_eq!(parse_signed_id(""), None, "no output (an old verifier) is not an identity");
+        assert_eq!(parse_signed_id("{\"sha\":\"sha-v2\",\"date\":\"2026-10-01\"}"), None, "a non-hex sha");
+        assert_eq!(parse_signed_id(&format!("{{\"sha\":\"{sha}\",\"date\":\"soon\"}}")), None, "a non-date");
+    }
+
+    #[test]
+    fn signed_bundle_verdict_uses_the_signed_identity() {
+        let now = parse_instant("2026-11-13T00:00:00Z").unwrap();
+        let s2 = "2".repeat(40);
+        let id = |d: &str| SignedId { sha: s2.clone(), date: d.into() };
+        assert_eq!(signed_bundle_verdict(&id("2026-10-01T00:00:00Z"), &s2, "2026-09-01T00:00:00Z", now), Ok(()));
+        assert_eq!(signed_bundle_verdict(&id("2026-10-01T00:00:00Z"), &"3".repeat(40), "2026-09-01T00:00:00Z", now), Err("sha-mismatch"));
+        assert_eq!(signed_bundle_verdict(&id("2026-08-01T00:00:00Z"), &s2, "2026-09-01T00:00:00Z", now), Err("not-newer"));
+        assert_eq!(signed_bundle_verdict(&id("2026-09-01T00:00:00Z"), &s2, "2026-09-01T00:00:00Z", now), Err("not-newer"), "equal is not newer");
+        assert_eq!(signed_bundle_verdict(&id("2026-11-13T23:00:00Z"), &s2, "", now), Ok(()), "within a day of skew is fine");
+        assert_eq!(signed_bundle_verdict(&id("2026-11-15T00:00:00Z"), &s2, "", now), Err("future-date"));
+        assert_eq!(signed_bundle_verdict(&id("2099-01-01T00:00:00Z"), &s2, "", now), Err("future-date"));
+    }
+
+    #[test]
+    fn anti_rollback_floor_ignores_a_far_future_record() {
+        let now = parse_instant("2026-11-13T00:00:00Z").unwrap();
+        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", "2026-10-01T00:00:00Z", now), "2026-10-01T00:00:00Z");
+        assert_eq!(anti_rollback_floor("2026-06-01T00:00:00Z", "2026-03-01T00:00:00Z", now), "2026-06-01T00:00:00Z");
+        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", "", now), "2026-01-01T00:00:00Z");
+        assert_eq!(anti_rollback_floor("2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z", now), "2026-01-01T00:00:00Z",
+            "a far-future installedDate must not become the floor");
+    }
+
     #[test]
     fn short_sha_is_char_safe() {
         assert_eq!(short_sha("abcdef0123456789"), "abcdef0"); // normal: first 7 chars

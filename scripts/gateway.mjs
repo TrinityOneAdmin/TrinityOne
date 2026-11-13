@@ -536,6 +536,9 @@ function suiteDateAfter(a, b) {
 // few hundred bytes → 64 KiB is ample.
 const SUITE_BUNDLE_MAX_BYTES = 100 * 1024 * 1024;
 const SUITE_SIG_MAX_BYTES = 64 * 1024;
+// A release is dated by its commit, which is in the past; one day covers clock skew. A signed date later than
+// that is refused (mirrors MAX_FUTURE_SKEW_SECS in the Rust shell).
+const SUITE_MAX_FUTURE_MS = 24 * 3600 * 1000;
 // Read a fetch body under a hard ceiling: refuse on an over-cap Content-Length, AND abort mid-stream if the
 // streamed bytes exceed the cap even when Content-Length lied or was absent — never buffer an unbounded body.
 async function suiteReadCapped(resp, maxBytes, label) {
@@ -640,21 +643,34 @@ async function suiteAutoUpdate(why, opts = {}) {
       const reason = /\bcap\b|content-length/i.test(msg) ? 'too-large' : 'download-failed';
       return { ok: false, reason, error: msg };
     }
-    // 5. pre-verify the detached Ed25519 signature over the EXACT .tmp bytes, with the shared verifier + key.
-    const vr = spawnSync(node, [verifier, tmpTgz, tmpSig, pubkey], { timeout: vTimeout, stdio: 'ignore' });
-    if (!vr || vr.status !== 0) { cleanTmp(); return { ok: false, reason: 'bad-signature', status: vr && vr.status }; }
-    // 6. anti-rollback: the remote date must exceed BOTH my build date and any recorded installed date,
-    //    compared by INSTANT ([AUDIT FIX #4]).
+    // 5. pre-verify the detached Ed25519 signature over the EXACT .tmp bytes, with the shared verifier + key. On
+    //    success the verifier prints the build identity read from version.txt INSIDE those signed bytes.
+    const vr = spawnSync(node, [verifier, tmpTgz, tmpSig, pubkey], { timeout: vTimeout, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (!vr || vr.status !== 0) { cleanTmp(); return { ok: false, reason: vr && vr.status === 7 ? 'not-a-suite-bundle' : 'bad-signature', status: vr && vr.status }; }
+    let signed = null;
+    try { signed = JSON.parse(String(vr.stdout || '').trim()); } catch {}
+    if (!signed || typeof signed.sha !== 'string' || typeof signed.date !== 'string') { cleanTmp(); return { ok: false, reason: 'bad-signature', error: 'verifier gave no identity' }; }
+    // 6. [AUDIT be258b42 HIGH 2] Every ordering decision uses the SIGNED identity, never the manifest (which
+    //    nobody signs): the signed sha must be the one the manifest named; the signed date must not be in the
+    //    future (a bogus far-future date would otherwise become the floor and freeze every later update); and it
+    //    must be strictly after MAX(my build date, a sane recorded installed date), compared by INSTANT.
+    if (signed.sha !== remote.sha) { cleanTmp(); return { ok: false, reason: 'sha-mismatch' }; }
+    const nowMs = opts.now || Date.now();
+    if (!(Date.parse(signed.date) <= nowMs + SUITE_MAX_FUTURE_MS)) { cleanTmp(); return { ok: false, reason: 'future-date' }; }
     let floor = (build && build.date) || '';
-    try { const st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8')); if (st && typeof st.installedDate === 'string' && suiteDateAfter(st.installedDate, floor)) floor = st.installedDate; } catch {}
-    if (!suiteDateAfter(remote.date, floor)) { cleanTmp(); return { ok: false, reason: 'anti-rollback' }; }
+    try {
+      const st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8'));
+      const inst = st && typeof st.installedDate === 'string' ? st.installedDate : '';
+      if (inst && Date.parse(inst) <= nowMs + SUITE_MAX_FUTURE_MS && suiteDateAfter(inst, floor)) floor = inst;
+    } catch {}
+    if (!suiteDateAfter(signed.date, floor)) { cleanTmp(); return { ok: false, reason: 'anti-rollback' }; }
     // 7. PROMOTE the verified .tmp bytes and write READY (does NOT apply — the shell reads this at the chosen
     //    time). Only now is a pre-existing good bundle replaced; READY is cleared first so it never points at a
-    //    mix, then rewritten atomically.
+    //    mix, then rewritten atomically. sha/date are the SIGNED ones; `version` is only a display label.
     try { rmSync(stReady, { force: true }); } catch {}
     renameSync(tmpTgz, stTgz); renameSync(tmpSig, stSig);
     cleanTmp();
-    const ready = { version: String(remote.version || remote.sha), sha: remote.sha, date: remote.date };
+    const ready = { version: String(remote.version || signed.sha), sha: signed.sha, date: signed.date };
     const tmpReady = stReady + '.tmp';
     writeFileSync(tmpReady, JSON.stringify(ready) + '\n'); renameSync(tmpReady, stReady);
     return { ok: true, staged: true, ready };

@@ -143,22 +143,38 @@ fn must(cmd: &mut Command, what: &str) {
     assert!(st.success(), "{what}: exited {st:?}");
 }
 
-// A minimal gateway that binds argv[2] on loopback and serves {"version":V,"ok":true} on /status.
-fn gateway_src(version: &str) -> String {
+// A minimal gateway that binds argv[2] on loopback and serves /status like the real one: "version" is line 1 of
+// ITS OWN version.txt (the real gateway reports BUILD.sha, read the same way), plus a human "label" the tests use
+// to tell trees apart. A `lie` gateway reports a version that is NOT its version.txt — the "wrong code answering"
+// health failure.
+fn gateway_src(label: &str, lie: bool) -> String {
     format!(
         "import http from 'node:http';\n\
+         import {{readFileSync}} from 'node:fs';\n\
          const PORT = Number(process.argv[2]);\n\
-         const VERSION = {v:?};\n\
+         const LABEL = {l:?};\n\
+         let V = ''; try {{ V = readFileSync('version.txt','utf8').split('\\n')[0].trim(); }} catch {{}}\n\
+         if ({lie}) V = 'f'.repeat(40);\n\
          http.createServer((req,res)=>{{\n\
            if ((req.url||'').startsWith('/status')) {{\n\
              res.writeHead(200,{{'content-type':'application/json'}});\n\
-             res.end(JSON.stringify({{version:VERSION, ok:true}}));\n\
+             res.end(JSON.stringify({{version:V, label:LABEL, ok:true}}));\n\
              return;\n\
            }}\n\
            res.writeHead(404); res.end('no');\n\
          }}).listen(PORT,'127.0.0.1');\n",
-        v = version
+        l = label,
+        lie = if lie { "true" } else { "false" }
     )
+}
+
+const SHA2: &str = "2222222222222222222222222222222222222222";
+const SHA3: &str = "3333333333333333333333333333333333333333";
+const D_OCT: &str = "2026-10-01T00:00:00Z";
+
+// A 40-hex sha made of one repeated digit — readable in assertions ("2222…" is v2).
+fn sha_of(c: char) -> String {
+    c.to_string().repeat(40)
 }
 
 const KEYGEN_MJS: &str = "import {generateKeyPairSync} from 'node:crypto';\n\
@@ -173,30 +189,39 @@ const data = readFileSync(process.argv[2]);\n\
 const key = createPrivateKey(readFileSync(process.argv[4]));\n\
 writeFileSync(process.argv[3], sign(null, data, key));\n";
 
-// Build a real .tgz whose scripts/gateway.mjs serves `gw_version`, then sign it with the throwaway key.
-// Writes bundle.tgz + bundle.sig into `staging` and returns nothing (caller writes READY).
-// Build a real .tgz whose scripts/gateway.mjs serves `gw_version`, then sign the EXACT tarball bytes with
-// `signing_key` (same raw-Ed25519 path the verifier checks). Pass the payload-pinned private key for a valid
-// bundle, or a DIFFERENT key to forge an invalid-signature bundle over a perfectly good tarball.
-fn build_signed_bundle(
-    node: &Path,
-    tools: &Path,
-    signing_key: &Path,
-    staging: &Path,
-    gw_version: &str,
-) {
+// What goes INSIDE a test bundle (and so is covered by its signature): the gateway's label, the signed sha +
+// commit date in version.txt, and whether the gateway lies about its version.
+struct Bundle<'a> {
+    label: &'a str,
+    sha: &'a str,
+    date: &'a str,
+    lie: bool,
+}
+
+// Build a real Suite-shaped .tgz (version.txt, release-origin, scripts/gateway.mjs — what the real verifier
+// requires), leading "./" like build-suite-js-bundle.sh, and sign the EXACT tarball bytes with `signing_key`
+// (same raw-Ed25519 path the verifier checks). Pass the payload-pinned private key for a valid bundle, or a
+// DIFFERENT key to forge an invalid-signature bundle over a perfectly good tarball. Writes bundle.tgz + bundle.sig
+// into `staging`; the caller writes READY.
+fn build_signed_bundle(node: &Path, tools: &Path, signing_key: &Path, staging: &Path, b: &Bundle) {
     let stage = staging.join(".build");
     let _ = std::fs::remove_dir_all(&stage);
-    write(&stage.join("scripts").join("gateway.mjs"), &gateway_src(gw_version));
+    write(&stage.join("scripts").join("gateway.mjs"), &gateway_src(b.label, b.lie));
+    write(&stage.join("version.txt"), &format!("{}\n{}\n", b.sha, b.date));
+    write(&stage.join("release-origin"), "https://example.invalid\n");
     let tgz = staging.join("bundle.tgz");
     let sig = staging.join("bundle.sig");
-    // Real tarball, leading "./" like build-suite-js-bundle.sh so unpack is a plain `tar -xzf`.
     must(Command::new("tar").arg("-czf").arg(&tgz).arg("-C").arg(&stage).arg("."), "tar bundle");
     must(
         Command::new(node).arg(tools.join("signer.mjs")).arg(&tgz).arg(&sig).arg(signing_key),
         "sign bundle",
     );
     let _ = std::fs::remove_dir_all(&stage);
+}
+
+// The common case: a well-behaved bundle labelled `label`, signed sha `sha`, signed date `date`.
+fn good<'a>(label: &'a str, sha: &'a str, date: &'a str) -> Bundle<'a> {
+    Bundle { label, sha, date, lie: false }
 }
 
 fn write_ready(staging: &Path, version: &str, sha: &str, date: &str) {
@@ -206,10 +231,10 @@ fn write_ready(staging: &Path, version: &str, sha: &str, date: &str) {
     );
 }
 
-// Read the version string the relay on PORT currently serves at /status (REAL probe), or None.
+// Read the label of the tree the relay on PORT currently serves at /status (REAL probe), or None.
 fn served_version() -> Option<String> {
     let body = http_get_loopback("/status", None)?;
-    json_str_value(&body, "version")
+    json_str_value(&body, "label")
 }
 
 fn wait_for_served(expect: &str, timeout: Duration) -> bool {
@@ -275,8 +300,8 @@ fn fresh_box(tag: &str, payload_date: &str) -> Fixture {
     std::fs::create_dir_all(payload.join("scripts")).unwrap();
     std::fs::copy(&repo_verifier, payload.join("scripts").join("verify-suite-bundle.mjs"))
         .expect("copy real verify-suite-bundle.mjs");
-    write(&payload.join("scripts").join("gateway.mjs"), &gateway_src("v1"));
-    write(&payload.join("version.txt"), &format!("sha-v1\n{payload_date}\n"));
+    write(&payload.join("scripts").join("gateway.mjs"), &gateway_src("v1", false));
+    write(&payload.join("version.txt"), &format!("{}\n{payload_date}\n", sha_of('1')));
 
     // Throwaway Ed25519 key: public → payload/relay-app/release-pubkey.pem (the pinned trust root), private
     // kept only under tools/ for signing bundles in this test.
@@ -376,6 +401,12 @@ fn end_to_end_apply_harness() {
     scenario_e_health_fail_rolls_back_and_quarantines();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (e)");
 
+    scenario_j_signed_sha_must_match_ready();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (j)");
+
+    scenario_k_far_future_signed_date_refused_and_does_not_freeze();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (k)");
+
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
 
@@ -388,7 +419,7 @@ fn end_to_end_apply_harness() {
     scenario_i_relay_that_will_not_stop_backs_off();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (i)");
 
-    eprintln!("ALL 9 apply-harness scenarios passed");
+    eprintln!("ALL apply-harness scenarios passed");
 }
 
 // (a) good, newer, validly-signed bundle → activates; relay serves v2.
@@ -396,8 +427,8 @@ fn scenario_a_good_bundle_activates() {
     eprintln!("── scenario (a): good newer bundle activates ──");
     let fx = fresh_box("a", "2026-01-01T00:00:00Z");
     let log = fx.data_dir.join("relay-launch.log");
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z"); // newer than payload floor
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z"); // newer than payload floor
 
     let host = TestHost::new(fx.node.clone());
     let mut cur = start_v1(&host, &fx, &log);
@@ -431,8 +462,8 @@ fn scenario_b_bad_signature_refused() {
             .arg(&wrong_priv),
         "wrong keygen",
     );
-    build_signed_bundle(&fx.node, &fx.tools, &wrong_priv, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &wrong_priv, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
 
     let host = TestHost::new(fx.node.clone());
     let mut cur = start_v1(&host, &fx, &log);
@@ -456,8 +487,10 @@ fn scenario_c_older_bundle_refused() {
         &fx.suite_dir.join("state.json"),
         "{\"installedSha\":\"old\",\"installedVersion\":\"v-old\",\"installedDate\":\"2026-09-01T00:00:00Z\",\"lastApplied\":\"2000-01-01\"}\n",
     );
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-03-01T00:00:00Z"); // older than installedDate
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-03-01T00:00:00Z"));
+    // READY (unsigned, written from the manifest) CLAIMS a new date — the forged-manifest rollback of audit HIGH 2.
+    // Only the date inside the signed version.txt may decide, so this must still be refused.
+    write_ready(&fx.staging, "v2", SHA2, "2099-01-01T00:00:00Z");
 
     let host = TestHost::new(fx.node.clone());
     let mut cur = start_v1(&host, &fx, &log);
@@ -478,8 +511,8 @@ fn scenario_d_older_than_payload_refused() {
     // Fresh box (no state.json); payload is dated 2026-06-01; the staged bundle is dated 2026-03-01 (older).
     let fx = fresh_box("d", "2026-06-01T00:00:00Z");
     let log = fx.data_dir.join("relay-launch.log");
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-03-01T00:00:00Z"); // older than payload version.txt date
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-03-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2099-01-01T00:00:00Z"); // forged-new READY date; the signed date is older than the payload
 
     let host = TestHost::new(fx.node.clone());
     let mut cur = start_v1(&host, &fx, &log);
@@ -499,8 +532,8 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     let log = fx.data_dir.join("relay-launch.log");
     // The bundle verifies + beats the floor, so it IS applied — but its gateway reports a version that does
     // NOT match READY, i.e. the "wrong code answering" health failure. Health must roll it back + quarantine.
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "WRONG-not-v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v2", sha: SHA2, date: "2026-10-01T00:00:00Z", lie: true });
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
 
     let host = TestHost::new(fx.node.clone());
     let mut cur = start_v1(&host, &fx, &log);
@@ -510,11 +543,59 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     assert!(wait_for_served("v1", Duration::from_secs(15)), "relay must be back on v1 after a health-fail rollback");
     assert!(!fx.suite_dir.join("active").exists(), "active/ must be gone after a rollback to payload");
     let quarantined = std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default();
-    assert_eq!(quarantined.trim(), "sha-v2", "the failed sha must be quarantined");
+    assert_eq!(quarantined.trim(), SHA2, "the failed sha must be quarantined");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"), "state not 'rolledback'");
     assert!(!fx.staging.join("READY").exists(), "staging must be discarded after a rollback");
     host.stop_relay();
     eprintln!("   (e) OK — wrong-version v2 rolled back to v1, sha-v2 quarantined, state=rolledback");
+}
+
+// (j) READY names one sha, the signed bundle is another (e.g. the relay staged a different release than the
+//     manifest said, or a manifest points at an older signed bundle under a new sha). Refused, nothing activated.
+fn scenario_j_signed_sha_must_match_ready() {
+    eprintln!("── scenario (j): signed sha differs from READY sha — refused ──");
+    let fx = fresh_box("j", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v3", SHA3, D_OCT); // READY claims v3; the signed bytes are v2
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert_eq!(served_version().as_deref(), Some("v1"), "a bundle whose signed sha is not READY's must not activate");
+    assert!(!fx.suite_dir.join("active").exists(), "no active/ for a sha mismatch");
+    assert!(!fx.staging.join("READY").exists(), "a mismatched staging must be discarded");
+    host.stop_relay();
+    eprintln!("   (j) OK — sha mismatch refused, v1 still serving");
+}
+
+// (k) A validly signed bundle dated far in the future (a bogus commit date) — audit HIGH 2's "freeze all updates
+//     for good". Refused; and a far-future installedDate already on disk does not block a genuine newer release.
+fn scenario_k_far_future_signed_date_refused_and_does_not_freeze() {
+    eprintln!("── scenario (k): far-future signed date refused; a far-future record cannot freeze updates ──");
+    let fx = fresh_box("k", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2099-01-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2099-01-01T00:00:00Z");
+    let host = TestHost::new(fx.node.clone());
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert_eq!(served_version().as_deref(), Some("v1"), "a far-future-dated bundle must not activate");
+    assert!(!fx.suite_dir.join("active").exists());
+    assert!(fx.suite_dir.join("state.json").is_file() == false, "a refused bundle must not record an installed date");
+
+    // A record poisoned with a far-future installedDate (e.g. written before this fix) must not freeze updates:
+    // a genuine, newer, validly signed release still applies.
+    write(
+        &fx.suite_dir.join("state.json"),
+        "{\"installedSha\":\"x\",\"installedVersion\":\"vx\",\"installedDate\":\"2099-01-01T00:00:00Z\",\"lastApplied\":\"2000-01-01\"}\n",
+    );
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v2", Duration::from_secs(15)), "a far-future installedDate froze a genuine update");
+    assert_eq!(read_state_field(&fx.suite_dir, "installedDate").as_deref(), Some(D_OCT), "installedDate must be the SIGNED date");
+    host.stop_relay();
+    eprintln!("   (k) OK — far-future signed date refused; poisoned floor ignored; signed date recorded");
 }
 
 // ══ Added 2026-11-13 (audit AUDIT-integration-all-1aa19150 MEDIUM 2): the LAUNCH choice, the toggle-off path,
@@ -525,7 +606,7 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
 fn install_active(fx: &Fixture, key: &Path, gw_version: &str) {
     let tmp = fx.suite_dir.join(".mk-active");
     std::fs::create_dir_all(&tmp).unwrap();
-    build_signed_bundle(&fx.node, &fx.tools, key, &tmp, gw_version);
+    build_signed_bundle(&fx.node, &fx.tools, key, &tmp, &good(gw_version, SHA2, D_OCT));
     let active = fx.suite_dir.join("active");
     let _ = std::fs::remove_dir_all(&active);
     std::fs::create_dir_all(&active).unwrap();
@@ -550,8 +631,8 @@ fn launch_with_nothing_downloaded_runs_the_shipped_payload() {
     assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "no update downloaded must run the shipped payload");
     // A bundle that is only STAGED (downloaded, verified, waiting for the apply time) is never run at launch.
     std::fs::create_dir_all(&fx.staging).unwrap();
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
     assert_eq!(launch(&fx, Some(&fx.node)), fx.payload, "a staged-but-not-applied bundle must not be launched");
 }
 
@@ -621,8 +702,8 @@ fn scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging() {
     let fx = fresh_box("f", "2026-01-01T00:00:00Z");
     let log = fx.data_dir.join("relay-launch.log");
     std::fs::remove_file(fx.data_dir.join("suite-autoupdate")).unwrap(); // the toggle is OFF
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
 
     let code = launch(&fx, Some(&fx.node));
     assert_eq!(code, fx.payload, "with nothing applied the launch must pick the shipped payload");
@@ -645,8 +726,8 @@ fn scenario_g_relaunch_after_an_apply_runs_the_update() {
     eprintln!("── scenario (g): relaunch after a good apply runs the update ──");
     let fx = fresh_box("g", "2026-01-01T00:00:00Z");
     let log = fx.data_dir.join("relay-launch.log");
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
     {
         let host = TestHost::new(fx.node.clone());
         let mut cur = start_v1(&host, &fx, &log);
@@ -681,8 +762,8 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     eprintln!("── scenario (h): bad v3 over good v2 rolls back to last-good (≈45s health timeout) ──");
     let fx = fresh_box("h", "2026-01-01T00:00:00Z");
     let log = fx.data_dir.join("relay-launch.log");
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
     let host = TestHost::new(fx.node.clone());
     let mut cur = start_v1(&host, &fx, &log);
     run_apply(&host, &fx, &log, &mut cur);
@@ -690,8 +771,8 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     let v2_tgz = std::fs::read(fx.suite_dir.join("active.tgz")).unwrap();
 
     yesterday_in_state(&fx.suite_dir);
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "WRONG-not-v3");
-    write_ready(&fx.staging, "v3", "sha-v3", "2026-10-02T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "WRONG-not-v3", sha: SHA3, date: "2026-10-02T00:00:00Z", lie: true });
+    write_ready(&fx.staging, "v3", SHA3, "2026-10-02T00:00:00Z");
     run_apply(&host, &fx, &log, &mut cur);
 
     assert!(wait_for_served("v2", Duration::from_secs(15)), "after v3 failed health the relay must be back on v2, not the payload");
@@ -699,7 +780,7 @@ fn scenario_h_bad_update_over_a_good_one_rolls_back_to_last_good() {
     assert_eq!(std::fs::read(fx.suite_dir.join("active.tgz")).unwrap(), v2_tgz, "active.tgz must be v2's again");
     assert!(!fx.suite_dir.join("last-good").exists(), "last-good/ must have been moved back to active/");
     let q = std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default();
-    assert_eq!(q.trim(), "sha-v3", "v3 must be quarantined");
+    assert_eq!(q.trim(), SHA3, "v3 must be quarantined");
     assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
     assert_eq!(read_state_field(&fx.suite_dir, "installedVersion").as_deref(), Some("v2"), "installed identity must stay v2");
     assert!(!fx.staging.join("READY").exists(), "v3's staging must be discarded");
@@ -742,8 +823,8 @@ fn scenario_i_relay_that_will_not_stop_backs_off() {
     eprintln!("── scenario (i): a relay that will not stop — abort, stay up, back off (≈20s stop timeout) ──");
     let fx = fresh_box("i", "2026-01-01T00:00:00Z");
     let log = fx.data_dir.join("relay-launch.log");
-    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, "v2");
-    write_ready(&fx.staging, "v2", "sha-v2", "2026-10-01T00:00:00Z");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, "2026-10-01T00:00:00Z"));
+    write_ready(&fx.staging, "v2", SHA2, "2026-10-01T00:00:00Z");
     let host = WedgedHost { inner: TestHost::new(fx.node.clone()), parked: Mutex::new(Vec::new()) };
     let mut cur_code_dir = fx.payload.clone();
     let mut cur_alive = Arc::new(AtomicBool::new(true));

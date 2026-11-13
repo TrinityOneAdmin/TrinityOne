@@ -1,27 +1,91 @@
 #!/usr/bin/env node
-// Verify a Suite JS auto-update bundle's detached Ed25519 signature over the EXACT tarball bytes.
+// Verify a Suite JS auto-update bundle's detached Ed25519 signature over the EXACT tarball bytes, and report the
+// build identity that is INSIDE those signed bytes.
 //
 //   node scripts/verify-suite-bundle.mjs <bundle.tgz> <bundle.sig> <release-pubkey.pem>
 //
-// Exit 0 = the signature is good; any non-zero exit = REJECT. The reason is written to stderr.
+// Exit 0 = the signature is good AND the bundle is a Suite JS bundle carrying a well-formed version.txt. On exit 0
+// stdout is ONE line of JSON: {"sha":"<40 hex>","date":"<ISO commit date>"} — read from version.txt INSIDE the
+// verified tarball. Any non-zero exit = REJECT; the reason is written to stderr.
 //
-// WHY THIS EXISTS AND WHY IT IS IN NODE (not Rust, not openssl):
-//   The Suite's trust root is the pinned Ed25519 release public key that ships in the read-only, OS-signed
-//   app payload (relay-app/release-pubkey.pem). The thing we must prove about a downloaded bundle is that it
-//   chains to that key. The Rust app shell holds no crypto key and has no portable openssl (not reliably
-//   present on Windows/macOS), so it shells out to THIS script with the bundled node — the same node the
-//   relay already runs. It reuses the exact crypto path production already trusts for the release manifest
-//   (crypto.verify(null, …) — raw Ed25519, algorithm=null; see gateway.mjs fetchSignedApkManifest), so there
-//   is ONE verification implementation, used by both the relay (pre-verify at stage time) and the shell
-//   (authoritative verify before activating).
+// WHY THE IDENTITY COMES FROM HERE (audit AUDIT-suite-autoupdate-be258b42 HIGH 2). The signature covers only the
+// tarball's bytes. suite-latest.json (sha, date, version) is NOT signed — anyone who can edit the GitHub Release
+// can rewrite it. Every "is this newer?" decision (anti-rollback, the downgrade floor, which sha to quarantine,
+// the date recorded as installed) must therefore use the sha + commit date in the bundle's OWN version.txt,
+// which build-relay-payload.sh stamps and the release key signs. Reading it here, from the same buffer the
+// signature was checked over, leaves no gap between "verified" and "read".
 //
-// INTEGRITY IS THE SIGNATURE OVER THE BYTES, NOT A HASH IN A MANIFEST. The manifest's sha256 is advisory and
-// will not match a host-rebuilt tgz; this verifier only ever checks the detached signature over the literal
-// tarball bytes. Keep it self-contained and side-effect-free (it reads three files, writes nothing) so the
-// read-only payload can run it against the writable staging path without trusting anything there.
+// WHAT COUNTS AS A SUITE BUNDLE. The same release key also signs the SERVER relay bundle (bundle.tgz) on the same
+// Release. Nothing in a signature says what kind of file it is, so a manifest could point a Suite at that file.
+// A Suite bundle is recognised by carrying, at its root: version.txt (sha + date), release-origin (written only
+// by build-relay-payload.sh — the server bundle never has it; without it the override boots PACKAGED=false) and
+// scripts/gateway.mjs. Anything else is refused (exit 7) even though its signature is good.
+//
+// WHY THIS IS IN NODE (not Rust, not openssl): the Rust app shell holds no crypto and has no portable openssl
+// (not reliably present on Windows/macOS), so it shells out to THIS script with the bundled node. It reuses the
+// crypto path production already trusts for the release manifest (crypto.verify(null, …) — raw Ed25519). ONE
+// implementation, used by the relay (pre-verify at stage time) and the shell (authoritative verify before
+// activating, and at every launch). Self-contained and side-effect-free: it reads three files, writes nothing.
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
+
+// A JS bundle unpacks to tens of MB; 1 GiB is far above any real bundle and stops a gzip bomb (only reachable
+// with a validly-SIGNED file anyway, since this runs after the signature check).
+const MAX_UNPACKED = 1024 * 1024 * 1024;
+
+// Minimal tar reader: returns Map(name -> Buffer) for the regular files whose normalised name is in `wanted`.
+// Handles ustar prefix, pax 'x' path records and GNU 'L' long names. A name listed twice is an error (a tar
+// extract would keep the LAST copy, so an ambiguous archive is refused rather than guessed at).
+function readTarFiles(tar, wanted) {
+  const out = new Map();
+  const norm = (n) => n.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  const str = (b, s, e) => { const x = b.subarray(s, e); const z = x.indexOf(0); return (z < 0 ? x : x.subarray(0, z)).toString('utf8'); };
+  const num = (b, s, e) => {
+    if (b[s] & 0x80) { let v = 0; for (let i = s + 1; i < e; i++) v = v * 256 + b[i]; return v; }   // base-256
+    const t = str(b, s, e).trim(); return t ? parseInt(t, 8) : 0;
+  };
+  let off = 0, longName = null, paxPath = null;
+  while (off + 512 <= tar.length) {
+    const h = tar.subarray(off, off + 512);
+    if (h.every((x) => x === 0)) break;                           // end-of-archive block
+    const size = num(h, 124, 136);
+    if (!Number.isFinite(size) || size < 0) throw new Error('bad tar header');
+    const type = String.fromCharCode(h[156] || 48);
+    let name = str(h, 0, 100);
+    if (str(h, 257, 262) === 'ustar') { const pre = str(h, 345, 500); if (pre) name = pre + '/' + name; }
+    const dataStart = off + 512;
+    const data = tar.subarray(dataStart, dataStart + size);
+    off = dataStart + Math.ceil(size / 512) * 512;
+    if (type === 'L') { longName = str(data, 0, data.length); continue; }
+    if (type === 'x') { const m = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(data.toString('utf8')); paxPath = m ? m[1] : null; continue; }
+    if (type === 'g') continue;
+    if (longName != null) { name = longName; longName = null; }
+    if (paxPath != null) { name = paxPath; paxPath = null; }
+    const n = norm(name);
+    if (!wanted.has(n)) continue;
+    if (out.has(n)) throw new Error('duplicate entry ' + n);
+    if (type !== '0') throw new Error(n + ' is not a regular file');
+    out.set(n, Buffer.from(data));
+  }
+  return out;
+}
+
+// The signed build identity of a verified tarball (already-read bytes). Throws with a reason if absent/malformed.
+export function bundleIdentity(tgzBytes) {
+  let tar;
+  try { tar = gunzipSync(tgzBytes, { maxOutputLength: MAX_UNPACKED }); } catch (e) { throw new Error('not a gzip tarball: ' + ((e && e.message) || e)); }
+  const files = readTarFiles(tar, new Set(['version.txt', 'release-origin', 'scripts/gateway.mjs']));
+  if (!files.has('release-origin')) throw new Error('not a Suite JS bundle (no release-origin at its root)');
+  if (!files.has('scripts/gateway.mjs')) throw new Error('not a Suite JS bundle (no scripts/gateway.mjs)');
+  if (!files.has('version.txt')) throw new Error('no version.txt in the bundle');
+  const [l1, l2] = files.get('version.txt').toString('utf8').split('\n');
+  const sha = (l1 || '').trim(), date = (l2 || '').trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('version.txt line 1 is not a git sha');
+  if (!date || !Number.isFinite(Date.parse(date))) throw new Error('version.txt line 2 is not a date');
+  return { sha, date };
+}
 
 export function verifyBundle(tgzPath, sigPath, pemPath) {
   if (!tgzPath || !sigPath || !pemPath) return { code: 2, error: 'usage: verify-suite-bundle.mjs <tgz> <sig> <pubkey.pem>' };
@@ -32,7 +96,9 @@ export function verifyBundle(tgzPath, sigPath, pemPath) {
   let ok = false;
   try { ok = cryptoVerify(null, data, pub, signature); } catch (e) { return { code: 6, error: 'verify error: ' + ((e && e.message) || e) }; }
   if (!ok) return { code: 1, error: 'signature does not verify against the key' };
-  return { code: 0 };
+  // Signature good → read the identity from THESE bytes (the ones just verified), never from a re-read file.
+  try { return { code: 0, identity: bundleIdentity(data) }; }
+  catch (e) { return { code: 7, error: 'signed, but refused: ' + ((e && e.message) || e) }; }
 }
 
 // Run only when invoked as a script (not when imported by a test). import.meta.url === the executed file.
@@ -42,5 +108,6 @@ const invokedDirectly = (() => {
 if (invokedDirectly) {
   const r = verifyBundle(process.argv[2], process.argv[3], process.argv[4]);
   if (r.code !== 0) process.stderr.write(r.error + '\n');
+  else process.stdout.write(JSON.stringify(r.identity) + '\n');
   process.exit(r.code);
 }
