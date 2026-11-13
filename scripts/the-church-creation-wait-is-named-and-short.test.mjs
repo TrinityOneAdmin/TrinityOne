@@ -240,7 +240,9 @@ const SHIPPED = (() => {
   assert.ok(m, 'CANONICAL_RELAYS is not in vendor/steward.js — re-anchor');
   return m[1].split(',').map(x => x.trim().replace(/^["'`]|["'`]$/g, '')).filter(Boolean);
 })();
-assert.equal(SHIPPED.length, 2, 'the shipped relay list is ' + JSON.stringify(SHIPPED) + ' — this test was written against two; re-measure before changing the pin');
+// 2 -> 1 on 2026-11-13: 9e88acec (D0) dropped the retired master-01 ts.net address from CANONICAL_RELAYS. The tripwire
+// did its job: at module load it threw, so the three rule-10 tests below never ran. Re-measured: one shipped relay.
+assert.equal(SHIPPED.length, 1, 'the shipped relay list is ' + JSON.stringify(SHIPPED) + ' — this test was written against one; re-measure before changing the pin');
 const asBase = (r) => r.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
 
 function liftSelfRegister({ fetch }) {
@@ -284,7 +286,7 @@ function liftSelfRegister({ fetch }) {
 // order — is what rule 10 protects, and this list is the whole of it.
 const DIALLED_BEFORE = [ORIGIN, CONFIG, ...SHIPPED.map(asBase)];
 
-test('rule 10: the bases dialled are exactly the ones the sequential loop dialled — the same four, nothing added, nothing dropped', async () => {
+test('rule 10: the bases dialled are exactly the ones the sequential loop dialled — the same three, nothing added, nothing dropped', async () => {
   const posts = [];
   const run = liftSelfRegister({ fetch: async (u) => { posts.push(String(u).replace(/\/config$/, '')); return { ok: true, json: async () => ({}) }; } });
   await run('St Columba, lifted', { createHere: true });
@@ -293,9 +295,9 @@ test('rule 10: the bases dialled are exactly the ones the sequential loop dialle
   assert.equal(posts.length, new Set(posts).size, 'a base was dialled twice: ' + JSON.stringify(posts));
 });
 
-test('…and the four are all in flight before any of them has answered', async () => {
+test('…and the three are all in flight before any of them has answered', async () => {
   // A fetch that does not answer until told to. Sequential code dials the second base only after the first
-  // resolves, so at the first pause exactly ONE would be pending; parallel code has all four pending.
+  // resolves, so at the first pause exactly ONE would be pending; parallel code has all three pending.
   const pending = []; let resolved = 0;
   const run = liftSelfRegister({ fetch: (u) => new Promise((res) => pending.push({ u: String(u).replace(/\/config$/, ''), res })) });
   const p = run('St Columba, lifted', { createHere: true });
