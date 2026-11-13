@@ -468,7 +468,7 @@ fn main() {
                 on_splash: AtomicBool::new(true),
             };
             // up_steps 480 = ~2 min: first run on Windows can be slow (Defender scans the bundled runtime)
-            let cfg = launcher::Config { config_file, default_data, port: PORT, up_steps: 480, log_path: log.clone() };
+            let cfg = launcher::Config { config_file, default_data, port: PORT, up_steps: 480, log_path: log.clone(), mover_wait_ms: 10 * 60 * 1000, check_steps: 1200 /* 5 min */ };
             thread::spawn(move || {
                 let end = launcher::run(&host, &cfg);
                 applog(&host.log, &format!("launcher ended: {end:?}"));

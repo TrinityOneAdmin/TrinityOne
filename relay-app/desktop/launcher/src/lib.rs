@@ -101,6 +101,11 @@ pub struct Config {
     pub up_steps: u32,
     /// relay-launch.log, named in every message that says the relay stopped
     pub log_path: PathBuf,
+    /// how long a launcher waits for a running mover before it says the move looks stuck (audit N1)
+    pub mover_wait_ms: u64,
+    /// after a MOVE, how many 250 ms steps the relay on the new folder gets to open its port before the check is
+    /// treated as failed and rolled back (audit N6). A normal start has no such bound.
+    pub check_steps: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -312,15 +317,27 @@ fn set_identity_note(cfg: &Config, note: Option<Value>) {
 // ── the main loop ───────────────────────────────────────────────────────────────────────────────────────────
 pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
     let mut rollbacks = 0u32;
-    loop {
+    'start: loop {
         if host.quitting() {
             return RunEnd::Quit;
         }
         // 0. A MOVER MAY STILL BE RUNNING (audit C M4): the sidecar is not killed when the app closes, so a window
         //    closed mid-move and reopened finds the old mover still at work. Recovering now would delete its partial
         //    copy from under it, and starting the relay would open the folder it is copying. Wait for it.
-        if !wait_for_mover(host, cfg) {
-            return RunEnd::Quit;
+        match wait_for_mover(host, cfg) {
+            Waited::Free => {}
+            Waited::Quit => return RunEnd::Quit,
+            Waited::Stuck => {
+                let lock = format!("{}.mover-lock", cfg.config_file.display());
+                let reason = format!(
+                    "A move of your relay's data has been running for a long time and has not finished. Close the app and open it again to keep waiting. If it is really stuck, close the app, delete the file {} and open it again: the launcher then recovers the move or undoes it. Details are in {}",
+                    lock,
+                    cfg.log_path.display()
+                );
+                record_refusal(cfg, "start", "mover-stuck", None);
+                host.progress(&Progress::Refused { title: "Your relay's move looks stuck".into(), reason: reason.clone() });
+                return RunEnd::Refused(reason);
+            }
         }
         // 1. CRASH RECOVERY, at every launch, before anything is spawned. The mover follows the pointer.
         let (dir, check, ic) = match mover(host, cfg, &["recover"], &[]).map(|v| read_recovery(&v)) {
@@ -383,6 +400,16 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                 break;
             }
             steps += 1;
+            // N6: right after a MOVE a relay that never opens its port is a failed check, not a slow start
+            if check && steps >= cfg.check_steps {
+                host.log("the relay on the new folder never opened its port; the check failed, rolling back");
+                relay.kill();
+                wait_exit(host, relay.as_ref());
+                if !roll_back(host, cfg, &mut rollbacks) {
+                    return RunEnd::Refused("rollback".into());
+                }
+                continue 'start;
+            }
             if steps >= cfg.up_steps && !told {
                 told = true;
                 host.progress(&Progress::Notice(format!("Still starting. The first start can take a few minutes. If it never finishes, details are in {}", cfg.log_path.display())));
@@ -460,21 +487,31 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
     }
 }
 
-/// true = go on; false = the app is closing
-fn wait_for_mover(host: &dyn Host, cfg: &Config) -> bool {
+enum Waited {
+    Free,
+    Quit,
+    /// still held after cfg.mover_wait_ms: never wait for ever behind a splash that says "Moving"
+    Stuck,
+}
+fn wait_for_mover(host: &dyn Host, cfg: &Config) -> Waited {
+    let mut waited = 0u64;
     loop {
         let held = mover(host, cfg, &["lock-status"], &[]).and_then(|v| v.get("held").and_then(|b| b.as_bool())).unwrap_or(false);
         if !held {
-            return true;
+            return Waited::Free;
         }
         if host.quitting() {
-            return false;
+            return Waited::Quit;
+        }
+        if waited >= cfg.mover_wait_ms {
+            return Waited::Stuck;
         }
         let st = read_state(&cfg.config_file);
         let m = st.get("move");
         let (cp, tot) = (m.and_then(|m| m.get("copiedBytes")).and_then(|x| x.as_u64()).unwrap_or(0), m.and_then(|m| m.get("totalBytes")).and_then(|x| x.as_u64()).unwrap_or(0));
         host.progress(&Progress::Moving { copied: cp, total: tot });
         host.sleep_ms(1000);
+        waited += 1000;
     }
 }
 
@@ -1113,7 +1150,7 @@ mod tests {
         fn sleep_ms(&self, _ms: u64) {}
     }
     fn cfg_in(b: &Path) -> Config {
-        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3, log_path: b.join("relay-launch.log") }
+        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3, log_path: b.join("relay-launch.log"), mover_wait_ms: 600_000, check_steps: 1_000_000 }
     }
     fn first(calls: &[String], what: &str) -> usize {
         calls.iter().position(|c| c == what).unwrap_or_else(|| panic!("{what} never happened: {calls:?}"))
@@ -1365,5 +1402,20 @@ mod tests {
         assert_eq!(c.iter().filter(|x| *x == "lock-status").count(), 3, "{c:?}");
         assert!(last_lock < first(&c, "recover") && first(&c, "recover") < first(&c, "SPAWN"), "recover/spawn ran while a mover was held: {c:?}");
         assert!(f.progresses.lock().unwrap().iter().any(|p| p.starts_with("Moving")), "the splash was not told");
+    }
+
+    #[test]
+    fn a_mover_that_never_finishes_ends_in_a_message_with_the_log_path_and_the_lock_file() {
+        let b = tmp("stuck");
+        let mut cfg = cfg_in(&b);
+        cfg.mover_wait_ms = 3000;
+        let held: Vec<(&'static str, Value)> = (0..10).map(|_| ("lock-status", json!({"held": true}))).collect();
+        let f = Fake::new(held, vec![]);
+        match run(&f, &cfg) {
+            RunEnd::Refused(r) => assert!(r.contains("mover-lock") && r.contains("relay-launch.log"), "{r}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(!f.calls().contains(&"SPAWN".to_string()) && !f.calls().contains(&"recover".to_string()), "{:?}", f.calls());
+        assert_eq!(read_state(&cfg.config_file)["launcher"]["lastRefusal"]["code"], "mover-stuck");
     }
 }
