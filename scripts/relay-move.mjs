@@ -30,6 +30,11 @@ import { createConnection } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 // The fixed folder name created on the chosen drive (owner §8a: a drive from a list, never a typed path).
+// The mover (and the relay itself) read the database with node:sqlite, which arrived in Node 22.5.
+export function nodeCanMove(version = process.versions.node) {
+  const m = /^(\d+)\.(\d+)/.exec(String(version || '')); if (!m) return false;
+  return Number(m[1]) > 22 || (Number(m[1]) === 22 && Number(m[2]) >= 5);
+}
 export const LEAF = 'trinityone-relay';
 export const MARK_INCOMPLETE = '.trinity-move-incomplete';
 export const STAMP = '.trinity-data-dir';
@@ -467,7 +472,9 @@ export async function moveRelayData(opts) {
   // 1. same volume: one atomic rename
   journal.write({ ...base, state: 'renaming', mode: 'rename' });
   let removedEmpty = false, oldNote = null;
-  if (existsSync(to)) {   // empty or a stale tombstone (checked above); Windows can't rename onto one
+  // POSIX renames onto an EMPTY folder, so only a stale tombstone (or Windows, which can't rename onto any) is cleared;
+  // the server helper (step 6) pre-creates the leaf root-owned-parent, where the service user cannot rmdir it
+  if (existsSync(to) && (pf === 'win32' || readdirSync(to).length)) {   // empty or a stale tombstone (checked above)
     try { oldNote = readFileSync(join(to, MOVED_TO), 'utf8'); } catch {}
     rmSync(to, { recursive: true, force: true }); removedEmpty = true;
   }
