@@ -348,8 +348,8 @@ function listFiles(dir, rel = '', top = true, out = []) {
   }
   return out;
 }
-function sha256(file) {
-  return new Promise((res, rej) => { const h = createHash('sha256'); createReadStream(file).on('error', rej).on('data', d => h.update(d)).on('end', () => res(h.digest('hex'))); });
+function sha256(file, onBytes) {
+  return new Promise((res, rej) => { const h = createHash('sha256'); createReadStream(file).on('error', rej).on('data', d => { h.update(d); if (onBytes) onBytes(d.length); }).on('end', () => res(h.digest('hex'))); });
 }
 async function openDb(file, opts) { const { DatabaseSync } = await import('node:sqlite'); return new DatabaseSync(file, opts || {}); }
 // Fold the WAL into relay.sqlite. Refuses (returns a code) if anything still holds the database, or a WAL is left.
@@ -592,15 +592,26 @@ async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace
   if (opts._afterCopy) await opts._afterCopy(to);
 
   // verify: same file list + sizes, same bytes, a sound database with the same rows, the same identity key
-  journal.write({ ...base, state: 'verifying', mode: 'copy', totalBytes: total, copiedBytes: total });
+  // PROGRESS IS JOURNALED THROUGH VERIFY TOO (audit follow-up): the launcher's "is the mover stuck?" guard counts a change
+  // of the journal as progress and never the clock, so a long hash must keep changing it. verifiedBytes = bytes hashed
+  // so far across BOTH streams (source and copy), out of verifyTotalBytes = 2 x total; written about every _verifyChunk.
+  const vbase = { ...base, state: 'verifying', mode: 'copy', totalBytes: total, copiedBytes: total, verifyTotalBytes: total * 2 };
+  journal.write({ ...vbase, verifiedBytes: 0, phase: 'hashing' });
   let got; try { got = listFiles(to); } catch { return fail('verify-failed', 'list'); }
   if (JSON.stringify(got) !== JSON.stringify(files)) return fail('verify-failed', 'file list or sizes differ');
+  let hashed = 0, hashedAt = 0; const chunk = opts._verifyChunk || 64 * 1024 * 1024;
+  const tick = n => { hashed += n; if (hashed - hashedAt >= chunk) { hashedAt = hashed; journal.write({ ...vbase, verifiedBytes: hashed, phase: 'hashing' }); } };
   for (const f of files) {
     let a, b;
-    try { [a, b] = await Promise.all([sha256(join(from, f.rel)), sha256(join(to, f.rel))]); } catch { return fail('verify-failed', 'read ' + f.rel); }
+    try { [a, b] = await Promise.all([sha256(join(from, f.rel), tick), sha256(join(to, f.rel), tick)]); } catch { return fail('verify-failed', 'read ' + f.rel); }
     if (a !== b) return fail('verify-failed', 'content differs: ' + f.rel);
   }
+  // PRAGMA integrity_check is ONE call into SQLite (node:sqlite is synchronous): it cannot report progress and blocks this
+  // process while it runs. The phase marker is written first, so the launcher reads "busy, not stuck" until the mover
+  // finishes or dies (the mover lock then goes stale and the wait ends).
+  journal.write({ ...vbase, verifiedBytes: hashed, phase: 'integrity' });
   if (!(await integrityOk(to))) return fail('verify-failed', 'database integrity');
+  journal.write({ ...vbase, verifiedBytes: hashed, phase: 'counting' });
   let c2; try { c2 = await countRows(to, { readOnly: true }); } catch { return fail('verify-failed', 'database unreadable'); }
   if (countsBad(counts, c2)) return fail('verify-failed', 'row counts differ');
   if (keyPubOf(to) !== relayPub) return fail('verify-failed', 'identity key differs');

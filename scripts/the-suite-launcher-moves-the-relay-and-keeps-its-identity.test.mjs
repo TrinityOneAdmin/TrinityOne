@@ -605,6 +605,20 @@ test('M-1: a mover that keeps making progress is never called stuck, however lon
   } finally { await l.stop(); }
 });
 
+test('a long VERIFY (only verifiedBytes moves, then the integrity marker) is not called stuck either', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 2 });
+  const h = fakeMover(); holdLock(fx, h); await sleep(300);
+  const l = await startLauncher(fx, { extra: ['--mover-wait-ms', '2000'] });
+  const journal = v => { const tmp = fx.state + '.t'; writeFileSync(tmp, JSON.stringify({ move: { state: 'verifying', totalBytes: 100, copiedBytes: 100, ...v } })); renameSync(tmp, fx.state); };
+  try {
+    for (let i = 1; i <= 6; i++) { journal({ phase: 'hashing', verifiedBytes: i }); await sleep(500); }
+    for (let i = 0; i < 6; i++) { journal({ phase: 'integrity', verifiedBytes: 6 }); await sleep(500); }   // one long call: the marker alone, unchanged
+    assert.equal(l.count(/^SIM end /), 0, 'a long verify was called stuck: ' + l.lines.join('|'));
+    writeFileSync(fx.state, '{}'); h.kill('SIGKILL');
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 60000), true, l.log);
+  } finally { await l.stop(); }
+});
+
 test('L-2: a normal start (no move behind it) is never killed or rolled back for being slow, even with a tiny check bound', { skip, timeout: 120000 }, async () => {
   const fx = fixture({ events: 3 });
   const l = await startLauncher(fx, { env: { TEST_SLOW_START_MS: '4000' }, upSteps: 4, extra: ['--check-steps', '4'] });   // the post-move bound would be 1 s; this is no post-move start

@@ -505,7 +505,7 @@ enum Waited {
 }
 fn wait_for_mover(host: &dyn Host, cfg: &Config) -> Waited {
     let mut idle = 0u64;
-    let mut last: Option<(String, u64, u64)> = None;
+    let mut last: Option<(String, u64, u64, u64, String)> = None;
     loop {
         let ls = mover(host, cfg, &["lock-status"], &[]);
         let held = ls.as_ref().and_then(|v| v.get("held").and_then(|b| b.as_bool())).unwrap_or(false);
@@ -520,8 +520,12 @@ fn wait_for_mover(host: &dyn Host, cfg: &Config) -> Waited {
         let m = st.get("move");
         let (cp, tot) = (m.and_then(|m| m.get("copiedBytes")).and_then(|x| x.as_u64()).unwrap_or(0), m.and_then(|m| m.get("totalBytes")).and_then(|x| x.as_u64()).unwrap_or(0));
         // PROGRESS, not the clock: any change of the move's state or copied bytes restarts the count
-        let sig = (m.and_then(|m| m.get("state")).and_then(|x| x.as_str()).unwrap_or("").to_string(), cp, tot);
-        if last.as_ref() != Some(&sig) {
+        let verified = m.and_then(|m| m.get("verifiedBytes")).and_then(|x| x.as_u64()).unwrap_or(0);
+        let phase = m.and_then(|m| m.get("phase")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let sig = (m.and_then(|m| m.get("state")).and_then(|x| x.as_str()).unwrap_or("").to_string(), cp, tot, verified, phase.clone());
+        // the database integrity check is one SQLite call that cannot report progress: while its phase marker stands and
+        // the mover lock is held, the move is busy, not stuck
+        if last.as_ref() != Some(&sig) || phase == "integrity" {
             last = Some(sig);
             idle = 0;
         }
@@ -1121,11 +1125,12 @@ mod tests {
         relays: Mutex<Vec<(Option<Exit>, String)>>,
         port_after: Mutex<u32>,
         bump: Mutex<Option<(PathBuf, u64)>>,
+        bump_key: Mutex<&'static str>,
         progresses: Mutex<Vec<String>>,
     }
     impl Fake {
         fn new(answers: Vec<(&'static str, Value)>, relays: Vec<(Option<Exit>, &str)>) -> Fake {
-            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), progresses: Mutex::new(vec![]) }
+            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]) }
         }
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
@@ -1171,8 +1176,13 @@ mod tests {
             // a mover that is making progress: its journal's copiedBytes grows each second
             if let Some((f, n)) = self.bump.lock().unwrap().as_mut() {
                 *n += 1;
+                let key = *self.bump_key.lock().unwrap();
                 update_state(f, |o| {
-                    o.insert("move".into(), json!({"state": "copying", "copiedBytes": *n, "totalBytes": 1000}));
+                    let mv = match key {
+                        "integrity" => json!({"state": "verifying", "phase": "integrity", "totalBytes": 1000}),
+                        k => json!({"state": "verifying", k: *n, "totalBytes": 1000}),
+                    };
+                    o.insert("move".into(), mv);
                 });
             }
         }
@@ -1481,6 +1491,23 @@ mod tests {
             let r = match run(&f, &cfg) { RunEnd::Refused(r) => r, o => panic!("{o:?}") };
             assert_eq!(r.contains("delete the file"), delete, "alive={alive:?}: {r}");
             assert!(r.contains("relay-launch.log"));
+        }
+    }
+
+    #[test]
+    fn a_long_verify_is_not_stuck_hashing_progress_counts_and_the_integrity_phase_is_busy() {
+        for key in ["verifiedBytes", "integrity"] {
+            let b = tmp("verify");
+            let mut cfg = cfg_in(&b);
+            cfg.mover_wait_ms = 3000;
+            let mut a: Vec<(&'static str, Value)> = (0..12).map(|_| ("lock-status", json!({"held": true, "alive": true}))).collect();
+            a.push(("lock-status", json!({"held": false})));
+            a.push(("recover", json!({"dataDir": null, "action": "none"})));
+            a.push(("prove", json!({"ok": true, "relayPub": "aa"})));
+            let f = Fake::new(a, vec![(None, "")]);
+            *f.bump.lock().unwrap() = Some((cfg.config_file.clone(), 0));
+            *f.bump_key.lock().unwrap() = key;
+            assert_eq!(run(&f, &cfg), RunEnd::Quit, "{key}: a long verify was called stuck: {:?}", f.progresses.lock().unwrap());
         }
     }
 }
