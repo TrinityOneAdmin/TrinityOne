@@ -7041,7 +7041,7 @@ function storageRequestIsLocal(req) {
 function storageReadJournal() {
   if (!STORAGE_STATE_FILE) return { j: null, err: 'storage-state-unknown' };
   if (!existsSync(STORAGE_STATE_FILE)) return { j: null, err: null };            // never moved: no journal yet
-  try { const o = JSON.parse(readFileSync(STORAGE_STATE_FILE, 'utf8')); return { j: (o && o.move && typeof o.move === 'object') ? o.move : null, err: null }; }
+  try { const o = JSON.parse(readFileSync(STORAGE_STATE_FILE, 'utf8')); return { j: (o && o.move && typeof o.move === 'object') ? o.move : null, launcher: (o && o.launcher && typeof o.launcher === 'object') ? o.launcher : null, err: null }; }
   catch { return { j: null, err: 'storage-state-unreadable' }; }
 }
 // Mount table: async (never blocks the event loop — audit C C8 / D), cached briefly; a move asks for a fresh one.
@@ -7147,7 +7147,7 @@ async function storageJudge(c, ctx) {
 // Everything the card needs. `fresh` re-reads the mount table and size (a move decides on current facts).
 async function storageReport(fresh) {
   const pf = process.platform;
-  const { j, err } = storageReadJournal();
+  const { j, err, launcher } = storageReadJournal();
   const [mounts, size] = await Promise.all([storageMounts(fresh), storageDataSize(fresh)]);
   let dataReal = null; try { dataReal = await realpathP(DATA_DIR); } catch {}
   const curMount = dataReal ? mountFor(dataReal, mounts || [], pf) : null;
@@ -7183,6 +7183,9 @@ async function storageReport(fresh) {
     // is gone for good and not offered again (audit C C3 — the remover, step 5/6, must set it)
     leftovers: (j && Array.isArray(j.leftovers) ? j.leftovers : []).filter(l => l && l.path && !l.removedAt)
       .map(l => ({ path: l.path, kind: l.kind || null, since: l.since || null, exists: existsSync(l.path) })),
+    // what the Suite launcher recorded about itself (step 5): the last move/removal it REFUSED (a refused move never
+    // reaches the journal) and an identity that changed since the pointer last recorded it. Read only, never written here.
+    launcher: launcher ? { lastRefusal: launcher.lastRefusal || null, identityChanged: launcher.identityChanged || null } : null,
     requests: { move: (m => m ? { ...m, stale: storageRequestIsStale(j) } : m)(req(STORAGE_MOVE_REQUEST)), removeOld: req(STORAGE_REMOVE_REQUEST) },
     refuse, drives,
   };

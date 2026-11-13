@@ -1834,6 +1834,23 @@
     }
     return '';
   }
+  // What the Suite launcher recorded about itself (storage plan step 5; storage.json `launcher`, served as GET /storage
+  // `launcher`): a move or removal it REFUSED (a refused move never reaches the move journal, so nothing else shows it),
+  // and a relay whose proven identity key is not the one recorded. Own ids, so #stResult stays the move outcome's.
+  function stLauncherNote(r) {
+    const l = r.launcher; if (!l) return '';
+    const note = (id, html) => '<div class="st-result bad" id="' + id + '">' + ST_BAD_SVG + '<span>' + html + '</span></div>';
+    let h = '';
+    const f = l.lastRefusal;
+    if (f && f.kind === 'move') {
+      const why = f.code === 'target-ineligible' && f.detail ? String(f.detail).split(',')[0] : f.code;
+      h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>The move was refused, so nothing was changed.</b> ' + esc(stReason(why))) + '</div>';
+    } else if (f && f.kind === 'remove-old') {
+      h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>The old copy was not removed.</b> ' + esc(f.code === 'not-recorded' ? 'It is not on record as an old copy, so it was left alone.' : f.code === 'current-folder' ? 'It is the folder your relay is using now, so it was left alone.' : 'It was left alone (' + f.code + ').')) + '</div>';
+    }
+    if (l.identityChanged) h += '<div style="margin-top:12px">' + note('stIdentityChanged', '<b>This relay is not the one it was before.</b><span class="st-sub">It proves a different identity key than the one recorded for it. If you restored another relay\'s backup, that is expected. If not, close the app and check which drive is connected.</span>') + '</div>';
+    return h;
+  }
   function stOldCopy(r) {
     const o = r.oldCopy; if (!o) return '';
     const place = stPlace(r, o.path, o.mountpoint);
@@ -1890,7 +1907,7 @@
       body = stProgress(r.move); if (desc) desc.textContent = 'Moving';
     } else {
       if (desc) desc.textContent = '';
-      body = stOutcome(r) + stOldCopy(r);
+      body = stOutcome(r) + stOldCopy(r) + stLauncherNote(r);
       if (r.mode === 'suite' && !r.local) body += stResult('info', '<b>Change this on the relay\'s own computer.</b><span class="st-sub">You can see where the data is from here, but moving it only works in the TrinityOne Suite window on that computer.</span>');
       else if (!(r.move && r.move.state === 'awaiting-confirm')) body += (body ? '<div style="margin-top:12px">' : '<div>') + stMoveControls(r) + '</div>';
       body += stLeftovers(r);
