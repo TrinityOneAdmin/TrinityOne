@@ -7157,6 +7157,12 @@ async function storageReport(fresh) {
   if (err) refuse.push(err);
   // the mover needs node:sqlite (Node 22.5+); the knob is only for the test that proves the card is told
   if (!nodeCanMove(process.env.TRINITY_STORAGE_NODE_VERSION || process.versions.node)) refuse.push('node-too-old');
+  // "Update now" runs as root for minutes while the relay keeps serving; a move started in that window could be undone by
+  // the update's restart (audit C M2). relay-update.sh also takes the lock a move holds; this tells the steward why not.
+  try {
+    const us = JSON.parse(readFileSync(join(DATA_DIR, 'update-status.json'), 'utf8'));
+    if (us && us.state === 'running' && Math.abs(Date.now() / 1000 - Number(us.at || 0)) < 30 * 60) refuse.push('update-in-progress');
+  } catch {}
   if (j && MOVE_ACTIVE.has(j.state)) refuse.push('move-in-progress');
   if (j && j.state === 'awaiting-confirm') refuse.push('old-copy-awaiting-removal');
   if (existsSync(join(DATA_DIR, '.restore-pending'))) refuse.push('restore-pending');

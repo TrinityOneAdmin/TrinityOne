@@ -18,7 +18,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, chmodSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, chmodSync, symlinkSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -68,7 +68,9 @@ case "$cmd" in
     cd "$ROOT"
     setsid nohup env "\${env_args[@]}" RELAY_SYNC=0 RELAY_HOST=127.0.0.1 RELAY_NO_OPEN=1 RELAY_DIRECTORY=http://127.0.0.1:9 TRINITY_TAILSCALE_BIN=/nonexistent/tailscale \\
       "$NODE" scripts/gateway.mjs "$PORT" >> "$B/relay.log" 2>&1 < /dev/null 9>&- &    # (systemd would not hand the relay the helper's lock either)
-    echo $! > "$B/relay.pid"; exit 0;;
+    echo $! > "$B/relay.pid"
+    if [ -f "$B/plant" ] && [ "$dd" != "$ORIG" ]; then ln -sf "$(cat "$B/plant")" "$dd/release-key.pem"; fi
+    exit 0;;
   *) exit 0;;
 esac
 `;
@@ -98,7 +100,7 @@ function rig(same = false) {
   };
   const r = { box, etc, state, stateFile, data, drive, driveBase, sysd, env, target: join(drive, 'trinityone-relay') };
   r.systemctl = (...a) => spawnSync(join(bin, 'systemctl'), a, { env, encoding: 'utf8' });
-  r.helper = () => { const o = spawnSync('bash', [join(HELPER_DIR, 'scripts/relay-move.sh')], { env, encoding: 'utf8', timeout: 120000 }); r.lastOutput = (o.stdout || '') + (o.stderr || ''); if (process.env.DEBUG_HELPER) console.error(r.lastOutput); return o; };
+  r.helper = () => { const o = spawnSync('bash', [join(env.TRINITYONE_DIR, 'scripts/relay-move.sh')], { env, encoding: 'utf8', timeout: 120000 }); r.lastOutput = (o.stdout || '') + (o.stderr || ''); if (process.env.DEBUG_HELPER) console.error(r.lastOutput); return o; };
   r.journal = () => { try { return JSON.parse(readFileSync(stateFile, 'utf8')); } catch { return null; } };
   r.log = f => { try { return readFileSync(join(box, f), 'utf8'); } catch { return ''; } };
   r.relayEnv = () => Object.fromEntries(readFileSync(join(etc, 'relay.env'), 'utf8').split('\n').filter(Boolean).map(l => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; }));
@@ -298,7 +300,7 @@ withRig('same drive: the helper renames the folder instantly (as root, the mover
   const res = r.helper(); assert.equal(res.status, 0, res.stderr);
   assert.notEqual(r.journal() && r.journal().move.code, 'same-volume-unsupported', 'a same-drive move was refused: the owner decided it is an instant rename');
   assert.equal(r.journal().move.mode, 'rename');
-  assert.equal(r.log('runuser.log'), '', 'the same-volume rename ran as the service user, which cannot rename a folder in a root-owned parent');
+  assert.doesNotMatch(r.log('runuser.log'), /relay-move\.mjs/, 'the same-volume rename ran as the service user, which cannot rename a folder in a root-owned parent');
   assert.ok(await up(), 'the relay is not running after the rename:\n' + r.log('relay.log').slice(-1500));
   assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.target);
   assert.ok(await identityOK(pub));
@@ -331,4 +333,119 @@ withRig('a cross-drive copy still runs the mover as the service user', async r =
   writeMoveRequest(r);
   assert.equal(r.helper().status, 0);
   assert.match(r.log('runuser.log'), /-u nobody -- .*relay-move\.mjs move/, 'the copy did not run through runuser');
+});
+
+// ── AUDIT C: H1 (the removal runs as the service user), M1 (boot recovery), M2 (shared lock), M3 (no root chmod through a link)
+import { cpSync, utimesSync } from 'node:fs';
+
+withRig('H1: remove old copy runs the deletion through runuser (the service user), not as root', async r => {
+  await seedAndRun(r);
+  writeMoveRequest(r);
+  assert.equal(r.helper().status, 0);
+  assert.ok(await up());
+  writeFileSync(join(r.target, '.remove-old-request'), JSON.stringify({ path: r.data }) + '\n');
+  assert.equal(r.helper().status, 0);
+  assert.deepEqual(readdirSync(r.data), ['MOVED-TO']);
+  assert.match(r.log('runuser.log'), /relay-move-server\.mjs delete-tree --path /, 'THE OLD COPY WAS DELETED AS ROOT');
+});
+
+// a copy of the scripts with one line of fault injected, so a helper can be killed at an exact moment
+function faultyScripts(r, file, from, to) {
+  const d = mkdtempSync(join(tmpdir(), 'trin-fault-')); cleanups.push(() => rmSync(d, { recursive: true, force: true }));
+  cpSync(join(HELPER_DIR, 'scripts'), join(d, 'scripts'), { recursive: true });
+  symlinkSync(join(ROOT, 'node_modules'), join(d, 'node_modules'));
+  const f = join(d, file), s = readFileSync(f, 'utf8'); assert.equal(s.split(from).length - 1, 1, 'fault anchor not exactly once: ' + from);
+  writeFileSync(f, s.replace(from, () => to));
+  r.env.TRINITYONE_DIR = d; return d;
+}
+const cleanDir = r => { r.env.TRINITYONE_DIR = HELPER_DIR; };
+const bootRecover = r => { const o = spawnSync('bash', [join(r.env.TRINITYONE_DIR, 'scripts/relay-move.sh'), '--recover-only'], { env: r.env, encoding: 'utf8', timeout: 120000 }); r.lastOutput = o.stdout + o.stderr; if (process.env.DEBUG_HELPER) console.error(r.lastOutput); return o; };
+const finishAfterBoot = r => spawnSync('bash', [join(r.env.TRINITYONE_DIR, 'scripts/relay-move.sh'), '--finish-check'], { env: r.env, encoding: 'utf8', timeout: 120000 });
+
+withRig('M1: a helper killed mid-copy does not leave the card stuck: boot recovery clears the journal and the partial copy', async r => {
+  const { pub } = await seedAndRun(r);
+  r.systemctl('stop', 'trinityone-relay'); assert.ok(await down());
+  const mark = r.log('systemctl.log');
+  // what a helper killed during the copy leaves: journal "copying", a marked partial copy on the drive
+  mkdirSync(r.target); writeFileSync(join(r.target, '.trinity-move-incomplete'), 'x'); writeFileSync(join(r.target, 'relay.sqlite'), 'partial');
+  writeFileSync(r.stateFile, JSON.stringify({ dataDir: r.data, relayPub: pub, move: { state: 'copying', mode: 'copy', from: r.data, to: r.target, relayPub: pub, counts: { events: 25, deletions: 0, meta: 1 }, startedAt: new Date().toISOString() } }));
+  const res = bootRecover(r); assert.equal(res.status, 0, res.stderr);
+  assert.equal(r.journal().move.state, 'failed', 'the journal still says a move is under way: the card is stuck and the gateway refuses every new request');
+  assert.equal(existsSync(r.target), false, 'the partial copy was left on the drive');
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.data);
+  // it never touches the relay unit: that is ordered after it, and starting it from here would deadlock
+  assert.doesNotMatch(r.log('systemctl.log').slice(mark.length), /^(start|stop) /m, 'boot recovery started or stopped the relay');
+  r.systemctl('start', 'trinityone-relay'); assert.ok(await up());
+  const g = await adminGet(r, '/storage'); assert.equal(g.j.refuse.includes('move-in-progress'), false, 'GET /storage still says a move is under way');
+});
+
+withRig('M1: killed after the mover finished but before the journal was read: boot recovery finds the move, points relay.env at it, and the check completes', async r => {
+  const { pub, events } = await seedAndRun(r);
+  faultyScripts(r, 'scripts/relay-move.sh', 'log "mover (exit $rc): $out"', 'kill -9 $$');
+  writeMoveRequest(r);
+  r.helper();                                                       // the helper dies right after the mover
+  cleanDir(r);
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.data, 'fixture: relay.env should still name the old folder');
+  assert.ok(existsSync(join(r.data, 'MOVED-TO')), 'fixture: the mover had already marked the old folder, so the relay cannot start on it');
+  assert.equal(await down(2000), true, 'fixture: the relay is stopped');
+  const res = bootRecover(r); assert.equal(res.status, 0, res.stderr + r.lastOutput);
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.target, 'relay.env still names the marked folder: the relay would refuse it (exit 78) and stay down');
+  assert.equal(r.journal().move.state, 'checking', 'the exact counts were not recorded before the relay starts');
+  assert.equal(existsSync(join(r.box, 'relay.pid')), false);
+  r.systemctl('start', 'trinityone-relay');                          // systemd starts the relay after recovery
+  assert.ok(await up(), 'the relay did not come up on the recovered folder:\n' + r.log('relay.log').slice(-1200));
+  const fin = finishAfterBoot(r); assert.equal(fin.status, 0, fin.stderr);
+  assert.equal(r.journal().move.state, 'awaiting-confirm', 'the recovered move was never finished');
+  assert.ok(await identityOK(pub)); assert.ok(eventCount(r.target) >= events);
+});
+
+withRig('M1: killed between recording the switch and writing relay.env: recovery writes relay.env, the relay is not left down', async r => {
+  const { pub } = await seedAndRun(r);
+  faultyScripts(r, 'scripts/relay-datadir-apply.sh', 'set -euo pipefail', 'kill -9 $PPID; exit 1');
+  writeMoveRequest(r);
+  r.helper();
+  cleanDir(r);
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.data);
+  assert.equal(r.journal().move.state, 'switched');
+  const res = bootRecover(r); assert.equal(res.status, 0, res.stderr + r.lastOutput);
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.target);
+  r.systemctl('start', 'trinityone-relay'); assert.ok(await up(), r.log('relay.log').slice(-1200));
+  assert.equal(finishAfterBoot(r).status, 0);
+  assert.equal(r.journal().move.state, 'awaiting-confirm'); assert.ok(await identityOK(pub));
+});
+
+withRig('M1: boot recovery with nothing to recover does nothing at all', async r => {
+  await seedAndRun(r);
+  const before = readFileSync(join(r.etc, 'relay.env'), 'utf8');
+  assert.equal(bootRecover(r).status, 0); assert.equal(finishAfterBoot(r).status, 0);
+  assert.equal(readFileSync(join(r.etc, 'relay.env'), 'utf8'), before); assert.equal(r.journal(), null);
+  assert.ok(await up(), 'recovery with nothing to do disturbed the running relay');
+});
+
+withRig('M2: a move asked for while "Update now" holds the lock is refused with update-in-progress, and the relay is untouched', async r => {
+  await seedAndRun(r);
+  const mark = r.log('systemctl.log');
+  const holder = spawn('flock', [join(r.state, 'update-move.lock'), 'sleep', '30'], { stdio: 'ignore' });
+  try {
+    await sleep(500);
+    r.env.TRINITYONE_LOCK_WAIT = '1';
+    writeMoveRequest(r);
+    const res = r.helper(); assert.equal(res.status, 0, res.stderr);
+    assert.equal(r.journal().move.code, 'update-in-progress');
+    assert.equal(existsSync(join(r.data, '.move-request')), false, 'the request was left behind (the path unit would loop)');
+    assert.doesNotMatch(r.log('systemctl.log').slice(mark.length), /^stop /m, 'the relay was stopped while an update held the lock');
+    assert.equal(existsSync(join(r.data, 'MOVED-TO')), false);
+    assert.ok(await up());
+  } finally { holder.kill('SIGKILL'); }
+});
+
+withRig('M3: root never chmods through a link the relay planted (the file a link points at keeps its mode)', async r => {
+  await seedAndRun(r);
+  const victim = join(r.box, 'victim.bin'); writeFileSync(victim, 'v'); chmodSync(victim, 0o644);
+  writeFileSync(join(r.box, 'plant'), victim);                       // the stub plants release-key.pem -> victim once the relay "runs" on the new folder
+  writeMoveRequest(r);
+  assert.equal(r.helper().status, 0);
+  assert.ok(lstatSync(join(r.target, 'release-key.pem')).isSymbolicLink(), 'fixture: the link was not planted');
+  assert.equal(statSync(victim).mode & 0o777, 0o644, 'A LINK THE RELAY PLANTED MADE THE HELPER CHMOD A FILE OUTSIDE ITS FOLDER');
+  assert.equal(statSync(join(r.target, 'relay-key.json')).mode & 0o777, 0o600, 'the real files were still fixed');
 });

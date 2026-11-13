@@ -41,6 +41,9 @@ SRV="$DIR/scripts/relay-move-server.mjs"; MV="$DIR/scripts/relay-move.mjs"; APPL
 RELAY_ENV="$ETC/relay.env"
 STATE="$STATE_DIR/move-state.json"; WORK="$STATE_DIR/work"; REQ="$STATE_DIR/request.json"
 LOGF="$STATE_DIR/move.log"
+PENDING="$STATE_DIR/pending-move.json"        # root-written: which move the mover was started on (boot recovery reads it)
+LOCK="$STATE_DIR/update-move.lock"; LOCK_WAIT="${TRINITYONE_LOCK_WAIT:-1800}"
+MODE="${1:-}"                                   # "" = act on a request; --recover-only = boot; --finish-check = after the relay started
 
 mkdir -p "$STATE_DIR" "$WORK"
 chmod 0755 "$STATE_DIR"
@@ -65,18 +68,34 @@ stop_relay() { STOPPED_BY_US=1; systemctl stop "$SVC" || log "systemctl stop $SV
 # whatever happens below, never leave the relay stopped by accident (a relay we mean to leave stopped sets LEAVE_STOPPED)
 trap 'if [ "$STOPPED_BY_US" = 1 ] && [ "$LEAVE_STOPPED" = 0 ] && ! relay_active; then log "starting the relay again on the way out"; start_relay; fi' EXIT
 
+# Ownership by chown -R (it does not follow links). The 0600s are done AS THE SERVICE USER and only on a regular file
+# (audit C M3): root's chmod follows a link the running relay planted, so a relay could make root chmod a file of its choice.
 fix_perms() {   # fix_perms <folder>
-  local d="$1" f
+  local d="$1" f files=()
   chown -R "$SVC_USER:$SVC_USER" "$d" 2>/dev/null || true
-  chmod 0700 "$d" 2>/dev/null || true
-  for f in admin.json relay-key.json vapid.json release-key.pem; do [ -e "$d/$f" ] && chmod 0600 "$d/$f" 2>/dev/null; done
+  if [ -d "$d" ] && [ ! -L "$d" ]; then chmod 0700 -- "$d" 2>/dev/null || true; fi
+  for f in admin.json relay-key.json vapid.json release-key.pem; do files+=("$d/$f"); done
+  runuser -u "$SVC_USER" -- bash -c 'for f; do if [ -f "$f" ] && [ ! -L "$f" ]; then chmod 0600 -- "$f"; fi; done' _ "${files[@]}" 2>/dev/null || true
   return 0
 }
 
-exec 9>"$STATE_DIR/.helper.lock"
-flock 9 2>/dev/null || true
-chown "$SVC_USER:$SVC_USER" "$WORK" 2>/dev/null || true; chmod 0700 "$WORK"
 DATA="$(datadir)"
+# ONE LOCK FOR "Update now" AND A MOVE (audit C M2): relay-update.sh takes the same file. A move waits for a running
+# update; an update that finds a move running refuses. Without it the update's restart could start the relay on the old
+# folder in the middle of a copy and the move would "stand" with the live relay writing into a folder marked MOVED-TO.
+exec 9>"$LOCK"
+if ! flock -w "$LOCK_WAIT" 9 2>/dev/null; then
+  log "another root job (an update?) still holds $LOCK after ${LOCK_WAIT}s"
+  if [ -z "$MODE" ]; then
+    # consume whatever was asked, say why in the journal, touch nothing else
+    for f in .move-request .remove-old-request; do
+      if [ -e "$DATA/$f" ] || [ -L "$DATA/$f" ]; then srv take-request --file "$DATA/$f" --out "$REQ" >/dev/null 2>&1; rm -f "$REQ"; fi
+    done
+    srv refuse --state "$STATE" --code update-in-progress --from "$DATA" >/dev/null
+  fi
+  exit 0
+fi
+chown "$SVC_USER:$SVC_USER" "$WORK" 2>/dev/null || true; chmod 0700 "$WORK"
 systemctl is-active --quiet "$SVC-tunnel" 2>/dev/null && TUN_WAS=1
 
 # ROLL BACK a move whose check failed (or whose record could not be written). The relay is stopped, the mover's own
@@ -96,17 +115,60 @@ rollback_flow() {   # rollback_flow <why>
 }
 
 # The step-8 check. beginCheck runs BEFORE the relay starts; the identity is proven after, by signature.
-finish_check() {
-  local cur pub r
-  r="$(srv begin-check --state "$STATE")" || { log "begin-check failed: $r"; rollback_flow "the copy did not pass the check before the relay started ($r)"; return; }
-  cur="$(srv pointer --state "$STATE" | jget dataDir)"; pub="$(srv current-pub --dir "$cur" | jget pub)"
-  fix_perms "$cur"                       # begin-check opened the database as root
-  start_relay                            # <- AFTER begin-check: the relay must never write before the exact counts are on record
+# verify_started: the relay is up on <cur>: prove it is the same relay, compare, keep the move or roll back.
+verify_started() {   # verify_started <folder> <pub>
+  local cur="$1" pub="$2" r
   r="$(srv prove --port "$PORT" --pub "$pub" --tries "$PROVE_TRIES" --interval "$PROVE_SLEEP")" || { rollback_flow "the relay on the new folder could not prove it is the same relay ($r)"; return; }
   r="$(srv compare --state "$STATE" --pub "$pub")" || { rollback_flow "the new folder does not hold what the old one did ($r)"; return; }
   fix_perms "$cur"
   r="$(srv pass --state "$STATE")"; log "move stands: $r"
 }
+finish_check() {
+  local cur pub r
+  # the unit must be down while the exact counts are taken (audit C M2: nothing may have written before beginCheck)
+  if relay_active; then log "the relay unit is running before the check; stopping it first"; stop_relay; fi
+  r="$(srv begin-check --state "$STATE")" || { log "begin-check failed: $r"; rollback_flow "the copy did not pass the check before the relay started ($r)"; return; }
+  cur="$(srv pointer --state "$STATE" | jget dataDir)"; pub="$(srv current-pub --dir "$cur" | jget pub)"
+  fix_perms "$cur"                       # begin-check opened the database as root
+  start_relay                            # <- AFTER begin-check: the relay must never write before the exact counts are on record
+  verify_started "$cur" "$pub"
+}
+
+# BOOT RECOVERY (audit C M1), run by trinityone-move-recover.service BEFORE the relay unit starts. It never starts or stops
+# the relay (the unit is ordered after it; starting it from here would deadlock). A helper killed mid-copy leaves the
+# journal 'copying' (the card would say "under way" for ever and the gateway would refuse every new request), and a
+# helper killed between the mover's switch and the relay.env write leaves the old folder marked MOVED-TO, so the relay
+# would refuse it (exit 78) and stay down. The pending-move file says which move the scratch journal belongs to.
+recover_boot() {
+  local r d a
+  if [ -f "$PENDING" ]; then
+    log "boot: a move was under way when this box stopped -- reading what the mover left"
+    r="$(srv absorb-pending --state "$STATE" --work "$WORK" --pending "$PENDING")"; log "boot: absorb: $r"
+    rm -f "$PENDING"
+  fi
+  if [ -f "$STATE" ] && [ "$(srv active --state "$STATE" | jget active)" = true ]; then
+    log "boot: a data move was interrupted -- recovering before the relay starts"
+    r="$(srv recover --state "$STATE")" || { log "boot: recovery refused: $r (the relay will refuse to start; see $STATE)"; return 0; }
+    d="$(printf '%s' "$r" | jget dataDir)"; a="$(printf '%s' "$r" | jget action)"
+    [ -n "$d" ] && [ "$d" != "$(datadir)" ] && { apply "$d" || log "boot: could not record $d in relay.env"; }
+    if [ "$a" = check ] && [ -n "$d" ]; then
+      r="$(srv begin-check --state "$STATE")" && fix_perms "$d" || log "boot: begin-check failed: $r (trinityone-move-finish rolls the move back)"
+    fi
+  fi
+  return 0
+}
+# After the relay is up: if boot recovery left a check to finish, finish it (prove, compare, keep or roll back).
+finish_after_boot() {
+  local cur pub
+  [ -f "$STATE" ] && [ "$(srv active --state "$STATE" | jget state)" = checking ] || return 0
+  cur="$(srv pointer --state "$STATE" | jget dataDir)"; pub="$(srv current-pub --dir "$cur" | jget pub)"
+  log "after boot: finishing the check of a recovered move"
+  verify_started "$cur" "$pub"
+}
+case "$MODE" in
+  --recover-only) recover_boot; exit 0;;
+  --finish-check) finish_after_boot; exit 0;;
+esac
 
 # An earlier run killed part-way: put the folders in a state the relay can start from, before anything else.
 recover_interrupted() {
@@ -127,7 +189,7 @@ handle_remove_old() {
   if ! r="$(srv take-request --file "$DATA/.remove-old-request" --out "$REQ")"; then
     log "remove-old request unreadable: $r"; srv refuse --state "$STATE" --code "$(printf '%s' "$r" | jget code)" >/dev/null; return
   fi
-  r="$(srv remove-old --state "$STATE" --request "$REQ" --live "$DATA")"; local rc=$?
+  r="$(srv remove-old --state "$STATE" --request "$REQ" --live "$DATA" --run-as-user "$SVC_USER")"; local rc=$?
   rm -f "$REQ"
   log "remove-old: $r"
   [ "$rc" != 0 ] && [ "$(printf '%s' "$r" | jget code)" = not-recorded ] && srv refuse --state "$STATE" --code remove-not-recorded >/dev/null
@@ -165,9 +227,11 @@ handle_move() {
   AS_USER=(runuser -u "$SVC_USER" --)
   if [ "$(stat -c %d "$target")" = "$(stat -c %d "$DATA")" ]; then AS_USER=(); log "same volume: the rename runs as root, nothing else does"; fi
   srv seed --state "$STATE" --work "$WORK" --from "$DATA" >/dev/null && chown -R "$SVC_USER:$SVC_USER" "$WORK" 2>/dev/null
+  printf '{"from":"%s","target":"%s"}\n' "$DATA" "$target" > "$PENDING"; chmod 0600 "$PENDING"   # boot recovery reads this
   out="$(${AS_USER[@]+"${AS_USER[@]}"} "$NODE" "$MV" move --from "$DATA" --drive "$drive" --pointer "$WORK/state.json" --port "$PORT" --mode server)"; rc=$?
   log "mover (exit $rc): $out"
   ab="$(srv absorb --state "$STATE" --work "$WORK" --from "$DATA" --target "$target")"; local abrc=$?
+  rm -f "$PENDING"
   if [ "$abrc" != 0 ]; then
     # the scratch journal is not believable: undo what the mover may have written, keep the old folder as it was
     log "the mover's journal was not accepted ($ab) -- putting the old folder back as it was"
