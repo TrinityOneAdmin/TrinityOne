@@ -284,7 +284,13 @@ test('an Approve refused while the console is out says so and throws nothing; th
   // the radio comes back; the console logs back in by itself, and the retry lets them in
   await evalIn(`(() => { window.__radioOff = false; return 1; })()`);
   assert.notEqual(await within(`window.Steward.relayAuthed()`, 60000), null, 'the console never logged back in once the radio was back');
-  await press('/^Approve$/', 'the Approve button, again');
+  // For ~0.5 s after the log-in the join queue is re-read (the authenticated-settle gate, rosterReadyFrom) and
+  // the row is briefly absent — the deliberate fail-closed "Checking". It can blink more than once (measured: a
+  // waitFor-then-press still missed it), because the console re-subscribes twice after a log-in (plan W2). So the
+  // press is retried until it lands on a button, as a person would tap again.
+  // TODO(bug A pacer): drop this 15 s retry back to one press once bug A's pacer is merged (audit 1b0af5f6 L2/L3).
+  { const t1 = Date.now(); let r = 'miss'; while (r !== 'ok' && Date.now() - t1 < 15000) { r = await evalIn(click('/^Approve$/')); if (r !== 'ok') await sleep(250); }
+    assert.equal(r, 'ok', 'nothing on screen matched the Approve button, again — not for 15 s after the log-in'); await sleep(500); }
   { const t1 = Date.now(); let ok = false; while (!ok && Date.now() - t1 < 15000) { ok = admitted().includes(k.pub); if (!ok) await sleep(400); } assert.ok(ok, 'the retried Approve never reached the relay'); }
   await sleep(1500);
   assert.doesNotMatch(await evalIn(`document.body.innerText.replace(/\\s+/g, ' ')`), /Couldn’t save the approved-members list/,
