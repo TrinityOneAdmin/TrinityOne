@@ -180,8 +180,7 @@ export function writeAtomic(file, text) {
   renameSync(tmp, file); fsyncDir(dirname(file));
 }
 const readJson = p => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } };
-// The gateway writes <dir>/.relay-lock {pid} at start-up (audit A #10). Held = that pid is alive (and, where /proc
-// exists, is a node process running gateway.mjs — so a reused pid does not block a move for ever).
+// The gateway writes <dir>/.relay-lock {pid, startedAt} at start-up (audit A #10); relayLockHeld() below decides.
 // The command line and start time of a live pid, ASYNC so a server caller's event loop is never blocked by a cold
 // PowerShell start (audit C C8). Linux: /proc + `ps -o lstart=`; macOS: `ps -ww` (without -ww BSD ps cuts the line
 // to the terminal width or 79 columns, which could hide "gateway.mjs" behind a long app path — audit C C2);
@@ -202,10 +201,13 @@ export async function processInfo(pid, pf = process.platform, run = execFileP) {
   const lstart = await run('ps', ['-p', String(pid), '-o', 'lstart='], 5000);
   return { commandLine: commandLine === null ? null : String(commandLine).trim(), startedAt: lstart ? (Date.parse(lstart.trim()) || null) : null };
 }
-// Held = the pid is alive, its command line runs gateway.mjs, and (when both times are known) it started no later
-// than the lock was written — a process that started AFTER the note is a different process that reused the pid.
-// Unknown counts as held (refusing a move is safe; moving a live relay's folder is not), and so does a node command
-// line long enough to have been cut short. The gateway itself never reads the lock, so it can never stop a relay.
+// Held = the pid is alive and its command line runs gateway.mjs — WHATEVER the start time says (audit D D-1: Linux
+// ps recomputes a start time from the current clock, so after a clock step a live relay's start looks later than its
+// lock; a gateway that reused the pid only makes the move wait, which is safe). The start time is used only to rule
+// out a pid reused by a NON-gateway process when the command line is ambiguous. Unknown counts as held (refusing a
+// move is safe; moving a live relay's folder is not), and so, on macOS only, does a node command line long enough to
+// have been cut short by BSD ps (Linux /proc and Windows are never truncated — D-4). The gateway itself never reads
+// the lock, so it can never stop a relay from starting.
 const START_SLACK_MS = 5000;   // ps lstart has 1 s resolution; clocks and the lock write add a little
 export async function relayLockHeld(dir, { platform = process.platform, info = processInfo } = {}) {
   const l = readJson(join(dir, '.relay-lock'));
@@ -213,12 +215,12 @@ export async function relayLockHeld(dir, { platform = process.platform, info = p
   if (!pid || pid === process.pid) return false;
   try { process.kill(pid, 0); } catch (e) { if (!e || e.code !== 'EPERM') return false; }
   const p = await info(pid, platform) || {};
-  const lockAt = l && Date.parse(l.startedAt);
-  if (p.startedAt && lockAt && p.startedAt > lockAt + START_SLACK_MS) return false;
   const cmd = p.commandLine;
+  if (cmd !== null && cmd !== undefined && /gateway\.mjs/.test(cmd)) return true;
+  const lockAt = l && Date.parse(l.startedAt);
+  if (p.startedAt && lockAt && p.startedAt > lockAt + START_SLACK_MS) return false;   // a later, non-gateway process
   if (cmd === null || cmd === undefined) return true;
-  if (/gateway\.mjs/.test(cmd)) return true;
-  if (/node/i.test(cmd) && cmd.length >= 79) return true;   // possibly truncated: do not trust the absence
+  if (platform === 'darwin' && /node/i.test(cmd) && cmd.length >= 79) return true;   // possibly cut short by BSD ps
   return false;
 }
 export function keyPubOf(dir) { const k = readJson(join(dir, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
@@ -622,7 +624,7 @@ function sweepTombstoneTemps(j, journal, now) {
   const pre = basename(j.from) + '.tombstone-tmp-';
   let rec = null;
   for (const n of names) {
-    if (!n.startsWith(pre)) continue;
+    if (!n.startsWith(pre) || !/^\d+$/.test(n.slice(pre.length))) continue;   // only names makeTombstoneDir writes (D N-4)
     const p = join(dirname(j.from), n), pid = Number(n.slice(pre.length));
     let alive = pid === process.pid; if (!alive && pid) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
     if (alive) continue;
@@ -664,9 +666,17 @@ export async function recoverMove({ journal, pointer, rename = renameSync, now =
     const dir = pr.v || j.from;
     if (j.relayPub && !gatewayWouldStart(dir)) return refuse(keyPubOf(dir) ? 'folder-not-startable' : 'drive-missing', dir);
     if (j.mode === 'rename') sweepTombstoneTemps(j, journal, now);
-    // Re-tombstone the old copy only while it still awaits removal, and only if this is still the relay that moved
-    // (audit C C3: a 'done' rename tombstone the steward removed is not re-created at every start).
-    if (j.state === 'awaiting-confirm' && keyPubOf(dir) === j.relayPub && j.to && samePath(dir, j.to, pf) && j.from && !samePath(j.from, j.to, pf)) ensureOldTombstoned(j, now);
+    // Re-tombstone the recorded old copy while it still awaits removal (audit C C3: a 'done' rename tombstone the
+    // steward removed is not re-created) — whatever identity the new folder holds now: the old copy still holds the
+    // data that moved, so a later restore elsewhere does not make it safe to start (audit D D-3).
+    if (j.state === 'awaiting-confirm' && j.to && samePath(dir, j.to, pf) && j.from && !samePath(j.from, j.to, pf)) ensureOldTombstoned(j, now);
+    // The folder is one the gateway would start, but it may no longer be the relay the pointer recorded (a restore
+    // of another relay's backup, or a drive letter now naming another relay's drive). Not refused — that would lock
+    // out a supported restore (C1) — but flagged, so the launcher compares it with the identity it PROVES via
+    // /relay-identity and tells the steward (audit D D-2).
+    const expected = (typeof pointer.relayPub === 'function' && pointer.relayPub()) || j.relayPub;
+    const found = keyPubOf(dir);
+    if (expected && found !== expected) return { dataDir: pr.v, action: 'none', identityChanged: true, expectedPub: expected, foundPub: found };
     return { dataDir: pr.v, action: 'none' };
   }
   if (j.mode === 'rename') sweepTombstoneTemps(j, journal, now);

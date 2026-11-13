@@ -439,3 +439,48 @@ test('C6 a tombstone temp folder left by a kill is cleared (dead pid, tombstone 
     assert.ok((t.journal.read().leftovers || []).some(l => l.path === odd && l.kind === 'tombstone-temp'), 'it is not listed as a leftover');
   } finally { t.done(); }
 });
+
+// ── Audit D of 260c4fdb ──────────────────────────────────────────────────────────────────────────────────────
+test('D-2 after a finished move, a folder now holding ANOTHER relay is started but flagged identity-changed', async () => {
+  const t = rig('rename');
+  try {
+    const m = await run(t); assert.equal(m.ok, true);
+    assert.equal((await beginCheck(t)).ok, true); checkPassed(t);
+    const same = await recoverMove(t);
+    assert.equal(same.action, 'none'); assert.ok(!same.identityChanged, 'flagged although nothing changed');
+    const k = generateSecretKey(), pub = getPublicKey(k);
+    writeFileSync(join(t.to, 'relay-key.json'), JSON.stringify({ sk: Buffer.from(k).toString('hex'), pub }));
+    writeFileSync(join(t.to, STAMP), JSON.stringify({ relayPub: pub }));
+    const r = await recoverMove(t);
+    assert.equal(r.action, 'none', 'refusing would lock out a supported restore (audit C C1)');
+    assert.equal(r.identityChanged, true, 'another relay\'s folder was accepted silently');
+    assert.equal(r.expectedPub, t.pub); assert.equal(r.foundPub, pub);
+  } finally { t.done(); }
+});
+
+test('D-3 copy move awaiting confirmation, a foreign restore, then the old drive returns: the old copy is still tombstoned', async () => {
+  const t = rig('copy');
+  try {
+    const m = await run(t, { rename: exdev() }); assert.equal(m.ok, true);
+    assert.equal((await beginCheck(t)).ok, true); checkPassed(t);
+    rmSync(join(t.from, MOVED_TO));                          // its drive was unplugged when MOVED-TO was due
+    const oldParent = dirname(t.from); renameSync(oldParent, oldParent + '-UNPLUGGED');
+    const k = generateSecretKey(), pub = getPublicKey(k);    // a restore of another relay's backup into the new folder
+    writeFileSync(join(t.to, 'relay-key.json'), JSON.stringify({ sk: Buffer.from(k).toString('hex'), pub }));
+    writeFileSync(join(t.to, STAMP), JSON.stringify({ relayPub: pub }));
+    await recoverMove(t);
+    renameSync(oldParent + '-UNPLUGGED', oldParent);
+    await recoverMove(t);
+    assert.ok(existsSync(join(t.from, MOVED_TO)), 'the old copy (which holds the data that moved) is left startable');
+  } finally { t.done(); }
+});
+
+test('N-4 only <leaf>.tombstone-tmp-<digits> folders are swept; anything else with that prefix is left alone', async () => {
+  const t = rig('rename');
+  try {
+    const m = await run(t); assert.equal(m.mode, 'rename');
+    const notes = t.from + '.tombstone-tmp-notes'; mkdirSync(notes);
+    await recoverMove(t);
+    assert.ok(existsSync(notes), 'a folder the mover never wrote was deleted');
+  } finally { t.done(); }
+});

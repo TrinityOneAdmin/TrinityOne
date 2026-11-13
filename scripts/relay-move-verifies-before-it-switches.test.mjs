@@ -424,15 +424,17 @@ test('C2 a command line cut short by macOS ps is not trusted; the lookup asks ps
   } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('C2 a process that started AFTER the lock was written is a reused pid, not the relay', async () => {
+test('C2 a NON-gateway process that started AFTER the lock was written is a reused pid, not the relay', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'trin-lock-c2b-'));
   const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'ignore' });
   try {
     const lockAt = Date.now() - 3600 * 1000;
     writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid, startedAt: new Date(lockAt).toISOString() }));
-    const gw = 'node scripts/gateway.mjs 8090';
-    assert.equal(await relayLockHeld(dir, { platform: 'win32', info: async () => ({ commandLine: gw, startedAt: lockAt + 60000 }) }), false, 'a later process with the same pid was taken for the relay');
-    assert.equal(await relayLockHeld(dir, { platform: 'win32', info: async () => ({ commandLine: gw, startedAt: lockAt - 1000 }) }), true);
+    // audit D D-1: the start time only rules out a pid reused by something that is NOT a gateway (here: an unreadable
+    // command line). A gateway line is held whatever the start time says — see the D-1 test.
+    assert.equal(await relayLockHeld(dir, { platform: 'win32', info: async () => ({ commandLine: null, startedAt: lockAt + 60000 }) }), false, 'a later process with the same pid was taken for the relay');
+    assert.equal(await relayLockHeld(dir, { platform: 'win32', info: async () => ({ commandLine: null, startedAt: lockAt - 1000 }) }), true);
+    assert.equal(await relayLockHeld(dir, { platform: 'win32', info: async () => ({ commandLine: 'node scripts/gateway.mjs 8090', startedAt: lockAt + 60000 }) }), true);
     const real = await processInfo(child.pid, 'linux');
     assert.ok(real.startedAt && Math.abs(real.startedAt - Date.now()) < 120000, 'ps -o lstart= gave no usable start time: ' + real.startedAt);
   } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
@@ -473,4 +475,30 @@ test('C1 gatewayWouldStart judges a folder by its OWN key: a restored foreign id
     assert.equal(gatewayWouldStart(t.from), true);
     writeFileSync(join(t.from, MOVED_TO), 'x'); assert.equal(gatewayWouldStart(t.from), false);
   } finally { t.done(); }
+});
+
+// ── Audit D of 260c4fdb ──────────────────────────────────────────────────────────────────────────────────────
+test('D-1 a live gateway is held even when the lock\'s clock reads behind its start time (a clock step on Linux)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-lock-d1-'));
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)', 'scripts/gateway.mjs', '8090'], { stdio: 'ignore' });
+  try {
+    for (const behind of [10e3, 3600e3]) {
+      writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid, startedAt: new Date(Date.now() - behind).toISOString() }));
+      assert.equal(await relayLockHeld(dir, { platform: 'linux' }), true, `a LIVE relay read as "not held" with the lock clock ${behind / 1000}s behind — the mover would move its folder`);
+    }
+  } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('D-4 the "possibly cut short" rule is macOS-only', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-lock-d4-'));
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'ignore' });
+  try {
+    writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid }));
+    const long = '/usr/local/bin/node /home/someone/a-long-running-node-tool/with/a/long/path/index.js --flag';
+    assert.ok(long.length >= 79);
+    const info = async () => ({ commandLine: long, startedAt: null });
+    assert.equal(await relayLockHeld(dir, { platform: 'linux', info }), false, 'Linux /proc is never cut short: a long node tool that reused the pid blocked a move');
+    assert.equal(await relayLockHeld(dir, { platform: 'win32', info }), false);
+    assert.equal(await relayLockHeld(dir, { platform: 'darwin', info }), true);
+  } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
 });
