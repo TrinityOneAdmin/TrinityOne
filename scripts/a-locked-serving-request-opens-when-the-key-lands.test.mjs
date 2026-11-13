@@ -423,6 +423,9 @@ function publishers(asked) {
     rosterFor: () => ({ roles: [{ id: 'r1' }], pods: [{ name: 'Pod A', fills: {} }], people: [] }), todayISO: () => '2026-09-30',
     // the stale-draft guard (a-rota-draft-does-not-overwrite-another-stewards-publish.test.mjs): nobody else has published here
     rotaBehind: () => false, skipNote: () => '', staleMsg: '', setDraft: () => {},
+    // publish / rotatePods / autoFillAhead pin the service they act on first (DashRota's pinSel, M2 of the audit of
+    // 4c47c063); the selection is not what this file tests
+    pinSel: () => {},
   };
   const names = Object.keys(world);
   // The verdict rule is file-level since 2026-10-02 (rotaSlotVerdict, shared with the calendar and the coverage
