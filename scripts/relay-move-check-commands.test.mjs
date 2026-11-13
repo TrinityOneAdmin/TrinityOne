@@ -19,7 +19,7 @@ import { promisify } from 'node:util';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { freePort } from './relay-network-harness.mjs';
 import { openStore } from './event-store.mjs';
-import { countRows, moverLockHeld } from './relay-move.mjs';
+import { countRows, moverLockHeld, moveRelayData, jsonPointer } from './relay-move.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MOVER = join(ROOT, 'scripts/relay-move.mjs');
@@ -134,4 +134,22 @@ test('N1: a live pid whose command line cannot be read, but which STARTED AFTER 
   // a readable command line decides on its own: a mover is held, anything else is not
   assert.equal(await moverLockHeld(lock, { platform: 'win32', info: async () => ({ commandLine: 'node scripts/relay-move.mjs move', startedAt: t0 - 100 }) }), true);
   assert.equal(await moverLockHeld(lock, { platform: 'win32', info: async () => ({ commandLine: 'svchost.exe -k x', startedAt: t0 - 100 }) }), false);
+});
+
+test('verify journals PROGRESS: bytes hashed keep growing while a big file is verified, then an integrity phase marker, so a guard can tell a long verify from a stuck one', async () => {
+  const fx = folder(5);
+  writeFileSync(join(fx.data, 'big.bin'), Buffer.alloc(12 * 1024 * 1024, 5));
+  const to = join(fx.base, 'drive'); mkdirSync(to);
+  const writes = [];
+  const journal = { read: () => writes.at(-1) || null, write: v => { writes.push(JSON.parse(JSON.stringify(v))); } };
+  const exdev = () => { throw Object.assign(new Error('x'), { code: 'EXDEV' }); };
+  const r = await moveRelayData({ from: fx.data, to: join(to, 'trinityone-relay'), pointer: jsonPointer(join(fx.base, 'p.json')), journal, relayRunning: async () => false, mode: 'suite', rename: exdev, codeDir: ROOT, mounts: [], _verifyChunk: 1024 * 1024 });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const ver = writes.filter(w => w.state === 'verifying');
+  const hashing = ver.filter(w => w.phase === 'hashing').map(w => w.verifiedBytes);
+  assert.ok(hashing.length >= 8, 'verify wrote almost no progress: ' + hashing.length);
+  assert.ok(hashing.every((v, i) => i === 0 || v > hashing[i - 1]), 'verifiedBytes did not strictly grow: ' + hashing.join(','));
+  assert.ok(hashing.at(-1) >= 20 * 1024 * 1024 && ver[0].verifyTotalBytes >= 24 * 1024 * 1024, 'both streams are not counted');
+  const phases = ver.map(w => w.phase);
+  assert.ok(phases.indexOf('integrity') > phases.lastIndexOf('hashing') && phases.indexOf('counting') > phases.indexOf('integrity'), 'phase markers out of order: ' + phases.join(','));
 });
