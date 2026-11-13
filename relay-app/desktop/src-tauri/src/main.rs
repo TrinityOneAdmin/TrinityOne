@@ -1241,11 +1241,16 @@ fn restore_store(data_dir: &Path, backup: &Path, log: &Path) {
             staged.push((f, tmp));
         }
     }
+    // Rename each copy straight OVER its live file (std::fs::rename replaces the target on Windows too), with the
+    // short retry for a file Defender is still scanning; only side files the backup does not have are deleted.
+    // The live store is therefore never gone before its replacement is in place (audit 3e4ffed4 L1).
     for f in DB_FILES {
-        let _ = std::fs::remove_file(data_dir.join(f));
+        if !staged.iter().any(|(g, _)| *g == f) {
+            let _ = std::fs::remove_file(data_dir.join(f));
+        }
     }
     for (f, tmp) in staged {
-        if let Err(e) = std::fs::rename(&tmp, data_dir.join(f)) {
+        if let Err(e) = rename_retry(&tmp, &data_dir.join(f), log) {
             applog(log, &format!("suite: RESTORE of {f} failed at the final rename: {e} (the backup is still at {backup:?})"));
         }
     }

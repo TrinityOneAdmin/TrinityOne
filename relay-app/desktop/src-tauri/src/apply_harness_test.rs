@@ -627,7 +627,7 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
     write(&fx.data_dir.join("relay.sqlite-wal"), "ORIGINAL-WAL");
     // "9999999999" is a backup dated in the future (the clock went back since it was made): the new backup must
-    // still sort after it and survive the pruning (audit 00aadeed N1), or the restore below would find nothing.
+    // be named after it (audit 00aadeed N1) — asserted by name below.
     for old in ["100", "200", "9999999999"] {
         write(&fx.suite_dir.join("db-backup").join(old).join("relay.sqlite"), "old");
     }
@@ -650,6 +650,8 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     assert_eq!(kept.len(), DB_BACKUPS_KEPT, "backups must be pruned to the newest {DB_BACKUPS_KEPT}");
     assert!(!fx.suite_dir.join("db-backup").join("100").exists(), "the oldest backup must be pruned");
     assert!(fx.suite_dir.join("db-backup").join("10000000000").join("relay.sqlite").exists(), "the backup just made must be kept");
+    // audit 3e4ffed4 L3: the bad relay was asked to close its tunnel before the rollback stop too
+    assert!(fx.data_dir.join("prepared-by-WRONG-not-v2").exists(), "the rollback stop did not close the tunnel first");
     host.stop_relay();
     eprintln!("   (e) OK (+ store restored, backups pruned) — wrong-version v2 rolled back to v1, sha-v2 quarantined, state=rolledback");
 }
