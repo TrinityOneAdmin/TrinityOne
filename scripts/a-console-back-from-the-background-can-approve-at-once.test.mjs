@@ -88,18 +88,27 @@ const HOOK = (relayUrl) => `(() => { if (window.__hooked) return; window.__hooke
     const s = p === undefined ? new W(url) : new W(url, p); window.__socks.push(s);
     // what the relay said "rate-limited" to — a CLOSED for a REQ, an OK false for an EVENT (the rate-limit rows below)
     s.addEventListener('message', (ev) => { const d = ev.data; if (typeof d !== 'string' || d.indexOf('rate-limited') < 0) return;
-      if (d.startsWith('["CLOSED"')) window.__rlClosed++; else if (d.startsWith('["OK"')) window.__rlOk.push(d); });
+      if (d.startsWith('["CLOSED"')) { window.__rlClosed++; try { window.__rlClosedIds.push(JSON.parse(d)[1]); } catch (e) {} } else if (d.startsWith('["OK"')) window.__rlOk.push(d); });
     return s; };
   // THE RELAY'S PER-SECOND LIMIT, FILLED FROM UNDER THE CONSOLE (the rate-limit rows below). Every frame the page sends
   // passes here, BELOW the console's own engine. Armed by window.__floodD (a d-tag prefix): just before the console's next
   // write of that document, 110 cheap REQs go out on the same socket first, so the relay has counted past its 100
   // for that second and answers the write itself with its genuine "rate-limited:" — the exact answer a cold reopen's
   // resubscribe burst produced. REQ frames are counted (window.__reqAt) so a burst row can say how many really left.
-  window.__rlClosed = 0; window.__rlOk = []; window.__reqAt = []; window.__floodD = ''; window.__floodedId = '';
+  // Armed instead by window.__floodReqD (a d-tag): the flood goes out just before the next REQ naming that document, so the
+  // relay CLOSES that read as rate-limited — genuinely — and window.__floodedSub says which subscription it was.
+  window.__rlClosed = 0; window.__rlClosedIds = []; window.__rlOk = []; window.__reqAt = []; window.__reqSubs = [];
+  window.__floodD = ''; window.__floodedId = ''; window.__floodReqD = ''; window.__floodedSub = '';
   const Sd = W.prototype.send;
   W.prototype.send = function (m) {
     if (typeof m === 'string') {
-      if (m.startsWith('["REQ"')) window.__reqAt.push(performance.now());
+      if (m.startsWith('["REQ"')) { window.__reqAt.push(performance.now()); try { window.__reqSubs.push(JSON.parse(m)[1]); } catch (e) {} }
+      if (window.__floodReqD && m.startsWith('["REQ"') && m.indexOf('"' + window.__floodReqD) > 0) {
+        window.__floodReqD = '';
+        try { window.__floodedSub = JSON.parse(m)[1]; } catch (e) {}
+        for (let i = 0; i < 110; i++) Sd.call(this, '["REQ","__flood",{"ids":["' + '0'.repeat(64) + '"]}]');
+        Sd.call(this, '["CLOSE","__flood"]');
+      }
       if (window.__floodD && m.startsWith('["EVENT"') && m.indexOf('"' + window.__floodD) > 0) {
         window.__floodD = '';
         try { window.__floodedId = JSON.parse(m)[1].id; } catch (e) {}
@@ -390,4 +399,26 @@ test('a Block the relay answers "rate-limited" is asked again and the blocklist 
   assert.equal(r, 'ok', 'A BLOCK THE RELAY ANSWERED "rate-limited" WAS REPORTED AS NOT SAVED — it was never asked again');
   const list = held('dtag = ?', 'trinityone/blocked:' + churchA).flatMap(e => { try { return JSON.parse(e.content).pubkeys || []; } catch { return []; } });
   assert.ok(list.includes(k.pub), 'the relay never stored the blocklist naming them');
+});
+
+// …AND A READ THE RELAY REALLY CLOSED AS RATE-LIMITED IS ASKED AGAIN, AND ITS DATA ARRIVES (audit of 536bcc80, L-a). Before the
+// re-ask, nostr-tools took the relay's CLOSED as the end of stored events and dropped the subscription: a reader like this one
+// delivers from `oneose`, so it showed an empty list until the next reconnect. The relay's limit is filled from under the
+// engine just before this read's REQ, so the CLOSED is the relay's own.
+test('a read the relay CLOSES as rate-limited is asked again a moment later, and its document arrives', { skip: SKIP, timeout: 300000 }, async () => {
+  await waitFor(`window.Steward.relayAuthed() && window.Steward.relaysHealthy()`, 120000, 'logged in and healthy first');
+  const A1 = H.key(), A2 = H.key();
+  assert.ok(await evalIn(`Promise.resolve(window.Steward.setReseats([{ old: ${JSON.stringify(A1.pub)}, new: ${JSON.stringify(A2.pub)}, name: 'Re-seated', at: Math.floor(Date.now() / 1000) }])).then(r => !!r)`),
+    'CONTROL: the re-seat document could not be written — there would be nothing for the read to bring in');
+  await sleep(2500);   // out of that write's second
+  await evalIn(`(() => { window.__rlClosedIds = []; window.__reqSubs = []; window.__floodedSub = ''; window.__floodReqD = 'trinityone/reseat:';
+    window.__reseatGot = null; window.__reseatStop = window.Steward.subscribeReseats(l => { if (Array.isArray(l) && l.some(p => p && p.new === ${JSON.stringify(A2.pub)})) window.__reseatGot = Date.now(); });
+    return 1; })()`);
+  const got = await within(`!!window.__reseatGot`, 20000);
+  const r = await evalIn(`(() => { const id = window.__floodedSub; try { window.__reseatStop && window.__reseatStop(); } catch (e) {}
+    return { id, closed: window.__rlClosedIds.filter(x => x === id).length, asked: window.__reqSubs.filter(x => x === id).length }; })()`);
+  assert.ok(r.id, 'CONTROL: the read never sent its REQ on a socket this page could see — this row proves nothing');
+  assert.ok(r.closed >= 1, 'CONTROL: the relay did NOT close the read as rate-limited — the flood did not fill its limit, so this row proves nothing');
+  assert.ok(r.asked >= 2, `THE READ THE RELAY CLOSED AS RATE-LIMITED WAS NEVER ASKED AGAIN (its REQ went out ${r.asked} time${r.asked === 1 ? '' : 's'})`);
+  assert.notEqual(got, null, 'the re-seat document never reached the reader — a read the relay closed as rate-limited stays empty');
 });

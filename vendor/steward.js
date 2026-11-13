@@ -18999,7 +18999,7 @@ zoo`.split("\n");
     try {
       const _dd = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
       if (_dd) {
-        _pk = (evt.pubkey || "") + "|" + _dd;
+        _pk = (evt.kind | 0) + "|" + (evt.pubkey || "") + "|" + _dd;
         let s0 = null;
         const done = new Promise((r) => {
           s0 = r;
@@ -19245,7 +19245,7 @@ zoo`.split("\n");
     try {
       const _dd = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
       if (_dd) {
-        _pk = (evt.pubkey || "") + "|" + _dd;
+        _pk = (evt.kind | 0) + "|" + (evt.pubkey || "") + "|" + _dd;
         let s0 = null;
         const done = new Promise((r) => {
           s0 = r;
