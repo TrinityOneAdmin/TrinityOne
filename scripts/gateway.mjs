@@ -7176,7 +7176,7 @@ async function storageReport(fresh) {
     current: { path: DATA_DIR, realPath: dataReal, drive: curMount ? { mountpoint: curMount.mountpoint, fsType: curMount.fsType } : null, sizeBytes: size.bytes, files: size.files, freeBytes: curFree },
     move: j ? { state: j.state, mode: j.mode || null, from: j.from || null, to: j.to || null, code: j.code || null, detail: j.detail || null, note: j.note || null,
       startedAt: j.startedAt || null, switchedAt: j.switchedAt || null, checkedAt: j.checkedAt || null, endedAt: j.endedAt || null,
-      totalBytes: j.totalBytes ?? null, copiedBytes: j.copiedBytes ?? null, counts: j.counts || null } : null,
+      totalBytes: j.totalBytes ?? null, copiedBytes: j.copiedBytes ?? null, counts: j.counts || null, refusal: j.refusal || null } : null,
     oldCopy: old ? { path: old.path, since: old.since || null, exists: existsSync(old.path), ageDays, remind: ageDays !== null && ageDays >= STORAGE_REMIND_DAYS,
       sizeBytes: j.totalBytes ?? null, mountpoint: (mountFor(old.path, mounts || [], pf) || {}).mountpoint || null } : null,
     // set-aside copies and rename tombstones the mover recorded (audit B N8); an entry the remover marked removedAt

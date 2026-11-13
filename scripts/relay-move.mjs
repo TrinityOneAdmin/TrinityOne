@@ -467,7 +467,9 @@ export async function moveRelayData(opts) {
   // 1. same volume: one atomic rename
   journal.write({ ...base, state: 'renaming', mode: 'rename' });
   let removedEmpty = false, oldNote = null;
-  if (existsSync(to)) {   // empty or a stale tombstone (checked above); Windows can't rename onto one
+  // POSIX renames onto an EMPTY folder, so only a stale tombstone (or Windows, which can't rename onto any) is cleared;
+  // the server helper (step 6) pre-creates the leaf root-owned-parent, where the service user cannot rmdir it
+  if (existsSync(to) && (pf === 'win32' || readdirSync(to).length)) {   // empty or a stale tombstone (checked above)
     try { oldNote = readFileSync(join(to, MOVED_TO), 'utf8'); } catch {}
     rmSync(to, { recursive: true, force: true }); removedEmpty = true;
   }
