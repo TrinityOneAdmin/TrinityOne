@@ -10,7 +10,7 @@
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use trinityone_launcher::*;
 
@@ -22,6 +22,8 @@ struct Sim {
     env: Vec<(String, String)>,
     quit: Arc<AtomicBool>,
     live: Arc<Mutex<Option<Arc<Mutex<Child>>>>>,
+    /// bytes of output the relay has written: its progress, for the post-move bound (full audit M-1)
+    activity: Arc<AtomicU64>,
 }
 
 struct SimRelay {
@@ -79,23 +81,27 @@ impl Host for Sim {
         say(&format!("SIM relay-pid {}", child.id()));
         let err = Arc::new(Mutex::new(String::new()));
         if let Some(mut so) = child.stdout.take() {
+            let act = self.activity.clone();
             std::thread::spawn(move || {
                 let mut b = [0u8; 4096];
                 while let Ok(n) = so.read(&mut b) {
                     if n == 0 {
                         break;
                     }
+                    act.fetch_add(n as u64, Ordering::SeqCst);
                 }
             });
         }
         if let Some(mut se) = child.stderr.take() {
             let e2 = err.clone();
+            let act = self.activity.clone();
             std::thread::spawn(move || {
                 let mut b = [0u8; 4096];
                 while let Ok(n) = se.read(&mut b) {
                     if n == 0 {
                         break;
                     }
+                    act.fetch_add(n as u64, Ordering::SeqCst);
                     let mut g = e2.lock().unwrap();
                     g.push_str(&String::from_utf8_lossy(&b[..n]));
                     let l = g.len();
@@ -138,6 +144,9 @@ impl Host for Sim {
     }
     fn quitting(&self) -> bool {
         self.quit.load(Ordering::Relaxed)
+    }
+    fn activity(&self) -> u64 {
+        self.activity.load(Ordering::SeqCst)
     }
 }
 
@@ -183,7 +192,7 @@ fn main() {
             q.store(true, Ordering::Relaxed);
         });
     }
-    let sim = Sim { node: get("node"), payload: PathBuf::from(get("payload")), gateway: a.get("gateway").cloned().unwrap_or_else(|| "scripts/gateway.mjs".into()), port: cfg.port, env: envs, quit: quit.clone(), live: live.clone() };
+    let sim = Sim { node: get("node"), payload: PathBuf::from(get("payload")), gateway: a.get("gateway").cloned().unwrap_or_else(|| "scripts/gateway.mjs".into()), port: cfg.port, env: envs, quit: quit.clone(), live: live.clone(), activity: Arc::new(AtomicU64::new(0)) };
     let end = run(&sim, &cfg);
     say(&format!("SIM end {end:?}"));
     // the app closing takes the relay with it

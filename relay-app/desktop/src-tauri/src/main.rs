@@ -1901,7 +1901,9 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     //     written (it then wrote .move-request and stopped itself). Now that it is down nothing can write one, so this
     //     check is final: if a request is there, nothing has been touched yet — put the snapshot back for a later
     //     window, record nothing, and do NOT restart the relay: the launcher carries out the move (Tick::MoveRequested).
-    if was_running && env.data_dir.join(launcher::MOVE_REQUEST).exists() {
+    //     Whether or not the relay was still running when the apply began (full audit L-1: it may have stopped itself
+    //     for the move in the moment between the tick's own request check and here).
+    if env.data_dir.join(launcher::MOVE_REQUEST).exists() {
         applog(log, "suite: APPLY deferred — the relay asked for a data move just before it stopped; the move goes first, the update waits");
         if !staging.join("bundle.tgz").exists() {
             let _ = rename_retry(&a_tgz, &staging.join("bundle.tgz"), log);
@@ -2075,10 +2077,11 @@ impl Drop for ApplyMarker {
 
 // Is a data move under way according to its journal (storage.json `move.state`)? The same set as relay-move.mjs
 // ACTIVE. The launcher only ticks while no move runs, so this is a second lock on the same door, not the first.
+// (Pinned to relay-move.mjs's list by the_shells_active_move_states_are_relay_move_mjs_active_states — full audit N-1.)
+const MOVE_ACTIVE_STATES: [&str; 7] = ["renaming", "copying", "verifying", "switching", "switched", "checking", "rolling-back"];
 fn move_journal_active(config_file: &Path) -> bool {
-    const ACTIVE: [&str; 7] = ["renaming", "copying", "verifying", "switching", "switched", "checking", "rolling-back"];
     let v = launcher::read_state(config_file);
-    v.get("move").and_then(|m| m.get("state")).and_then(|s| s.as_str()).map(|s| ACTIVE.contains(&s)).unwrap_or(false)
+    v.get("move").and_then(|m| m.get("state")).and_then(|s| s.as_str()).map(|s| MOVE_ACTIVE_STATES.contains(&s)).unwrap_or(false)
 }
 
 // EVERY START, before the relay first runs: repair a data restore a crash interrupted, and leave a note for the
@@ -2175,6 +2178,10 @@ struct SuiteHost<'s> {
     /// the auto-update's view of what runs (code dir, alive-flag, stop-timeout back-off), from startup()
     run: Mutex<Option<RunState>>,
     last_apply_eval: Mutex<Option<Instant>>,
+    /// owner decision (a): state.json as it was BEFORE an update that has just been applied (at a start or by a tick),
+    /// until the launcher has proven the relay it put in place; `rejecting` holds it while the launcher decides
+    pre_update_state: Mutex<Option<String>>,
+    rejecting: Mutex<Option<String>>,
 }
 
 impl<'s> SuiteHost<'s> {
@@ -2216,6 +2223,43 @@ impl<'s> SuiteHost<'s> {
         let why = json_str_value(&st, "lastReason").filter(|s| !s.is_empty()).unwrap_or_else(|| "an update stopped the relay and could not start it again".into());
         ("Your relay stopped".into(), format!("{why}. Details are in {}", self.log.display()))
     }
+
+    // After startup()/maybe_apply(): did an update just get applied (state.json changed to an "applied…" outcome)?
+    // Then keep the state from before it, so a failed identity proof can roll it back (owner decision (a)).
+    fn note_fresh_update(&self, data_dir: &Path, before: String) {
+        let after = read_suite_state(data_dir);
+        let applied = json_str_value(&after, "lastOutcome").map(|o| o.starts_with("applied")).unwrap_or(false);
+        *self.pre_update_state.lock().unwrap() = if applied && after != before { Some(before) } else { None };
+    }
+}
+
+fn read_suite_state(data_dir: &Path) -> String {
+    std::fs::read_to_string(data_dir.join("suite").join("state.json")).unwrap_or_default()
+}
+
+// OWNER DECISION (a), 2026-11-13: a relay that an update has just put in place and that fails the launcher's identity
+// proof (a different key, or none) is a FAILED UPDATE. Through the existing rollback path: quarantine the sha (a bad
+// release is never applied again), close the tunnel and stop it, then rollback_and_restart with the backup the apply
+// made — the church's data is put back, the code goes back to last-good (or the shipped payload), auto-update is
+// switched off and "rolledback" is recorded with the reason. `prev_state_raw` is state.json from before the apply.
+fn reject_fresh_update(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str, why: &str) {
+    let now_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
+    let sha = json_str_value(&now_raw, "installedSha").unwrap_or_default();
+    let day = json_str_value(&now_raw, "lastApplied").unwrap_or_default();
+    let address_before = json_str_value(&now_raw, "addressBefore").unwrap_or_default();
+    applog(env.log, &format!("suite: FAILED UPDATE {} — {why}; rolling back and quarantining it", short_sha(&sha)));
+    if !sha.is_empty() {
+        let _ = write_file_atomic(&env.suite_dir.join("quarantine-sha"), &format!("{sha}\n"), env.log);
+    }
+    let _ = prepare_restart(env.data_dir, env.log);
+    env.host.stop_relay();
+    let stopped = wait_stopped(&st.alive, Duration::from_secs(20));
+    // the backup the apply made just before it swapped the code: the newest one (names are epoch seconds)
+    let backup = std::fs::read_dir(env.suite_dir.join("db-backup"))
+        .ok()
+        .and_then(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().parse::<i64>().ok()).max())
+        .map(|n| env.suite_dir.join("db-backup").join(n.to_string()));
+    rollback_and_restart(env, st, prev_state_raw, &day, why, backup.as_deref(), stopped, &address_before);
 }
 
 // The auto-update's three capabilities, on the launcher's own process.
@@ -2275,7 +2319,9 @@ impl<'s> launcher::Host for SuiteHost<'s> {
         if env.checking {
             applog(&self.log, "launch: this start is a move's check; no update is applied before it");
         }
+        let before = read_suite_state(&env.data_dir);
         let st = self.with_apply_env(&env.data_dir, |ae| startup_with(ae, !env.checking));
+        self.note_fresh_update(&env.data_dir, before);
         *self.run.lock().unwrap() = Some(st);
         *self.last_apply_eval.lock().unwrap() = Some(Instant::now());
         match self.latest.lock().unwrap().take() {
@@ -2303,7 +2349,9 @@ impl<'s> launcher::Host for SuiteHost<'s> {
         {
             let mut run = self.run.lock().unwrap();
             let Some(st) = run.as_mut() else { return launcher::Tick::None };
+            let before = read_suite_state(data_dir);
             self.with_apply_env(data_dir, |ae| maybe_apply(ae, st));
+            self.note_fresh_update(data_dir, before);
         }
         if self.spawns.load(Ordering::SeqCst) != spawns0 {
             return match self.latest.lock().unwrap().take() {
@@ -2324,6 +2372,37 @@ impl<'s> launcher::Host for SuiteHost<'s> {
             return launcher::Tick::Stopped { title, reason };
         }
         launcher::Tick::None
+    }
+
+    fn activity(&self) -> u64 {
+        // the time of the relay's last line of output, kept by the one output pump (note_relay_activity)
+        RELAY_ACTIVITY_MS.load(Ordering::SeqCst)
+    }
+
+    fn fresh_update(&self) -> bool {
+        let pre = self.pre_update_state.lock().unwrap().take();
+        let fresh = pre.is_some();
+        *self.rejecting.lock().unwrap() = pre;
+        fresh
+    }
+
+    // Owner decision (a): the relay a just-applied update put in place failed the identity proof. Roll the update
+    // back through the existing rollback path and record it as a bad release; hand the launcher what runs instead.
+    fn reject_update(&self, data_dir: &Path, why: &str) -> launcher::Tick {
+        let Some(prev) = self.rejecting.lock().unwrap().take() else { return launcher::Tick::None };
+        let spawns0 = self.spawns.load(Ordering::SeqCst);
+        {
+            let mut run = self.run.lock().unwrap();
+            let Some(st) = run.as_mut() else { return launcher::Tick::None };
+            self.with_apply_env(data_dir, |ae| reject_fresh_update(ae, st, &prev, why));
+        }
+        if self.spawns.load(Ordering::SeqCst) != spawns0 {
+            if let Some(p) = self.latest.lock().unwrap().take() {
+                return launcher::Tick::Replaced(Box::new(p));
+            }
+        }
+        let (title, reason) = self.stopped_reason(data_dir);
+        launcher::Tick::Stopped { title, reason }
     }
 
     fn move_blocked(&self, data_dir: &Path) -> Option<String> {
@@ -2572,6 +2651,8 @@ fn main() {
                     stops: AtomicUsize::new(0),
                     run: Mutex::new(None),
                     last_apply_eval: Mutex::new(None),
+                    pre_update_state: Mutex::new(None),
+                    rejecting: Mutex::new(None),
                 };
                 let end = launcher::run(&host, &cfg);
                 applog(&host.log, &format!("launcher ended: {end:?}"));

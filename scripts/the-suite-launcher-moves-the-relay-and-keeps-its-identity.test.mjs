@@ -67,6 +67,9 @@ appendFileSync(env.TEST_STARTS_LOG, JSON.stringify({ dir: env.TRINITY_DATA_DIR, 
 if (env.TEST_EXIT_CODE) process.exit(Number(env.TEST_EXIT_CODE));
 if (env.TEST_HANG_DIR && env.TEST_HANG_DIR === env.TRINITY_DATA_DIR) { setInterval(() => {}, 1000); await new Promise(() => {}); }   // a relay that stays alive and never opens its port
 if (env.TEST_SLOW_START_MS) await new Promise(r => setTimeout(r, Number(env.TEST_SLOW_START_MS)));
+if (env.TEST_CHATTY_DIR && env.TEST_CHATTY_DIR === env.TRINITY_DATA_DIR) {   // a slow first start that keeps printing (a big store replaying)
+  const t0 = Date.now(); while (Date.now() - t0 < Number(env.TEST_CHATTY_MS)) { console.log('  replaying history… ' + (Date.now() - t0)); await new Promise(r => setTimeout(r, 150)); }
+}
 if (env.TEST_NO_PROOF) {   // a relay that serves its panel but cannot answer /relay-identity
   const http = await import('node:http'); const { syncBuiltinESMExports } = await import('node:module');
   const orig = http.default.createServer;
@@ -587,6 +590,22 @@ test('N6: after a move, a relay that hangs without opening its port is rolled ba
     assert.equal(starts[0].dir, newdir); assert.equal(starts.at(-1).dir, fx.data, 'after the hang the relay must run on the OLD folder');
     assert.equal(stateOf(fx).move.state, 'rolled-back');
     assert.equal((await proven(l)).relayPub, fx.pub); assert.equal(await events(l, fx.data), 6);
+  } finally { await l.stop(); }
+});
+
+test('full audit M-1: after a move, a relay that is slow to open its port but keeps printing is NEVER rolled back (progress, not the clock)', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 6 });
+  const newdir = await realCopyMove(fx, fx.home);
+  // the post-move bound is 8 steps (2 s) without progress; this relay takes 6 s but prints all the while
+  const l = await startLauncher(fx, { env: { TEST_CHATTY_DIR: newdir, TEST_CHATTY_MS: '6000' }, extra: ['--check-steps', '8'] });
+  try {
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 90000), true, 'the relay never opened. Log:\n' + l.log + JSON.stringify(stateOf(fx).move));
+    const starts = startsOf(fx);
+    assert.equal(starts.length, 1, 'the relay was restarted: ' + JSON.stringify(starts));
+    assert.equal(starts[0].dir, newdir);
+    assert.notEqual(stateOf(fx).move.state, 'rolled-back', 'a working relay was rolled back on the clock');
+    assert.ok(l.lines.some(x => x === 'SIM opened ' + newdir), l.lines.join('|'));
+    assert.equal((await proven(l)).relayPub, fx.pub); assert.equal(await events(l, newdir), 6);
   } finally { await l.stop(); }
 });
 

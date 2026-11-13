@@ -105,6 +105,21 @@ pub trait Host: Sync {
     fn sleep_ms(&self, ms: u64) {
         std::thread::sleep(Duration::from_millis(ms));
     }
+    /// A value that changes whenever the running relay shows it is working (the Suite: the time of its last line of
+    /// output). Only compared for change. Default: never changes, so only the step count decides.
+    fn activity(&self) -> u64 {
+        0
+    }
+    /// Was the relay just adopted put in place by a code update applied moments ago (at this start, or by the last
+    /// tick)? Asked once per adoption. Default: never.
+    fn fresh_update(&self) -> bool {
+        false
+    }
+    /// That fresh update failed the identity proof: roll it back. Replaced = the relay now running instead (proven
+    /// next); Stopped = none could be started; None = nothing was done.
+    fn reject_update(&self, _data_dir: &Path, _why: &str) -> Tick {
+        Tick::None
+    }
     /// The host's OWN crash recovery, run before ANY relay is started on `data_dir` — after the mover's recovery has
     /// decided the folder, before the step-8 begin-check counts it (the Suite: auto-update repairs a data restore a
     /// crash interrupted). Err((title, reason)) = start nothing; the splash says why.
@@ -137,8 +152,10 @@ pub struct Config {
     /// how long a launcher waits for a running mover that makes NO PROGRESS (its journal state / copiedBytes unchanged)
     /// before it says the move looks stuck. Progress resets the clock: a long copy is never "stuck" (audit N1, M-1)
     pub mover_wait_ms: u64,
-    /// after a MOVE, how many 250 ms steps the relay on the new folder gets to open its port before the check is
-    /// treated as failed and rolled back (audit N6). A normal start has no such bound.
+    /// after a MOVE, how many 250 ms steps the relay on the new folder may go WITHOUT PROGRESS (no new output, see
+    /// Host::activity) before the check is treated as failed and rolled back (audit N6). Any output resets the count:
+    /// a slow but working first start on a slow drive is never rolled back (full audit M-1, "progress, never the
+    /// clock"); a silent hang still is. A normal start has no such bound.
     pub check_steps: u32,
 }
 
@@ -445,6 +462,8 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
             // 5. wait for the port, or for the relay to exit. A relay that is merely SLOW is never killed or abandoned.
             let mut up = false;
             let (mut steps, mut told) = (0u32, false);
+            // the post-move bound counts steps WITHOUT PROGRESS; any output from the relay starts it again
+            let (mut quiet, mut last_activity) = (0u32, host.activity());
             loop {
                 if relay.exit().is_some() {
                     break;
@@ -458,9 +477,16 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                     break;
                 }
                 steps += 1;
-                // N6: right after a MOVE a relay that never opens its port is a failed check, not a slow start
-                if check && steps >= cfg.check_steps {
-                    host.log("the relay on the new folder never opened its port; the check failed, rolling back");
+                quiet += 1;
+                let a = host.activity();
+                if a != last_activity {
+                    last_activity = a;
+                    quiet = 0;
+                }
+                // N6: right after a MOVE a relay that never opens its port AND makes no progress is a failed check, not a
+                // slow start. Progress, not the clock (full audit M-1).
+                if check && quiet >= cfg.check_steps {
+                    host.log("the relay on the new folder never opened its port and made no progress; the check failed, rolling back");
                     relay.kill();
                     wait_exit(host, relay.as_ref());
                     if !roll_back(host, cfg, &mut rollbacks) {
@@ -511,7 +537,33 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                 // the move's check is over: a relay the host puts in its place later is proven, but is not a move's check
                 check = false;
             }
-            match compare_identity(proven.as_deref(), recorded.as_deref()) {
+            let identity = compare_identity(proven.as_deref(), recorded.as_deref());
+            // OWNER DECISION (full audit, 2026-11-13): a relay that a code UPDATE has just put in place and that proves
+            // a different key, or cannot prove one, is a FAILED UPDATE — not a restore. The panel is not opened for it;
+            // the host rolls the update back (and records it as a bad release) and the relay it starts instead is
+            // adopted and proven here like any other. On every other start a changed key is recorded and told, below,
+            // because restoring another relay's backup legitimately changes it.
+            if host.fresh_update() && matches!(identity, Identity::Changed { .. } | Identity::Unproven { .. }) {
+                let why = match &identity {
+                    Identity::Changed { .. } => "the update started a relay that proves a different identity",
+                    _ => "the update started a relay that could not prove its identity",
+                };
+                host.log(&format!("FAILED UPDATE: {why}; rolling it back"));
+                match host.reject_update(&dir, why) {
+                    Tick::Replaced(r) => {
+                        relay = r;
+                        continue 'adopt;
+                    }
+                    Tick::Stopped { title, reason } => {
+                        record_refusal(cfg, "start", "host-stopped", Some(&reason));
+                        host.progress(&Progress::Refused { title, reason: reason.clone() });
+                        return RunEnd::Refused(reason);
+                    }
+                    // the host could not roll it back: say so, as on any start, below
+                    _ => {}
+                }
+            }
+            match identity {
                 Identity::Same => set_identity_note(cfg, None),
                 Identity::NothingRecorded { .. } => {}
                 Identity::Changed { expected, proven } => {
@@ -1209,10 +1261,15 @@ mod tests {
         before: Mutex<Option<(String, String)>>,
         checking: Mutex<Vec<bool>>,
         idle_ticks: Mutex<u32>,
+        // M-1: a relay that prints while it starts (activity moves on every port poll)
+        chatty: Mutex<bool>,
+        activity: Mutex<u64>,
+        // owner decision (a): fresh_update answers, one per adoption
+        fresh: Mutex<Vec<bool>>,
     }
     impl Fake {
         fn new(answers: Vec<(&'static str, Value)>, relays: Vec<(Option<Exit>, &str)>) -> Fake {
-            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]), idle_ticks: Mutex::new(0) }
+            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]), idle_ticks: Mutex::new(0), chatty: Mutex::new(false), activity: Mutex::new(0), fresh: Mutex::new(vec![]) }
         }
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
@@ -1277,7 +1334,21 @@ mod tests {
         fn move_blocked(&self, _d: &Path) -> Option<String> {
             self.blocked.lock().unwrap().clone()
         }
+        fn activity(&self) -> u64 {
+            *self.activity.lock().unwrap()
+        }
+        fn fresh_update(&self) -> bool {
+            let mut f = self.fresh.lock().unwrap();
+            if f.is_empty() { false } else { f.remove(0) }
+        }
+        fn reject_update(&self, _d: &Path, _why: &str) -> Tick {
+            self.calls.lock().unwrap().push("REJECT".into());
+            Tick::Replaced(Box::new(FakeRelay { exit: Mutex::new(None), err: String::new() }))
+        }
         fn port_open(&self, _p: u16) -> bool {
+            if *self.chatty.lock().unwrap() {
+                *self.activity.lock().unwrap() += 1;
+            }
             let mut n = self.port_after.lock().unwrap();
             if *n > 0 {
                 *n -= 1;
@@ -1717,5 +1788,80 @@ mod tests {
         assert_eq!(st["launcher"]["lastRefusal"]["kind"], "move");
         assert_eq!(st["launcher"]["lastRefusal"]["code"], "suite-update-applying", "the card must be told why");
         assert_eq!(f.spawns.lock().unwrap().len(), 2, "the relay must be started again on the same folder");
+    }
+
+    // ── full audit M-1: the post-move bound counts steps WITHOUT PROGRESS, never the clock ───────────────────
+    #[test]
+    fn after_a_move_a_slow_but_printing_relay_is_never_rolled_back_and_a_silent_one_is() {
+        for chatty in [true, false] {
+            let b = tmp(if chatty { "m1chatty" } else { "m1silent" });
+            let cfg = cfg_in(&b); // check_steps: 2
+            let newdir = b.join("T7").join("trinityone-relay");
+            let olddir = b.join("data");
+            fs::create_dir_all(&newdir).unwrap();
+            fs::create_dir_all(&olddir).unwrap();
+            write_state(&cfg.config_file, &json!({"dataDir": newdir.to_string_lossy(), "relayPub": "aa", "move": {"state":"switched"}})).unwrap();
+            let f = Fake::new(
+                vec![
+                    ("recover", json!({"dataDir": newdir.to_string_lossy(), "action": "check"})),
+                    ("begin-check", json!({"ok": true, "bad": []})),
+                    ("prove", json!({"ok": true, "relayPub": "aa"})),
+                    ("verify-restart", json!({"ok": true, "bad": []})),
+                    ("check-passed", json!({"ok": true})),
+                    ("rollback", json!({"ok": true})),
+                    ("recover", json!({"dataDir": olddir.to_string_lossy(), "action": "none"})),
+                    ("prove", json!({"ok": true, "relayPub": "aa"})),
+                ],
+                vec![(None, ""), (None, "")],
+            );
+            // the port stays shut for 20 polls — ten times the bound
+            *f.port_after.lock().unwrap() = 20;
+            *f.chatty.lock().unwrap() = chatty;
+            let _ = run(&f, &cfg);
+            let c = f.calls();
+            if chatty {
+                assert!(!c.contains(&"rollback".to_string()), "a relay that kept printing was rolled back: {c:?}");
+                assert!(c.contains(&"check-passed".to_string()), "{c:?}");
+                assert_eq!(f.spawns.lock().unwrap().len(), 1);
+            } else {
+                assert!(c.contains(&"rollback".to_string()), "a silent relay after a move must still be rolled back: {c:?}");
+                assert!(!c.contains(&"check-passed".to_string()), "{c:?}");
+            }
+        }
+    }
+
+    // ── owner decision (a): a fresh UPDATE whose relay fails the identity proof is a failed update ─────────────
+    #[test]
+    fn a_relay_a_fresh_update_put_in_place_that_fails_the_proof_is_rolled_back_but_a_normal_start_is_only_told() {
+        // (1) a normal start with a different key: record and tell, open the panel, no rollback
+        let b = tmp("idnormal");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(&data).unwrap();
+        write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+        let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "RESTORED"}))], vec![(None, "")]);
+        let _ = run(&f, &cfg);
+        let c = f.calls();
+        assert!(!c.contains(&"REJECT".to_string()) && c.contains(&"OPENED".to_string()), "a restore's new key on a normal start must not roll anything back: {c:?}");
+        assert_eq!(read_state(&cfg.config_file)["launcher"]["identityChanged"]["provenPub"], "RESTORED");
+        // (2) the same, but the relay is one an update just put in place: different key, then unprovable
+        for (bad, tag) in [(json!({"ok": true, "relayPub": "STRANGER"}), "idfresh1"), (json!({"ok": false, "code": "no-proof-404"}), "idfresh2")] {
+            let b = tmp(tag);
+            let cfg = cfg_in(&b);
+            let data = b.join("data");
+            fs::create_dir_all(&data).unwrap();
+            write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+            let f = Fake::new(
+                vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", bad), ("prove", json!({"ok": true, "relayPub": "aa"}))],
+                vec![(None, "")],
+            );
+            *f.fresh.lock().unwrap() = vec![true];
+            let _ = run(&f, &cfg);
+            let c = f.calls();
+            let reject = c.iter().position(|x| x == "REJECT").unwrap_or_else(|| panic!("{tag}: a failed update was not rolled back: {c:?}"));
+            assert!(c.iter().position(|x| x == "OPENED").map(|o| o > reject).unwrap_or(false), "{tag}: the panel was opened for the failed update's relay: {c:?}");
+            assert_eq!(c.iter().filter(|x| *x == "OPENED").count(), 1, "{tag}: {c:?}");
+            assert_eq!(c.iter().filter(|x| *x == "prove").count(), 2, "{tag}: the relay after the rollback must be proven too: {c:?}");
+        }
     }
 }
