@@ -18,13 +18,17 @@
 
 use std::net::TcpStream;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use trinityone_launcher as launcher;
 use std::{thread, time::Duration};
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 const PORT: u16 = 8787;
+// set by the window's close handler; the launcher thread reads it through TauriHost::quitting
+static QUIT: AtomicBool = AtomicBool::new(false);
 
 // Holds the running relay child so we can kill it on exit. CommandChild::kill consumes self, hence the Option.
 struct Relay(Mutex<Option<CommandChild>>);
@@ -244,6 +248,169 @@ impl KeepAwake {
     }
 }
 
+// ── the Tauri side of the launcher (everything that needs a window or the sidecar) ──────────────────────────
+struct TauriHost {
+    app: tauri::AppHandle,
+    payload: std::path::PathBuf,
+    log: std::path::PathBuf,
+    current: Arc<Mutex<std::path::PathBuf>>,
+    /// the window's first URL (dist/index.html), where progress and refusals are shown
+    splash: Option<tauri::Url>,
+    on_splash: AtomicBool,
+}
+
+struct SidecarRelay {
+    app: tauri::AppHandle,
+    exit: Arc<Mutex<Option<launcher::Exit>>>,
+    err: Arc<Mutex<String>>,
+}
+impl launcher::RelayHandle for SidecarRelay {
+    fn exit(&self) -> Option<launcher::Exit> {
+        self.exit.lock().unwrap().clone()
+    }
+    fn stderr_tail(&self) -> String {
+        self.err.lock().unwrap().clone()
+    }
+    fn kill(&self) {
+        if let Some(child) = self.app.state::<Relay>().0.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
+}
+
+impl launcher::Host for TauriHost {
+    fn node(&self, args: &[String]) -> launcher::NodeOut {
+        let run = || -> Result<launcher::NodeOut, String> {
+            let cmd = self.app.shell().sidecar("trinityone-relay-node").map_err(|e| e.to_string())?;
+            let out = tauri::async_runtime::block_on(cmd.current_dir(self.payload.clone()).args(args.to_vec()).output()).map_err(|e| e.to_string())?;
+            Ok(launcher::NodeOut {
+                code: out.status.code().unwrap_or(-1),
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            })
+        };
+        run().unwrap_or_else(|e| launcher::NodeOut { code: -1, stdout: String::new(), stderr: e })
+    }
+
+    fn spawn_relay(&self, env: &launcher::RelayEnv) -> Result<Box<dyn launcher::RelayHandle>, String> {
+        let data_dir = env.data_dir.clone();
+        *self.current.lock().unwrap() = data_dir.clone();
+        let cmd = self.app.shell().sidecar("trinityone-relay-node").map_err(|e| format!("SIDECAR RESOLVE FAILED: {e}"))?;
+        let mut cmd = cmd
+            .current_dir(self.payload.clone())
+            .arg("scripts/gateway.mjs")
+            .arg(PORT.to_string())
+            .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
+            // the launcher chose this folder, so the panel offers the storage card (suite mode) and reads the move's
+            // journal from storage.json
+            .env("TRINITY_STORAGE_MODE", "suite")
+            .env("TRINITY_STORAGE_STATE", env.storage_state.to_string_lossy().to_string())
+            // the bundled cloudflared, so the relay can start a Cloudflare quick tunnel ("go public") itself
+            .env("CLOUDFLARED_BIN", std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(if cfg!(windows) { "trinityone-cloudflared.exe" } else { "trinityone-cloudflared" }))).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "cloudflared".into()))
+            // BIND ADDRESS. Loopback by default: the app window reaches the relay via 127.0.0.1, and nothing
+            // else on the network can. A church that wants phones on its own wifi to connect directly turns
+            // that on in the control panel, which writes the `lan-access` marker read here at start-up.
+            //
+            // AUDIT-2026-07-27: this used to set no RELAY_HOST at all, so the gateway took its server default
+            // of 0.0.0.0 and the desktop relay was reachable by anyone on the same network — a church hall's
+            // guest wifi, a coffee shop — while the comment here AND the one on BIND_HOST in gateway.mjs both
+            // stated it bound loopback. Two comments asserting a protection that was not implemented.
+            //
+            // Windows shows a one-time "allow network access?" prompt when this is on; the loopback path works
+            // regardless of the answer, so a missed prompt never stalls the app — it just gates OTHER devices.
+            .env("RELAY_HOST", if data_dir.join("lan-access").exists() { "0.0.0.0" } else { "127.0.0.1" })
+            .env("RELAY_NO_OPEN", "1"); // the Tauri window IS the control UI; don't also open a browser
+        if env.pinned {
+            // the launcher chose this folder: the gateway never creates it and never mints a key in it. NOT set on
+            // the very first run, before the relay has made its key (launcher::should_pin).
+            cmd = cmd.env("TRINITY_DATA_DIR_PINNED", "1");
+        }
+        applog(&self.log, &format!("starting the relay on {data_dir:?} (pinned={})", env.pinned));
+        let (mut rx, child) = cmd.spawn().map_err(|e| format!("SPAWN FAILED: {e}"))?;
+        applog(&self.log, "sidecar spawned OK");
+        *self.app.state::<Relay>().0.lock().unwrap() = Some(child);
+        let exit = Arc::new(Mutex::new(None));
+        let err = Arc::new(Mutex::new(String::new()));
+        let (x2, e2, lp) = (exit.clone(), err.clone(), self.log.clone());
+        tauri::async_runtime::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                match ev {
+                    CommandEvent::Stdout(b) => applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end())),
+                    CommandEvent::Stderr(b) => {
+                        let t = String::from_utf8_lossy(&b).into_owned();
+                        applog(&lp, &format!("[err] {}", t.trim_end()));
+                        let mut g = e2.lock().unwrap();
+                        g.push_str(&t);
+                        let n = g.len();
+                        if n > 8000 {
+                            *g = g[n - 8000..].to_string();
+                        }
+                    }
+                    CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
+                    CommandEvent::Terminated(t) => {
+                        applog(&lp, &format!("[exit] {t:?}"));
+                        *x2.lock().unwrap() = Some(t.code.map(launcher::Exit::Code).unwrap_or(launcher::Exit::Other));
+                    }
+                    _ => {}
+                }
+            }
+            // the channel closing without a Terminated is an exit all the same
+            let mut g = x2.lock().unwrap();
+            if g.is_none() {
+                *g = Some(launcher::Exit::Other);
+            }
+        });
+        Ok(Box::new(SidecarRelay { app: self.app.clone(), exit, err }))
+    }
+
+    fn progress(&self, p: &launcher::Progress) {
+        // The window shows the splash for anything but a running relay: back to dist/index.html if the control
+        // panel was showing (the relay behind it has stopped for a move), else just change its text.
+        let frag = launcher::splash_fragment(p);
+        let Some(win) = self.app.get_webview_window("control") else { return };
+        if self.on_splash.swap(true, Ordering::Relaxed) {
+            let _ = win.eval(&format!("location.hash = '{}'", &frag[1..]));
+        } else if let Some(mut u) = self.splash.clone() {
+            u.set_fragment(Some(&frag[1..]));
+            let _ = win.navigate(u);
+        }
+        let _ = win.show();
+    }
+
+    fn opened(&self, data_dir: &Path) {
+        applog(&self.log, &format!("relay answered on {data_dir:?}; opening its control panel"));
+        // ALWAYS the launcher (home.html), first run included. It asks "What should this computer
+        // do for your church?" and offers the two doors: "Run your church" (the Steward console)
+        // and "Manage a relay" (the control panel).
+        //
+        // First run used to go straight to steward.html, so somebody installing the Suite purely to
+        // run a relay for their church was walked into church setup with no way past it, and only
+        // ever saw the chooser on the SECOND launch. Reported 2026-09-08.
+        //
+        // No mode is passed in the address, deliberately — scripts/suite-two-doors.test.mjs pins
+        // that. Where the church's records live is DETECTED (_boxHostsUs asks this box's /config
+        // whether it holds this church), not declared by the door you came through; declaring it is
+        // what once split one congregation into two halves that could not see each other.
+        // (?relayapp=1 was dropped here 2026-09-08: nothing has read it since the sticky host
+        // marker was deleted — it was inert, like ?setup=1 before it.)
+        // 127.0.0.1, not localhost — on Windows localhost can resolve to IPv6 ::1 while the relay listens on IPv4.
+        let url = format!("http://127.0.0.1:{PORT}/relay-app/home.html");
+        if let (Some(win), Ok(u)) = (self.app.get_webview_window("control"), url.parse()) {
+            self.on_splash.store(false, Ordering::Relaxed);
+            let _ = win.navigate(u);
+            let _ = win.show();
+        }
+    }
+
+    fn log(&self, msg: &str) {
+        applog(&self.log, msg);
+    }
+
+    fn quitting(&self) -> bool {
+        QUIT.load(Ordering::Relaxed)
+    }
+}
+
 fn main() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -253,8 +420,20 @@ fn main() {
     let builder = builder.manage(Inhibitor(std::sync::Arc::new(Mutex::new(None))));
     builder
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?.join("data");
-            std::fs::create_dir_all(&data_dir).ok();
+            // THE DATA FOLDER IS DECIDED IN ONE PLACE (relay storage plan step 5, plan §2): the pointer
+            // <app config dir>/storage.json, or the default <app data dir>/data when there is none (every install
+            // that has never moved). `current` is what every Rust reader below follows — keep-awake's admin.json and
+            // off-switch, the LAN marker, TRINITY_DATA_DIR — and the launcher updates it whenever it starts the relay
+            // on a folder (a move, or a rollback).
+            let config_file = app.path().app_config_dir()?.join("storage.json");
+            let default_data = app.path().app_data_dir()?.join("data");
+            let data_dir = launcher::resolve_data_dir(std::fs::read_to_string(&config_file).ok().as_deref(), &default_data);
+            // Only the DEFAULT folder is ever created here. A folder the steward chose is never made: a missing
+            // drive must refuse (the gateway's pinned guard), not become an empty folder under a mount point.
+            if data_dir == default_data {
+                std::fs::create_dir_all(&data_dir).ok();
+            }
+            let current = Arc::new(Mutex::new(data_dir.clone()));
             let log = app.path().app_data_dir()?.join("relay-launch.log");
             let _ = std::fs::remove_file(&log); // fresh log each launch
 
@@ -273,93 +452,27 @@ fn main() {
             applog(&log, &format!("payload   = {payload:?} (exists={})", payload.exists()));
             applog(&log, &format!("gateway   = {gateway_abs:?} (exists={})", gateway_abs.exists()));
             applog(&log, &format!("data_dir  = {data_dir:?}"));
+            applog(&log, &format!("pointer   = {config_file:?}"));
             applog(&log, &format!("exe       = {:?}", std::env::current_exe()));
 
-            // start the relay: bundled node scripts/gateway.mjs <port> (cwd = payload), data → writable dir,
-            // bound to loopback so there's no firewall prompt.
-            let cmd = match app.shell().sidecar("trinityone-relay-node") {
-                Ok(c) => c,
-                Err(e) => {
-                    applog(&log, &format!("SIDECAR RESOLVE FAILED: {e}"));
-                    return Ok(());
-                }
+            // The launcher: recover a half-finished move, start the relay (bundled node scripts/gateway.mjs <port>,
+            // cwd = payload, data → the resolved folder, bound to loopback so there's no firewall prompt), prove who
+            // answered, open the control panel, and carry out a move or an old-copy removal the relay asks for.
+            // All of it is launcher/src/lib.rs, which the headless test host drives too.
+            let host = TauriHost {
+                app: app.handle().clone(),
+                payload: payload.clone(),
+                log: log.clone(),
+                current: current.clone(),
+                splash: app.get_webview_window("control").and_then(|w| w.url().ok()),
+                on_splash: AtomicBool::new(true),
             };
-            let cmd = cmd
-                .current_dir(payload.clone())
-                .arg("scripts/gateway.mjs")
-                .arg(PORT.to_string())
-                .env("TRINITY_DATA_DIR", data_dir.to_string_lossy().to_string())
-                // the bundled cloudflared, so the relay can start a Cloudflare quick tunnel ("go public") itself
-                .env("CLOUDFLARED_BIN", std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(if cfg!(windows) { "trinityone-cloudflared.exe" } else { "trinityone-cloudflared" }))).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "cloudflared".into()))
-                // BIND ADDRESS. Loopback by default: the app window reaches the relay via 127.0.0.1, and nothing
-                // else on the network can. A church that wants phones on its own wifi to connect directly turns
-                // that on in the control panel, which writes the `lan-access` marker read here at start-up.
-                //
-                // AUDIT-2026-07-27: this used to set no RELAY_HOST at all, so the gateway took its server default
-                // of 0.0.0.0 and the desktop relay was reachable by anyone on the same network — a church hall's
-                // guest wifi, a coffee shop — while the comment here AND the one on BIND_HOST in gateway.mjs both
-                // stated it bound loopback. Two comments asserting a protection that was not implemented.
-                //
-                // Windows shows a one-time "allow network access?" prompt when this is on; the loopback path works
-                // regardless of the answer, so a missed prompt never stalls the app — it just gates OTHER devices.
-                .env("RELAY_HOST", if data_dir.join("lan-access").exists() { "0.0.0.0" } else { "127.0.0.1" })
-                .env("RELAY_NO_OPEN", "1"); // the Tauri window IS the control UI; don't also open a browser
-            match cmd.spawn() {
-                Ok((mut rx, child)) => {
-                    applog(&log, "sidecar spawned OK");
-                    *app.state::<Relay>().0.lock().unwrap() = Some(child);
-                    let lp = log.clone();
-                    tauri::async_runtime::spawn(async move {
-                        while let Some(ev) = rx.recv().await {
-                            match ev {
-                                CommandEvent::Stdout(b) => applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end())),
-                                CommandEvent::Stderr(b) => applog(&lp, &format!("[err] {}", String::from_utf8_lossy(&b).trim_end())),
-                                CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
-                                CommandEvent::Terminated(t) => applog(&lp, &format!("[exit] {t:?}")),
-                                _ => {}
-                            }
-                        }
-                    });
-                }
-                Err(e) => applog(&log, &format!("SPAWN FAILED: {e}")),
-            }
-
-            // wait for the relay to accept connections, then point the window at its control panel (127.0.0.1,
-            // not localhost — on Windows localhost can resolve to IPv6 ::1 while the relay listens on IPv4).
-            if let Some(win) = app.get_webview_window("control") {
-                let lp = log.clone();
-                thread::spawn(move || {
-                    let mut up = false;
-                    for _ in 0..480 {
-                        // up to ~2 min (first run on Windows can be slow: Defender scans the bundled runtime)
-                        if TcpStream::connect(("127.0.0.1", PORT)).is_ok() {
-                            up = true;
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(250));
-                    }
-                    applog(&lp, &format!("port {PORT} reachable = {up}"));
-                    // ALWAYS the launcher (home.html), first run included. It asks "What should this computer
-                    // do for your church?" and offers the two doors: "Run your church" (the Steward console)
-                    // and "Manage a relay" (the control panel).
-                    //
-                    // First run used to go straight to steward.html, so somebody installing the Suite purely to
-                    // run a relay for their church was walked into church setup with no way past it, and only
-                    // ever saw the chooser on the SECOND launch. Reported 2026-09-08.
-                    //
-                    // No mode is passed in the address, deliberately — scripts/suite-two-doors.test.mjs pins
-                    // that. Where the church's records live is DETECTED (_boxHostsUs asks this box's /config
-                    // whether it holds this church), not declared by the door you came through; declaring it is
-                    // what once split one congregation into two halves that could not see each other.
-                    // (?relayapp=1 was dropped here 2026-09-08: nothing has read it since the sticky host
-                    // marker was deleted — it was inert, like ?setup=1 before it.)
-                    let url = format!("http://127.0.0.1:{PORT}/relay-app/home.html");
-                    if let Ok(u) = url.parse() {
-                        let _ = win.navigate(u);
-                    }
-                    let _ = win.show();
-                });
-            }
+            // up_steps 480 = ~2 min: first run on Windows can be slow (Defender scans the bundled runtime)
+            let cfg = launcher::Config { config_file, default_data, port: PORT, up_steps: 480 };
+            thread::spawn(move || {
+                let end = launcher::run(&host, &cfg);
+                applog(&host.log, &format!("launcher ended: {end:?}"));
+            });
 
             // keep-awake controller: every ~15s ask the relay whether it's public and hold/release the
             // OS sleep inhibitor to match. It runs for the life of the process — which is deliberate on
@@ -379,7 +492,7 @@ fn main() {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             let inhibitor_slot = app.state::<Inhibitor>().0.clone();
             {
-                let dd = data_dir.clone();
+                let cur = current.clone();
                 let lp = log.clone();
                 thread::spawn(move || {
                     let mut ka = KeepAwake::new(
@@ -389,6 +502,8 @@ fn main() {
                     let mut held = false;
                     let mut token_warned = false; // log the "no token yet" case once, not every 15s
                     loop {
+                        // the folder the launcher has the relay on RIGHT NOW (it changes after a move)
+                        let dd = cur.lock().unwrap().clone();
                         // Off-switch FIRST, before any network GET: release if we were holding, then idle.
                         if dd.join("keep-awake-off").exists() {
                             if held {
@@ -455,6 +570,8 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { .. } = event {
+                // tell the launcher this is the app closing, not the relay failing
+                QUIT.store(true, Ordering::Relaxed);
                 if let Some(child) = window.state::<Relay>().0.lock().unwrap().take() {
                     let _ = child.kill();
                 }
