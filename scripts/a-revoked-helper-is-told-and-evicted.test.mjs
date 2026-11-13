@@ -162,6 +162,10 @@ function makeHelperHandler(ctx) {
     churchPub: ctx.churchPub || 'own-church',
     cb: (list) => { ctx.cbCalls.push(list); },
     window: { Steward: { setActiveIdentity: (to, opts) => { ctx.switches.push({ to, opts }); } } },
+    // the removed-helper notice (2026-11-13): the branch marks the church it evicts and asks for the notice to be
+    // written once every relay has answered — recorded here so each case can say whether a removal was noted
+    evicted: (cp) => { ctx.evicted.push(cp); },
+    flushGone: () => { ctx.flushes++; },
   };
   const scope = new Proxy(stubs, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
@@ -179,13 +183,15 @@ const revokeFor = (author, subject, { ts = 100, tomb = false, empty = false } = 
   tags: tomb ? [['d', STEWARDREVOKE_D + subject], ['t', NET], ['deleted']] : [['d', STEWARDREVOKE_D + subject], ['t', NET], ['p', subject]],
   content: (tomb || empty) ? '' : JSON.stringify({ revoked: subject }),
 });
-const freshCtx = (over = {}) => ({ stewardedChurches: new Map([[X, { name: 'X' }]]), seenAt: new Map(), actingChurch: null, ownKeyBlank: false, ownedPubs: new Set(), churchPub: 'own-church', saves: 0, cbCalls: [], switches: [], ...over });
+const freshCtx = (over = {}) => ({ stewardedChurches: new Map([[X, { name: 'X' }]]), seenAt: new Map(), actingChurch: null, ownKeyBlank: false, ownedPubs: new Set(), churchPub: 'own-church', saves: 0, cbCalls: [], switches: [], evicted: [], flushes: 0, ...over });
 
 test('HELPER: a live revoke from a church we steward, newer than the roster, evicts it', () => {
   const ctx = freshCtx({ seenAt: new Map([[X, 50]]) });
   makeHelperHandler(ctx)(revokeFor(X, X, { ts: 100 }));
   assert.equal(ctx.stewardedChurches.has(X), false, 'the ghost church must be evicted');
   assert.equal(ctx.cbCalls.length, 1, 'the switcher must be told the list changed');
+  assert.deepEqual(ctx.evicted, [X], 'the eviction was not marked for the removed-helper notice');
+  assert.equal(ctx.flushes, 1, 'the removed-helper notice was never asked for after the eviction');
 });
 
 test('HELPER: when we were acting as the evicted church, identity switches away', () => {
@@ -200,6 +206,7 @@ test('HELPER: a tombstone is a no-op (a re-added helper’s cancelled revoke)', 
   makeHelperHandler(ctx)(revokeFor(X, X, { ts: 100, tomb: true }));
   assert.equal(ctx.stewardedChurches.has(X), true, 'a tombstone must NOT evict');
   assert.equal(ctx.cbCalls.length, 0);
+  assert.deepEqual(ctx.evicted, [], 'a tombstone was marked as a removal');
 });
 
 test('HELPER: an empty-content notice is a no-op', () => {

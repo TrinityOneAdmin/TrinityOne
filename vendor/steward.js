@@ -21666,6 +21666,54 @@ zoo`.split("\n");
         return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null;
       });
     },
+    // A REMOVED HELPER IS TOLD (owner device test 2026-11-13). [{ cp, name, at }] — the churches whose owner removed this
+    // console's own key, written by subscribeStewardedChurches ONLY after a signed removal was read and every relay in that
+    // read had answered (see noteGone there), and cleared if the church puts us back. Never written on a slow, failed or
+    // absent read. Shown by StewardRoot until acknowledgeRemoval().
+    removedNotices() {
+      try {
+        if (!churchPub) return [];
+        const a = JSON.parse(localStorage.getItem("trinityone.steward.removed-from." + churchPub) || "[]");
+        return Array.isArray(a) ? a.filter((x) => x && typeof x.cp === "string" && !stewardedChurches.has(x.cp)).map((x) => ({ cp: x.cp, name: typeof x.name === "string" ? x.name.slice(0, 80) : "", at: Number(x.at) || 0 })) : [];
+      } catch (e) {
+        return [];
+      }
+    },
+    // Does the removal leave this console with NOTHING to run? True only for a pure helper: its own key is the bare signing
+    // key "Help run a church" minted (_ownKeyBlank: never named, never registered), it stewards no other church, it is not
+    // waiting on a request, and it holds no network key (those are sealed with this key, so discarding it would lose them).
+    // That is the one console the removal sends back to the start screen; any other keeps running what it still has.
+    removedLeavesNothing() {
+      try {
+        if (!churchPub || actingChurch || !_ownKeyBlank() || stewardedChurches.size) return false;
+        if (localStorage.getItem(PENDING_CHURCH_KEY)) return false;
+        return !_netKeysRaw().length;
+      } catch (e) {
+        return false;
+      }
+    },
+    // The person pressed the button on the notice. Forget the notice; and when the removal left nothing to run
+    // (removedLeavesNothing — re-checked here, not trusted from the screen), discard the disposable helper key through the
+    // proper removal path, exactly as a withdrawn request does (withdrawStewardRequest), so StewardRoot shows the start
+    // screen. Resolves { cleared, keyRemoved }.
+    acknowledgeRemoval() {
+      try {
+        if (!churchPub) return Promise.resolve({ cleared: false, keyRemoved: false });
+        const leaves = window.Steward.removedLeavesNothing();
+        try {
+          localStorage.removeItem("trinityone.steward.removed-from." + churchPub);
+        } catch (e) {
+        }
+        try {
+          window.dispatchEvent(new CustomEvent("steward-removed"));
+        } catch (e) {
+        }
+        if (!leaves) return Promise.resolve({ cleared: true, keyRemoved: false });
+        return Promise.resolve(window.Steward.removeKey()).then(() => ({ cleared: true, keyRemoved: true }), () => ({ cleared: true, keyRemoved: true }));
+      } catch (e) {
+        return Promise.resolve({ cleared: false, keyRemoved: false });
+      }
+    },
     // THE "WAITING TO BE APPROVED AS A HELPER" STATE, for the console's onboarding screen. A console that minted a
     // bare signing key (createKeyQuiet, "Help run a church") and asked a church to let it help — requestSteward wrote
     // PENDING_CHURCH_KEY on a truthy publish — but holds no granted church yet has nothing to show. This returns
@@ -28550,6 +28598,38 @@ zoo`.split("\n");
         return out;
       };
       let closed = false, dialled = [];
+      const RMV_LS = "trinityone.steward.removed-from." + (me || "");
+      const gone = /* @__PURE__ */ new Map();
+      const answered = /* @__PURE__ */ new Set();
+      const noteGone = (cp, entry) => {
+        try {
+          let a = [];
+          try {
+            a = JSON.parse(localStorage.getItem(RMV_LS) || "[]");
+          } catch (e) {
+            a = [];
+          }
+          if (!Array.isArray(a)) a = [];
+          const had0 = a.some((x) => x && x.cp === cp);
+          if (!entry && !had0) return;
+          a = a.filter((x) => x && x.cp !== cp);
+          if (entry) a.push(entry);
+          if (a.length) localStorage.setItem(RMV_LS, JSON.stringify(a));
+          else localStorage.removeItem(RMV_LS);
+          window.dispatchEvent(new CustomEvent("steward-removed"));
+        } catch (e) {
+        }
+      };
+      const flushGone = () => {
+        if (!gone.size || !dialled.length || !dialled.every((u) => answered.has(u))) return;
+        for (const [cp, name] of [...gone]) {
+          gone.delete(cp);
+          if (!stewardedChurches.has(cp)) noteGone(cp, { cp, name: name === "Church" ? "" : name, at: now() });
+        }
+      };
+      const evicted = (cp) => {
+        gone.set(cp, stewardedChurches.get(cp) && stewardedChurches.get(cp).name || "");
+      };
       const relayUp = (url) => {
         try {
           let k = url;
@@ -28662,6 +28742,7 @@ zoo`.split("\n");
         if (subs.size && key === filterKey) return;
         closeAll();
         dialled = urls.slice();
+        answered.clear();
         filterKey = key;
         if (!dialled.length) return;
         [...stewardedChurches.keys()].forEach(resolveName);
@@ -28678,6 +28759,7 @@ zoo`.split("\n");
               const rcp = e.pubkey;
               const isTomb = e.tags.some((t) => t[0] === "deleted") || !e.content;
               if (stewardedChurches.has(rcp) && !isTomb && e.created_at > (seenAt.get(rcp) || 0)) {
+                evicted(rcp);
                 stewardedChurches.delete(rcp);
                 save();
                 if (actingChurch === rcp) {
@@ -28686,6 +28768,7 @@ zoo`.split("\n");
                   else window.Steward.setActiveIdentity(churchPub);
                 }
                 cb([...stewardedChurches.keys()]);
+                flushGone();
               }
               return;
             }
@@ -28706,6 +28789,8 @@ zoo`.split("\n");
               stewardedChurches.set(cp, { name: "Church" });
               save();
               resolveName(cp);
+              gone.delete(cp);
+              noteGone(cp, null);
               try {
                 const RK = "trinityone.steward.requested." + (me || "");
                 let reqd = [];
@@ -28734,6 +28819,7 @@ zoo`.split("\n");
               }
               cb([...stewardedChurches.keys()]);
             } else if (!listed && had) {
+              if (e.pubkey === cp) evicted(cp);
               stewardedChurches.delete(cp);
               save();
               if (actingChurch === cp) {
@@ -28742,17 +28828,23 @@ zoo`.split("\n");
                 else window.Steward.setActiveIdentity(churchPub);
               }
               cb([...stewardedChurches.keys()]);
+              flushGone();
             }
           }
         };
         const openOn = (u, at, from) => {
           const broad = !at;
           const filters = broad ? [{ kinds: [30078], "#t": [NET], ...from ? { since: from } : {} }, revoke] : [...ds.length ? [{ kinds: [30078], "#t": [NET], "#d": ds }] : [], { kinds: [30078], "#t": [NET], since: Math.max(0, at - 900) }, revoke];
+          answered.delete(u);
           const s = oneRelay(u, filters, {
             onevent: handlers.onevent,
             onanswer(genuine, why) {
               if (closed || subs.get(u) !== s) return;
               cb([...stewardedChurches.keys()]);
+              if (!(broad && !genuine && why === "timer" && relayUp(u))) {
+                answered.add(u);
+                flushGone();
+              }
               const r = record();
               if (!broad) {
                 if (genuine) r.done.set(u, now());

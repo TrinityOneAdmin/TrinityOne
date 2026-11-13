@@ -8450,6 +8450,42 @@ window.Steward = {
           try { window.dispatchEvent(new CustomEvent('steward-stewarded-watch')); } catch (e) {}
         } return ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null; });
   },
+  // A REMOVED HELPER IS TOLD (owner device test 2026-11-13). [{ cp, name, at }] — the churches whose owner removed this
+  // console's own key, written by subscribeStewardedChurches ONLY after a signed removal was read and every relay in that
+  // read had answered (see noteGone there), and cleared if the church puts us back. Never written on a slow, failed or
+  // absent read. Shown by StewardRoot until acknowledgeRemoval().
+  removedNotices() {
+    try {
+      if (!churchPub) return [];
+      const a = JSON.parse(localStorage.getItem('trinityone.steward.removed-from.' + churchPub) || '[]');
+      return Array.isArray(a) ? a.filter(x => x && typeof x.cp === 'string' && !stewardedChurches.has(x.cp)).map(x => ({ cp: x.cp, name: typeof x.name === 'string' ? x.name.slice(0, 80) : '', at: Number(x.at) || 0 })) : [];
+    } catch (e) { return []; }
+  },
+  // Does the removal leave this console with NOTHING to run? True only for a pure helper: its own key is the bare signing
+  // key "Help run a church" minted (_ownKeyBlank: never named, never registered), it stewards no other church, it is not
+  // waiting on a request, and it holds no network key (those are sealed with this key, so discarding it would lose them).
+  // That is the one console the removal sends back to the start screen; any other keeps running what it still has.
+  removedLeavesNothing() {
+    try {
+      if (!churchPub || actingChurch || !_ownKeyBlank() || stewardedChurches.size) return false;
+      if (localStorage.getItem(PENDING_CHURCH_KEY)) return false;
+      return !_netKeysRaw().length;
+    } catch (e) { return false; }
+  },
+  // The person pressed the button on the notice. Forget the notice; and when the removal left nothing to run
+  // (removedLeavesNothing — re-checked here, not trusted from the screen), discard the disposable helper key through the
+  // proper removal path, exactly as a withdrawn request does (withdrawStewardRequest), so StewardRoot shows the start
+  // screen. Resolves { cleared, keyRemoved }.
+  acknowledgeRemoval() {
+    try {
+      if (!churchPub) return Promise.resolve({ cleared: false, keyRemoved: false });
+      const leaves = window.Steward.removedLeavesNothing();
+      try { localStorage.removeItem('trinityone.steward.removed-from.' + churchPub); } catch (e) {}
+      try { window.dispatchEvent(new CustomEvent('steward-removed')); } catch (e) {}
+      if (!leaves) return Promise.resolve({ cleared: true, keyRemoved: false });
+      return Promise.resolve(window.Steward.removeKey()).then(() => ({ cleared: true, keyRemoved: true }), () => ({ cleared: true, keyRemoved: true }));
+    } catch (e) { return Promise.resolve({ cleared: false, keyRemoved: false }); }
+  },
   // THE "WAITING TO BE APPROVED AS A HELPER" STATE, for the console's onboarding screen. A console that minted a
   // bare signing key (createKeyQuiet, "Help run a church") and asked a church to let it help — requestSteward wrote
   // PENDING_CHURCH_KEY on a truthy publish — but holds no granted church yet has nothing to show. This returns
@@ -15206,6 +15242,36 @@ window.Steward = {
     // reach; the closer runs synchronously (the hook needs an unsubscribe back at once) and marks itself
     // closed so a proof landing after it opens nothing.
     let closed = false, dialled = [];
+    // TELLING A REMOVED HELPER THEY WERE REMOVED (owner device test 2026-11-13: "the church resets to 'your church' —
+    // it should tell the user they were removed"). An eviction below is always driven by a SIGNED document the relay
+    // actually delivered — a revocation notice the church wrote, or a roster from the church that no longer names us —
+    // never by data being absent, slow or unreachable: a cold start paints the cached list and evicts nothing. Even so
+    // the notice is not written at the eviction itself but once EVERY relay dialled in this opening has ended its read
+    // (`answered`), so a re-add that a second relay is about to deliver (the owner removed, then added them back, and one
+    // relay has not yet got the cancelling copy) puts the church back BEFORE anything is said. `gone` outlives a
+    // re-opening; a church that comes back is dropped from it and from the stored notice.
+    // The notice is kept per own key at RMV_LS (read by Steward.removedNotices(), shown by StewardRoot) until the person
+    // acknowledges it. It holds the church key and the name this console last knew for it — nothing sealed.
+    const RMV_LS = 'trinityone.steward.removed-from.' + (me || '');
+    const gone = new Map();   // cp -> the name it had when it was evicted
+    const answered = new Set();
+    const noteGone = (cp, entry) => {
+      try {
+        let a = []; try { a = JSON.parse(localStorage.getItem(RMV_LS) || '[]'); } catch (e) { a = []; }
+        if (!Array.isArray(a)) a = [];
+        const had0 = a.some(x => x && x.cp === cp);
+        if (!entry && !had0) return;
+        a = a.filter(x => x && x.cp !== cp);
+        if (entry) a.push(entry);
+        if (a.length) localStorage.setItem(RMV_LS, JSON.stringify(a)); else localStorage.removeItem(RMV_LS);
+        window.dispatchEvent(new CustomEvent('steward-removed'));
+      } catch (e) {}
+    };
+    const flushGone = () => {
+      if (!gone.size || !dialled.length || !dialled.every(u => answered.has(u))) return;
+      for (const [cp, name] of [...gone]) { gone.delete(cp); if (!stewardedChurches.has(cp)) noteGone(cp, { cp, name: name === 'Church' ? '' : name, at: now() }); }
+    };
+    const evicted = (cp) => { gone.set(cp, (stewardedChurches.get(cp) && stewardedChurches.get(cp).name) || ''); };
     // ONE RELAY, ONE SUBSCRIPTION, AND WHETHER ITS END WAS AN ANSWER — see the note above _NO_EOSE_TIMER (a local copy on
     // purpose, same note). onanswer(genuine, why) runs once: 'eose' (genuine) | 'closed' | 'timer'.
     const relayUp = (url) => { try { let k = url; try { k = normalizeURL(url); } catch (e) {} const r = pool.relays && pool.relays.get(k); return !!r && r.connected === true; } catch (e) { return false; } };
@@ -15271,6 +15337,7 @@ window.Steward = {
       if (subs.size && key === filterKey) return;   // the proof landed for a set we already dialled, asking the same question
       closeAll();
       dialled = urls.slice();
+      answered.clear();
       filterKey = key;
       if (!dialled.length) return;            // nothing proved: keep listening for a relay to return
       [...stewardedChurches.keys()].forEach(resolveName);   // refresh names for cached entries
@@ -15295,6 +15362,7 @@ window.Steward = {
             const rcp = e.pubkey;
             const isTomb = (e.tags.some(t => t[0] === 'deleted') || !e.content);
             if (stewardedChurches.has(rcp) && !isTomb && e.created_at > (seenAt.get(rcp) || 0)) {
+              evicted(rcp);
               stewardedChurches.delete(rcp); save();
               if (actingChurch === rcp) {
                 const other = _ownKeyBlank() ? [...stewardedChurches.keys()].find(k => !_ownedPubs.has(k)) : '';
@@ -15302,6 +15370,7 @@ window.Steward = {
                 else window.Steward.setActiveIdentity(churchPub);
               }
               cb([...stewardedChurches.keys()]);
+              flushGone();
             }
             return;
           }
@@ -15314,6 +15383,7 @@ window.Steward = {
           const had = stewardedChurches.has(cp);
           if (listed && !had) {
             stewardedChurches.set(cp, { name: 'Church' }); save(); resolveName(cp);
+            gone.delete(cp); noteGone(cp, null);   // back on the roster: whatever was said about a removal no longer holds
             // RETRACT OUR OWN REQUEST so the owner's console can never show it again after they later remove us.
             // Device-found 2026-11-05 (helper-delegation): a removed helper's STEWARDREQ, never consumed on
             // approval, resurfaced under "Requests to help" the moment `!stewardSet.has` turned true again. The
@@ -15351,6 +15421,7 @@ window.Steward = {
             cb([...stewardedChurches.keys()]);
           }
           else if (!listed && had) {
+            if (e.pubkey === cp) evicted(cp);   // the notice needs the church's own signature (the eviction is unchanged)
             stewardedChurches.delete(cp); save();
             if (actingChurch === cp) {
               // We were acting as this church and it just revoked us. Landing on churchPub re-shows the OWN
@@ -15364,6 +15435,7 @@ window.Steward = {
               else window.Steward.setActiveIdentity(churchPub);
             }
             cb([...stewardedChurches.keys()]);
+            flushGone();
           }
         },
       };
@@ -15372,11 +15444,15 @@ window.Steward = {
         const filters = broad
           ? [{ kinds: [30078], '#t': [NET], ...(from ? { since: from } : {}) }, revoke]
           : [...(ds.length ? [{ kinds: [30078], '#t': [NET], '#d': ds }] : []), { kinds: [30078], '#t': [NET], since: Math.max(0, at - 900) }, revoke];
+        answered.delete(u);
         const s = oneRelay(u, filters, {
           onevent: handlers.onevent,
           onanswer(genuine, why) {
             if (closed || subs.get(u) !== s) return;
             cb([...stewardedChurches.keys()]);
+            // every end counts here (an EOSE, a CLOSED, the library's timer): the question is only "has this relay said
+            // all it is going to say for now", so a dead relay cannot hold a genuine removal back for ever
+            if (!(broad && !genuine && why === 'timer' && relayUp(u))) { answered.add(u); flushGone(); }   // …except the one end that re-asks below
             const r = record();
             // A NARROW READ THAT GENUINELY ANSWERED has seen every roster changed up to now, so the next opening's
             // "changed since" window starts here — it does not grow for the whole session.

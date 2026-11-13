@@ -810,6 +810,41 @@ function StewardAwaitingApproval({ church }) {
 }
 window.StewardAwaitingApproval = StewardAwaitingApproval;
 
+// A HELPER THE CHURCH HAS REMOVED, AND WHO HAS NOTHING ELSE TO RUN (owner device test 2026-11-13: "the church resets to
+// 'your church' — it should tell the user they were removed and lead them back to the start a church screen").
+// StewardRoot shows this in place of the empty console only when Steward.removedNotices() holds a removal — written by
+// the engine after a SIGNED removal was read, never from a slow or failed read (subscribeStewardedChurches, noteGone) —
+// AND Steward.removedLeavesNothing() says this console's own key is the bare helper key with no other church, request or
+// network behind it. Continue clears the notice and that key (acknowledgeRemoval re-checks before it discards anything),
+// and with no key StewardRoot shows the start screen. A console with anything else left gets the dismissible banner.
+function removedNames(notes) {
+  const names = (notes || []).map(n => (n && n.name) || '').filter(Boolean);
+  return names.length ? names.join(' and ') : '';
+}
+function StewardRemoved({ notes }) {
+  const name = removedNames(notes);
+  const [busy, setBusy] = useSt(false);
+  const go = () => {
+    setBusy(true);
+    Promise.resolve(window.Steward.acknowledgeRemoval && window.Steward.acknowledgeRemoval()).catch(() => {}).then(() => setBusy(false));
+  };
+  const card = { width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28 };
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'radial-gradient(120% 80% at 50% -10%, var(--gold-tint, #f6edda), var(--paper))' }}>
+      <div style={card} role="alertdialog" aria-labelledby="stew-removed-title">
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
+          <div style={{ width: 54, height: 54, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={26} color="currentColor" /></div>
+          <h1 id="stew-removed-title" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, margin: 0, letterSpacing: '-.3px' }}>{name ? 'You’ve been removed from ' + name : 'You’ve been removed as a helper'}</h1>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>{(name ? 'The owner of ' + name : 'The church’s owner') + ' has removed you as a helper, so this console can no longer open that church. What you did while helping stays with the church.'}</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55 }}>This console has no church of its own, so it goes back to the start, where you can start a church or ask to help run one. Continuing clears this helper sign-in from this device; if the church wants you back, ask again with Help run a church.</div>
+        </div>
+        <button onClick={go} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '12px 16px', fontSize: 14.5, width: '100%', justifyContent: 'center', marginTop: 18, opacity: busy ? .6 : 1 }}>{busy ? 'One moment…' : 'Continue'}</button>
+      </div>
+    </div>
+  );
+}
+window.StewardRemoved = StewardRemoved;
+
 const SURFACES = [
   { key: 'console',   label: 'Console',     ic: 'sliders' },
   { key: 'relay',     label: 'Suite',       ic: 'globe' },
@@ -1212,6 +1247,18 @@ function StewardRoot() {
   const stewardedChurches = window.useStewardStewardedChurches ? window.useStewardStewardedChurches() : [];
   const awaitingReq = (ks.has && !ks.locked && !needsPin && !stewardedChurches.length && window.Steward.pendingStewardRequest)
     ? window.Steward.pendingStewardRequest() : null;
+  // A REMOVAL THIS CONSOLE HAS BEEN TOLD ABOUT (see StewardRemoved). Re-read on the engine's own event, on a key or
+  // identity change, and whenever the stewarded list changes (a church that comes back takes its notice with it).
+  const readRemoved = () => { let r = []; try { r = window.Steward.removedNotices ? window.Steward.removedNotices() : []; } catch (e) { r = []; } return Array.isArray(r) ? r : []; };
+  const [removedNotes, setRemovedNotes] = useSt(readRemoved);
+  useStE(() => {
+    const f = () => setRemovedNotes(readRemoved());
+    const evs = ['steward-removed', 'steward-key', 'steward-identity'];
+    evs.forEach(t => window.addEventListener(t, f)); f();
+    return () => evs.forEach(t => window.removeEventListener(t, f));
+  }, [stewardedChurches.join(',')]);
+  const removedOpen = ks.has && !ks.locked && !needsPin && removedNotes.length > 0;
+  const removedFull = removedOpen && !!(window.Steward.removedLeavesNothing && window.Steward.removedLeavesNothing());
 
   // idle auto-lock: when a PIN is set, forget the key after 10 min of no activity (re-prompt on return)
   useStE(() => {
@@ -1237,9 +1284,17 @@ function StewardRoot() {
           </div>
         ) : null}
         {window.UpdateBanner ? <UpdateBanner variant="steward" /> : null}
+        {removedOpen && !removedFull ? (
+          <div role="status" data-stew-removed-banner="1" style={{ padding: '10px 14px', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', borderBottom: '1px solid color-mix(in oklab, var(--clay) 28%, transparent)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <span style={{ flex: 1 }}><b>{removedNames(removedNotes) ? 'You’ve been removed from ' + removedNames(removedNotes) + '.' : 'You’ve been removed as a helper from a church.'}</b> Its owner removed you as a helper, so this console can no longer open it.</span>
+            <button onClick={() => { Promise.resolve(window.Steward.acknowledgeRemoval && window.Steward.acknowledgeRemoval()).catch(() => {}); }}
+              style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
+          </div>
+        ) : null}
         {ks.locked ? <StewardUnlock />
           : !ks.has ? <StewardWelcome />
           : needsPin ? <StewardForcedPin />
+          : removedFull ? <StewardRemoved notes={removedNotes} />
           : awaitingReq ? <StewardAwaitingApproval church={awaitingReq} />
           : <StewDashboard initial={params.get('tab') || 'overview'} />}
       </div>
