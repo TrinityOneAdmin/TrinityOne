@@ -1974,7 +1974,7 @@ fn suite_host<'s>(shell: &'s TestShell, fx: &Fixture, config_file: &Path, minute
 }
 
 fn launcher_cfg(config_file: &Path, default_data: &Path, log: &Path) -> launcher::Config {
-    launcher::Config { config_file: config_file.to_path_buf(), default_data: default_data.to_path_buf(), port: PORT, up_steps: 400, log_path: log.to_path_buf(), mover_wait_ms: 5000, check_steps: 400 }
+    launcher::Config { config_file: config_file.to_path_buf(), default_data: default_data.to_path_buf(), port: PORT, up_steps: 400, log_path: log.to_path_buf(), mover_wait_ms: 5000, check_steps: 400, check_ceiling_steps: 4800 }
 }
 
 fn small_boot_timing() {
@@ -2224,37 +2224,23 @@ fn an_update_whose_relay_fails_the_identity_proof_is_rolled_back_but_a_normal_st
     let _port = port_lock();
     assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
     small_boot_timing();
-    for (tag, bad) in [("idchg", "{\"ok\":true,\"relayPub\":\"STRANGER\"}"), ("idnone", "{\"ok\":false,\"code\":\"no-proof-404\"}")] {
-        eprintln!("── owner decision (a): {tag} ──");
-        let fx = fresh_box(tag, "2026-01-01T00:00:00Z");
-        write(&fx.data_dir.join("relay.sqlite"), "STORE");
-        build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
-        write_ready(&fx.staging, "v2", SHA2, D_OCT);
-        let config_file = fx._root.0.join("cfg").join("storage.json");
-        write(&config_file, "{\"relayPub\":\"aa\"}\n");
-        let minute = Arc::new(std::sync::atomic::AtomicU32::new(OUT_OF_WINDOW));
-        let m2 = minute.clone();
-        let shell = TestShell::new(fx.node.clone(), fx.data_dir.clone(), 2, Box::new(move |n| if n == 1 { m2.store(IN_WINDOW, Ordering::SeqCst) }));
-        // the first start proves the recorded key; the updated relay does not; the one after the rollback does
-        script(&shell, &[("prove", "{\"ok\":true,\"relayPub\":\"aa\"}"), ("prove", bad), ("prove", "{\"ok\":true,\"relayPub\":\"aa\"}")]);
-        let host = suite_host(&shell, &fx, &config_file, minute);
-        let end = launcher::run(&host, &launcher_cfg(&config_file, &fx.data_dir, &fx._root.0.join("l.log")));
-        let c = shell.calls();
-        assert_eq!(end, launcher::RunEnd::Quit, "({tag}) {c:?}");
+    // the update applied by a TICK proves another key than the one in its folder; or answers the proof wrongly three
+    // times in a row (a single definite failure is retried: fixes audit M-1)
+    let p404 = "{\"ok\":false,\"code\":\"no-proof-404\"}";
+    for (tag, bad) in [("idchg", vec!["{\"ok\":true,\"relayPub\":\"STRANGER\"}"]), ("idnone", vec![p404, p404, p404])] {
+        let mut proofs = vec![AA];
+        proofs.extend(bad.iter().copied());
+        proofs.push(AA);
+        let (fx, c) = fresh_case(&FreshCase { tag, proofs, ..FreshCase::default() });
+        let n = c.iter().filter(|x| *x == "prove").count();
         let starts: Vec<&String> = c.iter().filter(|x| x.starts_with("START ")).collect();
         assert!(starts.len() >= 3 && starts[1].ends_with("suite/active") && starts[2].ends_with("payload"), "({tag}) the update was not rolled back to the shipped code: {c:?}");
         let proves: Vec<usize> = c.iter().enumerate().filter(|(_, x)| *x == "prove").map(|(i, _)| i).collect();
         let opens: Vec<usize> = c.iter().enumerate().filter(|(_, x)| x.starts_with("OPENED")).map(|(i, _)| i).collect();
-        assert_eq!((proves.len(), opens.len()), (3, 2), "({tag}) {c:?}");
-        assert!(opens[1] > proves[2], "({tag}) the panel was opened before the rolled-back relay was proven: {c:?}");
-        assert!(!(opens[0] > proves[1] && opens[0] < proves[2]), "({tag}) the panel was opened for the failed update: {c:?}");
-        assert_eq!(std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default().trim(), SHA2, "({tag}) the bad release must be quarantined");
-        assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"), "({tag})");
-        assert!(!fx.suite_dir.join("active").exists(), "({tag}) the update's code must be gone");
-        assert!(!fx.data_dir.join("suite-autoupdate").exists(), "({tag}) auto-update must be switched off, as after any failed update");
-        assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "STORE");
-        drop(shell);
-        assert!(wait_port_free(Duration::from_secs(10)), "({tag}) port not free");
+        assert_eq!((n, opens.len()), (bad.len() + 2, 2), "({tag}) {c:?}");
+        assert!(opens[1] > proves[n - 1], "({tag}) the panel was opened before the rolled-back relay was proven: {c:?}");
+        assert!(!(opens[0] > proves[1] && opens[0] < proves[n - 1]), "({tag}) the panel was opened for the failed update: {c:?}");
+        assert_bad_release(&fx, tag);
     }
     // a NORMAL start that proves a different key: record and tell, no rollback, the panel opens
     let fx = fresh_box("idnormal", "2026-01-01T00:00:00Z");
@@ -2297,4 +2283,171 @@ fn the_shells_active_move_states_are_relay_move_mjs_active_states() {
     std::fs::write(&f, "{\"move\":{\"state\":\"done\"}}").unwrap();
     assert!(!move_journal_active(&f));
     let _ = std::fs::remove_dir_all(&d);
+}
+
+// ══ FIXES AUDIT of cfe288b2 (H-1, M-1, M-2) ═══════════════════════════════════════════════════════════════════════
+
+const AA: &str = "{\"ok\":true,\"relayPub\":\"aa\"}";
+
+// One launcher run for decision (a): a fresh box whose key file says `disk_key`, a good v2 bundle staged (its gateway
+// runs `bundle_prelude` first), the payload's gateway running `payload_prelude` first, the given mover `proofs` in
+// order, and the apply window open from the start (`at_launch`) or only once the first panel opened (a tick).
+struct FreshCase<'a> {
+    tag: &'a str,
+    at_launch: bool,
+    proofs: Vec<&'a str>,
+    disk_key: &'a str,
+    config: &'a str,
+    bundle_prelude: &'a str,
+    payload_prelude: &'a str,
+    restore_pending: bool,
+    quit_after: usize,
+}
+impl Default for FreshCase<'_> {
+    fn default() -> Self {
+        FreshCase { tag: "x", at_launch: false, proofs: vec![], disk_key: "aa", config: "{\"relayPub\":\"aa\"}", bundle_prelude: "", payload_prelude: "", restore_pending: false, quit_after: 2 }
+    }
+}
+fn key_json(k: &str) -> String {
+    format!("{{\"sk\":\"s\",\"pub\":\"{k}\"}}")
+}
+fn fresh_case(fc: &FreshCase) -> (Fixture, Vec<String>) {
+    eprintln!("── decision (a) case: {} ──", fc.tag);
+    let fx = fresh_box(fc.tag, "2026-01-01T00:00:00Z");
+    write(&fx.data_dir.join("relay.sqlite"), "STORE");
+    write(&fx.data_dir.join("relay-key.json"), &key_json(fc.disk_key));
+    if !fc.payload_prelude.is_empty() {
+        write(&fx.payload.join("scripts").join("gateway.mjs"), &gateway_src_ex("v1", false, fc.payload_prelude));
+    }
+    if fc.restore_pending {
+        std::fs::create_dir_all(fx.data_dir.join(".restore-pending")).unwrap();
+    }
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "v2", sha: SHA2, date: D_OCT, lie: false, prelude: fc.bundle_prelude });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    let config_file = fx._root.0.join("cfg").join("storage.json");
+    write(&config_file, &fc.config.replace("NEWDIR", &jstr(&fx.data_dir.to_string_lossy())));
+    let minute = Arc::new(std::sync::atomic::AtomicU32::new(if fc.at_launch { IN_WINDOW } else { OUT_OF_WINDOW }));
+    let m2 = minute.clone();
+    let shell = TestShell::new(fx.node.clone(), fx.data_dir.clone(), fc.quit_after, Box::new(move |n| if n == 1 { m2.store(IN_WINDOW, Ordering::SeqCst) }));
+    script(&shell, &fc.proofs.iter().map(|p| ("prove", *p)).collect::<Vec<_>>());
+    let host = suite_host(&shell, &fx, &config_file, minute);
+    let end = launcher::run(&host, &launcher_cfg(&config_file, &fx.data_dir, &fx._root.0.join("l.log")));
+    let c = shell.calls();
+    assert_eq!(end, launcher::RunEnd::Quit, "({}) {c:?}", fc.tag);
+    drop(shell);
+    assert!(wait_port_free(Duration::from_secs(10)), "({}) port not free", fc.tag);
+    (fx, c)
+}
+fn assert_bad_release(fx: &Fixture, tag: &str) {
+    assert_eq!(std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default().trim(), SHA2, "({tag}) the bad release must be quarantined");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"), "({tag})");
+    assert!(!fx.suite_dir.join("active").exists(), "({tag}) the update's code must be gone");
+    assert!(!fx.data_dir.join("suite-autoupdate").exists(), "({tag}) auto-update must be switched off, as after any failed update");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "STORE", "({tag})");
+}
+fn assert_good_release(fx: &Fixture, tag: &str, c: &[String]) {
+    assert!(!fx.suite_dir.join("quarantine-sha").exists(), "({tag}) a GOOD update was quarantined: {c:?}");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("applied"), "({tag}) {c:?}");
+    assert!(fx.data_dir.join("suite-autoupdate").exists(), "({tag}) auto-update was switched off: {c:?}");
+    assert!(fx.suite_dir.join("active").join("scripts").join("gateway.mjs").is_file(), "({tag}) the update's code was removed: {c:?}");
+}
+
+// The relay's boot carries out a staged restore, as gateway.mjs applyPendingRestore does: another relay's key and
+// store replace this one's.
+const RESTORE_ON_BOOT: &str = "{ const fs = await import('node:fs'); const dd = process.env.TRINITY_DATA_DIR; if (fs.existsSync(dd + '/.restore-pending')) { fs.writeFileSync(dd + '/relay-key.json', JSON.stringify({sk:'s',pub:'K2'})); fs.writeFileSync(dd + '/relay.sqlite', 'RESTORED-STORE'); fs.rmSync(dd + '/.restore-pending', {recursive:true, force:true}); } }";
+const K2: &str = "{\"ok\":true,\"relayPub\":\"K2\"}";
+
+// H-1 route 1: a moved box (storage.json records relayPub "aa") restored another relay's backup (its folder now holds
+// K2, and the relay proves K2). Every later update must still be judged a GOOD one, and storage.json adopts K2.
+#[test]
+fn h1_a_moved_box_that_restored_another_relays_backup_still_takes_good_updates() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
+    small_boot_timing();
+    let (fx, c) = fresh_case(&FreshCase {
+        tag: "h1moved",
+        disk_key: "K2",
+        config: "{\"dataDir\":NEWDIR,\"relayPub\":\"aa\",\"move\":{\"state\":\"done\"}}",
+        proofs: vec![K2, K2],
+        ..FreshCase::default()
+    });
+    assert_good_release(&fx, "h1moved", &c);
+    let st = std::fs::read_to_string(fx._root.0.join("cfg").join("storage.json")).unwrap();
+    assert_eq!(json_str_value(&st, "relayPub").as_deref(), Some("K2"), "storage.json must adopt the restored key: {st}");
+}
+
+// H-1 route 2: a restore was staged and the app reopened while an update waits with its window open. The restore must
+// go first (the launch-time apply waits for it), so the update is then judged against the RESTORED key and kept, and
+// the restored store is never replaced by the old one.
+#[test]
+fn h1_a_staged_restore_goes_before_a_waiting_update_and_the_update_is_not_rejected() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
+    small_boot_timing();
+    let (fx, c) = fresh_case(&FreshCase {
+        tag: "h1restore",
+        at_launch: true,
+        restore_pending: true,
+        payload_prelude: RESTORE_ON_BOOT,
+        bundle_prelude: RESTORE_ON_BOOT,
+        proofs: vec![K2, K2],
+        ..FreshCase::default()
+    });
+    let starts: Vec<&String> = c.iter().filter(|x| x.starts_with("START ")).collect();
+    assert!(starts[0].ends_with("payload"), "the update was started before the restore was carried out: {c:?}");
+    assert_good_release(&fx, "h1restore", &c);
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "RESTORED-STORE", "the restored store was replaced: {c:?}");
+    assert_eq!(launcher::key_pub_of(&fx.data_dir).as_deref(), Some("K2"));
+    assert!(!fx.data_dir.join(".restore-pending").exists());
+}
+
+// The key file and the key the relay signs with change TOGETHER under a fresh update (here the update's own boot
+// rewrites the key file): the relay signs with the key on disk, so it is not a failed update.
+#[test]
+fn a_fresh_update_whose_key_file_and_proof_change_together_is_not_rejected() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
+    small_boot_timing();
+    let rekey = "{ const fs = await import('node:fs'); fs.writeFileSync(process.env.TRINITY_DATA_DIR + '/relay-key.json', JSON.stringify({sk:'s',pub:'K3'})); }";
+    let (fx, c) = fresh_case(&FreshCase { tag: "together", bundle_prelude: rekey, proofs: vec![AA, "{\"ok\":true,\"relayPub\":\"K3\"}"], ..FreshCase::default() });
+    assert_good_release(&fx, "together", &c);
+}
+
+// M-2: the LAUNCH-time route of decision (a). An update whose window this computer missed is applied before the first
+// relay starts; if the relay it puts in place signs with a key that is not its folder's, it is rolled back right there
+// and the panel opens only on the relay that replaces it.
+#[test]
+fn a_launch_time_update_whose_relay_fails_the_identity_proof_is_rolled_back() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
+    small_boot_timing();
+    let (fx, c) = fresh_case(&FreshCase { tag: "idlaunch", at_launch: true, quit_after: 1, proofs: vec!["{\"ok\":true,\"relayPub\":\"STRANGER\"}", AA], ..FreshCase::default() });
+    let starts: Vec<&String> = c.iter().filter(|x| x.starts_with("START ")).collect();
+    assert!(starts.len() >= 2 && starts[0].ends_with("suite/active") && starts.last().unwrap().ends_with("payload"), "{c:?}");
+    assert_eq!(c.iter().filter(|x| x.starts_with("OPENED")).count(), 1, "{c:?}");
+    assert!(c.iter().rposition(|x| x == "prove").unwrap() < c.iter().position(|x| x == "OPENED 1").unwrap(), "{c:?}");
+    assert_bad_release(&fx, "idlaunch");
+}
+
+// Fixes audit M-1, in the real glue: a fresh update whose relay does not answer the first proof (and whose mover
+// output once cannot be read) and then proves its folder's key is kept.
+#[test]
+fn a_fresh_update_survives_a_proof_that_fails_once_for_no_reason_in_the_code() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
+    small_boot_timing();
+    let (fx, c) = fresh_case(&FreshCase { tag: "transient", proofs: vec![AA, "{\"ok\":false,\"code\":\"unreachable\"}", "not json", AA], ..FreshCase::default() });
+    assert_good_release(&fx, "transient", &c);
+}
+
+// LOW-3: only a TRANSITION to applied… is a fresh update; another rewrite of state.json is not.
+#[test]
+fn a_fresh_update_is_an_outcome_transition_not_any_rewrite_of_state_json() {
+    let rec = |o: &str, sha: &str, day: &str, extra: &str| format!("{{\"installedSha\":\"{sha}\",\"lastApplied\":\"{day}\",\"lastOutcome\":\"{o}\"{extra}}}");
+    assert!(fresh_update_transition("", &rec("applied", "s2", "d1", "")), "a first apply");
+    assert!(fresh_update_transition(&rec("rolledback", "s1", "d0", ""), &rec("applied", "s2", "d1", "")));
+    assert!(fresh_update_transition(&rec("applied", "s1", "d0", ""), &rec("applied-store-degraded", "s2", "d1", "")), "a second update over a first");
+    assert!(!fresh_update_transition(&rec("applied", "s1", "d0", ",\"restoreFailed\":\"x\""), &rec("applied", "s1", "d0", "")), "the operator's 'dealt with' rewrite");
+    assert!(!fresh_update_transition(&rec("applied", "s1", "d0", ""), &rec("applied", "s1", "d0", ",\"addressBefore\":\"y\"")));
+    assert!(!fresh_update_transition(&rec("applied", "s1", "d0", ""), &rec("not-applied", "s1", "d1", "")));
 }

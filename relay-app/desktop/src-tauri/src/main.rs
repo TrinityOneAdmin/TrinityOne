@@ -1811,6 +1811,13 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     };
     // For the whole apply — snapshot, stop, backup, swap, health check, any restore — this folder carries the apply
     // marker, so neither the panel (GET /storage) nor the launcher starts a data move under it. Dropped on every return.
+    // A restore of the church's data is waiting (fixes audit H-1 route 2, the LAUNCH-time and tick route): its relay's
+    // next boot carries it out. No update before it — not even the snapshot. (A restore staged while the apply runs is
+    // caught again at step 4c, once the relay is down.)
+    if restore_pending(env.data_dir) {
+        applog(log, "suite: APPLY deferred — a restore of the church's data is waiting; the restore goes first, the update waits");
+        return;
+    }
     let _marker = ApplyMarker::hold(suite_dir, log);
     let staging = suite_dir.join("staging");
     let was_running = st.alive.load(Ordering::SeqCst);
@@ -1910,6 +1917,21 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             let _ = rename_retry(&a_sig, &staging.join("bundle.sig"), log);
         }
         let _ = std::fs::remove_dir_all(&applying);
+        return;
+    }
+    // 4c. A RESTORE GOES FIRST (fixes audit H-1 route 2). A restore staged while the relay ran (.restore-pending)
+    //     is carried out by the relay's next boot. Backing up the store now would copy the OLD store, and the update's
+    //     boot would swap the restored key and church in under it — a later rollback would then put the old store back
+    //     under the restored identity. Put the snapshot back, record nothing, and start the current code again: its
+    //     boot carries the restore out; the update waits for a later window.
+    if restore_pending(env.data_dir) {
+        applog(log, "suite: APPLY deferred — a restore of the church's data is waiting; the restore goes first, the update waits");
+        if !staging.join("bundle.tgz").exists() {
+            let _ = rename_retry(&a_tgz, &staging.join("bundle.tgz"), log);
+            let _ = rename_retry(&a_sig, &staging.join("bundle.sig"), log);
+        }
+        let _ = std::fs::remove_dir_all(&applying);
+        restart_prev(st);
         return;
     }
 
@@ -2224,13 +2246,28 @@ impl<'s> SuiteHost<'s> {
         ("Your relay stopped".into(), format!("{why}. Details are in {}", self.log.display()))
     }
 
-    // After startup()/maybe_apply(): did an update just get applied (state.json changed to an "applied…" outcome)?
+    // After startup()/maybe_apply(): did an update just get applied (the outcome TRANSITIONED to applied…, see
+    // fresh_update_transition)?
     // Then keep the state from before it, so a failed identity proof can roll it back (owner decision (a)).
     fn note_fresh_update(&self, data_dir: &Path, before: String) {
         let after = read_suite_state(data_dir);
-        let applied = json_str_value(&after, "lastOutcome").map(|o| o.starts_with("applied")).unwrap_or(false);
-        *self.pre_update_state.lock().unwrap() = if applied && after != before { Some(before) } else { None };
+        *self.pre_update_state.lock().unwrap() = if fresh_update_transition(&before, &after) { Some(before) } else { None };
     }
+}
+
+// A restore the panel staged for the relay's next boot (gateway.mjs applyPendingRestore reads <data>/.restore-pending).
+fn restore_pending(data_dir: &Path) -> bool {
+    data_dir.join(".restore-pending").exists()
+}
+
+// LOW-3: an update was JUST applied iff the outcome TRANSITIONED to applied…: the new record says applied… and its
+// installed build or apply day differs from the record before. Any other rewrite of state.json (the operator's "dealt
+// with" clearing restoreFailed, a carried-over warning) is not a fresh update. PURE.
+fn fresh_update_transition(before: &str, after: &str) -> bool {
+    let f = |raw: &str, k: &str| json_str_value(raw, k).unwrap_or_default();
+    let applied = |raw: &str| f(raw, "lastOutcome").starts_with("applied");
+    applied(after)
+        && (!applied(before) || f(before, "installedSha") != f(after, "installedSha") || f(before, "lastApplied") != f(after, "lastApplied"))
 }
 
 fn read_suite_state(data_dir: &Path) -> String {
@@ -2634,7 +2671,7 @@ fn main() {
             };
             let (payload_h, log_h, current_h, state_h) = (payload.clone(), log.clone(), current.clone(), config_file.clone());
             // up_steps 480 = ~2 min: first run on Windows can be slow (Defender scans the bundled runtime)
-            let cfg = launcher::Config { config_file, default_data, port: PORT, up_steps: 480, log_path: log.clone(), mover_wait_ms: 10 * 60 * 1000, check_steps: 1200 /* 5 min */ };
+            let cfg = launcher::Config { config_file, default_data, port: PORT, up_steps: 480, log_path: log.clone(), mover_wait_ms: 10 * 60 * 1000, check_steps: 1200 /* 5 min without output */, check_ceiling_steps: 14400 /* 60 min without the port opening */ };
             thread::spawn(move || {
                 let host = SuiteHost {
                     shell: &shell,
