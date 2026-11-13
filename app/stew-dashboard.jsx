@@ -13179,11 +13179,18 @@ function DashBrandingPanel({ church }) {
   // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) — the second church colour, beside the accent. It paints the
   // members' church header (no banner), the badge (no picture), and the verse-of-the-day / featured-sermon
   // cards. Same pattern as the accent: sync only from a DEFINED value (2026-07-07), 400ms debounce, publish
-  // through publishProfile. Unset ('') until the steward picks one — the picker shows the accent as a
-  // placeholder and never publishes on its own.
+  // through publishProfile. Unset ('') until the steward picks one.
+  // OPT-IN (owner 2026-11-13): a "Use a separate main colour" switch. OFF — the default whenever no mainColor is
+  // saved — shows no Main controls and publishes nothing for Main; members keep today's look (plain header; the
+  // badge and the verse/sermon cards in the accent). ON reveals the controls and saves nothing until a colour is
+  // CHOSEN. Turning it OFF clears mainColor exactly as Reset does. A saved mainColor loads with it ON.
   const [mainCol, setMainState] = React.useState(church.mainColor || '');
   const mainTimer = React.useRef(null);
   React.useEffect(() => { if (church.mainColor !== undefined) setMainState(church.mainColor || ''); }, [church.mainColor]);
+  const [useMain, setUseMain] = React.useState(!!church.mainColor);
+  // only a SAVED colour turns the switch on; an unset one never turns it off (the steward may have just switched
+  // it on and not chosen yet, and the transient '' / undefined while the profile re-fetches must not hide it).
+  React.useEffect(() => { if (church.mainColor) setUseMain(true); }, [church.mainColor]);
   const onMain = (v) => {
     setMainState(v);
     if (mainTimer.current) clearTimeout(mainTimer.current);
@@ -13192,6 +13199,13 @@ function DashBrandingPanel({ church }) {
   const [mainHex, setMainHex] = React.useState((church.mainColor || '').toUpperCase());
   React.useEffect(() => { setMainHex(mainCol ? mainCol.toUpperCase() : ''); }, [mainCol]);
   const resetMain = () => { if (mainTimer.current) clearTimeout(mainTimer.current); setMainState(''); setMainHex(''); window.Steward.publishProfile({ mainColor: '' }); };
+  // OFF = Reset, then hide. Nothing is published when no main colour was ever saved or chosen (on, then off).
+  const setMainOn = (on) => {
+    if (on) { setUseMain(true); return; }
+    const had = !!(mainCol || church.mainColor || mainTimer.current);
+    if (had) resetMain(); else { setMainState(''); setMainHex(''); }
+    setUseMain(false);
+  };
   // Same rule as the accent's hex box: only a complete #RRGGBB is saved (no #RGB expansion mid-typing).
   const onMainHex = (v) => {
     let s = v.trim(); if (s && s[0] !== '#') s = '#' + s;
@@ -13199,15 +13213,23 @@ function DashBrandingPanel({ church }) {
     if (/^#[0-9a-fA-F]{6}$/.test(s)) onMain(s.toLowerCase());
   };
   const onMainHexBlur = () => { if (!/^#[0-9a-fA-F]{6}$/.test(mainHex)) setMainHex(mainCol ? mainCol.toUpperCase() : ''); };
-  // TWO VALUES, KEPT APART (owner device test 2026-11-13). The Main colour CONTROL (tile, picker, hex placeholder)
-  // shows the main colour, else its OWN fixed default — never the accent. It used to fall back to the accent, so
-  // with no main colour saved, picking an accent visibly changed Main too and Reset on either looked like it reset
-  // both; and the picker opened on the accent, so a phone's picker confirming its starting value would have saved
-  // the accent INTO mainColor. Only the live PREVIEW below still falls back to the accent, because that is what
-  // members' phones paint when no main colour is set (ChurchBadge / the church header, app/screens-church.jsx).
-  const MAIN_DEFAULT = '#C25A38';
-  const mainPick = mainCol || MAIN_DEFAULT;   // the Main control: main, else its own default
-  const mainShown = mainCol || acc;           // the members' header preview only
+  // TWO VALUES, KEPT APART (owner device test 2026-11-13). With no main colour saved, the Main control used to SHOW
+  // the accent, so picking an accent visibly changed Main and Reset on either looked like it reset both. The Main
+  // control never displays the accent as if it were the main colour now.
+  // The picker needs SOME starting value; with Main unset it opens on a FIXED colour (clay), never the accent, so
+  // nothing in the Main control follows the accent. A picker event equal to that starting value while Main is
+  // unset is IGNORED (audit
+  // AUDIT-colour-independent-4c2e359e finding 1): a phone picker that confirms its starting colour on close would
+  // otherwise save the accent into mainColor without the steward choosing anything. The tile itself shows a
+  // "not set" pattern, never a colour members don't see (finding 2).
+  const mainStart = mainCol || '#C25A38';
+  const onMainPick = (v) => { if (!mainCol && String(v).toLowerCase() === mainStart.toLowerCase()) return; onMain(v); };
+  const NOT_SET = 'repeating-linear-gradient(45deg, var(--surface-2) 0 6px, var(--line) 6px 8px)';
+  // THE PREVIEW SHOWS WHAT MEMBERS' PHONES PAINT (app/screens-church.jsx ChurchPill / ChurchBadge): with a banner,
+  // the banner over the main colour; without one, the compact header — filled with the main colour, else PLAIN.
+  // The badge is main, else the accent.
+  const badgeCol = mainCol || acc;
+  const onMainInk = (hex) => { try { const c = hex.slice(1).match(/../g).map(x => parseInt(x, 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))); return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) > 0.42 ? '#2A1B12' : '#fff'; } catch (e) { return '#fff'; } };
   const swatches = ['#C25A38', '#3B6FB0', '#5E8C6A', '#7A4FA3', '#B0853B', '#1F2A37'];
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -13218,14 +13240,24 @@ function DashBrandingPanel({ church }) {
       {cropFile ? <ImageCropModal file={cropFile} outW={768} outH={256} title="Position your banner" onSave={saveBanner} onClose={() => setCropFile(null)} /> : null}
       <div style={lbl}>Banner</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A wide image at the top of your church in members’ apps. Landscape works best (about 3:1) — it’s centre-cropped to fit.</div>
-      {/* live preview — banner + logo + name, the way members see the header */}
-      <div style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: church.banner ? `center/cover no-repeat url(${church.banner})` : `linear-gradient(135deg, ${mainShown}, color-mix(in oklab, ${mainShown} 60%, #000))`, WebkitMaskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: (church.banner && fade > 0) ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
-        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
-        <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <SkBadge initials={initials} picture={church.picture} accent={mainShown} size={36} radius={999} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
-          {!hideName ? <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: titleCol || '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div> : null}
+      {/* live preview — the church header the way members' phones draw it (see the note above badgeCol) */}
+      {church.banner ? (
+        <div data-brand-preview="banner" style={{ position: 'relative', width: '100%', aspectRatio: '3 / 1', borderRadius: 14, overflow: 'hidden', background: mainCol || 'transparent' }}>
+          <div style={{ position: 'absolute', inset: 0, WebkitMaskImage: fade > 0 ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none', maskImage: fade > 0 ? `linear-gradient(to bottom, #000 ${100 - fade}%, transparent)` : 'none' }}>
+            <div style={{ position: 'absolute', inset: 0, background: `center/cover no-repeat url(${church.banner})` }} />
+            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
+          </div>
+          <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <SkBadge initials={initials} picture={church.picture} accent={badgeCol} size={36} radius={999} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
+            {!hideName ? <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: titleCol || '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div> : null}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div data-brand-preview="compact" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', background: mainCol || 'var(--surface)', borderRadius: 14, padding: '7px 11px', boxShadow: 'var(--shadow)' }}>
+          <SkBadge initials={initials} picture={church.picture} accent={badgeCol} size={30} radius={999} />
+          <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: mainCol ? onMainInk(mainCol) : 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{church.name || 'Your church'}</div>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
         <label className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13, cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 }}>
           <Icon name={busy ? 'refresh' : (church.banner ? 'pen' : 'plus')} size={15} color="#fff" /> {busy ? 'Uploading…' : (church.banner ? 'Replace banner' : 'Upload banner')}
@@ -13274,15 +13306,24 @@ function DashBrandingPanel({ church }) {
 
       <div style={lbl}>Main colour</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Fills your church’s header when there is no banner, your badge when there is no picture, and the verse of the day and featured sermon cards in members’ apps.</div>
+      <button type="button" role="switch" aria-checked={useMain} aria-label="Use a separate main colour" onClick={() => setMainOn(!useMain)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', border: 'none', background: 'none', padding: '4px 0', marginBottom: useMain ? 12 : 6, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', textAlign: 'left' }}>
+        <span style={{ position: 'relative', width: 40, height: 24, borderRadius: 999, flexShrink: 0, background: useMain ? 'var(--clay)' : 'var(--line)', transition: 'background .15s' }}>
+          <span style={{ position: 'absolute', top: 3, left: useMain ? 19 : 3, width: 18, height: 18, borderRadius: 999, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,.3)', transition: 'left .15s' }} />
+        </span>
+        Use a separate main colour
+      </button>
+      {!useMain ? <div data-main-off-note="1" style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, marginBottom: 18 }}>Off: members see a plain header, and your accent colour on the badge and the verse and sermon cards.</div> : null}
+      {useMain ? <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: mainPick, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
-          <input type="color" value={mainPick.toLowerCase()} onChange={e => onMain(e.target.value)} aria-label="Main colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+        <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: mainCol || NOT_SET, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
+          <input type="color" value={mainStart.toLowerCase()} onChange={e => onMainPick(e.target.value)} aria-label="Main colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
         </label>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
-          <input value={mainHex.replace(/^#/, '')} onChange={e => onMainHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} onBlur={onMainHexBlur} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Main colour hex code" placeholder={MAIN_DEFAULT.replace(/^#/, '')}
+          <input value={mainHex.replace(/^#/, '')} onChange={e => onMainHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} onBlur={onMainHexBlur} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Main colour hex code" placeholder="RRGGBB"
             style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
-          {mainCol ? <button onClick={resetMain} title="Reset to default" aria-label="Reset main colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
+          {mainCol ? <button onClick={resetMain} title="Reset to default" aria-label="Reset main colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>not set</span>}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -13290,6 +13331,7 @@ function DashBrandingPanel({ church }) {
           <button key={s} onClick={() => onMain(s.toLowerCase())} title={s} aria-label={'Main colour ' + s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (mainCol.toLowerCase() === s.toLowerCase()) ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
         ))}
       </div>
+      </> : null}
 
       <div style={lbl}>Accent colour</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Tints the highlights, buttons and active states in your members’ app to match your church.</div>

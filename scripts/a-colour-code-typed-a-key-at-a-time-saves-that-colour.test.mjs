@@ -93,6 +93,9 @@ test('Church identity: typing a colour code a key at a time saves exactly that c
       await sleep(300);
       await evalIn(`(() => { const b=[...document.querySelectorAll('button,[role="button"],a,li,div')].reverse().find(x=>/^Church identity/.test((x.textContent||'').trim()) && x.onclick !== undefined && (x.tagName==='BUTTON'||x.getAttribute('role')==='button')); if (b) b.click(); })()`);
       await sleep(300);
+      // Main is opt-in (owner 2026-11-13): switch "Use a separate main colour" ON to reveal its hex box
+      await evalIn(`(() => { const s = document.querySelector('button[role="switch"][aria-label="Use a separate main colour"]'); if (s && s.getAttribute('aria-checked') === 'false') s.click(); })()`);
+      await sleep(300);
       return evalIn(`!!document.querySelector('input[aria-label="Main colour hex code"]') && !!document.querySelector('input[aria-label="Accent colour hex code"]')`);
     }, v => v === true);
     assert.equal(reached, true, 'Settings → Church identity never showed both colour hex boxes');

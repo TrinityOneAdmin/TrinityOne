@@ -50,11 +50,14 @@ async function panel(church) {
   const render = () => draw(mod.DashBrandingPanel, { church });
   render();
   const by = (label) => find(render(), n => n.props && n.props['aria-label'] === label)[0];
-  return { published, render, by };
+  // the "Use a separate main colour" switch (owner 2026-11-13: Main is opt-in)
+  const toggle = () => { const sw = by('Use a separate main colour'); assert.ok(sw, 'there is no "Use a separate main colour" switch'); sw.props.onClick(); };
+  return { published, render, by, toggle };
 }
 
 test('the Main colour picker publishes { mainColor } (and not accent)', async () => {
   const p = await panel({ name: 'Grace', accent: '#C25A38' });
+  p.toggle();
   const pick = p.by('Main colour picker');
   assert.ok(pick, 'there is no Main colour picker on the branding card');
   pick.props.onChange({ target: { value: '#1f4e79' } });
@@ -64,6 +67,7 @@ test('the Main colour picker publishes { mainColor } (and not accent)', async ()
 
 test('the Main colour hex field publishes once the code is a complete #RRGGBB, and not before', async () => {
   const p = await panel({ name: 'Grace' });
+  p.toggle();
   const hex = p.by('Main colour hex code');
   assert.ok(hex, 'there is no Main colour hex field');
   // "1F4" is the first half of "1F4E79", not a #RGB code: it must not be expanded to #11ff44 and published
@@ -90,12 +94,45 @@ test('a Main colour swatch publishes it, and Reset publishes { mainColor: "" }',
   assert.deepEqual(p.published.at(-1), { mainColor: '' });
 });
 
-test('an unset main colour publishes nothing on its own, and offers no Reset', async () => {
-  const p = await panel({ name: 'Grace', accent: '#C25A38' });
+test('an unset main colour is OFF: no Main controls, nothing published; switching it ON publishes nothing and offers no Reset', async () => {
+  const p = await panel({ name: 'Grace', accent: '#3B6FB0' });
   await sleep(450);
-  assert.deepEqual(p.published, []);
+  assert.equal(p.by('Use a separate main colour').props['aria-checked'], false, 'an unset main colour loaded with the switch ON');
+  for (const l of ['Main colour picker', 'Main colour hex code', 'Main colour #3B6FB0', 'Reset main colour']) assert.equal(p.by(l), undefined, `"${l}" is on screen with the switch OFF`);
+  p.toggle();
+  await sleep(450);
+  assert.equal(p.by('Use a separate main colour').props['aria-checked'], true);
+  assert.ok(p.by('Main colour picker') && p.by('Main colour hex code') && p.by('Main colour #3B6FB0'), 'switching ON did not reveal the Main controls');
+  assert.deepEqual(p.published, [], 'switching ON published ' + JSON.stringify(p.published));
   assert.equal(p.by('Reset main colour'), undefined);
-  assert.equal(p.by('Main colour picker').props.value, '#c25a38', 'the unset picker does not show the accent as its placeholder');
+  assert.notEqual(p.by('Main colour picker').props.value, '#3b6fb0', 'the unset Main picker opens on the accent');
+  assert.notEqual(p.by('Main colour hex code').props.placeholder.toLowerCase(), '3b6fb0', 'the unset Main hex box shows the accent as its hint');
+});
+
+test('audit finding 1: with Main unset, a picker event carrying the picker\'s own STARTING value saves nothing; a real choice does', async () => {
+  const p = await panel({ name: 'Grace', accent: '#3B6FB0' });
+  p.toggle();
+  const start = p.by('Main colour picker').props.value;
+  p.by('Main colour picker').props.onChange({ target: { value: start } });
+  p.by('Main colour picker').props.onChange({ target: { value: start.toUpperCase() } });
+  await sleep(450);
+  assert.deepEqual(p.published, [], `the picker's starting value ${start} was saved as the main colour: ${JSON.stringify(p.published)}`);
+  p.by('Main colour picker').props.onChange({ target: { value: '#1f4e79' } });
+  await sleep(450);
+  assert.deepEqual(p.published, [{ mainColor: '#1f4e79' }]);
+});
+
+test('a saved main colour loads with the switch ON; switching OFF publishes { mainColor: "" } and hides the controls; ON-then-OFF with nothing chosen publishes nothing', async () => {
+  const p = await panel({ name: 'Grace', accent: '#3B6FB0', mainColor: '#1f4e79' });
+  assert.equal(p.by('Use a separate main colour').props['aria-checked'], true, 'a saved main colour loaded with the switch OFF');
+  p.toggle();
+  assert.deepEqual(p.published, [{ mainColor: '' }], 'switching OFF did not publish the removal: ' + JSON.stringify(p.published));
+  assert.equal(p.by('Use a separate main colour').props['aria-checked'], false);
+  assert.equal(p.by('Main colour picker'), undefined, 'the Main controls stayed on screen after switching OFF');
+  const q = await panel({ name: 'Grace', accent: '#3B6FB0' });
+  q.toggle(); q.toggle();
+  await sleep(450);
+  assert.deepEqual(q.published, [], 'ON then OFF with nothing chosen published ' + JSON.stringify(q.published));
 });
 
 test('the accent controls still publish { accent } and never mainColor — the two cannot be swapped', async () => {
