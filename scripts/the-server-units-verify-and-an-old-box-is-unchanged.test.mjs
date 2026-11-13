@@ -27,7 +27,8 @@ test('every unit install.sh writes verifies as systemd, with the drop-ins relay-
     writeFileSync(join(bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const units = { 'trinityone-relay.service': '/etc/systemd/system/$SVC.service', 'trinityone-update.service': '/etc/systemd/system/trinityone-update.service',
       'trinityone-update.path': '/etc/systemd/system/trinityone-update.path', 'trinityone-move.service': '/etc/systemd/system/trinityone-move.service',
-      'trinityone-move.path': '/etc/systemd/system/trinityone-move.path' };
+      'trinityone-move.path': '/etc/systemd/system/trinityone-move.path',
+      'trinityone-move-recover.service': '/etc/systemd/system/trinityone-move-recover.service', 'trinityone-move-finish.service': '/etc/systemd/system/trinityone-move-finish.service' };
     for (const [n, t] of Object.entries(units)) writeFileSync(join(sysd, n), render(t, PRE));
     const ap = spawnSync('bash', [join(ROOT, 'scripts/relay-datadir-apply.sh'), '/mnt/church-disk/trinityone-relay'], { encoding: 'utf8',
       env: { ...process.env, PATH: bin + ':' + process.env.PATH, TRINITYONE_ETC: join(w, 'etc'), TRINITYONE_STATE_DIR: join(w, 'state'), TRINITYONE_SYSTEMD_DIR: sysd } });
@@ -67,4 +68,73 @@ test('install.sh on an existing box with no relay.env: data stays $DIR/relay and
   assert.equal(run(({ dir }) => mkdirSync(join(dir, 'relay')), '0'), 'DIR/relay|0|0|0');
   assert.equal(run(({ dir, etc }) => { mkdirSync(join(dir, 'relay')); writeFileSync(join(etc, 'relay.env'), 'TRINITY_DATA_DIR=/mnt/d/trinityone-relay\nTRINITY_DATA_DIR_PINNED=1\n'); }), '/mnt/d/trinityone-relay|1|0|1',
     're-running the installer after a move would plant a second, empty relay folder');
+});
+
+// ── AUDIT C: H1 (the old copy is no longer writable), L3 (folder recorded before the relay starts), L4 (never create a missing folder)
+function effectiveReadWritePaths(...unitTexts) {      // systemd semantics: later files append; an empty assignment resets
+  let list = [];
+  for (const t of unitTexts) for (const l of t.split('\n')) { const m = /^ReadWritePaths=(.*)$/.exec(l.trim()); if (m) list = m[1] === '' ? [] : [...list, m[1]]; }
+  return list;
+}
+test('H1: after a move the relay can write the NEW folder only — the old copy is not in its writable set', () => {
+  const w = mkdtempSync(join(tmpdir(), 'trin-rw-'));
+  try {
+    const sysd = join(w, 'systemd'), bin = join(w, 'bin'); mkdirSync(sysd); mkdirSync(bin);
+    writeFileSync(join(bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const main = render('/etc/systemd/system/$SVC.service', PRE);                 // a box installed before the move: names $DIR/relay
+    assert.deepEqual(effectiveReadWritePaths(main), [ROOT.replace(/\/$/, '') + '/relay']);
+    const ap = spawnSync('bash', [join(ROOT, 'scripts/relay-datadir-apply.sh'), '/mnt/church-disk/trinityone-relay'], { encoding: 'utf8',
+      env: { ...process.env, PATH: bin + ':' + process.env.PATH, TRINITYONE_ETC: join(w, 'etc'), TRINITYONE_STATE_DIR: join(w, 'state'), TRINITYONE_SYSTEMD_DIR: sysd } });
+    assert.equal(ap.status, 0, ap.stderr);
+    const drop = readFileSync(join(sysd, 'trinityone-relay.service.d/50-data-dir.conf'), 'utf8');
+    assert.deepEqual(effectiveReadWritePaths(main, drop), ['/mnt/church-disk/trinityone-relay'], 'THE OLD COPY IS STILL WRITABLE BY THE RELAY: a compromised relay could steer the root remover through it');
+    // and a re-run of install.sh after the move renders the live folder itself
+    const moved = render('/etc/systemd/system/$SVC.service', PRE.replace('DATA=$DIR/relay', 'DATA=/mnt/church-disk/trinityone-relay'));
+    assert.deepEqual(effectiveReadWritePaths(moved, drop), ['/mnt/church-disk/trinityone-relay']);
+  } finally { rmSync(w, { recursive: true, force: true }); }
+});
+
+function lift(startMarker) {
+  const a = SH.indexOf(startMarker); assert.ok(a >= 0, 'install.sh no longer has ' + startMarker);
+  return SH.slice(a, SH.indexOf('\n}\n', a) + 3);
+}
+test('L4: an installer re-run with the drive unplugged refuses and creates nothing (mountpoint -q is the check)', () => {
+  const w = mkdtempSync(join(tmpdir(), 'trin-l4-'));
+  try {
+    const bin = join(w, 'bin'); mkdirSync(bin);
+    const run = ({ hadEnv = 1, data, mountOk }) => {
+      writeFileSync(join(bin, 'mountpoint'), `#!/bin/sh\nexit ${mountOk ? 0 : 1}\n`, { mode: 0o755 });
+      return spawnSync('bash', ['-c', `die() { echo "DIE: $*" >&2; exit 1; }\nHAD_ENV=${hadEnv}; DATA=${data}\n${lift('check_data_folder_present() {')}\ncheck_data_folder_present && echo PASSED`],
+        { encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH } });
+    };
+    const missing = join(w, 'drive/trinityone-relay');
+    let r = run({ data: missing, mountOk: false }); assert.notEqual(r.status, 0); assert.match(r.stderr, /missing/); assert.equal(existsSync(join(w, 'drive')), false, 'the installer created the folder under the mount point');
+    mkdirSync(missing, { recursive: true });                                   // present but its drive is NOT mounted: it is the root disk under the mount point
+    r = run({ data: missing, mountOk: false }); assert.notEqual(r.status, 0); assert.match(r.stderr, /not mounted/);
+    r = run({ data: missing, mountOk: true }); assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /PASSED/);
+    r = run({ hadEnv: 0, data: join(w, 'nothing-yet'), mountOk: false }); assert.equal(r.status, 0, 'a fresh install (no relay.env) must not be refused');
+    // it is called, as a bare statement, before anything writes into the data folder
+    assert.match(SH, /^check_data_folder_present$/m);
+    assert.ok(SH.search(/^check_data_folder_present$/m) < SH.indexOf('mkdir -p "$DATA"\nprintf'), 'the check runs after the folder is created');
+  } finally { rmSync(w, { recursive: true, force: true }); }
+});
+
+test('L3: the data folder is recorded BEFORE the relay first starts, so the card shows at once', () => {
+  assert.match(SH, /^record_data_folder$/m);
+  assert.ok(SH.search(/^record_data_folder$/m) < SH.indexOf('systemctl restart "$SVC"'), 'relay.env is recorded after the relay restart');
+  const w = mkdtempSync(join(tmpdir(), 'trin-l3-'));
+  try {
+    const bin = join(w, 'bin'); mkdirSync(bin); writeFileSync(join(bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const run = (extra, data) => {
+      mkdirSync(data, { recursive: true }); if (extra) writeFileSync(join(data, 'relay-key.json'), '{}');
+      const sysd = join(w, 'sd' + Math.random().toString(36).slice(2)); mkdirSync(sysd);
+      const etc = join(w, 'etc' + Math.random().toString(36).slice(2));
+      const r = spawnSync('bash', ['-c', `warn() { echo "WARN $*" >&2; }\nSTORAGE=1; ENV_PINNED=0; DIR=${ROOT.replace(/\/$/, '')}; DATA=${data}; SVC=trinityone-relay; ETC_DIR=${etc}\n${lift('record_data_folder() {')}\nrecord_data_folder`],
+        { encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH, TRINITYONE_STATE_DIR: join(w, 'state'), TRINITYONE_SYSTEMD_DIR: sysd } });
+      assert.equal(r.status, 0, r.stderr); return readFileSync(join(etc, 'relay.env'), 'utf8');
+    };
+    const fresh = run(false, join(w, 'fresh'));
+    assert.match(fresh, /TRINITY_STORAGE_MODE=server/); assert.doesNotMatch(fresh, /PINNED/, 'a folder with no key yet must be recorded unpinned');
+    assert.match(run(true, join(w, 'keyed')), /TRINITY_DATA_DIR_PINNED=1/);
+  } finally { rmSync(w, { recursive: true, force: true }); }
 });

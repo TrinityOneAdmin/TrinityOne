@@ -164,12 +164,12 @@ BUNDLE_BASE="$(release_bundle_base "$SRC")"
 say "TrinityOne Relay installer"
 ok "release key sha256 $(printf '%s\n' "$RELEASE_PUBKEY_PEM" | sha256sum | cut -c1-64)"
 
-# ── Node (>=22.5) ────────────────────────────────────────────────────────────────
+# ── Node (>=22.13) ────────────────────────────────────────────────────────────────
 NODE_OK=0
 if command -v node >/dev/null 2>&1; then
-  # 22.5 is when node:sqlite arrived; the relay's event store and the data mover both need it, so an older Node
-  # (this said 18+, and installed 20) could never run the gateway at all.
-  case "$(node -p 'const [a,b]=process.versions.node.split(".").map(Number);(a>22||(a===22&&b>=5))?"ok":"old"' 2>/dev/null || echo old)" in
+  # node:sqlite arrived in 22.5 behind a flag and lost the flag in 22.13.0 (Node's changelog). The relay's event store
+  # and the data mover both import it, so an older Node (this said 18+, and installed 20) could never run the gateway.
+  case "$(node -p 'const [a,b]=process.versions.node.split(".").map(Number);(a>22||(a===22&&b>=13))?"ok":"old"' 2>/dev/null || echo old)" in
     ok) NODE_OK=1;;
   esac
 fi
@@ -213,9 +213,21 @@ say "Installing the relay's runtime dependencies (ws, web-push, nostr-tools)"
 ok "dependencies ready"
 
 # ── write policy (church.json) ──────────────────────────────────────────────────
+# NEVER CREATE A DATA FOLDER THAT relay.env NAMES AND THAT IS NOT THERE (plan R1, audit C L4): with the drive unplugged,
+# mkdir -p would plant the folder under the mount point on the root disk, write origin/code-source/church.json into it, and
+# hide it when the drive returns. The folder the move helper makes is <mountpoint>/trinityone-relay, so its drive must be
+# mounted (mountpoint -q) and the folder present. <<check-data-folder>>
+check_data_folder_present() {
+  [ "$HAD_ENV" = 1 ] || return 0
+  if [ ! -d "$DATA" ]; then die "this relay's data folder $DATA is missing -- is its drive connected? Nothing was changed. Reconnect it and run this installer again."; fi
+  case "$DATA" in
+    */trinityone-relay)
+      if ! mountpoint -q "$(dirname "$DATA")" 2>/dev/null; then die "the drive that holds this relay's data ($(dirname "$DATA")) is not mounted, so $DATA would be on the wrong disk. Nothing was changed. Mount it and run this installer again."; fi;;
+  esac
+  return 0
+}
+check_data_folder_present
 mkdir -p "$DATA"
-# the unit also names $DIR/relay (ReadWritePaths); after a move that is the tombstone the mover left there
-[ -e "$DIR/relay" ] || mkdir -p "$DIR/relay"
 printf '%s\n' "$ORIGIN" > "$DATA/origin"        # where the installers this box hands out come from
 printf '%s\n' "$SRC" > "$DATA/code-source"      # where "Update now" (scripts/relay-update.sh) pulls code from
 if [ -z "$CHURCH" ] && [ ! -s "$DATA/church.json" ]; then
@@ -232,7 +244,7 @@ else
   [ -s "$DATA/church.json" ] || echo '{"churches":[]}' > "$DATA/church.json"
   warn "no church key set yet — the relay is open until you add one to $DATA/church.json and restart"
 fi
-# SECURITY-AUDIT-2026-07-06 H4: only the data dir relay/ is service-writable (systemd ReadWritePaths=$DIR/relay);
+# SECURITY-AUDIT-2026-07-06 H4: only the data dir is service-writable (systemd ReadWritePaths=$DATA, i.e. $DIR/relay until a move);
 # keep code + the root-run update script + the release-signing pubkey root-owned so a compromised relay
 # process can't rewrite the updater or swap the trust anchor. Code was extracted + npm-installed as root above.
 chown -R "$SVC_USER:$SVC_USER" "$DATA"
@@ -262,10 +274,20 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=$DIR/relay
+ReadWritePaths=$DATA
 [Install]
 WantedBy=multi-user.target
 UNIT
+# the storage card is on only if the relay's FIRST start already sees relay.env, so record the folder before it (audit C L3).
+# A fresh folder holds no relay key until that first start, and a PINNED gateway refuses a folder with files but no key, so a
+# fresh install records it unpinned; the first move (or a re-run once the relay has a key) pins it. A box already pinned stays pinned.
+record_data_folder() {
+  [ "$STORAGE" = 1 ] || return 0
+  PIN_ARG=--unpinned
+  if [ "$ENV_PINNED" = 1 ] || [ -s "$DATA/relay-key.json" ]; then PIN_ARG=; fi
+  TRINITYONE_SVC="$SVC" TRINITYONE_ETC="$ETC_DIR" bash "$DIR/scripts/relay-datadir-apply.sh" "$DATA" $PIN_ARG || warn "couldn't record the data folder for the move helper"
+}
+record_data_folder
 systemctl daemon-reload
 systemctl enable "$SVC" >/dev/null 2>&1
 systemctl restart "$SVC"   # restart (not just enable --now) so re-running the installer loads new code
@@ -323,12 +345,39 @@ Unit=trinityone-move.service
 [Install]
 WantedBy=multi-user.target
 UNIT
-  # relay.env + the drop-ins. A fresh folder holds no relay key until the relay's first start, and a PINNED gateway
-  # refuses a folder with files but no key, so a fresh install records the folder unpinned; the first move (or a
-  # re-run of this installer once the relay has a key) pins it. A box already pinned stays pinned.
-  PIN_ARG=--unpinned
-  if [ "$ENV_PINNED" = 1 ] || [ -s "$DATA/relay-key.json" ]; then PIN_ARG=; fi
-  TRINITYONE_SVC="$SVC" TRINITYONE_ETC="$ETC_DIR" bash "$DIR/scripts/relay-datadir-apply.sh" "$DATA" $PIN_ARG || warn "couldn't record the data folder for the move helper"
+  # Boot recovery (audit C M1). Before the relay starts: finish or undo a move that was interrupted (a helper killed mid-copy
+  # would otherwise leave the card "under way" for ever; a crash between the switch and relay.env would leave the old folder
+  # marked MOVED-TO and the relay refusing it). It never starts or stops the relay. After the relay is up: finish the check
+  # recovery left. Neither blocks the relay if it fails.
+  cat > "/etc/systemd/system/trinityone-move-recover.service" <<UNIT
+[Unit]
+Description=TrinityOne relay data move: recover an interrupted move before the relay starts
+After=local-fs.target
+Before=$SVC.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=TRINITYONE_DIR=$DIR TRINITYONE_SVC=$SVC TRINITYONE_PORT=$PORT TRINITYONE_USER=$SVC_USER TRINITYONE_NODE=$NODE_BIN
+ExecStart=/bin/bash $DIR/scripts/relay-move.sh --recover-only
+[Install]
+WantedBy=multi-user.target
+UNIT
+  cat > "/etc/systemd/system/trinityone-move-finish.service" <<UNIT
+[Unit]
+Description=TrinityOne relay data move: finish the check of a recovered move
+After=$SVC.service
+Wants=$SVC.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=infinity
+Environment=TRINITYONE_DIR=$DIR TRINITYONE_SVC=$SVC TRINITYONE_PORT=$PORT TRINITYONE_USER=$SVC_USER TRINITYONE_NODE=$NODE_BIN
+ExecStart=/bin/bash $DIR/scripts/relay-move.sh --finish-check
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable trinityone-move-recover.service trinityone-move-finish.service >/dev/null 2>&1 || warn "couldn't enable the move recovery units"
   systemctl enable --now trinityone-move.path >/dev/null 2>&1 && ok "moving the data to another drive enabled (dashboard → Where this relay keeps its data)" || warn "couldn't enable the move watcher"
 fi
 

@@ -21,8 +21,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const procs = [], dirs = [];
 after(() => { for (const p of procs) try { p.kill('SIGKILL'); } catch {} for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
-test('nodeCanMove: 22.5 is the line', () => {
-  for (const [v, want] of [['18.20.0', false], ['20.11.1', false], ['22.4.9', false], ['22.5.0', true], ['22.22.2', true], ['24.0.0', true], ['', false], ['x', false]]) assert.equal(nodeCanMove(v), want, v);
+test('nodeCanMove: 22.13 is the line (node:sqlite lost its flag there)', () => {
+  for (const [v, want] of [['18.20.0', false], ['20.11.1', false], ['22.4.9', false], ['22.5.0', false], ['22.12.0', false], ['22.13.0', true], ['22.22.2', true], ['24.0.0', true], ['', false], ['x', false]]) assert.equal(nodeCanMove(v), want, v);
 });
 
 async function gateway(version) {
@@ -54,12 +54,12 @@ test('on a Node that can, the reason is absent', async () => {
   const g = await gateway(null);
   try { const r = await g.call('/storage'); assert.equal(r.j.refuse.includes('node-too-old'), false); } finally { await g.stop(); }
 });
-test('install.sh requires Node 22.5 (the gate expression, run), installs 22, and hands the move helper the relay\'s own Node', async () => {
+test('install.sh requires Node 22.13 (the gate expression, run), installs 22, and hands the move helper the relay\'s own Node', async () => {
   const sh = readFileSync(join(ROOT, 'relay-app/install.sh'), 'utf8');
   assert.doesNotMatch(sh, /setup_(18|20)\.x/); assert.match(sh, /setup_22\.x/);
   const m = /node -p '([^']+)'/.exec(sh.slice(sh.indexOf('NODE_OK=0'))); assert.ok(m, 'the Node gate moved');
   const { runInNewContext } = await import('node:vm');
-  for (const [v, want] of [['18.20.0', 'old'], ['20.11.1', 'old'], ['22.4.0', 'old'], ['22.5.0', 'ok'], ['22.22.2', 'ok'], ['24.1.0', 'ok']])
+  for (const [v, want] of [['18.20.0', 'old'], ['20.11.1', 'old'], ['22.4.0', 'old'], ['22.5.0', 'old'], ['22.12.9', 'old'], ['22.13.0', 'ok'], ['22.22.2', 'ok'], ['24.1.0', 'ok']])
     assert.equal(runInNewContext(m[1], { process: { versions: { node: v } } }), want, v);
   assert.match(sh, /TRINITYONE_NODE=\$NODE_BIN/, 'the move helper would use whatever node root finds first, not the relay\'s');
 });

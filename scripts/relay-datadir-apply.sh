@@ -17,6 +17,7 @@
 #     trinityone-relay.service.d/50-data-dir.conf   RequiresMountsFor, EnvironmentFile, ReadWritePaths
 #     trinityone-update.path.d/50-data-dir.conf     the update flag in the new folder
 #     trinityone-move.path.d/50-data-dir.conf       the move / remove-old requests in the new folder
+#     trinityone-move-recover.service.d/50-data-dir.conf   boot recovery waits for the drive
 #     trinityone-relay.service.d/10-refused-data-folder.conf   RestartPreventExitStatus=78 (see relay-update.sh)
 # then daemon-reload. Drop-ins survive install.sh rewriting the main unit files.
 #
@@ -54,12 +55,15 @@ chmod 0755 "$ETC" "$STATE_DIR"
   printf 'TRINITY_STORAGE_STATE=%s\n' "$STATE_DIR/move-state.json"
 } | write_atomic "$RELAY_ENV" 0644
 
-mkdir -p "$SYSD/$SVC.service.d" "$SYSD/trinityone-update.path.d" "$SYSD/trinityone-move.path.d"
+mkdir -p "$SYSD/$SVC.service.d" "$SYSD/trinityone-update.path.d" "$SYSD/trinityone-move.path.d" "$SYSD/trinityone-move-recover.service.d"
 printf '[Service]\nRestartPreventExitStatus=78\n' | write_atomic "$SYSD/$SVC.service.d/10-refused-data-folder.conf" 0644
-printf '[Unit]\nRequiresMountsFor=%s\n[Service]\nEnvironmentFile=-%s\nReadWritePaths=%s\n' "$DATA" "$RELAY_ENV" "$DATA" \
+# ReadWritePaths= is reset first: the main unit's list is replaced, so after a move the relay can write the NEW folder only and
+# no longer the old copy (audit C H1: the old copy must not stay writable by the process the remover is defending against).
+printf '[Unit]\nRequiresMountsFor=%s\n[Service]\nEnvironmentFile=-%s\nReadWritePaths=\nReadWritePaths=%s\n' "$DATA" "$RELAY_ENV" "$DATA" \
   | write_atomic "$SYSD/$SVC.service.d/50-data-dir.conf" 0644
 printf '[Path]\nPathExists=\nPathExists=%s/.update-request\n' "$DATA" \
   | write_atomic "$SYSD/trinityone-update.path.d/50-data-dir.conf" 0644
 printf '[Path]\nPathExists=\nPathExists=%s/.move-request\nPathExists=%s/.remove-old-request\n' "$DATA" "$DATA" \
   | write_atomic "$SYSD/trinityone-move.path.d/50-data-dir.conf" 0644
+printf '[Unit]\nRequiresMountsFor=%s\n' "$DATA" | write_atomic "$SYSD/trinityone-move-recover.service.d/50-data-dir.conf" 0644
 systemctl daemon-reload

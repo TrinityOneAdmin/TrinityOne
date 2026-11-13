@@ -19,6 +19,7 @@ import {
   readFileSync, writeFileSync, existsSync, lstatSync, readdirSync, rmSync, realpathSync, openSync, closeSync, fstatSync,
   readSync, unlinkSync, constants as FS,
 } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { join, resolve, dirname, basename, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -188,12 +189,18 @@ export function removeRecorded({ path, liveDirs, relayPub }, hooks = {}) {
     if (hooks.beforeDelete) hooks.beforeDelete(n);
     bad = still();                                   // THE RE-CHECK, at the moment of deletion
     if (bad) return { ok: false, code: bad, removed };
-    rmSync(join(path, n), { recursive: true, force: true }); removed++;
+    // NEVER FOLLOW A LINK AT ANY DEPTH (audit C H1). Node's rmSync walks by path: it lstats a subfolder, then lists and
+    // unlinks its children by path, so a subfolder swapped for a link in between is followed. GNU rm walks with an open
+    // directory descriptor per level (openat, O_NOFOLLOW), so a swap after it has opened a level cannot redirect it, and
+    // a link met at the top is unlinked, not entered. --one-file-system keeps it off anything mounted inside.
+    try { execFileSync('rm', ['-rf', '--one-file-system', '--', join(path, n)], { stdio: 'ignore' }); }
+    catch { return { ok: false, code: 'delete-failed', removed }; }
+    removed++;
   }
   return { ok: true, code: 'removed', removed };
 }
 // remove-old, end to end against the root journal. request = { path }.
-export function removeOld({ state, request, liveDirs, now = () => new Date() }, hooks = {}) {
+export function removeOld({ state, request, liveDirs, now = () => new Date(), deleter = removeRecorded }, hooks = {}) {
   const root = readJson(state) || {};
   const j = root.move || null;
   const path = request && typeof request.path === 'string' ? request.path : '';
@@ -201,7 +208,7 @@ export function removeOld({ state, request, liveDirs, now = () => new Date() }, 
   const isOld = j.state === 'awaiting-confirm' && j.oldCopy && j.oldCopy.path && samePath(j.oldCopy.path, path, 'linux');
   const left = (j.leftovers || []).find(l => l && l.path && !l.removedAt && samePath(l.path, path, 'linux'));
   if (!isOld && !left) return { ok: false, code: 'not-recorded' };
-  const r = removeRecorded({ path, liveDirs: [...(liveDirs || []), root.dataDir], relayPub: root.relayPub || j.relayPub }, hooks);
+  const r = deleter({ path, liveDirs: [...(liveDirs || []), root.dataDir], relayPub: root.relayPub || j.relayPub }, hooks);
   if (!r.ok) { recordRefusal({ state, code: 'remove-' + r.code, from: j.from }); return r; }
   const at = now().toISOString();
   const n = { ...j };
@@ -272,7 +279,7 @@ export async function cli(argv) {
     case 'seed': { need(a, 'state', 'work', 'from'); seedScratch({ state: a.state, work: a.work, from: a.from }); return { ok: true }; }
     case 'absorb': { need(a, 'state', 'work', 'from', 'target'); return absorbJournal({ state: a.state, work: a.work, from: a.from, target: a.target }); }
     case 'refuse': { need(a, 'state', 'code'); recordRefusal({ state: a.state, code: a.code, detail: a.detail && a.detail !== true ? a.detail : undefined, from: a.from }); return { ok: true }; }
-    case 'active': { const j = (readJson(a.state) || {}).move; return { ok: true, active: !!(j && ACTIVE.has(j.state)) }; }
+    case 'active': { const j = (readJson(a.state) || {}).move; return { ok: true, active: !!(j && ACTIVE.has(j.state)), state: (j && j.state) || '' }; }
     case 'pointer': { const r = readJson(a.state) || {}; return { ok: true, dataDir: r.dataDir || '' }; }
     case 'current-pub': { need(a, 'dir'); return { ok: true, pub: keyPubOf(a.dir) }; }
     case 'begin-check': return beginCheck({ journal: stores().journal });
@@ -289,9 +296,27 @@ export async function cli(argv) {
     case 'prove': { need(a, 'port', 'pub'); return proveIdentity({ port: Number(a.port), pub: a.pub, tries: Number(a.tries || 60), intervalMs: Number(a.interval || 2) * 1000 }); }
     case 'remove-old': {
       need(a, 'state', 'request', 'live');
-      return removeOld({ state: a.state, request: readJson(a.request), liveDirs: String(a.live).split(':').filter(Boolean) });
+      // THE DELETION RUNS AS THE SERVICE USER, never as root (audit C H1): it can then delete only what the relay could
+      // already, whatever the relay swaps while it runs. Root keeps the journal (checks it is recorded; marks it removed).
+      const user = a['run-as-user'] && a['run-as-user'] !== true ? a['run-as-user'] : null;
+      const deleter = user ? ({ path, liveDirs, relayPub }) => {
+        const r = spawnSync('runuser', ['-u', user, '--', process.execPath, fileURLToPath(import.meta.url), 'delete-tree', '--path', path,
+          '--live', liveDirs.filter(Boolean).join(':'), '--pub', relayPub || ''], { encoding: 'utf8', timeout: 3600000 });
+        try { return JSON.parse(String(r.stdout).trim().split('\n').pop()); } catch { return { ok: false, code: 'delete-failed' }; }
+      } : removeRecorded;
+      return removeOld({ state: a.state, request: readJson(a.request), liveDirs: String(a.live).split(':').filter(Boolean), deleter });
     }
-    default: throw new Error('usage: relay-move-server.mjs take-request|validate|seed|absorb|refuse|active|pointer|current-pub|begin-check|compare|pass|rollback|recover|prove|remove-old …');
+    case 'delete-tree': {      // runs as the service user; touches no journal
+      need(a, 'path', 'live');
+      return removeRecorded({ path: a.path, liveDirs: String(a.live).split(':').filter(Boolean), relayPub: a.pub && a.pub !== true ? a.pub : '' });
+    }
+    case 'absorb-pending': {   // boot recovery: the mover may have finished (or died) after the root journal was last written
+      need(a, 'state', 'work', 'pending');
+      const pd = readJson(a.pending);
+      if (!pd || !pd.from || !pd.target) return { ok: false, code: 'no-pending' };
+      return absorbJournal({ state: a.state, work: a.work, from: pd.from, target: pd.target });
+    }
+    default: throw new Error('usage: relay-move-server.mjs take-request|validate|seed|absorb|absorb-pending|delete-tree|refuse|active|pointer|current-pub|begin-check|compare|pass|rollback|recover|prove|remove-old …');
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

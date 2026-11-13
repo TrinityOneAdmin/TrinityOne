@@ -30,10 +30,11 @@ import { createConnection } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 // The fixed folder name created on the chosen drive (owner §8a: a drive from a list, never a typed path).
-// The mover (and the relay itself) read the database with node:sqlite, which arrived in Node 22.5.
+// The mover (and the relay itself) read the database with node:sqlite. It arrived in 22.5 behind a flag and lost the flag
+// in 22.13.0 (Node's changelog); the gateway imports it statically, so below 22.13 it cannot start at all (audit C L5).
 export function nodeCanMove(version = process.versions.node) {
   const m = /^(\d+)\.(\d+)/.exec(String(version || '')); if (!m) return false;
-  return Number(m[1]) > 22 || (Number(m[1]) === 22 && Number(m[2]) >= 5);
+  return Number(m[1]) > 22 || (Number(m[1]) === 22 && Number(m[2]) >= 13);
 }
 export const LEAF = 'trinityone-relay';
 export const MARK_INCOMPLETE = '.trinity-move-incomplete';

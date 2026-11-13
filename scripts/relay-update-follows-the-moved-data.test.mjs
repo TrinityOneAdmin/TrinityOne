@@ -134,3 +134,23 @@ test('the code backup is outside the data folder, and a failed build is rolled b
     assert.match(b.log('systemctl.log'), /restart trinityone-relay\n[\s\S]*restart trinityone-relay/, 'the relay was not restarted again after the rollback');
   } finally { b.done(); }
 });
+
+// ── AUDIT C M2: "Update now" and a move share one lock ──────────────────────────────────────────────────────
+import { spawn } from 'node:child_process';
+test('M2: an update that finds a move running refuses, says why in update-status.json, and restarts nothing', async () => {
+  const b = box({ relayEnv: true });
+  const holder = spawn('flock', [join(b.state, 'update-move.lock'), 'sleep', '30'], { stdio: 'ignore' });
+  try {
+    await new Promise(r => setTimeout(r, 500));
+    const r = b.run(); assert.equal(r.status, 1, r.stderr);
+    const st = JSON.parse(readFileSync(join(b.data, 'update-status.json'), 'utf8'));
+    assert.equal(st.state, 'failed'); assert.match(st.reason, /data move is running/);
+    assert.equal(existsSync(join(b.data, '.update-request')), false, 'the flag was left behind (the path unit would loop)');
+    assert.doesNotMatch(b.log('systemctl.log'), /restart trinityone-relay/, 'the update restarted the relay while a move held the lock');
+    assert.equal(b.log('curl.log'), '', 'the update downloaded something while a move held the lock');
+  } finally { holder.kill('SIGKILL'); b.done(); }
+});
+test('M2: with nothing holding the lock the update runs as before', () => {
+  const b = box({ relayEnv: true });
+  try { const r = b.run(); assert.equal(r.status, 0, r.stderr); assert.equal(JSON.parse(readFileSync(join(b.data, 'update-status.json'), 'utf8')).state, 'ok'); } finally { b.done(); }
+});
