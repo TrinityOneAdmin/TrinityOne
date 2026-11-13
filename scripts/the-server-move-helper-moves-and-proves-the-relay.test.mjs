@@ -51,6 +51,7 @@ cmd="$1"; shift
 alive() { [ -f "$B/relay.pid" ] && kill -0 "$(cat "$B/relay.pid")" 2>/dev/null; }
 case "$cmd" in
   daemon-reload) exit 0;;
+  is-enabled) [ -f "$B/disabled" ] && exit 1; exit 0;;
   is-active) for a in "$@"; do last="$a"; done; case "$last" in *-tunnel) exit 3;; esac; alive && exit 0; exit 3;;
   stop)
     if [ -f "$B/refuse-stop" ]; then exit 0; fi
@@ -499,6 +500,7 @@ withRig('H-1: --finish-check does nothing when the relay is not running (a relay
   assert.equal(bootRecover(r).status, 0, r.lastOutput);
   assert.equal(r.journal().move.state, 'checking');
   assert.equal(existsSync(join(r.box, 'relay.pid')), false, 'fixture: the relay should be down (the admin disabled it)');
+  writeFileSync(join(r.box, 'disabled'), '');                         // systemctl is-enabled says no
   const mark = r.log('systemctl.log');
   r.env.PROVE_TRIES = '2'; r.env.PROVE_SLEEP = '0.2';
   const fin = finishAfterBoot(r); assert.equal(fin.status, 0, fin.stderr);
@@ -517,4 +519,51 @@ withRig('H-1: --finish-check waits for the lock less than its unit\'s timeout (i
     assert.equal(res.status, 0, res.stderr);
     assert.ok(took < 10000, 'the finish check waited ' + took + ' ms: it is using LOCK_WAIT (1800 s) rather than its own cap, so its 900 s unit timeout would kill it first');
   } finally { holder.kill('SIGKILL'); }
+});
+
+// ── the gap named in the H-1 report: ENABLED but not running after a boot that left a check ────────────────────────────
+// Scenario: the helper died between the switch and relay.env; boot recovery pointed relay.env at the new folder and left the
+// journal at "checking"; the relay unit then started on the new folder and REFUSED it (exit 78: its identity key is not there).
+async function refusedAfterBoot(r) {
+  const { pub, events } = await seedAndRun(r);
+  faultyScripts(r, 'scripts/relay-datadir-apply.sh', 'set -euo pipefail', 'kill -9 $PPID; exit 1');
+  writeMoveRequest(r); r.helper(); cleanDir(r);
+  assert.equal(bootRecover(r).status, 0, r.lastOutput);
+  assert.equal(r.journal().move.state, 'checking');
+  renameTmp(join(r.target, 'relay-key.json'), join(r.target, 'relay-key.json.hidden'));   // a pinned gateway refuses a folder with no key
+  r.systemctl('start', 'trinityone-relay');
+  for (let i = 0; i < 60 && existsSync(join(r.box, 'relay.pid')) && spawnSync('kill', ['-0', readFileSync(join(r.box, 'relay.pid'), 'utf8').trim()]).status === 0; i++) await sleep(100);
+  assert.equal(r.systemctl('is-active', 'trinityone-relay').status !== 0, true, 'fixture: the relay should have refused the new folder and exited');
+  return { pub, events };
+}
+withRig('enabled + refused after boot: the finish step rolls back to the old folder and the relay runs there, same identity', async r => {
+  const { pub, events } = await refusedAfterBoot(r);
+  const mark = r.log('systemctl.log');
+  const fin = finishAfterBoot(r); assert.equal(fin.status, 0, fin.stderr);
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.data, 'relay.env still names the refused folder');
+  assert.equal(existsSync(join(r.data, 'MOVED-TO')), false);
+  assert.ok(await up(), 'THE RELAY IS STILL DOWN: enabled, refused, and nothing rolled the move back\n' + r.log('relay.log').slice(-800));
+  assert.ok(await identityOK(pub)); assert.equal(eventCount(r.data), events);
+  assert.equal(r.journal().move.state, 'rolled-back');
+  assert.match(r.log('systemctl.log').slice(mark.length), /^start trinityone-relay$/m);
+});
+withRig('disabled + not running after boot: the finish step does nothing at all', async r => {
+  await refusedAfterBoot(r);
+  writeFileSync(join(r.box, 'disabled'), '');
+  const mark = r.log('systemctl.log'), envBefore = readFileSync(join(r.etc, 'relay.env'), 'utf8');
+  const fin = finishAfterBoot(r); assert.equal(fin.status, 0, fin.stderr);
+  assert.doesNotMatch(r.log('systemctl.log').slice(mark.length), /^(start|stop) trinityone-relay$/m, 'the finish step started a relay an admin had disabled');
+  assert.equal(r.journal().move.state, 'checking'); assert.equal(readFileSync(join(r.etc, 'relay.env'), 'utf8'), envBefore);
+  assert.equal(existsSync(join(r.data, 'MOVED-TO')), true, 'the old folder was touched');
+});
+withRig('enabled + refused, but the drive is missing AND the old folder is unusable: not rolled back, left refused, the reason is in the journal', async r => {
+  await refusedAfterBoot(r);
+  rmSync(r.target, { recursive: true, force: true });                         // the drive is gone
+  rmSync(join(r.data, 'relay-key.json'));                                        // and the old copy cannot be started either
+  const mark = r.log('systemctl.log'), envBefore = readFileSync(join(r.etc, 'relay.env'), 'utf8');
+  const fin = finishAfterBoot(r); assert.equal(fin.status, 0, fin.stderr);
+  assert.doesNotMatch(r.log('systemctl.log').slice(mark.length), /^(start|stop) trinityone-relay$/m, 'a relay was started on a folder that is not the right one');
+  assert.equal(readFileSync(join(r.etc, 'relay.env'), 'utf8'), envBefore);
+  const j = r.journal().move; assert.equal(j.state, 'checking', 'the journal was changed: a rollback was attempted');
+  assert.equal(j.refusal.code, 'finish-no-rollback'); assert.match(j.refusal.detail, /old-folder-unusable/);
 });
