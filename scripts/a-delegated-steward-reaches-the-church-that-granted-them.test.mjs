@@ -362,8 +362,9 @@ async function screen(h) {
   win.Steward.isDelegated = () => !!h.stubs.actingChurch;
   Object.defineProperty(win.Steward, 'activePub', { get: () => h.stubs.pub });
   win.useStewardIdv = () => 0;
-  // An UNLOCKED console, as setKey() leaves it: the hook opens discovery only for an unlocked own key (2026-11-13,
-  // bug B — it used to dial the relay from behind the PIN screen), and reads which key from these two fields.
+  // An UNLOCKED console, as setKey() leaves it (2026-11-13, bug B). The hook itself reads only churchPub — WHICH key
+  // its read is for; whether it is open at all is the caller's `enabled` flag (default true here, as IdentitySwitcher
+  // uses it). hasKey/locked are set only so the fixture looks like a real unlocked console; the hook does not read them.
   win.Steward.hasKey = true; win.Steward.locked = false; win.Steward.churchPub = ME;
   const hookMod = await loadSlices([[ROOT_JSX, 'function useStewardStewardedChurches(enabled = true) {', 'useStewardStewardedChurches']], ['useStewardStewardedChurches'], {
     useSt: React.useState, useStE: React.useEffect, useStewardConn: () => 0, window: win, CustomEvent: h.stubs.CustomEvent,

@@ -15,10 +15,12 @@
 // and the console reloaded to its PIN screen. Every socket the page opens, and every REQ/CLOSE it sends, is seen
 // through a hook on the page's WebSocket constructor.
 //
-//   1. While the PIN screen is up the console opens NO socket to the relay at all.
-//   2. After unlock a member who joins is given the church name key (the envelope names them).
-//   3. Locking closes the stewarded-churches subscription (no REQ carrying our stewardrevoke filter stays open).
-//   4. Replacing the key (a restore of another church) reopens it for the NEW key, never the old one.
+// Three tests:
+//   1. While the PIN screen is up the console opens NO socket to the relay at all; after unlock a member who joins
+//      is given the church name key (the envelope names them).
+//   2. Locking closes the stewarded-churches subscription (no REQ carrying our stewardrevoke filter stays open), and
+//      unlocking reopens it.
+//   3. Replacing the key (a restore of another church) reopens it for the NEW key, never the old one.
 // Skips itself when chromium is unavailable.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

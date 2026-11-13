@@ -288,6 +288,7 @@ test('an Approve refused while the console is out says so and throws nothing; th
   // the row is briefly absent — the deliberate fail-closed "Checking". It can blink more than once (measured: a
   // waitFor-then-press still missed it), because the console re-subscribes twice after a log-in (plan W2). So the
   // press is retried until it lands on a button, as a person would tap again.
+  // TODO(bug A pacer): drop this 15 s retry back to one press once bug A's pacer is merged (audit 1b0af5f6 L2/L3).
   { const t1 = Date.now(); let r = 'miss'; while (r !== 'ok' && Date.now() - t1 < 15000) { r = await evalIn(click('/^Approve$/')); if (r !== 'ok') await sleep(250); }
     assert.equal(r, 'ok', 'nothing on screen matched the Approve button, again — not for 15 s after the log-in'); await sleep(500); }
   { const t1 = Date.now(); let ok = false; while (!ok && Date.now() - t1 < 15000) { ok = admitted().includes(k.pub); if (!ok) await sleep(400); } assert.ok(ok, 'the retried Approve never reached the relay'); }

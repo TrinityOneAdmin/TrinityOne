@@ -1210,7 +1210,7 @@ function StewardRoot() {
   // to the console the instant the grant lands) and Steward.pendingStewardRequest(), which reports an outstanding
   // request with no granted church. Null for an owner and for an approved helper, so this only ever replaces the
   // empty console a pure, not-yet-approved helper would otherwise see.
-  const stewardedChurches = window.useStewardStewardedChurches ? window.useStewardStewardedChurches(ks.has && !ks.locked && !needsPin) : [];   // NOT before unlock: see the hook
+  const stewardedChurches = window.useStewardStewardedChurches ? window.useStewardStewardedChurches(ks.has && !ks.locked && !needsPin) : [];   // NOT before unlock: see the hook. `!ks.locked` is REDUNDANT today (lock() clears hasKey, and a locked boot never sets it) — kept on purpose so the gate reads the same as awaitingReq below and stays closed if `has` ever stops implying unlocked
   const awaitingReq = (ks.has && !ks.locked && !needsPin && !stewardedChurches.length && window.Steward.pendingStewardRequest)
     ? window.Steward.pendingStewardRequest() : null;
 
