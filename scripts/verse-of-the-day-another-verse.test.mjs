@@ -152,9 +152,11 @@ test('tapping "Another verse" changes the verse, does not open the share sheet, 
   assert.equal(s.refShown(), other.ref, 'the verse did not change to the drawn verse (the hit on the current verse was not skipped)');
   assert.equal(r.stopped, true, 'the tap was not stopped at the button');
   assert.equal(s.shared.length, 0, 'tapping "Another verse" opened the share sheet');
+  // The new verse's text sits inside a polite live region, so a screen reader announces it.
   const p = find(s.card(), n => n.type === 'p' && texts(n).join('').includes(LIVE[BOOK[other.ref.split(' ')[0]]]))[0];
   assert.ok(p, 're-anchor: the verse text paragraph was not found on the card');
-  assert.equal(p.props['aria-live'], 'polite', 'a new verse is not announced to a screen reader');
+  const live = find(s.card(), n => n.props && n.props['aria-live'] === 'polite' && find(n, m => m === p).length > 0);
+  assert.equal(live.length, 1, 'a new verse is not announced to a screen reader (no polite live region around the verse text)');
   s.tap(s.card());
   assert.equal(s.shared.length, 1, 'tapping the card did not open the share sheet');
   assert.equal(s.shared[0].ref, other.ref, 'the card shared a verse other than the one showing');
