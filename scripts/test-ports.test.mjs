@@ -81,7 +81,10 @@ export function declaredPorts(src) {
   for (const line of src.split('\n')) {
     if (!/^const\s+(?:PORT|CDP)[A-Z0-9_]*\s*=/.test(line)) continue;
     const code = line.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*$/, '');
-    for (const m of code.matchAll(/\b([A-Z][A-Z0-9_]*)\s*=\s*(\d{2,5})\b/g)) {
+    // The literal must be the WHOLE value (followed by `,`, `;` or the end of the line). A port COMPUTED from a
+    // number — `const PORT = 20000 + Math.floor(Math.random() * 20000)` (the-console-heals-a-stalled-login,
+    // b0f74ef9) — is a random port, not fixed port 20000, and reading it as one invented a missing pre-flight.
+    for (const m of code.matchAll(/\b([A-Z][A-Z0-9_]*)\s*=\s*(\d{2,5})\s*(?=[,;]|$)/g)) {
       if (PORT_NAME.test(m[1])) out.push({ name: m[1], port: m[2] });
     }
   }
@@ -104,6 +107,11 @@ test('the port reader sees every form a file in this repo actually uses', () => 
     'a numeric constant that is not a port must not be claimed as one');
   assert.deepEqual(found('  const PORT = 8899;'), [],
     'only a TOP-LEVEL declaration is a file-wide fixed port');
+  assert.deepEqual(found('const PORT = 20000 + Math.floor(Math.random() * 20000);'), [],
+    'a port COMPUTED from a number is a random port, not a fixed one — only a literal that is the whole value counts');
+  assert.deepEqual(found('const PORT = 20000 + Math.floor(Math.random()*20000), CDP = 9360;'), ['CDP:9360'],
+    'a random PORT beside a fixed CDP: the fixed one must still be seen');
+  assert.deepEqual(found('const PORT = 8893'), ['PORT:8893'], 'a declaration with no semicolon is still a fixed port');
 });
 
 // The property that stops this rotting: the guard is worthless if the next test file forgets it, and

@@ -29,7 +29,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 import { fnBody } from './test-slice.mjs';
 
-const PORT = 19917;   // HIGH port (19900-19999) so a concurrent suite on the usual fixed ports cannot collide
+const PORT = 19919;   // was 19917, which the-widget-script-is-served-only-when-the-calendar-is-shared also claims (moved 2026-11-13). HIGH port (19900-19999) so a concurrent suite on the usual fixed ports cannot collide
 const HTTP = `http://127.0.0.1:${PORT}`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const sk = generateSecretKey();
