@@ -56,7 +56,7 @@ function mount(env) {
     addEventListener() {}, removeEventListener() {}, innerWidth: 360, localStorage,
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] },
     ChurchBadge: Stub('ChurchBadge'),
-    TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: POOL },
+    TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: env.pool || POOL },
     Bible: {
       parseRef: (r) => { const m = /^(\w+) (\d+):(\d+)$/.exec(String(r)); return m && BOOK[m[1]] ? { book: BOOK[m[1]], chap: +m[2], verse: +m[3] } : null; },
       loaded: true, books: () => env.books || [43, 19, 45],
@@ -112,7 +112,29 @@ function mount(env) {
   return { refShown, btn, tap, card, shared, store, get tree() { return tree; } };
 }
 
-const freshEnv = (over = {}) => ({ store: new Map([['trinityone.votd-min', '0']]), date: new Date(2026, 8, 30, 10, 0, 0), rand: [], ...over });
+// TIME-ZONE INDEPENDENT DAY KEYS (audit 2026-11-13): every instant below is chosen so that its LOCAL calendar
+// day differs from its UTC day in whatever zone the process runs — 00:30 local east of Greenwich, 23:30 local
+// west of it. A screen that keyed the pick by the UTC day (toISOString) instead of the local day then stores
+// and reads the wrong day, and the storage-shape and stored-pick tests fail. Run under several zones, e.g.
+//   TZ=Europe/London node --test …   and   TZ=Pacific/Auckland node --test …
+// (September is BST in London, +1, and NZDT in Auckland, +13.) In a zone at +00:00 on that date no instant
+// separates the two days, and the time-zone half of these tests cannot bite — the guard below says so.
+const at = (y, m, d) => {
+  const probe = new Date(y, m, d, 12, 0, 0);
+  const off = probe.getTimezoneOffset();          // minutes, NEGATIVE east of Greenwich
+  return off < 0 ? new Date(y, m, d, 0, 30, 0) : new Date(y, m, d, 23, 30, 0);
+};
+const utcISO = d => d.toISOString().slice(0, 10);
+const DAY1 = at(2026, 8, 30), DAY2 = at(2026, 9, 1);
+test('fixture: in this time zone the instants separate the local day from the UTC day', (t) => {
+  if (DAY1.getTimezoneOffset() === 0) { t.skip('this zone is +00:00 on 2026-09-30; run under TZ=Europe/London or TZ=Pacific/Auckland'); return; }
+  assert.notEqual(localISO(DAY1), utcISO(DAY1));
+  assert.notEqual(localISO(DAY2), utcISO(DAY2));
+  assert.equal(localISO(DAY1), '2026-09-30');
+  assert.equal(localISO(DAY2), '2026-10-01');
+});
+
+const freshEnv = (over = {}) => ({ store: new Map([['trinityone.votd-min', '0']]), date: DAY1, rand: [], ...over });
 
 test('tapping "Another verse" changes the verse, does not open the share sheet, and the card then shares the NEW verse in the active translation', () => {
   const env = freshEnv();
@@ -130,6 +152,9 @@ test('tapping "Another verse" changes the verse, does not open the share sheet, 
   assert.equal(s.refShown(), other.ref, 'the verse did not change to the drawn verse (the hit on the current verse was not skipped)');
   assert.equal(r.stopped, true, 'the tap was not stopped at the button');
   assert.equal(s.shared.length, 0, 'tapping "Another verse" opened the share sheet');
+  const p = find(s.card(), n => n.type === 'p' && texts(n).join('').includes(LIVE[BOOK[other.ref.split(' ')[0]]]))[0];
+  assert.ok(p, 're-anchor: the verse text paragraph was not found on the card');
+  assert.equal(p.props['aria-live'], 'polite', 'a new verse is not announced to a screen reader');
   s.tap(s.card());
   assert.equal(s.shared.length, 1, 'tapping the card did not open the share sheet');
   assert.equal(s.shared[0].ref, other.ref, 'the card shared a verse other than the one showing');
@@ -140,7 +165,7 @@ test('tapping "Another verse" changes the verse, does not open the share sheet, 
 test('the pick survives a restart (real lsGet/lsSet over storage) and the next day the day’s verse returns', () => {
   const env = freshEnv();
   const day = dayVerse(env.date);
-  const nextDate = new Date(2026, 9, 1, 10, 0, 0);
+  const nextDate = DAY2;
   const nextDay = dayVerse(nextDate);
   // The pick must differ from BOTH days' verses, or "the next day's verse returns" could not be told apart
   // from "the pick was kept".
@@ -162,7 +187,7 @@ test('the pick survives a restart (real lsGet/lsSet over storage) and the next d
 });
 
 test('a corrupt or wrongly shaped stored pick falls back to the day’s verse and never throws', () => {
-  const d = new Date(2026, 8, 30, 10, 0, 0);
+  const d = DAY1;
   const iso = localISO(d);
   const bad = ['not json{', '"John 3:16"', '42', 'null', 'true', '[]', '{}',
     JSON.stringify({ day: iso, ref: 'Nowhere 9:9' }), JSON.stringify({ day: iso }), JSON.stringify({ ref: 'Psalm 23:1' }),
@@ -200,4 +225,22 @@ test('with a church main colour the button wears the same ink as Minimise, so it
   assert.equal(b.props.style.color, min.props.style.color);
   const disc = find(b, n => n.type === 'span' && n.props.style && n.props.style.background === 'rgba(255,255,255,.18)')[0];
   assert.ok(disc, 'the button lost Minimise’s translucent disc');
+});
+
+test('a pick stored for TODAY (local day) is shown, even when the UTC day is a different date', () => {
+  const env = freshEnv();
+  const day = dayVerse(env.date);
+  const other = POOL.find(p => p.ref !== day.ref);
+  env.store.set('trinityone.votd-pick', JSON.stringify({ day: localISO(env.date), ref: other.ref }));
+  const s = mount(env);
+  assert.equal(s.refShown(), other.ref, 'a pick stored for today\u2019s local day was not shown');
+});
+
+test('with a pool of one verse there is no "Another verse" button (there is no different verse)', () => {
+  const env = freshEnv({ pool: [POOL[0]] });
+  const s = mount(env);
+  assert.ok(s.card(), 're-anchor: the expanded verse-of-the-day card was not drawn');
+  assert.ok(find(s.tree, n => n.type === 'button' && n.props['aria-label'] === 'Minimise')[0], 're-anchor: no Minimise button');
+  assert.equal(s.refShown(), POOL[0].ref);
+  assert.equal(s.btn(), undefined, 'the "Another verse" button is drawn with a pool of one');
 });

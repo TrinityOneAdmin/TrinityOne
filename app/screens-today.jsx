@@ -2846,7 +2846,7 @@ function TodayScreen({ ctx }) {
               <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: onMain, width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color={onMain} /></button>
             </div>
           </div>
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
+          <p aria-live="polite" style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
             {votdQ.open}{votd.text}{votdQ.close}
           </p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
