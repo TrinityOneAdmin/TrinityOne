@@ -1176,7 +1176,15 @@ const DB_FILES: [&str; 3] = ["relay.sqlite", "relay.sqlite-wal", "relay.sqlite-s
 
 fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Result<PathBuf> {
     let root = suite_dir.join("db-backup");
-    let dir = root.join(format!("{}", now_epoch()));
+    // Name = epoch seconds, but always LATER than any existing backup (a clock that went back must not make the
+    // new backup sort first and be pruned at once — audit 00aadeed N1).
+    let newest_existing = std::fs::read_dir(&root)
+        .ok()
+        .map(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().parse::<i64>().ok()).max())
+        .flatten()
+        .unwrap_or(i64::MIN);
+    let name = now_epoch().max(newest_existing.saturating_add(1));
+    let dir = root.join(name.to_string());
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     for f in DB_FILES {
@@ -1195,7 +1203,8 @@ fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Resul
             .filter_map(|e| e.file_name().to_string_lossy().parse::<i64>().ok())
             .collect();
         names.sort_unstable();
-        while names.len() > DB_BACKUPS_KEPT {
+        names.retain(|n| *n != name); // never the one just made
+        while names.len() + 1 > DB_BACKUPS_KEPT && !names.is_empty() {
             let old = names.remove(0);
             let _ = std::fs::remove_dir_all(root.join(old.to_string()));
         }
@@ -1207,15 +1216,37 @@ fn backup_store(data_dir: &Path, suite_dir: &Path, log: &Path) -> std::io::Resul
 // Put the backed-up store back (relay STOPPED). The side files are removed first so a -wal written by the bad
 // code cannot be replayed over the restored main file.
 fn restore_store(data_dir: &Path, backup: &Path, log: &Path) {
-    for f in DB_FILES {
-        let _ = std::fs::remove_file(data_dir.join(f));
+    // Never delete the live store unless the backup really holds one (audit 00aadeed N1): a missing or emptied
+    // backup leaves the data as it is, and says so.
+    let has_main = backup.join("relay.sqlite").is_file();
+    if !has_main && data_dir.join("relay.sqlite").is_file() {
+        applog(log, &format!("suite: NOT restoring the church's data: the backup at {backup:?} has no relay.sqlite"));
+        return;
     }
+    // Copy every backed-up file to a temporary name FIRST; only when all copies succeeded are the live files
+    // replaced (rename), so a copy that fails half-way leaves the live store untouched.
+    let mut staged = Vec::new();
     for f in DB_FILES {
         let b = backup.join(f);
         if b.is_file() {
-            if let Err(e) = std::fs::copy(&b, data_dir.join(f)) {
-                applog(log, &format!("suite: RESTORE of {f} failed: {e} (the backup is still at {backup:?})"));
+            let tmp = data_dir.join(format!("{f}.restore-tmp"));
+            if let Err(e) = std::fs::copy(&b, &tmp) {
+                applog(log, &format!("suite: NOT restoring the church's data: copying {f} failed: {e} (the backup is still at {backup:?})"));
+                for (_, t) in staged {
+                    let _ = std::fs::remove_file(t);
+                }
+                let _ = std::fs::remove_file(&tmp);
+                return;
             }
+            staged.push((f, tmp));
+        }
+    }
+    for f in DB_FILES {
+        let _ = std::fs::remove_file(data_dir.join(f));
+    }
+    for (f, tmp) in staged {
+        if let Err(e) = std::fs::rename(&tmp, data_dir.join(f)) {
+            applog(log, &format!("suite: RESTORE of {f} failed at the final rename: {e} (the backup is still at {backup:?})"));
         }
     }
     applog(log, &format!("suite: church data restored from {backup:?}"));
@@ -1364,7 +1395,8 @@ fn rollback_and_restart(env: &ApplyEnv, st: &mut RunState, prev_state_raw: &str,
             let _ = std::fs::remove_file(suite_dir.join("active.sig"));
             let _ = rename_retry(&suite_dir.join("last-good.tgz"), &suite_dir.join("active.tgz"), env.log);
             let _ = rename_retry(&suite_dir.join("last-good.sig"), &suite_dir.join("active.sig"), env.log);
-            active.clone()
+            // If last-good could not be put back, the shipped code — never a missing folder (audit 00aadeed N3).
+            if active.join("scripts").join("gateway.mjs").is_file() { active.clone() } else { env.payload.to_path_buf() }
         }
         RollbackTarget::Payload | RollbackTarget::Keep => {
             let _ = std::fs::remove_dir_all(&active);
@@ -1487,6 +1519,9 @@ fn startup(env: &ApplyEnv) -> RunState {
                 "launch: the downloaded update did not come up (boot={boot:?} reachable={reachable} version_match={version_match}); running the shipped code{}",
                 if proven_bad { " and retiring the update" } else { " this time" }
             ));
+            if boot == Boot::Up {
+                let _ = prepare_restart(env.data_dir, env.log);
+            }
             env.host.stop_relay();
             let _ = wait_stopped(&st.alive, Duration::from_secs(20));
             let prev_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
@@ -1532,7 +1567,7 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     // Restart whatever was running before (only if something was).
     let restart_prev = |st: &mut RunState| {
         if was_running {
-            let prev = st.code_dir.clone();
+            let prev = if st.code_dir.join("scripts").join("gateway.mjs").is_file() { st.code_dir.clone() } else { payload.to_path_buf() };
             spawn_and_wait(env, st, &prev);
         }
     };
@@ -1696,7 +1731,9 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     } else {
         (false, false, false, false)
     };
-    let crashed = boot == Boot::Exited || !st.alive.load(Ordering::SeqCst);
+    // NotStarted (the host could not start a process) says nothing about the code; the alive-flag then still
+    // belongs to the relay just stopped, so it is not consulted (audit 00aadeed N2).
+    let crashed = boot == Boot::Exited || (boot == Boot::Up && !st.alive.load(Ordering::SeqCst));
     match health_outcome(reachable, version_match, ok, degraded_storage, crashed) {
         Outcome::Keep { store_degraded } => {
             // 9. Record success and clear staging. The new code booted and identifies as what we activated.
@@ -1721,7 +1758,11 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             if quarantine {
                 let _ = write_file_atomic(&suite_dir.join("quarantine-sha"), &format!("{r_sha}\n"), log);
             }
-            // Stop the freshly-started (bad) relay, then roll back, restore the data, restart on known-good code.
+            // Stop the freshly-started (bad) relay — closing its tunnel cleanly first (audit 00aadeed N4) — then roll
+            // back, restore the data, restart on known-good code.
+            if boot == Boot::Up {
+                let _ = prepare_restart(env.data_dir, log);
+            }
             env.host.stop_relay();
             let _ = wait_stopped(&st.alive, Duration::from_secs(20));
             let why = if boot == Boot::Exited {

@@ -7512,7 +7512,8 @@ function serveStatic(req, res) {
   // relay started, which a hard kill of the relay would leave running (orphaned, on Windows for good) — but KEEPS
   // the stay-public flag, so the restarted relay opens a tunnel again. It answers the address it was using so the
   // shell can record it; the panel then says if the public address changed. Nothing else calls it.
-  if (route === '/suite/prepare-restart' && req.method === 'POST') {
+  // Packaged Suite only: a server relay keeps exactly the routes it had (audit 00aadeed N4).
+  if (PACKAGED && route === '/suite/prepare-restart' && req.method === 'POST') {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
     const was = CF_URL;

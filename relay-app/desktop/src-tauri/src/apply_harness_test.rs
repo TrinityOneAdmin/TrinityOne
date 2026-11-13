@@ -486,6 +486,12 @@ fn end_to_end_apply_harness() {
     scenario_u_failed_unpack_is_tried_once_per_window();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (u)");
 
+    scenario_v_a_relay_that_cannot_be_started_is_not_a_bad_release();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (v)");
+
+    scenario_w_rollback_to_an_unusable_last_good_runs_the_shipped_code();
+    assert!(wait_port_free(Duration::from_secs(10)), "port not free after (w)");
+
     scenario_f_toggle_off_launch_runs_shipped_code_and_ignores_staging();
     assert!(wait_port_free(Duration::from_secs(10)), "port not free after (f)");
 
@@ -620,7 +626,9 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     // [audit M5] the church's store before the update (and three older backups, to prove pruning to 2)
     write(&fx.data_dir.join("relay.sqlite"), "ORIGINAL-STORE");
     write(&fx.data_dir.join("relay.sqlite-wal"), "ORIGINAL-WAL");
-    for old in ["100", "200", "300"] {
+    // "9999999999" is a backup dated in the future (the clock went back since it was made): the new backup must
+    // still sort after it and survive the pruning (audit 00aadeed N1), or the restore below would find nothing.
+    for old in ["100", "200", "9999999999"] {
         write(&fx.suite_dir.join("db-backup").join(old).join("relay.sqlite"), "old");
     }
 
@@ -641,6 +649,7 @@ fn scenario_e_health_fail_rolls_back_and_quarantines() {
     let kept: Vec<_> = std::fs::read_dir(fx.suite_dir.join("db-backup")).unwrap().filter_map(|e| e.ok()).collect();
     assert_eq!(kept.len(), DB_BACKUPS_KEPT, "backups must be pruned to the newest {DB_BACKUPS_KEPT}");
     assert!(!fx.suite_dir.join("db-backup").join("100").exists(), "the oldest backup must be pruned");
+    assert!(fx.suite_dir.join("db-backup").join("10000000000").join("relay.sqlite").exists(), "the backup just made must be kept");
     host.stop_relay();
     eprintln!("   (e) OK (+ store restored, backups pruned) — wrong-version v2 rolled back to v1, sha-v2 quarantined, state=rolledback");
 }
@@ -942,6 +951,79 @@ fn scenario_u_failed_unpack_is_tried_once_per_window() {
     assert_eq!(served_version().as_deref(), Some("v1"));
     host.stop_relay();
     eprintln!("   (u) OK — one attempt per window");
+}
+
+// A host that cannot start anything from suite/active (as if the node sidecar vanished mid-apply).
+struct NoActiveSpawnHost {
+    inner: TestHost,
+}
+impl RelayHost for NoActiveSpawnHost {
+    fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
+        if code_dir.ends_with("active") {
+            return None;
+        }
+        self.inner.spawn_relay(code_dir, payload, data_dir, log)
+    }
+    fn stop_relay(&self) {
+        self.inner.stop_relay();
+    }
+    fn reload_webview(&self) {}
+}
+
+// (v) [audit 00aadeed N2] The new code could not be STARTED at all (the host returned nothing). That says nothing
+//     about the release: roll back, but do NOT quarantine it.
+fn scenario_v_a_relay_that_cannot_be_started_is_not_a_bad_release() {
+    eprintln!("── scenario (v): a relay that cannot be started is not a bad release ──");
+    let fx = fresh_box("v", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    let host = NoActiveSpawnHost { inner: TestHost::new(fx.node.clone()) };
+    let mut cur = start_v1(&host, &fx, &log);
+    run_apply(&host, &fx, &log, &mut cur);
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "not back on v1");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    assert!(!fx.suite_dir.join("quarantine-sha").exists(), "a release was banned because the computer could not start a process");
+    host.inner.stop_relay();
+    eprintln!("   (v) OK — rolled back, not quarantined");
+}
+
+// (w) [audit 00aadeed N3] A rollback whose last-good cannot be used (here: an empty folder) starts the shipped code,
+//     never a folder with nothing to run.
+fn scenario_w_rollback_to_an_unusable_last_good_runs_the_shipped_code() {
+    eprintln!("── scenario (w): an unusable last-good rolls back to the shipped code ──");
+    let fx = fresh_box("w", "2026-01-01T00:00:00Z");
+    let log = fx.data_dir.join("relay-launch.log");
+    std::fs::create_dir_all(fx.suite_dir.join("last-good")).unwrap(); // nothing in it
+    let host = TestHost::new(fx.node.clone());
+    let clock = clock_at(IN_WINDOW);
+    let env = env_for(&host, &fx, &log, &clock);
+    let mut st = RunState { code_dir: fx.payload.clone(), alive: Arc::new(AtomicBool::new(false)), cooldown_until: None };
+    rollback_and_restart(&env, &mut st, "", "2026-11-13", "test", None, "");
+    assert_eq!(st.code_dir, fx.payload, "rolled back into an empty folder");
+    assert!(wait_for_served("v1", Duration::from_secs(10)), "the relay was left down");
+    host.stop_relay();
+    eprintln!("   (w) OK — empty last-good → shipped code");
+}
+
+// [audit 00aadeed N1] restore_store never deletes the live store unless the backup really holds one.
+#[test]
+fn restore_refuses_a_backup_without_the_store() {
+    let root = std::env::temp_dir().join(format!("trin-restore-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (data, backup, log) = (root.join("data"), root.join("backup"), root.join("log"));
+    write(&data.join("relay.sqlite"), "LIVE");
+    write(&data.join("relay.sqlite-wal"), "LIVE-WAL");
+    std::fs::create_dir_all(&backup).unwrap(); // emptied backup
+    restore_store(&data, &backup, &log);
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite")).unwrap(), "LIVE", "the live store was deleted with nothing to put back");
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite-wal")).unwrap(), "LIVE-WAL");
+    // and a good backup is restored, side files included
+    write(&backup.join("relay.sqlite"), "BACKUP");
+    restore_store(&data, &backup, &log);
+    assert_eq!(std::fs::read_to_string(data.join("relay.sqlite")).unwrap(), "BACKUP");
+    assert!(!data.join("relay.sqlite-wal").exists(), "a -wal not in the backup must not survive the restore");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 // A host that, at the moment the apply stops the relay, has the relay's hourly check stage a DIFFERENT signed
