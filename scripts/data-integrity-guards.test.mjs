@@ -15,6 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stmt } from './test-slice.mjs';
+import { loadConsole, fakeReact, fakeSteward, fakeBrowser } from './console-screens.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const FINANCE = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'utf8');
@@ -112,14 +113,39 @@ test('an encrypted group key is not minted from an untrusted view', () => {
     'was already guarded; the interactive "add a member" path was not.');
 });
 
-test('the finance book only seeds after an authenticated read', () => {
-  const at = FINANCE.indexOf("encSubscribe('finance/'");
-  assert.notEqual(at, -1, 'the finance subscription is missing');
-  const region = FINANCE.slice(at, at + 1400);
-  assert.match(region, /relayAuthed/,
+test('the finance book only seeds after an authenticated read', async () => {
+  // RENDERED, not a fixed text window (rule 3; rewritten 2026-11-13). This used to read 1400 characters after
+  // `encSubscribe('finance/'` and look for `relayAuthed`; the guard is still there but drifted 3170 characters
+  // away as comments and Phase 4 code landed above it, so the test failed over a change that did not touch it.
+  // Now the REAL DashFinanceBook is drawn (scripts/console-screens.mjs, the whole console compiled the way the
+  // phone loads it) and its own finance/ subscription is handed an EMPTY read:
+  //   · unauthenticated: it must publish NOTHING — an empty read is not proof the church has no book, and
+  //     seeding republishes finance/settings and finance/account:<id>, which are replaceable;
+  //   · CONTROL, the same empty read once authenticated: it does seed, so the test is seeing the seed path.
+  const fr = fakeReact();
+  const pub = [];
+  let encSubCb = null, authed = false;
+  const Steward = fakeSteward({
+    actingChurch: '',
+    encSubscribe: (p, cb) => { if (String(p).startsWith('finance/')) encSubCb = cb; return () => {}; },
+    encPublish: async (d, body) => { pub.push(d); return true; },
+    relayAuthed: () => authed,
+  });
+  const { window } = fakeBrowser({ Steward });
+  // the same engine set the-reconcile-view-and-recurring-are-on-screen.test.mjs gives the screen
+  window.FinanceLedger = Object.assign({}, ...(await Promise.all(['ledger', 'store', 'statement', 'import', 'reconcile'].map(m => import('../src/finance-' + m + '.mjs')))));
+  const mods = loadConsole({ React: fr.React, window, expr: '{ DashFinanceBook }' });
+  const draw = () => { fr.reset(); mods.DashFinanceBook(); fr.flush(); };
+  draw();
+  assert.ok(encSubCb, 're-anchor: the Finance screen did not subscribe to finance/');
+  encSubCb([]); draw();
+  assert.deepEqual(pub.filter(d => /^finance\/(settings|account:|fund:)/.test(d)), [],
     'seeding republishes finance/settings and finance/account:<id>, which are replaceable — an empty read ' +
     'overwrites the church’s real currency, fiscal year and chart of accounts, and the journal then replays ' +
     'against a chart it no longer matches');
+  authed = true;
+  encSubCb([]); draw();
+  assert.ok(pub.includes('finance/settings'), 'CONTROL: an authenticated empty read did not seed the book — this test is not seeing the seed path: ' + JSON.stringify(pub));
 });
 
 test('the trusted-view signal is a real auth, not a constant — and it cannot outlive the socket', () => {
