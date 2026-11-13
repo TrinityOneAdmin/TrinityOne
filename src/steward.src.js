@@ -2615,6 +2615,55 @@ function _loginCheck(url, inst, tries) {
     });
   } catch (e) {}
 }
+// ── ONE SOCKET NEVER SENDS FASTER THAN ITS RELAY WILL LISTEN (2026-11-13) ─────────────────────────────────────────
+// The shipped relay answers every REQ/EVENT past the 100th in a second on one connection with `rate-limited:`
+// (scripts/gateway.mjs, the per-connection limiter; CLOSE and AUTH are not counted). MEASURED: a console reopened
+// with no saved member list re-opens all its subscriptions on its new socket inside one second — ~105 REQs — so
+// the relay CLOSED the last few REQs as rate-limited, and an Approve sent in that second was refused. A CLOSED
+// subscription is never asked again by most readers here (nostr-tools counts the CLOSED as that relay's EOSE, and
+// a reader that delivers from `oneose` then shows what it had — often nothing — until the next reconnect).
+//
+// So the frames the relay counts are paced per socket: at most _PACE_MAX in any _PACE_SPAN ms, the rest queued IN
+// ORDER and sent as the window frees. A CLOSE waits behind a queued REQ of its own (sent the other way round, the
+// relay would open a subscription nobody closes). AUTH is never held: the login is what every private read waits
+// for, and the relay gives it its own budget. Below the limit — every ordinary moment — a frame goes straight
+// through exactly as before; only a burst that would have been refused is spread out instead. 80 in 1.25 s, not
+// 100 in 1 s: any one-second window the relay counts then sees at most 80, with margin for network jitter.
+// This sends nothing new and opens nothing: it changes only WHEN frames already being sent leave.
+// Limit: nostr-tools arms a subscription's 4.4 s EOSE timer when the REQ is handed to send(), so a burst large enough
+// to queue a REQ for seconds can still see that timer — no worse than the CLOSED it replaces.
+const _PACE_MAX = 80, _PACE_SPAN = 1250;
+function _paceSocket(r) {
+  if (!r || r.__t1Paced || typeof r.send !== 'function') return;
+  r.__t1Paced = true;
+  const send = r.send.bind(r);
+  const sent = [], q = [];
+  let timer = null;
+  const counted = (m) => !/^\[\s*"(CLOSE|AUTH)"/.test(String(m).slice(0, 12));
+  const pump = () => {
+    timer = null;
+    const now = Date.now();
+    while (sent.length && now - sent[0] >= _PACE_SPAN) sent.shift();
+    while (q.length) {
+      const it = q[0];
+      if (counted(it.m) && sent.length >= _PACE_MAX) break;
+      q.shift();
+      if (counted(it.m)) sent.push(now);
+      try { Promise.resolve(send(it.m)).then(it.ok, it.no); } catch (e) { it.no(e); }
+    }
+    if (q.length) timer = setTimeout(pump, Math.max(20, sent[0] + _PACE_SPAN - now));
+  };
+  r.send = function (m) {
+    if (/^\[\s*"AUTH"/.test(String(m).slice(0, 12))) return send(m);   // the login is never held behind a burst
+    if (!q.length) {
+      const now = Date.now();
+      while (sent.length && now - sent[0] >= _PACE_SPAN) sent.shift();
+      if (!counted(m)) return send(m);
+      if (sent.length < _PACE_MAX) { sent.push(now); return send(m); }
+    }
+    return new Promise((ok, no) => { q.push({ m, ok, no }); if (!timer) timer = setTimeout(pump, Math.max(20, sent.length ? sent[0] + _PACE_SPAN - Date.now() : 0)); });
+  };
+}
 // THE ONE DOOR EVERY POOL PATH GOES THROUGH — subscribe, publish, querySync, and the ticker's own probe — so it
 // is where a socket can be seen whichever path opened it. A socket our subscriptions are not on is a return
 // (announced once per socket, as above); first sight on a boot that never failed is announced the same way
@@ -2627,6 +2676,7 @@ try {
       // very write it recorded is the AUDIT-9 loop (8 re-seals against 1).
       try { if (r) { const k = _relayKey(url); _watchSocket(k, r); if (_subbedOn.get(k) !== r && _returnAnnounced.get(k) !== r) { _clearanceSent.clear(); _announceReturn(k, r); } } } catch (e) {}
       try { if (r) _loginSoon(url, r); } catch (e) {}   // a socket that is not asked to sign in within a moment is asked — see _loginSoon
+      try { if (r) _paceSocket(r); } catch (e) {}       // never more than the relay's per-second limit on one socket — see _paceSocket
       return r;
     }, (err) => { try { _noteDialFailed(url); } catch (e) {} throw err; });
   };
@@ -4630,13 +4680,56 @@ async function publish(evt, opts) {
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, background: _bg } })); } catch (x) {}
     return false;
   }
+  // WHICH CALL IS THE NEWEST FOR THIS DOCUMENT — read only by the rate-limited retry below. Guarded: a test that
+  // lifts this function alone has no `_pubLatest`, and the throw is swallowed (the retry then simply never sees
+  // itself superseded, which is the pre-existing behaviour).
+  let _d0 = '';
+  try { _d0 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || ''; if (_d0) _pubLatest.set(_d0, evt.id); } catch (x) {}
   try {
-    await Promise.any(pool.publish(_targets, evt).map((p, i) => p.then(v => {
-      if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
-      // THIS ONE RELAY ACKNOWLEDGED THE WRITE — Promise.any only says "some relay did", so say which, per relay.
-      try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: _targets[i] } })); } catch (x) {}
-      return v;
-    })));
+    // ── "rate-limited:" IS "ASK AGAIN IN A MOMENT", SO ASK AGAIN (2026-11-13) ─────────────────────────────────────
+    // NIP-01's `rate-limited:` is the one refusal that says nothing about THIS event — only that the socket sent too
+    // much in the last second. The shipped relay answers it to any frame past 100 a second on one connection
+    // (scripts/gateway.mjs, the per-connection limiter). MEASURED: a console reopened with no saved member list
+    // re-opens every subscription on its new socket inside one second (~105 REQs), and an Approve or a Block in
+    // that second was refused "rate-limited: too many messages — try again in a moment", and this function took
+    // it as final: setAdmitted returned false and the steward was told the approval was not saved
+    // (scripts/a-room-key-reaches-a-member-the-console-never-saw-join.test.mjs, row B).
+    //
+    // So: the relays that said `rate-limited` are asked again, with the SAME signed event — the same id, so a relay
+    // that did store it the first time answers `duplicate` (OK true) and nothing is written twice, whatever the
+    // kind. BOUNDED: at most three more asks, 1.1 s, 2.2 s and 4.4 s apart — the first is already past the relay's
+    // one-second window. Any other answer (a rule, a dead socket) is final exactly as before. A relay that accepts
+    // on a retry is a success exactly as if it had accepted first time.
+    //
+    // NOT WHEN A NEWER CALL FOR THE SAME DOCUMENT HAS STARTED: re-sending an older copy then could replace it (a
+    // same-second tie goes to the lower id — scripts/event-store.mjs). The newer call reports its own outcome, so
+    // this one stops asking and is handled like the "a newer version is already stored" answer below.
+    //
+    // ⚠ WRITTEN INLINE for the reason the notes above give: the tests lift this function out of the bundle.
+    const _ans = _targets.map(() => undefined);   // each relay's LAST answer, index-aligned with _targets
+    let _ask = _targets.map((u, i) => i);         // which relays this attempt asks
+    for (let _try = 0; ; _try++) {
+      const _urls = _ask.map(i => _targets[i]);
+      try {
+        await Promise.any(pool.publish(_urls, evt).map((p, i) => p.then(v => {
+          if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+          // THIS ONE RELAY ACKNOWLEDGED THE WRITE — Promise.any only says "some relay did", so say which, per relay.
+          try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: _urls[i] } })); } catch (x) {}
+          return v;
+        })));
+        break;
+      } catch (e1) {
+        const errs = (e1 && e1.errors) || [];
+        _ask.forEach((t, j) => { _ans[t] = errs[j]; });
+        const _again = _ask.filter((t, j) => /^rate-limited/i.test(String((errs[j] && (errs[j].message || errs[j])) || '')));
+        let _newer = false;
+        try { _newer = !!_d0 && _pubLatest.has(_d0) && _pubLatest.get(_d0) !== evt.id; } catch (x) {}
+        if (_newer && _again.length) return evt;   // superseded while it waited — see above
+        if (!_again.length || _try >= 3) { const all = new Error('every relay refused'); all.errors = _ans; throw all; }
+        _ask = _again;
+        await new Promise(r => setTimeout(r, 1100 * (1 << _try)));
+      }
+    }
   }
   catch (e) {
     console.warn('[steward] publish failed', e);
@@ -4708,10 +4801,12 @@ async function publish(evt, opts) {
     //
     // ⚠ ADDITIVE, AND IT MUTATES ONLY THE CALLER'S OWN OBJECT. `opts` is optional; 68 of publish()'s 71
     // call sites pass nothing at all and are untouched, and the three that do pass a fresh object literal.
-    // `rate-limited` counts as a refusal here because a box did speak — that is the pre-existing behaviour
-    // for that case and not a change; the cases F2 was actually about are (2) and (3), and they now retry.
+    // `rate-limited` is NOT a refusal here (2026-11-13). It used to be ("a box did speak"), and the media-key memo
+    // then remembered a resubscribe burst's "try again in a moment" as a rule for the session: sermons stayed locked
+    // for those members until a reload. It never says anything about THIS event — the retry above has already asked
+    // again three times, and the next roster emit must be free to ask again after that.
     let _saidNo = false;
-    try { _saidNo = refused.some(r => /^(blocked|invalid|restricted|rate-limited|auth-required)/i.test(String((r && r.error) || ''))); } catch (x) {}
+    try { _saidNo = refused.some(r => /^(blocked|invalid|restricted|auth-required)/i.test(String((r && r.error) || ''))); } catch (x) {}
     // …and the relay's OWN WORDS with it, so a caller that reports the refusal can quote them instead of
     // inventing an explanation — the rule publishErrorMessage already follows in app/stew-dashboard.jsx.
     try { if (opts && typeof opts === 'object') { opts.refused = _saidNo; opts.reason = reason; } } catch (x) {}
@@ -4880,6 +4975,9 @@ try {
 // looking rather than asserted by the writer.
 async function _publishToRelays(evt, urls) {
   await _waitForRegistration();   // same gate as publish(): a church the relay has never heard of writes nothing
+  // which call is the newest for this document — read only by the rate-limited retry below (see publish())
+  let _d1 = '';
+  try { _d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || ''; if (_d1) _pubLatest.set(_d1, evt.id); } catch (x) {}
   // CONNECTED, not configured. With the all-must-accept rule below, targeting every CONFIGURED relay means a
   // single unreachable one makes `accepted < targets.length` for every member, always — a full-roster
   // safeguarding alarm while every record is safely stored. That is not hypothetical: CANONICAL_RELAYS ships a
@@ -4945,6 +5043,31 @@ async function _publishToRelays(evt, urls) {
       return v;
     })));
   } catch (e) { try { _noteSpread(evt, [], targets.slice()); } catch (x) {} return false; }
+  // "rate-limited:" IS "ASK AGAIN IN A MOMENT" — the same rule and bounds as publish() (see the note there, 2026-11-13).
+  // This is the path a Block takes (setBlocked), and a group, a clearance, the minors list: each relay that answered
+  // `rate-limited` is asked again with the SAME signed event (same id, so nothing is ever stored twice), at most three
+  // more times, 1.1 s, 2.2 s and 4.4 s apart; every other answer stands. It stops asking once a newer call for the
+  // same document has started (a same-second tie goes to the lower id), and this copy is then reported as it stood.
+  // Inline, for the reason the note above this function gives.
+  for (let _try = 0; _try < 3; _try++) {
+    const again = targets.map((u, i) => i).filter(i => rs[i] && rs[i].status === 'rejected'
+      && /^rate-limited/i.test(String((rs[i].reason && (rs[i].reason.message || rs[i].reason)) || '')));
+    if (!again.length) break;
+    let newer = false;
+    try { newer = !!_d1 && _pubLatest.has(_d1) && _pubLatest.get(_d1) !== evt.id; } catch (x) {}
+    if (newer) break;
+    await new Promise(r => setTimeout(r, 1100 * (1 << _try)));
+    const urls2 = again.map(i => targets[i]);
+    let rs2 = [];
+    try {
+      rs2 = await Promise.allSettled(pool.publish(urls2, evt).map((p, j) => p.then(v => {
+        if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+        try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: urls2[j] } })); } catch (x) {}
+        return v;
+      })));
+    } catch (e) { break; }
+    again.forEach((i, j) => { if (rs2[j]) rs[i] = rs2[j]; });
+  }
   const accepted = rs.filter(r => r.status === 'fulfilled').length;
   // RECORD THE SPREAD BEFORE ANY OF THE RETURNS BELOW, so the two failure shapes are told apart by the
   // callers that have a sentence to write about them. See the note above _lastSpread; the return values
@@ -5110,6 +5233,7 @@ const _lastStamp = new Map();   // d-tag -> the created_at we last published for
 // (rotaChangedSince) must be answered from this map; a failed write of our own must never read as somebody else's change.
 const _seenStamp = new Map();
 const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
+const _pubLatest = new Map();   // d-tag -> the id of the event the most recent publish() call was asked to send (its rate-limited retry stops once superseded)
 // ── A COPY WE CANNOT OPEN IS NOT AN EMPTY DOCUMENT (the roster wipe, 2026-10-12) ─────────────────────────
 // A console that opens before the church name key arrives sees every sealed calendar document as `_locked`.
 // The screens then showed a locked team as an EMPTY team, and any save — a roster edit, the care panel's effect,

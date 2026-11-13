@@ -17099,6 +17099,49 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
+  var _PACE_MAX = 80;
+  var _PACE_SPAN = 1250;
+  function _paceSocket(r) {
+    if (!r || r.__t1Paced || typeof r.send !== "function") return;
+    r.__t1Paced = true;
+    const send = r.send.bind(r);
+    const sent = [], q = [];
+    let timer = null;
+    const counted = (m) => !/^\[\s*"(CLOSE|AUTH)"/.test(String(m).slice(0, 12));
+    const pump = () => {
+      timer = null;
+      const now2 = Date.now();
+      while (sent.length && now2 - sent[0] >= _PACE_SPAN) sent.shift();
+      while (q.length) {
+        const it = q[0];
+        if (counted(it.m) && sent.length >= _PACE_MAX) break;
+        q.shift();
+        if (counted(it.m)) sent.push(now2);
+        try {
+          Promise.resolve(send(it.m)).then(it.ok, it.no);
+        } catch (e) {
+          it.no(e);
+        }
+      }
+      if (q.length) timer = setTimeout(pump, Math.max(20, sent[0] + _PACE_SPAN - now2));
+    };
+    r.send = function(m) {
+      if (/^\[\s*"AUTH"/.test(String(m).slice(0, 12))) return send(m);
+      if (!q.length) {
+        const now2 = Date.now();
+        while (sent.length && now2 - sent[0] >= _PACE_SPAN) sent.shift();
+        if (!counted(m)) return send(m);
+        if (sent.length < _PACE_MAX) {
+          sent.push(now2);
+          return send(m);
+        }
+      }
+      return new Promise((ok, no) => {
+        q.push({ m, ok, no });
+        if (!timer) timer = setTimeout(pump, Math.max(20, sent.length ? sent[0] + _PACE_SPAN - Date.now() : 0));
+      });
+    };
+  }
   try {
     const _ensure = pool.ensureRelay.bind(pool);
     pool.ensureRelay = function(url, params) {
@@ -17116,6 +17159,10 @@ zoo`.split("\n");
         }
         try {
           if (r) _loginSoon(url, r);
+        } catch (e) {
+        }
+        try {
+          if (r) _paceSocket(r);
         } catch (e) {
         }
         return r;
@@ -18826,15 +18873,48 @@ zoo`.split("\n");
       }
       return false;
     }
+    let _d0 = "";
     try {
-      await Promise.any(pool.publish(_targets, evt).map((p, i3) => p.then((v) => {
-        if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+      _d0 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+      if (_d0) _pubLatest.set(_d0, evt.id);
+    } catch (x) {
+    }
+    try {
+      const _ans = _targets.map(() => void 0);
+      let _ask = _targets.map((u, i3) => i3);
+      for (let _try = 0; ; _try++) {
+        const _urls = _ask.map((i3) => _targets[i3]);
         try {
-          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: _targets[i3] } }));
-        } catch (x) {
+          await Promise.any(pool.publish(_urls, evt).map((p, i3) => p.then((v) => {
+            if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+            try {
+              window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: _urls[i3] } }));
+            } catch (x) {
+            }
+            return v;
+          })));
+          break;
+        } catch (e1) {
+          const errs = e1 && e1.errors || [];
+          _ask.forEach((t, j) => {
+            _ans[t] = errs[j];
+          });
+          const _again = _ask.filter((t, j) => /^rate-limited/i.test(String(errs[j] && (errs[j].message || errs[j]) || "")));
+          let _newer = false;
+          try {
+            _newer = !!_d0 && _pubLatest.has(_d0) && _pubLatest.get(_d0) !== evt.id;
+          } catch (x) {
+          }
+          if (_newer && _again.length) return evt;
+          if (!_again.length || _try >= 3) {
+            const all = new Error("every relay refused");
+            all.errors = _ans;
+            throw all;
+          }
+          _ask = _again;
+          await new Promise((r) => setTimeout(r, 1100 * (1 << _try)));
         }
-        return v;
-      })));
+      }
     } catch (e) {
       console.warn("[steward] publish failed", e);
       let refused = [];
@@ -18853,7 +18933,7 @@ zoo`.split("\n");
       }
       let _saidNo = false;
       try {
-        _saidNo = refused.some((r) => /^(blocked|invalid|restricted|rate-limited|auth-required)/i.test(String(r && r.error || "")));
+        _saidNo = refused.some((r) => /^(blocked|invalid|restricted|auth-required)/i.test(String(r && r.error || "")));
       } catch (x) {
       }
       try {
@@ -18993,6 +19073,12 @@ zoo`.split("\n");
   }
   async function _publishToRelays(evt, urls) {
     await _waitForRegistration();
+    let _d1 = "";
+    try {
+      _d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+      if (_d1) _pubLatest.set(_d1, evt.id);
+    } catch (x) {
+    }
     const live = _connectedRelays();
     const targets = urls && urls.length ? urls : live.length ? live : relays();
     if (!targets.length) {
@@ -19031,6 +19117,34 @@ zoo`.split("\n");
       } catch (x) {
       }
       return false;
+    }
+    for (let _try = 0; _try < 3; _try++) {
+      const again = targets.map((u, i3) => i3).filter((i3) => rs[i3] && rs[i3].status === "rejected" && /^rate-limited/i.test(String(rs[i3].reason && (rs[i3].reason.message || rs[i3].reason) || "")));
+      if (!again.length) break;
+      let newer = false;
+      try {
+        newer = !!_d1 && _pubLatest.has(_d1) && _pubLatest.get(_d1) !== evt.id;
+      } catch (x) {
+      }
+      if (newer) break;
+      await new Promise((r) => setTimeout(r, 1100 * (1 << _try)));
+      const urls2 = again.map((i3) => targets[i3]);
+      let rs2 = [];
+      try {
+        rs2 = await Promise.allSettled(pool.publish(urls2, evt).map((p, j) => p.then((v) => {
+          if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+          try {
+            window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: urls2[j] } }));
+          } catch (x) {
+          }
+          return v;
+        })));
+      } catch (e) {
+        break;
+      }
+      again.forEach((i3, j) => {
+        if (rs2[j]) rs[i3] = rs2[j];
+      });
     }
     const accepted = rs.filter((r) => r.status === "fulfilled").length;
     try {
@@ -19154,6 +19268,7 @@ zoo`.split("\n");
   var _lastStamp = /* @__PURE__ */ new Map();
   var _seenStamp = /* @__PURE__ */ new Map();
   var _lastOk = /* @__PURE__ */ new Map();
+  var _pubLatest = /* @__PURE__ */ new Map();
   var _lockedAddr = /* @__PURE__ */ new Set();
   function _addrLocked(d) {
     return _lockedAddr.has(d);
