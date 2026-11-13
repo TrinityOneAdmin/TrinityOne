@@ -3590,16 +3590,37 @@ function NewPostModal({ onClose }) {
 // `pending` (2026-11-13): the value is a STATUS ("Checking…"), not a number. The 28px number slot drew that
 // one-word status 182px wide (measured, Sora 800), which at phone width painted past its card into the next.
 // A pending value is drawn small and muted, on one line, and is the ONLY value that may be cut with "…" — a
-// count is never ellipsed ("12…" reads as a smaller number); it may wrap instead (overflow-wrap:anywhere),
-// so a long one still cannot paint out of its card. The outer box keeps the number's font-size, so its line
-// height holds and the card does not jump when the count arrives. Only DashOverview's Members tile passes it.
+// count is never ellipsed ("12…" reads as a smaller number). The outer box keeps the number's font-size, so its
+// line height holds and the card does not jump when the count arrives. Only DashOverview's Members tile passes it.
+//
+// EVERY OTHER VALUE IS ONE LINE, WHOLE, AND SHRUNK TO FIT (audit 2026-11-13). Wrapping was tried and was worse:
+// in the four-across band (~860px) "Down" broke mid-word onto two lines and grew the stat row 119 -> 152px, and
+// 99999 split into what read as two numbers. So the value sits in a nowrap inline span, and after layout (and on
+// resize, and once web fonts load) the span's font steps down 1px at a time from the slot size until it fits its
+// box, floor 12px. Only the SPAN shrinks; the box keeps the slot's font-size, so the line box — and the row
+// height — is the same whether the relay reads Live or Down.
 function StatCard({ label, value, sub, ic, tint, onClick, snug = false, pending = false }) {
   const t = SK_TINT[tint];
   const narrow = useStewNarrow();
   const pad = narrow ? 12 : snug ? 14 : 18, icn = narrow ? 24 : snug ? 26 : 30;
+  const fitRef = React.useRef(null);
   const shown = pending
     ? <span style={{ display: 'inline-block', maxWidth: '100%', verticalAlign: 'middle', fontFamily: 'var(--font-ui)', fontSize: narrow ? 14 : 15, fontWeight: 700, letterSpacing: 0, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
-    : value;
+    : <span ref={fitRef} style={{ whiteSpace: 'nowrap' }}>{value}</span>;
+  React.useEffect(() => {
+    const el = fitRef.current, box = el && el.parentElement;
+    if (pending || !el || !box || typeof window === 'undefined' || !el.getBoundingClientRect) return;
+    const fit = () => {
+      let px = snug ? 26 : 28;
+      el.style.fontSize = '';
+      while (px > 12 && el.getBoundingClientRect().width > box.clientWidth + 0.5) { px -= 1; el.style.fontSize = px + 'px'; }
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    let live = true;
+    if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (live) fit(); });
+    return () => { live = false; window.removeEventListener('resize', fit); };
+  }, [value, pending, snug, narrow]);
   const icon = <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>;
   return (
     <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, minWidth: 0, padding: pad, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
@@ -3623,8 +3644,8 @@ function StatCard({ label, value, sub, ic, tint, onClick, snug = false, pending 
         {(onClick && !narrow && !snug) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
       {snug
-        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, overflowWrap: 'anywhere' }}>{shown}</div></div>
-        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12, minWidth: 0, overflowWrap: 'anywhere' }}>{shown}</div>}
+        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, whiteSpace: 'nowrap' }}>{shown}</div></div>
+        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12, minWidth: 0, whiteSpace: 'nowrap' }}>{shown}</div>}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
     </div>
   );

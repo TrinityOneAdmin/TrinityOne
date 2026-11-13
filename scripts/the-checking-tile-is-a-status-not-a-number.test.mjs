@@ -8,8 +8,9 @@
 // DashOverview passes pending ONLY on the Members tile and only while realCount is null ("Checking…").
 //
 // A REAL NUMBER IS NEVER CUT WITH "…": a count that says "12…" reads as a smaller number, not a cut-off one.
-// So the number branch carries no text-overflow/overflow:hidden; it may wrap (overflow-wrap:anywhere) instead,
-// so it still cannot paint out of its card. The browser side of this (geometry at 360px, a 4-digit count at
+// So the number branch carries no text-overflow/overflow:hidden and stays on ONE line (white-space:nowrap, in
+// the box and in the value's own span); in the browser the span's font steps down until it fits its box —
+// geometry that only a browser can show (scripts/the-overview-values-stay-on-one-line.test.mjs). The browser side of this (geometry at 360px, a 4-digit count at
 // 1.5× text) is scripts/the-checking-tile-fits-a-phone.test.mjs.
 //
 // Point of use (rule 1), no text match against app/*.jsx (rule 3): the REAL DashOverview and the REAL StatCard
@@ -78,6 +79,13 @@ function valueNode(card, value) {
   return hits[0];
 }
 
+// The value box: the node whose own children include the value's span.
+function boxOf(card, span) {
+  const hits = find(card, n => n && n.kids && n.kids.includes(span));
+  assert.equal(hits.length, 1, 're-anchor: no single box around the value span');
+  return hits[0];
+}
+
 for (const width of [360, 1200]) {
   test(`${width}px, roster not settled: the Members tile is PENDING and StatCard draws "Checking…" small and muted`, () => {
     const mod = load({ width, ready: false, members: M(5) });
@@ -96,25 +104,31 @@ for (const width of [360, 1200]) {
   });
 }
 
-test('360px, a settled 4-digit count: the number keeps its 28px and is never cut with "…" (it may wrap instead)', () => {
+test('360px, a settled 4-digit count: the number keeps its 28px and is never cut with "…" (one line)', () => {
   const mod = load({ width: 360, ready: true, members: M(1234) });
   const t = tiles(mod);
   assert.equal(t.Members.props.value, '1234', 're-anchor: the Members tile did not read the settled count');
   assert.ok(!t.Members.props.pending, 'a real count was marked pending');
-  const v = valueNode(mod.StatCard(t.Members.props), '1234');
-  const s = v.props.style || {};
+  const card = mod.StatCard(t.Members.props);
+  const v = valueNode(card, '1234');
+  const box = boxOf(card, v);
+  const s = box.props.style || {};
+  assert.equal((v.props.style || {}).whiteSpace, 'nowrap', 'the count span may wrap — 99999 would split into what reads as two numbers');
   assert.equal(s.fontSize, 28, 'the count lost its number size');
   assert.notEqual(s.textOverflow, 'ellipsis', 'THE DEFECT: a real count can be cut with "…" — "12…" reads as a smaller number');
   assert.notEqual(s.overflow, 'hidden', 'a real count is clipped');
-  assert.equal(s.overflowWrap, 'anywhere', 'the count has no wrap backstop, so a long one paints out of its card');
+  assert.equal(s.whiteSpace, 'nowrap', 'THE DEFECT: the count box may wrap — a word breaks mid-word, a number splits in two');
+  assert.notEqual(s.overflowWrap, 'anywhere', 'the count box breaks anywhere');
 });
 
 test('snug (the Suite window, 760–999px): pending is small there too, and a count is not ellipsed', () => {
   const mod = load({ width: 900, ready: true, members: M(3) });
   const pend = valueNode(mod.StatCard({ label: 'Members', value: 'Checking…', sub: '', ic: 'pray', tint: 'sage', snug: true, pending: true }), 'Checking…');
   assert.ok(pend.props.style.fontSize <= 16, 'snug "Checking…" is drawn at ' + pend.props.style.fontSize + 'px');
-  const num = valueNode(mod.StatCard({ label: 'Groups', value: '1234', sub: '', ic: 'chat', tint: 'clay', snug: true }), '1234');
+  const snugCard = mod.StatCard({ label: 'Groups', value: '1234', sub: '', ic: 'chat', tint: 'clay', snug: true });
+  const num = boxOf(snugCard, valueNode(snugCard, '1234'));
   assert.equal(num.props.style.fontSize, 26);
   assert.notEqual(num.props.style.textOverflow, 'ellipsis', 'THE DEFECT: the snug count can be cut with "…"');
+  assert.equal(num.props.style.whiteSpace, 'nowrap', 'THE DEFECT: the snug value may wrap ("Down" broke mid-word at 860px)');
   assert.match(texts(mod.StatCard({ label: 'Groups', value: '7', sub: 's', ic: 'chat', tint: 'clay', snug: true })).join(' '), /Groups/);
 });
