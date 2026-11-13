@@ -150,10 +150,11 @@ test('the pick survives a restart (real lsGet/lsSet over storage) and the next d
   const s = mount(env);
   s.tap(s.btn());
   assert.equal(s.refShown(), other.ref);
-  assert.deepEqual(JSON.parse(env.store.get('trinityone.votd-pick')), { day: localISO(env.date), ref: other.ref }, 'storage does not hold { day, ref }');
-  // A RESTART: a fresh React, a fresh compile, the same storage.
+  // A RESTART: a fresh React, a fresh compile, the same storage. Asserted BEFORE the storage shape, so a lost
+  // write fails HERE — on what the member sees — and not only on the raw key.
   const again = mount(env);
   assert.equal(again.refShown(), other.ref, 'after a restart the picked verse was lost');
+  assert.deepEqual(JSON.parse(env.store.get('trinityone.votd-pick')), { day: localISO(env.date), ref: other.ref }, 'storage does not hold { day, ref }');
   // THE NEXT DAY: the stored pick is ignored and that day's own verse is shown.
   env.date = nextDate;
   const tomorrow = mount(env);
