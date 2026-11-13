@@ -389,13 +389,36 @@ function useStewardNetworks() {
 window.useStewardNetworks = useStewardNetworks;
 
 // churches whose owner-signed roster lists OUR key — we can act as their steward (phase 2b).
-function useStewardStewardedChurches() {
+//
+// OPENED ONLY FOR AN UNLOCKED KEY, AND CLOSED WITH IT (2026-11-13, bug B). b8aae006 mounted this hook at the ROOT
+// so the helper's pending screen gives way the instant a grant lands — but the root renders while the PIN screen
+// is still up, so the subscription dialled the relay BEFORE unlock. Its broad read covers withheld documents, the
+// relay challenged, a locked console cannot sign, and the login was marked failed. After unlock the heal tore that
+// socket down and the console re-subscribed everything twice ~500 ms apart: >100 frames in one second, the relay
+// rate-limited the name-key grow, and new joiners were never keyed. So:
+//   - `enabled` OPENS AND CLOSES IT: the caller says whether the console is open. The root passes
+//     has && !locked && !needsPin, so the read waits for unlock and a lock closes it. (IdentitySwitcher, the
+//     other caller, mounts only inside the unlocked dashboard and keeps the default.)
+//   - `me` is WHICH key it is open for (Steward.churchPub, followed on steward-key). The engine's subscription
+//     captures churchPub when it opens, so a key change must close it and open a fresh one for the new key, or
+//     it keeps discovering for the OLD key. Both are effect deps;
+//   - the list returned is the one fetched for the CURRENT key only, never a previous key's.
+function useStewardStewardedChurches(enabled = true) {
   const conn = useStewardConn();
-  const [churches, setChurches] = useSt([]);
-  useStE(() => (window.Steward.subscribeStewardedChurches
-    ? window.Steward.subscribeStewardedChurches(list => { setChurches(list); try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch {} })
-    : undefined), [conn]);   // re-subscribe after a relay drop/restart
-  return churches;
+  const ownKey = () => { try { return (window.Steward && window.Steward.churchPub) || ''; } catch (e) { return ''; } };
+  const [me, setMe] = useSt(ownKey);
+  useStE(() => {
+    const f = () => setMe(ownKey());
+    window.addEventListener('steward-key', f); f();
+    return () => window.removeEventListener('steward-key', f);
+  }, []);
+  const on = !!enabled;
+  const [got, setGot] = useSt({ me: '', list: [] });
+  useStE(() => {
+    if (!on || !window.Steward.subscribeStewardedChurches) return undefined;
+    return window.Steward.subscribeStewardedChurches(list => { setGot({ me, list }); try { window.dispatchEvent(new CustomEvent('steward-networks')); } catch {} });
+  }, [conn, on, me]);   // re-subscribe after a relay drop/restart; close on lock; reopen for a new key
+  return (on && got.me === me) ? got.list : [];
 }
 window.useStewardStewardedChurches = useStewardStewardedChurches;
 
@@ -1187,7 +1210,7 @@ function StewardRoot() {
   // to the console the instant the grant lands) and Steward.pendingStewardRequest(), which reports an outstanding
   // request with no granted church. Null for an owner and for an approved helper, so this only ever replaces the
   // empty console a pure, not-yet-approved helper would otherwise see.
-  const stewardedChurches = window.useStewardStewardedChurches ? window.useStewardStewardedChurches() : [];
+  const stewardedChurches = window.useStewardStewardedChurches ? window.useStewardStewardedChurches(ks.has && !ks.locked && !needsPin) : [];   // NOT before unlock: see the hook
   const awaitingReq = (ks.has && !ks.locked && !needsPin && !stewardedChurches.length && window.Steward.pendingStewardRequest)
     ? window.Steward.pendingStewardRequest() : null;
 
