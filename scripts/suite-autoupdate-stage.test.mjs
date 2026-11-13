@@ -333,7 +333,7 @@ test('[future date] a validly signed bundle dated far in the future is refused (
   } finally { manifest = null; serveTgz = TGZ; serveSig = SIG; rmSync(d, { recursive: true, force: true }); }
 });
 
-test('[future date] a far-future installedDate already on disk does not freeze a genuine update', async () => {
+test('[clock] an installedDate beyond the clock (the clock went back) refuses rather than dropping the floor', async () => {
   const d = freshDataDir();
   try {
     mkdirSync(join(d, 'suite'), { recursive: true });
@@ -341,7 +341,8 @@ test('[future date] a far-future installedDate already on disk does not freeze a
     manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
     serveTgz = TGZ; serveSig = SIG;
     const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
-    assert.ok(r.ok && r.staged, 'a poisoned far-future record must be ignored: ' + JSON.stringify(r));
+    assert.equal(r.reason, 'clock-looks-wrong', JSON.stringify(r));
+    assert.ok(!existsSync(readyPath(d)), 'no READY');
   } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
 });
 
@@ -417,9 +418,17 @@ test('[M2] a release refused for its signature is not re-downloaded every hour (
     assert.equal(r2.reason, 'bad-signature', JSON.stringify(r2));
     assert.equal(r2.skipped, 'known-bad');
     assert.equal(bundleHits() - b0, 0, 'the same bad release was downloaded again an hour later');
-    const r3 = await api.suiteAutoUpdate('test', opts(d, { now: NOW + 7 * 3600e3 }));
+    // Hourly checks, as production does them: skipped up to +5 h, downloaded again once 6 h have passed since
+    // the REFUSAL (not since the last skip — audit f4129a25 MEDIUM 1: the skips must not extend the back-off).
+    for (let h = 2; h <= 5; h++) {
+      const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW + h * 3600e3 }));
+      assert.equal(r.skipped, 'known-bad', 'hour ' + h + ': ' + JSON.stringify(r));
+    }
+    assert.equal(bundleHits() - b0, 0, 'downloaded inside the back-off');
+    serveSig = SIG;   // the release is fixed meanwhile
+    const r6 = await api.suiteAutoUpdate('test', opts(d, { now: NOW + 6 * 3600e3 + 1000 }));
     assert.equal(bundleHits() - b0, 1, 'after the back-off the release is checked again');
-    assert.equal(r3.reason, 'bad-signature');
+    assert.ok(r6.ok && r6.staged, 'the fixed release stages: ' + JSON.stringify(r6));
   } finally { manifest = null; serveSig = SIG; rmSync(d, { recursive: true, force: true }); }
 });
 

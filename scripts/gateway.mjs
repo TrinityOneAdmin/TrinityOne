@@ -597,6 +597,9 @@ async function suiteAutoUpdate(why, opts = {}) {
   try { r = await suiteAutoUpdateRun(opts); }
   catch (e) { r = { ok: false, reason: 'error', error: String((e && e.message) || e) }; }
   finally { _suiteAutoBusy = false; }
+  // A known-bad skip leaves check.json exactly as it is: rewriting its time on every hourly skip would push the
+  // back-off forward for ever, and the release would never be retried (audit f4129a25 MEDIUM 1).
+  if (r && r.skipped === 'known-bad') return r;
   try {
     const suiteDir = join(opts.dataDir, 'suite');
     mkdirSync(suiteDir, { recursive: true });
@@ -700,11 +703,13 @@ async function suiteAutoUpdateRun(opts) {
     const nowMs = opts.now || Date.now();
     if (!(Date.parse(signed.date) <= nowMs + SUITE_MAX_FUTURE_MS)) { cleanTmp(); return { ok: false, reason: 'future-date', sha: rsha }; }
     let floor = (build && build.date) || '';
-    try {
-      const st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8'));
-      const inst = st && typeof st.installedDate === 'string' ? st.installedDate : '';
-      if (inst && Date.parse(inst) <= nowMs + SUITE_MAX_FUTURE_MS && suiteDateAfter(inst, floor)) floor = inst;
-    } catch {}
+    const st = readJson(join(suiteDir, 'state.json'));
+    const inst = st && typeof st.installedDate === 'string' ? st.installedDate : '';
+    // installedDate only ever comes from a signed date that was within a day of the clock when it was installed;
+    // one that is now beyond that means this computer's clock went BACK. Refuse until it is right rather than
+    // drop the floor (dropping it would let an older bundle in — audit f4129a25 LOW 2).
+    if (inst && !(Date.parse(inst) <= nowMs + SUITE_MAX_FUTURE_MS)) { cleanTmp(); return { ok: false, reason: 'clock-looks-wrong', sha: rsha }; }
+    if (inst && suiteDateAfter(inst, floor)) floor = inst;
     if (!suiteDateAfter(signed.date, floor)) { cleanTmp(); return { ok: false, reason: 'anti-rollback', sha: rsha }; }
     // 7. PROMOTE the verified .tmp bytes and write READY (does NOT apply — the shell reads this at the chosen
     //    time). Only now is a pre-existing good bundle replaced; READY is cleared first so it never points at a

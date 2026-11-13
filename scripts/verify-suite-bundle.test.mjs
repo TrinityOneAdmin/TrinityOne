@@ -120,3 +120,34 @@ test('a validly SIGNED bundle with no version.txt, or a malformed one, is refuse
     assert.equal(verify(p.tgzPath, p.sigPath, p.pemPath).status, 7, 'a version.txt with no date');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('[tar names] version.txt spelled twice under different-looking paths is refused, not guessed (exit 7)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-vsb-dup-'));
+  try {
+    // GNU tar keeps "./version.txt" and "./x/../version.txt"-free spellings; build the second spelling with
+    // --transform so the archive holds BOTH "./version.txt" and ".//version.txt" (tar -x writes one file).
+    const st = join(dir, 'st'); mkdirSync(join(st, 'scripts'), { recursive: true });
+    writeFileSync(join(st, 'version.txt'), SHA + '\n' + DATE + '\n');
+    writeFileSync(join(st, 'release-origin'), 'x\n'); writeFileSync(join(st, 'scripts', 'gateway.mjs'), '//\n');
+    writeFileSync(join(st, 'other.txt'), 'b'.repeat(40) + '\n2026-11-02T00:00:00Z\n');
+    const tarOut = join(dir, 'b.tgz');
+    const r = spawnSync('tar', ['-czf', tarOut, '-C', st, './version.txt', './release-origin', './scripts/gateway.mjs',
+      '--transform', 's|^\\./other\\.txt$|.//version.txt|', './other.txt']);
+    assert.equal(r.status, 0, String(r.stderr));
+    const listing = spawnSync('tar', ['-tzf', tarOut], { encoding: 'utf8' }).stdout;
+    assert.match(listing, /^\.\/\/version\.txt$/m, 'fixture: the second spelling is in the archive');
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    writeFileSync(join(dir, 'k.pem'), publicKey.export({ type: 'spki', format: 'pem' }));
+    writeFileSync(join(dir, 'b.sig'), cryptoSign(null, readFileSync(tarOut), privateKey));
+    const v = verify(tarOut, join(dir, 'b.sig'), join(dir, 'k.pem'));
+    assert.equal(v.status, 7, 'an ambiguous version.txt must be refused; stdout=' + v.stdout + ' stderr=' + v.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('[kind] a signed bundle with no scripts/gateway.mjs is refused (exit 7)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-vsb-nogw-'));
+  try {
+    const p = run(dir, { 'version.txt': SUITE_FILES['version.txt'], 'release-origin': 'x\n' });
+    assert.equal(verify(p.tgzPath, p.sigPath, p.pemPath).status, 7);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

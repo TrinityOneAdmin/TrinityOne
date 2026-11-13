@@ -40,7 +40,15 @@ const MAX_UNPACKED = 1024 * 1024 * 1024;
 // extract would keep the LAST copy, so an ambiguous archive is refused rather than guessed at).
 function readTarFiles(tar, wanted) {
   const out = new Map();
-  const norm = (n) => n.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  // Normalise the way tar resolves a member path: leading '/', empty and '.' segments vanish ('/version.txt',
+  // './/version.txt' and 'scripts/./gateway.mjs' all land where their plain names do). A '..' segment is
+  // refused outright. Without this an archive could name version.txt twice under spellings the reader saw as
+  // different and tar -x wrote to one file (audit f4129a25 LOW 1).
+  const norm = (n) => {
+    const parts = n.split('/').filter((p) => p !== '' && p !== '.');
+    if (parts.includes('..')) throw new Error('a member path climbs out of the bundle: ' + n);
+    return parts.join('/');
+  };
   const str = (b, s, e) => { const x = b.subarray(s, e); const z = x.indexOf(0); return (z < 0 ? x : x.subarray(0, z)).toString('utf8'); };
   const num = (b, s, e) => {
     if (b[s] & 0x80) { let v = 0; for (let i = s + 1; i < e; i++) v = v * 256 + b[i]; return v; }   // base-256
