@@ -85,7 +85,30 @@ const HOOK = (relayUrl) => `(() => { if (window.__hooked) return; window.__hooke
   const W = window.WebSocket; window.__socks = []; window.__dials = 0; window.__deadDials = 0;
   const Wd = function (u, p) { let url = String(u);
     if (url === ${JSON.stringify(relayUrl)}) { window.__dials++; if (window.__radioOff) { window.__deadDials++; url = 'ws://127.0.0.1:9/relay'; } }
-    const s = p === undefined ? new W(url) : new W(url, p); window.__socks.push(s); return s; };
+    const s = p === undefined ? new W(url) : new W(url, p); window.__socks.push(s);
+    // what the relay said "rate-limited" to — a CLOSED for a REQ, an OK false for an EVENT (the rate-limit rows below)
+    s.addEventListener('message', (ev) => { const d = ev.data; if (typeof d !== 'string' || d.indexOf('rate-limited') < 0) return;
+      if (d.startsWith('["CLOSED"')) window.__rlClosed++; else if (d.startsWith('["OK"')) window.__rlOk.push(d); });
+    return s; };
+  // THE RELAY'S PER-SECOND LIMIT, FILLED FROM UNDER THE CONSOLE (the rate-limit rows below). Every frame the page sends
+  // passes here, BELOW the console's own engine. Armed by window.__floodD (a d-tag prefix): just before the console's next
+  // write of that document, 110 cheap REQs go out on the same socket first, so the relay has counted past its 100
+  // for that second and answers the write itself with its genuine "rate-limited:" — the exact answer a cold reopen's
+  // resubscribe burst produced. REQ frames are counted (window.__reqAt) so a burst row can say how many really left.
+  window.__rlClosed = 0; window.__rlOk = []; window.__reqAt = []; window.__floodD = ''; window.__floodedId = '';
+  const Sd = W.prototype.send;
+  W.prototype.send = function (m) {
+    if (typeof m === 'string') {
+      if (m.startsWith('["REQ"')) window.__reqAt.push(performance.now());
+      if (window.__floodD && m.startsWith('["EVENT"') && m.indexOf('"' + window.__floodD) > 0) {
+        window.__floodD = '';
+        try { window.__floodedId = JSON.parse(m)[1].id; } catch (e) {}
+        for (let i = 0; i < 110; i++) Sd.call(this, '["REQ","__flood",{"ids":["' + '0'.repeat(64) + '"]}]');
+        Sd.call(this, '["CLOSE","__flood"]');
+      }
+    }
+    return Sd.call(this, m);
+  };
   Wd.prototype = W.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Wd[k] = W[k]; window.WebSocket = Wd;
   const si = window.setInterval; window.__beats = [];
   window.setInterval = function (fn, ms, ...a) { const id = si.call(this, fn, ms, ...a); if (ms === 90000) window.__beats.push({ at: performance.now(), stack: String(new Error().stack || '') }); return id; };
@@ -295,4 +318,76 @@ test('an Approve refused while the console is out says so and throws nothing; th
   await sleep(1500);
   assert.doesNotMatch(await evalIn(`document.body.innerText.replace(/\\s+/g, ' ')`), /Couldn’t save the approved-members list/,
     'THE BANNER STAYED after the retry let the person in (on the Oppo it sat there, collapsed: "Couldn\'t save the appr…")');
+});
+
+// ── THE RELAY'S PER-SECOND LIMIT (2026-11-13) ────────────────────────────────────────────────────────────────────────
+// A console reopened with no saved member list re-opened every subscription on its new socket inside one second
+// (~105 REQs) — past the relay's 100 frames a second on one connection (scripts/gateway.mjs) — and an Approve pressed
+// in that second was answered "rate-limited: too many messages — try again in a moment". publish() took that as
+// final: the steward was told the approval was not saved (a-room-key-reaches-a-member-the-console-never-saw-join,
+// row B). The next two rows are the two halves of the fix, each at the point of use.
+
+// An Approve the relay rate-limits is asked again, and lands. The relay's limit is filled from UNDER the console (the
+// hook above) just before the approved-members write leaves, so the refusal is the relay's own and nothing in the
+// console's engine is stubbed.
+test('an Approve the relay answers "rate-limited" is asked again a moment later and the person is let in — no "couldn\'t save"', { skip: SKIP, timeout: 300000 }, async () => {
+  await waitFor(`window.Steward.relayAuthed() && window.Steward.relaysHealthy()`, 120000, 'logged in and healthy first');
+  const k = H.key();
+  await H.publishAll(relay, [joinTo(churchA, k)]);
+  await waitFor(`[...document.querySelectorAll('button')].filter(x => (x.textContent||'').trim() === 'Approve').length === 1`, 30000, 'the join request on the Members screen');
+  const before = errors.length;
+  await sleep(1500);   // past the second the join request's own traffic came in, so the flood alone fills the limit
+  await evalIn(`(() => { window.__rlOk = []; window.__floodedId = ''; window.__floodD = 'trinityone/admitted:'; return 1; })()`);
+  await press('/^Approve$/', 'the Approve button');
+  { const t1 = Date.now(); let ok = false; while (!ok && Date.now() - t1 < 20000) { ok = admitted().includes(k.pub); if (!ok) await sleep(400); }
+    const id = await evalIn('window.__floodedId');
+    const refused = await evalIn(`window.__rlOk.filter(d => !!window.__floodedId && d.indexOf(window.__floodedId) > 0 && /^\\["OK","[0-9a-f]+",false/.test(d)).length`);
+    assert.ok(id, 'CONTROL: the Approve never wrote the approved-members list on a socket this page could see — this row proves nothing');
+    assert.ok(refused >= 1, 'CONTROL: the relay did NOT answer the Approve "rate-limited" — the flood did not fill its limit, so this row proves nothing');
+    assert.ok(ok, 'AN APPROVE THE RELAY ANSWERED "rate-limited" WAS NEVER ASKED AGAIN — the person was not let in (that answer means "try again in a moment")'); }
+  await sleep(1500);
+  const said = await evalIn(`document.body.innerText.replace(/\\s+/g, ' ')`);
+  assert.doesNotMatch(said, /Couldn’t save the approved-members list/, 'the steward was told the approval was not saved, although it landed');
+  assert.deepEqual(errors.slice(before), [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+// …and the console does not provoke the limit in the first place. 150 subscriptions opened in one tick — more than the
+// relay will take on one socket in a second, as a cold reopen's resubscribe is — and the relay closes NONE of them as
+// rate-limited. A CLOSED subscription is never asked again by most of the console's readers (nostr-tools counts the
+// CLOSED as that relay's end of stored events), so each one closed was a list the console would show as empty.
+test('a burst of subscriptions past the relay\'s per-second limit is spread out by the console — the relay closes none of them as rate-limited', { skip: SKIP, timeout: 300000 }, async () => {
+  await waitFor(`window.Steward.relayAuthed() && window.Steward.relaysHealthy()`, 120000, 'logged in and healthy first');
+  await sleep(2500);   // the previous row's flood is long out of the relay's window
+  const N = 150;
+  await evalIn(`(() => { window.__rlClosed = 0; window.__reqAt = []; window.__burstGot = 0; window.__burst = [];
+    for (let i = 0; i < ${N}; i++) { let once = false; window.__burst.push(window.Steward.subscribeReseats(() => { if (!once) { once = true; window.__burstGot++; } })); }
+    return 1; })()`);
+  const got = await within(`window.__burstGot >= ${N}`, 20000);
+  await sleep(1500);
+  const r = await evalIn(`(() => { const a = window.__reqAt.slice().sort((x, y) => x - y); let most = 0;
+    for (let i = 0, j = 0; i < a.length; i++) { while (a[i] - a[j] > 1000) j++; most = Math.max(most, i - j + 1); }
+    for (const c of window.__burst) { try { c && c(); } catch (e) {} }
+    return { closed: window.__rlClosed, sent: a.length, most, span: a.length ? Math.round(a[a.length - 1] - a[0]) : 0 }; })()`);
+  assert.ok(r.sent >= N, `CONTROL: only ${r.sent} REQs left the page for ${N} subscriptions — this row proves nothing`);
+  assert.equal(r.closed, 0, `THE RELAY CLOSED ${r.closed} OF THE CONSOLE'S SUBSCRIPTIONS AS RATE-LIMITED — ${r.sent} REQs, ${r.most} of them inside one second (the relay takes 100)`);
+  assert.ok(r.most <= 80, `the console sent ${r.most} REQs inside one second on its socket — its own pacer allows 80 (the relay takes 100)`);
+  assert.notEqual(got, null, `only some of the ${N} subscriptions ever answered`);
+});
+
+// …and a Block, which travels the other write path (setBlocked -> _publishToRelays, where every relay must take it), is
+// asked again the same way. Engine-level on purpose: the Members-screen Block also rotates every key, and this row is
+// about the blocklist write itself. The refusal is again the real relay's, provoked from under the engine.
+test('a Block the relay answers "rate-limited" is asked again and the blocklist lands', { skip: SKIP, timeout: 300000 }, async () => {
+  await waitFor(`window.Steward.relayAuthed() && window.Steward.relaysHealthy()`, 120000, 'logged in and healthy first');
+  await sleep(2500);
+  const k = H.key();
+  await evalIn(`(() => { window.__rlOk = []; window.__floodedId = ''; window.__floodD = 'trinityone/blocked:'; return 1; })()`);
+  const r = await evalIn(`Promise.resolve(window.Steward.setBlocked([${JSON.stringify(k.pub)}])).then(v => v ? 'ok' : String(v), e => 'ERR ' + e.message)`);
+  const id = await evalIn('window.__floodedId');
+  const refused = await evalIn(`window.__rlOk.filter(d => !!window.__floodedId && d.indexOf(window.__floodedId) > 0 && /^\\["OK","[0-9a-f]+",false/.test(d)).length`);
+  assert.ok(id, 'CONTROL: the Block never wrote the blocklist on a socket this page could see — this row proves nothing');
+  assert.ok(refused >= 1, 'CONTROL: the relay did NOT answer the Block "rate-limited" — this row proves nothing');
+  assert.equal(r, 'ok', 'A BLOCK THE RELAY ANSWERED "rate-limited" WAS REPORTED AS NOT SAVED — it was never asked again');
+  const list = held('dtag = ?', 'trinityone/blocked:' + churchA).flatMap(e => { try { return JSON.parse(e.content).pubkeys || []; } catch { return []; } });
+  assert.ok(list.includes(k.pub), 'the relay never stored the blocklist naming them');
 });
