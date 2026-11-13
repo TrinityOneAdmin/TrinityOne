@@ -1429,7 +1429,8 @@ fn scenario_ab_a_start_never_builds_over_held_originals() {
     // audit b4e69a7c L2: an update is waiting for a missed window too — it must NOT be applied while data is held
     build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v4", &sha_of('4'), "2026-10-03T00:00:00Z"));
     write_ready(&fx.staging, "v4", &sha_of('4'), "2026-10-03T00:00:00Z");
-    set_mtime(&fx.staging.join("READY"), now_epoch() - 10 * 3600);
+    // staged 20 h ago: before today's 00:00 window opened (the start is at "14:00"), so it counts as MISSED
+    set_mtime(&fx.staging.join("READY"), now_epoch() - 20 * 3600);
     let rf_before = read_state_field(&fx.suite_dir, "restoreFailed").unwrap_or_default();
     let backups_before = std::fs::read_dir(fx.suite_dir.join("db-backup")).map(|r| r.count()).unwrap_or(0);
     {
