@@ -896,6 +896,8 @@ function suiteUpdateStatus() {
     restoreFailed: typeof st.restoreFailed === 'string' ? st.restoreFailed : '',   // audit 5ad96e13: a rollback that could not put the data back
     recovered: (() => { try { return readFileSync(join(suiteDir, 'recovered.txt'), 'utf8').trim(); } catch { return ''; } })(),   // audit a1cc6eff L2: a restore a crash interrupted was repaired at start-up
     staged: ready && typeof ready === 'object' ? { version: ready.version || '', sha: ready.sha || '', date: ready.date || '' } : null,
+    // the shell holds a staged update back while a restore waits for the relay's next boot (storage fixes audit L-c)
+    heldByRestore: !!ready && existsSync(join(DATA_DIR, '.restore-pending')),
     check: check && typeof check === 'object' ? { at: check.at || '', ok: !!check.ok, reason: check.reason || '' } : null,
     // [audit M6] the quick-tunnel address before the last update vs now (a quick tunnel cannot keep its address
     // across a relay restart); the panel says when it changed.

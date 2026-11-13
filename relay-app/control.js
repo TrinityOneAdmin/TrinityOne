@@ -725,7 +725,8 @@
     }
     if (suite.addressChanged && suite.addressChanged.to) out.push('After the update this relay\u2019s public address changed to ' + suite.addressChanged.to + ' — phones that use your relay\u2019s name follow it; anyone given the old address needs the new one');
     if (suite.enabled) {
-      if (suite.staged && (suite.staged.version || suite.staged.sha)) out.push('Update ' + (suite.staged.version || String(suite.staged.sha).slice(0, 7)) + ' is downloaded and installs ' + win + ' if this computer is on — otherwise the next time the Suite starts');
+      if (suite.staged && (suite.staged.version || suite.staged.sha) && suite.heldByRestore) out.push('Update ' + (suite.staged.version || String(suite.staged.sha).slice(0, 7)) + ' is downloaded but waits: a restore of your church’s data is waiting to be finished first. Fully close and reopen the app to finish the restore');
+      else if (suite.staged && (suite.staged.version || suite.staged.sha)) out.push('Update ' + (suite.staged.version || String(suite.staged.sha).slice(0, 7)) + ' is downloaded and installs ' + win + ' if this computer is on — otherwise the next time the Suite starts');
       else out.push('Checks every hour; installs ' + win);
       if (suite.check && suite.check.reason) {
         const t = new Date(suite.check.at), hm = isNaN(t) ? '' : ' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');

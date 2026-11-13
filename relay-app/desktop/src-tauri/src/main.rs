@@ -1815,9 +1815,13 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     // next boot carries it out. No update before it — not even the snapshot. (A restore staged while the apply runs is
     // caught again at step 4c, once the relay is down.)
     if restore_pending(env.data_dir) {
-        applog(log, "suite: APPLY deferred — a restore of the church's data is waiting; the restore goes first, the update waits");
+        // once, not every minute of the window (fixes audit L-c); the panel says it too (GET /update heldByRestore)
+        if !RESTORE_WAIT_LOGGED.swap(true, Ordering::SeqCst) {
+            applog(log, "suite: APPLY deferred — a restore of the church's data is waiting; the restore goes first, the update waits");
+        }
         return;
     }
+    RESTORE_WAIT_LOGGED.store(false, Ordering::SeqCst);
     let _marker = ApplyMarker::hold(suite_dir, log);
     let staging = suite_dir.join("staging");
     let was_running = st.alive.load(Ordering::SeqCst);
@@ -1931,6 +1935,13 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
             let _ = rename_retry(&a_sig, &staging.join("bundle.sig"), log);
         }
         let _ = std::fs::remove_dir_all(&applying);
+        // On the tick route this restarts the relay now, and its boot carries out the steward's staged restore during
+        // the window, without the app being reopened (stated in the fixes audit NIT; the steward asked for the restore).
+        // The launcher is told this boot carried out a restore (restore_handed_to_boot), which it cannot see itself:
+        // the restore was staged after it last looked.
+        if was_running {
+            RESTORE_HANDED_TO_BOOT.store(true, Ordering::SeqCst);
+        }
         restart_prev(st);
         return;
     }
@@ -2256,6 +2267,8 @@ impl<'s> SuiteHost<'s> {
 }
 
 // A restore the panel staged for the relay's next boot (gateway.mjs applyPendingRestore reads <data>/.restore-pending).
+static RESTORE_WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESTORE_HANDED_TO_BOOT: AtomicBool = AtomicBool::new(false);
 fn restore_pending(data_dir: &Path) -> bool {
     data_dir.join(".restore-pending").exists()
 }
@@ -2440,6 +2453,10 @@ impl<'s> launcher::Host for SuiteHost<'s> {
         }
         let (title, reason) = self.stopped_reason(data_dir);
         launcher::Tick::Stopped { title, reason }
+    }
+
+    fn restore_handed_to_boot(&self) -> bool {
+        RESTORE_HANDED_TO_BOOT.swap(false, Ordering::SeqCst)
     }
 
     fn move_blocked(&self, data_dir: &Path) -> Option<String> {

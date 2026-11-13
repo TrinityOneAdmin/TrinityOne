@@ -225,3 +225,14 @@ test('[audit a1cc6eff L3] a stuck update says so', () => {
   wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: false, lastOutcome: 'stuck', lastReason: 'it could not be stopped — Restart this computer' });
   assert.match(els.suiteAutoStatus.textContent, /could not be stopped.*Restart this computer/);
 });
+
+// Storage fixes audit L-c: an update held back by a waiting restore says so (and does not promise the window).
+test('status line says when a staged update is held back by a restore that is waiting', () => {
+  const { doc, els } = fakeDom();
+  wireSuiteAutoUpdate(doc, okFetch(), noAuth, { enabled: true, at: '03:00', windowEnd: '05:00', staged: { version: '1.2.4' }, heldByRestore: true });
+  assert.match(els.suiteAutoStatus.textContent, /1\.2\.4.*waits: a restore.*close and reopen/i);
+  assert.doesNotMatch(els.suiteAutoStatus.textContent, /installs between/, 'it must not promise the window while it waits');
+  const { doc: d2, els: e2 } = fakeDom();
+  wireSuiteAutoUpdate(d2, okFetch(), noAuth, { enabled: true, at: '03:00', windowEnd: '05:00', staged: { version: '1.2.4' }, heldByRestore: false });
+  assert.doesNotMatch(e2.suiteAutoStatus.textContent, /waits: a restore/);
+});

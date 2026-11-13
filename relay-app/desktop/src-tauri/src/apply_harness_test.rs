@@ -2357,8 +2357,10 @@ fn assert_good_release(fx: &Fixture, tag: &str, c: &[String]) {
 const RESTORE_ON_BOOT: &str = "{ const fs = await import('node:fs'); const dd = process.env.TRINITY_DATA_DIR; if (fs.existsSync(dd + '/.restore-pending')) { fs.writeFileSync(dd + '/relay-key.json', JSON.stringify({sk:'s',pub:'K2'})); fs.writeFileSync(dd + '/relay.sqlite', 'RESTORED-STORE'); fs.rmSync(dd + '/.restore-pending', {recursive:true, force:true}); } }";
 const K2: &str = "{\"ok\":true,\"relayPub\":\"K2\"}";
 
-// H-1 route 1: a moved box (storage.json records relayPub "aa") restored another relay's backup (its folder now holds
-// K2, and the relay proves K2). Every later update must still be judged a GOOD one, and storage.json adopts K2.
+// H-1 route 1: a moved box (storage.json records relayPub "aa") restores another relay's backup: the restore is staged
+// and the next boot carries it out (its folder then holds K2, and the relay proves K2). The launcher SAW the restore
+// (staged before the boot, gone after), so storage.json adopts K2; every later update is judged a GOOD one; and after
+// the in-session update the warning does not come back (the expected key is read again: fixes audit NIT).
 #[test]
 fn h1_a_moved_box_that_restored_another_relays_backup_still_takes_good_updates() {
     let _port = port_lock();
@@ -2366,7 +2368,8 @@ fn h1_a_moved_box_that_restored_another_relays_backup_still_takes_good_updates()
     small_boot_timing();
     let (fx, c) = fresh_case(&FreshCase {
         tag: "h1moved",
-        disk_key: "K2",
+        restore_pending: true,
+        payload_prelude: RESTORE_ON_BOOT,
         config: "{\"dataDir\":NEWDIR,\"relayPub\":\"aa\",\"move\":{\"state\":\"done\"}}",
         proofs: vec![K2, K2],
         ..FreshCase::default()
@@ -2374,6 +2377,7 @@ fn h1_a_moved_box_that_restored_another_relays_backup_still_takes_good_updates()
     assert_good_release(&fx, "h1moved", &c);
     let st = std::fs::read_to_string(fx._root.0.join("cfg").join("storage.json")).unwrap();
     assert_eq!(json_str_value(&st, "relayPub").as_deref(), Some("K2"), "storage.json must adopt the restored key: {st}");
+    assert!(!st.contains("identityChanged"), "after the update the warning came back: {st}");
 }
 
 // H-1 route 2: a restore was staged and the app reopened while an update waits with its window open. The restore must
@@ -2401,16 +2405,24 @@ fn h1_a_staged_restore_goes_before_a_waiting_update_and_the_update_is_not_reject
     assert!(!fx.data_dir.join(".restore-pending").exists());
 }
 
-// The key file and the key the relay signs with change TOGETHER under a fresh update (here the update's own boot
-// rewrites the key file): the relay signs with the key on disk, so it is not a failed update.
+// Fixes audit M-A: an update whose OWN boot rewrites the key file (no restore was staged) and signs with the new key
+// is a FAILED update — gateway.mjs re-mints a key file its reader cannot parse, which would re-key the box. Before
+// 90ab43a6 this test asserted the opposite. (A key change carried out by a staged restore during a boot is NOT a
+// failure: launcher test an_update_that_rekeys_the_folder_is_rejected_but_a_restore_the_boot_carried_out_is_not; in
+// the app an update never boots with a restore staged, see the route-2 test.)
 #[test]
-fn a_fresh_update_whose_key_file_and_proof_change_together_is_not_rejected() {
+fn a_fresh_update_whose_own_boot_rekeys_the_folder_is_rejected() {
     let _port = port_lock();
     assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
     small_boot_timing();
     let rekey = "{ const fs = await import('node:fs'); fs.writeFileSync(process.env.TRINITY_DATA_DIR + '/relay-key.json', JSON.stringify({sk:'s',pub:'K3'})); }";
-    let (fx, c) = fresh_case(&FreshCase { tag: "together", bundle_prelude: rekey, proofs: vec![AA, "{\"ok\":true,\"relayPub\":\"K3\"}"], ..FreshCase::default() });
-    assert_good_release(&fx, "together", &c);
+    let (fx, c) = fresh_case(&FreshCase { tag: "rekey", bundle_prelude: rekey, proofs: vec![AA, "{\"ok\":true,\"relayPub\":\"K3\"}", AA], ..FreshCase::default() });
+    let starts: Vec<&String> = c.iter().filter(|x| x.starts_with("START ")).collect();
+    assert!(starts.len() >= 3 && starts[1].ends_with("suite/active") && starts[2].ends_with("payload"), "the re-keying update was kept: {c:?}");
+    assert_eq!(std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default().trim(), SHA2, "the re-keying release must be quarantined: {c:?}");
+    assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("rolledback"));
+    let st = std::fs::read_to_string(fx._root.0.join("cfg").join("storage.json")).unwrap();
+    assert_eq!(json_str_value(&st, "relayPub").as_deref(), Some("aa"), "the minted key must never be adopted: {st}");
 }
 
 // M-2: the LAUNCH-time route of decision (a). An update whose window this computer missed is applied before the first
@@ -2430,7 +2442,8 @@ fn a_launch_time_update_whose_relay_fails_the_identity_proof_is_rolled_back() {
 }
 
 // Fixes audit M-1, in the real glue: a fresh update whose relay does not answer the first proof (and whose mover
-// output once cannot be read) and then proves its folder's key is kept.
+// output once cannot be read) and then proves its folder's key is kept. The proof is RETRIED: exactly four proofs —
+// the first start's, two inconclusive, the good one (fixes audit L-b: without the retry there would be two).
 #[test]
 fn a_fresh_update_survives_a_proof_that_fails_once_for_no_reason_in_the_code() {
     let _port = port_lock();
@@ -2438,6 +2451,55 @@ fn a_fresh_update_survives_a_proof_that_fails_once_for_no_reason_in_the_code() {
     small_boot_timing();
     let (fx, c) = fresh_case(&FreshCase { tag: "transient", proofs: vec![AA, "{\"ok\":false,\"code\":\"unreachable\"}", "not json", AA], ..FreshCase::default() });
     assert_good_release(&fx, "transient", &c);
+    assert_eq!(c.iter().filter(|x| *x == "prove").count(), 4, "the fresh update's proof was not retried: {c:?}");
+}
+
+// Fixes audit NIT: step 4c. A restore is staged in the moment between the apply's first check and its stop (here the
+// relay stages it while closing its tunnel for the update). Once the relay is down the apply finds it: no backup, no
+// swap, the bundle goes back, and the current code restarts and carries the restore out. The launcher is told that
+// boot carried out a restore, so a moved box adopts the restored key.
+#[test]
+fn a_restore_staged_while_the_apply_stops_the_relay_goes_first() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use (NOT a code failure)");
+    small_boot_timing();
+    let at = "try { writeFileSync(process.env.TRINITY_DATA_DIR + '/prepared-by-' + LABEL, '1'); } catch {}";
+    let stage = format!("{at} try {{ (await import('node:fs')).mkdirSync(process.env.TRINITY_DATA_DIR + '/.restore-pending', {{recursive:true}}); }} catch {{}}");
+    let mut gw = gateway_src_ex("v1", false, RESTORE_ON_BOOT);
+    assert_eq!(gw.matches(at).count(), 1);
+    // the handler is not async: stage the restore synchronously
+    gw = gw.replace(at, &stage.replace("(await import('node:fs')).mkdirSync", "mkdirSyncX"));
+    gw = gw.replacen("import http from 'node:http';", "import http from 'node:http';\nimport {mkdirSync as mkdirSyncX} from 'node:fs';", 1);
+    let fx = fresh_box("r4c", "2026-01-01T00:00:00Z");
+    write(&fx.data_dir.join("relay.sqlite"), "STORE");
+    write(&fx.data_dir.join("relay-key.json"), &key_json("aa"));
+    write(&fx.payload.join("scripts").join("gateway.mjs"), &gw);
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+    let config_file = fx._root.0.join("cfg").join("storage.json");
+    write(&config_file, &format!("{{\"dataDir\":{},\"relayPub\":\"aa\",\"move\":{{\"state\":\"done\"}}}}", jstr(&fx.data_dir.to_string_lossy())));
+    let minute = Arc::new(std::sync::atomic::AtomicU32::new(OUT_OF_WINDOW));
+    let m2 = minute.clone();
+    // open 1: the window opens; the tick's apply hits 4c; open 2 is the restarted (restored) relay
+    let shell = TestShell::new(fx.node.clone(), fx.data_dir.clone(), 2, Box::new(move |n| if n == 1 { m2.store(IN_WINDOW, Ordering::SeqCst) }));
+    script(&shell, &[("prove", AA), ("prove", K2)]);
+    let host = suite_host(&shell, &fx, &config_file, minute);
+    let end = launcher::run(&host, &launcher_cfg(&config_file, &fx.data_dir, &fx._root.0.join("l.log")));
+    let c = shell.calls();
+    assert_eq!(end, launcher::RunEnd::Quit, "{c:?}");
+    drop(shell);
+    assert!(wait_port_free(Duration::from_secs(10)));
+    assert!(fx.data_dir.join("prepared-by-v1").exists(), "fixture: the apply never reached its stop: {c:?}");
+    assert!(!fx.suite_dir.join("db-backup").exists(), "the apply backed up the store under a waiting restore: {c:?}");
+    assert!(!fx.suite_dir.join("active").exists(), "the apply swapped the code under a waiting restore: {c:?}");
+    assert!(fx.staging.join("bundle.tgz").exists() && fx.staging.join("READY").exists(), "the bundle must wait for a later window");
+    assert!(read_state_field(&fx.suite_dir, "lastApplied").is_none(), "the window must not be used up");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "RESTORED-STORE", "the restore was not carried out");
+    assert!(!fx.data_dir.join(".restore-pending").exists());
+    let starts: Vec<&String> = c.iter().filter(|x| x.starts_with("START ")).collect();
+    assert!(starts.len() == 2 && starts[1].ends_with("payload"), "the current code must be restarted: {c:?}");
+    let st = std::fs::read_to_string(&config_file).unwrap();
+    assert_eq!(json_str_value(&st, "relayPub").as_deref(), Some("K2"), "the restore the restart carried out must be adopted: {st}");
 }
 
 // LOW-3: only a TRANSITION to applied… is a fresh update; another rewrite of state.json is not.
