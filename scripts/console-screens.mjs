@@ -120,7 +120,15 @@ export function fakeBrowser({ Steward = fakeSteward(), TrinityBackup = {} } = {}
     Steward, TrinityBackup, localStorage, sessionStorage: localStorage, document, location,
     isSecureContext: true, innerWidth: 390, innerHeight: 800, devicePixelRatio: 2,
     addEventListener: on(listeners.window), removeEventListener: off(listeners.window), dispatch: fire(listeners.window), dispatchEvent() { return true; },
-    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }),
+    // A WIDTH query is answered against innerWidth, as a browser answers it against the screen: useStewNarrow
+    // asks `(min-width: 760px)` since 2026-11-13, and a harness that said "no" to every query put the whole
+    // console in its phone layout whatever width a test set. Every other query (hover, standalone, motion)
+    // still answers false, as it always has.
+    matchMedia: (q) => {
+      const m = /\((min|max)-width:\s*([\d.]+)px\)/.exec(String(q || ''));
+      const w = window.innerWidth;
+      return { matches: m ? (m[1] === 'min' ? w >= Number(m[2]) : w <= Number(m[2])) : false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} };
+    },
     setTimeout: (f, ms, ...a) => unref(setTimeout(f, ms, ...a)), clearTimeout, setInterval: (f, ms, ...a) => unref(setInterval(f, ms, ...a)), clearInterval,
     requestAnimationFrame: (f) => unref(setTimeout(f, 0)), cancelAnimationFrame: clearTimeout, queueMicrotask,
     navigator: { userAgent: 'node', clipboard: { writeText: async () => {} }, share: undefined, onLine: true, language: 'en-GB', languages: ['en-GB'] },

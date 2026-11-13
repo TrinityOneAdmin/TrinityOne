@@ -2497,9 +2497,8 @@ function StewDashboard({ initial = 'overview' }) {
   const [renaming, setRenaming] = React.useState(false);   // styled rename dialog (replaces window.prompt)
   const editName = () => setRenaming(true);
   // responsive: a phone/narrow window collapses the desktop sidebar into a top header + scrollable nav
-  const [vw, setVw] = React.useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
-  React.useEffect(() => { const f = () => setVw(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
-  const narrow = vw < 760;
+  // The same detector as every card below (useStewNarrow), NOT window.innerWidth: see the note on it.
+  const narrow = useStewNarrow();
 
   // DM conversations — lifted here so the badge and dropdown are visible on every tab, not only Members.
   const [dmConvos, setDmConvos] = React.useState([]);
@@ -2727,8 +2726,13 @@ function StewDashboard({ initial = 'overview' }) {
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {/* topbar */}
           <div style={{ height: 64, flexShrink: 0, borderBottom: '1px solid var(--line)', background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', display: 'flex', alignItems: 'center', padding: '0 28px', gap: 16 }}>
-            <div><h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20, margin: 0 }}>{(nav.find(n => n.key === tab) || {}).label || ''}</h1></div>
-            {church.isNetwork ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '5px 11px' }}><Icon name="globe" size={13} color="var(--clay)" /> Network view · {churchName}</span> : null}
+            {/* THE TITLE AND THE NETWORK BADGE GIVE WAY, THE BUTTONS DO NOT (2026-11-13). The buttons need ~390px
+                and this bar gets 457px at the narrowest desktop window (760, less the 232px sidebar, the 28px
+                padding each side and a 15px scrollbar). With the title fixed at its text width the bar
+                was 764-775px wide there (by tab: Members, Overview, Resources) and the page scrolled sideways.
+                minWidth 0 lets the title and badge shrink and ellipsise; the buttons keep their size. */}
+            <div style={{ minWidth: 0, flexShrink: 1 }}><h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(nav.find(n => n.key === tab) || {}).label || ''}</h1></div>
+            {church.isNetwork ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, letterSpacing: '.3px', color: 'var(--clay-ink)', background: 'var(--clay-soft)', borderRadius: 999, padding: '5px 11px', minWidth: 0, flexShrink: 1, overflow: 'hidden', whiteSpace: 'nowrap' }}><Icon name="globe" size={13} color="var(--clay)" /> <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>Network view · {churchName}</span></span> : null}
             <div style={{ flex: 1 }} />
             {actions}
           </div>
@@ -3666,9 +3670,45 @@ function PushEnabler() {
 }
 
 // shared responsive flag for the dashboard cards (phone/narrow window)
+//
+// IT ASKS THE MEDIA QUERY, NEVER window.innerWidth (2026-11-13). innerWidth is the width of the page as
+// Chrome has LAID IT OUT, and on a phone that is not the screen: when anything overflows, mobile Chrome
+// zooms out until it fits and innerWidth grows to match. The desktop header (with its Messages button,
+// 8fe85f1d) is 764px wide, so a console shrunk from 1280 to 360 (a tablet or large phone rotated from
+// landscape to portrait) read innerWidth 764, stayed in the desktop layout, and kept the header that was
+// causing the overflow: stuck for good, the join card's name column squeezed to 0px. A media query is
+// measured against the screen's own width (the initial containing block, 360 here), whatever the content
+// does, and on a desktop browser it counts the scrollbar exactly as innerWidth did, so no wide-window
+// breakpoint moves. Fallback without matchMedia: documentElement.clientWidth (same 360). Re-read on the
+// query's own change event AND on resize/orientationchange, so a rotation is caught whichever fires.
+//
+// ONE function, no helper beside it: several test files lift this hook BY ITSELF out of this file (and
+// find it by its declaration, so do not quote that declaration in a comment above it) and run it against a
+// stand-in window that has only innerWidth, which is why the last fallback is innerWidth and why the
+// reading lives inside the hook.
 function useStewNarrow(bp = 760) {
-  const [n, setN] = React.useState(typeof window !== 'undefined' ? window.innerWidth < bp : false);
-  React.useEffect(() => { const f = () => setN(window.innerWidth < bp); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
+  const query = '(min-width: ' + bp + 'px)';
+  const read = () => {
+    if (typeof window === 'undefined') return false;
+    try { if (window.matchMedia) return !window.matchMedia(query).matches; } catch (e) {}
+    const de = window.document && window.document.documentElement;
+    const w = (de && de.clientWidth) || window.innerWidth || 0;
+    return w > 0 && w < bp;
+  };
+  const [n, setN] = React.useState(read);   // lazy: read once, on mount
+  React.useEffect(() => {
+    const f = () => setN(read());
+    let mq = null;
+    try { mq = window.matchMedia ? window.matchMedia(query) : null; } catch (e) {}
+    if (mq) { if (mq.addEventListener) mq.addEventListener('change', f); else if (mq.addListener) mq.addListener(f); }
+    window.addEventListener('resize', f);
+    window.addEventListener('orientationchange', f);
+    return () => {
+      if (mq) { if (mq.removeEventListener) mq.removeEventListener('change', f); else if (mq.removeListener) mq.removeListener(f); }
+      window.removeEventListener('resize', f);
+      window.removeEventListener('orientationchange', f);
+    };
+  }, [bp]);
   return n;
 }
 
@@ -8724,9 +8764,10 @@ function DashMembers({ dmConvos: dmConvosProp }) {
   // the chat icon (screenshots, 2026-10-14). The narrow branch does not draw that column at all — it folds
   // private messages into a collapsible strip above the list — so the defect is unreachable, not patched.
   //
-  // `useStewNarrow` has NINE callers: IdentitySwitcher (:154), StatCard (:3173), Panel (:3206),
-  // DashOverview, DashDevotionals, BulkUploadModal, THIS one, DashCheckin, DashSettings. Only this one
-  // passes an argument; the other eight keep the 760 default, so nothing else on the console changes shape.
+  // `useStewNarrow` is called 18 times in 15 components (counted 2026-11-13): StewDashboard, IdentitySwitcher,
+  // StatCard, Panel, DashOverview (x3: 760, 1000, 850), DashGroups, DashDevotionals, BulkUploadModal, THIS one
+  // (x2: 1366 here, 760 for the join card), DashCheckin, DashSettings, and in the sibling files DashRota,
+  // DashCalendar, FinTabStrip, MealsNeedDetail. The 1366 here does not change any other caller's shape.
   // Panel is the one that nests: at 1280 its header keeps the desktop arrangement while the list below is
   // the phone card. That is the header pill's position only, and it is correct for a wide window.
   const narrow = useStewNarrow(1366);                       // the phone's one-row member card (memberRow) + its ⋯ sheet

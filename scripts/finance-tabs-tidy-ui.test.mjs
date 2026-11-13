@@ -27,8 +27,9 @@ const MORE = ['Invoices', 'Bills', 'Accounts & funds', 'Budget', 'Donors', 'Insi
 function strip({ tab = 'transactions', moreOpen = false, width = 500 } = {}) {
   const fr = fakeReact();
   const { window } = fakeBrowser({ Steward: fakeSteward({ actingChurch: '' }) });
-  // useStewNarrow() reads window.innerWidth: <760 = narrow (2+More), >=760 = all tabs inline (desktop). The
-  // default here is a NARROW width so the collapse tests assert the phone layout explicitly.
+  // useStewNarrow() asks matchMedia('(min-width: 760px)'), which fakeBrowser answers against window.innerWidth:
+  // <760 = narrow (2+More), >=760 = all tabs inline (desktop). The default here is a NARROW width so the
+  // collapse tests assert the phone layout explicitly.
   window.innerWidth = width;
   window.FinanceLedger = FL;
   const { FinTabStrip } = loadConsole({ React: fr.React, window, expr: '{ FinTabStrip }' });
@@ -81,7 +82,8 @@ test('the More popover is NOT a dialog (stays off every-console-dialog-mounts)',
 });
 
 // ── DESKTOP / wide (owner device-test, 2026-11-02): >=760 shows ALL tabs inline, NO "More" button ───────────
-// useStewNarrow() is <760, so 500 is narrow (2+More, above) and 760/1200 are desktop (all inline). These fail
+// useStewNarrow() is true below a 760px screen (matchMedia, answered against innerWidth by fakeBrowser), so 500
+// is narrow (2+More, above) and 760/1200 are desktop (all inline). These fail
 // if the desktop branch is removed and the strip collapses on desktop again.
 test('DESKTOP (1200): all eight tabs are top-level pills and there is NO More button', () => {
   const { tree } = strip({ tab: 'transactions', moreOpen: false, width: 1200 });
