@@ -217,12 +217,21 @@ ok "dependencies ready"
 # mkdir -p would plant the folder under the mount point on the root disk, write origin/code-source/church.json into it, and
 # hide it when the drive returns. The folder the move helper makes is <mountpoint>/trinityone-relay, so its drive must be
 # mounted (mountpoint -q) and the folder present. <<check-data-folder>>
+is_mounted() {   # is_mounted <path>: mountpoint(1), else findmnt(8), else /proc/mounts -- a missing tool is not "not mounted"
+  local m="$1"
+  if command -v mountpoint >/dev/null 2>&1; then mountpoint -q "$m" 2>/dev/null; return; fi
+  if command -v findmnt >/dev/null 2>&1; then findmnt -rn -M "$m" >/dev/null 2>&1; return; fi
+  awk -v m="$m" '$2 == m { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
+}
 check_data_folder_present() {
   [ "$HAD_ENV" = 1 ] || return 0
+  # Only a folder that could be hiding on the wrong disk is checked: a PINNED one, or one that is not the default $DIR/relay.
+  # An unpinned relay.env naming $DIR/relay (a reinstall after the install dir was removed) is an ordinary fresh start.
+  if [ "$ENV_PINNED" != 1 ] && [ "$DATA" = "$DIR/relay" ]; then return 0; fi
   if [ ! -d "$DATA" ]; then die "this relay's data folder $DATA is missing -- is its drive connected? Nothing was changed. Reconnect it and run this installer again."; fi
   case "$DATA" in
     */trinityone-relay)
-      if ! mountpoint -q "$(dirname "$DATA")" 2>/dev/null; then die "the drive that holds this relay's data ($(dirname "$DATA")) is not mounted, so $DATA would be on the wrong disk. Nothing was changed. Mount it and run this installer again."; fi;;
+      if [ "$DATA" != "$DIR/relay" ] && ! is_mounted "$(dirname "$DATA")"; then die "the drive that holds this relay's data ($(dirname "$DATA")) is not mounted, so $DATA would be on the wrong disk. Nothing was changed. Mount it and run this installer again."; fi;;
   esac
   return 0
 }
@@ -302,6 +311,7 @@ say "Installing the self-update trigger"
 cat > "/etc/systemd/system/trinityone-update.service" <<UNIT
 [Unit]
 Description=TrinityOne relay self-update
+After=trinityone-move-recover.service
 [Service]
 Type=oneshot
 Environment=TRINITYONE_DIR=$DIR TRINITYONE_SVC=$SVC TRINITYONE_PORT=$PORT TRINITYONE_USER=$SVC_USER
@@ -329,6 +339,7 @@ if [ "$STORAGE" = 1 ]; then
   cat > "/etc/systemd/system/trinityone-move.service" <<UNIT
 [Unit]
 Description=TrinityOne relay data move (root helper)
+After=trinityone-move-recover.service
 [Service]
 Type=oneshot
 TimeoutStartSec=infinity
@@ -348,7 +359,9 @@ UNIT
   # Boot recovery (audit C M1). Before the relay starts: finish or undo a move that was interrupted (a helper killed mid-copy
   # would otherwise leave the card "under way" for ever; a crash between the switch and relay.env would leave the old folder
   # marked MOVED-TO and the relay refusing it). It never starts or stops the relay. After the relay is up: finish the check
-  # recovery left. Neither blocks the relay if it fails.
+  # recovery left. The finish unit REQUIRES the relay to be up (Requisite=, not Wants=: an admin who disabled the relay must not
+  # have it started at boot by this) and is bounded. Neither blocks the relay if it fails. The move and update units are ordered
+  # After= the recover unit, so a request left from before shutdown cannot take the lock first (audit N2).
   cat > "/etc/systemd/system/trinityone-move-recover.service" <<UNIT
 [Unit]
 Description=TrinityOne relay data move: recover an interrupted move before the relay starts
@@ -366,11 +379,11 @@ UNIT
 [Unit]
 Description=TrinityOne relay data move: finish the check of a recovered move
 After=$SVC.service
-Wants=$SVC.service
+Requisite=$SVC.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-TimeoutStartSec=infinity
+TimeoutStartSec=900
 Environment=TRINITYONE_DIR=$DIR TRINITYONE_SVC=$SVC TRINITYONE_PORT=$PORT TRINITYONE_USER=$SVC_USER TRINITYONE_NODE=$NODE_BIN
 ExecStart=/bin/bash $DIR/scripts/relay-move.sh --finish-check
 [Install]
