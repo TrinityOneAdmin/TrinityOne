@@ -32,6 +32,9 @@
   .exits { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
   .exits a { display: inline-block; text-decoration: none; font-weight: 700; font-size: 13px; padding: 9px 14px; border-radius: 10px; color: #fff; background: var(--clay); transition: opacity .3s; }
   .exits a[aria-disabled="true"] { opacity: .45; }
+  .bad .halo { animation: none; border-color: var(--clay); }
+  .bad .hint, .bad .exits { display: none; }
+  .note .halo { animation: none; border-color: var(--accent); }
   :focus-visible, a:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
 </style>
 </head>
@@ -60,6 +63,24 @@
     // launcher as soon as the relay is listening (main.rs), whether or not this script ever sees it answer.
     setTimeout(function () { var s = document.getElementById('slow'); if (s) s.classList.add('show'); }, 6000);
 
+    // WHAT THE SHELL TELLS THIS PAGE (relay-app/desktop/launcher, splash_fragment): while it moves the relay's data,
+    // checks the copy, or REFUSES to start the relay, it sets the address fragment  #t=<title>&s=<text>&k=<busy|note|bad>
+    // and this page shows it — instead of the broken page the window used to open when the relay would not start.
+    // With a message showing, the "relay is running" probe below is switched off: the relay is not what answers.
+    window.__splashLocked = false;
+    function applyHash() {
+      var h = location.hash.replace(/^#/, ''); if (!h) return;
+      var p = {}; h.split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) { try { p[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); } catch (e) {} } });
+      if (!p.t) return;
+      window.__splashLocked = true;
+      var card = document.getElementById('card'); card.classList.remove('up', 'bad', 'note');
+      if (p.k === 'bad' || p.k === 'note') card.classList.add(p.k);
+      document.getElementById('title').textContent = p.t;
+      document.getElementById('sub').textContent = p.s || '';
+      var sl = document.getElementById('slow'); if (sl) sl.style.display = 'none';
+    }
+    applyHash(); window.addEventListener('hashchange', applyHash);
+
     // THE RELAY'S ADDRESS. The shell starts the gateway on a fixed port (main.rs: `const PORT: u16 = 8787`) and
     // reaches it by 127.0.0.1, not localhost — on Windows localhost can resolve to ::1 while the relay listens on
     // IPv4. The shell passes no query string; `?relay=` exists so the headless browser test can point this page
@@ -73,7 +94,7 @@
       var hint = document.getElementById('hint');
       var answered = false;
       function up() {
-        if (answered) return; answered = true;
+        if (answered || window.__splashLocked) return; answered = true;
         [panel, console_].forEach(function (a) { if (a) a.setAttribute('aria-disabled', 'false'); });
         document.getElementById('card').classList.add('up');
         var t = document.getElementById('title'); if (t) t.textContent = 'Your relay is running';
@@ -85,6 +106,7 @@
       // changes nothing: the links above work without it.
       function tick() {
         if (answered) return;
+        if (window.__splashLocked) { setTimeout(tick, 1000); return; }
         var done = false;
         try {
           fetch(base + '/status', { cache: 'no-store' }).then(function (r) { if (r && r.ok) { done = true; up(); } }).catch(function () {}).then(function () { if (!done) setTimeout(tick, 1000); });

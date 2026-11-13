@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2" }
 tauri-plugin-shell = "2"
+trinityone-launcher = { path = "../launcher" }
 
 [profile.release]
 strip = true

@@ -1861,6 +1861,11 @@
       case 'move-in-progress': case 'move-already-requested': return 'A move is already under way.';
       case 'source-has-symlink': return 'This folder links to somewhere else, so it can\'t be moved safely.';
       case 'drives-unknown': return 'Couldn\'t list this computer\'s drives. Try again in a moment.';
+      case 'node-too-old': return 'This relay\'s Node is too old to move data. Update Node (22.13 or newer) on the relay\'s computer first.';
+      case 'update-in-progress': return 'An update is running. Try again when it has finished.';
+      case 'suite-update-applying': return 'The app is installing an update. Try again when it has finished.';
+      case 'suite-update-due': return 'An update is about to be installed. Try again in a couple of hours, or after it has been installed.';
+      case 'suite-data-held-aside': return 'Your church\'s data needs attention after an update. Restart this computer first, then move.';
       case 'storage-state-unknown': case 'storage-state-unreadable': return 'This relay can\'t move its data. Reinstall the app, or ask for help.';
       case 'no-permissions-not-acknowledged': return 'Tick the box to say you understand this drive has no file permissions.';
       case 'removable-not-acknowledged': return 'Tick the box to say you understand this drive can wear out and fail.';
@@ -1947,6 +1952,9 @@
   function stRecent(m) { const t = Date.parse(m.endedAt || m.checkedAt || m.switchedAt || m.startedAt || 0); return t && Date.now() - t < ST_RECENT_MS; }
   function stOutcome(r) {
     const m = r.move; if (!m) return '';
+    // a removal that stopped part-way is the news now: an old failed move's "nothing was changed" would contradict it (audit L-3)
+    const lr = r.launcher && r.launcher.lastRefusal;
+    if (lr && lr.kind === 'remove-old' && /^(delete-failed|read-failed)/.test(lr.code || '') && (m.state === 'failed' || m.state === 'rolled-back')) return '';
     const events = m.counts && typeof m.counts.events === 'number' ? ' Same relay, same records — ' + m.counts.events.toLocaleString('en-GB') + ' events checked.' : ' Same relay, same records.';
     const here = stPlace(r, r.current.realPath || r.current.path, r.current.drive && r.current.drive.mountpoint);
     const onHere = here.kind === 'home' ? 'in your Home folder' : 'on ' + esc(here.label);
@@ -1966,6 +1974,25 @@
     }
     return '';
   }
+  // What the Suite launcher recorded about itself (storage plan step 5; storage.json `launcher`, served as GET /storage
+  // `launcher`): a move or removal it REFUSED (a refused move never reaches the move journal, so nothing else shows it),
+  // and a relay whose proven identity key is not the one recorded. Own ids, so #stResult stays the move outcome's.
+  function stLauncherNote(r) {
+    const l = r.launcher; if (!l) return '';
+    const note = (id, html) => '<div class="st-result bad" id="' + id + '">' + ST_BAD_SVG + '<span>' + html + '</span></div>';
+    let h = '';
+    const f = l.lastRefusal;
+    if (f && f.kind === 'move') {
+      const why = f.code === 'target-ineligible' && f.detail ? String(f.detail).split(',')[0] : f.code;
+      h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>The move was refused, so nothing was changed.</b> ' + esc(stReason(why))) + '</div>';
+    } else if (f && f.kind === 'remove-old') {
+      h += '<div style="margin-top:12px">' + note('stLauncherRefusal', '<b>' + (/^(delete-failed|read-failed)/.test(f.code || '') ? 'The old copy was only partly removed.' : 'The old copy was not removed.') + '</b> ' + esc(f.code === 'not-recorded' ? 'It is not on record as an old copy, so it was left alone.' : f.code === 'current-folder' ? 'It is the folder your relay is using now, so it was left alone.' : /^(delete-failed|read-failed)/.test(f.code || '') ? 'The removal stopped part-way — see the log. Some of the old copy may be left; try again.' : 'It was left alone (' + f.code + ').')) + '</div>';
+    }
+    // two different things, worded differently (audit C L1): the relay answered with ANOTHER key, or it could not be made to prove one at all
+    if (l.identityChanged && l.identityChanged.provenPub === null) h += '<div style="margin-top:12px">' + note('stIdentityChanged', '<b>This relay couldn\'t prove who it is.</b><span class="st-sub">It didn\'t answer the identity check, so it can\'t be confirmed as the relay it was before. Close and reopen the app. If this stays, check which drive is connected.</span>') + '</div>';
+    else if (l.identityChanged) h += '<div style="margin-top:12px">' + note('stIdentityChanged', '<b>This relay is not the one it was before.</b><span class="st-sub">It proves a different identity key than the one recorded for it. If you restored another relay\'s backup, that is expected. If not, close the app and check which drive is connected.</span>') + '</div>';
+    return h;
+  }
   function stOldCopy(r) {
     const o = r.oldCopy; if (!o) return '';
     const place = stPlace(r, o.path, o.mountpoint);
@@ -1982,11 +2009,19 @@
     else act = stState.removeArmed === o.path ? '<button type="button" class="btn btn-danger" id="stRemoveOld">Remove the old copy?</button>' : '<button type="button" class="btn btn-ghost btn-caution" id="stRemoveOld">' + ST_TRASH_SVG + 'Remove old copy</button>';
     h += '<div class="st-old"><div class="txt">' + txt + '</div>' + act + '</div>';
     if (stState.removeArmed === o.path) h += '<div class="st-msg err-text">This can\'t be undone. Click again to remove it, or click anywhere else to keep it.</div>';
-    return h;
+    return h + stRemoveNote(r);
+  }
+  // a Remove the helper stopped or refused (move.refusal, code remove-*). "delete-failed" means the delete began and stopped
+  // part-way, so the folder is NOT untouched (audit N8); the other codes were refused before anything was deleted.
+  function stRemoveNote(r) {
+    const f = r && r.move && r.move.refusal; if (!f || !/^remove-/.test(String(f.code || ''))) return '';
+    if (f.code === 'remove-delete-failed') return '<div class="st-msg err-text"><b>Removing it stopped part-way.</b> Some of the old copy may already be gone. See the log (move.log in the relay\'s state folder) for what is left.</div>';
+    return '<div class="st-msg err-text">It couldn\'t be removed, and was left alone (' + esc(String(f.code).slice(7)) + ').</div>';
   }
   function stLeftovers(r) {
     const pend = r.requests && r.requests.removeOld && r.requests.removeOld.path;
-    return (r.leftovers || []).filter(l => l.exists).map(l => {
+    const note = r.oldCopy ? '' : stRemoveNote(r);   // with an old copy on the card, stOldCopy shows it
+    return note + (r.leftovers || []).filter(l => l.exists).map(l => {
       const place = stPlace(r, l.path, null);
       const when = l.since ? ' on ' + new Date(l.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
       const txt = l.kind === 'set-aside'
@@ -2022,7 +2057,7 @@
       body = stProgress(r.move); if (desc) desc.textContent = 'Moving';
     } else {
       if (desc) desc.textContent = '';
-      body = stOutcome(r) + stOldCopy(r);
+      body = stOutcome(r) + stOldCopy(r) + stLauncherNote(r);
       if (r.mode === 'suite' && !r.local) body += stResult('info', '<b>Change this on the relay\'s own computer.</b><span class="st-sub">You can see where the data is from here, but moving it only works in the TrinityOne Suite window on that computer.</span>');
       else if (!(r.move && r.move.state === 'awaiting-confirm')) body += (body ? '<div style="margin-top:12px">' : '<div>') + stMoveControls(r) + '</div>';
       body += stLeftovers(r);
