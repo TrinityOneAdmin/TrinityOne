@@ -13199,7 +13199,15 @@ function DashBrandingPanel({ church }) {
     if (/^#[0-9a-fA-F]{6}$/.test(s)) onMain(s.toLowerCase());
   };
   const onMainHexBlur = () => { if (!/^#[0-9a-fA-F]{6}$/.test(mainHex)) setMainHex(mainCol ? mainCol.toUpperCase() : ''); };
-  const mainShown = mainCol || acc;   // what the preview and the picker tile show: main, else the accent
+  // TWO VALUES, KEPT APART (owner device test 2026-11-13). The Main colour CONTROL (tile, picker, hex placeholder)
+  // shows the main colour, else its OWN fixed default — never the accent. It used to fall back to the accent, so
+  // with no main colour saved, picking an accent visibly changed Main too and Reset on either looked like it reset
+  // both; and the picker opened on the accent, so a phone's picker confirming its starting value would have saved
+  // the accent INTO mainColor. Only the live PREVIEW below still falls back to the accent, because that is what
+  // members' phones paint when no main colour is set (ChurchBadge / the church header, app/screens-church.jsx).
+  const MAIN_DEFAULT = '#C25A38';
+  const mainPick = mainCol || MAIN_DEFAULT;   // the Main control: main, else its own default
+  const mainShown = mainCol || acc;           // the members' header preview only
   const swatches = ['#C25A38', '#3B6FB0', '#5E8C6A', '#7A4FA3', '#B0853B', '#1F2A37'];
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
   const initials = (church.name ? church.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'TO').toUpperCase();
@@ -13267,12 +13275,12 @@ function DashBrandingPanel({ church }) {
       <div style={lbl}>Main colour</div>
       <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Fills your church’s header when there is no banner, your badge when there is no picture, and the verse of the day and featured sermon cards in members’ apps.</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: mainShown, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
-          <input type="color" value={mainShown.toLowerCase()} onChange={e => onMain(e.target.value)} aria-label="Main colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+        <label title="Pick any colour" style={{ position: 'relative', width: 54, height: 54, borderRadius: 14, cursor: 'pointer', flexShrink: 0, background: mainPick, border: '1px solid var(--line)', boxShadow: 'inset 0 0 0 3px var(--surface)' }}>
+          <input type="color" value={mainPick.toLowerCase()} onChange={e => onMain(e.target.value)} aria-label="Main colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
         </label>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
-          <input value={mainHex.replace(/^#/, '')} onChange={e => onMainHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} onBlur={onMainHexBlur} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Main colour hex code" placeholder={acc.replace(/^#/, '')}
+          <input value={mainHex.replace(/^#/, '')} onChange={e => onMainHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} onBlur={onMainHexBlur} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Main colour hex code" placeholder={MAIN_DEFAULT.replace(/^#/, '')}
             style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
           {mainCol ? <button onClick={resetMain} title="Reset to default" aria-label="Reset main colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
         </div>
