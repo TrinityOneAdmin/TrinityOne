@@ -87,7 +87,7 @@ test('send passes the reply {id, by} to publishPost and clears the bar once it i
   c.input(c.paint()).props.onChange({ target: { value: 'On my way' } });
   c.sendBtn(c.paint()).props.onClick();
   await flush();
-  assert.deepEqual(c.calls, [['On my way', 'g1', { id: 'm1', by: RUTH }]]);
+  assert.deepEqual(c.calls, [['On my way', 'g1', { id: 'm1', by: RUTH }, undefined]]);   // 4th arg: the pod filter (3f4fa841) — none chosen here
   const t = c.paint();
   assert.equal(c.bar(t), undefined, 'the bar stayed after an accepted send');
   assert.equal(c.input(t).props.value, '');
@@ -98,7 +98,7 @@ test('a plain send passes no reply', async () => {
   c.input(c.paint()).props.onChange({ target: { value: 'Hello' } });
   c.sendBtn(c.paint()).props.onClick();
   await flush();
-  assert.deepEqual(c.calls, [['Hello', 'g1', undefined]]);
+  assert.deepEqual(c.calls, [['Hello', 'g1', undefined, undefined]]);
 });
 
 test('a send nobody accepted KEEPS the reply and the words (resolved false, and thrown)', async () => {
