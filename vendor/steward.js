@@ -21555,7 +21555,12 @@ zoo`.split("\n");
         }
       }
       m = m.replace(/^trinityone-church:/i, "").trim();
-      return window.Steward.restoreKey(m);
+      const restored = window.Steward.restoreKey(m);
+      try {
+        if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub);
+      } catch (e) {
+      }
+      return restored;
     },
     // ---- "Become a steward" handshake: a would-be steward shows this code to a church owner, who scans/pastes
     // it under Delegated stewards to add them. Unlike the church handoff this carries ONLY the public npub of
@@ -21689,19 +21694,13 @@ zoo`.split("\n");
     },
     // Does the removal leave this console with NOTHING to run? True only for a pure helper: its own key is the bare signing
     // key "Help run a church" minted (_ownKeyBlank: never named, never registered), it stewards no other church, it is not
-    // waiting on a request, and it holds no network key (those are sealed with this key, so discarding it would lose them).
-    // That is the one console the removal sends back to the start screen; any other keeps running what it still has.
+    // waiting on its latest request (PENDING — that console has the waiting screen), and it holds no network key.
+    // That console gets the full-screen notice; any other gets the banner and keeps running what it still has. Whether
+    // Continue then DISCARDS the key is a stricter question, answered by removedDiscardsKey (the mark, and no older request).
     removedLeavesNothing() {
       try {
         if (!churchPub || actingChurch || !_ownKeyBlank() || stewardedChurches.size) return false;
         if (localStorage.getItem(PENDING_CHURCH_KEY)) return false;
-        let reqd = [];
-        try {
-          reqd = JSON.parse(localStorage.getItem("trinityone.steward.requested." + churchPub) || "[]");
-        } catch (e) {
-          reqd = [];
-        }
-        if (Array.isArray(reqd) && reqd.some((x) => x && x !== churchPub)) return false;
         return !_netKeysRaw().length;
       } catch (e) {
         return false;
@@ -21710,9 +21709,24 @@ zoo`.split("\n");
     // Will Continue discard this console's key? Only when the removal left nothing to run AND this device minted the key as
     // a bare helper key (HELPERKEY_LS, set by createKeyQuiet). Without that mark — a key from before it existed, or a real
     // church that merely looks blank here — the key is kept (audit of 496b8b21, MEDIUM 1).
+    //
+    // …and only while this key has NO request to help any church still on its books (audit of 496b8b21, LOW 3): asked B,
+    // then A; A approved (which clears PENDING) and later removed us — B's request may still be approved, and an approval of
+    // a deleted key is lost. That list can hold a church that declined or never answered, for ever: the helper cannot see a
+    // decline (the owner's answers are sealed to the church key) and an entry carries no time, so there is no safe moment to
+    // treat it as answered. So since the audit of 15dc0960 (LOW 2) the list no longer decides whether the person sees the
+    // full notice — that is removedLeavesNothing's job, and it ignores the list — it only stops the deletion: the key is
+    // kept, and the notice says so.
     removedDiscardsKey() {
       try {
-        return !!churchPub && window.Steward.removedLeavesNothing() && localStorage.getItem(HELPERKEY_LS + churchPub) === "1";
+        if (!churchPub || !window.Steward.removedLeavesNothing() || localStorage.getItem(HELPERKEY_LS + churchPub) !== "1") return false;
+        let reqd = [];
+        try {
+          reqd = JSON.parse(localStorage.getItem("trinityone.steward.requested." + churchPub) || "[]");
+        } catch (e) {
+          reqd = [];
+        }
+        return !(Array.isArray(reqd) && reqd.some((x) => x && x !== churchPub));
       } catch (e) {
         return false;
       }
@@ -21994,6 +22008,10 @@ zoo`.split("\n");
       try {
         localStorage.removeItem(KEY_LS);
       } catch {
+      }
+      try {
+        if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub);
+      } catch (e) {
       }
       try {
         for (let i3 = localStorage.length - 1; i3 >= 0; i3--) {

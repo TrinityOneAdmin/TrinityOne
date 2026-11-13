@@ -216,8 +216,10 @@ test('a helper\'s Overview shows NO "people want to help" banner, while the owne
   while (!ok && Date.now() - t0 < 20000) { ok = OWNER.rows(`kind = 30078 AND dtag = 'trinityone/stewardhandled:${cp}'`).length > 0; if (!ok) await sleep(400); }
   assert.ok(ok, 'staging: the decline never reached the relay');
   // STAGING, NOT VACUOUS: the helper's console really does receive both requests — the stream the stale count came from
-  const seen = await ONE.ev(`(() => new Promise(res => { let n = 0; const u = window.Steward.subscribeStewardRequests(l => { n = l.length; }); setTimeout(() => { try { u(); } catch (e) {} res(n); }, 5000); }))()`);
-  assert.ok(seen >= 2, 'staging: the helper console does not receive the requests at all (' + seen + '), so hiding proves nothing');
+  // (waited for, not a fixed sleep — audit of 15dc0960, NIT 6: a busy machine delivered only one in 5 s)
+  await ONE.ev(`(() => { window.__reqN = 0; window.__reqU = window.Steward.subscribeStewardRequests(l => { window.__reqN = Math.max(window.__reqN, l.length); }); return 1; })()`);
+  await ONE.waitFor(`window.__reqN >= 2`, 90000, 'the helper console receiving both requests (if it never does, hiding the banner proves nothing)');
+  await ONE.ev(`(() => { try { window.__reqU(); } catch (e) {} return 1; })()`);
   await OWNER.press(/^Overview$/, 'Overview');
   await OWNER.waitFor(`${BANNER_COUNT} === 1`, 30000, 'the owner\'s banner counting Yann alone');
   await ONE.press(/^Overview$/, 'Overview');
@@ -253,10 +255,28 @@ test('Continue takes Ruth to the start screen, with no key left on the device; t
   await ONE.waitFor(`[...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent||'').trim())) && [...document.querySelectorAll('button')].some(x => /^Help run a church$/.test((x.textContent||'').trim()))`, 30000, 'the start screen');
   assert.equal(await ONE.ev(`!!window.Steward.hasKey`), false, 'the helper key is still on the device');
   assert.equal(await ONE.ev(`localStorage.getItem('trinityone.steward.church-key.enc')`), null, 'the encrypted helper key is still stored');
+  assert.equal(await ONE.ev(`localStorage.getItem('trinityone.steward.helperkey.' + ${JSON.stringify(ONE.pub)})`), null, 'the helper mark outlived its key (audit of 15dc0960, NIT 3)');
   await OWNER.press(/^Overview$/, 'Overview');
   await sleep(1500);
   assert.equal(await OWNER.ev(TOLD), false, 'the owner\'s console shows the removal notice');
   assert.equal(await notices(OWNER), '[]', 'the owner\'s console holds a removal notice');
+});
+
+// AUDIT OF 15dc0960, NIT 3: a church restored from its 12 words is never a "helper key", even if this device once marked
+// that same key as one (the words of a helper key, made into a church elsewhere). Driven through the real Restore screen.
+test('restoring a church from its 12 words clears any helper mark this device held for that key', { skip: SKIP, timeout: 120000 }, async () => {
+  const { generateSeedWords, privateKeyFromSeedWords } = await import('nostr-tools/nip06');
+  const { getPublicKey } = await import('nostr-tools');
+  const words = generateSeedWords(), pk = getPublicKey(privateKeyFromSeedWords(words));
+  await ONE.ev(`(() => { localStorage.setItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)}, '1'); return 1; })()`);
+  await ONE.press(/Restore a church/i, 'Restore a church');
+  await ONE.waitFor(`!!document.querySelector('textarea[aria-label^="Your church"]')`, 30000, 'the 12-word box');
+  await ONE.ev(`(() => { const t=document.querySelector('textarea[aria-label^="Your church"]'); const set=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; set.call(t, ${JSON.stringify(words)}); t.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
+  await sleep(300);
+  await ONE.press(/^Restore church$/, 'Restore church');
+  await ONE.waitFor(`!!document.querySelector('input[aria-label="Choose a console PIN or passphrase"]')`, 60000, 'the PIN gate after the restore');
+  assert.equal(await ONE.ev(`window.Steward.churchPub`), pk, 'staging: the restore did not load the key from those words');
+  assert.equal(await ONE.ev(`localStorage.getItem('trinityone.steward.helperkey.' + ${JSON.stringify(pk)})`), null, 'THE HAZARD: a restored church still carries a helper mark, so a removal notice could discard it');
 });
 
 test('CONTROL: Sam is removed while his relay is unreachable — a reload paints the church and tells him NOTHING', { skip: SKIP, timeout: 240000 }, async () => {
@@ -278,6 +298,10 @@ test('…and the same console, its relay back, IS told — and an UNMARKED key s
   await reloadAndUnlock(TWO);
   await TWO.waitFor(TOLD, 90000, 'Sam being told, once the relay can answer');
   assert.ok((await TWO.text()).includes('You’ve been removed from ' + CHURCH_NAME), 'the notice does not name the church');
+  // what the card SAYS for a key it will keep (audit of 15dc0960, NIT 5) — never that the sign-in will be cleared
+  const said = await TWO.ev(`(document.querySelector('[role="alertdialog"]') || {}).innerText || ''`);
+  assert.ok(/keeps this console.s sign-in on this device/.test(said), 'the card does not say the sign-in is kept: ' + said.slice(0, 400));
+  assert.ok(!/clears this helper sign-in/.test(said), 'the card says it will clear a sign-in it keeps: ' + said.slice(0, 400));
   await TWO.press(/^Continue$/, 'Continue');
   await sleep(2500);
   assert.equal(await TWO.ev(`!!window.Steward.hasKey`), true, 'THE HAZARD: Continue discarded a key this device never marked as a helper key');
@@ -287,18 +311,19 @@ test('…and the same console, its relay back, IS told — and an UNMARKED key s
   assert.equal(await OWNER.ev(TOLD), false, 'the owner\'s console shows the removal notice');
 });
 
-// AUDIT OF 496b8b21, LOW 3 + NIT 5. Tess has also asked ANOTHER church (it is in her requested list, not the latest
-// pending one), so her removal leaves her something: she gets the banner, not the full screen, and her key stays. Then
-// her other request goes away, so the console now "leaves nothing" and is marked — and Dismiss must STILL only dismiss.
-test('a removed helper still waiting on ANOTHER church gets the banner, not the start screen; Dismiss never deletes', { skip: SKIP, timeout: 240000 }, async () => {
+// AUDIT OF 496b8b21 NIT 5, and of 15dc0960 LOW 2. (a) Tess is waiting on ANOTHER church (her latest request), so her
+// removal leaves her something: the banner over her waiting screen. Then that request goes, so Continue WOULD now discard
+// her marked key — and the banner's Dismiss must still only dismiss. (b) An OLDER request (her requested list — a church
+// that may have declined or never answered, which she cannot tell) no longer keeps the full notice from her, but it does
+// stop the deletion: the card says the sign-in is kept, and Continue keeps it.
+test('a removed helper waiting on another church gets the banner, and Dismiss never deletes', { skip: SKIP, timeout: 240000 }, async () => {
   const other = 'ab'.repeat(32);
-  await THREE.ev(`(() => { localStorage.setItem('trinityone.steward.requested.' + ${JSON.stringify(THREE.pub)}, JSON.stringify([${JSON.stringify(other)}])); return 1; })()`);
+  await THREE.ev(`(() => { localStorage.setItem('trinityone.steward.pending-church', ${JSON.stringify(other)}); return 1; })()`);
   await removeHelper(THREE);
   await THREE.waitFor(`!!document.querySelector('[data-stew-removed-banner]')`, 60000, 'Tess\'s removal banner');
-  assert.equal(await THREE.ev(`!!document.querySelector('[role="alertdialog"]')`), false, 'THE BUG: the full "nothing left" screen, though she is still waiting on another church');
+  assert.equal(await THREE.ev(`!!document.querySelector('[role="alertdialog"]')`), false, 'the full "nothing left" screen, though she is still waiting on another church');
   assert.ok((await THREE.text()).includes('You’ve been removed from ' + CHURCH_NAME), 'the banner does not name the church');
-  // her other request is gone now (say it was withdrawn): the key is a marked helper key with nothing else behind it
-  await THREE.ev(`(() => { localStorage.removeItem('trinityone.steward.requested.' + ${JSON.stringify(THREE.pub)}); return 1; })()`);
+  await THREE.ev(`(() => { localStorage.removeItem('trinityone.steward.pending-church'); return 1; })()`);
   assert.equal(await THREE.ev(`window.Steward.removedDiscardsKey()`), true, 'staging: the console should now be one whose key Continue WOULD discard');
   const r = await THREE.ev(`(() => { const b=[...document.querySelectorAll('[data-stew-removed-banner] button')].find(x=>/^Dismiss$/.test((x.textContent||'').trim())); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
   assert.equal(r, 'ok', 'no Dismiss on the removal banner');
@@ -306,4 +331,20 @@ test('a removed helper still waiting on ANOTHER church gets the banner, not the 
   assert.equal(await THREE.ev(`!!window.Steward.hasKey`), true, 'THE BUG: Dismiss deleted the key');
   assert.ok(await THREE.ev(`!!localStorage.getItem('trinityone.steward.church-key.enc')`), 'Dismiss deleted the stored key');
   assert.equal(await notices(THREE), '[]', 'Dismiss did not clear the notice');
+});
+
+test('an old request to another church still shows the full notice, but Continue keeps the key and says so', { skip: SKIP, timeout: 120000 }, async () => {
+  const other = 'ab'.repeat(32);
+  await THREE.ev(`(() => { localStorage.setItem('trinityone.steward.requested.' + ${JSON.stringify(THREE.pub)}, JSON.stringify([${JSON.stringify(other)}])); return 1; })()`);
+  // the removal itself was proved above; this re-presents the SAME notice record the engine wrote, so the screen's two
+  // real decisions (full notice? discard?) run against an older request on her books
+  await THREE.ev(`(() => { localStorage.setItem('trinityone.steward.removed-from.' + ${JSON.stringify(THREE.pub)}, JSON.stringify([{ cp: ${JSON.stringify(OWNER.churchPub)}, name: ${JSON.stringify(CHURCH_NAME)}, at: Math.floor(Date.now()/1000) }])); window.dispatchEvent(new CustomEvent('steward-removed')); return 1; })()`);
+  await THREE.waitFor(`!!document.querySelector('[role="alertdialog"]')`, 20000, 'THE BUG (audit LOW 2): an old request kept the full notice from her');
+  assert.equal(await THREE.ev(`window.Steward.removedDiscardsKey()`), false, 'an old request no longer protects the key');
+  const said = await THREE.ev(`document.querySelector('[role="alertdialog"]').innerText`);
+  assert.ok(/keeps this console.s sign-in on this device/.test(said), 'the card does not say the sign-in is kept: ' + said.slice(0, 400));
+  await THREE.press(/^Continue$/, 'Continue');
+  await sleep(2500);
+  assert.equal(await THREE.ev(`!!window.Steward.hasKey`), true, 'THE HAZARD: Continue discarded a key with a request still on its books');
+  assert.ok(await THREE.ev(`!!localStorage.getItem('trinityone.steward.church-key.enc')`), 'the stored key was deleted');
 });

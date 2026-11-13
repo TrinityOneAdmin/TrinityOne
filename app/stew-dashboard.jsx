@@ -3827,7 +3827,8 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const stewardReqs = useHelperRequests().pending;
   // NOT ON A HELPER'S CONSOLE (owner 2026-11-13: "hide it unless the helper has full permissions that include adding
   // helpers. But the issue was that it was stale"). No helper can hold such a permission: the roster is church-key-only
-  // at the relay (gateway.mjs canWrite STEWARDS_D) and in the engine (setStewards' _requireTrustedView), and DashStewardsPanel
+  // at the relay (gateway.mjs: a STEWARDS_D roster is accepted only when the church key signed it, so a helper's own-key
+  // signature is refused), no helper capability (STEWARD_CAPS) covers it, and DashStewardsPanel
   // tells a delegate it "is not something a church can grant". And a helper's count was stale by construction: the owner's
   // answers (stewardhandled:<church>) are sealed to the church key, so every request the owner declined kept counting on
   // their console for ever (measured: owner 1, helper 2). So a delegate gets no banner at all; the owner's is unchanged.
