@@ -9,8 +9,10 @@
 //
 // Point of use (rule 1): the REAL DashGroups, the REAL ListPanel and the REAL useStewNarrow are sliced from
 // app/stew-dashboard.jsx, compiled and rendered together; nothing is matched as text in app/*.jsx (rule 3).
-// useStewNarrow reads innerWidth ONCE, in its useState initialiser, so every case below mounts a fresh
-// miniReact with window.innerWidth set BEFORE the first draw.
+// useStewNarrow takes its first value from innerWidth in its useState initialiser and then follows the window
+// through a 'resize' listener (app/stew-dashboard.jsx, useStewNarrow), so in the console the row switches live
+// across 760px. This harness fires no resize events, so every case below mounts a fresh miniReact with
+// window.innerWidth set BEFORE the first draw — the initialiser is the only path these cases exercise.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -45,7 +47,7 @@ const GROUP = { id: 'g1', name: 'Main chat', kind: 'group', childsafe: false, en
 async function renderGroups(width, native = false) {
   const { React, draw } = miniReact();
   const win = {
-    innerWidth: width,   // set BEFORE mount: useStewNarrow's useState initialiser reads it once
+    innerWidth: width,   // set BEFORE mount: useStewNarrow's useState initialiser takes its first value from it
     Steward: { publishGroup: async () => ({}) },
     useStewardGroups: () => [GROUP], useStewardRosters: () => [], useStewardMembers: () => [],
     useStewardCategories: () => [], useStewardBlocked: () => [], useStewardAdmitted: () => [], useStewardJoinPolicy: () => false,
