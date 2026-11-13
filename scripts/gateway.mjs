@@ -570,11 +570,34 @@ function suiteIsNewer(remote, mine) {
   return true;
 }
 let _suiteAutoBusy = false;
+// [AUDIT be258b42 MEDIUM 2] Refusals that the SAME release will give again (its signature, its kind, its signed
+// identity) are remembered in suite/check.json, and that sha is not downloaded again for this long. Churches run
+// on small pipes: without this, a bad release cost a full bundle download every hour until the next release.
+const SUITE_KNOWN_BAD_MS = 6 * 3600 * 1000;
+const SUITE_HARD_REFUSALS = ['bad-signature', 'not-a-suite-bundle', 'sha-mismatch', 'future-date', 'anti-rollback'];
 // opts carries everything so the function can be lifted and driven in a test with no module globals:
-//   { packaged, settings, dataDir, build, base, verifier, pubkey, node }
+//   { packaged, settings, dataDir, build, base, verifier, pubkey, node, now }
+// Every run that gets past the gate records its outcome in DATA_DIR/suite/check.json {at, ok, reason, sha} —
+// the control panel shows it (audit MEDIUM 7: "the panel never says why nothing happened").
 async function suiteAutoUpdate(why, opts = {}) {
-  const packaged = opts.packaged;
-  const settings = opts.settings || {};
+  // GATE: only a packaged Suite box with the toggle on ever runs. Checked before any network/disk touch so a
+  // non-packaged box (every server install, every test-spawned gateway) is provably inert.
+  if (!opts.packaged || (opts.settings || {}).autoUpdate !== true) return { ok: false, skipped: 'disabled' };
+  if (_suiteAutoBusy) return { ok: false, skipped: 'busy' };
+  _suiteAutoBusy = true;
+  let r;
+  try { r = await suiteAutoUpdateRun(opts); }
+  catch (e) { r = { ok: false, reason: 'error', error: String((e && e.message) || e) }; }
+  finally { _suiteAutoBusy = false; }
+  try {
+    const suiteDir = join(opts.dataDir, 'suite');
+    mkdirSync(suiteDir, { recursive: true });
+    const rec = { at: new Date(opts.now || Date.now()).toISOString(), ok: !!r.ok, reason: r.reason || (r.staged ? 'staged' : ''), sha: r.sha || '' };
+    writeFileSync(join(suiteDir, 'check.json.tmp'), JSON.stringify(rec) + '\n'); renameSync(join(suiteDir, 'check.json.tmp'), join(suiteDir, 'check.json'));
+  } catch {}
+  return r;
+}
+async function suiteAutoUpdateRun(opts) {
   const dataDir  = opts.dataDir;
   const build    = opts.build || {};
   const base     = opts.base;
@@ -582,17 +605,13 @@ async function suiteAutoUpdate(why, opts = {}) {
   const pubkey   = opts.pubkey;
   const node     = opts.node || process.execPath;
   const vTimeout = opts.verifyTimeoutMs || 15000;
-  // GATE: only a packaged Suite box with the toggle on ever runs. Checked before any network/disk touch so a
-  // non-packaged box (every server install, every test-spawned gateway) is provably inert.
-  if (!packaged || settings.autoUpdate !== true) return { ok: false, skipped: 'disabled' };
-  if (_suiteAutoBusy) return { ok: false, skipped: 'busy' };
-  _suiteAutoBusy = true;
   const suiteDir = join(dataDir, 'suite');
   const staging  = join(suiteDir, 'staging');
   const stTgz    = join(staging, 'bundle.tgz');
   const stSig    = join(staging, 'bundle.sig');
   const stReady  = join(staging, 'READY');
-  try {
+  const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
+  {
     // 1. fetch the manifest
     let remote = null;
     try {
@@ -602,6 +621,19 @@ async function suiteAutoUpdate(why, opts = {}) {
     if (!remote || typeof remote !== 'object') return { ok: false, reason: 'no-manifest' };
     // 2. newer than mine (sha differs AND date strictly newer)?
     if (!suiteIsNewer(remote, build)) return { ok: false, reason: 'not-newer' };
+    const rsha = remote.sha;
+    // 2b. [AUDIT be258b42 MEDIUM 2] Nothing to fetch if this exact release is already staged and waiting for the
+    //     apply time, was marked bad by a failed install (quarantine-sha — never auto-applied again), or was
+    //     refused for a reason it will give again within SUITE_KNOWN_BAD_MS. Checked BEFORE any download.
+    const q = (() => { try { return readFileSync(join(suiteDir, 'quarantine-sha'), 'utf8').trim(); } catch { return ''; } })();
+    if (q && q === rsha) return { ok: false, reason: 'quarantined', sha: rsha };
+    const staged = readJson(stReady);
+    if (staged && staged.sha === rsha && existsSync(stTgz) && existsSync(stSig)) return { ok: true, staged: true, already: true, reason: 'already-staged', sha: rsha };
+    const last = readJson(join(suiteDir, 'check.json'));
+    const nowMs0 = opts.now || Date.now();
+    if (last && last.sha === rsha && SUITE_HARD_REFUSALS.includes(last.reason) && nowMs0 - Date.parse(last.at) < SUITE_KNOWN_BAD_MS) {
+      return { ok: false, reason: last.reason, sha: rsha, skipped: 'known-bad' };
+    }
     // 3. [AUDIT FIX #1 — SSRF] Pin BOTH downloads to the SAME origin the manifest was fetched from. A
     // controlled/MITM'd suite-latest.json must not be able to aim the relay's fetch at an arbitrary (e.g.
     // internal) host — that would be a probe primitive. `url`/`sig`, when present, must share scheme+host+port
@@ -615,8 +647,8 @@ async function suiteAutoUpdate(why, opts = {}) {
       return o === baseOrigin ? v : null;                               // foreign origin → refuse
     };
     const tgzUrl = pinUrl(remote.url, '/suite-js-bundle.tgz');
-    const sigUrl = pinUrl(remote.sig, '/suite-js-bundle.tgz.sig');
-    if (tgzUrl === null || sigUrl === null) return { ok: false, reason: 'url-origin-mismatch' };
+    const sigUrl = pinUrl(remote.sig, '/suite-js-bundle.sig');   // [L3] the name publish-relay-bundle.sh uploads
+    if (tgzUrl === null || sigUrl === null) return { ok: false, reason: 'url-origin-mismatch', sha: rsha };
     // 4. [AUDIT FIX #3 — update-DoS] download tgz + sig to staging/.tmp and VERIFY THERE; nothing is promoted
     // over a previously-good staged bundle until the NEW bytes pass signature + anti-rollback. A forged
     // newer-dated manifest with bad bytes therefore cannot wipe a good staged bundle. Downloads are size-capped
@@ -628,42 +660,44 @@ async function suiteAutoUpdate(why, opts = {}) {
     const maxTgz = opts.maxBundleBytes || SUITE_BUNDLE_MAX_BYTES;   // test hook; defaults used in production
     const maxSig = opts.maxSigBytes || SUITE_SIG_MAX_BYTES;
     const tmpTgz = join(tmp, 'bundle.tgz'), tmpSig = join(tmp, 'bundle.sig');
+    // [AUDIT be258b42 MEDIUM 2] The few-hundred-byte signature FIRST: a release whose .sig is not up yet costs
+    // one tiny request, not a full bundle download, every hour.
     try {
+      const sr = await fetch(sigUrl, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
+      if (!sr.ok) { cleanTmp(); return { ok: false, reason: 'signature-missing', sha: rsha, error: 'HTTP ' + sr.status + ' for the signature' }; }
+      const sigBuf = await suiteReadCapped(sr, maxSig, 'signature');
       const tr = await fetch(tgzUrl, { cache: 'no-store', signal: AbortSignal.timeout(900000) });
       if (!tr.ok) throw new Error('HTTP ' + tr.status + ' for the bundle');
       const tgzBuf = await suiteReadCapped(tr, maxTgz, 'bundle');
       if (tgzBuf.length < 512) throw new Error('bundle too small (' + tgzBuf.length + ' bytes)');
-      const sr = await fetch(sigUrl, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
-      if (!sr.ok) throw new Error('HTTP ' + sr.status + ' for the signature');
-      const sigBuf = await suiteReadCapped(sr, maxSig, 'signature');
       writeFileSync(tmpTgz, tgzBuf); writeFileSync(tmpSig, sigBuf);
     } catch (e) {
       cleanTmp();
       const msg = String((e && e.message) || e);
       const reason = /\bcap\b|content-length/i.test(msg) ? 'too-large' : 'download-failed';
-      return { ok: false, reason, error: msg };
+      return { ok: false, reason, error: msg, sha: rsha };
     }
     // 5. pre-verify the detached Ed25519 signature over the EXACT .tmp bytes, with the shared verifier + key. On
     //    success the verifier prints the build identity read from version.txt INSIDE those signed bytes.
     const vr = spawnSync(node, [verifier, tmpTgz, tmpSig, pubkey], { timeout: vTimeout, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    if (!vr || vr.status !== 0) { cleanTmp(); return { ok: false, reason: vr && vr.status === 7 ? 'not-a-suite-bundle' : 'bad-signature', status: vr && vr.status }; }
+    if (!vr || vr.status !== 0) { cleanTmp(); return { ok: false, reason: vr && vr.status === 7 ? 'not-a-suite-bundle' : 'bad-signature', status: vr && vr.status, sha: rsha }; }
     let signed = null;
     try { signed = JSON.parse(String(vr.stdout || '').trim()); } catch {}
-    if (!signed || typeof signed.sha !== 'string' || typeof signed.date !== 'string') { cleanTmp(); return { ok: false, reason: 'bad-signature', error: 'verifier gave no identity' }; }
+    if (!signed || typeof signed.sha !== 'string' || typeof signed.date !== 'string') { cleanTmp(); return { ok: false, reason: 'bad-signature', error: 'verifier gave no identity', sha: rsha }; }
     // 6. [AUDIT be258b42 HIGH 2] Every ordering decision uses the SIGNED identity, never the manifest (which
     //    nobody signs): the signed sha must be the one the manifest named; the signed date must not be in the
     //    future (a bogus far-future date would otherwise become the floor and freeze every later update); and it
     //    must be strictly after MAX(my build date, a sane recorded installed date), compared by INSTANT.
-    if (signed.sha !== remote.sha) { cleanTmp(); return { ok: false, reason: 'sha-mismatch' }; }
+    if (signed.sha !== remote.sha) { cleanTmp(); return { ok: false, reason: 'sha-mismatch', sha: rsha }; }
     const nowMs = opts.now || Date.now();
-    if (!(Date.parse(signed.date) <= nowMs + SUITE_MAX_FUTURE_MS)) { cleanTmp(); return { ok: false, reason: 'future-date' }; }
+    if (!(Date.parse(signed.date) <= nowMs + SUITE_MAX_FUTURE_MS)) { cleanTmp(); return { ok: false, reason: 'future-date', sha: rsha }; }
     let floor = (build && build.date) || '';
     try {
       const st = JSON.parse(readFileSync(join(suiteDir, 'state.json'), 'utf8'));
       const inst = st && typeof st.installedDate === 'string' ? st.installedDate : '';
       if (inst && Date.parse(inst) <= nowMs + SUITE_MAX_FUTURE_MS && suiteDateAfter(inst, floor)) floor = inst;
     } catch {}
-    if (!suiteDateAfter(signed.date, floor)) { cleanTmp(); return { ok: false, reason: 'anti-rollback' }; }
+    if (!suiteDateAfter(signed.date, floor)) { cleanTmp(); return { ok: false, reason: 'anti-rollback', sha: rsha }; }
     // 7. PROMOTE the verified .tmp bytes and write READY (does NOT apply — the shell reads this at the chosen
     //    time). Only now is a pre-existing good bundle replaced; READY is cleared first so it never points at a
     //    mix, then rewritten atomically. sha/date are the SIGNED ones; `version` is only a display label.
@@ -673,10 +707,8 @@ async function suiteAutoUpdate(why, opts = {}) {
     const ready = { version: String(remote.version || signed.sha), sha: signed.sha, date: signed.date };
     const tmpReady = stReady + '.tmp';
     writeFileSync(tmpReady, JSON.stringify(ready) + '\n'); renameSync(tmpReady, stReady);
-    return { ok: true, staged: true, ready };
-  } catch (e) {
-    return { ok: false, reason: 'error', error: String((e && e.message) || e) };
-  } finally { _suiteAutoBusy = false; }
+    return { ok: true, staged: true, ready, sha: signed.sha };
+  }
 }
 // SUITE-AUTOUPDATE-END
 // The module-level defaults handed to suiteAutoUpdate from the real call sites (the test passes its own opts).

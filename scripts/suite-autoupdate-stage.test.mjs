@@ -31,9 +31,9 @@ const VERIFIER = join(HERE, 'verify-suite-bundle.mjs');
 const SRC = readFileSync(join(HERE, 'gateway.mjs'), 'utf8');
 const m = SRC.match(/\/\/ SUITE-AUTOUPDATE-BEGIN[^\n]*\n([\s\S]*?)\/\/ SUITE-AUTOUPDATE-END/);
 assert.ok(m, 'SUITE-AUTOUPDATE markers are gone from gateway.mjs — the check/stage logic was removed; re-anchor this test');
-const api = new Function('join', 'mkdirSync', 'writeFileSync', 'readFileSync', 'renameSync', 'rmSync', 'spawnSync',
+const api = new Function('join', 'mkdirSync', 'writeFileSync', 'readFileSync', 'renameSync', 'rmSync', 'spawnSync', 'existsSync',
   m[1] + '\nreturn { suiteAutoUpdate, suiteIsNewer, suiteUpdateBase };')(
-  join, mkdirSync, writeFileSync, readFileSync, renameSync, rmSync, spawnSync);
+  join, mkdirSync, writeFileSync, readFileSync, renameSync, rmSync, spawnSync, existsSync);
 
 // ── Throwaway key + bundle bytes. ────────────────────────────────────────────────────────────────────────
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -59,13 +59,16 @@ const BUILD = { sha: 'b'.repeat(40), date: '2026-01-01T00:00:00Z' };   // what t
 
 // ── The localhost fixture: switchable manifest/tgz/sig; counts hits so case (e) can prove "never ran". ───────
 let server, baseUrl, hits = 0;
-let manifest = null, serveTgz = TGZ, serveSig = SIG, chunkTgz = false;
+let manifest = null, serveTgz = TGZ, serveSig = SIG, chunkTgz = false, sigMissing = false;
+const pathHits = {};   // url path -> request count (M2: prove what is NOT downloaded)
 
 before(async () => {
   writeFileSync(PUBKEY_PATH, publicKey.export({ type: 'spki', format: 'pem' }));
   server = createServer((req, res) => {
     hits++;
     const url = req.url.split('?')[0];
+    pathHits[url] = (pathHits[url] || 0) + 1;
+    if (url === '/suite-js-bundle.sig' && sigMissing) { res.writeHead(404); res.end('not yet'); return; }
     if (url === '/suite-latest.json' && manifest) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(manifest)); return; }
     if (url === '/suite-js-bundle.tgz') {
       if (chunkTgz) {
@@ -78,7 +81,7 @@ before(async () => {
       }
       res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(serveTgz); return;
     }
-    if (url === '/suite-js-bundle.tgz.sig') { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(serveSig); return; }
+    if (url === '/suite-js-bundle.sig') { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(serveSig); return; }
     res.writeHead(404); res.end('not found');
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -362,5 +365,92 @@ test('[READY] carries the SIGNED sha + date even when the manifest date differs'
     const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
     assert.ok(r.ok && r.staged, JSON.stringify(r));
     assert.deepEqual(JSON.parse(readFileSync(readyPath(d), 'utf8')), { version: 'v2', sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z' });
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
+});
+
+// ── audit AUDIT-suite-autoupdate-be258b42 MEDIUM 2: never re-download what is staged, quarantined or known bad;
+//    fetch the small signature before the bundle. Each counts requests per path on the localhost fixture. ─────
+const bundleHits = () => pathHits['/suite-js-bundle.tgz'] || 0;
+const sigHits = () => pathHits['/suite-js-bundle.sig'] || 0;
+
+test('[M2] a release already staged is not downloaded again on the next hourly check', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = SIG;
+    const first = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.ok(first.ok && first.staged, JSON.stringify(first));
+    const ready = readFileSync(readyPath(d), 'utf8');
+    const b0 = bundleHits(), s0 = sigHits();
+    const again = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(again.reason, 'already-staged', JSON.stringify(again));
+    assert.equal(bundleHits() - b0, 0, 'the staged bundle was downloaded again');
+    assert.equal(sigHits() - s0, 0, 'the staged signature was downloaded again');
+    assert.equal(readFileSync(readyPath(d), 'utf8'), ready, 'READY must be untouched');
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[M2] a quarantined release (it failed an install) is never downloaded again', async () => {
+  const d = freshDataDir();
+  try {
+    mkdirSync(join(d, 'suite'), { recursive: true });
+    writeFileSync(join(d, 'suite', 'quarantine-sha'), 'a'.repeat(40) + '\n');
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = SIG;
+    const b0 = bundleHits(), s0 = sigHits();
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(r.reason, 'quarantined', JSON.stringify(r));
+    assert.equal(bundleHits() - b0 + sigHits() - s0, 0, 'a quarantined release was downloaded');
+    assert.ok(!existsSync(readyPath(d)), 'no READY');
+  } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[M2] a release refused for its signature is not re-downloaded every hour (6h back-off), then retried', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = cryptoSign(null, Buffer.from('wrong bytes'), privateKey);
+    const r1 = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(r1.reason, 'bad-signature', JSON.stringify(r1));
+    const b0 = bundleHits();
+    const r2 = await api.suiteAutoUpdate('test', opts(d, { now: NOW + 3600e3 }));
+    assert.equal(r2.reason, 'bad-signature', JSON.stringify(r2));
+    assert.equal(r2.skipped, 'known-bad');
+    assert.equal(bundleHits() - b0, 0, 'the same bad release was downloaded again an hour later');
+    const r3 = await api.suiteAutoUpdate('test', opts(d, { now: NOW + 7 * 3600e3 }));
+    assert.equal(bundleHits() - b0, 1, 'after the back-off the release is checked again');
+    assert.equal(r3.reason, 'bad-signature');
+  } finally { manifest = null; serveSig = SIG; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[M2] the signature is fetched FIRST: a release whose .sig is not up yet costs no bundle download', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    serveTgz = TGZ; serveSig = SIG; sigMissing = true;
+    const b0 = bundleHits(), s0 = sigHits();
+    const r = await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    assert.equal(r.reason, 'signature-missing', JSON.stringify(r));
+    assert.equal(sigHits() - s0, 1, 'the signature was asked for');
+    assert.equal(bundleHits() - b0, 0, 'the bundle was downloaded although its signature does not exist');
+    // and it is NOT a hard refusal: once the .sig is up, the next check stages it
+    sigMissing = false;
+    const r2 = await api.suiteAutoUpdate('test', opts(d, { now: NOW + 3600e3 }));
+    assert.ok(r2.ok && r2.staged, JSON.stringify(r2));
+  } finally { manifest = null; sigMissing = false; rmSync(d, { recursive: true, force: true }); }
+});
+
+test('[M7] every check past the gate records its outcome in suite/check.json for the panel', async () => {
+  const d = freshDataDir();
+  try {
+    manifest = { sha: 'd'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };   // bytes are sha a… → mismatch
+    serveTgz = TGZ; serveSig = SIG;
+    await api.suiteAutoUpdate('test', opts(d, { now: NOW }));
+    const rec = JSON.parse(readFileSync(join(d, 'suite', 'check.json'), 'utf8'));
+    assert.deepEqual(rec, { at: new Date(NOW).toISOString(), ok: false, reason: 'sha-mismatch', sha: 'd'.repeat(40) });
+    manifest = { sha: 'a'.repeat(40), date: '2026-06-01T00:00:00Z', version: 'v2' };
+    await api.suiteAutoUpdate('test', opts(d, { now: NOW + 1000 }));
+    const rec2 = JSON.parse(readFileSync(join(d, 'suite', 'check.json'), 'utf8'));
+    assert.equal(rec2.ok, true); assert.equal(rec2.reason, 'staged'); assert.equal(rec2.sha, 'a'.repeat(40));
   } finally { manifest = null; rmSync(d, { recursive: true, force: true }); }
 });
