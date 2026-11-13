@@ -423,6 +423,8 @@ fn read_state_field(suite_dir: &Path, key: &str) -> Option<String> {
 
 #[test]
 fn end_to_end_apply_harness() {
+    // the launcher scenarios at the end of this file bind PORT too; one at a time
+    let _port = port_lock();
     // Preflight: a stray relay on PORT would answer our probes and turn a BROKEN apply green (AUDIT F14).
     assert!(
         !port_reachable(),
@@ -1791,4 +1793,291 @@ fn scenario_i_relay_that_will_not_stop_backs_off() {
     assert!(t1.elapsed() < Duration::from_secs(5), "a tick inside the cooldown tried to apply again");
     assert!(fx.staging.join("READY").exists());
     eprintln!("   (i) OK — aborted without a swap, v1 still serving, staging kept, backed off ~1h");
+}
+
+// ══ THE LAUNCHER SCENARIOS (storage + auto-update integration, 2026-11-13) ══════════════════════════════════
+// The REAL launcher::run driving the REAL SuiteHost (main.rs) — the production glue between the relay storage
+// launcher and the auto-update — with a TestShell in place of the Tauri window and sidecar. The mover's CLI answers
+// are scripted (the mover has its own suites); everything else is real: the pointer read, the hooks, the apply,
+// the backup and restore, the fake gateways on PORT.
+//
+// They bind PORT like the keystone above, so every test that does takes PORT_LOCK (cargo runs tests in parallel).
+static PORT_LOCK: Mutex<()> = Mutex::new(());
+
+fn port_lock() -> std::sync::MutexGuard<'static, ()> {
+    PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+struct TestShell {
+    node: PathBuf,
+    data: PathBuf,
+    child: Arc<Mutex<Option<Child>>>,
+    calls: Mutex<Vec<String>>,
+    kills: AtomicUsize,
+    opened: AtomicUsize,
+    quit_after: usize,
+    /// when the first panel opened: a launcher that never reaches quit_after (a broken build) ends the test after
+    /// 60 s instead of hanging it, so it fails on its assertions
+    first_open: Mutex<Option<Instant>>,
+    /// called at each OPENED with its number (1 = the first panel)
+    on_open: Box<dyn Fn(usize) + Send + Sync>,
+}
+
+impl TestShell {
+    fn new(node: PathBuf, data: PathBuf, quit_after: usize, on_open: Box<dyn Fn(usize) + Send + Sync>) -> Self {
+        TestShell { node, data, child: Arc::new(Mutex::new(None)), calls: Mutex::new(vec![]), kills: AtomicUsize::new(0), opened: AtomicUsize::new(0), quit_after, first_open: Mutex::new(None), on_open }
+    }
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl Shell for TestShell {
+    fn start(&self, code_dir: &Path, env: &[(String, String)]) -> Result<Proc, String> {
+        let mut cmd = Command::new(&self.node);
+        cmd.current_dir(code_dir).arg("scripts/gateway.mjs").arg(PORT.to_string());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut ch = cmd.spawn().map_err(|e| e.to_string())?;
+        self.calls.lock().unwrap().push(format!("START {}", code_dir.display()));
+        if let Some(out) = ch.stdout.take() {
+            thread::spawn(move || {
+                use std::io::BufRead;
+                for _ in std::io::BufReader::new(out).lines() {
+                    note_relay_activity();
+                }
+            });
+        }
+        *self.child.lock().unwrap() = Some(ch);
+        let exit = Arc::new(Mutex::new(None));
+        let alive = Arc::new(AtomicBool::new(true));
+        let (x2, a2, slot) = (exit.clone(), alive.clone(), self.child.clone());
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_millis(100));
+            let mut g = slot.lock().unwrap();
+            let code = match g.as_mut() {
+                Some(c) => match c.try_wait() {
+                    Ok(Some(s)) => Some(s.code().map(launcher::Exit::Code).unwrap_or(launcher::Exit::Other)),
+                    Ok(None) => None,
+                    Err(_) => Some(launcher::Exit::Other),
+                },
+                None => Some(launcher::Exit::Other), // taken by a kill
+            };
+            if let Some(c) = code {
+                *g = None;
+                *x2.lock().unwrap() = Some(c);
+                a2.store(false, Ordering::SeqCst);
+                break;
+            }
+        });
+        let slot = self.child.clone();
+        let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            if let Some(mut c) = slot.lock().unwrap().take() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        });
+        Ok(Proc { exit, err: Arc::new(Mutex::new(String::new())), alive, kill })
+    }
+    fn kill_current(&self) {
+        self.kills.fetch_add(1, Ordering::SeqCst);
+        if let Some(mut c) = self.child.lock().unwrap().take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+    // The mover's CLI, scripted. A `move` call records what the data folder looked like at that moment.
+    fn node(&self, args: &[String]) -> launcher::NodeOut {
+        let sub = args.get(1).cloned().unwrap_or_default();
+        let answer = match sub.as_str() {
+            "lock-status" => "{\"held\":false}".to_string(),
+            "recover" => "{\"dataDir\":null,\"action\":\"none\"}".to_string(),
+            "prove" => "{\"ok\":true,\"relayPub\":\"aa\"}".to_string(),
+            "move" => {
+                let suite = self.data.join("suite");
+                self.calls.lock().unwrap().push(format!(
+                    "move backup={} ready={} active={} kills={}",
+                    suite.join("db-backup").exists(),
+                    suite.join("staging").join("READY").exists() && suite.join("staging").join("bundle.tgz").exists(),
+                    suite.join("active").exists(),
+                    self.kills.load(Ordering::SeqCst)
+                ));
+                "{\"ok\":false,\"code\":\"test-refused\"}".to_string()
+            }
+            _ => "{\"ok\":false,\"code\":\"unscripted\"}".to_string(),
+        };
+        if sub != "move" {
+            self.calls.lock().unwrap().push(sub);
+        }
+        launcher::NodeOut { code: 0, stdout: answer + "\n", stderr: String::new() }
+    }
+    fn progress(&self, _p: &launcher::Progress) {}
+    fn opened(&self, _d: &Path) {
+        let n = self.opened.fetch_add(1, Ordering::SeqCst) + 1;
+        self.first_open.lock().unwrap().get_or_insert_with(Instant::now);
+        self.calls.lock().unwrap().push(format!("OPENED {n}"));
+        (self.on_open)(n);
+    }
+    fn quitting(&self) -> bool {
+        self.opened.load(Ordering::SeqCst) >= self.quit_after
+            || self.first_open.lock().unwrap().map(|t| t.elapsed() > Duration::from_secs(60)).unwrap_or(false)
+    }
+}
+
+impl Drop for TestShell {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.child.lock().unwrap().take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+// The production SuiteHost, with the test's shell and a clock the test moves (minutes of the local day).
+fn suite_host<'s>(shell: &'s TestShell, fx: &Fixture, config_file: &Path, minute: Arc<std::sync::atomic::AtomicU32>) -> SuiteHost<'s> {
+    SuiteHost {
+        shell,
+        payload: fx.payload.clone(),
+        log: fx._root.0.join("relay-launch.log"),
+        current: Arc::new(Mutex::new(fx.data_dir.clone())),
+        storage_state: config_file.to_path_buf(),
+        node: Some(fx.node.clone()),
+        clock: Box::new(move || clock_at(minute.load(Ordering::SeqCst))()),
+        apply_every: Duration::from_millis(0),
+        pinned: AtomicBool::new(false),
+        latest: Mutex::new(None),
+        spawns: AtomicUsize::new(0),
+        stops: AtomicUsize::new(0),
+        run: Mutex::new(None),
+        last_apply_eval: Mutex::new(None),
+    }
+}
+
+fn launcher_cfg(config_file: &Path, default_data: &Path, log: &Path) -> launcher::Config {
+    launcher::Config { config_file: config_file.to_path_buf(), default_data: default_data.to_path_buf(), port: PORT, up_steps: 400, log_path: log.to_path_buf(), mover_wait_ms: 5000, check_steps: 400 }
+}
+
+fn small_boot_timing() {
+    TEST_BOOT_TIMING.with(|c| c.set(Some(BootTiming {
+        base: Duration::from_secs(3),
+        quiet: Duration::from_secs(2),
+        cap: Duration::from_secs(30),
+        health: Duration::from_secs(6),
+    })));
+}
+
+const OUT_OF_WINDOW: u32 = 840; // 14:00 — the fixtures' window is 00:00–02:00
+
+// AFTER A MOVE, AN UPDATE'S BACKUP AND RESTORE TOUCH THE NEW FOLDER. The pointer (storage.json) names a folder on
+// another drive; the default app-data folder still holds an old copy. A bad update is applied while the relay runs
+// (the launcher's tick), fails its health check, and is rolled back with the church's data restored. Every one of
+// those file operations must be in the folder the launcher resolved — and the relay the rollback leaves running must
+// be proven again by the launcher before the panel reopens.
+#[test]
+fn after_a_move_an_updates_backup_and_restore_touch_the_new_folder() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use; a leftover relay would make this test report false results (NOT a code failure)");
+    small_boot_timing();
+    let fx = fresh_box("moved", "2026-01-01T00:00:00Z");
+    let root = fx._root.0.clone();
+    // the NEW folder (the pointer's) is the fixture's data dir; the default folder is the old copy
+    let old = root.join("default-data");
+    write(&old.join("relay.sqlite"), "OLD-STORE");
+    write(&old.join("suite-autoupdate"), "00:00\n");
+    write(&old.join("admin.json"), "{\"token\":\"test-admin-token\"}\n");
+    write(&old.join("MOVED-TO"), "moved");
+    write(&fx.data_dir.join("relay.sqlite"), "NEW-STORE");
+    write(&fx.data_dir.join("relay.sqlite-wal"), "NEW-WAL");
+    let config_file = root.join("cfg").join("storage.json");
+    write(&config_file, &format!("{{\"dataDir\":{},\"relayPub\":\"aa\",\"move\":{{\"state\":\"done\"}}}}\n", jstr(&fx.data_dir.to_string_lossy())));
+    // a bad update: it verifies and beats the floor, but reports the wrong version and mangles the store it runs on
+    build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &Bundle { label: "BAD", sha: SHA2, date: D_OCT, lie: true, prelude: "" });
+    write_ready(&fx.staging, "v2", SHA2, D_OCT);
+
+    let minute = Arc::new(std::sync::atomic::AtomicU32::new(OUT_OF_WINDOW));
+    let m2 = minute.clone();
+    // the first panel is open: now the apply window opens
+    let shell = TestShell::new(fx.node.clone(), fx.data_dir.clone(), 2, Box::new(move |n| if n == 1 { m2.store(IN_WINDOW, Ordering::SeqCst) }));
+    let host = suite_host(&shell, &fx, &config_file, minute);
+    let log = root.join("relay-launch.log");
+    let end = launcher::run(&host, &launcher_cfg(&config_file, &old, &log));
+    assert_eq!(end, launcher::RunEnd::Quit, "{:?}", shell.calls());
+
+    let backups: Vec<_> = std::fs::read_dir(fx.suite_dir.join("db-backup")).map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default();
+    assert_eq!(backups.len(), 1, "the update's backup must be made in the NEW folder (suite/db-backup): {:?}", shell.calls());
+    assert_eq!(std::fs::read_to_string(backups[0].join("relay.sqlite")).unwrap(), "NEW-STORE", "the backup must be of the NEW folder's store");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite")).unwrap(), "NEW-STORE", "the bad update's damage must be restored in the NEW folder");
+    assert_eq!(std::fs::read_to_string(fx.data_dir.join("relay.sqlite-wal")).unwrap(), "NEW-WAL");
+    assert_eq!(std::fs::read_to_string(fx.suite_dir.join("quarantine-sha")).unwrap_or_default().trim(), SHA2, "the NEW folder records the quarantine");
+    assert_eq!(std::fs::read_to_string(old.join("relay.sqlite")).unwrap(), "OLD-STORE", "the old copy must never be touched");
+    assert!(!old.join("suite").exists(), "nothing of the update may be written in the default folder");
+    // every relay the launcher supervised was proven: the first start and the one the rollback left running
+    let c = shell.calls();
+    assert_eq!(c.iter().filter(|x| *x == "prove").count(), 2, "the relay after the update was not proven again: {c:?}");
+    let p2 = c.iter().rposition(|x| x == "prove").unwrap();
+    assert!(p2 < c.iter().position(|x| x == "OPENED 2").unwrap(), "proof must come before the panel reopens: {c:?}");
+    drop(shell);
+    assert!(wait_port_free(Duration::from_secs(10)));
+}
+
+// A MOVE AND AN APPLY NEVER OVERLAP — in both orders the move goes first and the update waits.
+//   (1) A steward asks for a move just as the update window opens: the launcher's tick does not even start the
+//       apply while the request waits; the relay stops for the move, the move runs with nothing of the update done,
+//       and the update is applied at the next start.
+//   (2) The move is accepted in the instant the apply is already stopping the relay (here: the relay writes its
+//       .move-request while closing its tunnel for the update): once the relay is down the apply finds the request,
+//       puts the bundle back and hands the launcher the move — no backup, no swap, no restart on top of it.
+#[test]
+fn a_move_and_an_update_apply_never_overlap() {
+    let _port = port_lock();
+    assert!(!port_reachable(), "port {PORT} is already in use; a leftover relay would make this test report false results (NOT a code failure)");
+    small_boot_timing();
+    // A v1 gateway that stops itself (exit 0) once a .move-request appears in its folder, as the real one does.
+    let stops_for_a_move = "setInterval(() => { try { readFileSync(process.env.TRINITY_DATA_DIR + '/.move-request'); setTimeout(() => process.exit(0), 200); } catch {} }, 150);";
+    for case in [1, 2] {
+        eprintln!("── launcher scenario: move vs apply, case ({case}) ──");
+        let fx = fresh_box(&format!("mvap{case}"), "2026-01-01T00:00:00Z");
+        let root = fx._root.0.clone();
+        let mut gw = gateway_src_ex("v1", false, stops_for_a_move);
+        if case == 2 {
+            // the move is accepted while the relay closes its tunnel for the apply's stop
+            let at = "try { writeFileSync(process.env.TRINITY_DATA_DIR + '/prepared-by-' + LABEL, '1'); } catch {}";
+            assert_eq!(gw.matches(at).count(), 1);
+            gw = gw.replace(at, &format!("{at} try {{ writeFileSync(process.env.TRINITY_DATA_DIR + '/.move-request', '{{\"drive\":\"/media/x\"}}'); }} catch {{}}"));
+        }
+        write(&fx.payload.join("scripts").join("gateway.mjs"), &gw);
+        write(&fx.data_dir.join("relay.sqlite"), "STORE");
+        build_signed_bundle(&fx.node, &fx.tools, &fx.priv_key, &fx.staging, &good("v2", SHA2, D_OCT));
+        write_ready(&fx.staging, "v2", SHA2, D_OCT);
+        let config_file = root.join("cfg").join("storage.json");
+        let minute = Arc::new(std::sync::atomic::AtomicU32::new(OUT_OF_WINDOW));
+        let (m2, data2) = (minute.clone(), fx.data_dir.clone());
+        let shell = TestShell::new(fx.node.clone(), fx.data_dir.clone(), 2, Box::new(move |n| {
+            if n == 1 {
+                if case == 1 {
+                    // the steward clicks Move in the panel just as the window opens
+                    let _ = std::fs::write(data2.join(".move-request"), "{\"drive\":\"/media/x\"}");
+                }
+                m2.store(IN_WINDOW, Ordering::SeqCst);
+            }
+        }));
+        let host = suite_host(&shell, &fx, &config_file, minute);
+        let log = root.join("relay-launch.log");
+        let end = launcher::run(&host, &launcher_cfg(&config_file, &fx.data_dir, &log));
+        let c = shell.calls();
+        assert_eq!(end, launcher::RunEnd::Quit, "({case}) {c:?}");
+        let mv: Vec<&String> = c.iter().filter(|x| x.starts_with("move ")).collect();
+        assert_eq!(mv.len(), 1, "({case}) the move must be carried out once: {c:?}");
+        // at the moment the mover ran: no backup made, the bundle still staged, nothing swapped, and the update never
+        // stopped the relay (case 1) / stopped it only to hand over to the move (case 2)
+        let kills = if case == 1 { 0 } else { 1 };
+        assert_eq!(mv[0].as_str(), format!("move backup=false ready=true active=false kills={kills}"), "({case}) the move overlapped the update: {c:?}");
+        assert!(!fx.suite_dir.join(APPLY_MARKER).exists(), "({case}) the apply marker was left behind");
+        // and the update was applied afterwards, at the next start
+        assert_eq!(read_state_field(&fx.suite_dir, "lastOutcome").as_deref(), Some("applied"), "({case}) the update must be applied after the move: {c:?}");
+        drop(shell);
+        assert!(wait_port_free(Duration::from_secs(10)), "({case}) port not free");
+    }
 }

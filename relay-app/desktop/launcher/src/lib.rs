@@ -1208,10 +1208,11 @@ mod tests {
         blocked: Mutex<Option<String>>,
         before: Mutex<Option<(String, String)>>,
         checking: Mutex<Vec<bool>>,
+        idle_ticks: Mutex<u32>,
     }
     impl Fake {
         fn new(answers: Vec<(&'static str, Value)>, relays: Vec<(Option<Exit>, &str)>) -> Fake {
-            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]) }
+            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]), idle_ticks: Mutex::new(0) }
         }
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
@@ -1249,7 +1250,9 @@ mod tests {
             let c = self.calls.lock().unwrap();
             let opened = c.iter().filter(|x| *x == "OPENED").count();
             let replaced = c.iter().filter(|x| *x == "TICK:replace").count();
-            opened > replaced && self.ticks.lock().unwrap().is_empty()
+            // (a launcher that never reopens the panel would otherwise tick for ever: give up after many idle ticks so
+            // the test fails on its assertions instead of hanging)
+            (opened > replaced || *self.idle_ticks.lock().unwrap() > 200) && self.ticks.lock().unwrap().is_empty()
         }
         fn before_start(&self, _d: &Path) -> Result<(), (String, String)> {
             self.calls.lock().unwrap().push("BEFORE_START".into());
@@ -1261,6 +1264,7 @@ mod tests {
         fn tick(&self, _d: &Path) -> Tick {
             let mut t = self.ticks.lock().unwrap();
             if t.is_empty() {
+                *self.idle_ticks.lock().unwrap() += 1;
                 return Tick::None;
             }
             let what = t.remove(0);
