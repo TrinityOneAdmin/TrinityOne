@@ -18,7 +18,7 @@ import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';
 import { createTunnelWatchdog } from './relay-selfheal.mjs';
 // Relay storage plan step 3: the panel API reuses the mover's OWN checks (audit B: same realpath/symlink/classify path).
-import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
+import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath, blockDeviceIsUsbOrRemovable } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
 // The names this relay gates by, from the ONE declared list (ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
@@ -7101,7 +7101,9 @@ async function storageCandidates(mounts) {
   if (pf === 'darwin') { for (const e of await dirsIn('/Volumes')) if (!e.link) add(e.p, basename(e.p), 'volume'); }   // the boot volume's alias is a symlink
   else {
     const u = String(process.env.USER || process.env.LOGNAME || '').replace(/[\\/]/g, '');
-    if (u) for (const d of ['/media/' + u, '/run/media/' + u]) for (const e of await dirsIn(d)) add(e.p, basename(e.p), 'removable');
+    // only a real mountpoint (audit B L-2): a directory left behind after an unmount would otherwise put the relay on
+    // the root disk under a future mount point — the R1 trap
+    if (u) for (const d of ['/media/' + u, '/run/media/' + u]) for (const e of await dirsIn(d)) if ((mounts || []).some(m => m.mountpoint === e.p)) add(e.p, basename(e.p), 'removable');
     for (const e of await dirsIn('/mnt')) if ((mounts || []).some(m => m.mountpoint === e.p)) add(e.p, basename(e.p), 'mount');
   }
   return out;
@@ -7139,6 +7141,7 @@ async function storageJudge(c, ctx) {
   const cls = classifyTarget({ path: d.target, fsType: d.fsType, mountOptions: m && m.options, free: d.freeBytes == null ? undefined : d.freeBytes,
     need: d.needBytes == null ? undefined : d.needBytes, mode: STORAGE_MODE, codeDir: ROOT, platform: pf });
   d.refuse.push(...cls.refuse); d.warn.push(...cls.warn);
+  if (pf === 'linux' && m && !d.warn.includes('removable') && await blockDeviceIsUsbOrRemovable(m.source)) d.warn.push('removable');   // audit B L-6
   return done();
 }
 // Everything the card needs. `fresh` re-reads the mount table and size (a move decides on current facts).
@@ -7155,7 +7158,10 @@ async function storageReport(fresh) {
   if (j && MOVE_ACTIVE.has(j.state)) refuse.push('move-in-progress');
   if (j && j.state === 'awaiting-confirm') refuse.push('old-copy-awaiting-removal');
   if (existsSync(join(DATA_DIR, '.restore-pending'))) refuse.push('restore-pending');
-  if (existsSync(STORAGE_MOVE_REQUEST)) refuse.push('move-already-requested');
+  // A request is live only if THIS run of the relay wrote it (it stops right after writing). One older than this
+  // process, with no move under way, is a leftover the launcher never consumed (audit B M-1): it is reported as
+  // stale and not treated as "under way". The mover consumes the request as its first act, so this is a backstop.
+  if (existsSync(STORAGE_MOVE_REQUEST) && !storageRequestIsStale(j)) refuse.push('move-already-requested');
   if (await relayLockHeld(DATA_DIR)) refuse.push('relay-running');   // ANOTHER live relay process on this folder (our own lock is ignored)
   if (size.symlink) refuse.push('source-has-symlink');
   if (!mounts) refuse.push('drives-unknown');
@@ -7177,9 +7183,16 @@ async function storageReport(fresh) {
     // is gone for good and not offered again (audit C C3 — the remover, step 5/6, must set it)
     leftovers: (j && Array.isArray(j.leftovers) ? j.leftovers : []).filter(l => l && l.path && !l.removedAt)
       .map(l => ({ path: l.path, kind: l.kind || null, since: l.since || null, exists: existsSync(l.path) })),
-    requests: { move: req(STORAGE_MOVE_REQUEST), removeOld: req(STORAGE_REMOVE_REQUEST) },
+    requests: { move: (m => m ? { ...m, stale: storageRequestIsStale(j) } : m)(req(STORAGE_MOVE_REQUEST)), removeOld: req(STORAGE_REMOVE_REQUEST) },
     refuse, drives,
   };
+}
+const STORAGE_STARTED_AT = Date.now();
+function storageRequestIsStale(j) {
+  if (j && MOVE_ACTIVE.has(j.state)) return false;
+  let at = NaN; try { at = Date.parse(JSON.parse(readFileSync(STORAGE_MOVE_REQUEST, 'utf8')).requestedAt); } catch {}
+  if (!Number.isFinite(at)) { try { at = statSync(STORAGE_MOVE_REQUEST).mtimeMs; } catch { return false; } }
+  return at < STORAGE_STARTED_AT;
 }
 function storageWriteRequest(file, obj) {
   const tmp = file + '.tmp-' + process.pid;
@@ -8194,6 +8207,8 @@ function serveStatic(req, res) {
   if (STORAGE_MODE && (route === '/storage' || route === '/storage/move' || route === '/storage/remove-old')) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // same-origin panel: NO Access-Control-Allow-Origin
     const send = (code, obj) => { res.writeHead(code, H); res.end(JSON.stringify(obj)); };
+    // N-3 (audit B, left as is): on an opted-in box a non-admin gets 401 here, where an unset box answers like a
+    // missing path — that reveals only that the mode is on.
     if (!adminOK(req)) { send(401, { error: 'unauthorized' }); return; }
     const local = storageRequestIsLocal(req);
     if (route === '/storage') {
@@ -8236,7 +8251,11 @@ function serveStatic(req, res) {
         const path = typeof b.path === 'string' ? b.path : '';
         const kind = r.oldCopy && r.oldCopy.path === path ? 'old-copy' : (r.leftovers.find(l => l.path === path) ? 'leftover' : '');
         if (!kind) { send(400, { error: 'not-recorded' }); return; }
-        if (samePath(path, DATA_DIR) || (r.current.realPath && samePath(path, r.current.realPath))) { send(409, { error: 'refused', refuse: ['current-folder'] }); return; }
+        // never the live folder, nor anything that holds it or is inside it, compared after resolving symlinks
+        // (audit B L-4). The step-5/6 remover must re-check the same thing itself: it is the boundary, not this.
+        let real = path; try { real = await realpathP(path); } catch {}
+        const live = [DATA_DIR, r.current.realPath].filter(Boolean);
+        if (live.some(l => [path, real].some(p => samePath(p, l) || storageInside(p, l) || storageInside(l, p)))) { send(409, { error: 'refused', refuse: ['current-folder'] }); return; }
         storageWriteRequest(STORAGE_REMOVE_REQUEST, { path, kind, relayPub: relayKeyPubOnDisk(), mode: STORAGE_MODE, requestedAt: new Date().toISOString() });
         send(200, { ok: true, requested: true, path, kind });
       })().catch(e => { try { send(500, { error: String((e && e.message) || e) }); } catch {} });

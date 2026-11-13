@@ -1752,7 +1752,7 @@
     const shown = rest.length > 2 ? ['…', ...rest.slice(-2)] : rest;
     return [place.label.charAt(0).toUpperCase() + place.label.slice(1), ...shown];
   }
-  let stState = { r: null, sel: '', ack: false, open: false, armed: false, msg: '', stopped: false, removeArmed: '', removed: {} };
+  let stState = { r: null, sel: '', ack: false, open: false, armed: false, msg: '', stopped: false, removeArmed: '', removeMsg: '', removeMsgFor: '' };
   let stDisarmT = null;
   function stDriveRow(d) {
     const sel = stState.sel === d.mountpoint, off = !d.eligible;
@@ -1807,7 +1807,9 @@
     } else if (stState.msg) {
       h += '<div style="margin-top:12px">' + stState.msg + '</div>';
     }
-    h += '<div class="st-explain">The relay stops for a few minutes while it copies. Members carry on through your church\'s other relays. Your old copy is kept until you remove it.</div>';
+    h += d && d.sameDrive
+      ? '<div class="st-explain" id="stExplain">Same drive, so the move is instant and there is no old copy. The relay restarts once.</div>'
+      : '<div class="st-explain" id="stExplain">The relay stops for a few minutes while it copies. Members carry on through your church\'s other relays. Your old copy is kept until you remove it.</div>';
     return h;
   }
   function stRecent(m) { const t = Date.parse(m.endedAt || m.checkedAt || m.switchedAt || m.startedAt || 0); return t && Date.now() - t < ST_RECENT_MS; }
@@ -1842,7 +1844,7 @@
     const since = o.since ? new Date(o.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
     const txt = o.remind ? 'Old copy: <b>' + esc(place.label) + '</b>' + size + (since ? ', kept since ' + since : '') + '.' : 'The old copy is still on <b>' + esc(place.label) + '</b>' + size + '.';
     let act;
-    if (pending) act = '<span class="muted" id="stRemovePending">Removal requested — the old copy goes next time the relay restarts.</span>';
+    if (pending) act = '<span class="muted" id="stRemovePending">Removal requested. This card updates once the old copy is gone.</span>';
     else if (!o.exists) act = '<span class="muted">Plug in ' + esc(place.label) + ' to remove the old copy.</span>';
     else if (!r.canChange) act = '';
     else act = stState.removeArmed === o.path ? '<button type="button" class="btn btn-danger" id="stRemoveOld">Remove the old copy?</button>' : '<button type="button" class="btn btn-ghost btn-caution" id="stRemoveOld">' + ST_TRASH_SVG + 'Remove old copy</button>';
@@ -1892,6 +1894,8 @@
       if (r.mode === 'suite' && !r.local) body += stResult('info', '<b>Change this on the relay\'s own computer.</b><span class="st-sub">You can see where the data is from here, but moving it only works in the TrinityOne Suite window on that computer.</span>');
       else if (!(r.move && r.move.state === 'awaiting-confirm')) body += (body ? '<div style="margin-top:12px">' : '<div>') + stMoveControls(r) + '</div>';
       body += stLeftovers(r);
+      // a failed Remove is shown whatever the card now holds — the folder it named may no longer be on record
+      if (stState.removeMsg) body += '<div style="margin-top:10px" id="stRemoveMsg">' + stState.removeMsg + '</div>';
     }
     document.getElementById('stBody').innerHTML = body;
     stWire();
@@ -1902,7 +1906,8 @@
   function stRenderDash(r) {
     const el = document.getElementById('storageRemindDash'); if (!el) return;
     const o = r && r.oldCopy;
-    if (!o || !o.remind) { el.hidden = true; return; }
+    const removing = !!(o && r.requests && r.requests.removeOld && r.requests.removeOld.path === o.path);   // audit B N-1
+    if (!o || !o.remind || removing) { el.hidden = true; return; }
     const place = stPlace(r, o.path, o.mountpoint);
     document.getElementById('stDashT').textContent = 'Your old copy has been on ' + place.label + ' for ' + o.ageDays + ' days.';
     el.hidden = false;
@@ -1929,6 +1934,17 @@
     if (res.status === 400 && res.j.error === 'drive-not-offered') return stResult('bad', '<b>That drive isn\'t offered any more.</b> Pick again.');
     const codes = (res.j && res.j.refuse) || [];
     return stResult('bad', '<b>Can\'t move right now.</b> ' + esc(codes.length ? stReason(codes[0]) : (res.j.error || 'Something went wrong.')));
+  }
+  // a failed Remove says what failed — never "Can't move right now" (audit B L-1)
+  function stRemoveFailText(res, path) {
+    const isOld = !!(stState.r && stState.r.oldCopy && stState.r.oldCopy.path === path);
+    const what = isOld ? 'Couldn\'t remove the old copy.' : 'Couldn\'t remove that leftover folder.';
+    const why = res.status === 403 ? stReason('local-only')
+      : res.status === 400 && res.j && res.j.error === 'not-recorded' ? 'It is no longer on record, so it was left alone. Reload the page.'
+      : res.status === 409 ? 'It is the folder your relay is using now, so it was left alone.'
+      : res.status === 0 ? 'Couldn\'t reach the relay. Try again.'
+      : 'Something went wrong. Try again.';
+    return stResult('bad', '<b>' + what + '</b> ' + esc(why));
   }
   async function stWaitForRelay() {
     // the relay serves this page and is off during the move: wait for it, then show what happened
@@ -1965,7 +1981,8 @@
     if (stState.removeArmed !== path) { stState.removeArmed = path; stRender(); stArm(); return; }
     stDisarm();
     let res; try { res = await stPost('/storage/remove-old', { path }); } catch (e) { res = { status: 0, j: { error: e.message } }; }
-    if (res.status !== 200) stState.msg = stFailText(res);
+    stState.removeMsg = ''; stState.removeMsgFor = '';
+    if (res.status !== 200) { stState.removeMsg = stRemoveFailText(res, path); stState.removeMsgFor = path; }
     await stLoad();
   }
   async function stLoad() {

@@ -21,6 +21,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { parseWinLogicalDisks } from './relay-move.mjs';
 import { requireFreePort } from './test-ports.mjs';
 
 const PORT = 8874;
@@ -419,12 +420,17 @@ function fakeMountsPreload(base) {
   writeFileSync(f, `import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 const add = process.env.TEST_MOUNTINFO_ADD || '', fstab = process.env.TEST_FSTAB;
-const orig = fs.promises.readFile;
+const sysRoot = process.env.TEST_SYSFS_ROOT || '';                     // /sys/... is read from here instead
+const dirMap = JSON.parse(process.env.TEST_READDIR_MAP || '{}');       // listing a mapped folder lists another
+const sys = p => sysRoot && String(p).startsWith('/sys/') ? sysRoot + String(p) : p;
+const orig = fs.promises.readFile, origRp = fs.promises.realpath, origRd = fs.promises.readdir;
 fs.promises.readFile = async function (p, ...a) {
   if (String(p) === '/etc/fstab' && fstab !== undefined) return fstab;
-  const t = await orig.call(this, p, ...a);
+  const t = await orig.call(this, sys(p), ...a);
   return String(p) === '/proc/self/mountinfo' && add ? String(t) + add : t;
 };
+fs.promises.realpath = async function (p, ...a) { return origRp.call(this, sys(p), ...a); };
+fs.promises.readdir = async function (p, ...a) { return origRd.call(this, dirMap[String(p)] || p, ...a); };
 syncBuiltinESMExports();\n`);
   return '--import ' + f;
 }
@@ -509,4 +515,111 @@ test('owner §8b: a REMOVABLE drive (USB wear) needs its acknowledgement too, wh
       } finally { await stop(g); }
     } finally { rmSync(base, { recursive: true, force: true }); }
   }
+});
+
+test('audit B M-1: a request older than this run of the relay (never consumed) is stale, not "under way"; a fresh one still refuses', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-storage-stale-'));
+  try {
+    const { dir } = relayFolder(base);
+    const s = suiteEnv(base);
+    writeFileSync(join(dir, '.move-request'), JSON.stringify({ drive: s.home, requestedAt: new Date(Date.now() - 3600e3).toISOString() }));
+    const g = await boot(dir, s.env);
+    try {
+      let r = (await http('GET', '/storage', { token: TOKEN })).json;
+      assert.ok(!r.refuse.includes('move-already-requested'), 'a stale request left from before this start blocks every move for ever: ' + JSON.stringify(r.refuse));
+      assert.equal(r.requests.move.stale, true);
+      // a request written by THIS run (the relay stops straight after, so this only happens if the stop failed) refuses
+      writeFileSync(join(dir, '.move-request'), JSON.stringify({ drive: s.home, requestedAt: new Date().toISOString() }));
+      r = (await http('GET', '/storage', { token: TOKEN })).json;
+      assert.ok(r.refuse.includes('move-already-requested'), 'a live request was ignored: ' + JSON.stringify(r.refuse));
+      assert.equal(r.requests.move.stale, false);
+      // while a move is under way a request is never stale
+      writeFileSync(join(dir, '.move-request'), JSON.stringify({ drive: s.home, requestedAt: new Date(Date.now() - 3600e3).toISOString() }));
+      writeFileSync(s.state, JSON.stringify({ move: { state: 'copying', from: dir, to: join(s.home, 'trinityone-relay') } }));
+      r = (await http('GET', '/storage', { token: TOKEN })).json;
+      assert.equal(r.requests.move.stale, false, 'a request during an active move was called stale');
+    } finally { await stop(g); }
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('audit B L-4: remove-old refuses a recorded path that holds, sits inside, or symlinks to the live folder', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-storage-l4-'));
+  try {
+    const { dir } = relayFolder(base);
+    mkdirSync(join(dir, 'blobs'));
+    const s = suiteEnv(base);
+    const link = join(base, 'link-to-data'); symlinkSync(dir, link);
+    const fine = join(base, 'aside'); mkdirSync(fine);
+    const now = new Date().toISOString();
+    writeFileSync(s.state, JSON.stringify({ move: { state: 'done', mode: 'copy', from: base, to: dir,
+      leftovers: [base, join(dir, 'blobs'), link, fine].map(p => ({ path: p, kind: 'set-aside', since: now })) } }));
+    const g = await boot(dir, s.env);
+    try {
+      for (const [path, why] of [[base, 'a folder that HOLDS the live one'], [join(dir, 'blobs'), 'a folder INSIDE the live one'], [link, 'a symlink TO the live one']]) {
+        const r = await http('POST', '/storage/remove-old', { token: TOKEN, body: { path } });
+        assert.equal(r.status, 409, `remove-old accepted ${why}: ${r.body}`);
+        assert.equal(existsSync(join(dir, '.remove-old-request')), false, `a removal was requested for ${why}`);
+      }
+      assert.equal((await http('POST', '/storage/remove-old', { token: TOKEN, body: { path: fine } })).status, 200, 'an unrelated recorded leftover was refused');
+    } finally { await stop(g); }
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('audit B L-2: on Linux the Suite offers /media/$USER/* only when the entry is a real mountpoint', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-storage-l2-'));
+  try {
+    const { dir } = relayFolder(base);
+    const s = suiteEnv(base);
+    const fakeMedia = join(base, 'media-listing'); mkdirSync(join(fakeMedia, 'STICK'), { recursive: true }); mkdirSync(join(fakeMedia, 'LEFTOVER'));
+    const user = 'storage-test-user';
+    const g = await boot(dir, { ...s.env, USER: user, NODE_OPTIONS: fakeMountsPreload(base),
+      TEST_READDIR_MAP: JSON.stringify({ ['/media/' + user]: fakeMedia }),
+      TEST_MOUNTINFO_ADD: `9999 1 0:999 / /media/${user}/STICK rw,relatime shared:999 - vfat /dev/sdz1 rw\n` });
+    try {
+      const r = (await http('GET', '/storage', { token: TOKEN })).json;
+      const mps = r.drives.map(d => d.mountpoint);
+      assert.ok(mps.includes(`/media/${user}/STICK`), 'a mounted stick under /media/$USER is not offered: ' + JSON.stringify(mps));
+      assert.ok(!mps.includes(`/media/${user}/LEFTOVER`), 'a directory left under /media/$USER after an unmount is offered (the R1 trap): ' + JSON.stringify(mps));
+    } finally { await stop(g); }
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('audit B L-6 (Linux): a drive whose block device is on USB or removable gets the wear warning wherever it is mounted', async () => {
+  // an injected /sys: three block devices — one under a USB bus, one whose disk says removable=1, one plain SATA
+  const cases = [['sdq1', 'pci0000:00/0000:00:14.0/usb2/2-1/2-1:1.0/host6/target6:0:0/6:0:0:0/block/sdq/sdq1', '0', true],
+                 ['sdr1', 'pci0000:00/0000:00:17.0/ata3/host2/target2:0:0/2:0:0:0/block/sdr/sdr1', '1', true],
+                 ['sds1', 'pci0000:00/0000:00:17.0/ata4/host3/target3:0:0/3:0:0:0/block/sds/sds1', '0', false]];
+  for (const [dev, path, removable, want] of cases) {
+    const base = mkdtempSync(join(tmpdir(), 'trin-storage-l6-'));
+    try {
+      const { dir } = relayFolder(base);
+      const s = suiteEnv(base);
+      const sys = join(base, 'sysroot');
+      const devDir = join(sys, 'sys', 'devices', path); mkdirSync(devDir, { recursive: true });
+      writeFileSync(join(devDir, '..', 'removable'), removable + '\n');
+      writeFileSync(join(devDir, 'partition'), '1\n');
+      mkdirSync(join(sys, 'sys', 'class', 'block'), { recursive: true });
+      symlinkSync(devDir, join(sys, 'sys', 'class', 'block', dev));
+      const g = await boot(dir, { ...s.env, NODE_OPTIONS: fakeMountsPreload(base), TEST_SYSFS_ROOT: sys,
+        TEST_MOUNTINFO_ADD: `9999 1 0:999 / ${s.home} rw,relatime shared:999 - ext4 /dev/${dev} rw\n` });
+      try {
+        const d = (await http('GET', '/storage', { token: TOKEN })).json.drives.find(x => x.mountpoint === s.home);
+        assert.ok(d, 'the drive is not listed');
+        assert.equal(d.warn.includes('removable'), want, `${dev} (${path.includes('/usb') ? 'USB' : 'SATA'}, removable=${removable}): wear warning ${want ? 'missing' : 'wrongly shown'}: ${JSON.stringify(d.warn)}`);
+        if (want) assert.equal((await http('POST', '/storage/move', { token: TOKEN, body: { drive: s.home } })).status, 409, 'a USB drive was moved to without the acknowledgement');
+      } finally { await stop(g); }
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  }
+});
+
+test('audit B L-6 (Windows, parser only — the real PowerShell query is a step-7 device check): a USB bus marks a drive removable', () => {
+  const rows = parseWinLogicalDisks(JSON.stringify([
+    { DeviceID: 'C:', DriveType: 3, FileSystem: 'NTFS', BusType: 'NVMe' },
+    { DeviceID: 'E:', DriveType: 3, FileSystem: 'exFAT', BusType: 'USB' },      // a USB SSD reports DriveType 3 (fixed)
+    { DeviceID: 'F:', DriveType: 3, FileSystem: 'NTFS', BusType: '7' },          // the numeric BusType enum (7 = USB)
+    { DeviceID: 'G:', DriveType: 2, FileSystem: 'FAT32' },                       // a stick: removable by DriveType alone
+    { DeviceID: 'H:', DriveType: 3, FileSystem: 'NTFS' },                        // no bus known: not flagged
+  ]));
+  const rem = Object.fromEntries(rows.map(r => [r.mountpoint, r.options.includes('removable')]));
+  assert.deepEqual(rem, { 'C:\\': false, 'E:\\': true, 'F:\\': true, 'G:\\': true, 'H:\\': false });
 });

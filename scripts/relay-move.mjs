@@ -117,7 +117,12 @@ export function parseMacMount(text) {
   }
   return out;
 }
-// Windows: `Get-CimInstance Win32_LogicalDisk | Select DeviceID,DriveType,FileSystem,ProviderName | ConvertTo-Json`.
+// Windows: Win32_LogicalDisk plus each letter's disk BusType (Get-Partition -> Get-Disk; built-in Storage module,
+// no native code). Most USB SSDs/HDDs report DriveType 3 (fixed), so the bus is what says "USB" (audit B L-6).
+// NOT RUN ON WINDOWS YET — a step-7 device check: confirm a USB SSD comes back BusType "USB" (or 7).
+const WIN_DISKS_PS = "$b=@{}; try { Get-Partition -ErrorAction Stop | Where-Object { $_.DriveLetter } | ForEach-Object { $b[[string]$_.DriveLetter] = [string](Get-Disk -Number $_.DiskNumber).BusType } } catch {}; "
+  + "Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,FileSystem,ProviderName,@{n='BusType';e={$b[[string]$_.DeviceID.Substring(0,1)]}} | ConvertTo-Json -Compress";
+// Windows rows: DeviceID, DriveType (4 = network, 2 = removable), FileSystem, ProviderName, BusType.
 // DriveType 4 = network (a MAPPED drive letter), 2 = removable. Pure. (A `subst` drive is not distinguishable here.)
 export function parseWinLogicalDisks(json) {
   let rows; try { rows = JSON.parse(String(json || '')); } catch { return []; }
@@ -126,7 +131,7 @@ export function parseWinLogicalDisks(json) {
     mountpoint: r.DeviceID.toUpperCase() + '\\',
     fsType: Number(r.DriveType) === 4 ? 'smb' : String(r.FileSystem || '').toLowerCase(),
     source: r.ProviderName || '',
-    options: Number(r.DriveType) === 2 ? ['removable'] : [],
+    options: (Number(r.DriveType) === 2 || /^(usb|7)$/i.test(String(r.BusType || ''))) ? ['removable'] : [],
   }));
 }
 // The mount holding path p (longest mountpoint prefix).
@@ -140,7 +145,7 @@ export function systemMounts() {
     if (process.platform === 'linux') return parseMountinfo(readFileSync('/proc/self/mountinfo', 'utf8'));
     if (process.platform === 'darwin') return parseMacMount(execFileSync('mount', [], { encoding: 'utf8', timeout: 5000 }));
     if (process.platform === 'win32') return parseWinLogicalDisks(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,FileSystem,ProviderName | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 15000, windowsHide: true }));
+      WIN_DISKS_PS], { encoding: 'utf8', timeout: 15000, windowsHide: true }));
   } catch {}
   return null;
 }
@@ -152,9 +157,25 @@ export async function systemMountsAsync(pf = process.platform) {
     if (pf === 'linux') { const { readFile } = await import('node:fs/promises'); return parseMountinfo(await readFile('/proc/self/mountinfo', 'utf8')); }
     if (pf === 'darwin') return parseMacMount(await run('mount', [], 5000));
     if (pf === 'win32') return parseWinLogicalDisks(await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,FileSystem,ProviderName | ConvertTo-Json -Compress'], 15000));
+      WIN_DISKS_PS], 15000));
   } catch {}
   return null;
+}
+// Linux: is the block device behind a mount removable or on USB? (audit B L-6: a USB disk mounted outside /media —
+// an fstab /mnt mount, say — must still get the wear warning.) /sys/class/block/<dev> resolves to a path under
+// /sys/devices that contains a "/usb" component for anything on a USB bus; a partition's parent disk carries
+// `removable`. Never throws; false when it cannot tell. `source` is the mount's source, e.g. /dev/sdb1.
+export async function blockDeviceIsUsbOrRemovable(source) {
+  try {
+    const m = /^\/dev\/([A-Za-z0-9._-]+)$/.exec(String(source || '')); if (!m) return false;
+    const fsp = await import('node:fs/promises');
+    const dev = await fsp.realpath('/sys/class/block/' + m[1]);
+    if (/\/usb\d*\//.test(dev + '/')) return true;
+    for (const f of [dev + '/removable', dirname(dev) + '/removable']) {
+      try { if (String(await fsp.readFile(f, 'utf8')).trim() === '1') return true; } catch {}
+    }
+  } catch {}
+  return false;
 }
 export function freeBytes(p) {
   let q = resolve(p);
@@ -399,6 +420,12 @@ export async function moveRelayData(opts) {
   const freeSpace = opts.freeSpace || freeBytes;
   const no = (code, detail) => ({ ok: false, code, ...(detail ? { detail } : {}) });
 
+  // THE REQUEST IS ONE-SHOT (audit B M-1). The gateway leaves <from>/.move-request for the launcher; it is consumed
+  // here, before anything else — before any refusal, rename or copy — so a rename cannot carry it into the new
+  // folder, a failed or refused move cannot leave it behind to be acted on at the next close, and a rollback (which
+  // renames the folder back) has nothing to bring back. One request, one attempt.
+  let names = []; try { names = readdirSync(from); } catch {}
+  for (const n of names) if (n === '.move-request' || /^\.move-request\.tmp-\d+$/.test(n)) { try { rmSync(join(from, n), { force: true }); } catch {} }
   const prev = journal.read();
   if (prev && ACTIVE.has(prev.state)) return no('move-in-progress', prev.state);
   // one old copy at a time (audit A #14): "Remove old copy" deletes only the folder recorded as old, so a second
