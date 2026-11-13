@@ -9,13 +9,16 @@ import { WebSocketServer } from 'ws';
 import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync, accessSync, openSync, fsyncSync, closeSync, constants as fsConstants } from 'fs';
 import { Transform } from 'stream';
 import { gzipSync } from 'node:zlib';
-import { extname, normalize, join, sep } from 'path';
-import { networkInterfaces, totalmem } from 'os';
+import { extname, normalize, join, sep, basename, relative, isAbsolute } from 'path';
+import { networkInterfaces, totalmem, homedir } from 'os';
+import { readdir as readdirP, lstat as lstatP, realpath as realpathP, statfs as statfsP, readFile as readFileP } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';
-import { createTunnelWatchdog } from './relay-selfheal.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
+import { createTunnelWatchdog } from './relay-selfheal.mjs';
+// Relay storage plan step 3: the panel API reuses the mover's OWN checks (audit B: same realpath/symlink/classify path).
+import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
 // The names this relay gates by, from the ONE declared list (ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
@@ -189,6 +192,7 @@ function stagingHasSymlink(p) {
     if (staged.includes('relay-key.json') && !importStamp) { try { rmSync(DATA_DIR_STAMP, { force: true }); } catch {} }
     for (const name of staged) {
       if (name === 'MOVED-TO') { console.error('  restore-on-boot: skipped a MOVED-TO note in the backup'); continue; }
+      if (/^\.(move-request|remove-old-request)(\.tmp-\d+)?$/.test(name)) { console.error('  restore-on-boot: skipped a ' + name + ' in the backup (a request to another box\'s launcher)'); continue; }
       if (name === '.trinity-data-dir' && !importStamp) { console.error('  restore-on-boot: skipped a .trinity-data-dir that does not match the backup\'s key'); continue; }
       const dst = join(DATA_DIR, name);
       try { rmSync(dst, { recursive: true, force: true }); } catch {}
@@ -6995,6 +6999,194 @@ function publicFeed(req, res, route) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
+// ── RELAY STORAGE LOCATION — the panel API (relay storage plan step 3) ─────────────────────────────────────────────
+// GET /storage, POST /storage/move, POST /storage/remove-old. ALL HIDDEN unless the launcher sets
+// TRINITY_STORAGE_MODE=suite|server: with it unset (every box today, a git checkout, the release host) the three
+// routes do not exist — they fall through to the static handler exactly as before, and nothing below ever runs.
+//
+// The gateway NEVER moves or deletes anything. It shows what a move would do, and on request writes a request file
+// into its own data folder for the launcher (Suite: the Rust shell, step 5; server: the root helper, step 6), which
+// re-checks everything itself — the request is a wish, not an authority (plan §2, R2).
+//   * POST /storage/move  — admin token; on the Suite ALSO a genuinely local request (owner §8a: never over the
+//     tunnel, even with the token). Re-checks eligibility with the mover's own checks, writes .move-request, then
+//     shuts the relay down CLEANLY (store.close() folds the WAL) and exits 0 so the launcher can do the move.
+//   * POST /storage/remove-old — the same gates; names ONLY a folder the journal recorded (the old copy, or a
+//     leftover). Writes .remove-old-request. Removes nothing.
+// The journal (move state) lives OUTSIDE the data folder (plan §2), in the JSON file the launcher names with
+// TRINITY_STORAGE_STATE (Suite: storage.json; server: move-state.json), field `move`. Read only, never written here.
+const STORAGE_MODE = (m => (m === 'suite' || m === 'server') ? m : '')(String(process.env.TRINITY_STORAGE_MODE || '').trim().toLowerCase());
+const STORAGE_STATE_FILE = String(process.env.TRINITY_STORAGE_STATE || '').trim();
+const STORAGE_MOVE_REQUEST = join(DATA_DIR, '.move-request');
+const STORAGE_REMOVE_REQUEST = join(DATA_DIR, '.remove-old-request');
+const STORAGE_REMIND_DAYS = 7;                       // owner §8a: remind about a kept old copy after 7 days
+const STORAGE_SPACE_MARGIN = 512 * 1024 * 1024;     // the mover's own margin (relay-move.mjs SPACE_MARGIN)
+const STORAGE_SERVER_FS = new Set(['ext4', 'xfs', 'btrfs', 'zfs', 'f2fs']);   // plan §3 "Linux server"
+// A request that crossed a proxy or a tunnel. cloudflared delivers on a LOOPBACK socket, so the socket alone proves
+// nothing; the Cloudflare edge always adds X-Forwarded-For / CF-Connecting-IP / CF-Ray, which a client cannot strip.
+// A strict superset of the /local-token test (x-forwarded-for + forwarded), plus the same loopback Host check.
+const STORAGE_PROXY_HEADERS = ['x-forwarded-for', 'forwarded', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-server',
+  'x-real-ip', 'x-original-forwarded-for', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'cf-ipcountry', 'cdn-loop', 'true-client-ip',
+  'via', 'tailscale-user-login', 'tailscale-user-name', 'tailscale-funnel-request'];
+function storageRequestIsLocal(req) {
+  const ra = (req.socket && req.socket.remoteAddress) || '';
+  const loopbackSock = ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
+  const proxied = STORAGE_PROXY_HEADERS.some(h => req.headers[h] != null);
+  const host = String(req.headers['host'] || '').toLowerCase();
+  const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0];
+  const loopbackHost = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  return loopbackSock && !proxied && loopbackHost;
+}
+function storageReadJournal() {
+  if (!STORAGE_STATE_FILE) return { j: null, err: 'storage-state-unknown' };
+  if (!existsSync(STORAGE_STATE_FILE)) return { j: null, err: null };            // never moved: no journal yet
+  try { const o = JSON.parse(readFileSync(STORAGE_STATE_FILE, 'utf8')); return { j: (o && o.move && typeof o.move === 'object') ? o.move : null, err: null }; }
+  catch { return { j: null, err: 'storage-state-unreadable' }; }
+}
+// Mount table: async (never blocks the event loop — audit C C8 / D), cached briefly; a move asks for a fresh one.
+let _storageMountsP = null, _storageMountsAt = 0;
+function storageMounts(fresh) {
+  if (fresh || !_storageMountsP || Date.now() - _storageMountsAt > 30000) { _storageMountsAt = Date.now(); _storageMountsP = systemMountsAsync(); }
+  return _storageMountsP;
+}
+// Size of the data folder, async and cached (blobs can be GBs). Also notes any symlink: the mover refuses those.
+let _storageSizeP = null, _storageSizeAt = 0;
+function storageDataSize(fresh) {
+  if (fresh || !_storageSizeP || Date.now() - _storageSizeAt > 60000) {
+    _storageSizeAt = Date.now();
+    _storageSizeP = (async () => {
+      let bytes = 0, files = 0, symlink = false; const stack = [DATA_DIR];
+      while (stack.length) {
+        const d = stack.pop(); let ents; try { ents = await readdirP(d, { withFileTypes: true }); } catch { continue; }
+        for (const e of ents) {
+          const p = join(d, e.name);
+          if (e.isSymbolicLink()) { symlink = true; continue; }
+          if (e.isDirectory()) stack.push(p);
+          else if (e.isFile()) { try { bytes += (await lstatP(p)).size; files++; } catch {} }
+        }
+      }
+      return { bytes, files, symlink };
+    })();
+  }
+  return _storageSizeP;
+}
+function storageInside(a, b) { const r = relative(b, a); return r === '' || (!!r && !r.startsWith('..') && !isAbsolute(r)); }
+// The places a steward may pick (plan §3 per OS, owner §8a: a drive, never a typed path). Each becomes
+// <place>/trinityone-relay.
+async function storageCandidates(mounts) {
+  const pf = process.platform, out = [];
+  const add = (path, label, kind) => { if (path && !out.some(c => samePath(c.path, path, pf))) out.push({ path, label, kind }); };
+  const dirsIn = async d => { try { return (await readdirP(d, { withFileTypes: true })).filter(e => e.isDirectory() || e.isSymbolicLink()).map(e => ({ p: join(d, e.name), link: e.isSymbolicLink() })); } catch { return []; } };
+  if (STORAGE_MODE === 'server') {
+    // only persistent (fstab) mounts, so systemd can mount the drive before the relay at boot (RequiresMountsFor=)
+    let fstab = ''; try { fstab = await readFileP('/etc/fstab', 'utf8'); } catch {}
+    for (const line of fstab.split('\n')) {
+      const f = line.replace(/#.*/, '').trim().split(/\s+/); if (f.length < 3) continue;
+      const mp = f[1].replace(/\\040/g, ' ');
+      if (!mp.startsWith('/') || mp === '/' || f[2] === 'swap') continue;
+      add(mp, basename(mp), 'fstab');
+    }
+    return out;
+  }
+  if (pf === 'win32') { for (const m of mounts || []) add(m.mountpoint, m.mountpoint.replace(/\\$/, ''), 'drive'); return out; }
+  add(homedir(), 'Home folder', 'home');
+  if (pf === 'darwin') { for (const e of await dirsIn('/Volumes')) if (!e.link) add(e.p, basename(e.p), 'volume'); }   // the boot volume's alias is a symlink
+  else {
+    const u = String(process.env.USER || process.env.LOGNAME || '').replace(/[\\/]/g, '');
+    if (u) for (const d of ['/media/' + u, '/run/media/' + u]) for (const e of await dirsIn(d)) add(e.p, basename(e.p), 'removable');
+    for (const e of await dirsIn('/mnt')) if ((mounts || []).some(m => m.mountpoint === e.p)) add(e.p, basename(e.p), 'mount');
+  }
+  return out;
+}
+// One place, judged as the mover judges it: symlinks, realpath, mount, classifyTarget (relay-move.mjs).
+async function storageJudge(c, ctx) {
+  const pf = process.platform;
+  const d = { mountpoint: c.path, label: c.label, kind: c.kind, target: join(c.path, STORAGE_LEAF), fsType: null, freeBytes: null, needBytes: null, sameDrive: false, eligible: false, refuse: [], warn: [] };
+  const done = () => { d.refuse = [...new Set(d.refuse)]; d.warn = [...new Set(d.warn)]; d.eligible = d.refuse.length === 0; return d; };
+  // a network mount is refused from the mount table ALONE: never lstat/statfs it (a dead share can hang a call)
+  const pre = mountFor(c.path, ctx.mounts, pf);
+  const preCls = classifyTarget({ path: d.target, fsType: pre && pre.fsType, mountOptions: pre && pre.options, mode: STORAGE_MODE, platform: pf });
+  if (preCls.refuse.includes('network')) { d.fsType = (pre && pre.fsType) || null; d.refuse.push('network'); return done(); }
+  if (pathHasSymlink(c.path, pf)) { d.refuse.push('path-has-symlink'); return done(); }
+  let real; try { real = await realpathP(c.path); } catch { d.refuse.push('drive-missing'); return done(); }
+  d.target = join(real, STORAGE_LEAF);
+  const m = mountFor(real, ctx.mounts, pf);
+  d.fsType = (m && m.fsType) || null;
+  if (STORAGE_MODE === 'server') {
+    if (!m || !samePath(m.mountpoint, real, pf)) d.refuse.push('not-mounted');
+    else if (!STORAGE_SERVER_FS.has(String(m.fsType || '').toLowerCase())) d.refuse.push('filesystem-not-supported');
+  }
+  d.sameDrive = !!(m && ctx.curMount && samePath(m.mountpoint, ctx.curMount.mountpoint, pf));
+  if (ctx.dataReal && samePath(d.target, ctx.dataReal, pf)) d.refuse.push('already-here');
+  else if (ctx.dataReal && (storageInside(d.target, ctx.dataReal) || storageInside(ctx.dataReal, d.target))) d.refuse.push('target-overlaps-source');
+  try {
+    const st = await lstatP(d.target);
+    if (st.isSymbolicLink() || !st.isDirectory()) d.refuse.push('target-not-empty');
+    else if ((await readdirP(d.target)).length && !isTombstoneOnly(d.target)) d.refuse.push('target-not-empty');
+  } catch {}
+  try { const s = await statfsP(real); d.freeBytes = Number(s.bavail) * Number(s.bsize); } catch {}
+  // a same-drive move is a rename (owner §8a) and needs no space; anything else is a full copy
+  if (!d.sameDrive) d.needBytes = Math.ceil(ctx.sizeBytes * 1.1) + STORAGE_SPACE_MARGIN;
+  const cls = classifyTarget({ path: d.target, fsType: d.fsType, mountOptions: m && m.options, free: d.freeBytes == null ? undefined : d.freeBytes,
+    need: d.needBytes == null ? undefined : d.needBytes, mode: STORAGE_MODE, codeDir: ROOT, platform: pf });
+  d.refuse.push(...cls.refuse); d.warn.push(...cls.warn);
+  return done();
+}
+// Everything the card needs. `fresh` re-reads the mount table and size (a move decides on current facts).
+async function storageReport(fresh) {
+  const pf = process.platform;
+  const { j, err } = storageReadJournal();
+  const [mounts, size] = await Promise.all([storageMounts(fresh), storageDataSize(fresh)]);
+  let dataReal = null; try { dataReal = await realpathP(DATA_DIR); } catch {}
+  const curMount = dataReal ? mountFor(dataReal, mounts || [], pf) : null;
+  let curFree = null; try { const s = await statfsP(DATA_DIR); curFree = Number(s.bavail) * Number(s.bsize); } catch {}
+  // reasons the FOLDER cannot be moved right now, whatever drive is picked (audit A #11, #14; audit B)
+  const refuse = [];
+  if (err) refuse.push(err);
+  if (j && MOVE_ACTIVE.has(j.state)) refuse.push('move-in-progress');
+  if (j && j.state === 'awaiting-confirm') refuse.push('old-copy-awaiting-removal');
+  if (existsSync(join(DATA_DIR, '.restore-pending'))) refuse.push('restore-pending');
+  if (existsSync(STORAGE_MOVE_REQUEST)) refuse.push('move-already-requested');
+  if (await relayLockHeld(DATA_DIR)) refuse.push('relay-running');   // ANOTHER live relay process on this folder (our own lock is ignored)
+  if (size.symlink) refuse.push('source-has-symlink');
+  if (!mounts) refuse.push('drives-unknown');
+  const ctx = { mounts: mounts || [], dataReal, curMount, sizeBytes: size.bytes };
+  const drives = [];
+  for (const c of await storageCandidates(mounts || [])) drives.push(await storageJudge(c, ctx));
+  const old = j && j.state === 'awaiting-confirm' && j.oldCopy && j.oldCopy.path ? j.oldCopy : null;
+  const ageDays = old && old.since ? Math.floor((Date.now() - Date.parse(old.since)) / 86400000) : null;
+  const req = f => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return existsSync(f) ? {} : null; } };
+  return {
+    ok: true, mode: STORAGE_MODE,
+    current: { path: DATA_DIR, realPath: dataReal, drive: curMount ? { mountpoint: curMount.mountpoint, fsType: curMount.fsType } : null, sizeBytes: size.bytes, files: size.files, freeBytes: curFree },
+    move: j ? { state: j.state, mode: j.mode || null, from: j.from || null, to: j.to || null, code: j.code || null, detail: j.detail || null, note: j.note || null,
+      startedAt: j.startedAt || null, switchedAt: j.switchedAt || null, checkedAt: j.checkedAt || null, endedAt: j.endedAt || null,
+      totalBytes: j.totalBytes ?? null, copiedBytes: j.copiedBytes ?? null, counts: j.counts || null } : null,
+    oldCopy: old ? { path: old.path, since: old.since || null, exists: existsSync(old.path), ageDays, remind: ageDays !== null && ageDays >= STORAGE_REMIND_DAYS } : null,
+    // set-aside copies and rename tombstones the mover recorded (audit B N8); an entry the remover marked removedAt
+    // is gone for good and not offered again (audit C C3 — the remover, step 5/6, must set it)
+    leftovers: (j && Array.isArray(j.leftovers) ? j.leftovers : []).filter(l => l && l.path && !l.removedAt)
+      .map(l => ({ path: l.path, kind: l.kind || null, since: l.since || null, exists: existsSync(l.path) })),
+    requests: { move: req(STORAGE_MOVE_REQUEST), removeOld: req(STORAGE_REMOVE_REQUEST) },
+    refuse, drives,
+  };
+}
+function storageWriteRequest(file, obj) {
+  const tmp = file + '.tmp-' + process.pid;
+  const fd = openSync(tmp, 'w', 0o600);
+  try { writeFileSync(fd, JSON.stringify(obj) + '\n'); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(tmp, file);
+  try { const dfd = openSync(DATA_DIR, 'r'); try { fsyncSync(dfd); } finally { closeSync(dfd); } } catch {}   // Windows cannot open a directory
+}
+// The relay stops itself for the move the way SIGTERM stops it (store.close() checkpoints the WAL, the lock note
+// goes), but exits 0: the launcher reads .move-request and moves the data while nothing has the folder open.
+function storageStopForMove() {
+  if (_shuttingDown) return; _shuttingDown = true;
+  console.log('  stopping for a data move (.move-request written); the launcher moves the data and starts the relay again');
+  try { store.close(); } catch (e) {}
+  releaseDataDirLock();
+  process.exit(0);
+}
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
   // relay status (for the Relay app control dashboard)
@@ -7986,6 +8178,54 @@ function serveStatic(req, res) {
     }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
+  // RELAY STORAGE LOCATION (plan step 3; helpers + the full contract above serveStatic). Not a route at all unless
+  // TRINITY_STORAGE_MODE is set: an unset box falls through to the static handler exactly as before.
+  if (STORAGE_MODE && (route === '/storage' || route === '/storage/move' || route === '/storage/remove-old')) {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // same-origin panel: NO Access-Control-Allow-Origin
+    const send = (code, obj) => { res.writeHead(code, H); res.end(JSON.stringify(obj)); };
+    if (!adminOK(req)) { send(401, { error: 'unauthorized' }); return; }
+    const local = storageRequestIsLocal(req);
+    if (route === '/storage') {
+      if (req.method !== 'GET') { send(405, { error: 'method' }); return; }
+      storageReport(false).then(r => send(200, { ...r, local, canChange: STORAGE_MODE === 'server' || local }),
+        e => send(500, { error: String((e && e.message) || e) }));
+      return;
+    }
+    if (req.method !== 'POST') { send(405, { error: 'method' }); return; }
+    // owner §8a: on the Suite a move (or removing a copy) is started ONLY on the relay's own computer — never over the
+    // tunnel, even with the admin token
+    if (STORAGE_MODE === 'suite' && !local) { send(403, { error: 'local-only', message: 'Change this on the relay\'s own computer.' }); return; }
+    let body = ''; req.on('data', c => { body += c; if (body.length > 4000) req.destroy(); });
+    req.on('end', () => {
+      let b; try { b = JSON.parse(body || '{}'); } catch { send(400, { error: 'bad request' }); return; }
+      (async () => {
+        const r = await storageReport(true);
+        if (route === '/storage/move') {
+          const drive = typeof b.drive === 'string' ? b.drive : '';
+          const d = r.drives.find(x => x.mountpoint === drive);           // only a place THIS list offered — never a typed path
+          if (!d) { send(400, { error: 'drive-not-offered' }); return; }
+          if (r.refuse.length) { send(409, { error: 'refused', refuse: r.refuse }); return; }
+          if (!d.eligible) { send(409, { error: 'refused', refuse: d.refuse }); return; }
+          const pub = relayKeyPubOnDisk();
+          if (!pub) { send(409, { error: 'refused', refuse: ['source-has-no-key'] }); return; }
+          let events = null; try { events = store.count(); } catch {}
+          storageWriteRequest(STORAGE_MOVE_REQUEST, { drive: d.mountpoint, target: d.target, from: DATA_DIR, relayPub: pub, events, sizeBytes: r.current.sizeBytes,
+            sameDrive: d.sameDrive, warn: d.warn, mode: STORAGE_MODE, requestedAt: new Date().toISOString() });
+          res.once('finish', () => setTimeout(storageStopForMove, 50));
+          send(200, { ok: true, stopping: true, drive: d.mountpoint, target: d.target, sameDrive: d.sameDrive, warn: d.warn });
+          return;
+        }
+        // remove-old: ONLY the recorded old copy or a recorded leftover, never the folder in use
+        const path = typeof b.path === 'string' ? b.path : '';
+        const kind = r.oldCopy && r.oldCopy.path === path ? 'old-copy' : (r.leftovers.find(l => l.path === path) ? 'leftover' : '');
+        if (!kind) { send(400, { error: 'not-recorded' }); return; }
+        if (samePath(path, DATA_DIR) || (r.current.realPath && samePath(path, r.current.realPath))) { send(409, { error: 'refused', refuse: ['current-folder'] }); return; }
+        storageWriteRequest(STORAGE_REMOVE_REQUEST, { path, kind, relayPub: relayKeyPubOnDisk(), mode: STORAGE_MODE, requestedAt: new Date().toISOString() });
+        send(200, { ok: true, requested: true, path, kind });
+      })().catch(e => { try { send(500, { error: String((e && e.message) || e) }); } catch {} });
+    });
+    return;
+  }
   // relay feature toggles (what this box serves besides the relay) — token-gated, same pattern as /config
   if (route === '/settings') {
     const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
@@ -8134,6 +8374,8 @@ function serveStatic(req, res) {
       child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
         '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log',
         '--exclude=./rejected.log', '--exclude=./rejected.log.1', '--exclude=./.relay-lock',
+        // requests to the launcher (storage step 3): a backup restored elsewhere must never carry a pending move/removal
+        '--exclude=./.move-request', '--exclude=./.remove-old-request', '--exclude=./.move-request.tmp-[0-9]*', '--exclude=./.remove-old-request.tmp-[0-9]*',
         // the names the guard writes (tmp-<pid>); a tar glob cannot say digits-only, so this is the closest match
         '--exclude=./relay-key.json.tmp-[0-9]*', '--exclude=./.trinity-data-dir.tmp-[0-9]*', '.'],
         { stdio: ['ignore', 'pipe', 'ignore'] });

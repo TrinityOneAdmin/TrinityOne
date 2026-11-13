@@ -37,7 +37,7 @@ export const MOVED_TO = 'MOVED-TO';
 // Not carried by a COPY (same list as the backup's excludes, gateway.mjs, plus the side files of a folded WAL and
 // this feature's own files). A RENAME carries everything, so it needs no list.
 export const SKIP = new Set(['.restore-pending', '.bundle-cache', 'cloudflared.log', 'rejected.log', 'rejected.log.1',
-  'relay-launch.log', 'relay.sqlite-shm', 'relay.sqlite-wal', '.move-request', '.relay-lock', MARK_INCOMPLETE]);
+  'relay-launch.log', 'relay.sqlite-shm', 'relay.sqlite-wal', '.move-request', '.remove-old-request', '.relay-lock', MARK_INCOMPLETE]);
 const SPACE_MARGIN = 512 * 1024 * 1024;
 // A check interrupted twice is rolled back automatically only inside this window after the first check began, and
 // only if the new folder has not taken writes since (audit A #15).
@@ -141,6 +141,18 @@ export function systemMounts() {
     if (process.platform === 'darwin') return parseMacMount(execFileSync('mount', [], { encoding: 'utf8', timeout: 5000 }));
     if (process.platform === 'win32') return parseWinLogicalDisks(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,FileSystem,ProviderName | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 15000, windowsHide: true }));
+  } catch {}
+  return null;
+}
+// The same lookup without blocking: the gateway serves the drive list from a live server, where `mount` or a cold
+// PowerShell start (up to 15 s) must not stall the event loop (audit C C8 / audit D: a step-3 obligation).
+export async function systemMountsAsync(pf = process.platform) {
+  const run = (cmd, args, timeout) => new Promise((res, rej) => execFile(cmd, args, { encoding: 'utf8', timeout, windowsHide: true }, (e, out) => e ? rej(e) : res(out)));
+  try {
+    if (pf === 'linux') { const { readFile } = await import('node:fs/promises'); return parseMountinfo(await readFile('/proc/self/mountinfo', 'utf8')); }
+    if (pf === 'darwin') return parseMacMount(await run('mount', [], 5000));
+    if (pf === 'win32') return parseWinLogicalDisks(await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,FileSystem,ProviderName | ConvertTo-Json -Compress'], 15000));
   } catch {}
   return null;
 }
