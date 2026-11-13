@@ -1,25 +1,30 @@
 // RELAY DATA MOVE — relay storage plan step 2 (TrinityOne-internal/reference/PLAN-relay-storage-location-2026-11-12.html,
-// §3 as amended by the owner's §8a of 2026-11-13). A pure module plus a CLI. NOTHING CALLS IT YET: the gateway
-// request (step 3), the panel (step 4), the Suite launcher (step 5) and the server root helper (step 6) come later.
+// §3 as amended by the owner's §8a of 2026-11-13; hardened after Audit A of a32084f4). A pure module plus a CLI.
+// NOTHING CALLS IT YET: the gateway request (step 3), the panel (step 4), the Suite launcher (step 5) and the server
+// root helper (step 6) come later.
 //
-// The relay must be STOPPED before any of this runs. The mover never starts or stops a relay itself; the caller
-// (the launcher) does, and runs the step-8 "same key, same events" check with compareAfterRestart().
+// The relay must be STOPPED before any of this runs (the caller's check, plus the gateway's .relay-lock). The mover
+// never starts or stops a relay; the launcher does, and runs the step-8 check: beginCheck() BEFORE it spawns the
+// relay on the new folder (exact row counts — nothing has run there yet), compareAfterRestart() after (proven key;
+// counts may only have grown, because a live relay takes writes at once), then checkPassed() or rollbackMove().
 //
-// SAME VOLUME  -> one atomic rename (owner, §8a). No old copy exists; rollback = rename back.
-// CROSS VOLUME -> rename fails with EXDEV and nothing has changed; then fold the WAL, copy every file, verify every
-//                 byte + the database, and only then flip the pointer. The old folder is kept, marked MOVED-TO (the
-//                 gateway refuses to start on it — step 1), never auto-deleted; journal.oldCopy.since records when
-//                 it became the old copy so a later step can remind after 7 days.
+// SAME VOLUME  -> one atomic rename (owner, §8a), then an EMPTY folder holding only MOVED-TO is left at the old path,
+//                 so anything that still starts a relay there is refused (step 1) instead of minting a stranger.
+//                 No old copy exists; rollback = remove that tombstone and rename back.
+// CROSS VOLUME -> rename fails with EXDEV and nothing has changed; then fold the WAL, copy every file, fsync, verify
+//                 every byte + the database, and only then flip the pointer. The old folder is kept, marked MOVED-TO,
+//                 never auto-deleted; journal.oldCopy.since records when it became the old copy (7-day reminder).
 //
-// The POINTER (which folder the launcher starts the relay on) and the JOURNAL (move state) live OUTSIDE both data
-// folders, and are passed in as small {read, write} objects so the Suite (storage.json) and the server
-// (/etc/trinityone/relay.env + drop-ins, step 6) can each supply their own. jsonFieldStore() is the file version.
+// THE POINTER DECIDES. The pointer (which folder the launcher starts the relay on) and the journal (move state) live
+// OUTSIDE both data folders and are injected as {read, write} objects. Recovery never hands back a folder other than
+// the one the pointer names; if that folder is unreadable (drive unplugged) it says "do not start" instead.
 import {
   readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, lstatSync, statSync,
-  statfsSync, copyFileSync, openSync, fsyncSync, closeSync, chmodSync, rmdirSync, createReadStream, constants as FS,
+  statfsSync, copyFileSync, openSync, fsyncSync, closeSync, chmodSync, rmdirSync, createReadStream, realpathSync,
+  constants as FS,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, resolve, dirname, sep, basename } from 'node:path';
+import { join, resolve, dirname, basename, parse as parsePath } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -30,12 +35,26 @@ export const MARK_INCOMPLETE = '.trinity-move-incomplete';
 export const STAMP = '.trinity-data-dir';
 export const MOVED_TO = 'MOVED-TO';
 // Not carried by a COPY (same list as the backup's excludes, gateway.mjs, plus the side files of a folded WAL and
-// this feature's own request file). A RENAME carries everything, so it needs no list.
+// this feature's own files). A RENAME carries everything, so it needs no list.
 export const SKIP = new Set(['.restore-pending', '.bundle-cache', 'cloudflared.log', 'rejected.log', 'rejected.log.1',
   'relay-launch.log', 'relay.sqlite-shm', 'relay.sqlite-wal', '.move-request', '.relay-lock', MARK_INCOMPLETE]);
 const SPACE_MARGIN = 512 * 1024 * 1024;
+// A check interrupted twice is rolled back automatically only inside this window after the first check began, and
+// only if the new folder has not taken writes since (audit A #15).
+export const CHECK_WINDOW_MS = 10 * 60 * 1000;
 // States in which a move is under way and recoverMove() has work to do.
 export const ACTIVE = new Set(['renaming', 'copying', 'verifying', 'switching', 'switched', 'checking', 'rolling-back']);
+
+// ── paths, per platform ────────────────────────────────────────────────────────────────────────────────────
+// macOS and Windows filesystems are case-insensitive by default; Windows takes either slash.
+const foldCase = pf => pf === 'win32' || pf === 'darwin';
+function pkey(p, pf) { let s = String(p); if (pf === 'win32') s = s.replace(/\//g, '\\'); return foldCase(pf) ? s.toLowerCase() : s; }
+function underP(p, root, pf = process.platform) {
+  const S = pf === 'win32' ? '\\' : '/';
+  const a = pkey(p, pf), b = pkey(root, pf);
+  return a === b || a.startsWith(b.endsWith(S) ? b : b + S);
+}
+export function samePath(a, b, pf = process.platform) { return !!a && !!b && pkey(resolve(a), pf) === pkey(resolve(b), pf); }
 
 // ── drive eligibility ──────────────────────────────────────────────────────────────────────────────────────
 // Refused (§2): network filesystems (SQLite WAL needs shared memory, sqlite.org/wal.html), sync-client folders
@@ -46,26 +65,30 @@ const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb', 'smb2', 'smb3', 'smbfs
 const NO_PERMS_FS = new Set(['exfat', 'fuse.exfat', 'vfat', 'msdos', 'fat', 'fat32', 'ntfs', 'ntfs3', 'fuseblk', 'fuse.ntfs-3g']);
 const SYNC_RE = /(^|[\\/])(OneDrive[^\\/]*|Dropbox[^\\/]*|Google Drive[^\\/]*|GoogleDrive[^\\/]*|Mobile Documents|CloudStorage|iCloud Drive[^\\/]*|iCloudDrive|Box Sync|pCloud Drive|MEGAsync|Nextcloud|ownCloud)([\\/]|$)/i;
 const SYSTEM_POSIX = ['/etc', '/usr', '/boot', '/proc', '/sys', '/dev', '/root', '/var/log', '/bin', '/sbin', '/lib', '/lib64', '/System', '/Library', '/private/etc', '/private/var'];
-const under = (p, root) => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep);
+const SYSTEM_WIN = /^[a-z]:\\(windows|program files|program files \(x86\)|programdata|\$recycle\.bin|system volume information|recovery|boot)(\\|$)/i;
 
-// classifyTarget: pure. info = { path, fsType, mountOptions:[...], free, need, mode:'suite'|'server', home, codeDir }
+// classifyTarget: pure. info = { path, fsType, mountOptions:[...], free, need, mode:'suite'|'server', codeDir, platform }
 // Returns { eligible, refuse:[codes], warn:[codes] }.
 export function classifyTarget(info) {
   const refuse = [], warn = [];
+  const pf = info.platform || process.platform;
   const p = String(info.path || '');
   const fs = String(info.fsType || '').toLowerCase();
   const opts = (info.mountOptions || []).map(o => String(o).toLowerCase());
+  const win = pf === 'win32' || /^[a-z]:[\\/]/i.test(p) || /^\\\\/.test(p);
   if (/^\\\\/.test(p) || /^\/\/[^/]/.test(p)) refuse.push('network');          // UNC / smb:// style
   else if (NETWORK_FS.has(fs)) refuse.push('network');
   if (SYNC_RE.test(p)) refuse.push('sync-folder');
-  if (p.startsWith('/')) {
-    if (SYSTEM_POSIX.some(r => under(p, r)) || (under(p, '/run') && !under(p, '/run/media'))) refuse.push('system-folder');
-    if (info.mode === 'server' && under(p, '/home')) refuse.push('system-folder');
+  if (win) {
+    if (SYSTEM_WIN.test(p.replace(/\//g, '\\'))) refuse.push('system-folder');
+  } else if (p.startsWith('/')) {
+    if (SYSTEM_POSIX.some(r => underP(p, r, pf)) || (underP(p, '/run', pf) && !underP(p, '/run/media', pf))) refuse.push('system-folder');
+    if (info.mode === 'server' && underP(p, '/home', pf)) refuse.push('system-folder');
   }
-  if (info.codeDir && under(resolve(p), resolve(info.codeDir))) refuse.push('inside-app');
+  if (info.codeDir && underP(p, info.codeDir, win ? 'win32' : pf)) refuse.push('inside-app');
   if (typeof info.free === 'number' && typeof info.need === 'number' && info.free < info.need) refuse.push('not-enough-space');
   if (NO_PERMS_FS.has(fs) || opts.includes('noowners')) warn.push('no-permissions');
-  if (p.startsWith('/media/') || p.startsWith('/run/media/') || p.startsWith('/Volumes/')) warn.push('removable');
+  if (p.startsWith('/media/') || p.startsWith('/run/media/') || p.startsWith('/Volumes/') || opts.includes('removable')) warn.push('removable');
   if (!fs && !/^\\\\/.test(p)) warn.push('filesystem-unknown');
   return { eligible: refuse.length === 0, refuse: [...new Set(refuse)], warn: [...new Set(warn)] };
 }
@@ -94,17 +117,30 @@ export function parseMacMount(text) {
   }
   return out;
 }
-// The mount holding path p (longest mountpoint prefix). Linux and macOS; elsewhere null (fs unknown — flagged).
-export function mountFor(p, mounts) {
-  const abs = resolve(p);
+// Windows: `Get-CimInstance Win32_LogicalDisk | Select DeviceID,DriveType,FileSystem,ProviderName | ConvertTo-Json`.
+// DriveType 4 = network (a MAPPED drive letter), 2 = removable. Pure. (A `subst` drive is not distinguishable here.)
+export function parseWinLogicalDisks(json) {
+  let rows; try { rows = JSON.parse(String(json || '')); } catch { return []; }
+  if (!Array.isArray(rows)) rows = rows ? [rows] : [];
+  return rows.filter(r => r && /^[A-Za-z]:$/.test(r.DeviceID || '')).map(r => ({
+    mountpoint: r.DeviceID.toUpperCase() + '\\',
+    fsType: Number(r.DriveType) === 4 ? 'smb' : String(r.FileSystem || '').toLowerCase(),
+    source: r.ProviderName || '',
+    options: Number(r.DriveType) === 2 ? ['removable'] : [],
+  }));
+}
+// The mount holding path p (longest mountpoint prefix).
+export function mountFor(p, mounts, pf = process.platform) {
   let best = null;
-  for (const m of mounts || []) if (under(abs, m.mountpoint) || m.mountpoint === '/') { if (!best || m.mountpoint.length > best.mountpoint.length) best = m; }
+  for (const m of mounts || []) if (m.mountpoint === '/' || underP(p, m.mountpoint, pf)) { if (!best || m.mountpoint.length > best.mountpoint.length) best = m; }
   return best;
 }
 export function systemMounts() {
   try {
     if (process.platform === 'linux') return parseMountinfo(readFileSync('/proc/self/mountinfo', 'utf8'));
     if (process.platform === 'darwin') return parseMacMount(execFileSync('mount', [], { encoding: 'utf8', timeout: 5000 }));
+    if (process.platform === 'win32') return parseWinLogicalDisks(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,FileSystem,ProviderName | ConvertTo-Json -Compress'], { encoding: 'utf8', timeout: 15000, windowsHide: true }));
   } catch {}
   return null;
 }
@@ -114,9 +150,29 @@ export function freeBytes(p) {
   const s = statfsSync(q); return Number(s.bavail) * Number(s.bsize);
 }
 export function targetFor(mountpoint) { return join(mountpoint, LEAF); }
+// Does any component of p (an absolute path) resolve through a symlink? macOS's own fixed links (/var, /tmp, /etc
+// -> /private/…) are allowed; nothing else is (audit A #4: a symlinked "drive" defeated every refusal).
+const DARWIN_OS_LINKS = new Set(['/var', '/tmp', '/etc']);
+export function pathHasSymlink(p, pf = process.platform) {
+  const abs = resolve(p); const root = parsePath(abs).root;
+  let cur = root;
+  for (const part of abs.slice(root.length).split(/[\\/]+/).filter(Boolean)) {
+    cur = join(cur, part);
+    let st; try { st = lstatSync(cur); } catch { return false; }   // the rest does not exist yet
+    if (st.isSymbolicLink() && !(pf === 'darwin' && DARWIN_OS_LINKS.has(cur))) return true;
+  }
+  return false;
+}
 
 // ── small helpers ──────────────────────────────────────────────────────────────────────────────────────────
 function fsyncDir(d) { try { const fd = openSync(d, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } } catch {} }
+// fsync a file or directory so it is on the medium, not only in the page cache (audit A #3). Windows cannot open a
+// directory, and needs a writable handle to flush a file; both are tried.
+export function fsyncPath(p) {
+  let fd;
+  try { fd = openSync(p, 'r+'); } catch { try { fd = openSync(p, 'r'); } catch { return false; } }
+  try { fsyncSync(fd); return true; } catch { return false; } finally { try { closeSync(fd); } catch {} }
+}
 export function writeAtomic(file, text) {
   const tmp = file + '.tmp-' + process.pid;
   const fd = openSync(tmp, 'w');
@@ -134,6 +190,14 @@ export function relayLockHeld(dir) {
   try { const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8'); return /gateway\.mjs/.test(cmd); } catch { return true; }
 }
 export function keyPubOf(dir) { const k = readJson(join(dir, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
+// A folder the step-1 guard would start: this relay's key, no MOVED-TO, not a partial copy.
+export function startable(dir, pub) {
+  return !!dir && keyPubOf(dir) === pub && !existsSync(join(dir, MOVED_TO)) && !existsSync(join(dir, MARK_INCOMPLETE));
+}
+// An empty folder holding only MOVED-TO: what a same-drive rename leaves at the old path.
+export function isTombstoneOnly(dir) {
+  try { const n = readdirSync(dir); return n.length === 1 && n[0] === MOVED_TO; } catch { return false; }
+}
 export function hasSymlink(p) {
   let st; try { st = lstatSync(p); } catch { return false; }
   if (st.isSymbolicLink()) return true;
@@ -170,8 +234,8 @@ export async function foldWal(dir) {
   if (existsSync(wal) && statSync(wal).size > 0) return 'wal-not-folded';
   return null;
 }
-// readOnly leaves empty -wal/-shm side files behind (it cannot remove them), so the SOURCE is opened normally —
-// the relay is stopped, and the last connection's close removes them — and only the copy is opened readOnly.
+// readOnly leaves empty -wal/-shm side files behind (it cannot remove them), so a folder no relay is running on is
+// opened normally — the last connection's close removes them — and only the unverified copy is opened readOnly.
 export async function countRows(dir, { readOnly = false } = {}) {
   const db = join(dir, 'relay.sqlite');
   if (!existsSync(db)) return null;
@@ -189,6 +253,18 @@ async function integrityOk(dir) {
   try { h = await openDb(db, { readOnly: true }); const r = h.prepare('PRAGMA integrity_check').get(); return r && Object.values(r)[0] === 'ok'; }
   catch { return false; } finally { try { h && h.close(); } catch {} }
 }
+// counts comparison: exact, or (after a relay has run) every table at least what was recorded
+function countsBad(rec, got, { atLeast = false } = {}) {
+  if (!rec) return false;
+  if (!got) return true;
+  for (const k of Object.keys(rec)) {
+    if (rec[k] === null) continue;
+    if (got[k] === null || got[k] === undefined) return true;
+    if (atLeast ? got[k] < rec[k] : got[k] !== rec[k]) return true;
+  }
+  return false;
+}
+function movedOn(rec, got) { return !!(rec && got && Object.keys(rec).some(k => rec[k] !== null && got[k] > rec[k])); }
 
 // A {read, write} store for one field of a JSON file, written atomically. The Suite keeps pointer and journal in
 // storage.json (fields dataDir/relayPub and move); tests and the CLI use the same shape.
@@ -203,15 +279,37 @@ export function jsonPointer(file) {
   const d = jsonFieldStore(file, 'dataDir'), k = jsonFieldStore(file, 'relayPub');
   return { read: () => d.read(), write(dir, pub) { const o = readJson(file) || {}; o.dataDir = dir; if (pub) o.relayPub = pub; mkdirSync(dirname(file), { recursive: true }); writeAtomic(file, JSON.stringify(o, null, 2) + '\n'); }, relayPub: () => k.read() };
 }
+const safeRead = pointer => { try { return { ok: true, v: pointer.read() }; } catch { return { ok: false, v: null }; } };
+
+function movedNote(to, when) { return `This relay's data moved to ${to} on ${when}. This old copy must not be started.\n`; }
+function asideNote(from, when, why) { return `This folder was set aside on ${when} after ${why}. The relay's data is in ${from}. Do not start a relay on this folder.\n`; }
+const stamp = when => when.toISOString().replace(/[:.]/g, '-');
+// Put a complete copy out of the way, tombstoned FIRST so it is never startable even if the rename fails.
+function setAside(dir, suffix, note, rename, now) {
+  writeAtomic(join(dir, MOVED_TO), note);
+  const aside = dir + '-' + suffix + '-' + stamp(now());
+  rename(dir, aside);
+  return aside;
+}
+// Undo a same-drive rename: remove the tombstone at `from` (only if that is all it holds), rename `to` back.
+function undoRename(j, rename) {
+  if (keyPubOf(j.to) !== j.relayPub) return startable(j.from, j.relayPub);
+  if (existsSync(j.from)) { if (!isTombstoneOnly(j.from)) return false; rmSync(j.from, { recursive: true, force: true }); }
+  rename(j.to, j.from);
+  return startable(j.from, j.relayPub);
+}
 
 // ── the move ───────────────────────────────────────────────────────────────────────────────────────────────
 // opts: { from, to, pointer, journal, relayRunning: async () => bool, mode, mounts?, freeSpace?: p=>bytes,
-//         rename?: (a,b)=>void (injectable so a test can force EXDEV), now?: ()=>Date, onProgress?, _afterCopy? }
-// Returns { ok:true, mode:'rename'|'copy', journal } or { ok:false, code, detail? }. On ok:false the pointer is
-// unchanged and `from` is exactly as it was.
+//         rename?: (a,b)=>void (injectable so a test can force EXDEV), now?: ()=>Date, codeDir?, platform?,
+//         onProgress?, _afterCopy?, _fsync? }
+// Returns { ok:true, mode:'rename'|'copy', journal } or { ok:false, code, detail? }. On ok:false the pointer names
+// `from` and `from` is as it was — except code 'switch-uncertain', where the pointer could not be confirmed and
+// everything is left for recoverMove(), which follows the pointer.
 export async function moveRelayData(opts) {
   const { pointer, journal } = opts;
-  const from = resolve(opts.from), to = resolve(opts.to);
+  const pf = opts.platform || process.platform;
+  const from = resolve(opts.from);
   const rename = opts.rename || renameSync;
   const now = opts.now || (() => new Date());
   const freeSpace = opts.freeSpace || freeBytes;
@@ -219,28 +317,35 @@ export async function moveRelayData(opts) {
 
   const prev = journal.read();
   if (prev && ACTIVE.has(prev.state)) return no('move-in-progress', prev.state);
+  // one old copy at a time (audit A #14): "Remove old copy" deletes only the folder recorded as old, so a second
+  // move must not overwrite that record while the first copy — cleartext church records — is still on disk.
+  if (prev && prev.state === 'awaiting-confirm') return no('old-copy-awaiting-removal', prev.oldCopy && prev.oldCopy.path);
   if (typeof opts.relayRunning !== 'function') return no('relay-state-unknown');
   if (await opts.relayRunning()) return no('relay-running');
   const cur = pointer.read();
-  if (cur && resolve(cur) !== from) return no('not-current-folder', cur);
+  if (cur && !samePath(cur, from, pf)) return no('not-current-folder', cur);
   if (!existsSync(from)) return no('source-missing');
   if (relayLockHeld(from)) return no('relay-running', 'a relay process still holds this folder');
   if (existsSync(join(from, MOVED_TO))) return no('source-moved');
+  if (existsSync(join(from, '.restore-pending'))) return no('restore-pending');   // audit A #11: a copy would drop it
   const relayPub = keyPubOf(from);
   if (!relayPub) return no('source-has-no-key');
-  const stamp = readJson(join(from, STAMP));
-  if (stamp && stamp.relayPub && stamp.relayPub !== relayPub) return no('source-foreign');
+  const stampOnDisk = readJson(join(from, STAMP));
+  if (stampOnDisk && stampOnDisk.relayPub && stampOnDisk.relayPub !== relayPub) return no('source-foreign');
   if (hasSymlink(from)) return no('source-has-symlink');
-  if (from === to || under(to, from) || under(from, to)) return no('target-overlaps-source');
-  if (basename(to) !== LEAF) return no('target-not-fixed-leaf');
-  if (!existsSync(dirname(to))) return no('drive-missing');
+  if (basename(resolve(opts.to)) !== LEAF) return no('target-not-fixed-leaf');
+  const driveDir = dirname(resolve(opts.to));
+  if (!existsSync(driveDir)) return no('drive-missing');
+  if (pathHasSymlink(driveDir, pf)) return no('target-path-has-symlink');
+  let to; try { to = join(realpathSync(driveDir), LEAF); } catch { return no('drive-missing'); }
+  if (samePath(from, to, pf) || underP(to, from, pf) || underP(from, to, pf)) return no('target-overlaps-source');
   if (existsSync(to)) {
     if (lstatSync(to).isSymbolicLink() || !lstatSync(to).isDirectory()) return no('target-not-empty');
     if (readdirSync(to).length) return no('target-not-empty');
   }
   const mounts = opts.mounts !== undefined ? opts.mounts : systemMounts();
-  const m = mounts ? mountFor(dirname(to), mounts) : null;
-  const cls = classifyTarget({ path: to, fsType: m && m.fsType, mountOptions: m && m.options, mode: opts.mode, codeDir: opts.codeDir });
+  const m = mounts ? mountFor(dirname(to), mounts, pf) : null;
+  const cls = classifyTarget({ path: to, fsType: m && m.fsType, mountOptions: m && m.options, mode: opts.mode, codeDir: opts.codeDir, platform: pf });
   if (!cls.eligible) return no('target-ineligible', cls.refuse.join(','));
 
   const walErr = await foldWal(from);
@@ -260,27 +365,37 @@ export async function moveRelayData(opts) {
       journal.write({ ...base, state: 'failed', mode: 'rename', code: 'rename-failed', detail: String(e && e.code || e), endedAt: now().toISOString() });
       return no('rename-failed', String(e && e.code || e));
     }
-    return copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace });
+    return copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace, rename });
   }
-  // renamed — switch the pointer; on any failure rename back
+  // renamed — tombstone the old path, stamp, switch the pointer
   try {
+    mkdirSync(from); writeAtomic(join(from, MOVED_TO), movedNote(to, now().toISOString()));
     journal.write({ ...base, state: 'switching', mode: 'rename' });
     if (keyPubOf(to) !== relayPub) throw new Error('key changed in rename');
     writeAtomic(join(to, STAMP), JSON.stringify({ relayPub, stampedAt: now().toISOString() }) + '\n');
     pointer.write(to, relayPub);
   } catch (e) {
-    try { if (!existsSync(from)) rename(to, from); } catch {}
+    const msg = String(e && e.message || e);
     try { pointer.write(from, relayPub); } catch {}
-    journal.write({ ...base, state: 'failed', mode: 'rename', code: 'switch-failed', detail: String(e && e.message || e), endedAt: now().toISOString() });
-    return no('switch-failed', String(e && e.message || e));
+    const p = safeRead(pointer);
+    if (!p.ok || !samePath(p.v || from, from, pf)) {
+      // audit A #2: the pointer may name `to` — touch nothing; recovery follows the pointer
+      journal.write({ ...base, state: 'switching', mode: 'rename', note: 'switch uncertain: ' + msg });
+      return no('switch-uncertain', msg);
+    }
+    try { undoRename({ from, to, relayPub }, rename); } catch {}
+    journal.write({ ...base, state: 'failed', mode: 'rename', code: 'switch-failed', detail: msg, endedAt: now().toISOString() });
+    return no('switch-failed', msg);
   }
   const j = { ...base, state: 'switched', mode: 'rename', oldCopy: null, switchedAt: now().toISOString() };
   journal.write(j);
   return { ok: true, mode: 'rename', journal: j };
 }
 
-async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace }) {
+async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace, rename }) {
   const { pointer, journal } = opts;
+  const pf = opts.platform || process.platform;
+  const fsync = opts._fsync || fsyncPath;
   const fail = (code, detail) => {
     // a copy is only ever deleted while it carries the incomplete marker
     try { if (existsSync(join(to, MARK_INCOMPLETE))) rmSync(to, { recursive: true, force: true }); } catch {}
@@ -297,15 +412,22 @@ async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace
   try {
     mkdirSync(to, { recursive: false });
   } catch (e) { if (!(e && e.code === 'EEXIST' && readdirSync(to).length === 0)) return fail('target-unwritable', String(e && e.code || e)); }
+  const dirs = new Set([to]);
   try {
     writeFileSync(join(to, MARK_INCOMPLETE), 'A relay data move did not finish. This folder is safe to delete.\n');
     let done = 0, last = 0;
     for (const f of files) {
-      mkdirSync(dirname(join(to, f.rel)), { recursive: true });
-      copyFileSync(join(from, f.rel), join(to, f.rel), FS.COPYFILE_FICLONE);
+      const dst = join(to, f.rel);
+      let d = dirname(dst); while (!dirs.has(d) && d.length > to.length) { dirs.add(d); d = dirname(d); }
+      mkdirSync(dirname(dst), { recursive: true });
+      copyFileSync(join(from, f.rel), dst, FS.COPYFILE_FICLONE);
       done += f.size;
       if (done - last > 64 * 1024 * 1024) { last = done; journal.write({ ...base, state: 'copying', mode: 'copy', totalBytes: total, copiedBytes: done }); if (opts.onProgress) opts.onProgress(done, total); }
     }
+    // durable before it is verified or switched to (audit A #3): every file, then every directory, deepest first
+    for (const f of files) fsync(join(to, f.rel));
+    for (const d of [...dirs].sort((a, b) => b.length - a.length)) fsync(d);
+    fsync(dirname(to));
   } catch (e) { return fail(e && e.code === 'EPERM' ? 'target-permission-denied' : 'copy-failed', String(e && e.code || e)); }
   if (opts._afterCopy) await opts._afterCopy(to);
 
@@ -320,7 +442,7 @@ async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace
   }
   if (!(await integrityOk(to))) return fail('verify-failed', 'database integrity');
   let c2; try { c2 = await countRows(to, { readOnly: true }); } catch { return fail('verify-failed', 'database unreadable'); }
-  if (JSON.stringify(c2) !== JSON.stringify(counts)) return fail('verify-failed', 'row counts differ');
+  if (countsBad(counts, c2)) return fail('verify-failed', 'row counts differ');
   if (keyPubOf(to) !== relayPub) return fail('verify-failed', 'identity key differs');
   // the integrity open may leave side files; the copy must not carry a WAL it was not verified with
   for (const s of ['relay.sqlite-wal', 'relay.sqlite-shm']) { try { rmSync(join(to, s), { force: true }); } catch {} }
@@ -336,9 +458,16 @@ async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace
     rmSync(join(to, MARK_INCOMPLETE), { force: true }); fsyncDir(to);
     pointer.write(to, relayPub);
   } catch (e) {
+    const msg = String(e && e.message || e);
     try { pointer.write(from, relayPub); } catch {}
+    const p = safeRead(pointer);
+    if (!p.ok || !samePath(p.v || from, from, pf)) {
+      // audit A #2: the pointer may name the verified copy — never destroy it; recovery follows the pointer
+      journal.write({ ...base, state: 'switching', mode: 'copy', totalBytes: total, note: 'switch uncertain: ' + msg });
+      return { ok: false, code: 'switch-uncertain', detail: msg };
+    }
     try { writeFileSync(join(to, MARK_INCOMPLETE), 'switch failed\n'); } catch {}
-    return fail('switch-failed', String(e && e.message || e));
+    return fail('switch-failed', msg);
   }
   const since = now().toISOString();
   try { writeAtomic(join(from, MOVED_TO), movedNote(to, since)); } catch {}   // recoverMove re-writes it if this is lost
@@ -346,19 +475,29 @@ async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace
   journal.write(j);
   return { ok: true, mode: 'copy', journal: j };
 }
-function movedNote(to, when) { return `This relay's data moved to ${to} on ${when}. This old copy must not be started.\n`; }
 
-// ── after the launcher restarts the relay ─────────────────────────────────────────────────────────────────
-// observed = { relayPub (PROVEN by the launcher via /relay-identity, never the bare /status string), counts }.
+// ── the step-8 check ──────────────────────────────────────────────────────────────────────────────────────
+// beginCheck: the launcher calls it BEFORE it spawns the relay on the new folder. Nothing has run there yet on the
+// first attempt, so the counts must be EXACTLY the recorded ones (audit A #5); on a re-check the relay has already
+// run there, so they may only have grown. Returns { ok, bad:[...], journal }. Not ok -> rollbackMove().
+export async function beginCheck({ journal, now = () => new Date() }) {
+  const j = journal.read(); if (!j || !['switched', 'checking'].includes(j.state)) return { ok: false, bad: ['no-move-to-check'] };
+  const attempts = (j.checkAttempts || 0) + 1;
+  const bad = [];
+  if (keyPubOf(j.to) !== j.relayPub) bad.push('relay-key');
+  let c = null; try { c = await countRows(j.to); } catch {}
+  if (countsBad(j.counts, c, { atLeast: attempts > 1 })) bad.push('event-count');
+  const n = { ...j, state: 'checking', checkAttempts: attempts, firstCheckAt: j.firstCheckAt || now().toISOString(), preStartCounts: c };
+  journal.write(n);
+  return { ok: bad.length === 0, bad, journal: n };
+}
+// After the restart. observed = { relayPub PROVEN by the launcher via /relay-identity (never the bare /status
+// string, rule 10), counts? }. A live relay takes writes and syncs from peers at once, so counts may only be >=.
 export function compareAfterRestart(j, observed) {
   const bad = [];
   if (!observed || observed.relayPub !== j.relayPub) bad.push('relay-key');
-  if (j.counts && JSON.stringify(observed && observed.counts) !== JSON.stringify(j.counts)) bad.push('event-count');
+  if (observed && observed.counts && countsBad(j.counts, observed.counts, { atLeast: true })) bad.push('event-count');
   return bad;
-}
-export function beginCheck({ journal }) {
-  const j = journal.read(); if (!j || !['switched', 'checking'].includes(j.state)) return null;
-  const n = { ...j, state: 'checking', checkAttempts: (j.checkAttempts || 0) + 1 }; journal.write(n); return n;
 }
 export function checkPassed({ journal, now = () => new Date() }) {
   const j = journal.read(); if (!j || !['switched', 'checking'].includes(j.state)) return null;
@@ -367,76 +506,108 @@ export function checkPassed({ journal, now = () => new Date() }) {
   journal.write(n); return n;
 }
 
-// Roll back a switched move (failed step-8 check). Idempotent: safe to re-run after being killed part-way.
+// Roll back a switched move (failed check). Idempotent: safe to re-run after being killed part-way. Order matters
+// (audit A #9): the new folder is tombstoned and set aside BEFORE the old folder's MOVED-TO is removed, and a step
+// that fails stops the rollback with the journal left at 'rolling-back' — never two startable folders.
 export function rollbackMove({ journal, pointer, rename = renameSync, now = () => new Date() }) {
   const j = journal.read();
   if (!j || !['switching', 'switched', 'checking', 'rolling-back'].includes(j.state)) return { ok: false, code: 'nothing-to-roll-back' };
   journal.write({ ...j, state: 'rolling-back' });
+  const blocked = (why) => ({ ok: false, code: 'rollback-blocked', detail: why });
+  let aside = null;
   if (j.mode === 'rename') {
-    if (existsSync(j.to) && !existsSync(j.from)) rename(j.to, j.from);
+    let ok = false; try { ok = undoRename(j, rename); } catch (e) { return blocked(String(e && e.message || e)); }
+    if (!ok) return blocked('the relay\'s data is not where the move left it');
     pointer.write(j.from, j.relayPub);
   } else {
-    pointer.write(j.from, j.relayPub);
-    try { rmSync(join(j.from, MOVED_TO), { force: true }); } catch {}
+    if (!startable(j.from, j.relayPub) && !(keyPubOf(j.from) === j.relayPub && existsSync(join(j.from, MOVED_TO)))) return blocked('the old copy is not intact');
     if (existsSync(j.to)) {
-      const aside = j.to + '-failed-' + now().toISOString().replace(/[:.]/g, '-');
-      try { rename(j.to, aside); } catch {}
+      try { aside = setAside(j.to, 'failed', asideNote(j.from, now().toISOString(), 'a relay data move was rolled back'), rename, now); }
+      catch (e) { return blocked('could not set the new folder aside: ' + String(e && e.code || e)); }
     }
+    pointer.write(j.from, j.relayPub);
+    rmSync(join(j.from, MOVED_TO), { force: true });
   }
-  const n = { ...j, state: 'rolled-back', endedAt: now().toISOString() };
+  const n = { ...j, state: 'rolled-back', ...(aside ? { leftover: aside } : {}), endedAt: now().toISOString() };
   journal.write(n);
   return { ok: true, dataDir: j.from, journal: n };
 }
 
 // ── recovery: run by the launcher BEFORE starting the relay, every start ──────────────────────────────────
-// Returns { dataDir, action: 'none'|'check', note }. 'check' = start the relay on dataDir and run the step-8 check
-// (beginCheck / compareAfterRestart / checkPassed or rollbackMove). Never deletes a folder without the incomplete
-// marker; never returns a folder that is not a complete relay of the recorded key.
-export function recoverMove({ journal, pointer, rename = renameSync, now = () => new Date() }) {
+// THE POINTER DECIDES (audit A #1). Returns one of:
+//   { dataDir, action: 'none' }   start the relay on dataDir (always the folder the pointer names)
+//   { dataDir, action: 'check' }  start it there and run the step-8 check
+//   { dataDir: null, action: 'refuse', code, expected }  do NOT start: e.g. the pointer names a drive that is not
+//                                  connected. The journal is left as it was, so the next start tries again.
+// Never deletes a folder without the incomplete marker; never returns a folder the step-1 guard would refuse.
+export async function recoverMove({ journal, pointer, rename = renameSync, now = () => new Date(), platform }) {
+  const pf = platform || process.platform;
   const j = journal.read();
-  const cur = () => pointer.read();
-  if (!j || !ACTIVE.has(j.state)) return { dataDir: cur(), action: 'none' };
-  const failed = (note, extra = {}) => { journal.write({ ...j, state: 'failed', code: 'interrupted', note, ...extra, endedAt: now().toISOString() }); return { dataDir: j.from, action: 'none', note }; };
+  const pr = safeRead(pointer);
+  if (!pr.ok) return { dataDir: null, action: 'refuse', code: 'pointer-unreadable' };
+  if (!j || !ACTIVE.has(j.state)) return { dataDir: pr.v, action: 'none' };
+  const refuse = (code, expected) => ({ dataDir: null, action: 'refuse', code, ...(expected ? { expected } : {}) });
+  const failed = (note, extra = {}) => { journal.write({ ...j, state: 'failed', code: 'interrupted', note, ...extra, endedAt: now().toISOString() }); };
+  // the result must be the folder the pointer names, and one the gateway would start
+  const give = (r) => {
+    if (r.action === 'refuse') return r;
+    const p = safeRead(pointer);
+    if (!p.ok || !samePath(p.v || j.from, r.dataDir, pf)) return refuse('pointer-mismatch', p.v);
+    if (!startable(r.dataDir, j.relayPub)) return refuse(keyPubOf(r.dataDir) ? 'folder-not-startable' : 'drive-missing', r.dataDir);
+    return r;
+  };
 
-  if (j.state === 'rolling-back') { const r = rollbackMove({ journal, pointer, rename, now }); return { dataDir: r.dataDir || j.from, action: 'none', note: 'finished rolling back' }; }
-  if (j.state === 'renaming') {
-    if (!existsSync(j.from) && existsSync(j.to) && keyPubOf(j.to) === j.relayPub) { rename(j.to, j.from); return failed('renamed back'); }
-    return failed('nothing moved');
-  }
-  if (j.state === 'copying' || j.state === 'verifying') {
-    if (existsSync(join(j.to, MARK_INCOMPLETE))) { try { rmSync(j.to, { recursive: true, force: true }); } catch {} return failed('partial copy removed'); }
-    return failed('no partial copy found');
-  }
-  if (j.state === 'switching') {
-    const p = cur();
-    if (p && resolve(p) === resolve(j.to) && keyPubOf(j.to) === j.relayPub) {
-      // the switch happened; finish it
-      const since = now().toISOString();
-      let oldCopy = null;
-      if (j.mode === 'copy' && existsSync(j.from)) { try { if (!existsSync(join(j.from, MOVED_TO))) writeAtomic(join(j.from, MOVED_TO), movedNote(j.to, since)); } catch {} oldCopy = { path: j.from, since }; }
-      journal.write({ ...j, state: 'switched', oldCopy, switchedAt: since });
-      return { dataDir: j.to, action: 'check', note: 'finished the switch' };
-    }
-    if (j.mode === 'rename') {
-      if (!existsSync(j.from) && existsSync(j.to)) rename(j.to, j.from);
-      try { pointer.write(j.from, j.relayPub); } catch {}
-      return failed('renamed back');
-    }
-    // a verified copy that never became current: kept, set aside so a retry can use the fixed folder name
-    let aside = null;
-    if (existsSync(j.to)) {
-      if (existsSync(join(j.to, MARK_INCOMPLETE))) { try { rmSync(j.to, { recursive: true, force: true }); } catch {} }
-      else { aside = j.to + '-interrupted-' + now().toISOString().replace(/[:.]/g, '-'); try { rename(j.to, aside); } catch { aside = j.to; } }
-    }
-    return failed('switch did not happen; copy kept', aside ? { leftover: aside } : {});
-  }
-  // switched / checking: the pointer is the new folder
-  if (j.mode === 'copy' && existsSync(j.from) && !existsSync(join(j.from, MOVED_TO))) { try { writeAtomic(join(j.from, MOVED_TO), movedNote(j.to, (j.oldCopy && j.oldCopy.since) || now().toISOString())); } catch {} }
-  if (j.state === 'checking' && (j.checkAttempts || 0) >= 2) {
+  if (j.state === 'rolling-back') {
     const r = rollbackMove({ journal, pointer, rename, now });
-    return { dataDir: r.dataDir || j.from, action: 'none', note: 'check did not finish twice; rolled back' };
+    return r.ok ? give({ dataDir: j.from, action: 'none', note: 'finished rolling back' }) : refuse(r.code, j.from);
   }
-  return { dataDir: j.to, action: 'check', note: j.state === 'checking' ? 're-running the check' : 'run the check' };
+  const onTo = !!pr.v && samePath(pr.v, j.to, pf);
+  const onFrom = !pr.v || samePath(pr.v, j.from, pf);
+  if (!onTo && !onFrom) return refuse('pointer-unexpected', pr.v);
+
+  if (onTo) {
+    // The switch happened. The new folder must be readable; if its drive is not connected, do not start anywhere.
+    if (keyPubOf(j.to) !== j.relayPub) return refuse('drive-missing', j.to);
+    if (j.mode === 'rename') { if (!existsSync(j.from)) { try { mkdirSync(j.from, { recursive: true }); writeAtomic(join(j.from, MOVED_TO), movedNote(j.to, now().toISOString())); } catch {} } }
+    else if (existsSync(j.from) && !existsSync(join(j.from, MOVED_TO))) { try { writeAtomic(join(j.from, MOVED_TO), movedNote(j.to, (j.oldCopy && j.oldCopy.since) || now().toISOString())); } catch {} }
+    if (!['switched', 'checking'].includes(j.state)) {
+      const since = now().toISOString();
+      journal.write({ ...j, state: 'switched', oldCopy: j.mode === 'copy' && existsSync(j.from) ? { path: j.from, since } : null, switchedAt: since });
+      return give({ dataDir: j.to, action: 'check', note: 'finished the switch' });
+    }
+    if (j.state === 'checking' && (j.checkAttempts || 0) >= 2) {
+      // audit A #15: roll back automatically only soon after the move AND if the new folder has taken no writes
+      let c = null; try { c = await countRows(j.to); } catch {}
+      const within = Date.parse(j.firstCheckAt || j.switchedAt || 0) + CHECK_WINDOW_MS >= now().getTime();
+      if (within && !movedOn(j.counts, c)) {
+        const r = rollbackMove({ journal, pointer, rename, now });
+        return r.ok ? give({ dataDir: j.from, action: 'none', note: 'check did not finish twice; rolled back' }) : refuse(r.code, j.to);
+      }
+      return give({ dataDir: j.to, action: 'check', note: 'the new folder has moved on (or the window has passed): not rolling back automatically' });
+    }
+    return give({ dataDir: j.to, action: 'check', note: j.state === 'checking' ? 're-running the check' : 'run the check' });
+  }
+
+  // The pointer names the OLD folder: the switch did not happen (or was undone).
+  if (j.mode === 'rename') {
+    let ok = false; try { ok = undoRename(j, rename); } catch {}
+    if (!ok) return refuse(keyPubOf(j.to) || keyPubOf(j.from) ? 'folder-not-startable' : 'drive-missing', j.from);
+    failed('renamed back');
+    return give({ dataDir: j.from, action: 'none', note: 'renamed back' });
+  }
+  if (existsSync(j.to)) {
+    if (existsSync(join(j.to, MARK_INCOMPLETE))) { try { rmSync(j.to, { recursive: true, force: true }); } catch {} }
+    else if (keyPubOf(j.to)) {
+      // a verified copy that never became current: tombstoned and kept, out of the fixed folder name
+      let aside; try { aside = setAside(j.to, 'interrupted', asideNote(j.from, now().toISOString(), 'an interrupted relay data move'), rename, now); } catch { aside = j.to; }
+      if (!startable(j.from, j.relayPub)) return refuse('folder-not-startable', j.from);
+      failed('switch did not happen; copy kept', { leftover: aside });
+      return give({ dataDir: j.from, action: 'none', note: 'copy set aside' });
+    }
+  }
+  if (!startable(j.from, j.relayPub)) return refuse(keyPubOf(j.from) ? 'folder-not-startable' : 'drive-missing', j.from);
+  failed(j.state === 'renaming' ? 'nothing moved' : 'partial copy removed');
+  return give({ dataDir: j.from, action: 'none', note: 'interrupted; the old folder is unchanged' });
 }
 
 // ── CLI ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -445,6 +616,7 @@ export function recoverMove({ journal, pointer, rename = renameSync, now = () =>
 //   node scripts/relay-move.mjs rollback --pointer FILE [--journal FILE]
 //   node scripts/relay-move.mjs classify --path DIR [--mode suite|server]
 // Prints one JSON object. Exit 0 = ok, 2 = refused / failed safely, 1 = usage or unexpected error.
+const CODE_DIR = fileURLToPath(new URL('..', import.meta.url));   // the app's own code: never a target
 function portOpen(port) {
   return new Promise(res => { const s = createConnection({ host: '127.0.0.1', port }); const done = v => { try { s.destroy(); } catch {} res(v); }; s.once('connect', () => done(true)); s.once('error', () => done(false)); setTimeout(() => done(true), 3000); });
 }
@@ -455,11 +627,18 @@ async function cli(argv) {
   if (cmd === 'move') {
     if (!a.from || !a.drive || !a.port) throw new Error('move needs --from, --drive and --port');
     const port = Number(a.port);
-    return moveRelayData({ ...store(), from: a.from, to: targetFor(a.drive), mode: a.mode, relayRunning: () => portOpen(port) });
+    return moveRelayData({ ...store(), from: a.from, to: targetFor(a.drive), mode: a.mode, codeDir: CODE_DIR, relayRunning: () => portOpen(port) });
   }
-  if (cmd === 'recover') return recoverMove(store());
+  if (cmd === 'recover') { const r = await recoverMove(store()); return r.action === 'refuse' ? { ok: false, ...r } : r; }
   if (cmd === 'rollback') return rollbackMove(store());
-  if (cmd === 'classify') { const ms = systemMounts(); const m = ms && mountFor(a.path, ms); let free; try { free = freeBytes(a.path); } catch {} return { mount: m, free, ...classifyTarget({ path: resolve(a.path), fsType: m && m.fsType, mountOptions: m && m.options, mode: a.mode }) }; }
+  if (cmd === 'classify') {
+    if (!a.path) throw new Error('classify needs --path');
+    const ms = systemMounts(); let real = resolve(a.path); try { real = realpathSync(a.path); } catch {}
+    const m = ms && mountFor(real, ms); let free; try { free = freeBytes(real); } catch {}
+    const c = classifyTarget({ path: real, fsType: m && m.fsType, mountOptions: m && m.options, mode: a.mode, codeDir: CODE_DIR });
+    if (pathHasSymlink(a.path)) { c.refuse.push('path-has-symlink'); c.eligible = false; }
+    return { mount: m, free, ...c };
+  }
   throw new Error('usage: relay-move.mjs move|recover|rollback|classify …');
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

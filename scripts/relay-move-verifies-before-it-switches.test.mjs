@@ -16,7 +16,8 @@ import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { moveRelayData, jsonPointer, jsonFieldStore, classifyTarget, parseMountinfo, parseMacMount, mountFor, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
+import { moveRelayData, jsonPointer, jsonFieldStore, classifyTarget, parseMountinfo, parseMacMount, parseWinLogicalDisks, mountFor, checkPassed, beginCheck, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
+import { spawnSync } from 'node:child_process';
 
 function makeRelay(dir) {
   mkdirSync(dir, { recursive: true });
@@ -71,7 +72,7 @@ test('same drive: ONE rename — the data is moved, not copied; no old copy; poi
     const res = await moveRelayData(t.opts({}));
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.mode, 'rename');
-    assert.equal(existsSync(t.from), false, 'a same-drive move left the old folder behind (owner: instant rename, no old copy)');
+    assert.deepEqual(readdirSync(t.from), [MOVED_TO], 'a same-drive move must leave ONLY a MOVED-TO tombstone at the old path (owner: instant rename, no old copy)');
     assert.equal(t.pointer.read(), t.to);
     assert.equal(res.journal.oldCopy, null, 'a same-drive move recorded an old copy to remind about');
     const after = snapshot(t.to); delete after[STAMP]; const b = { ...before }; delete b[STAMP];
@@ -252,4 +253,98 @@ test('a stale relay lock (its process is gone) does not block a move, and is not
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(existsSync(join(t.to, '.relay-lock')), false, 'a lock note was carried into the new folder');
   } finally { t.done(); }
+});
+
+// ── Audit A of a32084f4 ──────────────────────────────────────────────────────────────────────────────────────
+const ROOT = new URL('..', import.meta.url).pathname;
+
+test('#6 same drive: the old path holds ONLY a MOVED-TO tombstone, and the REAL gateway refuses to start there', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    const res = await moveRelayData(t.opts({}));
+    assert.equal(res.mode, 'rename');
+    const r = spawnSync(process.execPath, ['scripts/gateway.mjs', '8875'], { cwd: ROOT, env: { ...process.env, TRINITY_DATA_DIR: t.from, RELAY_NO_OPEN: '1' }, encoding: 'utf8', timeout: 30000 });
+    assert.equal(r.status, 78, 'a relay started at the old path after a same-drive move — a new, empty relay with a new key. ' + r.stderr);
+    assert.equal(existsSync(join(t.from, 'relay-key.json')), false, 'a key was minted at the old path');
+  } finally { t.done(); }
+});
+
+test('#3 every copied file and directory is fsynced BEFORE the pointer is switched', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    const synced = new Set(); let syncedAtSwitch = null;
+    const realWrite = t.pointer.write.bind(t.pointer);
+    const pointer = { read: () => t.pointer.read(), write: (d, p) => { if (d === t.to) syncedAtSwitch = new Set(synced); return realWrite(d, p); } };
+    const res = await moveRelayData(t.opts({ pointer, rename: exdevOnce(), _fsync: p => { synced.add(p); return true; } }));
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.ok(syncedAtSwitch, 'the pointer was never switched');
+    for (const f of ['relay.sqlite', 'relay-key.json', join('blobs', 'ab', 'cdef')]) assert.ok(syncedAtSwitch.has(join(t.to, f)), f + ' was not fsynced before the switch');
+    for (const d of [t.to, join(t.to, 'blobs'), join(t.to, 'blobs', 'ab'), t.drive]) assert.ok(syncedAtSwitch.has(d), d + ' (directory) was not fsynced before the switch');
+  } finally { t.done(); }
+});
+
+test('#4 a "drive" that is a symlink into a sync folder is refused, and nothing lands there', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    const dropbox = join(t.base, 'Dropbox'); mkdirSync(dropbox);
+    const usb = join(t.base, 'usb'); symlinkSync(dropbox, usb);
+    const res = await moveRelayData(t.opts({ to: join(usb, LEAF) }));
+    assertNothingSwitched({ ...t, to: join(dropbox, LEAF) }, null, res, 'symlinked drive');
+    assert.equal(res.code, 'target-path-has-symlink');
+    const direct = await moveRelayData(t.opts({ to: join(dropbox, LEAF) }));
+    assert.equal(direct.code, 'target-ineligible'); assert.match(direct.detail, /sync-folder/);
+  } finally { t.done(); }
+});
+
+test('#11 a staged restore in the folder -> refused (a copy would silently drop it)', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    mkdirSync(join(t.from, '.restore-pending'));
+    const res = await moveRelayData(t.opts({}));
+    assertNothingSwitched(t, null, res, 'restore pending');
+    assert.equal(res.code, 'restore-pending');
+  } finally { t.done(); }
+});
+
+test('#14 a second move is refused while the first move\'s old copy still awaits removal', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    const first = await moveRelayData(t.opts({ rename: exdevOnce() }));
+    assert.equal(first.ok, true);
+    assert.equal((await beginCheck(t)).ok, true); checkPassed(t);
+    const drive2 = join(t.base, 'drive2'); mkdirSync(drive2);
+    const second = await moveRelayData({ ...t.opts({}), from: t.to, to: join(drive2, LEAF) });
+    assert.equal(second.ok, false, 'a second move overwrote the record of an old copy that is still on disk');
+    assert.equal(second.code, 'old-copy-awaiting-removal');
+    assert.equal(t.journal.read().oldCopy.path, t.from, 'the old copy\'s record was lost');
+    assert.equal(t.pointer.read(), t.to);
+  } finally { t.done(); }
+});
+
+test('#12 Windows: system folders refused case-insensitively; a mapped network letter is refused; removable flagged', () => {
+  for (const p of ['C:\\Windows\\' + LEAF, 'c:\\program files\\TrinityOne\\' + LEAF, 'D:\\ProgramData\\' + LEAF])
+    assert.ok(classifyTarget({ path: p, fsType: 'ntfs', platform: 'win32' }).refuse.includes('system-folder'), p);
+  assert.equal(classifyTarget({ path: 'E:\\' + LEAF, fsType: 'exfat', platform: 'win32' }).eligible, true);
+  const disks = parseWinLogicalDisks(JSON.stringify([
+    { DeviceID: 'C:', DriveType: 3, FileSystem: 'NTFS' }, { DeviceID: 'E:', DriveType: 2, FileSystem: 'exFAT' },
+    { DeviceID: 'Z:', DriveType: 4, FileSystem: 'NTFS', ProviderName: '\\\\nas\\share' }]));
+  const z = mountFor('z:\\' + LEAF, disks, 'win32');
+  assert.equal(z.mountpoint, 'Z:\\', 'drive letters must match case-insensitively');
+  assert.deepEqual(classifyTarget({ path: 'Z:\\' + LEAF, fsType: z.fsType, platform: 'win32' }).refuse, ['network'], 'a mapped network drive was accepted');
+  const e = mountFor('E:\\' + LEAF, disks, 'win32');
+  const ce = classifyTarget({ path: 'E:\\' + LEAF, fsType: e.fsType, mountOptions: e.options, platform: 'win32' });
+  assert.ok(ce.warn.includes('removable') && ce.warn.includes('no-permissions'));
+  assert.ok(classifyTarget({ path: '/system/Library/' + LEAF, fsType: 'apfs', platform: 'darwin' }).refuse.includes('system-folder'), 'macOS paths are case-insensitive');
+  assert.ok(classifyTarget({ path: 'C:\\Users\\ann\\TrinityOne Suite\\payload\\' + LEAF, fsType: 'ntfs', platform: 'win32', codeDir: 'c:\\users\\ann\\trinityone suite\\payload' }).refuse.includes('inside-app'));
+});
+
+test('#12 the CLI refuses a target inside the app\'s own code folder', () => {
+  const r = spawnSync(process.execPath, ['scripts/relay-move.mjs', 'classify', '--path', join(ROOT, 'scripts')], { cwd: ROOT, encoding: 'utf8' });
+  const out = JSON.parse(r.stdout);
+  assert.ok(out.refuse.includes('inside-app'), 'the CLI does not pass codeDir: ' + r.stdout);
 });

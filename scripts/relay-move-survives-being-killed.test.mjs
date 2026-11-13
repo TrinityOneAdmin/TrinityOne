@@ -47,32 +47,32 @@ function assertStartable(t, dir, why) {
   assert.equal(t.pointer.read(), dir, why + ': the pointer does not name the folder recovery returned');
 }
 
-test('killed mid-rename (the rename happened, the journal did not catch up) -> renamed back, old folder in use', () => {
+test('killed mid-rename (the rename happened, the journal did not catch up) -> renamed back, old folder in use', async () => {
   const t = rig('rename');
   try {
     t.j('renaming'); renameSync(t.from, t.to);
-    const r = recoverMove(t);
+    const r = await recoverMove(t);
     assertStartable(t, r.dataDir, 'renaming/after');
     assert.equal(r.dataDir, t.from); assert.equal(existsSync(t.to), false);
     assert.equal(t.journal.read().state, 'failed');
   } finally { t.done(); }
 });
 
-test('killed before the rename -> old folder, nothing touched', () => {
+test('killed before the rename -> old folder, nothing touched', async () => {
   const t = rig('rename');
   try {
     t.j('renaming');
-    const r = recoverMove(t);
+    const r = await recoverMove(t);
     assertStartable(t, r.dataDir, 'renaming/before'); assert.equal(r.dataDir, t.from);
   } finally { t.done(); }
 });
 
 for (const state of ['copying', 'verifying']) {
-  test(`killed while ${state} -> partial copy (marked) removed, old folder in use`, () => {
+  test(`killed while ${state} -> partial copy (marked) removed, old folder in use`, async () => {
     const t = rig('copy');
     try {
       t.j(state); t.fullCopy(true);
-      const r = recoverMove(t);
+      const r = await recoverMove(t);
       assertStartable(t, r.dataDir, state); assert.equal(r.dataDir, t.from);
       assert.equal(existsSync(t.to), false, 'the partial copy was left in place');
       assert.equal(r.action, 'none');
@@ -80,11 +80,11 @@ for (const state of ['copying', 'verifying']) {
   });
 }
 
-test('killed after the copy was VERIFIED but before the pointer switched -> old folder in use, verified copy KEPT', () => {
+test('killed after the copy was VERIFIED but before the pointer switched -> old folder in use, verified copy KEPT', async () => {
   const t = rig('copy');
   try {
     t.j('switching'); t.fullCopy(false);
-    const r = recoverMove(t);
+    const r = await recoverMove(t);
     assertStartable(t, r.dataDir, 'switching/pointer-old'); assert.equal(r.dataDir, t.from);
     const j = t.journal.read();
     assert.ok(j.leftover, 'the verified copy is not recorded');
@@ -93,11 +93,11 @@ test('killed after the copy was VERIFIED but before the pointer switched -> old 
   } finally { t.done(); }
 });
 
-test('killed after the pointer switched, before MOVED-TO -> finishes: new folder, old one marked and dated, check requested', () => {
+test('killed after the pointer switched, before MOVED-TO -> finishes: new folder, old one marked and dated, check requested', async () => {
   const t = rig('copy');
   try {
     t.j('switching'); t.fullCopy(false); t.pointer.write(t.to, t.pub);
-    const r = recoverMove(t);
+    const r = await recoverMove(t);
     assertStartable(t, r.dataDir, 'switching/pointer-new'); assert.equal(r.dataDir, t.to);
     assert.equal(r.action, 'check');
     assert.ok(existsSync(join(t.from, MOVED_TO)), 'the old copy was not marked MOVED-TO — an old launcher could start it');
@@ -105,34 +105,34 @@ test('killed after the pointer switched, before MOVED-TO -> finishes: new folder
   } finally { t.done(); }
 });
 
-test('same-drive rename killed after the rename, before the pointer -> renamed back', () => {
+test('same-drive rename killed after the rename, before the pointer -> renamed back', async () => {
   const t = rig('rename');
   try {
     t.j('switching'); renameSync(t.from, t.to);
-    const r = recoverMove(t);
+    const r = await recoverMove(t);
     assertStartable(t, r.dataDir, 'rename/switching'); assert.equal(r.dataDir, t.from);
   } finally { t.done(); }
 });
 
-test('switched, MOVED-TO lost -> rewritten; the relay is started on the new folder and checked', () => {
+test('switched, MOVED-TO lost -> rewritten; the relay is started on the new folder and checked', async () => {
   const t = rig('copy');
   try {
     t.fullCopy(false); t.pointer.write(t.to, t.pub); t.j('switched', { oldCopy: { path: t.from, since: new Date().toISOString() } });
-    const r = recoverMove(t);
+    const r = await recoverMove(t);
     assertStartable(t, r.dataDir, 'switched'); assert.equal(r.action, 'check');
     assert.ok(existsSync(join(t.from, MOVED_TO)));
   } finally { t.done(); }
 });
 
-test('killed during the check: re-checked once, then rolled back — and the new copy is set aside, not deleted', () => {
+test('killed during the check: re-checked once, then rolled back — and the new copy is set aside, not deleted', async () => {
   const t = rig('copy');
   try {
     t.fullCopy(false); writeFileSync(join(t.from, MOVED_TO), 'moved'); t.pointer.write(t.to, t.pub);
     t.j('checking', { checkAttempts: 1 });
-    const r1 = recoverMove(t);
+    const r1 = await recoverMove(t);
     assert.equal(r1.action, 'check'); assertStartable(t, r1.dataDir, 'checking/1');
-    t.j('checking', { checkAttempts: 2 });
-    const r2 = recoverMove(t);
+    t.j('checking', { checkAttempts: 2, firstCheckAt: new Date().toISOString() });
+    const r2 = await recoverMove(t);
     assertStartable(t, r2.dataDir, 'checking/2'); assert.equal(r2.dataDir, t.from);
     assert.equal(t.journal.read().state, 'rolled-back');
     const aside = readdirSync(dirname(t.to)).filter(n => n.startsWith(LEAF + '-failed-'));
@@ -140,18 +140,18 @@ test('killed during the check: re-checked once, then rolled back — and the new
   } finally { t.done(); }
 });
 
-test('killed half-way through a rollback of a rename -> the rollback finishes', () => {
+test('killed half-way through a rollback of a rename -> the rollback finishes', async () => {
   const t = rig('rename');
   try {
     renameSync(t.from, t.to); t.pointer.write(t.to, t.pub); t.j('rolling-back');
-    const r = recoverMove(t);
+    const r = await recoverMove(t);
     assertStartable(t, r.dataDir, 'rolling-back'); assert.equal(r.dataDir, t.from);
   } finally { t.done(); }
 });
 
-test('no move under way -> the pointer as it is', () => {
+test('no move under way -> the pointer as it is', async () => {
   const t = rig('copy');
-  try { const r = recoverMove(t); assert.equal(r.action, 'none'); assert.equal(r.dataDir, t.from); } finally { t.done(); }
+  try { const r = await recoverMove(t); assert.equal(r.action, 'none'); assert.equal(r.dataDir, t.from); } finally { t.done(); }
 });
 
 // ── end to end through the step-8 check ──
@@ -162,7 +162,7 @@ test('cross-drive move, check passes -> awaiting the steward; old copy kept with
   const t = rig('copy');
   try {
     const m = await run(t, { rename: exdev() }); assert.equal(m.ok, true, JSON.stringify(m));
-    const j = beginCheck(t);
+    const bc = await beginCheck(t); assert.equal(bc.ok, true, JSON.stringify(bc.bad)); const j = bc.journal;
     assert.deepEqual(compareAfterRestart(j, { relayPub: t.pub, counts: j.counts }), []);
     assert.ok(compareAfterRestart(j, { relayPub: 'f'.repeat(64), counts: j.counts }).includes('relay-key'));
     assert.ok(compareAfterRestart(j, { relayPub: t.pub, counts: { ...j.counts, events: 1 } }).includes('event-count'));
@@ -170,7 +170,7 @@ test('cross-drive move, check passes -> awaiting the steward; old copy kept with
     assert.equal(done.state, 'awaiting-confirm');
     assert.equal(done.oldCopy.path, t.from); assert.ok(Date.parse(done.oldCopy.since));
     assert.ok(existsSync(join(t.from, 'relay-key.json')), 'the old copy was deleted automatically');
-    assert.equal(recoverMove(t).action, 'none');
+    assert.equal((await recoverMove(t)).action, 'none');
   } finally { t.done(); }
 });
 
@@ -178,7 +178,7 @@ test('cross-drive move, check FAILS -> rollback: old folder back in use, tombsto
   const t = rig('copy');
   try {
     const m = await run(t, { rename: exdev() }); assert.equal(m.ok, true);
-    beginCheck(t);
+    assert.equal((await beginCheck(t)).ok, true);
     const r = rollbackMove(t);
     assert.equal(r.ok, true);
     assertStartable(t, r.dataDir, 'rollback/copy');
@@ -190,13 +190,140 @@ test('same-drive move, check passes -> done, no old copy; check fails -> renamed
   const a = rig('rename');
   try {
     const m = await run(a); assert.equal(m.mode, 'rename');
-    beginCheck(a); const done = checkPassed(a);
+    assert.equal((await beginCheck(a)).ok, true); const done = checkPassed(a);
     assert.equal(done.state, 'done'); assert.equal(done.oldCopy, null);
   } finally { a.done(); }
   const b = rig('rename');
   try {
     const m = await run(b); assert.equal(m.mode, 'rename');
-    beginCheck(b); const r = rollbackMove(b);
+    await beginCheck(b); const r = rollbackMove(b);
     assertStartable(b, r.dataDir, 'rollback/rename'); assert.equal(existsSync(b.to), false);
   } finally { b.done(); }
+});
+
+// ── Audit A of a32084f4 ──────────────────────────────────────────────────────────────────────────────────────
+const unplug = t => renameSync(dirname(t.to), dirname(t.to) + '-UNPLUGGED');
+const replug = t => renameSync(dirname(t.to) + '-UNPLUGGED', dirname(t.to));
+
+for (const moved of [true, false]) {
+  test(`#1 killed after the switch, then the new drive is MISSING at the next start (MOVED-TO ${moved ? 'written' : 'not yet written'}) -> do not start anywhere`, async () => {
+    const t = rig('copy');
+    try {
+      t.j('switching'); t.fullCopy(false); t.pointer.write(t.to, t.pub);
+      if (moved) writeFileSync(join(t.from, MOVED_TO), 'moved');
+      unplug(t);
+      const r = await recoverMove(t);
+      assert.equal(r.action, 'refuse', 'recovery handed back a folder although the pointer names a drive that is not connected: ' + JSON.stringify(r));
+      assert.equal(r.code, 'drive-missing'); assert.equal(r.dataDir, null);
+      assert.equal(r.expected, t.to);
+      assert.equal(t.pointer.read(), t.to, 'the pointer was changed');
+      assert.equal(t.journal.read().state, 'switching', 'the journal moved on, so the next start cannot finish the switch');
+      replug(t);
+      const r2 = await recoverMove(t);
+      assertStartable(t, r2.dataDir, 'drive back'); assert.equal(r2.dataDir, t.to); assert.equal(r2.action, 'check');
+      assert.ok(existsSync(join(t.from, MOVED_TO)), 'the old copy is startable alongside the new one');
+    } finally { t.done(); }
+  });
+}
+
+test('#1 switched / checking and the drive is missing -> refuse, never the old folder', async () => {
+  for (const state of ['switched', 'checking']) {
+    const t = rig('copy');
+    try {
+      t.fullCopy(false); writeFileSync(join(t.from, MOVED_TO), 'moved'); t.pointer.write(t.to, t.pub);
+      t.j(state, { checkAttempts: 2, firstCheckAt: new Date().toISOString(), oldCopy: { path: t.from, since: new Date().toISOString() } });
+      unplug(t);
+      const r = await recoverMove(t);
+      assert.equal(r.action, 'refuse', state + ': ' + JSON.stringify(r));
+      assert.equal(t.pointer.read(), t.to);
+    } finally { t.done(); }
+  }
+});
+
+for (const mode of ['copy', 'rename']) {
+  test(`#2 ${mode}: the pointer write lands then throws, and the write-back fails -> the new folder is NOT destroyed; recovery follows the pointer`, async () => {
+    const t = rig(mode);
+    try {
+      let cur = t.from;
+      const pointer = { read: () => cur, write(d) { cur = d; throw new Error('daemon-reload failed'); } };
+      const rename = mode === 'copy' ? exdev() : renameSync;
+      const m = await moveRelayData({ from: t.from, to: t.to, pointer, journal: t.journal, relayRunning: async () => false, mounts: null, rename });
+      assert.equal(m.ok, false);
+      assert.equal(cur, t.from, 'fixture: the write-back should have landed (it throws after setting)');
+    } finally { t.done(); }
+    // now the harder one: the write-back does NOT land
+    const u = rig(mode);
+    try {
+      let cur = u.from, n = 0;
+      const pointer = { read: () => cur, write(d) { n++; if (n === 1) cur = d; throw new Error('daemon-reload failed'); } };
+      const rename = mode === 'copy' ? exdev() : renameSync;
+      const m = await moveRelayData({ from: u.from, to: u.to, pointer, journal: u.journal, relayRunning: async () => false, mounts: null, rename });
+      assert.equal(m.ok, false); assert.equal(m.code, 'switch-uncertain');
+      assert.equal(cur, u.to, 'fixture: the pointer should name the new folder');
+      assert.equal(JSON.parse(readFileSync(join(u.to, 'relay-key.json'), 'utf8')).pub, u.pub, 'THE FOLDER THE POINTER NAMES WAS DESTROYED');
+      assert.equal(existsSync(join(u.to, MARK_INCOMPLETE)), false);
+      const r = await recoverMove({ journal: u.journal, pointer: { read: () => cur, write(d) { cur = d; } } });
+      assert.equal(r.dataDir, u.to); assert.equal(r.action, 'check');
+    } finally { u.done(); }
+  });
+}
+
+test('#5 the first check counts the new folder BEFORE the relay runs (exact); after the restart more events are fine', async () => {
+  const t = rig('copy');
+  try {
+    const m = await run(t, { rename: exdev() }); assert.equal(m.ok, true);
+    const db = new DatabaseSync(join(t.to, 'relay.sqlite')); db.exec("INSERT INTO events VALUES ('stray')"); db.close();
+    const bc = await beginCheck(t);
+    assert.equal(bc.ok, false, 'a new folder with rows the source never had passed the pre-start check');
+    assert.deepEqual(bc.bad, ['event-count']);
+    const j = bc.journal;
+    assert.deepEqual(compareAfterRestart(j, { relayPub: t.pub, counts: { events: 9, deletions: 0, meta: 0 } }), [], 'a live relay that took new events failed the check — a healthy move would be rolled back');
+    assert.deepEqual(compareAfterRestart(j, { relayPub: t.pub, counts: { events: 1, deletions: 0, meta: 0 } }), ['event-count']);
+  } finally { t.done(); }
+});
+
+test('#9 rollback: the new folder is tombstoned and set aside BEFORE the old one\'s MOVED-TO is removed; if that fails, it stops', async () => {
+  const t = rig('copy');
+  try {
+    const m = await run(t, { rename: exdev() }); assert.equal(m.ok, true);
+    const r0 = rollbackMove({ journal: t.journal, pointer: t.pointer, rename: () => { const e = new Error('EBUSY'); e.code = 'EBUSY'; throw e; } });
+    assert.equal(r0.ok, false); assert.equal(r0.code, 'rollback-blocked');
+    assert.ok(existsSync(join(t.from, MOVED_TO)), 'the old folder was un-tombstoned although the new one could not be set aside');
+    assert.ok(existsSync(join(t.to, MOVED_TO)), 'the new folder was not tombstoned first');
+    assert.equal(t.journal.read().state, 'rolling-back');
+    const r = await recoverMove(t);   // resumes the rollback with a working rename
+    assertStartable(t, r.dataDir, 'rollback resumed');
+    const aside = readdirSync(dirname(t.to)).filter(n => n.startsWith(LEAF + '-failed-'));
+    assert.equal(aside.length, 1);
+    assert.ok(existsSync(join(dirname(t.to), aside[0], MOVED_TO)), 'the set-aside copy is a startable identity clone');
+  } finally { t.done(); }
+});
+
+test('#9 a verified copy set aside by recovery carries a tombstone', async () => {
+  const t = rig('copy');
+  try {
+    t.j('switching'); t.fullCopy(false);
+    await recoverMove(t);
+    const j = t.journal.read();
+    assert.ok(existsSync(join(j.leftover, MOVED_TO)), 'the -interrupted- copy is a startable identity clone');
+  } finally { t.done(); }
+});
+
+test('#15 a check interrupted twice is NOT rolled back if the new folder has taken writes, or if the window has passed', async () => {
+  const t = rig('copy');
+  try {
+    t.fullCopy(false); writeFileSync(join(t.from, MOVED_TO), 'moved'); t.pointer.write(t.to, t.pub);
+    const db = new DatabaseSync(join(t.to, 'relay.sqlite')); db.exec("INSERT INTO events VALUES ('written after the move')"); db.close();
+    t.j('checking', { checkAttempts: 2, firstCheckAt: new Date().toISOString() });
+    const r = await recoverMove(t);
+    assert.equal(r.dataDir, t.to, 'writes made on the new folder were stranded by an automatic rollback');
+    assert.equal(r.action, 'check');
+  } finally { t.done(); }
+  const u = rig('copy');
+  try {
+    u.fullCopy(false); writeFileSync(join(u.from, MOVED_TO), 'moved'); u.pointer.write(u.to, u.pub);
+    u.j('checking', { checkAttempts: 2, firstCheckAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() });
+    const r = await recoverMove(u);
+    assert.equal(r.dataDir, u.to, 'rolled back an hour after the move');
+  } finally { u.done(); }
 });
