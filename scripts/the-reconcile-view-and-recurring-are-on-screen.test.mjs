@@ -63,7 +63,14 @@ function seedBook() {
 test('the Finance screen offers a Reconcile control, and it opens the reconcile view', () => {
   const h = setup();
   h.draw();
+  // 431d9368 added the book preloader: until encSubscribe has delivered once, the Finance page is only a
+  // spinner. Deliver a book first, as the Recurring test below does.
+  h.feedItems(toItems(FL.bookToDocs(seedBook())));
   assert.ok(h.button('Reconcile'), 'NO "Reconcile" control on the Finance screen');
+  const isReconcile = (n) => n && (n.type === h.mods.FinanceReconcile || (n.type && n.type.name === 'FinanceReconcile'));
+  assert.ok(!h.all().some(isReconcile), 'CONTROL: the reconcile view was already open before Reconcile was pressed');
+  h.click('Reconcile');
+  assert.ok(h.all().some(isReconcile), 'pressing Reconcile did not open the reconcile view (no FinanceReconcile in the tree)');
 });
 
 test('the Recurring-payments panel shows a template with a "Post this month" control', () => {
