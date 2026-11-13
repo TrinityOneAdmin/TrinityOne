@@ -25,7 +25,7 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname, basename, parse as parsePath } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
@@ -182,32 +182,59 @@ export function writeAtomic(file, text) {
 const readJson = p => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } };
 // The gateway writes <dir>/.relay-lock {pid} at start-up (audit A #10). Held = that pid is alive (and, where /proc
 // exists, is a node process running gateway.mjs — so a reused pid does not block a move for ever).
-// The command line of a live pid: /proc on Linux, `ps -p PID -o command=` on macOS, Win32_Process.CommandLine via
-// PowerShell on Windows (audit B N6: without it, any process that reused the pid blocked a move). null = unknown.
-export function processCommandLine(pid, pf = process.platform) {
-  try {
-    if (pf === 'linux') return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
-    if (pf === 'darwin') return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 });
-    if (pf === 'win32') return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8', timeout: 15000, windowsHide: true });
-  } catch {}
-  return null;
+// The command line and start time of a live pid, ASYNC so a server caller's event loop is never blocked by a cold
+// PowerShell start (audit C C8). Linux: /proc + `ps -o lstart=`; macOS: `ps -ww` (without -ww BSD ps cuts the line
+// to the terminal width or 79 columns, which could hide "gateway.mjs" behind a long app path — audit C C2);
+// Windows: Win32_Process via PowerShell. Any value can be null = unknown. NOT run on a real Mac or Windows yet.
+const execFileP = (cmd, args, timeout) => new Promise(res => execFile(cmd, args, { encoding: 'utf8', timeout, windowsHide: true }, (e, out) => res(e ? null : out)));
+export async function processInfo(pid, pf = process.platform, run = execFileP) {
+  pid = Number(pid);
+  if (pf === 'win32') {
+    const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { $p.CreationDate.ToUniversalTime().ToString('o'); $p.CommandLine }`], 15000);
+    if (!out) return { commandLine: null, startedAt: null };
+    const [first, ...rest] = out.split(/\r?\n/);
+    return { commandLine: rest.join(' ').trim() || null, startedAt: Date.parse(first) || null };
+  }
+  let commandLine = null;
+  if (pf === 'linux') { try { commandLine = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' '); } catch {} }
+  if (commandLine === null) commandLine = await run('ps', ['-ww', '-p', String(pid), '-o', 'command='], 5000);
+  const lstart = await run('ps', ['-p', String(pid), '-o', 'lstart='], 5000);
+  return { commandLine: commandLine === null ? null : String(commandLine).trim(), startedAt: lstart ? (Date.parse(lstart.trim()) || null) : null };
 }
-// Held = that pid is alive AND its command line runs gateway.mjs. If the command line cannot be read, it counts as
-// held (refusing a move is safe; moving a live relay's folder is not). The gateway itself never reads the lock, so
-// it can never stop a relay from starting.
-export function relayLockHeld(dir, { platform = process.platform, commandLine = processCommandLine } = {}) {
+// Held = the pid is alive, its command line runs gateway.mjs, and (when both times are known) it started no later
+// than the lock was written — a process that started AFTER the note is a different process that reused the pid.
+// Unknown counts as held (refusing a move is safe; moving a live relay's folder is not), and so does a node command
+// line long enough to have been cut short. The gateway itself never reads the lock, so it can never stop a relay.
+const START_SLACK_MS = 5000;   // ps lstart has 1 s resolution; clocks and the lock write add a little
+export async function relayLockHeld(dir, { platform = process.platform, info = processInfo } = {}) {
   const l = readJson(join(dir, '.relay-lock'));
   const pid = l && Number(l.pid);
   if (!pid || pid === process.pid) return false;
   try { process.kill(pid, 0); } catch (e) { if (!e || e.code !== 'EPERM') return false; }
-  const cmd = commandLine(pid, platform);
-  return cmd === null || cmd === undefined ? true : /gateway\.mjs/.test(cmd);
+  const p = await info(pid, platform) || {};
+  const lockAt = l && Date.parse(l.startedAt);
+  if (p.startedAt && lockAt && p.startedAt > lockAt + START_SLACK_MS) return false;
+  const cmd = p.commandLine;
+  if (cmd === null || cmd === undefined) return true;
+  if (/gateway\.mjs/.test(cmd)) return true;
+  if (/node/i.test(cmd) && cmd.length >= 79) return true;   // possibly truncated: do not trust the absence
+  return false;
 }
 export function keyPubOf(dir) { const k = readJson(join(dir, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
 // A folder the step-1 guard would start: this relay's key, no MOVED-TO, not a partial copy.
 export function startable(dir, pub) {
   return !!dir && keyPubOf(dir) === pub && !existsSync(join(dir, MOVED_TO)) && !existsSync(join(dir, MARK_INCOMPLETE));
+}
+// What the step-1 gateway guard checks for a PINNED folder, judged on the folder's OWN identity (audit C C1): a usable
+// key, no MOVED-TO, no incomplete marker, and a stamp (if any) naming that same key. Used outside an active move,
+// where a restore of another relay's backup may legitimately have changed the identity since the journal was written.
+export function gatewayWouldStart(dir) {
+  const k = keyPubOf(dir);
+  if (!k || existsSync(join(dir, MOVED_TO)) || existsSync(join(dir, MARK_INCOMPLETE))) return false;
+  if (!existsSync(join(dir, STAMP))) return true;
+  const st = readJson(join(dir, STAMP));
+  return !!(st && st.relayPub === k);
 }
 // An empty folder holding only MOVED-TO: what a same-drive rename leaves at the old path.
 // Also accepts an EMPTY folder or one holding only a half-written MOVED-TO.tmp-* (a kill while it was being made,
@@ -240,7 +267,7 @@ export function hasSymlink(p) {
 // relative paths of every regular file under dir, skipping SKIP names at the top level
 function listFiles(dir, rel = '', top = true, out = []) {
   for (const name of readdirSync(join(dir, rel)).sort()) {
-    if (top && SKIP.has(name)) continue;
+    if (top && (SKIP.has(name) || /^(relay-key\.json|\.trinity-data-dir)\.tmp-\d+$/.test(name))) continue;   // a key temp holds a secret: never copied
     const r = rel ? join(rel, name) : name;
     const st = lstatSync(join(dir, r));
     if (st.isDirectory()) listFiles(dir, r, false, out);
@@ -365,7 +392,7 @@ export async function moveRelayData(opts) {
   const cur = pointer.read();
   if (cur && !samePath(cur, from, pf)) return no('not-current-folder', cur);
   if (!existsSync(from)) return no('source-missing');
-  if (relayLockHeld(from)) return no('relay-running', 'a relay process still holds this folder');
+  if (await relayLockHeld(from, { platform: pf })) return no('relay-running', 'a relay process still holds this folder');
   if (existsSync(join(from, MOVED_TO))) return no('source-moved');
   if (existsSync(join(from, '.restore-pending'))) return no('restore-pending');   // audit A #11: a copy would drop it
   const relayPub = keyPubOf(from);
@@ -395,13 +422,17 @@ export async function moveRelayData(opts) {
 
   // 1. same volume: one atomic rename
   journal.write({ ...base, state: 'renaming', mode: 'rename' });
-  let removedEmpty = false;
-  if (existsSync(to)) { rmSync(to, { recursive: true, force: true }); removedEmpty = true; }   // empty or a stale tombstone (checked above); Windows can't rename onto one
+  let removedEmpty = false, oldNote = null;
+  if (existsSync(to)) {   // empty or a stale tombstone (checked above); Windows can't rename onto one
+    try { oldNote = readFileSync(join(to, MOVED_TO), 'utf8'); } catch {}
+    rmSync(to, { recursive: true, force: true }); removedEmpty = true;
+  }
   try {
     rename(from, to);
   } catch (e) {
     if (!e || e.code !== 'EXDEV') {
-      if (removedEmpty) { try { mkdirSync(to); } catch {} }
+      // audit C C4: a stale tombstone goes back as it was — never a bare empty folder a launcher could start in
+      if (removedEmpty) { try { if (oldNote !== null) makeTombstoneDir(to, oldNote); else mkdirSync(to); } catch {} }
       journal.write({ ...base, state: 'failed', mode: 'rename', code: 'rename-failed', detail: String(e && e.code || e), endedAt: now().toISOString() });
       return no('rename-failed', String(e && e.code || e));
     }
@@ -584,6 +615,22 @@ export function rollbackMove({ journal, pointer, rename = renameSync, now = () =
 
 // The data has left j.from: make sure nothing can start a relay there. Copy: a MOVED-TO in the old copy (if its drive
 // is connected). Rename: an atomic MOVED-TO-only folder if the path is empty. Best effort; re-run on every start.
+// A kill while makeTombstoneDir was building leaves <from>.tombstone-tmp-<pid>. It holds no data: delete it when it
+// holds only a tombstone and its pid is gone, otherwise record it as a leftover (audit C C6).
+function sweepTombstoneTemps(j, journal, now) {
+  let names; try { names = readdirSync(dirname(j.from)); } catch { return; }
+  const pre = basename(j.from) + '.tombstone-tmp-';
+  let rec = null;
+  for (const n of names) {
+    if (!n.startsWith(pre)) continue;
+    const p = join(dirname(j.from), n), pid = Number(n.slice(pre.length));
+    let alive = pid === process.pid; if (!alive && pid) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
+    if (alive) continue;
+    if (isTombstoneOnly(p)) { try { rmSync(p, { recursive: true, force: true }); } catch {} }
+    else if (!(j.leftovers || []).some(l => l.path === p)) rec = withLeftover({ leftovers: rec || j.leftovers }, p, 'tombstone-temp', now);
+  }
+  if (rec) { j.leftovers = rec; journal.write(j); }
+}
 function ensureOldTombstoned(j, now) {
   const note = movedNote(j.to, (j.oldCopy && j.oldCopy.since) || now().toISOString());
   try {
@@ -599,7 +646,9 @@ function ensureOldTombstoned(j, now) {
 //   { dataDir, action: 'check' }  start it there and run the step-8 check
 //   { dataDir: null, action: 'refuse', code, expected }  do NOT start: e.g. the pointer names a drive that is not
 //                                  connected. The journal is left as it was, so the next start tries again.
-// Never deletes a folder without the incomplete marker; never returns a folder the step-1 guard would refuse.
+// Never deletes a folder without the incomplete marker. In an active move the folder returned is checked against the
+// pointer and against this relay's recorded key; outside one, against what the pinned gateway itself checks
+// (gatewayWouldStart), since a restore may have changed the identity since the move.
 export async function recoverMove({ journal, pointer, rename = renameSync, now = () => new Date(), platform }) {
   const pf = platform || process.platform;
   const j = journal.read();
@@ -610,11 +659,17 @@ export async function recoverMove({ journal, pointer, rename = renameSync, now =
   if (!ACTIVE.has(j.state)) {
     // A past move is recorded: the folder the pointer names must still be one the gateway would start (audit B N1),
     // and the folder the data LEFT must not be (audit B N3 — re-tombstoned here, outside the active states too).
+    // Judged as the gateway judges it — NOT against the journal's relayPub: a restore of another relay's backup
+    // after the move is a supported flow and changes the identity (audit C C1).
     const dir = pr.v || j.from;
-    if (j.relayPub && !startable(dir, j.relayPub)) return refuse(keyPubOf(dir) ? 'folder-not-startable' : 'drive-missing', dir);
-    if (j.to && samePath(dir, j.to, pf) && j.from && !samePath(j.from, j.to, pf)) ensureOldTombstoned(j, now);
+    if (j.relayPub && !gatewayWouldStart(dir)) return refuse(keyPubOf(dir) ? 'folder-not-startable' : 'drive-missing', dir);
+    if (j.mode === 'rename') sweepTombstoneTemps(j, journal, now);
+    // Re-tombstone the old copy only while it still awaits removal, and only if this is still the relay that moved
+    // (audit C C3: a 'done' rename tombstone the steward removed is not re-created at every start).
+    if (j.state === 'awaiting-confirm' && keyPubOf(dir) === j.relayPub && j.to && samePath(dir, j.to, pf) && j.from && !samePath(j.from, j.to, pf)) ensureOldTombstoned(j, now);
     return { dataDir: pr.v, action: 'none' };
   }
+  if (j.mode === 'rename') sweepTombstoneTemps(j, journal, now);
   const failed = (note, extra = {}) => { journal.write({ ...j, state: 'failed', code: 'interrupted', note, ...extra, endedAt: now().toISOString() }); };
   // the result must be the folder the pointer names, and one the gateway would start
   const give = (r) => {

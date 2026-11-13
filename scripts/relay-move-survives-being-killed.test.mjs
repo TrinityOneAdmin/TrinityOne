@@ -396,3 +396,46 @@ test('N8 leftovers are recorded and carried: the rename tombstone, and a set-asi
     assert.ok(r.journal.leftovers.some(l => l.kind === 'set-aside' && l.path.startsWith(b.to + '-failed-')), 'the set-aside copy is not recorded');
   } finally { b.done(); }
 });
+
+// ── Audit C of fdba15d8 ──────────────────────────────────────────────────────────────────────────────────────
+for (const mode of ['rename', 'copy']) {
+  test(`C1 ${mode}: after a finished move, restoring ANOTHER relay's backup into the folder does not lock the box out`, async () => {
+    const t = rig(mode);
+    try {
+      const m = await run(t, mode === 'copy' ? { rename: exdev() } : {}); assert.equal(m.ok, true);
+      assert.equal((await beginCheck(t)).ok, true); checkPassed(t);
+      // what the gateway's restore-on-boot leaves: the backup's key, and a stamp re-made from it
+      const k = generateSecretKey(), pub = getPublicKey(k);
+      writeFileSync(join(t.to, 'relay-key.json'), JSON.stringify({ sk: Buffer.from(k).toString('hex'), pub }));
+      writeFileSync(join(t.to, STAMP), JSON.stringify({ relayPub: pub }));
+      const r = await recoverMove(t);
+      assert.equal(r.action, 'none', 'a box that restored another relay\'s backup is refused at every start: ' + JSON.stringify(r));
+      assert.equal(r.dataDir, t.to);
+    } finally { t.done(); }
+  });
+}
+
+test('C3 a "done" rename tombstone the steward removed is not re-created at the next start', async () => {
+  const t = rig('rename');
+  try {
+    const m = await run(t); assert.equal(m.mode, 'rename');
+    assert.equal((await beginCheck(t)).ok, true); checkPassed(t);
+    rmSync(t.from, { recursive: true, force: true });
+    const r = await recoverMove(t);
+    assert.equal(r.dataDir, t.to);
+    assert.equal(existsSync(t.from), false, 'a removed tombstone came back at the next start');
+  } finally { t.done(); }
+});
+
+test('C6 a tombstone temp folder left by a kill is cleared (dead pid, tombstone only) or recorded as a leftover', async () => {
+  const t = rig('rename');
+  try {
+    const m = await run(t); assert.equal(m.mode, 'rename');
+    const clean = t.from + '.tombstone-tmp-2147483646'; mkdirSync(clean); writeFileSync(join(clean, MOVED_TO), 'x');
+    const odd = t.from + '.tombstone-tmp-2147483645'; mkdirSync(odd); writeFileSync(join(odd, 'something'), 'x');
+    await recoverMove(t);
+    assert.equal(existsSync(clean), false, 'a tombstone-only temp folder was left behind');
+    assert.ok(existsSync(odd), 'a temp folder holding something else was deleted');
+    assert.ok((t.journal.read().leftovers || []).some(l => l.path === odd && l.kind === 'tombstone-temp'), 'it is not listed as a leftover');
+  } finally { t.done(); }
+});

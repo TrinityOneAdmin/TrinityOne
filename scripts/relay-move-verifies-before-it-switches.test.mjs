@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { moveRelayData, jsonPointer, jsonFieldStore, classifyTarget, parseMountinfo, parseMacMount, parseWinLogicalDisks, mountFor, checkPassed, beginCheck, relayLockHeld, processCommandLine, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
+import { moveRelayData, jsonPointer, jsonFieldStore, classifyTarget, parseMountinfo, parseMacMount, parseWinLogicalDisks, mountFor, checkPassed, beginCheck, relayLockHeld, processInfo, gatewayWouldStart, LEAF, MOVED_TO, STAMP, MARK_INCOMPLETE } from './relay-move.mjs';
 import { spawnSync, spawn } from 'node:child_process';
 
 function makeRelay(dir) {
@@ -394,14 +394,83 @@ test('N6 a reused pid is not a relay: the lock is held only when the live proces
   const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'ignore' });
   try {
     writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid }));
+    const as = commandLine => async () => ({ commandLine, startedAt: null });
     for (const platform of ['linux', 'darwin', 'win32']) {
-      assert.equal(relayLockHeld(dir, { platform, commandLine: () => 'C:\\\\Windows\\\\notepad.exe' }), false, platform + ': an unrelated process that reused the pid blocked a move');
-      assert.equal(relayLockHeld(dir, { platform, commandLine: () => 'node scripts/gateway.mjs 8090' }), true, platform);
-      assert.equal(relayLockHeld(dir, { platform, commandLine: () => null }), true, platform + ': unknown must count as held');
+      assert.equal(await relayLockHeld(dir, { platform, info: as('C:\\Windows\\notepad.exe') }), false, platform + ': an unrelated process that reused the pid blocked a move');
+      assert.equal(await relayLockHeld(dir, { platform, info: as('node scripts/gateway.mjs 8090') }), true, platform);
+      assert.equal(await relayLockHeld(dir, { platform, info: as(null) }), true, platform + ': unknown must count as held');
     }
-    // the real lookups this box can run: /proc and `ps -p PID -o command=` (the macOS path)
-    assert.match(processCommandLine(child.pid, 'linux'), /setTimeout/);
-    assert.match(processCommandLine(child.pid, 'darwin') || '', /setTimeout/, 'ps -p PID -o command= did not return the command line');
-    assert.equal(relayLockHeld(dir, { platform: 'darwin' }), false, 'a live non-gateway process was taken for a relay');
+    // the real lookups this box can run: /proc, and `ps -ww -p PID -o command=` (the macOS path, here on procps)
+    assert.match((await processInfo(child.pid, 'linux')).commandLine, /setTimeout/);
+    assert.match((await processInfo(child.pid, 'darwin')).commandLine || '', /setTimeout/, 'ps did not return the command line');
+    assert.equal(await relayLockHeld(dir, { platform: 'darwin' }), false, 'a live non-gateway process was taken for a relay');
   } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── Audit C of fdba15d8 ──────────────────────────────────────────────────────────────────────────────────────
+test('C2 a command line cut short by macOS ps is not trusted; the lookup asks ps for full width', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-lock-c2-'));
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)', 'x'.repeat(300) + '-END'], { stdio: 'ignore' });
+  try {
+    writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid, startedAt: new Date().toISOString() }));
+    const cut = '/Applications/TrinityOne Suite.app/Contents/MacOS/trinityone-relay-node scripts/gatew';   // 79+ columns, no "gateway.mjs"
+    assert.equal(await relayLockHeld(dir, { platform: 'darwin', info: async () => ({ commandLine: cut, startedAt: null }) }), true,
+      'a relay whose command line ps cut short was taken for "not a relay" — the mover would move a live folder');
+    const calls = [];
+    await processInfo(child.pid, 'darwin', async (cmd, args) => { calls.push([cmd, ...args].join(' ')); return null; });
+    assert.ok(calls.some(c => /^ps .*-ww/.test(c) && /command=/.test(c)), 'the macOS lookup does not ask ps for unlimited width: ' + calls.join(' | '));
+    const real = await processInfo(child.pid, 'darwin');   // procps here; on a Mac this still needs checking
+    assert.match(real.commandLine || '', /-END/, 'the full command line was not returned');
+  } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('C2 a process that started AFTER the lock was written is a reused pid, not the relay', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-lock-c2b-'));
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 30000)'], { stdio: 'ignore' });
+  try {
+    const lockAt = Date.now() - 3600 * 1000;
+    writeFileSync(join(dir, '.relay-lock'), JSON.stringify({ pid: child.pid, startedAt: new Date(lockAt).toISOString() }));
+    const gw = 'node scripts/gateway.mjs 8090';
+    assert.equal(await relayLockHeld(dir, { platform: 'win32', info: async () => ({ commandLine: gw, startedAt: lockAt + 60000 }) }), false, 'a later process with the same pid was taken for the relay');
+    assert.equal(await relayLockHeld(dir, { platform: 'win32', info: async () => ({ commandLine: gw, startedAt: lockAt - 1000 }) }), true);
+    const real = await processInfo(child.pid, 'linux');
+    assert.ok(real.startedAt && Math.abs(real.startedAt - Date.now()) < 120000, 'ps -o lstart= gave no usable start time: ' + real.startedAt);
+  } finally { child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('C4 a stale tombstone at the target is put back if the rename then fails', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    mkdirSync(t.to); writeFileSync(join(t.to, MOVED_TO), 'moved somewhere else long ago\n');
+    const res = await moveRelayData(t.opts({ rename: () => { const e = new Error('EBUSY'); e.code = 'EBUSY'; throw e; } }));
+    assert.equal(res.code, 'rename-failed');
+    assert.deepEqual(readdirSync(t.to), [MOVED_TO], 'the tombstone was replaced by an EMPTY folder a launcher could start a stranger in');
+    assert.equal(readFileSync(join(t.to, MOVED_TO), 'utf8'), 'moved somewhere else long ago\n');
+  } finally { t.done(); }
+});
+
+test('C6 a key temp file (it holds a secret) is never carried by a copy move', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    writeFileSync(join(t.from, 'relay-key.json.tmp-4242'), '{"sk":"secret"}');
+    const res = await moveRelayData(t.opts({ rename: exdevOnce() }));
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(existsSync(join(t.to, 'relay-key.json.tmp-4242')), false, 'a secret key temp file was copied to the new drive');
+  } finally { t.done(); }
+});
+
+test('C1 gatewayWouldStart judges a folder by its OWN key: a restored foreign identity with a matching stamp is fine', () => {
+  const t = rig();
+  try {
+    t.db.close();
+    assert.equal(gatewayWouldStart(t.from), true);
+    const k = generateSecretKey(), pub = getPublicKey(k);
+    writeFileSync(join(t.from, 'relay-key.json'), JSON.stringify({ sk: Buffer.from(k).toString('hex'), pub }));
+    assert.equal(gatewayWouldStart(t.from), false, 'a stamp naming another key must be refused, as the pinned gateway does');
+    writeFileSync(join(t.from, STAMP), JSON.stringify({ relayPub: pub }));
+    assert.equal(gatewayWouldStart(t.from), true);
+    writeFileSync(join(t.from, MOVED_TO), 'x'); assert.equal(gatewayWouldStart(t.from), false);
+  } finally { t.done(); }
 });
