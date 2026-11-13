@@ -1,0 +1,155 @@
+// THE MOVER'S CHECK COMMANDS — what the Suite launcher asks of scripts/relay-move.mjs after a move (relay storage plan
+// step 5). Run: node --test scripts/relay-move-check-commands.test.mjs
+//
+// `prove` and `verify-restart` are how the launcher learns WHO answered on the relay's port (rule 10): a signed nonce
+// from /relay-identity, never the bare relayPub string in /status. Driven here through the real CLI against a real
+// gateway, and against two look-alikes: a host that copies /status (a forwarder, or any other program on the port),
+// and one that replays an old proof.
+//   * begin-check is the EXACT count taken before the relay is spawned on the new folder.
+//   * check-passed turns the journal's state into awaiting-confirm (copy) / done (rename).
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn, execFile } from 'node:child_process';
+import { createServer } from 'node:http';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
+import { freePort } from './relay-network-harness.mjs';
+import { openStore } from './event-store.mjs';
+import { countRows, moverLockHeld, moveRelayData, jsonPointer } from './relay-move.mjs';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const MOVER = join(ROOT, 'scripts/relay-move.mjs');
+const run = promisify(execFile);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const cleanups = [];
+after(() => { for (const f of cleanups.reverse()) { try { f(); } catch {} } });
+
+function folder(events = 0) {
+  const base = mkdtempSync(join(tmpdir(), 'trin-check-cmds-'));
+  cleanups.push(() => rmSync(base, { recursive: true, force: true }));
+  const data = join(base, 'data'); mkdirSync(data);
+  const sk = generateSecretKey(), pub = getPublicKey(sk);
+  writeFileSync(join(data, 'relay-key.json'), JSON.stringify({ sk: Buffer.from(sk).toString('hex'), pub }));
+  const st = openStore(join(data, 'relay.sqlite'), { maxEvents: 500 });
+  const a = generateSecretKey(), t0 = Math.floor(Date.now() / 1000) - 600;
+  for (let i = 0; i < events; i++) st.put(finalizeEvent({ kind: 1, created_at: t0 + i, tags: [], content: 'r' + i }, a), '');
+  st.close();
+  return { base, data, pub, state: join(base, 'storage.json') };
+}
+async function gateway(dir) {
+  const port = await freePort('check commands gateway');
+  const proc = spawn(process.execPath, [join(ROOT, 'scripts/gateway.mjs'), String(port)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, TRINITY_DATA_DIR: dir, RELAY_SYNC: '0', RELAY_HOST: '127.0.0.1', RELAY_NO_OPEN: '1', RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale' } });
+  let log = ''; proc.stdout.on('data', d => { log += d; }); proc.stderr.on('data', d => { log += d; });
+  cleanups.push(() => { try { proc.kill('SIGKILL'); } catch {} });
+  let up = false;
+  for (let i = 0; i < 200 && !up; i++) { try { up = (await fetch(`http://127.0.0.1:${port}/status`)).ok; } catch {} if (!up) await sleep(150); }
+  assert.ok(up, 'gateway never came up: ' + log);
+  return { port, stop: () => proc.kill('SIGKILL') };
+}
+const cli = async (args) => { try { const r = await run(process.execPath, [MOVER, ...args], { cwd: ROOT }); return JSON.parse(r.stdout.trim().split('\n').pop()); } catch (e) { if (e.stdout) return JSON.parse(e.stdout.trim().split('\n').pop()); throw e; } };
+const journalOf = (fx, over) => writeFileSync(fx.state, JSON.stringify({ move: { state: 'switched', mode: 'copy', from: join(fx.base, 'old'), to: fx.data, relayPub: fx.pub, counts: null, ...over } }));
+
+test('prove: a real relay proves the key it signs a fresh nonce with', async () => {
+  const fx = folder(3);
+  const g = await gateway(fx.data);
+  const r = await cli(['prove', '--port', String(g.port)]);
+  assert.deepEqual({ ok: r.ok, relayPub: r.relayPub }, { ok: true, relayPub: fx.pub });
+  g.stop();
+});
+
+test('prove: a host that only copies /status (a forwarder, another program on the port) proves NOTHING, however right its string is', async () => {
+  const fx = folder();
+  const port = await freePort('lookalike');
+  const srv = createServer((req, res) => {
+    if (req.url.startsWith('/status')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, relayPub: fx.pub, counts: { events: 0 } })); }
+    else { res.writeHead(404); res.end(); }
+  }).listen(port, '127.0.0.1');
+  cleanups.push(() => srv.close());
+  const r = await cli(['prove', '--port', String(port)]);
+  assert.equal(r.ok, false, 'a /status look-alike was accepted as the relay: ' + JSON.stringify(r));
+  // and through verify-restart, which the launcher uses after a move: never ok
+  journalOf(fx, { counts: { events: 0, deletions: 0, meta: 0 } });
+  const v = await cli(['verify-restart', '--pointer', fx.state, '--port', String(port), '--data-dir', fx.data]);
+  assert.equal(v.ok, false); assert.ok(v.bad.includes('relay-key'), JSON.stringify(v));
+});
+
+test('prove: a replayed proof (valid signature, someone else\'s nonce) is refused', async () => {
+  const fx = folder();
+  const port = await freePort('replay');
+  const sk = Buffer.from(JSON.parse(readFileSync(join(fx.data, 'relay-key.json'), 'utf8')).sk, 'hex');
+  const old = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', 'relay-identity'], ['method', 'GET'], ['nonce', '0'.repeat(32)], ['relay', `ws://127.0.0.1:${port}/relay`]], content: '' }, sk);
+  const srv = createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ proof: old })); }).listen(port, '127.0.0.1');
+  cleanups.push(() => srv.close());
+  const r = await cli(['prove', '--port', String(port)]);
+  assert.equal(r.ok, false); assert.equal(r.code, 'wrong-nonce');
+});
+
+test('verify-restart: the same key and the same events pass; a different recorded key fails; fewer events fail', async () => {
+  const fx = folder(4);
+  const counts = await countRows(fx.data);
+  const g = await gateway(fx.data);
+  journalOf(fx, { counts });
+  const ok = await cli(['verify-restart', '--pointer', fx.state, '--port', String(g.port), '--data-dir', fx.data]);
+  assert.equal(ok.ok, true, JSON.stringify(ok)); assert.equal(ok.relayPub, fx.pub); assert.equal(ok.events, 4);
+  journalOf(fx, { counts, relayPub: 'ab'.repeat(32) });
+  const wrongKey = await cli(['verify-restart', '--pointer', fx.state, '--port', String(g.port), '--data-dir', fx.data]);
+  assert.equal(wrongKey.ok, false); assert.ok(wrongKey.bad.includes('relay-key'), JSON.stringify(wrongKey));
+  journalOf(fx, { counts: { ...counts, events: 9 } });
+  const fewer = await cli(['verify-restart', '--pointer', fx.state, '--port', String(g.port), '--data-dir', fx.data]);
+  assert.equal(fewer.ok, false); assert.ok(fewer.bad.includes('event-count'), JSON.stringify(fewer));
+  g.stop();
+});
+
+test('begin-check: exact counts before the relay runs (more events than recorded is a failure too); check-passed ends the move', async () => {
+  const fx = folder(5);
+  const counts = await countRows(fx.data);
+  journalOf(fx, { counts });
+  const good = await cli(['begin-check', '--pointer', fx.state]);
+  assert.equal(good.ok, true, JSON.stringify(good));
+  assert.equal(JSON.parse(readFileSync(fx.state, 'utf8')).move.state, 'checking');
+  assert.ok(JSON.parse(readFileSync(fx.state, 'utf8')).move.preStartCounts, 'the pre-start counts were not recorded');
+  const passed = await cli(['check-passed', '--pointer', fx.state]);
+  assert.equal(passed.ok, true); assert.equal(JSON.parse(readFileSync(fx.state, 'utf8')).move.state, 'awaiting-confirm');
+  // the folder holds MORE than the journal recorded: an exact check on a relay that has not run catches it
+  journalOf(fx, { counts: { ...counts, events: counts.events - 1 } });
+  const bad = await cli(['begin-check', '--pointer', fx.state]);
+  assert.equal(bad.ok, false); assert.ok(bad.bad.includes('event-count'), JSON.stringify(bad));
+});
+
+test('N1: a live pid whose command line cannot be read, but which STARTED AFTER the lock was written, is a reused pid: the lock is stale', async () => {
+  const fx = folder();
+  const lock = join(fx.base, 'storage.json.mover-lock');
+  const t0 = Date.now();
+  writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: new Date(t0).toISOString() }));   // a live pid that is not us
+  const unreadable = startedAt => async () => ({ commandLine: null, startedAt });
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: unreadable(t0 + 60000) }), false, 'a process that started after the lock was taken for its holder');
+  // cannot tell and no later start: held (the launcher\'s bounded wait is what stops this freezing the Suite)
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: unreadable(t0 - 1000) }), true);
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: unreadable(null) }), true);
+  // a readable command line decides on its own: a mover is held, anything else is not
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: async () => ({ commandLine: 'node scripts/relay-move.mjs move', startedAt: t0 - 100 }) }), true);
+  assert.equal(await moverLockHeld(lock, { platform: 'win32', info: async () => ({ commandLine: 'svchost.exe -k x', startedAt: t0 - 100 }) }), false);
+});
+
+test('verify journals PROGRESS: bytes hashed keep growing while a big file is verified, then an integrity phase marker, so a guard can tell a long verify from a stuck one', async () => {
+  const fx = folder(5);
+  writeFileSync(join(fx.data, 'big.bin'), Buffer.alloc(12 * 1024 * 1024, 5));
+  const to = join(fx.base, 'drive'); mkdirSync(to);
+  const writes = [];
+  const journal = { read: () => writes.at(-1) || null, write: v => { writes.push(JSON.parse(JSON.stringify(v))); } };
+  const exdev = () => { throw Object.assign(new Error('x'), { code: 'EXDEV' }); };
+  const r = await moveRelayData({ from: fx.data, to: join(to, 'trinityone-relay'), pointer: jsonPointer(join(fx.base, 'p.json')), journal, relayRunning: async () => false, mode: 'suite', rename: exdev, codeDir: ROOT, mounts: [], _verifyChunk: 1024 * 1024 });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const ver = writes.filter(w => w.state === 'verifying');
+  const hashing = ver.filter(w => w.phase === 'hashing').map(w => w.verifiedBytes);
+  assert.ok(hashing.length >= 8, 'verify wrote almost no progress: ' + hashing.length);
+  assert.ok(hashing.every((v, i) => i === 0 || v > hashing[i - 1]), 'verifiedBytes did not strictly grow: ' + hashing.join(','));
+  assert.ok(hashing.at(-1) >= 20 * 1024 * 1024 && ver[0].verifyTotalBytes >= 24 * 1024 * 1024, 'both streams are not counted');
+  const phases = ver.map(w => w.phase);
+  assert.ok(phases.indexOf('integrity') > phases.lastIndexOf('hashing') && phases.indexOf('counting') > phases.indexOf('integrity'), 'phase markers out of order: ' + phases.join(','));
+});

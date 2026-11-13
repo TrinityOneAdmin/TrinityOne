@@ -30,6 +30,12 @@ import { createConnection } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 // The fixed folder name created on the chosen drive (owner §8a: a drive from a list, never a typed path).
+// The mover (and the relay itself) read the database with node:sqlite. It arrived in 22.5 behind a flag and lost the flag
+// in 22.13.0 (Node's changelog); the gateway imports it statically, so below 22.13 it cannot start at all (audit C L5).
+export function nodeCanMove(version = process.versions.node) {
+  const m = /^(\d+)\.(\d+)/.exec(String(version || '')); if (!m) return false;
+  return Number(m[1]) > 22 || (Number(m[1]) === 22 && Number(m[2]) >= 13);
+}
 export const LEAF = 'trinityone-relay';
 export const MARK_INCOMPLETE = '.trinity-move-incomplete';
 export const STAMP = '.trinity-data-dir';
@@ -258,6 +264,42 @@ export async function relayLockHeld(dir, { platform = process.platform, info = p
   if (platform === 'darwin' && /node/i.test(cmd) && cmd.length >= 79) return true;   // possibly cut short by BSD ps
   return false;
 }
+// THE MOVER LOCK (audit C M4). A mover run through the Suite's sidecar is NOT killed when the app closes, so a window
+// closed mid-move and reopened starts a second launcher beside a mover still copying. The mover therefore takes an
+// exclusive lockfile (pid + start time, like .relay-lock) next to the pointer for the whole of a move; a second mover is
+// refused, and a launcher WAITS while it is held (lock-status) before it recovers or starts anything. A holder is
+// "held" while its pid is alive and its command line is a relay-move.mjs. A DEAD pid is stale; a REUSED pid is stale per
+// the rules in moverLockHeld below (readable command line that is not a mover, or a start time later than the lock's,
+// except on Linux); both are taken over.
+export const moverLockFile = pointerFile => pointerFile + '.mover-lock';
+export async function moverLockHeld(file, { platform = process.platform, info = processInfo } = {}) {
+  const l = readJson(file), pid = l && Number(l.pid);
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try { process.kill(pid, 0); } catch (e) { if (!e || e.code !== 'EPERM') return false; }
+  const p = await info(pid, platform) || {};
+  const cmd = p.commandLine;
+  if (cmd !== null && cmd !== undefined) return /relay-move\.mjs/.test(cmd);
+  // The command line is unreadable (on Windows a reused pid is often a system process a normal user cannot inspect).
+  // A process that STARTED AFTER the lock was written cannot be the mover that wrote it: a reused pid, stale (audit N1).
+  // Linux is the exception, as in relayLockHeld: its `ps` recomputes a start time from the current clock, so an unknown
+  // command line with a later start proves nothing there (and /proc makes an unreadable one rare).
+  const lockAt = Date.parse(l.startedAt);
+  if (p.startedAt && lockAt && p.startedAt > lockAt + START_SLACK_MS && platform !== 'linux') return false;
+  return true;   // still cannot tell: held. The launcher's wait is bounded, so this can never freeze the Suite.
+}
+export async function acquireMoverLock(file) {
+  mkdirSync(dirname(file), { recursive: true });
+  for (let i = 0; i < 2; i++) {
+    try {
+      const fd = openSync(file, 'wx');
+      try { writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); fsyncSync(fd); } finally { closeSync(fd); }
+      return { ok: true, release() { try { const l = readJson(file); if (l && l.pid === process.pid) rmSync(file, { force: true }); } catch {} } };
+    } catch (e) { if (!e || e.code !== 'EEXIST') return { ok: false, code: 'lock-unwritable' }; }
+    if (await moverLockHeld(file)) return { ok: false, code: 'mover-running' };
+    try { rmSync(file, { force: true }); } catch {}   // stale
+  }
+  return { ok: false, code: 'mover-running' };
+}
 export function keyPubOf(dir) { const k = readJson(join(dir, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
 // A folder the step-1 guard would start: this relay's key, no MOVED-TO, not a partial copy.
 export function startable(dir, pub) {
@@ -312,8 +354,8 @@ function listFiles(dir, rel = '', top = true, out = []) {
   }
   return out;
 }
-function sha256(file) {
-  return new Promise((res, rej) => { const h = createHash('sha256'); createReadStream(file).on('error', rej).on('data', d => h.update(d)).on('end', () => res(h.digest('hex'))); });
+function sha256(file, onBytes) {
+  return new Promise((res, rej) => { const h = createHash('sha256'); createReadStream(file).on('error', rej).on('data', d => { h.update(d); if (onBytes) onBytes(d.length); }).on('end', () => res(h.digest('hex'))); });
 }
 async function openDb(file, opts) { const { DatabaseSync } = await import('node:sqlite'); return new DatabaseSync(file, opts || {}); }
 // Fold the WAL into relay.sqlite. Refuses (returns a code) if anything still holds the database, or a WAL is left.
@@ -467,7 +509,9 @@ export async function moveRelayData(opts) {
   // 1. same volume: one atomic rename
   journal.write({ ...base, state: 'renaming', mode: 'rename' });
   let removedEmpty = false, oldNote = null;
-  if (existsSync(to)) {   // empty or a stale tombstone (checked above); Windows can't rename onto one
+  // POSIX renames onto an EMPTY folder, so only a stale tombstone (or Windows, which can't rename onto any) is cleared;
+  // the server helper (step 6) pre-creates the leaf root-owned-parent, where the service user cannot rmdir it
+  if (existsSync(to) && (pf === 'win32' || readdirSync(to).length)) {   // empty or a stale tombstone (checked above)
     try { oldNote = readFileSync(join(to, MOVED_TO), 'utf8'); } catch {}
     rmSync(to, { recursive: true, force: true }); removedEmpty = true;
   }
@@ -556,15 +600,26 @@ async function copyMove(opts, base, { from, to, relayPub, counts, now, freeSpace
   if (opts._afterCopy) await opts._afterCopy(to);
 
   // verify: same file list + sizes, same bytes, a sound database with the same rows, the same identity key
-  journal.write({ ...base, state: 'verifying', mode: 'copy', totalBytes: total, copiedBytes: total });
+  // PROGRESS IS JOURNALED THROUGH VERIFY TOO (audit follow-up): the launcher's "is the mover stuck?" guard counts a change
+  // of the journal as progress and never the clock, so a long hash must keep changing it. verifiedBytes = bytes hashed
+  // so far across BOTH streams (source and copy), out of verifyTotalBytes = 2 x total; written about every _verifyChunk.
+  const vbase = { ...base, state: 'verifying', mode: 'copy', totalBytes: total, copiedBytes: total, verifyTotalBytes: total * 2 };
+  journal.write({ ...vbase, verifiedBytes: 0, phase: 'hashing' });
   let got; try { got = listFiles(to); } catch { return fail('verify-failed', 'list'); }
   if (JSON.stringify(got) !== JSON.stringify(files)) return fail('verify-failed', 'file list or sizes differ');
+  let hashed = 0, hashedAt = 0; const chunk = opts._verifyChunk || 64 * 1024 * 1024;
+  const tick = n => { hashed += n; if (hashed - hashedAt >= chunk) { hashedAt = hashed; journal.write({ ...vbase, verifiedBytes: hashed, phase: 'hashing' }); } };
   for (const f of files) {
     let a, b;
-    try { [a, b] = await Promise.all([sha256(join(from, f.rel)), sha256(join(to, f.rel))]); } catch { return fail('verify-failed', 'read ' + f.rel); }
+    try { [a, b] = await Promise.all([sha256(join(from, f.rel), tick), sha256(join(to, f.rel), tick)]); } catch { return fail('verify-failed', 'read ' + f.rel); }
     if (a !== b) return fail('verify-failed', 'content differs: ' + f.rel);
   }
+  // PRAGMA integrity_check is ONE call into SQLite (node:sqlite is synchronous): it cannot report progress and blocks this
+  // process while it runs. The phase marker is written first, so the launcher reads "busy, not stuck" until the mover
+  // finishes or dies (the mover lock then goes stale and the wait ends).
+  journal.write({ ...vbase, verifiedBytes: hashed, phase: 'integrity' });
   if (!(await integrityOk(to))) return fail('verify-failed', 'database integrity');
+  journal.write({ ...vbase, verifiedBytes: hashed, phase: 'counting' });
   let c2; try { c2 = await countRows(to, { readOnly: true }); } catch { return fail('verify-failed', 'database unreadable'); }
   if (countsBad(counts, c2)) return fail('verify-failed', 'row counts differ');
   if (keyPubOf(to) !== relayPub) return fail('verify-failed', 'identity key differs');
@@ -795,10 +850,36 @@ export async function recoverMove({ journal, pointer, rename = renameSync, now =
 //   node scripts/relay-move.mjs recover  --pointer FILE [--journal FILE]
 //   node scripts/relay-move.mjs rollback --pointer FILE [--journal FILE]
 //   node scripts/relay-move.mjs classify --path DIR [--mode suite|server]
+//   node scripts/relay-move.mjs begin-check|check-passed --pointer FILE [--journal FILE]      (step 5, the Suite launcher)
+//   node scripts/relay-move.mjs lock-status --pointer FILE                                  (is a mover running? the launcher waits)
+//   node scripts/relay-move.mjs prove --port N                                              (rule 10: a signed nonce)
+//   node scripts/relay-move.mjs verify-restart --pointer FILE --port N --data-dir DIR
 // Prints one JSON object. Exit 0 = ok, 2 = refused / failed safely, 1 = usage or unexpected error.
 const CODE_DIR = fileURLToPath(new URL('..', import.meta.url));   // the app's own code: never a target
 function portOpen(port) {
   return new Promise(res => { const s = createConnection({ host: '127.0.0.1', port }); const done = v => { try { s.destroy(); } catch {} res(v); }; s.once('connect', () => done(true)); s.once('error', () => done(false)); setTimeout(() => done(true), 3000); });
+}
+// Ask a relay on this machine to PROVE its identity (rule 10): GET /relay-identity?nonce=<32 hex> returns a kind-27235
+// event signed by the relay's key binding OUR nonce. The pubkey in /status or NIP-11 is an unauthenticated string and
+// is never used here. Checks the signature, that the nonce is ours, that it is fresh, and that the address it signed
+// is the loopback one we dialled. Never throws: { ok:false, code } when it cannot be proven.
+export async function proveIdentity(port, { host = '127.0.0.1', timeoutMs = 5000 } = {}) {
+  try {
+    const { verifyEvent } = await import('nostr-tools/pure');
+    const { randomBytes } = await import('node:crypto');
+    const nonce = randomBytes(16).toString('hex');
+    const r = await fetch(`http://${host}:${port}/relay-identity?nonce=${nonce}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return { ok: false, code: 'no-proof-' + r.status };
+    const ev = (await r.json()).proof;
+    const tag = k => { const t = ((ev && ev.tags) || []).find(x => x[0] === k); return t ? t[1] : null; };
+    if (!ev || ev.kind !== 27235 || !/^[0-9a-f]{64}$/.test(String(ev.pubkey || ''))) return { ok: false, code: 'bad-proof' };
+    if (!verifyEvent(ev)) return { ok: false, code: 'bad-signature' };
+    if (tag('nonce') !== nonce || tag('u') !== 'relay-identity') return { ok: false, code: 'wrong-nonce' };
+    if (Math.abs(Math.floor(Date.now() / 1000) - ev.created_at) > 300) return { ok: false, code: 'stale-proof' };
+    let signed; try { signed = new URL(String(tag('relay')).replace(/^ws/, 'http')); } catch { return { ok: false, code: 'bad-address' }; }
+    if (signed.hostname !== host || Number(signed.port || 80) !== Number(port)) return { ok: false, code: 'wrong-address' };
+    return { ok: true, relayPub: ev.pubkey };
+  } catch (e) { return { ok: false, code: 'unreachable', detail: String(e && e.message || e) }; }
 }
 async function cli(argv) {
   const cmd = argv[0]; const a = {};
@@ -807,10 +888,40 @@ async function cli(argv) {
   if (cmd === 'move') {
     if (!a.from || !a.drive || !a.port) throw new Error('move needs --from, --drive and --port');
     const port = Number(a.port);
-    return moveRelayData({ ...store(), from: a.from, to: targetFor(a.drive), mode: a.mode, codeDir: CODE_DIR, relayRunning: () => portOpen(port) });
+    const lock = await acquireMoverLock(moverLockFile(a.pointer));
+    if (!lock.ok) return { ok: false, code: lock.code };
+    try { return await moveRelayData({ ...store(), from: a.from, to: targetFor(a.drive), mode: a.mode, codeDir: CODE_DIR, relayRunning: () => portOpen(port) }); }
+    finally { lock.release(); }
   }
+  if (cmd === 'lock-status') { if (!a.pointer) throw new Error('--pointer required'); const f = moverLockFile(a.pointer); const pid = (readJson(f) || {}).pid || null; let alive = false;
+    if (pid) { try { process.kill(Number(pid), 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
+    return { held: await moverLockHeld(f), pid, alive }; }
   if (cmd === 'recover') { const r = await recoverMove(store()); return r.action === 'refuse' ? { ok: false, ...r } : r; }
   if (cmd === 'rollback') return rollbackMove(store());
+  // The step-8 check, driven by the Suite launcher (relay storage plan step 5). The launcher calls begin-check BEFORE
+  // it spawns the relay on the new folder, verify-restart once the relay answers, then check-passed or rollback.
+  if (cmd === 'begin-check') { const { journal } = store(); return beginCheck({ journal }); }
+  if (cmd === 'check-passed') { const { journal } = store(); const n = checkPassed({ journal }); return n ? { ok: true, journal: n } : { ok: false, code: 'nothing-to-confirm' }; }
+  if (cmd === 'prove') { if (!a.port) throw new Error('prove needs --port'); return proveIdentity(Number(a.port)); }
+  if (cmd === 'verify-restart') {
+    if (!a.port || !a['data-dir']) throw new Error('verify-restart needs --port and --data-dir');
+    const { journal } = store(); const j = journal.read();
+    if (!j) return { ok: false, bad: ['no-move-to-check'] };
+    const pr = await proveIdentity(Number(a.port));
+    // the live count of events, read from the relay itself (the database is open there): /status with the admin token
+    let events = null;
+    try {
+      const token = (readJson(join(a['data-dir'], 'admin.json')) || {}).token;
+      const r = await fetch(`http://127.0.0.1:${Number(a.port)}/status`, { headers: token ? { Authorization: 'Bearer ' + token } : {}, signal: AbortSignal.timeout(5000) });
+      const s = await r.json(); if (s && s.counts && Number.isFinite(s.counts.events)) events = Number(s.counts.events);
+    } catch {}
+    // beginCheck already compared every table EXACTLY before the relay ran; here only events can be read live, so the
+    // other tables carry their recorded value (they can only have grown)
+    const counts = events === null ? null : { ...(j.counts || {}), events };
+    const bad = compareAfterRestart(j, { relayPub: pr.ok ? pr.relayPub : null, counts });
+    if (events === null && j.counts && j.counts.events !== null) bad.push('event-count-unreadable');
+    return { ok: bad.length === 0, bad, relayPub: pr.ok ? pr.relayPub : null, proof: pr.ok ? 'verified' : pr.code, events };
+  }
   if (cmd === 'classify') {
     if (!a.path) throw new Error('classify needs --path');
     const ms = systemMounts(); let real = resolve(a.path); try { real = realpathSync(a.path); } catch {}

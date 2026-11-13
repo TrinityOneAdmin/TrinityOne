@@ -1,10 +1,24 @@
 // TrinityOne Relay — Tauri 2 desktop shell.
 //
 // What it does: on launch it starts the church relay (the gateway) as a BUNDLED Node sidecar — the user needs
-// no Node installed — pointed at the read-only app payload for its code and at a writable per-user app-data dir
+// no Node installed — pointed at the read-only app payload for its code and at the relay's data folder
 // (TRINITY_DATA_DIR) for its data. It shows a splash window immediately, waits for the relay to bind its port,
 // then navigates the window to the relay's own control panel (same-origin, so /status etc. just work). On close
 // it kills the relay child so nothing lingers.
+//
+// ONE OWNER OF THE RELAY'S LIFE (integration of the relay storage launcher with the Suite JS auto-update,
+// 2026-11-13). The launcher crate (relay-app/desktop/launcher, `launcher::run`) is the only loop that starts,
+// waits for, PROVES, supervises and restarts the relay, and the only thing that decides the data folder. The
+// auto-update is not a second loop: it runs inside the launcher's cycle through three hooks this file implements
+// on TauriHost —
+//   • before_start  — after the mover's recovery has settled the folder and before anything counts or starts it:
+//                     the auto-update's own crash repair (an interrupted data restore) and the held-originals guard;
+//   • spawn_relay   — the launch-time code choice and a missed-window apply (never during a move's check), all of
+//                     whose relay processes come from the ONE process spawn below (TauriHost::spawn_sidecar);
+//   • tick          — the timed apply, run on the launcher's own thread while it supervises a proven relay, so an
+//                     apply and a move can never overlap; any relay it leaves running is handed back to the
+//                     launcher, which proves who answers again before it shows the panel.
+// The data folder every one of them (and every other Rust reader) uses is the launcher's resolved folder.
 //
 // The payload (scripts/gateway.mjs + web app + minimal node_modules) is produced by scripts/build-relay-payload.sh
 // and bundled as a Tauri resource. The Node runtime is shipped as the sidecar `binaries/trinityone-relay-<triple>`
@@ -19,15 +33,18 @@
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{thread, time::Duration};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use trinityone_launcher as launcher;
 
 const PORT: u16 = 8787;
+// set by the window's close handler; the launcher thread reads it through TauriHost::quitting
+static QUIT: AtomicBool = AtomicBool::new(false);
 
 // The loopback-vs-network bind decision lives in its own dependency-free file so the node suite can compile and
 // run its tests with plain rustc (scripts/relay-bind-setting.test.mjs). relay_env() below is its only caller.
@@ -876,87 +893,24 @@ fn relay_env(
     ]
 }
 
-// Spawn the relay sidecar from `code_dir`, wiring a FRESH stdout/stderr pump and an alive-flag the pump clears
-// when the child exits (CommandEvent::Terminated, or the event channel closing). Returns that alive-flag so the
-// controller can wait for a clean stop before any swap/rebind. The child is parked in the Tauri-managed Relay
-// slot so the window-close handler still reaps whichever child is current.
-//
-// [P3-AUDIT — HIGH, trust root] PAYLOAD_DIR is set to the READ-ONLY payload in BOTH launch modes. The relay
-// resolves its verifier + pinned release-pubkey.pem from PAYLOAD_DIR || ROOT; when launching an override, ROOT
-// is the writable active/ dir, so omitting PAYLOAD_DIR would silently make the override its own trust root.
-// When launching the payload itself PAYLOAD_DIR == ROOT, which is correct and harmless. All other env matches
-// the original single-spawn site (TRINITY_DATA_DIR, CLOUDFLARED_BIN, RELAY_HOST, RELAY_NO_OPEN).
-fn spawn_relay(
-    app: &AppHandle,
-    code_dir: &Path,
-    payload: &Path,
-    data_dir: &Path,
-    log: &Path,
-) -> Option<Arc<AtomicBool>> {
-    let cmd = match app.shell().sidecar("trinityone-relay-node") {
-        Ok(c) => c,
-        Err(e) => {
-            applog(log, &format!("SIDECAR RESOLVE FAILED: {e}"));
-            return None;
-        }
-    };
-    let cloudflared = std::env::current_exe()
-        .ok()
-        .and_then(|p| {
-            p.parent().map(|d| {
-                d.join(if cfg!(windows) {
-                    "trinityone-cloudflared.exe"
-                } else {
-                    "trinityone-cloudflared"
-                })
-            })
-        })
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "cloudflared".into());
-    let mut cmd = cmd
-        .current_dir(code_dir.to_path_buf())
-        .arg("scripts/gateway.mjs")
-        .arg(PORT.to_string());
-    for (k, v) in relay_env(code_dir, payload, data_dir, &cloudflared) {
-        cmd = cmd.env(k, v);
+// PURE: the storage half of every relay launch's env (cargo-testable), added by the relay storage launcher. The
+// launcher chose the folder, so the panel offers the storage card (suite mode) and reads the move's journal from
+// storage.json; TRINITY_DATA_DIR_PINNED=1 when the launcher says the folder is pinned (launcher::should_pin), so the
+// gateway never creates it and never mints a key in it. Every relay process — first start, apply, rollback — gets
+// both relay_env() and this, from the one spawn (TauriHost::spawn_sidecar).
+fn storage_env(storage_state: &Path, pinned: bool) -> Vec<(String, String)> {
+    let mut v = vec![
+        ("TRINITY_STORAGE_MODE".to_string(), "suite".to_string()),
+        ("TRINITY_STORAGE_STATE".to_string(), storage_state.to_string_lossy().to_string()),
+    ];
+    if pinned {
+        v.push(("TRINITY_DATA_DIR_PINNED".into(), "1".into()));
     }
-    match cmd.spawn() {
-        Ok((mut rx, child)) => {
-            applog(log, &format!("sidecar spawned OK (cwd={code_dir:?})"));
-            *app.state::<Relay>().0.lock().unwrap() = Some(child);
-            let alive = Arc::new(AtomicBool::new(true));
-            let alive2 = alive.clone();
-            let lp = log.to_path_buf();
-            tauri::async_runtime::spawn(async move {
-                while let Some(ev) = rx.recv().await {
-                    match ev {
-                        CommandEvent::Stdout(b) => {
-                            note_relay_activity();
-                            applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end()))
-                        }
-                        CommandEvent::Stderr(b) => {
-                            note_relay_activity();
-                            applog(&lp, &format!("[err] {}", String::from_utf8_lossy(&b).trim_end()))
-                        }
-                        CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
-                        CommandEvent::Terminated(t) => {
-                            applog(&lp, &format!("[exit] {t:?}"));
-                            alive2.store(false, Ordering::SeqCst);
-                        }
-                        _ => {}
-                    }
-                }
-                // Channel closed → no more events will come → the child is gone.
-                alive2.store(false, Ordering::SeqCst);
-            });
-            Some(alive)
-        }
-        Err(e) => {
-            applog(log, &format!("SPAWN FAILED: {e}"));
-            None
-        }
-    }
+    v
 }
+
+// The relay process is started in exactly ONE place, TauriHost::spawn_sidecar (below main's helpers). Both the
+// launcher (its every start) and the auto-update orchestration (apply / rollback restarts, through RelayHost) call it.
 
 // Is the relay port currently accepting connections?
 fn port_reachable() -> bool {
@@ -1513,46 +1467,24 @@ fn health_probe(signed_sha: &str, timeout: Duration) -> (bool, bool, bool, bool)
     }
 }
 
-// Point the control window at the (freshly-served) app again after a swap.
-fn reload_webview(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("control") {
-        if let Ok(u) = format!("http://127.0.0.1:{PORT}/relay-app/home.html").parse() {
-            let _ = win.navigate(u);
-        }
-    }
-}
 
 // ── Relay process host (apply seam) ─────────────────────────────────────────────────────────────
 // The apply orchestration (maybe_apply / attempt_apply / spawn_and_wait / rollback_and_restart) needs exactly
-// three capabilities from the Tauri shell: spawn the relay child (parking it in the managed Relay slot), stop
-// the current child, and point the control webview at the freshly-served app. Those three are the ONLY coupling
-// to AppHandle. Factoring them behind this trait lets the end-to-end apply harness drive the REAL orchestration
-// against a REAL `node scripts/gateway.mjs` child with no Tauri runtime, while production keeps byte-identical
-// behaviour through TauriHost — which delegates spawn/reload to the UNCHANGED spawn_relay / reload_webview free
-// fns and keeps the exact take+kill the apply path used inline at its two stop points. This is a pure seam: it
+// three capabilities from the shell: spawn the relay child, stop the current child, and point the control webview
+// at the freshly-served app. Factoring them behind this trait lets the end-to-end apply harness drive the REAL
+// orchestration against a REAL `node scripts/gateway.mjs` child with no Tauri runtime. In production the host is
+// TauriHost, whose spawn is the ONE process spawn the launcher also uses (spawn_sidecar), so every relay the
+// orchestration starts is one the launcher adopts and proves (launcher::Tick::Replaced). This is a pure seam: it
 // moves no verify, anti-rollback, swap or health decision — those all stay in attempt_apply.
 trait RelayHost {
     fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>>;
     fn stop_relay(&self);
     fn reload_webview(&self);
-}
-
-// Production host: delegates verbatim to the existing free fns + the existing Relay-slot kill.
-struct TauriHost {
-    app: AppHandle,
-}
-
-impl RelayHost for TauriHost {
-    fn spawn_relay(&self, code_dir: &Path, payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
-        spawn_relay(&self.app, code_dir, payload, data_dir, log)
-    }
-    fn stop_relay(&self) {
-        if let Some(child) = self.app.state::<Relay>().0.lock().unwrap().take() {
-            let _ = child.kill();
-        }
-    }
-    fn reload_webview(&self) {
-        reload_webview(&self.app);
+    /// Did the relay just spawned exit with the gateway's "refusing to start" code (78: a missing drive, a moved-out
+    /// folder, a foreign key)? That is the DATA FOLDER's state, not the code's: it must never count as evidence that
+    /// an update is bad (no quarantine, no retirement). Default: unknown → false (the harness's hosts).
+    fn last_exit_refused(&self) -> bool {
+        false
     }
 }
 
@@ -1600,7 +1532,16 @@ fn spawn_and_wait(env: &ApplyEnv, st: &mut RunState, dir: &Path) -> Boot {
     match env.host.spawn_relay(dir, env.payload, env.data_dir, env.log) {
         Some(a) => {
             st.alive = a;
-            wait_boot(&st.alive)
+            match wait_boot(&st.alive) {
+                // Exit 78 is the gateway refusing the FOLDER (a missing drive, a moved-out folder, a foreign key — the
+                // relay storage launcher's refusals), whichever code is running: it says nothing about the code, so it
+                // must never quarantine or retire an update. The launcher shows the refusal's own reason.
+                Boot::Exited if env.host.last_exit_refused() => {
+                    applog(env.log, "suite: the relay refused its data folder (exit 78); that is not the code's fault");
+                    Boot::NotStarted
+                }
+                b => b,
+            }
         }
         None => Boot::NotStarted,
     }
@@ -1756,23 +1697,19 @@ fn maybe_apply(env: &ApplyEnv, st: &mut RunState) {
 // Start the relay if the apply did not, and when it is the override, confirm it really comes up and identifies
 // as the signed build; if not, return to the shipped code, retire the override and switch auto-update off
 // (audit M1 — "the relay stays down on every launch").
+// (The app calls startup_with through the launcher; the apply harness calls this.)
+#[cfg_attr(not(test), allow(dead_code))]
 fn startup(env: &ApplyEnv) -> RunState {
+    startup_with(env, true)
+}
+
+// startup() with the launch-time apply allowed or not. The launcher passes false for the start that is a data move's
+// check (launcher::RelayEnv::checking): nothing may change under a moved store before the check has counted it.
+fn startup_with(env: &ApplyEnv, allow_apply: bool) -> RunState {
     // [audit a1cc6eff L2] Before anything reads the church's data: repair a restore a crash interrupted, and leave a
-    // note for the panel (suite/recovered.txt; cleared when the operator acknowledges it, gateway.mjs).
-    if let Some(note) = recover_interrupted_restore(env.data_dir, env.log) {
-        let _ = write_file_atomic(&env.suite_dir.join("recovered.txt"), &format!("{note}\n"), env.log);
-        // a "stuck … NOT restarted" record from before this start is now out of date (audit 55c3b306 N3)
-        let prev = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
-        if json_str_value(&prev, "lastOutcome").as_deref() == Some("stuck") && !data_held_aside(env.data_dir) {
-            write_state(env.suite_dir, &StateRec {
-                sha: &json_str_value(&prev, "installedSha").unwrap_or_default(),
-                version: &json_str_value(&prev, "installedVersion").unwrap_or_default(),
-                date: &json_str_value(&prev, "installedDate").unwrap_or_default(),
-                last_applied: &json_str_value(&prev, "lastApplied").unwrap_or_default(),
-                outcome: "recovered", reason: &note, auto_off: true, address_before: "", restore_failed: "",
-            }, env.log);
-        }
-    }
+    // note for the panel. (The launcher already ran this from before_start, before a move's begin-check, and then
+    // this finds nothing to do; the apply harness calls startup() directly, so it stays here too.)
+    repair_interrupted_restore(env.suite_dir, env.data_dir, env.log);
     let choice = launch_code_dir(env.payload, env.suite_dir, env.data_dir, env.node, env.log);
     let mut st = RunState {
         code_dir: choice.dir.clone(),
@@ -1782,7 +1719,7 @@ fn startup(env: &ApplyEnv) -> RunState {
     // No launch-time apply while the church's original data is held aside (audit b4e69a7c L2): it could not start a
     // relay, but it would back up an empty store, prune a real backup and repoint the warning at the empty one.
     let held = data_held_aside(env.data_dir);
-    if let (false, Some((r_version, r_sha, staged, target_min, _)), Some(_)) = (held, staged_and_enabled(env), env.node) {
+    if let (true, false, Some((r_version, r_sha, staged, target_min, _)), Some(_)) = (allow_apply, held, staged_and_enabled(env), env.node) {
         if let Some(now) = (env.clock)() {
             let state_raw = std::fs::read_to_string(env.suite_dir.join("state.json")).unwrap_or_default();
             let last_applied = json_str_value(&state_raw, "lastApplied").unwrap_or_default();
@@ -1872,6 +1809,9 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
         Some(n) => n,
         None => return,
     };
+    // For the whole apply — snapshot, stop, backup, swap, health check, any restore — this folder carries the apply
+    // marker, so neither the panel (GET /storage) nor the launcher starts a data move under it. Dropped on every return.
+    let _marker = ApplyMarker::hold(suite_dir, log);
     let staging = suite_dir.join("staging");
     let was_running = st.alive.load(Ordering::SeqCst);
     // Restart whatever was running before (only if something was).
@@ -1954,6 +1894,20 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
         let _ = std::fs::remove_dir_all(&applying);
         let prev = st.code_dir.clone();
         spawn_and_wait(env, st, &prev);
+        return;
+    }
+
+    // 4b. A MOVE GOES FIRST. The relay may have accepted a data move in the moment before the marker above was
+    //     written (it then wrote .move-request and stopped itself). Now that it is down nothing can write one, so this
+    //     check is final: if a request is there, nothing has been touched yet — put the snapshot back for a later
+    //     window, record nothing, and do NOT restart the relay: the launcher carries out the move (Tick::MoveRequested).
+    if was_running && env.data_dir.join(launcher::MOVE_REQUEST).exists() {
+        applog(log, "suite: APPLY deferred — the relay asked for a data move just before it stopped; the move goes first, the update waits");
+        if !staging.join("bundle.tgz").exists() {
+            let _ = rename_retry(&a_tgz, &staging.join("bundle.tgz"), log);
+            let _ = rename_retry(&a_sig, &staging.join("bundle.sig"), log);
+        }
+        let _ = std::fs::remove_dir_all(&applying);
         return;
     }
 
@@ -2091,6 +2045,456 @@ fn attempt_apply(env: &ApplyEnv, st: &mut RunState, r_version: &str, r_sha: &str
     }
 }
 
+// ── the apply marker: "an update is being applied in this data folder" ──────────────────────────────────────
+// Held (as suite/apply-in-progress) for the whole of attempt_apply — from taking the staged bundle to the health
+// verdict and any data restore. Two readers: the gateway's GET /storage refuses a move while it exists
+// (`suite-update-applying`), and the launcher refuses a move it finds (TauriHost::move_blocked). It lives inside the
+// data folder, so it is always the RESOLVED folder's. A marker a crash left behind is removed at the next start
+// (TauriHost::before_start) — nothing can be applying then.
+const APPLY_MARKER: &str = "apply-in-progress";
+
+struct ApplyMarker(PathBuf);
+
+impl ApplyMarker {
+    fn hold(suite_dir: &Path, log: &Path) -> ApplyMarker {
+        let p = suite_dir.join(APPLY_MARKER);
+        if write_file_atomic(&p, &format!("{{\"pid\":{},\"at\":{}}}\n", std::process::id(), now_epoch()), log).is_err() {
+            // The apply still re-checks for a move request once the relay is down (attempt_apply step 4b), so a
+            // marker that could not be written cannot let a move and an apply overlap; it only loses the early warning.
+            applog(log, "suite: could not write the apply marker; the move check after the stop still applies");
+        }
+        ApplyMarker(p)
+    }
+}
+
+impl Drop for ApplyMarker {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+// Is a data move under way according to its journal (storage.json `move.state`)? The same set as relay-move.mjs
+// ACTIVE. The launcher only ticks while no move runs, so this is a second lock on the same door, not the first.
+fn move_journal_active(config_file: &Path) -> bool {
+    const ACTIVE: [&str; 7] = ["renaming", "copying", "verifying", "switching", "switched", "checking", "rolling-back"];
+    let v = launcher::read_state(config_file);
+    v.get("move").and_then(|m| m.get("state")).and_then(|s| s.as_str()).map(|s| ACTIVE.contains(&s)).unwrap_or(false)
+}
+
+// EVERY START, before the relay first runs: repair a data restore a crash interrupted, and leave a note for the
+// panel (suite/recovered.txt; cleared when the operator acknowledges it, gateway.mjs). Shared by startup() and the
+// launcher's before_start hook (which runs it earlier, before a move's begin-check counts the store); the second
+// call finds nothing to do.
+fn repair_interrupted_restore(suite_dir: &Path, data_dir: &Path, log: &Path) {
+    // [audit a1cc6eff L2] Before anything reads the church's data.
+    if let Some(note) = recover_interrupted_restore(data_dir, log) {
+        let _ = write_file_atomic(&suite_dir.join("recovered.txt"), &format!("{note}\n"), log);
+        // a "stuck … NOT restarted" record from before this start is now out of date (audit 55c3b306 N3)
+        let prev = std::fs::read_to_string(suite_dir.join("state.json")).unwrap_or_default();
+        if json_str_value(&prev, "lastOutcome").as_deref() == Some("stuck") && !data_held_aside(data_dir) {
+            write_state(suite_dir, &StateRec {
+                sha: &json_str_value(&prev, "installedSha").unwrap_or_default(),
+                version: &json_str_value(&prev, "installedVersion").unwrap_or_default(),
+                date: &json_str_value(&prev, "installedDate").unwrap_or_default(),
+                last_applied: &json_str_value(&prev, "lastApplied").unwrap_or_default(),
+                outcome: "recovered", reason: &note, auto_off: true, address_before: "", restore_failed: "",
+            }, log);
+        }
+    }
+}
+
+const HELD_TITLE: &str = "Your church's data needs attention";
+fn held_reason(log: &Path) -> String {
+    format!(
+        "An update could not put your church's data back, so the original files are kept to one side and the relay was not started. Restart this computer: the Suite puts them back before it starts. If this stays, details are in {}",
+        log.display()
+    )
+}
+
+// ── the glue: the launcher's host, with the auto-update inside it ────────────────────────────────────────────
+// SuiteHost is the launcher::Host the app runs, and the RelayHost the auto-update orchestration uses. It holds every
+// decision of the integration; the only things it asks of the platform are behind `Shell` (a process, a window, the
+// bundled node), so the apply harness drives the REAL SuiteHost under the REAL launcher::run with a test shell
+// (apply_harness_test.rs, the "launcher" scenarios). Production's shell is TauriShell, below.
+trait Shell: Sync {
+    /// start `node scripts/gateway.mjs <PORT>` with cwd `code_dir` and exactly `env`; the one process spawn
+    fn start(&self, code_dir: &Path, env: &[(String, String)]) -> Result<Proc, String>;
+    /// kill the relay process started last, if it still runs
+    fn kill_current(&self);
+    /// run the bundled node on `<payload>/<args>` (the mover's CLI) and wait for it
+    fn node(&self, args: &[String]) -> launcher::NodeOut;
+    fn progress(&self, p: &launcher::Progress);
+    fn opened(&self, data_dir: &Path);
+    fn quitting(&self) -> bool;
+}
+
+/// A relay process: what the launcher reads (exit code, the stderr tail an exit-78 reason is in) and what the
+/// auto-update reads (an alive-flag its clean-stop and boot waits poll).
+struct Proc {
+    exit: Arc<Mutex<Option<launcher::Exit>>>,
+    err: Arc<Mutex<String>>,
+    alive: Arc<AtomicBool>,
+    kill: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl launcher::RelayHandle for Proc {
+    fn exit(&self) -> Option<launcher::Exit> {
+        self.exit.lock().unwrap().clone()
+    }
+    fn stderr_tail(&self) -> String {
+        self.err.lock().unwrap().clone()
+    }
+    fn kill(&self) {
+        (self.kill)()
+    }
+}
+
+struct SuiteHost<'s> {
+    shell: &'s dyn Shell,
+    payload: PathBuf,
+    log: PathBuf,
+    /// THE data folder the relay runs on right now: set by the launcher at every start (a move, a rollback), read by
+    /// every Rust reader of the data folder (keep-awake's admin.json / keep-awake-off, the LAN marker via relay_env,
+    /// TRINITY_DATA_DIR, and — through ApplyEnv — the auto-update's suite/, store backup, restore, held-originals
+    /// guard and apply marker).
+    current: Arc<Mutex<PathBuf>>,
+    /// <app config dir>/storage.json (TRINITY_STORAGE_STATE, and the move journal)
+    storage_state: PathBuf,
+    /// the bundled node, for the auto-update's verifier
+    node: Option<PathBuf>,
+    /// the local clock the operator set HH:MM in (production: local_now on the bundled node)
+    clock: Box<dyn Fn() -> Option<LocalNow> + Send + Sync>,
+    /// how often the timed apply is considered while the relay runs (production: a minute)
+    apply_every: Duration,
+    /// what the launcher said about the folder at this start (launcher::should_pin)
+    pinned: AtomicBool,
+    /// the newest relay process started (by the launcher's start or by an apply/rollback), for the launcher to adopt
+    latest: Mutex<Option<Proc>>,
+    spawns: AtomicUsize,
+    stops: AtomicUsize,
+    /// the auto-update's view of what runs (code dir, alive-flag, stop-timeout back-off), from startup()
+    run: Mutex<Option<RunState>>,
+    last_apply_eval: Mutex<Option<Instant>>,
+}
+
+impl<'s> SuiteHost<'s> {
+    // THE ONE PLACE A RELAY PROCESS IS STARTED (for both the launcher and the auto-update). cwd = `code_dir` (the
+    // payload, or an activated update); env = relay_env (TRINITY_DATA_DIR, PAYLOAD_DIR = the read-only payload — the
+    // trust root — RELAY_HOST from the folder's lan-access marker, …) + storage_env (suite mode, the journal, pinned).
+    fn spawn_proc(&self, code_dir: &Path, data_dir: &Path) -> Result<Proc, String> {
+        *self.current.lock().unwrap() = data_dir.to_path_buf();
+        let pinned = self.pinned.load(Ordering::SeqCst);
+        let env: Vec<(String, String)> = relay_env(code_dir, &self.payload, data_dir, &cloudflared_path())
+            .into_iter()
+            .chain(storage_env(&self.storage_state, pinned))
+            .collect();
+        applog(&self.log, &format!("starting the relay on {data_dir:?} from {code_dir:?} (pinned={pinned})"));
+        self.shell.start(code_dir, &env)
+    }
+
+    // The auto-update's environment for the folder the launcher has the relay on.
+    fn with_apply_env<R>(&self, data_dir: &Path, f: impl FnOnce(&ApplyEnv) -> R) -> R {
+        let suite_dir = data_dir.join("suite");
+        let env = ApplyEnv {
+            host: self,
+            suite_dir: &suite_dir,
+            payload: &self.payload,
+            data_dir,
+            log: &self.log,
+            node: self.node.as_deref(),
+            clock: &*self.clock,
+        };
+        f(&env)
+    }
+
+    // Why no relay is running after the auto-update stopped one, in the panel's words.
+    fn stopped_reason(&self, data_dir: &Path) -> (String, String) {
+        if data_held_aside(data_dir) {
+            return (HELD_TITLE.into(), held_reason(&self.log));
+        }
+        let st = std::fs::read_to_string(data_dir.join("suite").join("state.json")).unwrap_or_default();
+        let why = json_str_value(&st, "lastReason").filter(|s| !s.is_empty()).unwrap_or_else(|| "an update stopped the relay and could not start it again".into());
+        ("Your relay stopped".into(), format!("{why}. Details are in {}", self.log.display()))
+    }
+}
+
+// The auto-update's three capabilities, on the launcher's own process.
+impl<'s> RelayHost for SuiteHost<'s> {
+    fn spawn_relay(&self, code_dir: &Path, _payload: &Path, data_dir: &Path, log: &Path) -> Option<Arc<AtomicBool>> {
+        match self.spawn_proc(code_dir, data_dir) {
+            Ok(p) => {
+                let alive = p.alive.clone();
+                *self.latest.lock().unwrap() = Some(p);
+                self.spawns.fetch_add(1, Ordering::SeqCst);
+                Some(alive)
+            }
+            Err(e) => {
+                applog(log, &e);
+                None
+            }
+        }
+    }
+    fn stop_relay(&self) {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+        self.shell.kill_current();
+    }
+    // No-op: the window is pointed at the panel only by the launcher, AFTER it has proven who answers
+    // (launcher::Host::opened) — never by the apply before that proof.
+    fn reload_webview(&self) {}
+    fn last_exit_refused(&self) -> bool {
+        self.latest.lock().unwrap().as_ref().map(|p| *p.exit.lock().unwrap() == Some(launcher::Exit::Code(launcher::EXIT_REFUSED))).unwrap_or(false)
+    }
+}
+
+impl<'s> launcher::Host for SuiteHost<'s> {
+    fn node(&self, args: &[String]) -> launcher::NodeOut {
+        self.shell.node(args)
+    }
+
+    // After the mover's recovery, before begin-check and before any spawn: the auto-update's crash repair, on the
+    // folder the mover settled. Nothing is being applied at a start, so an apply marker here is a crash's leftover.
+    fn before_start(&self, data_dir: &Path) -> Result<(), (String, String)> {
+        let suite_dir = data_dir.join("suite");
+        if std::fs::remove_file(suite_dir.join(APPLY_MARKER)).is_ok() {
+            applog(&self.log, "launch: removed an apply marker left by an update that was interrupted");
+        }
+        repair_interrupted_restore(&suite_dir, data_dir, &self.log);
+        if data_held_aside(data_dir) {
+            return Err((HELD_TITLE.into(), held_reason(&self.log)));
+        }
+        Ok(())
+    }
+
+    // The launcher's every start. The auto-update's startup() decides the code tree (and, unless this start is a
+    // move's check, applies an update whose window was missed); every process it starts is spawn_proc's. What is
+    // running at the end is handed to the launcher, which waits for it and proves who answers.
+    fn spawn_relay(&self, env: &launcher::RelayEnv) -> Result<Box<dyn launcher::RelayHandle>, String> {
+        self.pinned.store(env.pinned, Ordering::SeqCst);
+        *self.current.lock().unwrap() = env.data_dir.clone();
+        *self.latest.lock().unwrap() = None;
+        if env.checking {
+            applog(&self.log, "launch: this start is a move's check; no update is applied before it");
+        }
+        let st = self.with_apply_env(&env.data_dir, |ae| startup_with(ae, !env.checking));
+        *self.run.lock().unwrap() = Some(st);
+        *self.last_apply_eval.lock().unwrap() = Some(Instant::now());
+        match self.latest.lock().unwrap().take() {
+            Some(p) => Ok(Box::new(p)),
+            None if data_held_aside(&env.data_dir) => Err(held_reason(&self.log)),
+            None => Err("the relay could not be started".into()),
+        }
+    }
+
+    // About every 500 ms while the launcher supervises a proven relay. The timed apply runs here (once per
+    // apply_every), on the launcher's thread: a move cannot begin while it runs, and it never begins while a move's
+    // request is waiting or the journal says a move is under way.
+    fn tick(&self, data_dir: &Path) -> launcher::Tick {
+        {
+            let mut last = self.last_apply_eval.lock().unwrap();
+            if last.map(|t| t.elapsed() < self.apply_every).unwrap_or(false) {
+                return launcher::Tick::None;
+            }
+            *last = Some(Instant::now());
+        }
+        if data_dir.join(launcher::MOVE_REQUEST).exists() || move_journal_active(&self.storage_state) {
+            return launcher::Tick::None; // the move goes first; the relay is about to stop for it
+        }
+        let (spawns0, stops0) = (self.spawns.load(Ordering::SeqCst), self.stops.load(Ordering::SeqCst));
+        {
+            let mut run = self.run.lock().unwrap();
+            let Some(st) = run.as_mut() else { return launcher::Tick::None };
+            self.with_apply_env(data_dir, |ae| maybe_apply(ae, st));
+        }
+        if self.spawns.load(Ordering::SeqCst) != spawns0 {
+            return match self.latest.lock().unwrap().take() {
+                Some(p) => launcher::Tick::Replaced(Box::new(p)),
+                None => {
+                    let (title, reason) = self.stopped_reason(data_dir);
+                    launcher::Tick::Stopped { title, reason }
+                }
+            };
+        }
+        if self.stops.load(Ordering::SeqCst) != stops0 {
+            // stopped and nothing started: the relay asked for a move just before the apply stopped it (step 4b), or
+            // the church's data is held aside
+            if data_dir.join(launcher::MOVE_REQUEST).exists() {
+                return launcher::Tick::MoveRequested;
+            }
+            let (title, reason) = self.stopped_reason(data_dir);
+            return launcher::Tick::Stopped { title, reason };
+        }
+        launcher::Tick::None
+    }
+
+    fn move_blocked(&self, data_dir: &Path) -> Option<String> {
+        if data_dir.join("suite").join(APPLY_MARKER).exists() {
+            return Some("suite-update-applying".into());
+        }
+        if data_held_aside(data_dir) {
+            return Some("suite-data-held-aside".into());
+        }
+        None
+    }
+
+    fn progress(&self, p: &launcher::Progress) {
+        self.shell.progress(p)
+    }
+    fn opened(&self, data_dir: &Path) {
+        applog(&self.log, &format!("relay answered on {data_dir:?}; opening its control panel"));
+        self.shell.opened(data_dir)
+    }
+    fn log(&self, msg: &str) {
+        applog(&self.log, msg);
+    }
+    fn quitting(&self) -> bool {
+        self.shell.quitting()
+    }
+}
+
+fn cloudflared_path() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(if cfg!(windows) { "trinityone-cloudflared.exe" } else { "trinityone-cloudflared" })))
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "cloudflared".into())
+}
+
+// ── the Tauri shell (everything that needs a window or the sidecar) ──────────────────────────────────────────
+struct TauriShell {
+    app: AppHandle,
+    payload: PathBuf,
+    log: PathBuf,
+    /// the window's first URL (dist/index.html), where progress and refusals are shown
+    splash: Option<tauri::Url>,
+    on_splash: AtomicBool,
+}
+
+impl Shell for TauriShell {
+    // One output pump feeds the launcher (exit code, stderr tail) and the auto-update (activity for its progress-based
+    // boot wait, the alive-flag). The child is parked in the managed Relay slot so the window-close handler reaps
+    // whichever child is current.
+    fn start(&self, code_dir: &Path, env: &[(String, String)]) -> Result<Proc, String> {
+        let cmd = self.app.shell().sidecar("trinityone-relay-node").map_err(|e| format!("SIDECAR RESOLVE FAILED: {e}"))?;
+        let mut cmd = cmd.current_dir(code_dir.to_path_buf()).arg("scripts/gateway.mjs").arg(PORT.to_string());
+        for (k, v) in env {
+            cmd = cmd.env(k, v);
+        }
+        let (mut rx, child) = cmd.spawn().map_err(|e| format!("SPAWN FAILED: {e}"))?;
+        applog(&self.log, "sidecar spawned OK");
+        *self.app.state::<Relay>().0.lock().unwrap() = Some(child);
+        let exit = Arc::new(Mutex::new(None));
+        let err = Arc::new(Mutex::new(String::new()));
+        let alive = Arc::new(AtomicBool::new(true));
+        let (x2, e2, a2, lp) = (exit.clone(), err.clone(), alive.clone(), self.log.clone());
+        tauri::async_runtime::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                match ev {
+                    CommandEvent::Stdout(b) => {
+                        note_relay_activity();
+                        applog(&lp, &format!("[out] {}", String::from_utf8_lossy(&b).trim_end()))
+                    }
+                    CommandEvent::Stderr(b) => {
+                        note_relay_activity();
+                        let t = String::from_utf8_lossy(&b).into_owned();
+                        applog(&lp, &format!("[err] {}", t.trim_end()));
+                        let mut g = e2.lock().unwrap();
+                        g.push_str(&t);
+                        let n = g.len();
+                        if n > 8000 {
+                            let mut cut = n - 8000;
+                            while !g.is_char_boundary(cut) {
+                                cut += 1;
+                            }
+                            *g = g[cut..].to_string();
+                        }
+                    }
+                    CommandEvent::Error(e) => applog(&lp, &format!("[error] {e}")),
+                    CommandEvent::Terminated(t) => {
+                        applog(&lp, &format!("[exit] {t:?}"));
+                        *x2.lock().unwrap() = Some(t.code.map(launcher::Exit::Code).unwrap_or(launcher::Exit::Other));
+                        a2.store(false, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+            }
+            // the channel closing without a Terminated is an exit all the same
+            let mut g = x2.lock().unwrap();
+            if g.is_none() {
+                *g = Some(launcher::Exit::Other);
+            }
+            a2.store(false, Ordering::SeqCst);
+        });
+        let app = self.app.clone();
+        let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            if let Some(child) = app.state::<Relay>().0.lock().unwrap().take() {
+                let _ = child.kill();
+            }
+        });
+        Ok(Proc { exit, err, alive, kill })
+    }
+
+    fn kill_current(&self) {
+        if let Some(child) = self.app.state::<Relay>().0.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
+
+    fn node(&self, args: &[String]) -> launcher::NodeOut {
+        let run = || -> Result<launcher::NodeOut, String> {
+            let cmd = self.app.shell().sidecar("trinityone-relay-node").map_err(|e| e.to_string())?;
+            let out = tauri::async_runtime::block_on(cmd.current_dir(self.payload.clone()).args(args.to_vec()).output()).map_err(|e| e.to_string())?;
+            Ok(launcher::NodeOut {
+                code: out.status.code().unwrap_or(-1),
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            })
+        };
+        run().unwrap_or_else(|e| launcher::NodeOut { code: -1, stdout: String::new(), stderr: e })
+    }
+
+    fn progress(&self, p: &launcher::Progress) {
+        // The window shows the splash for anything but a running relay: back to dist/index.html if the control
+        // panel was showing (the relay behind it has stopped for a move or an update), else just change its text.
+        let frag = launcher::splash_fragment(p);
+        let Some(win) = self.app.get_webview_window("control") else { return };
+        if self.on_splash.swap(true, Ordering::Relaxed) {
+            let _ = win.eval(&format!("location.hash = '{}'", &frag[1..]));
+        } else if let Some(mut u) = self.splash.clone() {
+            u.set_fragment(Some(&frag[1..]));
+            let _ = win.navigate(u);
+        }
+        let _ = win.show();
+    }
+
+    fn opened(&self, _data_dir: &Path) {
+        // ALWAYS the launcher (home.html), first run included. It asks "What should this computer
+        // do for your church?" and offers the two doors: "Run your church" (the Steward console)
+        // and "Manage a relay" (the control panel).
+        //
+        // First run used to go straight to steward.html, so somebody installing the Suite purely to
+        // run a relay for their church was walked into church setup with no way past it, and only
+        // ever saw the chooser on the SECOND launch. Reported 2026-09-08.
+        //
+        // No mode is passed in the address, deliberately — scripts/suite-two-doors.test.mjs pins
+        // that. Where the church's records live is DETECTED (_boxHostsUs asks this box's /config
+        // whether it holds this church), not declared by the door you came through; declaring it is
+        // what once split one congregation into two halves that could not see each other.
+        // (?relayapp=1 was dropped here 2026-09-08: nothing has read it since the sticky host
+        // marker was deleted — it was inert, like ?setup=1 before it.)
+        // 127.0.0.1, not localhost — on Windows localhost can resolve to IPv6 ::1 while the relay listens on IPv4.
+        let url = format!("http://127.0.0.1:{PORT}/relay-app/home.html");
+        if let (Some(win), Ok(u)) = (self.app.get_webview_window("control"), url.parse()) {
+            self.on_splash.store(false, Ordering::Relaxed);
+            let _ = win.navigate(u);
+            let _ = win.show();
+        }
+    }
+
+    fn quitting(&self) -> bool {
+        QUIT.load(Ordering::Relaxed)
+    }
+}
+
 fn main() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2100,8 +2504,20 @@ fn main() {
     let builder = builder.manage(Inhibitor(std::sync::Arc::new(Mutex::new(None))));
     builder
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?.join("data");
-            std::fs::create_dir_all(&data_dir).ok();
+            // THE DATA FOLDER IS DECIDED IN ONE PLACE (relay storage plan step 5, plan §2): the pointer
+            // <app config dir>/storage.json, or the default <app data dir>/data when there is none (every install
+            // that has never moved). `current` is what every Rust reader below follows — keep-awake's admin.json and
+            // off-switch, the LAN marker, TRINITY_DATA_DIR, and the auto-update's suite/ folder, store backup and
+            // restore — and the launcher updates it whenever it starts the relay on a folder (a move, a rollback).
+            let config_file = app.path().app_config_dir()?.join("storage.json");
+            let default_data = app.path().app_data_dir()?.join("data");
+            let data_dir = launcher::resolve_data_dir(std::fs::read_to_string(&config_file).ok().as_deref(), &default_data);
+            // Only the DEFAULT folder is ever created here. A folder the steward chose is never made: a missing
+            // drive must refuse (the gateway's pinned guard), not become an empty folder under a mount point.
+            if data_dir == default_data {
+                std::fs::create_dir_all(&data_dir).ok();
+            }
+            let current = Arc::new(Mutex::new(data_dir.clone()));
             let log = app.path().app_data_dir()?.join("relay-launch.log");
             let _ = std::fs::remove_file(&log); // fresh log each launch
 
@@ -2120,55 +2536,52 @@ fn main() {
             applog(&log, &format!("payload   = {payload:?} (exists={})", payload.exists()));
             applog(&log, &format!("gateway   = {gateway_abs:?} (exists={})", gateway_abs.exists()));
             applog(&log, &format!("data_dir  = {data_dir:?}"));
+            applog(&log, &format!("pointer   = {config_file:?}"));
             applog(&log, &format!("exe       = {:?}", std::env::current_exe()));
 
-            // EVERY LAUNCH: the code choice, a waiting update whose window was missed, and the first spawn all
-            // happen in startup(), run first thing on the controller thread below (so a launch-time apply never
-            // blocks the window from opening). The window thread just waits for the port, as before.
-            let suite_dir = data_dir.join("suite");
+            // The launcher: wait for a mover, recover a half-finished move, repair an interrupted update restore,
+            // choose the code and start the relay (bundled node scripts/gateway.mjs <port>, cwd = payload or the
+            // activated update, data → the resolved folder, bound to loopback so there's no firewall prompt), prove
+            // who answered, open the control panel, apply a timed update, and carry out a move or an old-copy removal
+            // the relay asks for. The lifecycle is launcher/src/lib.rs, which the headless test host drives too.
             let node = node_sidecar_path();
-
-            // wait for the relay to accept connections, then point the window at its control panel (127.0.0.1,
-            // not localhost — on Windows localhost can resolve to IPv6 ::1 while the relay listens on IPv4).
-            if let Some(win) = app.get_webview_window("control") {
-                let lp = log.clone();
-                thread::spawn(move || {
-                    let mut up = false;
-                    for _ in 0..480 {
-                        // up to ~2 min (first run on Windows can be slow: Defender scans the bundled runtime)
-                        if TcpStream::connect(("127.0.0.1", PORT)).is_ok() {
-                            up = true;
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(250));
-                    }
-                    applog(&lp, &format!("port {PORT} reachable = {up}"));
-                    // ALWAYS the launcher (home.html), first run included. It asks "What should this computer
-                    // do for your church?" and offers the two doors: "Run your church" (the Steward console)
-                    // and "Manage a relay" (the control panel).
-                    //
-                    // First run used to go straight to steward.html, so somebody installing the Suite purely to
-                    // run a relay for their church was walked into church setup with no way past it, and only
-                    // ever saw the chooser on the SECOND launch. Reported 2026-09-08.
-                    //
-                    // No mode is passed in the address, deliberately — scripts/suite-two-doors.test.mjs pins
-                    // that. Where the church's records live is DETECTED (_boxHostsUs asks this box's /config
-                    // whether it holds this church), not declared by the door you came through; declaring it is
-                    // what once split one congregation into two halves that could not see each other.
-                    // (?relayapp=1 was dropped here 2026-09-08: nothing has read it since the sticky host
-                    // marker was deleted — it was inert, like ?setup=1 before it.)
-                    let url = format!("http://127.0.0.1:{PORT}/relay-app/home.html");
-                    if let Ok(u) = url.parse() {
-                        let _ = win.navigate(u);
-                    }
-                    let _ = win.show();
-                });
-            }
+            let node_for_clock = node.clone();
+            let shell = TauriShell {
+                app: app.handle().clone(),
+                payload: payload.clone(),
+                log: log.clone(),
+                splash: app.get_webview_window("control").and_then(|w| w.url().ok()),
+                on_splash: AtomicBool::new(true),
+            };
+            let (payload_h, log_h, current_h, state_h) = (payload.clone(), log.clone(), current.clone(), config_file.clone());
+            // up_steps 480 = ~2 min: first run on Windows can be slow (Defender scans the bundled runtime)
+            let cfg = launcher::Config { config_file, default_data, port: PORT, up_steps: 480, log_path: log.clone(), mover_wait_ms: 10 * 60 * 1000, check_steps: 1200 /* 5 min */ };
+            thread::spawn(move || {
+                let host = SuiteHost {
+                    shell: &shell,
+                    payload: payload_h,
+                    log: log_h,
+                    current: current_h,
+                    storage_state: state_h,
+                    node,
+                    clock: Box::new(move || node_for_clock.as_deref().and_then(local_now)),
+                    apply_every: Duration::from_secs(60),
+                    pinned: AtomicBool::new(false),
+                    latest: Mutex::new(None),
+                    spawns: AtomicUsize::new(0),
+                    stops: AtomicUsize::new(0),
+                    run: Mutex::new(None),
+                    last_apply_eval: Mutex::new(None),
+                };
+                let end = launcher::run(&host, &cfg);
+                applog(&host.log, &format!("launcher ended: {end:?}"));
+            });
 
             // keep-awake controller: every ~15s ask the relay whether it's public and hold/release the
             // OS sleep inhibitor to match. It runs for the life of the process — which is deliberate on
             // Windows, where the inhibitor is per-thread state that evaporates if its thread exits, so it
-            // MUST be set and cleared from this same long-lived thread.
+            // MUST be set and cleared from this same long-lived thread. (The auto-update apply that used to
+            // ride on this thread's loop now runs on the launcher's, see TauriHost::tick.)
             //
             // AUTH: the state endpoints are admin-gated, so each tick we read the admin token the gateway
             // wrote to `<data_dir>/admin.json` and send it as a bearer (see read_admin_token / the comment
@@ -2182,52 +2595,19 @@ fn main() {
             // both sides agree on where it lives.
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             let inhibitor_slot = app.state::<Inhibitor>().0.clone();
-            // Handed to the controller so it can start the relay and drive the auto-update apply: a handle to
-            // spawn/kill the relay, the suite + payload dirs, and the node sidecar for verify + local-clock reads.
-            let app_ctrl = app.handle().clone();
-            let suite_c = suite_dir.clone();
-            let payload_c = payload.clone();
-            let node_c = node.clone();
             {
-                let dd = data_dir.clone();
+                let cur = current.clone();
                 let lp = log.clone();
                 thread::spawn(move || {
-                    // The production RelayHost: wraps this thread's AppHandle clone so the apply path can
-                    // spawn/stop the relay child and reload the webview (see TauriHost).
-                    let host = TauriHost { app: app_ctrl };
-                    let node_for_clock = node_c.clone();
-                    let clock = move || node_for_clock.as_deref().and_then(local_now);
-                    let env = ApplyEnv {
-                        host: &host,
-                        suite_dir: &suite_c,
-                        payload: &payload_c,
-                        data_dir: &dd,
-                        log: &lp,
-                        node: node_c.as_deref(),
-                        clock: &clock,
-                    };
-                    // FIRST: choose the code tree, apply a missed update, start the relay (see startup).
-                    let mut run = startup(&env);
                     let mut ka = KeepAwake::new(
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
                         inhibitor_slot,
                     );
                     let mut held = false;
                     let mut token_warned = false; // log the "no token yet" case once, not every 15s
-                    // Throttle the auto-update apply check to ~once a minute (HH:MM is minute-resolution and
-                    // apply is once per window); the keep-awake policy below keeps its own 15s cadence.
-                    let mut last_apply_eval = Instant::now();
                     loop {
-                        // ── SUITE AUTO-UPDATE APPLY ─────────────────────────────────────────────────────
-                        // Evaluated at the TOP of the tick, BEFORE the keep-awake-off and token early-continues
-                        // below and OUTSIDE any #[cfg] block, so (a) turning keep-awake OFF never also disables
-                        // auto-update and (b) the swap/respawn runs on every OS, Windows included. It gates on
-                        // its OWN suite-autoupdate marker, reads staging/READY from disk, and health-probes the
-                        // PUBLIC /status — no admin token needed. [AUDIT#2 MEDIUM] [AUDIT FIX #4]
-                        if last_apply_eval.elapsed() >= Duration::from_secs(60) {
-                            last_apply_eval = Instant::now();
-                            maybe_apply(&env, &mut run);
-                        }
+                        // the folder the launcher has the relay on RIGHT NOW (it changes after a move)
+                        let dd = cur.lock().unwrap().clone();
                         // Off-switch FIRST, before any network GET: release if we were holding, then idle.
                         if dd.join("keep-awake-off").exists() {
                             if held {
@@ -2294,6 +2674,8 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { .. } = event {
+                // tell the launcher this is the app closing, not the relay failing
+                QUIT.store(true, Ordering::Relaxed);
                 if let Some(child) = window.state::<Relay>().0.lock().unwrap().take() {
                     let _ = child.kill();
                 }

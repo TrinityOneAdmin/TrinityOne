@@ -18,7 +18,7 @@ import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';
 import { createTunnelWatchdog } from './relay-selfheal.mjs';
 // Relay storage plan step 3: the panel API reuses the mover's OWN checks (audit B: same realpath/symlink/classify path).
-import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath, blockDeviceIsUsbOrRemovable } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
+import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath, blockDeviceIsUsbOrRemovable, nodeCanMove } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
 // The names this relay gates by, from the ONE declared list (ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
@@ -7359,7 +7359,7 @@ function storageRequestIsLocal(req) {
 function storageReadJournal() {
   if (!STORAGE_STATE_FILE) return { j: null, err: 'storage-state-unknown' };
   if (!existsSync(STORAGE_STATE_FILE)) return { j: null, err: null };            // never moved: no journal yet
-  try { const o = JSON.parse(readFileSync(STORAGE_STATE_FILE, 'utf8')); return { j: (o && o.move && typeof o.move === 'object') ? o.move : null, err: null }; }
+  try { const o = JSON.parse(readFileSync(STORAGE_STATE_FILE, 'utf8')); return { j: (o && o.move && typeof o.move === 'object') ? o.move : null, launcher: (o && o.launcher && typeof o.launcher === 'object') ? o.launcher : null, err: null }; }
   catch { return { j: null, err: 'storage-state-unreadable' }; }
 }
 // Mount table: async (never blocks the event loop — audit C C8 / D), cached briefly; a move asks for a fresh one.
@@ -7465,7 +7465,7 @@ async function storageJudge(c, ctx) {
 // Everything the card needs. `fresh` re-reads the mount table and size (a move decides on current facts).
 async function storageReport(fresh) {
   const pf = process.platform;
-  const { j, err } = storageReadJournal();
+  const { j, err, launcher } = storageReadJournal();
   const [mounts, size] = await Promise.all([storageMounts(fresh), storageDataSize(fresh)]);
   let dataReal = null; try { dataReal = await realpathP(DATA_DIR); } catch {}
   const curMount = dataReal ? mountFor(dataReal, mounts || [], pf) : null;
@@ -7473,6 +7473,14 @@ async function storageReport(fresh) {
   // reasons the FOLDER cannot be moved right now, whatever drive is picked (audit A #11, #14; audit B)
   const refuse = [];
   if (err) refuse.push(err);
+  // the mover needs node:sqlite (Node 22.5+); the knob is only for the test that proves the card is told
+  if (!nodeCanMove(process.env.TRINITY_STORAGE_NODE_VERSION || process.versions.node)) refuse.push('node-too-old');
+  // "Update now" runs as root for minutes while the relay keeps serving; a move started in that window could be undone by
+  // the update's restart (audit C M2). relay-update.sh also takes the lock a move holds; this tells the steward why not.
+  try {
+    const us = JSON.parse(readFileSync(join(DATA_DIR, 'update-status.json'), 'utf8'));
+    if (us && us.state === 'running' && Math.abs(Date.now() / 1000 - Number(us.at || 0)) < 30 * 60) refuse.push('update-in-progress');
+  } catch {}
   if (j && MOVE_ACTIVE.has(j.state)) refuse.push('move-in-progress');
   if (j && j.state === 'awaiting-confirm') refuse.push('old-copy-awaiting-removal');
   if (existsSync(join(DATA_DIR, '.restore-pending'))) refuse.push('restore-pending');
@@ -7494,13 +7502,16 @@ async function storageReport(fresh) {
     current: { path: DATA_DIR, realPath: dataReal, drive: curMount ? { mountpoint: curMount.mountpoint, fsType: curMount.fsType } : null, sizeBytes: size.bytes, files: size.files, freeBytes: curFree },
     move: j ? { state: j.state, mode: j.mode || null, from: j.from || null, to: j.to || null, code: j.code || null, detail: j.detail || null, note: j.note || null,
       startedAt: j.startedAt || null, switchedAt: j.switchedAt || null, checkedAt: j.checkedAt || null, endedAt: j.endedAt || null,
-      totalBytes: j.totalBytes ?? null, copiedBytes: j.copiedBytes ?? null, counts: j.counts || null } : null,
+      totalBytes: j.totalBytes ?? null, copiedBytes: j.copiedBytes ?? null, counts: j.counts || null, refusal: j.refusal || null } : null,
     oldCopy: old ? { path: old.path, since: old.since || null, exists: existsSync(old.path), ageDays, remind: ageDays !== null && ageDays >= STORAGE_REMIND_DAYS,
       sizeBytes: j.totalBytes ?? null, mountpoint: (mountFor(old.path, mounts || [], pf) || {}).mountpoint || null } : null,
     // set-aside copies and rename tombstones the mover recorded (audit B N8); an entry the remover marked removedAt
     // is gone for good and not offered again (audit C C3 — the remover, step 5/6, must set it)
     leftovers: (j && Array.isArray(j.leftovers) ? j.leftovers : []).filter(l => l && l.path && !l.removedAt)
       .map(l => ({ path: l.path, kind: l.kind || null, since: l.since || null, exists: existsSync(l.path) })),
+    // what the Suite launcher recorded about itself (step 5): the last move/removal it REFUSED (a refused move never
+    // reaches the journal) and an identity that changed since the pointer last recorded it. Read only, never written here.
+    launcher: launcher ? { lastRefusal: launcher.lastRefusal || null, identityChanged: launcher.identityChanged || null } : null,
     requests: { move: (m => m ? { ...m, stale: storageRequestIsStale(j) } : m)(req(STORAGE_MOVE_REQUEST)), removeOld: req(STORAGE_REMOVE_REQUEST) },
     refuse, drives,
   };
