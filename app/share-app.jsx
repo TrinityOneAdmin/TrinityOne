@@ -119,11 +119,19 @@ function isShareableModule(r) {
 }
 window.isShareableModule = isShareableModule;
 
+// AN iPHONE CANNOT INSTALL WHAT THIS SHARES. The file is the Android APK and iOS has no way to install an app
+// from a file, so on iOS the app-share is not offered at all (identity.jsx hides the row, ShareAppSheet renders
+// nothing) and this refuses as a last guard. isNativePlatform() is true on iOS AND Android, so ask by name.
+function shareAppOnIos() {
+  try { const Cap = window.Capacitor; return !!(Cap && Cap.getPlatform && Cap.getPlatform() === 'ios'); } catch (e) { return false; }
+}
+
 // Share the APK (cache-once), alone, via the OS share sheet.
 async function shareTrinityOneApp(ctx, onStatus) {
   const Cap = window.Capacitor, P = Cap && Cap.Plugins;
   const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
   const say = (m) => { try { onStatus && onStatus(m); } catch (e) {} };
+  if (shareAppOnIos()) { ctx && ctx.toast && ctx.toast('The app can’t be passed on from an iPhone — share a Bible from your Library instead'); return { ok: false, where: 'ios' }; }
 
   // web / installed PWA: a download is the on-device equivalent
   if (!native) {
@@ -169,6 +177,7 @@ function ShareAppSheet({ open, onClose, ctx }) {
   }, [open]);
   const go = async () => { if (busy) return; setBusy(true); try { await shareTrinityOneApp(ctx, setStatus); } finally { setBusy(false); setStatus(''); } };
   const toLibrary = () => { onClose && onClose(); ctx && ctx.openStore && ctx.openStore('installed', 'bibles'); };
+  if (shareAppOnIos()) return null;   // nothing here an iPhone can use — the "Choose a Bible" pointer goes with it
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="82%" z={60}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
