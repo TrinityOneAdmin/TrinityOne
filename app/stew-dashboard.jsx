@@ -13162,15 +13162,19 @@ function DashBrandingPanel({ church }) {
     saveTimer.current = setTimeout(() => window.Steward.publishProfile({ accent: v }), 400);
   };
   const resetAccent = () => { if (saveTimer.current) clearTimeout(saveTimer.current); setAccentState(''); setHexDraft(''); window.Steward.publishProfile({ accent: '' }); };
-  // typed hex code — free text while typing, publishes only once it's a valid #RGB / #RRGGBB
+  // typed hex code — free text while typing, publishes only once it's a complete #RRGGBB.
+  // NO #RGB SHORT FORM (fix 2026-11-13): "1F4" is the first half of "1F4E79", not a finished code. Expanding it
+  // set the accent to #11FF44, the sync effect below wrote "11FF44" back into the box, and the box (maxLength 6)
+  // was then full — so typing a code one character at a time published the WRONG colour to every member.
+  // Leaving the box with an unfinished code puts the saved colour back, so the box never shows an unsaved code.
   const [hexDraft, setHexDraft] = React.useState((church.accent || '').toUpperCase());
   React.useEffect(() => { setHexDraft(accent ? accent.toUpperCase() : ''); }, [accent]);
   const onHex = (v) => {
     let s = v.trim(); if (s && s[0] !== '#') s = '#' + s;
     setHexDraft(s.toUpperCase());
-    if (/^#[0-9a-fA-F]{3}$/.test(s)) onAccent('#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3]);
-    else if (/^#[0-9a-fA-F]{6}$/.test(s)) onAccent(s);
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) onAccent(s);
   };
+  const onHexBlur = () => { if (!/^#[0-9a-fA-F]{6}$/.test(hexDraft)) setHexDraft(accent ? accent.toUpperCase() : ''); };
   const acc = accent || '#C25A38';
   // THE CHURCH'S MAIN COLOUR (owner 2026-11-12) — the second church colour, beside the accent. It paints the
   // members' church header (no banner), the badge (no picture), and the verse-of-the-day / featured-sermon
@@ -13188,12 +13192,13 @@ function DashBrandingPanel({ church }) {
   const [mainHex, setMainHex] = React.useState((church.mainColor || '').toUpperCase());
   React.useEffect(() => { setMainHex(mainCol ? mainCol.toUpperCase() : ''); }, [mainCol]);
   const resetMain = () => { if (mainTimer.current) clearTimeout(mainTimer.current); setMainState(''); setMainHex(''); window.Steward.publishProfile({ mainColor: '' }); };
+  // Same rule as the accent's hex box: only a complete #RRGGBB is saved (no #RGB expansion mid-typing).
   const onMainHex = (v) => {
     let s = v.trim(); if (s && s[0] !== '#') s = '#' + s;
     setMainHex(s.toUpperCase());
-    if (/^#[0-9a-fA-F]{3}$/.test(s)) onMain(('#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3]).toLowerCase());
-    else if (/^#[0-9a-fA-F]{6}$/.test(s)) onMain(s.toLowerCase());
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) onMain(s.toLowerCase());
   };
+  const onMainHexBlur = () => { if (!/^#[0-9a-fA-F]{6}$/.test(mainHex)) setMainHex(mainCol ? mainCol.toUpperCase() : ''); };
   const mainShown = mainCol || acc;   // what the preview and the picker tile show: main, else the accent
   const swatches = ['#C25A38', '#3B6FB0', '#5E8C6A', '#7A4FA3', '#B0853B', '#1F2A37'];
   const lbl = { fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 0 6px' };
@@ -13267,7 +13272,7 @@ function DashBrandingPanel({ church }) {
         </label>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
-          <input value={mainHex.replace(/^#/, '')} onChange={e => onMainHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Main colour hex code" placeholder={acc.replace(/^#/, '')}
+          <input value={mainHex.replace(/^#/, '')} onChange={e => onMainHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} onBlur={onMainHexBlur} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Main colour hex code" placeholder={acc.replace(/^#/, '')}
             style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
           {mainCol ? <button onClick={resetMain} title="Reset to default" aria-label="Reset main colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
         </div>
@@ -13287,7 +13292,7 @@ function DashBrandingPanel({ church }) {
         </label>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 46, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 13px', gap: 3 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--ink-3)' }}>#</span>
-          <input value={hexDraft.replace(/^#/, '')} onChange={e => onHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Accent colour hex code" placeholder="C25A38"
+          <input value={hexDraft.replace(/^#/, '')} onChange={e => onHex('#' + e.target.value.replace(/[^0-9a-fA-F]/g, ''))} onBlur={onHexBlur} spellCheck={false} autoCapitalize="characters" maxLength={6} aria-label="Accent colour hex code" placeholder="C25A38"
             style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink)', background: 'transparent', border: 'none', outline: 'none', padding: 0 }} />
           {accent ? <button onClick={resetAccent} title="Reset to default" aria-label="Reset accent colour" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : <span style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>default</span>}
         </div>

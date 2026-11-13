@@ -62,13 +62,16 @@ test('the Main colour picker publishes { mainColor } (and not accent)', async ()
   assert.deepEqual(p.published, [{ mainColor: '#1f4e79' }], 'the Main picker did not publish mainColor: ' + JSON.stringify(p.published));
 });
 
-test('the Main colour hex field publishes once the code is valid', async () => {
+test('the Main colour hex field publishes once the code is a complete #RRGGBB, and not before', async () => {
   const p = await panel({ name: 'Grace' });
   const hex = p.by('Main colour hex code');
   assert.ok(hex, 'there is no Main colour hex field');
-  hex.props.onChange({ target: { value: '1F4' } });   // #RGB expands
+  // "1F4" is the first half of "1F4E79", not a #RGB code: it must not be expanded to #11ff44 and published
+  // (audit 2026-11-13 MEDIUM). The box keeps what was typed.
+  hex.props.onChange({ target: { value: '1F4' } });
   await sleep(450);
-  assert.deepEqual(p.published.at(-1), { mainColor: '#11ff44' });
+  assert.deepEqual(p.published, [], 'a 3-character entry was published: ' + JSON.stringify(p.published));
+  assert.equal(p.by('Main colour hex code').props.value, '1F4', 'the box rewrote what was typed');
   p.by('Main colour hex code').props.onChange({ target: { value: '1F4E79' } });
   await sleep(450);
   assert.deepEqual(p.published.at(-1), { mainColor: '#1f4e79' });
