@@ -226,3 +226,24 @@ test('a staged restore whose key and stamp DISAGREE: the stamp is dropped and re
     assert.equal(readJson(join(dir, '.trinity-data-dir')).relayPub, newPub);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Audit A finding 10: a move must not run against a folder a live relay holds, even if the caller's port check
+// says the relay is stopped (wrong port, second process). The REAL gateway marks the folder; the REAL mover reads it.
+test('a running relay marks its folder, and the mover refuses it even when told the relay is stopped', async () => {
+  const { moveRelayData, jsonPointer, jsonFieldStore, LEAF } = await import('./relay-move.mjs');
+  const base = mkdtempSync(join(tmpdir(), 'trin-r1-lock-'));
+  const dir = join(base, 'data'); mkdirSync(dir);
+  await requireFreePort(PORT, 'a-relay-on-a-missing-drive-refuses-to-start.test.mjs');
+  const r = start(dir, {});
+  try {
+    let up = false;
+    for (let i = 0; i < 200 && r.code === undefined; i++) { try { if ((await fetch(BASE + '/status')).ok) { up = true; break; } } catch {} await sleep(150); }
+    assert.ok(up, 'relay did not start. ' + r.log);
+    assert.equal(readJson(join(dir, '.relay-lock')).pid, r.p.pid, 'the gateway did not mark its data folder as in use');
+    mkdirSync(join(base, 'drive'));
+    const cfg = join(base, 'storage.json');
+    const res = await moveRelayData({ from: dir, to: join(base, 'drive', LEAF), pointer: jsonPointer(cfg), journal: jsonFieldStore(cfg, 'move'), relayRunning: async () => false, mounts: null });
+    assert.equal(res.ok, false, 'the mover moved a folder a live relay is writing to');
+    assert.equal(res.code, 'relay-running');
+  } finally { if (r.code === undefined) { r.p.kill('SIGKILL'); await r.exited; } rmSync(base, { recursive: true, force: true }); }
+});

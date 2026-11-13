@@ -162,6 +162,13 @@ function stagingHasSymlink(p) {
   try { rmSync(staging, { recursive: true, force: true }); } catch {}
 })();
 checkDataDirIdentity();
+// A "this folder is in use" note for scripts/relay-move.mjs, which must never copy or rename a folder a live relay
+// is writing to (audit A #10: "the port I was told is closed" is not proof). It is advisory: the mover checks the
+// pid is alive (and, where /proc exists, that it is a gateway). Never removed by a signal kill, so a stale note is
+// normal — a dead pid means free. Excluded from backups and from a move's copy.
+const DATA_DIR_LOCK = join(DATA_DIR, '.relay-lock');
+try { writeFileSync(DATA_DIR_LOCK, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n'); } catch {}
+process.on('exit', () => { try { const l = JSON.parse(readFileSync(DATA_DIR_LOCK, 'utf8')); if (l && l.pid === process.pid) unlinkSync(DATA_DIR_LOCK); } catch {} });
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');                 // legacy JSON store (migrated from, once)
 // SHA-256 of the release signing certificate (android/app/keystore.properties -> release.keystore, alias
@@ -8070,7 +8077,7 @@ function serveStatic(req, res) {
     try {
       child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
         '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log',
-        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '.'],
+        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '--exclude=./.relay-lock', '.'],
         { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"tar not available on this box"}'); return; }
     res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + fname + '"', ...SEC_HEADERS });

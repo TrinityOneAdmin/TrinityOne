@@ -32,7 +32,7 @@ export const MOVED_TO = 'MOVED-TO';
 // Not carried by a COPY (same list as the backup's excludes, gateway.mjs, plus the side files of a folded WAL and
 // this feature's own request file). A RENAME carries everything, so it needs no list.
 export const SKIP = new Set(['.restore-pending', '.bundle-cache', 'cloudflared.log', 'rejected.log', 'rejected.log.1',
-  'relay-launch.log', 'relay.sqlite-shm', 'relay.sqlite-wal', '.move-request', MARK_INCOMPLETE]);
+  'relay-launch.log', 'relay.sqlite-shm', 'relay.sqlite-wal', '.move-request', '.relay-lock', MARK_INCOMPLETE]);
 const SPACE_MARGIN = 512 * 1024 * 1024;
 // States in which a move is under way and recoverMove() has work to do.
 export const ACTIVE = new Set(['renaming', 'copying', 'verifying', 'switching', 'switched', 'checking', 'rolling-back']);
@@ -124,6 +124,15 @@ export function writeAtomic(file, text) {
   renameSync(tmp, file); fsyncDir(dirname(file));
 }
 const readJson = p => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } };
+// The gateway writes <dir>/.relay-lock {pid} at start-up (audit A #10). Held = that pid is alive (and, where /proc
+// exists, is a node process running gateway.mjs — so a reused pid does not block a move for ever).
+export function relayLockHeld(dir) {
+  const l = readJson(join(dir, '.relay-lock'));
+  const pid = l && Number(l.pid);
+  if (!pid || pid === process.pid) return false;
+  try { process.kill(pid, 0); } catch (e) { if (!e || e.code !== 'EPERM') return false; }
+  try { const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8'); return /gateway\.mjs/.test(cmd); } catch { return true; }
+}
 export function keyPubOf(dir) { const k = readJson(join(dir, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
 export function hasSymlink(p) {
   let st; try { st = lstatSync(p); } catch { return false; }
@@ -215,6 +224,7 @@ export async function moveRelayData(opts) {
   const cur = pointer.read();
   if (cur && resolve(cur) !== from) return no('not-current-folder', cur);
   if (!existsSync(from)) return no('source-missing');
+  if (relayLockHeld(from)) return no('relay-running', 'a relay process still holds this folder');
   if (existsSync(join(from, MOVED_TO))) return no('source-moved');
   const relayPub = keyPubOf(from);
   if (!relayPub) return no('source-has-no-key');

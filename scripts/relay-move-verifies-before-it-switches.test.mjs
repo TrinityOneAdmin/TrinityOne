@@ -242,3 +242,14 @@ test('mount tables parse and resolve to the longest matching mount', () => {
   assert.equal(mountFor('/Volumes/T7/' + LEAF, mac).fsType, 'exfat');
   assert.ok(mountFor('/Volumes/T7/x', mac).options.includes('noowners'));
 });
+
+test('a stale relay lock (its process is gone) does not block a move, and is not copied', async () => {
+  const t = rig();
+  try {
+    t.db.close();
+    writeFileSync(join(t.from, '.relay-lock'), JSON.stringify({ pid: 2147483646 }));
+    const res = await moveRelayData(t.opts({ rename: exdevOnce() }));
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(existsSync(join(t.to, '.relay-lock')), false, 'a lock note was carried into the new folder');
+  } finally { t.done(); }
+});
