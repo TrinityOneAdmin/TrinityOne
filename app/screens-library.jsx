@@ -988,6 +988,23 @@ function InstalledBrowser({ ctx, category, force }) {
   // — what a recipient's Library → Import can take. The bytes are the engine's own cached copy; if they are not
   // there, say so and share nothing. Backing out of the share sheet is not an error and shows nothing.
   const canShareRow = (r) => typeof window.isShareableModule === 'function' && window.isShareableModule(r);
+  // A SHARE THAT NEVER SETTLES MUST NOT LOCK EVERY ROW. If Android recreates the activity while the member is in
+  // the other app, Share.share may never resolve, and `sharing` would hold every Share button disabled until the
+  // Library is reopened. Coming back to the app is the moment the share sheet has gone, so the native foreground
+  // event clears it — chosen over a timer because a member may legitimately spend minutes picking a contact, and
+  // a timer short enough to help would re-enable Share while the sheet is still up. If the share does settle
+  // after this, its own `finally` just clears an already-clear state.
+  React.useEffect(() => {
+    let h = null, gone = false;
+    try {
+      const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+      if (AppP && AppP.addListener) {
+        Promise.resolve(AppP.addListener('appStateChange', (st) => { if (st && st.isActive) setSharing(null); }))
+          .then(x => { if (gone) { try { x && x.remove && x.remove(); } catch (e) {} } else h = x; }).catch(() => {});
+      }
+    } catch (e) {}
+    return () => { gone = true; try { h && h.remove && h.remove(); } catch (e) {} };
+  }, []);
   const share = async (r) => {
     if (sharing) return;
     setSharing(r.url);
@@ -1034,9 +1051,9 @@ function InstalledBrowser({ ctx, category, force }) {
                 "Septuagint" spilled under the buttons (measured — installed-row-share-fits-a-phone.test.mjs). */}
             <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
               {canShareRow(r) ? (
-                <button onClick={() => share(r)} disabled={sharing === r.url} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                <button onClick={() => share(r)} disabled={!!sharing} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
                   border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay)',
-                  borderRadius: 11, padding: '7px 11px', cursor: sharing === r.url ? 'default' : 'pointer', opacity: sharing === r.url ? 0.6 : 1,
+                  borderRadius: 11, padding: '7px 11px', cursor: sharing ? 'default' : 'pointer', opacity: sharing ? 0.6 : 1,
                   fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
                   <Icon name="share" size={14} stroke={2.2} /> {sharing === r.url ? 'Preparing…' : 'Share'}
                 </button>

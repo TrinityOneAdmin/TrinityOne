@@ -95,16 +95,22 @@ async function bytesOf(rec) {
 }
 
 // ── the phone's plugins ──────────────────────────────────────────────────────────────────────────────────────
-function fakeCapacitor({ native = true, shareRejects = null } = {}) {
-  const shares = [], writes = [];
+// `shareRejects` makes Share.share reject with that message; `shareHangs` makes it never settle (the activity
+// recreated under memory pressure while the member is in the other app). `App` records appStateChange listeners
+// so a test can bring the app back to the foreground.
+function fakeCapacitor({ native = true, shareRejects = null, shareHangs = false } = {}) {
+  const shares = [], writes = [], deletes = [], appListeners = [];
   const Plugins = {
+    App: { addListener: (ev, cb) => { appListeners.push([ev, cb]); return { remove() {} }; } },
     Filesystem: {
+      deleteFile: async ({ path, directory }) => { deletes.push([path, directory]); },
       stat: async () => { throw new Error('File does not exist'); },
       writeFile: async ({ path, data, directory }) => { writes.push({ path, directory, bytes: new Uint8Array(Buffer.from(data, 'base64')) }); return { uri: 'file:///data/cache/' + path }; },
     },
-    Share: { share: async (args) => { shares.push(args); if (shareRejects) throw new Error(shareRejects); return { activityType: 'x' }; } },
+    Share: { share: async (args) => { shares.push(args); if (shareHangs) return new Promise(() => {}); if (shareRejects) throw new Error(shareRejects); return { activityType: 'x' }; } },
   };
-  return { Capacitor: { isNativePlatform: () => native, Plugins }, shares, writes };
+  const resume = () => appListeners.filter(([ev]) => ev === 'appStateChange').forEach(([, cb]) => cb({ isActive: true }));
+  return { Capacitor: { isNativePlatform: () => native, Plugins }, shares, writes, deletes, resume };
 }
 const APK = new Uint8Array(1_200_000).fill(7);
 const apkFetch = (ok = true) => async (url) => {
@@ -131,7 +137,7 @@ function fakeBrowser({ canShare = true, shareRejects = null } = {}) {
 // ── the screens ──────────────────────────────────────────────────────────────────────────────────────────────
 function app({ cap, records = ALL, exportOverride = null, fetchOk = true, browser = fakeBrowser() } = {}) {
   const { React, draw } = miniReact();
-  const toasts = [], opened = [];
+  const toasts = [], opened = [], warns = [];
   let closed = 0;
   const win = {
     Capacitor: cap ? cap.Capacitor : undefined,
@@ -151,6 +157,7 @@ function app({ cap, records = ALL, exportOverride = null, fetchOk = true, browse
   const Icon = ({ name }) => React.createElement('i', { 'data-icon': name });
   const shared = {
     React, window: win, Icon, btoa, fetch: apkFetch(fetchOk), File, Blob,
+    console: { warn: (...a) => warns.push(a.join(' ')), log() {}, error() {} },
     navigator: browser.navigator, document: browser.document, URL: browser.URL,
     setTimeout: () => 0,
   };
@@ -176,7 +183,7 @@ function app({ cap, records = ALL, exportOverride = null, fetchOk = true, browse
     return rows[rows.length - 1];
   };
   const shareBtnOf = (tree, name) => labelled(rowFor(tree, name), 'Share');
-  return { S, win, toasts, opened, closed: () => closed, sheet, installed, labelled, rowFor, shareBtnOf, browser };
+  return { S, win, toasts, opened, warns, closed: () => closed, sheet, installed, labelled, rowFor, shareBtnOf, browser };
 }
 
 // ════════════════════════════════════════ A. "Share the app" ════════════════════════════════════════════════
@@ -345,4 +352,87 @@ test('W8 — on the web, Share hands the browser ONE File where it can, and down
   const c = app({ cap: null, browser: ab });
   await c.shareBtnOf(c.installed(), 'King James Version')[0].props.onClick();
   assert.deepEqual(c.toasts, []); assert.equal(ab.clicked.length, 0);
+});
+
+// ═══════════════════════════ audit follow-ups (AUDIT-share-app-split-d0de5349, 2026-11-13) ═══════════════════════
+const ticks = () => new Promise(r => setTimeout(r, 30));
+const appBtn = (a) => a.labelled(a.sheet(), 'Share the app').find(b => !b.props['data-iconbtn']);
+
+test('L2 — a share that really failed says "Couldn’t share {name}" and nothing more; the plugin text goes to the log', async () => {
+  const cap = fakeCapacitor({ shareRejects: 'No Activity found to handle Intent' });
+  const a = app({ cap });
+  await a.shareBtnOf(a.installed(), 'King James Version')[0].props.onClick();
+  assert.deepEqual(a.toasts, ['Couldn’t share King James Version'], `the member was shown ${JSON.stringify(a.toasts)}`);
+  assert.ok(a.warns.some(w => w.includes('No Activity found to handle Intent')), 'the plugin’s error was not logged');
+
+  const cap2 = fakeCapacitor({ shareRejects: 'Can’t share while sharing is in progress' });
+  const b = app({ cap: cap2 });
+  await appBtn(b).props.onClick();
+  assert.deepEqual(b.toasts, ['Couldn’t share TrinityOne'], `the member was shown ${JSON.stringify(b.toasts)}`);
+});
+
+test('L3 — a module copy written for a share is deleted once it settles; a shared one at the next share; the APK never', async () => {
+  // dismissed → deleted at once (nothing is reading it)
+  const c1 = fakeCapacitor({ shareRejects: 'Share canceled' });
+  const a = app({ cap: c1 });
+  await a.shareBtnOf(a.installed(), 'King James Version')[0].props.onClick();
+  assert.deepEqual(c1.deletes, [['eng-kjv.zip', 'CACHE']], 'a dismissed module share left its copy in CACHE');
+
+  // failed → deleted at once
+  const c2 = fakeCapacitor({ shareRejects: 'No Activity found to handle Intent' });
+  const b = app({ cap: c2 });
+  await b.shareBtnOf(b.installed(), 'King James Version')[0].props.onClick();
+  assert.deepEqual(c2.deletes, [['eng-kjv.zip', 'CACHE']], 'a failed module share left its copy in CACHE');
+
+  // shared → NOT deleted while a background transfer may still be reading it; deleted when the next module is shared
+  const c3 = fakeCapacitor();
+  const c = app({ cap: c3 });
+  await c.shareBtnOf(c.installed(), 'King James Version')[0].props.onClick();
+  await ticks();
+  assert.deepEqual(c3.deletes, [], 'a shared copy was deleted while Quick Share / Bluetooth may still be reading it');
+  await c.shareBtnOf(c.installed(), 'Geneva Study Notes')[0].props.onClick();
+  await ticks();
+  assert.deepEqual(c3.deletes, [['eng-kjv.zip', 'CACHE']], 'the previous shared copy was not cleared by the next share');
+
+  // the APK's cache-once copy is never deleted — shared, dismissed or failed
+  for (const opts of [{}, { shareRejects: 'Share canceled' }, { shareRejects: 'boom' }]) {
+    const ca = fakeCapacitor(opts);
+    const d = app({ cap: ca });
+    await appBtn(d).props.onClick();
+    await ticks();
+    assert.equal(ca.shares.length, 1, 're-anchor: the APK share never opened');
+    assert.deepEqual(ca.deletes, [], `the APK copy was deleted (${JSON.stringify(opts)})`);
+  }
+});
+
+test('L4 + N5 — while one row prepares, EVERY row’s Share is disabled; coming back to the app clears a share that never settled', async () => {
+  const cap = fakeCapacitor({ shareHangs: true });
+  const a = app({ cap });
+  a.installed();                                                   // mount: the foreground listener is attached
+  a.shareBtnOf(a.installed(), 'King James Version')[0].props.onClick();   // never settles
+  await ticks();
+  assert.equal(cap.shares.length, 1, 'the share sheet never opened — re-anchor this test');
+  let tree = a.installed();
+  assert.equal(a.labelled(a.rowFor(tree, 'King James Version'), 'Preparing').length, 1, 'the row being shared does not say Preparing…');
+  for (const r of OFFERED.filter(x => x.name !== 'King James Version')) {
+    const b = a.shareBtnOf(tree, r.name);
+    assert.equal(b.length, 1, `${r.name} lost its Share button`);
+    assert.equal(b[0].props.disabled, true, `${r.name}'s Share looks tappable while another share is preparing, and does nothing`);
+  }
+
+  cap.resume();                                                    // the member comes back from the other app
+  tree = a.installed();
+  assert.equal(a.labelled(a.rowFor(tree, 'King James Version'), 'Preparing').length, 0, 'still "Preparing…" after coming back to the app');
+  for (const r of OFFERED) assert.equal(a.shareBtnOf(tree, r.name)[0].props.disabled, false, `${r.name}'s Share is still locked after coming back`);
+});
+
+test('N6 — "Choose a Bible" is offered only when a shareable BIBLE is installed', () => {
+  const onlyCommentary = [OFFERED.find(r => r.category === 'commentaries'), ...HELD_BACK];
+  const a = app({ cap: fakeCapacitor(), records: onlyCommentary });
+  assert.equal(a.labelled(a.sheet(), 'Choose a Bible').length, 0, 'the pointer leads to a Bibles list with nothing to share');
+  const onlyDict = [OFFERED.find(r => r.category === 'dictionaries'), ...HELD_BACK];
+  const b = app({ cap: fakeCapacitor(), records: onlyDict });
+  assert.equal(b.labelled(b.sheet(), 'Choose a Bible').length, 0, 'the pointer leads to a Bibles list with nothing to share');
+  const c = app({ cap: fakeCapacitor(), records: [OFFERED[0], ...HELD_BACK] });
+  assert.equal(c.labelled(c.sheet(), 'Choose a Bible').length, 1, 'a phone with a shareable Bible is not offered the pointer');
 });

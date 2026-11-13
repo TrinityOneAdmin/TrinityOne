@@ -5,8 +5,15 @@
 //
 // EVERY SHARE IS ONE FILE. The app and a Bible used to go out together as one two-file share
 // (ACTION_SEND_MULTIPLE, typed */*). Signal's multi-file path keeps only images and videos, so it was left with
-// nothing and closed its share screen without a word — the member picked Signal and nothing was sent. A single
-// file goes as ACTION_SEND with its own type, which Signal (and every other target) accepts whatever the type.
+// nothing and closed its share screen without a word — the member picked Signal and nothing was sent (read from
+// Signal's source, not proved here). A single file goes as ACTION_SEND instead. Whether Signal then takes an .apk,
+// a .zip or a .mybible is a DEVICE check, not something this code or its tests establish.
+//
+// THE TYPE THE OTHER APP SEES. On native it is NOT ours to choose: @capacitor/share (SharePlugin.java
+// getMimeType) takes it from the file name's extension via Android's MimeTypeMap, and falls back to */* when
+// that has no answer. So .apk → package-archive and .zip → application/zip, but a .mybible / .bbl.mybible file
+// (no Android type for "mybible") and any name MimeTypeMap will not parse — e.g. one containing a space, as an
+// imported file's name can — go out as */*. shareOneFile's `mime` is used on the WEB path only.
 //
 // v1 is pure JS (CapacitorHttp fetch + Filesystem + @capacitor/share, all already used). Module bytes come from
 // the engine's own cache (window.Bible.exportModule); the import side persists via Bible's file input.
@@ -22,12 +29,20 @@ function shareAppToBase64(u8) {
 }
 
 // SHARE EXACTLY ONE FILE. Returns 'shared' | 'dismissed' | 'failed'.
-//   opts: { bytes | uri, filename, mime, title, dialogTitle }
+//   opts: { bytes | uri, filename, mime, title, dialogTitle }   — `mime` is used on web only (see the header)
 // Native: `bytes` are written to CACHE (the dir the app's FileProvider exposes) to get a uri; then ONE file goes
 // to the share sheet — never text or url alongside it (passing text makes Quick Share / Bluetooth send only the
 // text). Backing out of the sheet is not a failure: the plugin rejects "Share canceled" and that is 'dismissed',
-// with no toast. Anything else that fails says so.
+// with no toast. Anything else that fails says "Couldn't share {name}" — the plugin's own text goes to the log,
+// not in front of the member.
+// A copy this function WROTE (from `bytes`; never a `uri` it was handed, so never the APK's cache-once copy) is
+// deleted once the share settles — at once if it was dismissed or failed, since nothing is reading it; and if it
+// was shared, at the start of the NEXT module share, not straight away: Quick Share and Bluetooth hand the file
+// to a background transfer that reads it AFTER the share sheet has returned, so deleting it the moment the share
+// resolves could cut a transfer short. At most one shared copy is therefore left in CACHE (and the OS may clear
+// CACHE itself); the pointer is in memory, so a restart forgets it.
 // Web / PWA: navigator.share with one File where the browser can, otherwise a download.
+let shareAppLastCopy = null;   // CACHE path of the last module copy that was SHARED (deleted at the next one)
 async function shareOneFile(opts, ctx) {
   const o = opts || {};
   const Cap = window.Capacitor, P = Cap && Cap.Plugins;
@@ -56,22 +71,33 @@ async function shareOneFile(opts, ctx) {
 
   if (!(P && P.Share && P.Filesystem)) { toast('Sharing isn’t available on this device'); return 'failed'; }
   let uri = o.uri || null;
+  let wrote = null;
+  const drop = (path) => { try { Promise.resolve(P.Filesystem.deleteFile({ path, directory: 'CACHE' })).catch(() => {}); } catch (e) {} };
   if (!uri) {
+    if (shareAppLastCopy && shareAppLastCopy !== o.filename) drop(shareAppLastCopy);
+    shareAppLastCopy = null;
     try {
       const w = await P.Filesystem.writeFile({ path: o.filename, data: shareAppToBase64(o.bytes), directory: 'CACHE' });
       uri = w && w.uri;
+      if (uri) wrote = o.filename;
     } catch (e) { uri = null; }
     if (!uri) { toast('Couldn’t get ' + name + ' ready to share — is the phone full?'); return 'failed'; }
   }
+  let result;
   try {
     await P.Share.share({ title: name, files: [uri], dialogTitle: o.dialogTitle || ('Share ' + name) });
-    return 'shared';
+    result = 'shared';
   } catch (e) {
     const msg = String((e && (e.message || e.errorMessage)) || e || '');
-    if (/share cancel+ed/i.test(msg)) return 'dismissed';
-    toast('Couldn’t share ' + name + (msg ? ' — ' + msg : ''));
-    return 'failed';
+    if (/share cancel+ed/i.test(msg)) result = 'dismissed';
+    else {
+      try { console.warn('shareOneFile: ' + (o.filename || name) + ' — ' + msg); } catch (e2) {}
+      toast('Couldn’t share ' + name);
+      result = 'failed';
+    }
   }
+  if (wrote) { if (result === 'shared') shareAppLastCopy = wrote; else drop(wrote); }
+  return result;
 }
 window.shareOneFile = shareOneFile;
 
@@ -136,9 +162,10 @@ function ShareAppSheet({ open, onClose, ctx }) {
   const [busy, setBusy] = React.useState(false);
   const [status, setStatus] = React.useState('');
   const native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  // is there anything on this phone that can be passed on separately? (the pointer to Library → Installed)
+  // is there a BIBLE on this phone that can be passed on separately? The pointer opens Library → Installed scoped
+  // to Bibles, so a shareable commentary or dictionary alone would land the member on a list with no Share.
   const hasModule = React.useMemo(() => {
-    try { const m = (window.Bible && window.Bible.installedMap && window.Bible.installedMap()) || {}; return Object.values(m).some(isShareableModule); } catch (e) { return false; }
+    try { const m = (window.Bible && window.Bible.installedMap && window.Bible.installedMap()) || {}; return Object.values(m).some(r => isShareableModule(r) && r.category === 'bibles'); } catch (e) { return false; }
   }, [open]);
   const go = async () => { if (busy) return; setBusy(true); try { await shareTrinityOneApp(ctx, setStatus); } finally { setBusy(false); setStatus(''); } };
   const toLibrary = () => { onClose && onClose(); ctx && ctx.openStore && ctx.openStore('installed', 'bibles'); };
