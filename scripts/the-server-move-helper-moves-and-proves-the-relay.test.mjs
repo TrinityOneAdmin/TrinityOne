@@ -465,3 +465,56 @@ withRig('N2: boot recovery returns at once when another root job holds the lock 
     assert.match(r.lastOutput, /not waiting/);
   } finally { holder.kill('SIGKILL'); }
 });
+
+// ── final audit H-1: the finish unit's rollback stops the relay from inside the finish script ───────────────────────────
+// The unit has no Requisite= on the relay (that made systemd stop the finish unit when the relay was stopped, killing the
+// rollback half-way and leaving the relay down). Real systemd is not run here; the finish script is run the way systemd runs it
+// (a plain process), and the scenario is the one the auditor demonstrated: boot recovery left a check, the relay came up, and
+// the check FAILS (the new folder holds fewer records than were recorded), so the script must stop the relay, put the folders
+// back, and start the relay again -- all from one process that nothing else kills.
+withRig('H-1: a finish-after-boot check that FAILS rolls back from inside the finish script, and the relay ends up running on the old folder', async r => {
+  const { pub, events } = await seedAndRun(r);
+  faultyScripts(r, 'scripts/relay-datadir-apply.sh', 'set -euo pipefail', 'kill -9 $PPID; exit 1');
+  writeMoveRequest(r); r.helper(); cleanDir(r);
+  assert.equal(bootRecover(r).status, 0, r.lastOutput);
+  assert.equal(r.journal().move.state, 'checking');
+  r.systemctl('start', 'trinityone-relay'); assert.ok(await up(), r.log('relay.log').slice(-1200));
+  // the new folder loses records after beginCheck: the compare must fail
+  const db = new DatabaseSync(join(r.target, 'relay.sqlite')); db.exec('DELETE FROM events WHERE rowid IN (SELECT rowid FROM events LIMIT 5)'); db.close();
+  const mark = r.log('systemctl.log');
+  const fin = finishAfterBoot(r); assert.equal(fin.status, 0, fin.stderr);
+  const calls = r.log('systemctl.log').slice(mark.length).split('\n').filter(l => /^(start|stop) trinityone-relay$/.test(l));
+  assert.deepEqual(calls, ['stop trinityone-relay', 'start trinityone-relay'], 'the rollback did not stop and restart the relay from the finish script: ' + calls.join(' | '));
+  assert.equal(r.journal().move.state, 'rolled-back');
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.data, 'relay.env still names the new folder');
+  assert.equal(existsSync(join(r.data, 'MOVED-TO')), false);
+  assert.ok(await up(), 'THE RELAY IS LEFT DOWN after the finish script rolled back:\n' + r.log('relay.log').slice(-1200));
+  assert.ok(await identityOK(pub)); assert.equal(eventCount(r.data), events);
+});
+
+withRig('H-1: --finish-check does nothing when the relay is not running (a relay an admin disabled is never started from here)', async r => {
+  const { pub } = await seedAndRun(r);
+  faultyScripts(r, 'scripts/relay-datadir-apply.sh', 'set -euo pipefail', 'kill -9 $PPID; exit 1');
+  writeMoveRequest(r); r.helper(); cleanDir(r);
+  assert.equal(bootRecover(r).status, 0, r.lastOutput);
+  assert.equal(r.journal().move.state, 'checking');
+  assert.equal(existsSync(join(r.box, 'relay.pid')), false, 'fixture: the relay should be down (the admin disabled it)');
+  const mark = r.log('systemctl.log');
+  r.env.PROVE_TRIES = '2'; r.env.PROVE_SLEEP = '0.2';
+  const fin = finishAfterBoot(r); assert.equal(fin.status, 0, fin.stderr);
+  assert.doesNotMatch(r.log('systemctl.log').slice(mark.length), /^(start|stop) trinityone-relay$/m, 'the finish unit started or stopped a relay that was not running');
+  assert.equal(r.journal().move.state, 'checking', 'the journal was touched although no relay was there to check');
+  assert.equal(r.relayEnv().TRINITY_DATA_DIR, r.target);
+});
+
+withRig('H-1: --finish-check waits for the lock less than its unit\'s timeout (its own cap, not LOCK_WAIT)', async r => {
+  await seedAndRun(r);
+  const holder = spawn('flock', [join(r.state, 'update-move.lock'), 'sleep', '30'], { stdio: 'ignore' });
+  try {
+    await sleep(500);
+    r.env.TRINITYONE_LOCK_WAIT = '1800'; r.env.TRINITYONE_FINISH_LOCK_WAIT = '2';
+    const t0 = Date.now(); const res = finishAfterBoot(r); const took = Date.now() - t0;
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(took < 10000, 'the finish check waited ' + took + ' ms: it is using LOCK_WAIT (1800 s) rather than its own cap, so its 900 s unit timeout would kill it first');
+  } finally { holder.kill('SIGKILL'); }
+});

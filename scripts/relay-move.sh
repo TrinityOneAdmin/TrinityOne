@@ -87,7 +87,8 @@ exec 9>"$LOCK"
 # BOOT RECOVERY NEVER WAITS (audit N2): it is ordered Before= the relay, so a wait here holds the relay back. If another root job
 # already has the lock, that job is a move helper (which recovers an interrupted move itself, at its start) or an update (which
 # touches no move state); either way recovery has nothing to add right now.
-FLOCK_ARGS=(-w "$LOCK_WAIT"); [ "$MODE" = --recover-only ] && FLOCK_ARGS=(-n)
+# --finish-check is killed by its unit at 900 s, so it waits for the lock less than that (600 s) whatever LOCK_WAIT says
+FLOCK_ARGS=(-w "$LOCK_WAIT"); [ "$MODE" = --recover-only ] && FLOCK_ARGS=(-n); [ "$MODE" = --finish-check ] && FLOCK_ARGS=(-w "${TRINITYONE_FINISH_LOCK_WAIT:-600}")
 if ! flock "${FLOCK_ARGS[@]}" 9 2>/dev/null; then
   log "another root job holds $LOCK${MODE:+ (mode $MODE: not waiting)}"
   if [ -z "$MODE" ]; then
@@ -165,6 +166,9 @@ recover_boot() {
 finish_after_boot() {
   local cur pub
   [ -f "$STATE" ] && [ "$(srv active --state "$STATE" | jget state)" = checking ] || return 0
+  # Only a relay that IS running is checked. A relay an admin disabled must not be started by this unit, and (H-1) the unit has no
+  # Requisite= on the relay: a rollback stops the relay from inside this script, which must not kill this script.
+  relay_active || { log "after boot: the relay is not running, so there is nothing to check (and it is not started from here)"; return 0; }
   cur="$(srv pointer --state "$STATE" | jget dataDir)"; pub="$(srv current-pub --dir "$cur" | jget pub)"
   log "after boot: finishing the check of a recovered move"
   verify_started "$cur" "$pub"

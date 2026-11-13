@@ -140,16 +140,19 @@ test('L3: the data folder is recorded BEFORE the relay first starts, so the card
 });
 
 // ── second audit: N2 (boot ordering), N4 (L4 over-broad / missing mountpoint tool), N5 (finish unit) ───────────────────
-test('N2/N5: the move and update units are ordered After= the recover unit; the finish unit needs the relay up (Requisite, not Wants) and is bounded — and the whole set has no ordering cycle', () => {
+test('N2/N5/H-1: the move and update units are ordered After= the recover unit; the finish unit has no dependency on the relay (After= only) and is bounded — and the whole set has no ordering cycle', () => {
   const w = mkdtempSync(join(tmpdir(), 'trin-ord-'));
   try {
     const t = n => render(`/etc/systemd/system/${n}`, PRE);
     const move = t('trinityone-move.service'), upd = t('trinityone-update.service'), rec = t('trinityone-move-recover.service'), fin = t('trinityone-move-finish.service'), relay = t('$SVC.service');
     for (const [n, u] of [['move', move], ['update', upd]]) assert.match(u, /^After=trinityone-move-recover\.service$/m, n + ' service can run before boot recovery: a request left from before shutdown could take the lock first and start the relay');
     assert.match(rec, /^Before=trinityone-relay\.service$/m);
-    assert.match(fin, /^After=trinityone-relay\.service$/m); assert.match(fin, /^Requisite=trinityone-relay\.service$/m);
-    assert.doesNotMatch(fin, /^Wants=/m, 'the finish unit pulls in (starts) a relay an admin had disabled');
+    assert.match(fin, /^After=trinityone-relay\.service$/m); // H-1 (final audit): NO dependency on the relay but After=. Wants= starts a relay an admin disabled; Requisite= (and
+    // Requires=, BindsTo=) make stopping the relay stop THIS unit, so a rollback run from inside it was killed half-way.
+    assert.doesNotMatch(fin, /^(Wants|Requires|Requisite|BindsTo|PartOf)=/m, 'the finish unit depends on the relay: stopping the relay (a rollback does) would stop it, or it would start a disabled relay');
     const to = /^TimeoutStartSec=(.*)$/m.exec(fin); assert.ok(to && /^\d+$/.test(to[1]) && Number(to[1]) <= 1800, 'the finish unit has no bound: boot waits on it for ever (' + (to && to[1]) + ')');
+    const cap = /TRINITYONE_FINISH_LOCK_WAIT:-(\d+)/.exec(readFileSync(join(ROOT, 'scripts/relay-move.sh'), 'utf8'));
+    assert.ok(cap && Number(cap[1]) + 180 <= Number(to[1]), 'the finish lock wait (' + (cap && cap[1]) + ' s) plus the identity proof does not fit inside the unit timeout (' + to[1] + ' s)');
     assert.doesNotMatch(relay, /move-recover|move-finish/, 'the relay unit must not depend on the recovery units');
     // systemd itself: every unit together, with a real parser, finds no ordering cycle and no unknown directive
     const sysd = join(w, 'systemd'); mkdirSync(sysd);
