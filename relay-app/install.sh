@@ -44,6 +44,10 @@
 #                               relay (https://host). Default: the newest GitHub release.
 #   --origin <https://host>     where the member/steward installers come from (default
 #                               https://app.trinityone.church; a relay named by --src, when it is one)
+#   --storage-move              let the control panel move the relay's data to another drive (writes
+#                               /etc/trinityone/relay.env and installs the root move helper). On by default for
+#                               a FRESH install; an existing box is left exactly as it is unless you pass this.
+#   --no-storage-move           never enable it (on a fresh install)
 #   --fingerprint               print the SHA-256 of the release key pinned in this file, and exit
 #   -y                          non-interactive: accept defaults, no prompts
 set -euo pipefail
@@ -52,7 +56,7 @@ SRC="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download"
 APP_ORIGIN_DEFAULT="https://app.trinityone.church"
 ORIGIN=""
 DIR="/opt/trinityone"; PORT="8000"
-CHURCH=""; CHURCH_NAME=""; TUNNEL=""; CF_TOKEN=""; CF_HOST=""; ASSUME_YES=0; SHOW_FP=0
+CHURCH=""; CHURCH_NAME=""; TUNNEL=""; CF_TOKEN=""; CF_HOST=""; ASSUME_YES=0; SHOW_FP=0; STORAGE=auto
 SVC_USER="trinityone"; SVC="trinityone-relay"
 
 while [ $# -gt 0 ]; do
@@ -66,6 +70,8 @@ while [ $# -gt 0 ]; do
     --dir)    DIR="$2"; shift 2;;
     --src)    SRC="${2%/}"; shift 2;;
     --origin) ORIGIN="${2%/}"; shift 2;;
+    --storage-move) STORAGE=1; shift;;
+    --no-storage-move) STORAGE=0; shift;;
     --fingerprint) SHOW_FP=1; shift;;
     -y|--yes) ASSUME_YES=1; shift;;
     *) echo "unknown option: $1" >&2; exit 1;;
@@ -132,6 +138,23 @@ if [ "$SHOW_FP" = 1 ]; then printf '%s\n' "$RELEASE_PUBKEY_PEM" | sha256sum | cu
 [ "$(id -u)" = "0" ] || die "run as root:  sudo bash install.sh"
 command -v apt-get >/dev/null 2>&1 || die "this installer needs an apt-based distro (Debian/Ubuntu/Raspberry Pi OS). Install Node + run scripts/gateway.mjs manually otherwise."
 
+# WHERE THE DATA LIVES (relay storage plan step 6). $DIR/relay unless a steward has moved it: then the root move
+# helper has recorded the new folder in relay.env, and every data path below follows it -- re-running this installer
+# after a move must not plant a second, empty relay folder and rewrite the unit without the new path (plan R3).
+# The file is parsed, never sourced. With no relay.env (every box installed before this) DATA is $DIR/relay and
+# nothing below differs from before.
+ETC_DIR="${TRINITYONE_ETC:-/etc/trinityone}"; RELAY_ENV="$ETC_DIR/relay.env"
+DATA="$DIR/relay"; HAD_ENV=0; ENV_PINNED=0
+if [ -r "$RELAY_ENV" ]; then
+  HAD_ENV=1
+  _dd="$(sed -n 's/^TRINITY_DATA_DIR=//p' "$RELAY_ENV" 2>/dev/null | head -n1)"
+  case "$_dd" in /*) DATA="$_dd";; esac
+  grep -qx 'TRINITY_DATA_DIR_PINNED=1' "$RELAY_ENV" 2>/dev/null && ENV_PINNED=1
+fi
+# a FRESH install (no data folder yet, no relay.env) gets the storage card; an existing box does not, unless asked
+FRESH=0; [ ! -e "$DIR/relay" ] && [ "$HAD_ENV" = 0 ] && FRESH=1
+if [ "$STORAGE" = auto ]; then if [ "$HAD_ENV" = 1 ] || [ "$FRESH" = 1 ]; then STORAGE=1; else STORAGE=0; fi; fi
+
 # The apps' origin: named, else the relay --src points at, else the default.
 if [ -z "$ORIGIN" ]; then
   case "$(release_bundle_base "$SRC")" in "$SRC/relay-app") ORIGIN="$SRC";; *) ORIGIN="$APP_ORIGIN_DEFAULT";; esac
@@ -188,10 +211,12 @@ say "Installing the relay's runtime dependencies (ws, web-push, nostr-tools)"
 ok "dependencies ready"
 
 # ── write policy (church.json) ──────────────────────────────────────────────────
-mkdir -p "$DIR/relay"
-printf '%s\n' "$ORIGIN" > "$DIR/relay/origin"        # where the installers this box hands out come from
-printf '%s\n' "$SRC" > "$DIR/relay/code-source"      # where "Update now" (scripts/relay-update.sh) pulls code from
-if [ -z "$CHURCH" ] && [ ! -s "$DIR/relay/church.json" ]; then
+mkdir -p "$DATA"
+# the unit also names $DIR/relay (ReadWritePaths); after a move that is the tombstone the mover left there
+[ -e "$DIR/relay" ] || mkdir -p "$DIR/relay"
+printf '%s\n' "$ORIGIN" > "$DATA/origin"        # where the installers this box hands out come from
+printf '%s\n' "$SRC" > "$DATA/code-source"      # where "Update now" (scripts/relay-update.sh) pulls code from
+if [ -z "$CHURCH" ] && [ ! -s "$DATA/church.json" ]; then
   CHURCH="$(ask 'Your church public key (npub1…), or blank to set later: ' '')"
 fi
 if [ -n "$CHURCH" ]; then
@@ -199,16 +224,16 @@ if [ -n "$CHURCH" ]; then
     const [list,name]=[process.argv[1],process.argv[2]||""];
     const churches=list.split(",").map(s=>s.trim()).filter(Boolean).map(npub=>({npub,name}));
     require("fs").writeFileSync(process.argv[3],JSON.stringify({churches},null,2)+"\n");
-  ' "$CHURCH" "$CHURCH_NAME" "$DIR/relay/church.json"
+  ' "$CHURCH" "$CHURCH_NAME" "$DATA/church.json"
   ok "write policy set ($(echo "$CHURCH" | tr ',' '\n' | grep -c .) church key(s))"
 else
-  [ -s "$DIR/relay/church.json" ] || echo '{"churches":[]}' > "$DIR/relay/church.json"
-  warn "no church key set yet — the relay is open until you add one to $DIR/relay/church.json and restart"
+  [ -s "$DATA/church.json" ] || echo '{"churches":[]}' > "$DATA/church.json"
+  warn "no church key set yet — the relay is open until you add one to $DATA/church.json and restart"
 fi
 # SECURITY-AUDIT-2026-07-06 H4: only the data dir relay/ is service-writable (systemd ReadWritePaths=$DIR/relay);
 # keep code + the root-run update script + the release-signing pubkey root-owned so a compromised relay
 # process can't rewrite the updater or swap the trust anchor. Code was extracted + npm-installed as root above.
-chown -R "$SVC_USER:$SVC_USER" "$DIR/relay"
+chown -R "$SVC_USER:$SVC_USER" "$DATA"
 chown -R root:root "$DIR/scripts" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
 chmod 0644 "$DIR/relay-app/release-pubkey.pem" 2>/dev/null || true
 
@@ -224,6 +249,7 @@ Wants=network-online.target
 User=$SVC_USER
 WorkingDirectory=$DIR
 ExecStart=$NODE_BIN scripts/gateway.mjs $PORT
+EnvironmentFile=-$RELAY_ENV
 Restart=always
 RestartSec=3
 # exit 78 = the relay REFUSED its data folder (missing drive / moved / foreign). Restarting cannot fix
@@ -261,13 +287,48 @@ cat > "/etc/systemd/system/trinityone-update.path" <<UNIT
 [Unit]
 Description=TrinityOne relay update trigger (watches for an update request)
 [Path]
-PathExists=$DIR/relay/.update-request
+PathExists=$DATA/.update-request
 Unit=trinityone-update.service
 [Install]
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now trinityone-update.path >/dev/null 2>&1 && ok "one-click updates enabled (dashboard → Update now)" || warn "couldn't enable the update watcher"
+
+# ── moving the relay's data from the panel (storage plan step 6) ─────────────────────────────────────────────────
+# The sandboxed relay can only drop a request file in its own data folder (.move-request / .remove-old-request);
+# this ROOT path-unit starts scripts/relay-move.sh, which stops the relay, validates the drive itself (the request is
+# a wish, not an authority), runs scripts/relay-move.mjs, records the new folder in relay.env, starts the relay and
+# proves it is the same relay -- or puts everything back. Only installed when the storage card is on (see --storage-move).
+if [ "$STORAGE" = 1 ]; then
+  say "Installing the data-move helper"
+  cat > "/etc/systemd/system/trinityone-move.service" <<UNIT
+[Unit]
+Description=TrinityOne relay data move (root helper)
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+Environment=TRINITYONE_DIR=$DIR TRINITYONE_SVC=$SVC TRINITYONE_PORT=$PORT TRINITYONE_USER=$SVC_USER
+ExecStart=/bin/bash $DIR/scripts/relay-move.sh
+UNIT
+  cat > "/etc/systemd/system/trinityone-move.path" <<UNIT
+[Unit]
+Description=TrinityOne relay data move trigger (watches for a move or remove-old request)
+[Path]
+PathExists=$DATA/.move-request
+PathExists=$DATA/.remove-old-request
+Unit=trinityone-move.service
+[Install]
+WantedBy=multi-user.target
+UNIT
+  # relay.env + the drop-ins. A fresh folder holds no relay key until the relay's first start, and a PINNED gateway
+  # refuses a folder with files but no key, so a fresh install records the folder unpinned; the first move (or a
+  # re-run of this installer once the relay has a key) pins it. A box already pinned stays pinned.
+  PIN_ARG=--unpinned
+  if [ "$ENV_PINNED" = 1 ] || [ -s "$DATA/relay-key.json" ]; then PIN_ARG=; fi
+  TRINITYONE_SVC="$SVC" TRINITYONE_ETC="$ETC_DIR" bash "$DIR/scripts/relay-datadir-apply.sh" "$DATA" $PIN_ARG || warn "couldn't record the data folder for the move helper"
+  systemctl enable --now trinityone-move.path >/dev/null 2>&1 && ok "moving the data to another drive enabled (dashboard → Where this relay keeps its data)" || warn "couldn't enable the move watcher"
+fi
 
 # ── reachability ─────────────────────────────────────────────────────────────────
 # Default: Cloudflare. With --cf-token the relay comes up on the church's OWN domain (relay.yourchurch.org)
@@ -327,7 +388,7 @@ UNIT
 esac
 
 # ── done ────────────────────────────────────────────────────────────────────────
-ADMIN_TOKEN="$(node -e 'try{process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).token||"")}catch(e){}' "$DIR/relay/admin.json" 2>/dev/null || true)"
+ADMIN_TOKEN="$(node -e 'try{process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).token||"")}catch(e){}' "$DATA/admin.json" 2>/dev/null || true)"
 say "Done — finish in the browser (no more terminal)."
 echo "  Open the dashboard:  http://${LAN_IP:-localhost}:$PORT/relay-app/control.html"
 echo
