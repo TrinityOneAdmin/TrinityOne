@@ -29,6 +29,10 @@ use tauri_plugin_shell::ShellExt;
 
 const PORT: u16 = 8787;
 
+// The loopback-vs-network bind decision lives in its own dependency-free file so the node suite can compile and
+// run its tests with plain rustc (scripts/relay-bind-setting.test.mjs). relay_env() below is its only caller.
+mod bind_host;
+
 // Holds the running relay child so we can kill it on exit. CommandChild::kill consumes self, hence the Option.
 struct Relay(Mutex<Option<CommandChild>>);
 
@@ -553,13 +557,17 @@ fn local_now(node: &Path) -> Option<(u32, String)> {
 // ROOT (cwd) is the writable active/ dir, so if PAYLOAD_DIR were omitted — or set to code_dir — the override
 // would silently become its own trust root. The test `override_env_payload_dir_is_payload` goes red if this
 // line is weakened. The rest matches the original single-spawn site exactly.
+//
+// RELAY_HOST is decided HERE, from the `lan-access` marker in `data_dir` (bind_host::relay_bind_host), so every
+// launch path — first start, apply respawn, rollback respawn, and the apply harness's TestHost — gets it from the
+// same place. (Moved here from spawn_relay 2026-11-13, behaviour unchanged, so it can be tested.)
 fn relay_env(
     _code_dir: &Path,
     payload: &Path,
     data_dir: &Path,
     cloudflared: &str,
-    relay_host: &str,
 ) -> Vec<(String, String)> {
+    let relay_host = bind_host::relay_bind_host(data_dir);
     vec![
         ("TRINITY_DATA_DIR".into(), data_dir.to_string_lossy().to_string()),
         // the bundled cloudflared, so the relay can start a Cloudflare quick tunnel ("go public") itself
@@ -610,16 +618,11 @@ fn spawn_relay(
         })
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "cloudflared".into());
-    let relay_host = if data_dir.join("lan-access").exists() {
-        "0.0.0.0"
-    } else {
-        "127.0.0.1"
-    };
     let mut cmd = cmd
         .current_dir(code_dir.to_path_buf())
         .arg("scripts/gateway.mjs")
         .arg(PORT.to_string());
-    for (k, v) in relay_env(code_dir, payload, data_dir, &cloudflared, relay_host) {
+    for (k, v) in relay_env(code_dir, payload, data_dir, &cloudflared) {
         cmd = cmd.env(k, v);
     }
     match cmd.spawn() {
@@ -1580,7 +1583,7 @@ mod tests {
         let data = Path::new("/home/u/.local/share/trinity/data");
         // Launching the OVERRIDE: cwd is active/, but PAYLOAD_DIR must still point at the read-only payload —
         // never at the override — or the relay's trust root is defeated.
-        let env = relay_env(active, payload, data, "/opt/app/cloudflared", "127.0.0.1");
+        let env = relay_env(active, payload, data, "/opt/app/cloudflared");
         let pd = env.iter().find(|(k, _)| k == "PAYLOAD_DIR").map(|(_, v)| v.as_str());
         assert_eq!(pd, Some("/opt/app/payload"));
         assert_ne!(pd, Some(active.to_string_lossy().as_ref())); // NOT the writable override
@@ -1591,15 +1594,31 @@ mod tests {
         assert_eq!(get("RELAY_NO_OPEN").as_deref(), Some("1"));
         assert_eq!(get("CLOUDFLARED_BIN").as_deref(), Some("/opt/app/cloudflared"));
         // Launching the PAYLOAD itself: PAYLOAD_DIR == payload == cwd, still correct.
-        let env2 = relay_env(payload, payload, data, "/opt/app/cloudflared", "0.0.0.0");
+        let env2 = relay_env(payload, payload, data, "/opt/app/cloudflared");
         assert_eq!(
             env2.iter().find(|(k, _)| k == "PAYLOAD_DIR").map(|(_, v)| v.as_str()),
             Some("/opt/app/payload")
         );
-        assert_eq!(
-            env2.iter().find(|(k, _)| k == "RELAY_HOST").map(|(_, v)| v.as_str()),
-            Some("0.0.0.0")
-        );
+    }
+
+    // The env every relay launch gets carries the bind decision read from the REAL data dir: loopback with no
+    // `lan-access` marker, all interfaces with it. Real temp dir, real marker file — so flipping or deleting the
+    // marker check in bind_host, or relay_env ignoring it, turns this red.
+    #[test]
+    fn relay_env_binds_loopback_unless_the_lan_access_marker_exists() {
+        let data = std::env::temp_dir().join(format!("trin-relay-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        std::fs::create_dir_all(&data).unwrap();
+        let payload = Path::new("/opt/app/payload");
+        let host = |env: Vec<(String, String)>| {
+            env.into_iter().find(|(k, _)| k == "RELAY_HOST").map(|(_, v)| v)
+        };
+        assert_eq!(host(relay_env(payload, payload, &data, "cf")).as_deref(), Some("127.0.0.1"));
+        std::fs::write(data.join("lan-access"), "1").unwrap();
+        assert_eq!(host(relay_env(payload, payload, &data, "cf")).as_deref(), Some("0.0.0.0"));
+        std::fs::remove_file(data.join("lan-access")).unwrap();
+        assert_eq!(host(relay_env(payload, payload, &data, "cf")).as_deref(), Some("127.0.0.1"));
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     // [AUDIT FIX #1] The post-respawn health matrix: a good bundle that boots + identifies is kept even when

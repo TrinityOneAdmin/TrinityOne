@@ -52,7 +52,7 @@ impl RelayHost for TestHost {
         let mut cmd = Command::new(&self.node);
         cmd.current_dir(code_dir).arg("scripts/gateway.mjs").arg(PORT.to_string());
         // The REAL env assembly — so PAYLOAD_DIR (the trust root) is set exactly as in production.
-        for (k, v) in relay_env(code_dir, payload, data_dir, "/nonexistent/cloudflared", "127.0.0.1") {
+        for (k, v) in relay_env(code_dir, payload, data_dir, "/nonexistent/cloudflared") {
             cmd.env(k, v);
         }
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
