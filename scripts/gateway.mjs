@@ -54,7 +54,67 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));   // project dir (fi
 // to a writable per-user location (OS app-data dir) so the app payload itself can stay READ-ONLY inside the
 // installed bundle — the app ships its code read-only and keeps its data separately, the platform-native way.
 const DATA_DIR = process.env.TRINITY_DATA_DIR || join(ROOT, 'relay');
-try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+// ── DATA-DIR GUARD (relay storage plan step 1, risk R1) ────────────────────────────────────────────────
+// A missing folder used to be created here unconditionally, and relay-key.json / admin.json below are minted
+// when absent — so an unplugged drive, a changed Windows drive letter, or a folder the data was moved out of
+// brought the relay up EMPTY with a NEW identity: a stranger to every church that trusts it (rule 10), and on
+// Linux a fresh folder planted under the mount point, hidden when the drive comes back.
+//   * MOVED-TO in the folder  -> refuse, ALWAYS (an older/unpinned launcher must never start on a moved-out copy:
+//                                it holds the same identity key as the copy now in use).
+//   * TRINITY_DATA_DIR_PINNED=1 (set by a launcher that chose the folder; nothing sets it yet):
+//       folder missing -> refuse, never create;  no usable relay-key.json -> refuse, never mint;
+//       stamp present but naming a different key -> refuse.
+//   * not pinned (every box today): exactly today's behaviour — a missing folder is created and a missing key is
+//     minted — plus a one-time `.trinity-data-dir` stamp {relayPub} written once the key exists.
+// Refusal exits with DATA_DIR_REFUSED (78, EX_CONFIG) after a plain-English line a volunteer can act on.
+const DATA_DIR_PINNED = /^(1|true|yes|on)$/i.test(process.env.TRINITY_DATA_DIR_PINNED || '');
+const DATA_DIR_STAMP = join(DATA_DIR, '.trinity-data-dir');
+const DATA_DIR_MOVED = join(DATA_DIR, 'MOVED-TO');
+const DATA_DIR_REFUSED = 78;
+function refuseDataDir(why, todo) {
+  console.error('');
+  console.error('  ✖ RELAY NOT STARTED: ' + why);
+  console.error('    data folder: ' + DATA_DIR);
+  if (todo) console.error('    ' + todo);
+  console.error('    (refusing rather than starting an empty relay with a new identity — exit ' + DATA_DIR_REFUSED + ')');
+  console.error('');
+  process.exit(DATA_DIR_REFUSED);
+}
+function readJsonOrNull(p) { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } }
+function relayKeyPubOnDisk() { const k = readJsonOrNull(join(DATA_DIR, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
+function stampPubOnDisk() { const s = readJsonOrNull(DATA_DIR_STAMP); return (s && typeof s.relayPub === 'string') ? s.relayPub : ''; }
+function writeDataDirStamp(pub) {
+  const tmp = DATA_DIR_STAMP + '.tmp-' + process.pid;
+  try { writeFileSync(tmp, JSON.stringify({ relayPub: pub, stampedAt: new Date().toISOString() }) + '\n'); renameSync(tmp, DATA_DIR_STAMP); }
+  catch (e) { try { rmSync(tmp, { force: true }); } catch {} console.error('  could not write .trinity-data-dir stamp:', (e && e.message) || e); }
+}
+function refuseIfMovedOut() {
+  if (!existsSync(DATA_DIR_MOVED)) return;
+  let note = ''; try { note = readFileSync(DATA_DIR_MOVED, 'utf8').replace(/[^\x20-\x7e -￿]+/g, ' ').trim().slice(0, 400); } catch {}
+  refuseDataDir('this relay\'s data was moved somewhere else. ' + (note || '(the MOVED-TO note is unreadable)'),
+    'Start the relay on the folder it moved to. This old copy must not run: it has the same identity as the new one.');
+}
+if (!existsSync(DATA_DIR)) {
+  if (DATA_DIR_PINNED) refuseDataDir('the relay\'s data folder is missing (is its drive unplugged, or did its drive letter change?).',
+    'Reconnect the drive that holds it, then start the relay again. Nothing has been created or changed.');
+  try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+}
+refuseIfMovedOut();
+// Called again after a staged restore is applied (below), when relay-key.json may have changed.
+function checkDataDirIdentity() {
+  refuseIfMovedOut();
+  const keyPub = relayKeyPubOnDisk(), stampPub = stampPubOnDisk(), hasStamp = existsSync(DATA_DIR_STAMP);
+  if (DATA_DIR_PINNED) {
+    if (!keyPub) refuseDataDir('the data folder has no usable relay identity key (relay-key.json).',
+      'This is not the relay\'s data folder, or it is incomplete. Point the relay at the folder that holds its data.');
+    if (hasStamp && stampPub !== keyPub) refuseDataDir('the data folder belongs to a different relay (its .trinity-data-dir names ' + (stampPub || 'nothing readable') + ', its key is ' + keyPub + ').',
+      'Point the relay at its own data folder.');
+  } else if (hasStamp && keyPub && stampPub !== keyPub) {
+    console.error('  WARNING: .trinity-data-dir names relay ' + (stampPub || '(unreadable)') + ' but relay-key.json is ' + keyPub + ' — re-stamping (not pinned, so starting as before).');
+    writeDataDirStamp(keyPub); return;
+  }
+  if (keyPub && !hasStamp) writeDataDirStamp(keyPub);   // one-time adoption of an existing folder
+}
 // A staged restore must contain NO symlinks: a symlink named e.g. `relay.sqlite` would let the store, once it's
 // swapped in, write THROUGH the link to an arbitrary path (an arbitrary-file-write primitive). Reject the whole
 // restore if any entry (at any depth) is a symlink. (tar as a non-root user already blocks `..` traversal and
@@ -74,7 +134,13 @@ function stagingHasSymlink(p) {
   if (!existsSync(staging)) return;
   try {
     if (stagingHasSymlink(staging)) { console.error('  restore-on-boot REFUSED: backup contains a symlink'); rmSync(staging, { recursive: true, force: true }); return; }
-    for (const name of readdirSync(staging)) {
+    // DATA-DIR GUARD: a restored relay-key.json is a deliberate identity change, so the folder's old stamp goes
+    // with it (re-stamped from the restored key below) unless the backup carries its own. A backup never imports
+    // a MOVED-TO tombstone — that would make the restored relay refuse to start.
+    const staged = readdirSync(staging);
+    if (staged.includes('relay-key.json') && !staged.includes('.trinity-data-dir')) { try { rmSync(DATA_DIR_STAMP, { force: true }); } catch {} }
+    for (const name of staged) {
+      if (name === 'MOVED-TO') { console.error('  restore-on-boot: skipped a MOVED-TO note in the backup'); continue; }
       const dst = join(DATA_DIR, name);
       try { rmSync(dst, { recursive: true, force: true }); } catch {}
       renameSync(join(staging, name), dst);
@@ -83,6 +149,7 @@ function stagingHasSymlink(p) {
   } catch (e) { console.error('  restore-on-boot failed:', (e && e.message) || e); }
   try { rmSync(staging, { recursive: true, force: true }); } catch {}
 })();
+checkDataDirIdentity();
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');                 // legacy JSON store (migrated from, once)
 // SHA-256 of the release signing certificate (android/app/keystore.properties -> release.keystore, alias
@@ -1281,6 +1348,9 @@ const RELAY_KEY_FILE = join(DATA_DIR,'relay-key.json');
 let RELAY_SK = null, RELAY_PUB = '';
 try { const k = JSON.parse(readFileSync(RELAY_KEY_FILE, 'utf8')); if (k && k.sk && k.pub) { RELAY_SK = Uint8Array.from(Buffer.from(k.sk, 'hex')); RELAY_PUB = k.pub; } } catch {}
 if (!RELAY_SK || !RELAY_PUB) { RELAY_SK = generateSecretKey(); RELAY_PUB = getPublicKey(RELAY_SK); try { writeFileSync(RELAY_KEY_FILE, JSON.stringify({ sk: Buffer.from(RELAY_SK).toString('hex'), pub: RELAY_PUB }), { mode: 0o600 }); } catch {} }
+// DATA-DIR GUARD: a fresh folder gets its .trinity-data-dir stamp once its key exists (pinned folders were already
+// checked above and never reach a mint — checkDataDirIdentity refuses a pinned folder without a usable key).
+if (!existsSync(DATA_DIR_STAMP) && relayKeyPubOnDisk() === RELAY_PUB) writeDataDirStamp(RELAY_PUB);
 // a relay-signed NIP-98 (kind-27235) proof bound to url+method+church — how this relay authenticates to a peer's /sync.
 function relayProof(url, method, cp) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', method], ['church', cp]], content: '' }, RELAY_SK))).toString('base64'); }
 // this relay's OWN claim (control panel → claim a memorable name in a directory): kind-27235 signed by RELAY_SK,
