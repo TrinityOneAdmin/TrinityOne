@@ -927,10 +927,15 @@ function DashRota({ onNewTeam }) {
   // (Assign, Copy last week, Auto-fill, Publish, the conflict checks) acts on this service, so a minute tick that
   // moved it at start + 2h would land a steward's next pick on the wrong service (audit of the plan, doAssign).
   // Services that arrive later are judged against the same moment.
+  // ONLY SERVICES WITH A READABLE DATE ARE CANDIDATES. schSvcPast calls an undated service "not past" (never guessed
+  // at), and an undated one sorts first, so without this filter an old record with no date (publishService has
+  // written date '' before) became the opening service — a "NaN" chip that Assign, Auto-fill and Publish then acted
+  // on (audit of 4c47c063, M1). With no dated service at all, the last one, as before.
   const openAt = useSchR(0);
   if (!openAt.current && sortedSvcs.length) openAt.current = nowD.getTime();
   const openD = openAt.current ? new Date(openAt.current) : nowD;
-  const defaultSvc = (sortedSvcs.find(s => !schSvcPast(s, openD)) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
+  const datedSvcs = sortedSvcs.filter(s => /^\d{4}-\d{2}-\d{2}$/.test(String((s && s.date) || '')));
+  const defaultSvc = (datedSvcs.find(s => !schSvcPast(s, openD)) || datedSvcs[datedSvcs.length - 1] || sortedSvcs[sortedSvcs.length - 1] || {}).id;
 
   const [sel, setSel] = useSch(null);
   // OPEN SCROLLED TO THAT SERVICE. Once months of past services sit on the strip, a phone otherwise opens showing only
@@ -1313,12 +1318,14 @@ function DashRota({ onNewTeam }) {
         {sortedSvcs.map(s => {
           const on = s.id === svcId; const p = schParts(s.date);
           // A PAST SERVICE STAYS WHERE IT IS, FADED, MARKED "Past", AND STILL SELECTABLE. Less faded while selected,
-          // so the selected border stays easy to see.
+          // so the selected border stays easy to see. THE FADE IS KEPT READABLE: at .75 the smallest text (the
+          // --ink-3 month/time line) is 3.19:1 on --surface, and at .85 it is ~3.6:1 on the selected tint; at the
+          // first cut's .5 it was 2.05:1 (audit of 4c47c063, L3). The "Past" mark sits outside the fade.
           const past = schSvcPast(s, nowD);
           return (
             <button key={s.id} data-svc-id={s.id} aria-pressed={on} onClick={() => setSel(s.id)} title={past ? 'This service has passed — show its rota' : 'Show this service’s rota'} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'left',
               border: on ? '2px solid var(--clay)' : '1px solid var(--line)', background: on ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: past ? (on ? 0.75 : 0.5) : 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: past ? (on ? 0.85 : 0.75) : 1 }}>
               <div style={{ textAlign: 'center', lineHeight: 1 }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--clay-ink)', textTransform: 'uppercase' }}>{p.dow}</div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>{p.day}</div></div>
               <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{s.name}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{p.mon} · {s.time}</div></div>
               </div>

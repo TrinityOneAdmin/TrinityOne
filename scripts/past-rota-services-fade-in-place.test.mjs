@@ -103,9 +103,72 @@ test('a past chip can still be tapped: it is selected, its rota shows, and ONE l
   assert.ok(reads(tree).includes('Ruth Bexley'), 'the person on the past rota is not shown');
   const notes = find(tree, n => n.type === 'div' && (n.kids || []).some(k => typeof k === 'string' && k.includes(PASSED_NOTE)));
   assert.equal(notes.length, 1, `expected exactly one "${PASSED_NOTE}" line, found ${notes.length}`);
-  // still faded while selected, but less so (the selected border must stay easy to see)
+  // still faded while selected, but less so than an unselected past chip (the selected border must stay easy to see)
   const c = chip(tree, 'nov1');
-  assert.ok(fade(c) < 1 && fade(c) > 0.5, `a selected past chip should be faded less than an unselected one (opacity ${fade(c)})`);
+  const unselectedPast = chip(board(clock, [svc('x', '2026-11-01', '10:30'), svc('y', '2026-11-15', '10:30')]).draw(), 'x');
+  assert.ok(fade(c) < 1 && fade(c) > fade(unselectedPast), `a selected past chip should be faded, but less than an unselected one (selected ${fade(c)}, unselected ${fade(unselectedPast)})`);
+});
+
+// M1 (audit of 4c47c063): an undated service sorts first and is "not past" (never guessed at), so it used to become
+// the opening service — a "NaN" chip that Assign, Auto-fill and Publish then acted on with nothing tapped.
+test('a service with no readable date is never the service the board opens on', () => {
+  const clock = clockAt('2026-11-13T12:00');
+  const services = [svc('nodate', '', '10:30'), svc('baddate', 'next week', '10:30'), svc('nov1', '2026-11-01', '10:30'), svc('nov15', '2026-11-15', '10:30')];
+  const tree = board(clock, services).draw();
+  assert.equal(chipsOf(tree).length, 4, 'expected all 4 chips (undated ones stay on the strip) — re-anchor this test');
+  assert.deepEqual(selected(tree), ['nov15'], 'the board opened on a service with no readable date');
+  // every dated service past: the last DATED one, not an undated one
+  const allPast = board(clock, [svc('nov1', '2026-11-01', '10:30'), svc('nov8', '2026-11-08', '10:30'), svc('zz', 'zz-not-a-date', '')]).draw();
+  assert.deepEqual(selected(allPast), ['nov8'], 'with every dated service past, the board did not open on the last dated one');
+});
+
+// L3 (audit of 4c47c063): the fade must leave the smallest text readable — at least 3:1 for every colour inside the
+// faded part of a past chip, on its own background — and the "Past" mark itself is not faded at all. Colours are
+// the brand tokens from brand.css (the console's stylesheet), opacity is what the real DashRota draws.
+test('a faded past chip keeps every piece of its text at 3:1 or better, and the "Past" mark is not faded', () => {
+  const CSS = readFileSync(new URL('../brand.css', import.meta.url), 'utf8');
+  const token = (name) => {
+    const m = new RegExp('--' + name + ':\\s*(#[0-9A-Fa-f]{6})').exec(CSS);
+    assert.ok(m, `--${name} is not a hex colour in brand.css — re-anchor this test`);
+    return m[1];
+  };
+  const rgb = (hex) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const lin = (v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  const lum = (c) => { const [r, g, b] = c.map(lin); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const mix = (fg, bg, a) => fg.map((f, i) => f * a + bg[i] * (1 - a));
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const colourOf = (style) => {
+    const m = /var\(--([a-z0-9-]+)\)/.exec(String((style && style.color) || 'var(--ink)'));
+    return m ? token(m[1]) : null;
+  };
+
+  const clock = clockAt('2026-11-13T12:00');
+  const services = [svc('nov1', '2026-11-01', '10:30'), svc('nov8', '2026-11-08', '10:30'), svc('nov15', '2026-11-15', '10:30')];
+  const b = board(clock, services);
+  chip(b.draw(), 'nov8').props.onClick();   // nov8 selected, nov1 not
+  const tree = b.draw();
+  const SURFACE = rgb(token('surface'));
+  // the selected background is color-mix(in oklab, var(--clay) 8%, var(--surface)); approximated here in sRGB
+  const SELECTED_BG = mix(rgb(token('clay')), SURFACE, 0.08);
+  const low = [];
+  for (const [id, bg] of [['nov1', SURFACE], ['nov8', SELECTED_BG]]) {
+    const c = chip(tree, id);
+    const faded = find(c, n => n.props && n.props.style && n.props.style.opacity !== undefined && Number(n.props.style.opacity) < 1);
+    assert.equal(faded.length, 1, `${id}: expected one faded box inside the chip — re-anchor this test`);
+    const a = Number(faded[0].props.style.opacity);
+    // every text-bearing element inside the faded box, with its own colour (inherited --ink where it sets none)
+    const texty = find(faded[0], n => typeof n.type === 'string' && (n.kids || []).some(k => typeof k === 'string' || typeof k === 'number'));
+    assert.ok(texty.length >= 3, `${id}: found no text inside the faded box — re-anchor this test`);
+    for (const n of texty) {
+      const hex = colourOf(n.props.style) || token('ink');
+      const r = ratio(mix(rgb(hex), bg, a), bg);
+      if (r < 3) low.push(`${id} "${reads(n)}" ${hex} at opacity ${a}: ${r.toFixed(2)}:1`);
+    }
+    // the Past mark: present, and NOT inside the faded box
+    assert.match(reads(c), /\bPast\b/);
+    assert.doesNotMatch(reads(faded[0]), /\bPast\b/, `${id}: the "Past" mark is inside the faded box`);
+  }
+  assert.deepEqual(low, [], 'faded past-chip text under 3:1');
 });
 
 test('on the day: a 10:30 service is not past at 12:29, is past at 12:30, and the board still opens on it at 11:00', () => {
@@ -157,11 +220,26 @@ test('the 60-second refresh fades a chip in place but never moves the service th
   assert.deepEqual(selected(fresh), ['next']);
 });
 
-test('without window.setInterval / addEventListener (the miniReact harnesses) the board starts no timer and does not throw', () => {
+test('without BOTH window.setInterval and window.addEventListener (the miniReact harnesses) the board starts no timer and adds no listener', () => {
   const clock = clockAt('2026-11-13T12:00');
-  const b = board(clock, [svc('a', '2026-11-01', '10:30')], { effects: true });
-  assert.doesNotThrow(() => b.draw());
-  assert.equal(chipsOf(b.draw()).length, 1);
+  // neither present: draws, does not throw
+  const bare = board(clock, [svc('a', '2026-11-01', '10:30')], { effects: true });
+  assert.doesNotThrow(() => bare.draw());
+  assert.equal(chipsOf(bare.draw()).length, 1);
+  // only one of the two present: the present one is never called (spied), so a harness with a real setInterval but
+  // no addEventListener never gets a live Node interval
+  const calls = [];
+  const onlyTimer = board(clock, [svc('a', '2026-11-01', '10:30')], { effects: true, win: { setInterval: (fn, ms) => { calls.push(['setInterval', ms]); return 1; }, clearInterval() {} } });
+  assert.doesNotThrow(() => onlyTimer.draw());
+  const onlyListen = board(clock, [svc('a', '2026-11-01', '10:30')], { effects: true, win: { addEventListener: (ev) => calls.push(['addEventListener', ev]), removeEventListener() {} } });
+  assert.doesNotThrow(() => onlyListen.draw());
+  assert.deepEqual(calls, [], 'the board started a timer or a listener without both window.setInterval and window.addEventListener');
+  // CONTROL: with both present the same spies ARE called, so the empty list above is not a blind spy
+  const both = board(clock, [svc('a', '2026-11-01', '10:30')], { effects: true, win: {
+    setInterval: (fn, ms) => { calls.push(['setInterval', ms]); return 1; }, clearInterval() {},
+    addEventListener: (ev) => calls.push(['addEventListener', ev]), removeEventListener() {} } });
+  both.draw();
+  assert.ok(calls.some(c => c[0] === 'setInterval'), 'CONTROL: the spy saw no timer even with both present');
 });
 
 // ── THE SCREEN RULE, AS A TABLE ─────────────────────────────────────────────────────────────────────────────────

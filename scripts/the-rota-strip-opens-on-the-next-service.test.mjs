@@ -247,10 +247,14 @@ const MEASURE = `(() => {
   const chips = [...document.querySelectorAll('main button[data-svc-id]')];
   if (!chips.length) return JSON.stringify({ chips: 0 });
   const strip = chips[0].parentElement, sr = strip.getBoundingClientRect();
-  const pageScroll = [document.scrollingElement ? document.scrollingElement.scrollTop : 0, document.querySelector('main').scrollTop];
+  // EVERYTHING ELSE THAT COULD HAVE SCROLLED: the window, and every ancestor of the strip. scrollIntoView would move
+  // one of these; setting the strip's own scrollLeft moves none of them.
+  const moved = [];
+  if (window.scrollX || window.scrollY) moved.push('window ' + window.scrollX + ',' + window.scrollY);
+  for (let el = strip.parentElement; el; el = el.parentElement) if (el.scrollTop || el.scrollLeft) moved.push(el.tagName.toLowerCase() + (el.className ? '.' + String(el.className).split(' ')[0] : '') + ' ' + el.scrollLeft + ',' + el.scrollTop);
   return JSON.stringify({
     chips: chips.length, scrollLeft: strip.scrollLeft, scrollWidth: strip.scrollWidth, clientWidth: strip.clientWidth,
-    strip: [Math.round(sr.left), Math.round(sr.right)], pageScroll,
+    strip: [Math.round(sr.left), Math.round(sr.right)], stripTop: Math.round(sr.top), viewportH: innerHeight, moved,
     list: chips.map(c => { const r = c.getBoundingClientRect(); return { id: c.getAttribute('data-svc-id'), on: c.getAttribute('aria-pressed'),
       past: /\\bpast\\b/i.test(c.innerText || ''), left: Math.round(r.left), right: Math.round(r.right),
       opacity: Math.min(...[...c.querySelectorAll('*')].map(e => Number(getComputedStyle(e).opacity))) }; }),
@@ -273,6 +277,13 @@ test('at 360px the strip opens on next Sunday, scrolled so its chip is at the st
   { skip: !CHROME ? 'no chromium' : false, timeout: 300000 }, async () => {
     await setViewport(PHONE);
     await openTab('Overview');
+    // ROOM FOR scrollIntoView TO GIVE ITSELF AWAY (audit of 4c47c063, L1). A test-only stylesheet pushes the Rota
+    // 1600px down inside <main>, so the strip opens BELOW the viewport: scrollIntoView would have to scroll <main> or
+    // the window to reach it, and the "nothing else moved" check below would see that. The strip's own scrollLeft
+    // moves nothing else. It changes no app code and is removed at the end of the next test.
+    await evalIn(`(() => { const st = document.createElement('style'); st.id = 'test-room-above-the-strip';
+      st.textContent = 'main { padding-top: 1600px !important; }'; document.head.appendChild(st);
+      window.scrollTo(0, 0); const m = document.querySelector('main'); if (m) { m.scrollTop = 0; m.scrollLeft = 0; } return 'ok'; })()`);
     await openTab('Rota');
     let m = null;
     for (let i = 0; i < 20; i++) { m = JSON.parse(await evalIn(MEASURE)); if (m.chips >= 15) break; await sleep(1000); }
@@ -290,8 +301,10 @@ test('at 360px the strip opens on next Sunday, scrolled so its chip is at the st
     // …and next Sunday's chip is wholly inside the strip's visible box, at its start
     assert.ok(next.left >= m.strip[0] - 1 && next.right <= m.strip[1] + 1, `next Sunday's chip (${next.left}..${next.right}) is not inside the strip (${m.strip[0]}..${m.strip[1]})`);
     assert.ok(next.left - m.strip[0] <= 2, `next Sunday's chip is not at the start of the strip (it sits ${next.left - m.strip[0]}px in)`);
-    // the page itself was not scrolled to get there (scrollIntoView would have moved it)
-    assert.deepEqual(m.pageScroll, [0, 0], 'opening the Rota scrolled the page, not just the strip');
+    // the page itself was not scrolled to get there. Precondition first: the strip is below the viewport, so
+    // scrollIntoView WOULD have had to move something (otherwise this check could not fail)
+    assert.ok(m.stripTop > m.viewportH, `the strip is on screen (top ${m.stripTop}px, viewport ${m.viewportH}px), so the no-other-scroll check below proves nothing — re-anchor the test stylesheet`);
+    assert.deepEqual(m.moved, [], 'opening the Rota scrolled something other than the strip (the window or an ancestor)');
 
     // the past chips are faded and marked; next Sunday is neither
     const past = m.list.filter(c => seeded.past.includes(c.id));
@@ -300,6 +313,45 @@ test('at 360px the strip opens on next Sunday, scrolled so its chip is at the st
     assert.ok(later.length === 2 && later.every(c => !c.past && c.opacity === 1), 'a later Sunday is faded or marked Past: ' + JSON.stringify(later));
     assert.ok(past.every(c => c.past && c.opacity < 1), 'a past chip is not faded and marked: ' + JSON.stringify(past.filter(c => !(c.past && c.opacity < 1))));
     assert.equal(next.opacity, 1, 'next Sunday\'s chip is faded');
+    assert.deepEqual(errors, [], 'the console threw on the Rota:\n  ' + errors.join('\n  '));
+  });
+
+// ONCE, AND NEVER AFTER A TAP (audit of 4c47c063, L2). A steward scrolls the strip by hand; then the list changes (a
+// service another steward added arrives, re-rendering the board). The strip must stay where the steward left it —
+// first with nothing tapped (only the once-latch stops a re-scroll), then after tapping a chip.
+test('the strip scrolls once: a later re-render from a new service does not move it, before or after a chip is tapped',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 300000 }, async () => {
+    const strip = `[...document.querySelectorAll('main button[data-svc-id]')][0].parentElement`;
+    const count = async () => evalIn(`document.querySelectorAll('main button[data-svc-id]').length`);
+    const addSunday = async (days) => evalIn(`(async () => {
+      const d = new Date(); d.setDate(d.getDate() + ${days});
+      const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      const r = await window.Steward.publishService({ name: 'Added later', date: iso, time: '10:30' });
+      return r && r.id ? r.id : null; })()`);
+    const before = await count();
+    assert.ok(before >= 15, 'the strip is not on screen — run after the previous test');
+
+    // (a) nothing tapped: hand-scroll, then a new service arrives
+    await evalIn(`(${strip}).scrollLeft = 300`);
+    const a = await addSunday(40);
+    assert.ok(a, 'the extra service was not saved');
+    const n1 = await settles(count, v => v > before, 30000);
+    assert.ok(n1 > before, 'the new service never reached the strip, so nothing re-rendered and this proves nothing');
+    await sleep(1200);
+    assert.equal(await evalIn(`(${strip}).scrollLeft`), 300, 'with nothing tapped, a re-render scrolled the strip back');
+
+    // (b) tap the first (past) chip, hand-scroll, then another new service arrives
+    const tapped = await evalIn(`(() => { const c = document.querySelector('main button[data-svc-id]'); c.click(); return c.getAttribute('data-svc-id'); })()`);
+    await sleep(600);
+    await evalIn(`(${strip}).scrollLeft = 600`);
+    const b = await addSunday(47);
+    assert.ok(b, 'the second extra service was not saved');
+    const n2 = await settles(count, v => v > n1, 30000);
+    assert.ok(n2 > n1, 'the second new service never reached the strip, so nothing re-rendered and this proves nothing');
+    await sleep(1200);
+    assert.equal(await evalIn(`(${strip}).scrollLeft`), 600, 'after a tap, a re-render scrolled the strip');
+    assert.equal(await evalIn(`document.querySelector('main button[data-svc-id="${tapped}"]').getAttribute('aria-pressed')`), 'true', 'the tapped chip is no longer selected');
+    await evalIn(`(() => { const st = document.getElementById('test-room-above-the-strip'); if (st) st.remove(); return 'ok'; })()`);
     assert.deepEqual(errors, [], 'the console threw on the Rota:\n  ' + errors.join('\n  '));
   });
 
