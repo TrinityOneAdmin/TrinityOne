@@ -310,6 +310,7 @@
       loadServes();
       loadUpdate();
       loadSubs();
+      stLoad();   // the storage card + its Dashboard reminder (hidden unless this box opted in)
       loadStats();
     } catch (e) { /* relay down — the hero card shows it */ }
   }
@@ -1825,3 +1826,308 @@
       setTimeout(() => { const gp = document.getElementById('goPublic'); if (gp) gp.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 140);
     };
   }
+
+  // STORAGE-BEGIN — "Where this relay keeps its data" (relay storage plan step 4; owner-approved mockup
+  // TrinityOne-internal/reference/MOCKUP-relay-storage-card-2026-11-13.html, decisions §8a/§8b). Driven by
+  // scripts/the-storage-card-moves-the-relay-and-keeps-its-identity.test.mjs in a real browser — keep the markers.
+  // The card exists only when GET /storage answers (the launcher set TRINITY_STORAGE_MODE); on every other box it
+  // answers like a path that does not exist and the card and the Dashboard reminder stay hidden.
+  const ST_ACTIVE = ['renaming', 'copying', 'verifying', 'switching', 'switched', 'checking', 'rolling-back'];
+  const ST_RECENT_MS = 7 * 86400000;   // how long a finished move's outcome stays on the card
+  const ST_WARN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v4M12 17.5v.5"></path></svg>';
+  const ST_OK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>';
+  const ST_BAD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7.5v5.5M12 16.5v.5"></path></svg>';
+  const ST_INFO_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg>';
+  const ST_SPIN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.6"></path></svg>';
+  const ST_DOT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"></circle></svg>';
+  const ST_TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"></path></svg>';
+  const stGB = (b) => fmtStore(b);
+  // one line per code, worded as the approved mockup's table (section 3)
+  function stReason(code, d) {
+    switch (code) {
+      case 'not-enough-space': return 'Not enough space (needs ' + stGB(d && d.needBytes) + ')';
+      case 'network': return 'Network drive — not supported';
+      case 'sync-folder': return 'Synced by ' + ((d && /onedrive/i.test(d.mountpoint)) ? 'OneDrive' : (d && /dropbox/i.test(d.mountpoint)) ? 'Dropbox' : (d && /google/i.test(d.mountpoint)) ? 'Google Drive' : (d && /icloud|mobile documents/i.test(d.mountpoint)) ? 'iCloud' : 'a cloud service') + ' — not supported';
+      case 'system-folder': case 'inside-app': return 'Used by the computer itself — not allowed';
+      case 'path-has-symlink': return 'Reached through a shortcut — not supported';
+      case 'target-not-empty': return 'Already has a "trinityone-relay" folder with something in it';
+      case 'already-here': case 'target-overlaps-source': return 'Your relay\'s data is already here';
+      case 'drive-missing': case 'not-mounted': return 'Not connected';
+      case 'not-in-fstab': return 'Not set up to mount at start-up — add it to /etc/fstab first';
+      case 'filesystem-not-supported': return 'This kind of drive can\'t hold a server relay\'s data';
+      case 'old-copy-awaiting-removal': return 'Remove the old copy from your last move first.';
+      case 'restore-pending': return 'A restore is waiting. Close and reopen the app to finish it, then move.';
+      case 'relay-running': return 'Another copy of the relay is using this folder. Close it, then try again.';
+      case 'move-in-progress': case 'move-already-requested': return 'A move is already under way.';
+      case 'source-has-symlink': return 'This folder links to somewhere else, so it can\'t be moved safely.';
+      case 'drives-unknown': return 'Couldn\'t list this computer\'s drives. Try again in a moment.';
+      case 'storage-state-unknown': case 'storage-state-unreadable': return 'This relay can\'t move its data. Reinstall the app, or ask for help.';
+      case 'no-permissions-not-acknowledged': return 'Tick the box to say you understand this drive has no file permissions.';
+      case 'removable-not-acknowledged': return 'Tick the box to say you understand this drive can wear out and fail.';
+      case 'local-only': return 'Change this on the relay\'s own computer.';
+      default: return 'This can\'t be used (' + code + ')';
+    }
+  }
+  const stInside = (p, root) => !!p && !!root && (p === root || p.startsWith(root.endsWith('/') || root.endsWith('\\') ? root : root + (root.includes('\\') && !root.includes('/') ? '\\' : '/')));
+  // the friendly name of the place a path is on: a listed drive if one holds it, else "this computer"
+  function stPlace(r, p, mountpoint) {
+    let best = null;
+    for (const d of r.drives || []) if (stInside(p, d.mountpoint) && (!best || d.mountpoint.length > best.mountpoint.length)) best = d;
+    if (best) return best;
+    if (mountpoint && mountpoint !== '/') return { label: mountpoint.split(/[\\/]/).filter(Boolean).pop() || mountpoint, mountpoint };
+    return { label: 'this computer', mountpoint: mountpoint || '/' };
+  }
+  function stPathParts(r) {
+    const p = (r.current.realPath || r.current.path || '');
+    const place = stPlace(r, p, r.current.drive && r.current.drive.mountpoint);
+    const rest = p.slice((place.mountpoint || '').length).split(/[\\/]+/).filter(Boolean);
+    const shown = rest.length > 2 ? ['…', ...rest.slice(-2)] : rest;
+    return [place.label.charAt(0).toUpperCase() + place.label.slice(1), ...shown];
+  }
+  let stState = { r: null, sel: '', ack: false, open: false, armed: false, msg: '', stopped: false, removeArmed: '', removeMsg: '', removeMsgFor: '' };
+  let stDisarmT = null;
+  function stDriveRow(d) {
+    const sel = stState.sel === d.mountpoint, off = !d.eligible;
+    const meta = d.sameDrive ? 'This drive · ' + stGB(d.freeBytes) + ' free' : (d.fsType ? esc(d.fsType) : 'Drive') + (d.freeBytes != null ? ' · ' + stGB(d.freeBytes) + ' free' : '');
+    let extra = '';
+    if (!off && d.sameDrive) extra += '<span class="chip chip-fast">Moves instantly — same drive</span>';
+    // the warnings a steward must tick to accept (owner §8b): no file permissions, and USB wear on any removable
+    // drive — both in ONE box with ONE tick
+    if (!off && stNeedsAck(d)) extra += stAckBox(d, sel);
+    if (!off && d.warn.includes('removable')) extra += '<div class="st-soft">' + ST_WARN_SVG + '<span>Removable drive. If it is unplugged, the relay stops until it is plugged back in.</span></div>';
+    if (!off && d.warn.includes('filesystem-unknown')) extra += '<div class="st-soft">' + ST_WARN_SVG + '<span>We couldn\'t tell what kind of drive this is.</span></div>';
+    return '<label class="st-drive' + (sel ? ' sel' : '') + (off ? ' off' : '') + '"><input type="radio" name="stDrive" value="' + esc(d.mountpoint) + '"' + (sel ? ' checked' : '') + (off ? ' disabled' : '') + '>'
+      + '<div class="st-dmain"><div class="st-dname">' + esc(d.label) + '</div><div class="st-dmeta">' + meta + '</div>'
+      + (off ? '<div class="st-why">' + esc(stReason(d.refuse[0], d)) + '</div>' : '') + extra + '</div></label>';
+  }
+  // Move is enabled only for an eligible drive, on a box that can change it, with nothing refusing the folder —
+  // and for a drive with no file permissions, only once the steward has ticked the box (owner §8b).
+  const ST_ACK_WARNS = ['no-permissions', 'removable'];
+  const stNeedsAck = (d) => !!d && ST_ACK_WARNS.some(w => d.warn.includes(w));
+  const ST_PERMS_LINE = 'This drive has no file permissions. Anyone who plugs it in can read your church\'s records.';
+  const ST_WEAR_LINE = 'Running your church\'s relay from a USB stick wears it out faster than normal use, because it writes all day, every day. A USB stick can fail without warning. Keep regular backups.';
+  function stAckBox(d, withTick) {
+    const perms = d.warn.includes('no-permissions'), wear = d.warn.includes('removable');
+    let h = '<div class="st-ackbox">';
+    if (perms) h += '<div class="st-strong">' + ST_WARN_SVG + '<span>' + ST_PERMS_LINE + '</span></div>';
+    if (wear) h += '<div class="st-strong st-wear">' + ST_WARN_SVG + '<span>' + ST_WEAR_LINE + '</span></div>';
+    if (withTick) h += '<label class="st-ack"><input type="checkbox" id="stAck"' + (stState.ack ? ' checked' : '') + '> '
+      + (perms && wear ? 'I understand anyone with this drive can read it, and that it can wear out and fail'
+        : perms ? 'I understand anyone with this drive can read it' : 'I understand this drive can wear out and fail') + '</label>';
+    return h + '</div>';
+  }
+  function stCanMove() {
+    const r = stState.r; if (!r || !r.canChange || r.refuse.length) return false;
+    const d = (r.drives || []).find(x => x.mountpoint === stState.sel);
+    if (!d || !d.eligible) return false;
+    if (stNeedsAck(d) && !stState.ack) return false;
+    return true;
+  }
+  function stResult(kind, html) { return '<div class="st-result ' + kind + '" id="stResult">' + (kind === 'ok' ? ST_OK_SVG : kind === 'bad' ? ST_BAD_SVG : ST_INFO_SVG) + '<span>' + html + '</span></div>'; }
+  function stMoveControls(r) {
+    const d = (r.drives || []).find(x => x.mountpoint === stState.sel);
+    const pick = '<div class="st-move"><button type="button" class="st-select" id="stPick" aria-haspopup="listbox" aria-expanded="' + (stState.open ? 'true' : 'false') + '"><span>Move to: <b>' + (d ? esc(d.label) : 'Choose a drive…') + '</b></span><span class="chev">▾</span></button>'
+      + '<button type="button" class="btn ' + (stState.armed ? 'btn-danger' : 'btn-clay') + '" id="stMove"' + (stCanMove() ? '' : ' disabled') + '>' + (stState.armed ? 'Confirm — stop the relay and move' : 'Move…') + '</button></div>';
+    const list = stState.open ? '<div class="st-list" role="listbox" aria-label="Drives" id="stList">' + (r.drives.length ? r.drives.map(stDriveRow).join('') : '<div class="st-drive off"><div class="st-dmain">No drives found.</div></div>') + '</div>' : '';
+    let h = stState.open ? list + pick : pick;
+    if (stState.armed && d) {
+      if (stNeedsAck(d)) h += stAckBox(d, false);
+      h += '<div class="st-msg err-text" id="stMsg">Click again to stop the relay and move its data to <b>' + esc(d.label) + '</b>. Click anywhere else, press Esc, or wait to cancel.</div>'
+        + '<div class="hint">If the app doesn\'t reopen by itself, open it again.</div>';
+    } else if (r.refuse.length) {
+      h += '<div style="margin-top:12px">' + stResult('bad', '<b>Can\'t move right now.</b> ' + esc(stReason(r.refuse[0]))) + '</div>';
+    } else if (stState.msg) {
+      h += '<div style="margin-top:12px">' + stState.msg + '</div>';
+    }
+    h += d && d.sameDrive
+      ? '<div class="st-explain" id="stExplain">Same drive, so the move is instant and there is no old copy. The relay restarts once.</div>'
+      : '<div class="st-explain" id="stExplain">The relay stops for a few minutes while it copies. Members carry on through your church\'s other relays. Your old copy is kept until you remove it.</div>';
+    return h;
+  }
+  function stRecent(m) { const t = Date.parse(m.endedAt || m.checkedAt || m.switchedAt || m.startedAt || 0); return t && Date.now() - t < ST_RECENT_MS; }
+  function stOutcome(r) {
+    const m = r.move; if (!m) return '';
+    const events = m.counts && typeof m.counts.events === 'number' ? ' Same relay, same records — ' + m.counts.events.toLocaleString('en-GB') + ' events checked.' : ' Same relay, same records.';
+    const here = stPlace(r, r.current.realPath || r.current.path, r.current.drive && r.current.drive.mountpoint);
+    const onHere = here.kind === 'home' ? 'in your Home folder' : 'on ' + esc(here.label);
+    if (m.state === 'awaiting-confirm') {
+      const cur = (r.drives || []).find(x => x.target === r.current.realPath);
+      return stResult('ok', '<b>Your relay now keeps its data ' + onHere + '.</b>' + events)
+        + (cur && cur.warn.includes('no-permissions') ? '<div class="st-strong">' + ST_WARN_SVG + '<span>This drive has no file permissions. Anyone who plugs it in can read your church\'s records.</span></div>' : '');
+    }
+    if (!stRecent(m)) return '';
+    if (m.state === 'done') return stResult('ok', '<b>Your relay now keeps its data ' + onHere + '.</b>' + events + (m.mode === 'rename' ? '<span class="st-sub">Same drive, so it moved instantly. There is no old copy to remove.</span>' : ''));
+    if (m.state === 'rolled-back') return stResult('bad', '<b>The relay didn\'t start from the new drive, so it went back to the old folder.</b> Nothing was lost.');
+    if (m.state === 'failed') {
+      if (m.code === 'verify-failed') return stResult('bad', '<b>The copy didn\'t match, so nothing was changed.</b> Your relay is running from the old folder.');
+      if (m.code === 'interrupted') return stResult('bad', '<b>The move didn\'t finish.</b> Your relay is still using the old folder. Nothing was lost.');
+      if (m.code === 'target-permission-denied') return stResult('bad', '<b>Your Mac blocked access to that drive.</b> Allow TrinityOne Suite in System Settings → Privacy &amp; Security → Files and Folders, then try again.');
+      return stResult('bad', '<b>The move didn\'t work, so nothing was changed.</b> Your relay is running from the old folder.');
+    }
+    return '';
+  }
+  function stOldCopy(r) {
+    const o = r.oldCopy; if (!o) return '';
+    const place = stPlace(r, o.path, o.mountpoint);
+    const size = o.sizeBytes != null ? ' (' + stGB(o.sizeBytes) + ')' : '';
+    const pending = r.requests && r.requests.removeOld && r.requests.removeOld.path === o.path;
+    let h = '';
+    if (o.remind) h += '<div class="sleepwarn st-remind" id="stRemind"><b>Your old copy has been on ' + esc(place.label) + ' for ' + o.ageDays + ' days.</b><span class="sw-sub">It still holds your church\'s records. Remove it once you\'re happy the move worked.</span></div>';
+    const since = o.since ? new Date(o.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    const txt = o.remind ? 'Old copy: <b>' + esc(place.label) + '</b>' + size + (since ? ', kept since ' + since : '') + '.' : 'The old copy is still on <b>' + esc(place.label) + '</b>' + size + '.';
+    let act;
+    if (pending) act = '<span class="muted" id="stRemovePending">Removal requested. This card updates once the old copy is gone.</span>';
+    else if (!o.exists) act = '<span class="muted">Plug in ' + esc(place.label) + ' to remove the old copy.</span>';
+    else if (!r.canChange) act = '';
+    else act = stState.removeArmed === o.path ? '<button type="button" class="btn btn-danger" id="stRemoveOld">Remove the old copy?</button>' : '<button type="button" class="btn btn-ghost btn-caution" id="stRemoveOld">' + ST_TRASH_SVG + 'Remove old copy</button>';
+    h += '<div class="st-old"><div class="txt">' + txt + '</div>' + act + '</div>';
+    if (stState.removeArmed === o.path) h += '<div class="st-msg err-text">This can\'t be undone. Click again to remove it, or click anywhere else to keep it.</div>';
+    return h;
+  }
+  function stLeftovers(r) {
+    const pend = r.requests && r.requests.removeOld && r.requests.removeOld.path;
+    return (r.leftovers || []).filter(l => l.exists).map(l => {
+      const place = stPlace(r, l.path, null);
+      const when = l.since ? ' on ' + new Date(l.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+      const txt = l.kind === 'set-aside'
+        ? '<b>Left over from a move that was undone</b>' + when + ': a full copy of your relay\'s records on <b>' + esc(place.label) + '</b>. Nothing uses it.'
+        : '<b>Left over from an earlier move</b>' + when + ': an empty marker folder on <b>' + esc(place.label) + '</b>. Nothing uses it.';
+      const act = pend === l.path ? '<span class="muted">Removal requested.</span>'
+        : !r.canChange ? '' : stState.removeArmed === l.path ? '<button type="button" class="btn btn-danger" data-st-remove="' + esc(l.path) + '">Remove?</button>'
+        : '<button type="button" class="btn btn-ghost btn-caution" data-st-remove="' + esc(l.path) + '">' + ST_TRASH_SVG + 'Remove</button>';
+      return '<div class="st-old st-leftover"><div class="txt">' + txt + '</div>' + act + '</div>';
+    }).join('');
+  }
+  function stProgress(m) {
+    const step = m.state === 'copying' || m.state === 'renaming' ? 1 : m.state === 'verifying' ? 2 : 3;
+    const amount = m.totalBytes ? ' ' + stGB(m.copiedBytes || 0) + ' of ' + stGB(m.totalBytes) : '';
+    const rows = [['Relay stopped'], ['Moving your relay\'s data…' + amount], ['Checking the copy…'], ['Starting the relay…']];
+    return '<ul class="st-steps" id="stSteps">' + rows.map((t, i) => '<li class="' + (i < step ? 'done' : i === step ? 'now' : '') + '"><span class="ic' + (i === step ? ' ic-spin' : '') + '">' + (i < step ? ST_OK_SVG : i === step ? ST_SPIN_SVG : ST_DOT_SVG) + '</span>' + esc(t[0]) + '</li>').join('') + '</ul>'
+      + '<div class="hint">Members carry on through your church\'s other relays.</div>';
+  }
+  function stRender() {
+    const card = document.getElementById('storageCard'), r = stState.r;
+    if (!card) return;
+    if (!r) { card.hidden = true; stRenderDash(null); return; }
+    card.hidden = false;
+    const parts = stPathParts(r);
+    document.getElementById('stNow').innerHTML = '<span class="k">Now</span><span class="st-path">' + parts.map(esc).join('<span class="sep">›</span>') + '</span><span class="st-size">' + stGB(r.current.sizeBytes) + (r.current.freeBytes != null ? ' · ' + stGB(r.current.freeBytes) + ' free' : '') + '</span>';
+    const desc = document.getElementById('stDesc');
+    let body;
+    if (stState.stopped) {
+      body = '<div class="wz-line" id="stStopped"><span class="ic-spin">' + ST_SPIN_SVG + '</span><b>Your relay is stopped for the move. This page reconnects when it\'s back.</b></div>'
+        + '<div class="hint">If the app doesn\'t reopen by itself, open it again.</div>';
+      if (desc) desc.textContent = 'Moving';
+    } else if (r.move && ST_ACTIVE.includes(r.move.state)) {
+      body = stProgress(r.move); if (desc) desc.textContent = 'Moving';
+    } else {
+      if (desc) desc.textContent = '';
+      body = stOutcome(r) + stOldCopy(r);
+      if (r.mode === 'suite' && !r.local) body += stResult('info', '<b>Change this on the relay\'s own computer.</b><span class="st-sub">You can see where the data is from here, but moving it only works in the TrinityOne Suite window on that computer.</span>');
+      else if (!(r.move && r.move.state === 'awaiting-confirm')) body += (body ? '<div style="margin-top:12px">' : '<div>') + stMoveControls(r) + '</div>';
+      body += stLeftovers(r);
+      // a failed Remove is shown whatever the card now holds — the folder it named may no longer be on record
+      if (stState.removeMsg) body += '<div style="margin-top:10px" id="stRemoveMsg">' + stState.removeMsg + '</div>';
+    }
+    document.getElementById('stBody').innerHTML = body;
+    stWire();
+    stRenderDash(r);
+  }
+  // The 7-day reminder also goes on the Dashboard (owner §8b) — as a full-width card in its own row, so the
+  // fixed grid's rows below keep their equal heights.
+  function stRenderDash(r) {
+    const el = document.getElementById('storageRemindDash'); if (!el) return;
+    const o = r && r.oldCopy;
+    const removing = !!(o && r.requests && r.requests.removeOld && r.requests.removeOld.path === o.path);   // audit B N-1
+    if (!o || !o.remind || removing) { el.hidden = true; return; }
+    const place = stPlace(r, o.path, o.mountpoint);
+    document.getElementById('stDashT').textContent = 'Your old copy has been on ' + place.label + ' for ' + o.ageDays + ' days.';
+    el.hidden = false;
+  }
+  function stDisarm() {
+    if (stDisarmT) { clearTimeout(stDisarmT); stDisarmT = null; }
+    document.removeEventListener('click', stOutside, true); document.removeEventListener('keydown', stEsc);
+    if (stState.armed || stState.removeArmed) { stState.armed = false; stState.removeArmed = ''; stRender(); }
+  }
+  function stOutside(ev) { const b = ev.target && ev.target.closest && ev.target.closest('#stMove, #stRemoveOld, [data-st-remove]'); if (!b) stDisarm(); }
+  function stEsc(ev) { if (ev.key === 'Escape') stDisarm(); }
+  function stArm() {
+    stDisarmT = setTimeout(stDisarm, 10000);
+    setTimeout(() => document.addEventListener('click', stOutside, true), 0);
+    document.addEventListener('keydown', stEsc);
+  }
+  async function stPost(url, body) {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    return { status: r.status, j };
+  }
+  function stFailText(res) {
+    if (res.status === 403) return stResult('info', '<b>' + esc(stReason('local-only')) + '</b>');
+    if (res.status === 400 && res.j.error === 'drive-not-offered') return stResult('bad', '<b>That drive isn\'t offered any more.</b> Pick again.');
+    const codes = (res.j && res.j.refuse) || [];
+    return stResult('bad', '<b>Can\'t move right now.</b> ' + esc(codes.length ? stReason(codes[0]) : (res.j.error || 'Something went wrong.')));
+  }
+  // a failed Remove says what failed — never "Can't move right now" (audit B L-1)
+  function stRemoveFailText(res, path) {
+    const isOld = !!(stState.r && stState.r.oldCopy && stState.r.oldCopy.path === path);
+    const what = isOld ? 'Couldn\'t remove the old copy.' : 'Couldn\'t remove that leftover folder.';
+    const why = res.status === 403 ? stReason('local-only')
+      : res.status === 400 && res.j && res.j.error === 'not-recorded' ? 'It is no longer on record, so it was left alone. Reload the page.'
+      : res.status === 409 ? 'It is the folder your relay is using now, so it was left alone.'
+      : res.status === 0 ? 'Couldn\'t reach the relay. Try again.'
+      : 'Something went wrong. Try again.';
+    return stResult('bad', '<b>' + what + '</b> ' + esc(why));
+  }
+  async function stWaitForRelay() {
+    // the relay serves this page and is off during the move: wait for it, then show what happened
+    for (;;) {
+      await new Promise(res => setTimeout(res, 3000));
+      try { const s = await fetch('/status', { cache: 'no-store' }); if (s.ok) { location.reload(); return; } } catch (e) {}
+    }
+  }
+  function stWire() {
+    const pick = document.getElementById('stPick');
+    if (pick) pick.onclick = () => { stState.open = !stState.open; stDisarm(); stRender(); };
+    document.querySelectorAll('#stList input[name="stDrive"]').forEach(inp => {
+      inp.onchange = () => { stState.sel = inp.value; stState.ack = false; stState.msg = ''; stDisarm(); stRender(); };
+    });
+    const ack = document.getElementById('stAck');
+    if (ack) ack.onchange = () => { stState.ack = ack.checked; stDisarm(); stRender(); };
+    const mv = document.getElementById('stMove');
+    if (mv) mv.onclick = async () => {
+      if (!stCanMove()) return;
+      if (!stState.armed) { stState.armed = true; stRender(); stArm(); return; }
+      stDisarm();
+      const d = stState.r.drives.find(x => x.mountpoint === stState.sel);
+      mv.disabled = true;
+      let res; try { res = await stPost('/storage/move', { drive: d.mountpoint, acknowledge: stState.ack ? ST_ACK_WARNS.filter(w => d.warn.includes(w)) : [] }); }
+      catch (e) { stState.msg = stResult('bad', '<b>Couldn\'t reach the relay.</b> ' + esc(e.message)); stRender(); return; }
+      if (res.status === 200 && res.j.ok) { stState.stopped = true; stRender(); stWaitForRelay(); return; }
+      stState.msg = stFailText(res); await stLoad();
+    };
+    const ro = document.getElementById('stRemoveOld');
+    if (ro) ro.onclick = () => stRemove(stState.r.oldCopy.path);
+    document.querySelectorAll('[data-st-remove]').forEach(b => { b.onclick = () => stRemove(b.getAttribute('data-st-remove')); });
+  }
+  async function stRemove(path) {
+    if (stState.removeArmed !== path) { stState.removeArmed = path; stRender(); stArm(); return; }
+    stDisarm();
+    let res; try { res = await stPost('/storage/remove-old', { path }); } catch (e) { res = { status: 0, j: { error: e.message } }; }
+    stState.removeMsg = ''; stState.removeMsgFor = '';
+    if (res.status !== 200) { stState.removeMsg = stRemoveFailText(res, path); stState.removeMsgFor = path; }
+    await stLoad();
+  }
+  async function stLoad() {
+    try {
+      const r = await adminFetch('/storage');
+      if (r.status !== 200) { stState.r = null; stRender(); return; }
+      const j = await r.json();
+      if (!j || !j.ok || !j.current) { stState.r = null; stRender(); return; }
+      stState.r = j;
+      if (stState.sel && !(j.drives || []).some(d => d.mountpoint === stState.sel)) { stState.sel = ''; stState.ack = false; }
+    } catch (e) { stState.r = null; }
+    stRender();
+  }
+  { const go = document.getElementById('stDashGo');
+    if (go) go.onclick = () => { selectTab('set', false); setTimeout(() => { const c = document.getElementById('storageCard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 140); }; }
+  // STORAGE-END

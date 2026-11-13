@@ -6,16 +6,19 @@
 //   node scripts/gateway.mjs [port]        default port 8090
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync, accessSync, constants as fsConstants } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lstatSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync, statfsSync, accessSync, openSync, fsyncSync, closeSync, constants as fsConstants } from 'fs';
 import { Transform } from 'stream';
 import { gzipSync } from 'node:zlib';
-import { extname, normalize, join, sep } from 'path';
-import { networkInterfaces, totalmem } from 'os';
+import { extname, normalize, join, sep, basename, relative, isAbsolute } from 'path';
+import { networkInterfaces, totalmem, homedir } from 'os';
+import { readdir as readdirP, lstat as lstatP, realpath as realpathP, statfs as statfsP, readFile as readFileP } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
 import { openStore, matchFilter } from './event-store.mjs';
-import { createTunnelWatchdog } from './relay-selfheal.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
+import { createTunnelWatchdog } from './relay-selfheal.mjs';
+// Relay storage plan step 3: the panel API reuses the mover's OWN checks (audit B: same realpath/symlink/classify path).
+import { LEAF as STORAGE_LEAF, ACTIVE as MOVE_ACTIVE, classifyTarget, mountFor, systemMountsAsync, pathHasSymlink, isTombstoneOnly, relayLockHeld, samePath, blockDeviceIsUsbOrRemovable } from './relay-move.mjs';   // SPEC §3: self-healing tunnel watchdog (silent edge-death → kill+respawn+reclaim)
 // The names this relay gates by, from the ONE declared list (ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
@@ -54,7 +57,109 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));   // project dir (fi
 // to a writable per-user location (OS app-data dir) so the app payload itself can stay READ-ONLY inside the
 // installed bundle — the app ships its code read-only and keeps its data separately, the platform-native way.
 const DATA_DIR = process.env.TRINITY_DATA_DIR || join(ROOT, 'relay');
-try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+// ── DATA-DIR GUARD (relay storage plan step 1, risk R1) ────────────────────────────────────────────────
+// A missing folder used to be created here unconditionally, and relay-key.json / admin.json below are minted
+// when absent — so an unplugged drive, a changed Windows drive letter, or a folder the data was moved out of
+// brought the relay up EMPTY with a NEW identity: a stranger to every church that trusts it (rule 10), and on
+// Linux a fresh folder planted under the mount point, hidden when the drive comes back.
+//   * MOVED-TO in the folder  -> refuse, ALWAYS (an older/unpinned launcher must never start on a moved-out copy:
+//                                it holds the same identity key as the copy now in use).
+//   * TRINITY_DATA_DIR_PINNED=1 (set by a launcher that chose the folder; nothing sets it yet):
+//       folder missing -> refuse, never create;  no usable relay-key.json -> refuse, never mint;
+//       stamp present but naming a different key -> refuse.
+//   * not pinned (every box today): exactly today's behaviour — a missing folder is created and a missing key is
+//     minted — plus a one-time `.trinity-data-dir` stamp {relayPub} written once the key exists.
+// Refusal exits with DATA_DIR_REFUSED (78, EX_CONFIG) after a plain-English line a volunteer can act on.
+const DATA_DIR_PINNED = /^(1|true|yes|on)$/i.test(process.env.TRINITY_DATA_DIR_PINNED || '');
+const DATA_DIR_STAMP = join(DATA_DIR, '.trinity-data-dir');
+const DATA_DIR_MOVED = join(DATA_DIR, 'MOVED-TO');
+const DATA_DIR_REFUSED = 78;
+function refuseDataDir(why, todo) {
+  console.error('');
+  console.error('  ✖ RELAY NOT STARTED: ' + why);
+  console.error('    data folder: ' + DATA_DIR);
+  if (todo) console.error('    ' + todo);
+  console.error('    (refusing rather than starting an empty relay with a new identity — exit ' + DATA_DIR_REFUSED + ')');
+  console.error('');
+  process.exit(DATA_DIR_REFUSED);
+}
+function readJsonOrNull(p) { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } }
+function relayKeyPubOnDisk() { const k = readJsonOrNull(join(DATA_DIR, 'relay-key.json')); return (k && k.sk && k.pub) ? String(k.pub) : ''; }
+function stampPubOnDisk() { const s = readJsonOrNull(DATA_DIR_STAMP); return (s && typeof s.relayPub === 'string') ? s.relayPub : ''; }
+function writeDataDirStamp(pub) {
+  const tmp = DATA_DIR_STAMP + '.tmp-' + process.pid;
+  try { writeFileSync(tmp, JSON.stringify({ relayPub: pub, stampedAt: new Date().toISOString() }) + '\n'); renameSync(tmp, DATA_DIR_STAMP); }
+  catch (e) { try { rmSync(tmp, { force: true }); } catch {} console.error('  could not write .trinity-data-dir stamp:', (e && e.message) || e); }
+}
+function refuseIfMovedOut() {
+  if (!existsSync(DATA_DIR_MOVED)) return;
+  let note = ''; try { note = readFileSync(DATA_DIR_MOVED, 'utf8').replace(/[^\x20-\x7e -￿]+/g, ' ').trim().slice(0, 400); } catch {}
+  refuseDataDir('this relay\'s data was moved somewhere else. ' + (note || '(the MOVED-TO note is unreadable)'),
+    'Start the relay on the folder it moved to. This old copy must not run: it has the same identity as the new one.');
+}
+if (!existsSync(DATA_DIR)) {
+  if (DATA_DIR_PINNED) refuseDataDir('the relay\'s data folder is missing (is its drive unplugged, or did its drive letter change?).',
+    'Reconnect the drive that holds it, then start the relay again. Nothing has been created or changed.');
+  try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+}
+refuseIfMovedOut();
+// Temp files this guard writes (relay-key.json.tmp-<pid>, .trinity-data-dir.tmp-<pid>) are left behind only by a
+// process killed mid-write. A key temp holds a complete secret key: delete any whose writer is gone (audit C C6).
+// They are also excluded from backups. Only these two exact patterns, only with a dead pid.
+const DATA_DIR_TEMP_RE = /^(relay-key\.json|\.trinity-data-dir)\.tmp-(\d+)$/;
+try {
+  for (const n of readdirSync(DATA_DIR)) {
+    const m = DATA_DIR_TEMP_RE.exec(n); if (!m) continue;
+    // Our OWN pid on a temp written before this process started is a previous boot's (a container gateway is often
+    // pid 1 every time — audit D N-1): dead. Judged by the file's mtime against this process's start.
+    const pid = Number(m[2]); let alive = false;
+    if (pid === process.pid) { try { alive = statSync(join(DATA_DIR, n)).mtimeMs >= Date.now() - process.uptime() * 1000 - 1000; } catch {} }
+    else { try { process.kill(pid, 0); alive = true; } catch (e) { alive = !!(e && e.code === 'EPERM'); } }
+    if (!alive) { try { rmSync(join(DATA_DIR, n), { force: true }); } catch {} }
+  }
+} catch {}
+// A COMPLETELY EMPTY folder is a fresh one: a launcher that pins on the very first run (and has just created the
+// folder) must be able to start. R1 stays closed: an unplugged drive cannot produce an existing <mount>/<leaf>,
+// and a folder with ANY file in it but no key is still refused. Measured before anything below writes into it.
+// Leftover temp files from a first boot killed while writing the key or stamp (below) do not count, nor does the
+// clutter an OS file browser drops into any folder it opens (audit C C9). NOT ._* AppleDouble files: a lone
+// ._relay.sqlite on exFAT is what a deleted relay leaves behind, so it must not read as "fresh" (audit D N-3).
+const OS_CLUTTER = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'ehthumbs.db', 'desktop.ini', '.directory', '.Spotlight-V100', '.Trashes', '.fseventsd', '.TemporaryItems']);
+let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => DATA_DIR_TEMP_RE.test(n) || OS_CLUTTER.has(n) || (n.startsWith('._') && OS_CLUTTER.has(n.slice(2)))); } catch {}   // ._.DS_Store yes, ._relay.sqlite no (audit E E-1)
+// Called again after a staged restore is applied (below), when relay-key.json may have changed.
+function checkDataDirIdentity() {
+  refuseIfMovedOut();
+  const keyPub = relayKeyPubOnDisk(), stampPub = stampPubOnDisk(), hasStamp = existsSync(DATA_DIR_STAMP);
+  if (DATA_DIR_PINNED) {
+    if (!keyPub && DATA_DIR_WAS_EMPTY) {
+      // Audit B N5: the identity is the FIRST thing written into a fresh pinned folder — before .relay-lock,
+      // admin.json or the database — so a first boot killed part-way never leaves a folder that has files but no
+      // key (which every later pinned boot would refuse). Written to a temp name, fsynced, renamed, and the folder
+      // fsynced (audit C C5), so after a kill or a power cut it is whole or absent — as far as the filesystem honours
+      // fsync (exFAT/FAT journal nothing, so this narrows the window rather than closing it there).
+      console.log('  data folder is new and empty: creating this relay\'s identity (pinned)');
+      const sk = generateSecretKey(), pub = getPublicKey(sk);
+      const kf = join(DATA_DIR, 'relay-key.json'), tmp = kf + '.tmp-' + process.pid;
+      try {
+        const fd = openSync(tmp, 'w', 0o600);
+        try { writeFileSync(fd, JSON.stringify({ sk: Buffer.from(sk).toString('hex'), pub })); fsyncSync(fd); } finally { closeSync(fd); }
+        renameSync(tmp, kf);
+        try { const dfd = openSync(DATA_DIR, 'r'); try { fsyncSync(dfd); } finally { closeSync(dfd); } } catch {}   // Windows cannot open a directory
+      }
+      catch (e) { try { rmSync(tmp, { force: true }); } catch {} refuseDataDir('could not write the relay identity into the new data folder: ' + ((e && e.code) || e), 'Check the drive is writable, then start the relay again.'); }
+      writeDataDirStamp(pub);
+      return;
+    }
+    if (!keyPub) refuseDataDir('the data folder has no usable relay identity key (relay-key.json).',
+      'This is not the relay\'s data folder, or it is incomplete. Point the relay at the folder that holds its data.');
+    if (hasStamp && stampPub !== keyPub) refuseDataDir('the data folder belongs to a different relay (its .trinity-data-dir names ' + (stampPub || 'nothing readable') + ', its key is ' + keyPub + ').',
+      'Point the relay at its own data folder.');
+  } else if (hasStamp && keyPub && stampPub !== keyPub) {
+    console.error('  WARNING: .trinity-data-dir names relay ' + (stampPub || '(unreadable)') + ' but relay-key.json is ' + keyPub + ' — re-stamping (not pinned, so starting as before).');
+    writeDataDirStamp(keyPub); return;
+  }
+  if (keyPub && !hasStamp) writeDataDirStamp(keyPub);   // one-time adoption of an existing folder
+}
 // A staged restore must contain NO symlinks: a symlink named e.g. `relay.sqlite` would let the store, once it's
 // swapped in, write THROUGH the link to an arbitrary path (an arbitrary-file-write primitive). Reject the whole
 // restore if any entry (at any depth) is a symlink. (tar as a non-root user already blocks `..` traversal and
@@ -74,7 +179,21 @@ function stagingHasSymlink(p) {
   if (!existsSync(staging)) return;
   try {
     if (stagingHasSymlink(staging)) { console.error('  restore-on-boot REFUSED: backup contains a symlink'); rmSync(staging, { recursive: true, force: true }); return; }
-    for (const name of readdirSync(staging)) {
+    // DATA-DIR GUARD: a restored relay-key.json is a deliberate identity change, so the folder's old stamp goes
+    // with it (re-stamped from the restored key below) unless the backup carries its own. A backup never imports
+    // a MOVED-TO tombstone — that would make the restored relay refuse to start.
+    // A staged stamp is imported ONLY together with a staged key it matches; otherwise it is a foreign stamp
+    // (a hand-made tar, a stamp without its key) and would make a pinned relay refuse after a "successful" restore.
+    const staged = readdirSync(staging);
+    let sk = null, ss = null;
+    try { const k = JSON.parse(readFileSync(join(staging, 'relay-key.json'), 'utf8')); if (k && k.sk && k.pub) sk = String(k.pub); } catch {}
+    try { const t = JSON.parse(readFileSync(join(staging, '.trinity-data-dir'), 'utf8')); if (t && typeof t.relayPub === 'string') ss = t.relayPub; } catch {}
+    const importStamp = !!(sk && ss && sk === ss);
+    if (staged.includes('relay-key.json') && !importStamp) { try { rmSync(DATA_DIR_STAMP, { force: true }); } catch {} }
+    for (const name of staged) {
+      if (name === 'MOVED-TO') { console.error('  restore-on-boot: skipped a MOVED-TO note in the backup'); continue; }
+      if (/^\.(move-request|remove-old-request)(\.tmp-\d+)?$/.test(name)) { console.error('  restore-on-boot: skipped a ' + name + ' in the backup (a request to another box\'s launcher)'); continue; }
+      if (name === '.trinity-data-dir' && !importStamp) { console.error('  restore-on-boot: skipped a .trinity-data-dir that does not match the backup\'s key'); continue; }
       const dst = join(DATA_DIR, name);
       try { rmSync(dst, { recursive: true, force: true }); } catch {}
       renameSync(join(staging, name), dst);
@@ -83,6 +202,16 @@ function stagingHasSymlink(p) {
   } catch (e) { console.error('  restore-on-boot failed:', (e && e.message) || e); }
   try { rmSync(staging, { recursive: true, force: true }); } catch {}
 })();
+checkDataDirIdentity();
+// A "this folder is in use" note for scripts/relay-move.mjs, which must never copy or rename a folder a live relay
+// is writing to (audit A #10: "the port I was told is closed" is not proof). It is advisory: the mover checks the
+// pid is alive and is a gateway started no later than this note (command line + start time, on every OS). Removed on
+// a normal exit and on SIGTERM/SIGINT; a SIGKILL or a crash leaves it, so a stale note is normal — a dead pid means
+// free. The gateway itself never reads it. Excluded from backups and from a move's copy.
+const DATA_DIR_LOCK = join(DATA_DIR, '.relay-lock');
+try { writeFileSync(DATA_DIR_LOCK, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n'); } catch {}
+function releaseDataDirLock() { try { const l = JSON.parse(readFileSync(DATA_DIR_LOCK, 'utf8')); if (l && l.pid === process.pid) unlinkSync(DATA_DIR_LOCK); } catch {} }
+process.on('exit', releaseDataDirLock);   // a normal exit; the SIGTERM/SIGINT handler below calls it too (it re-raises, so 'exit' never fires)
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');                 // legacy JSON store (migrated from, once)
 // SHA-256 of the release signing certificate (android/app/keystore.properties -> release.keystore, alias
@@ -1599,6 +1728,9 @@ const RELAY_KEY_FILE = join(DATA_DIR,'relay-key.json');
 let RELAY_SK = null, RELAY_PUB = '';
 try { const k = JSON.parse(readFileSync(RELAY_KEY_FILE, 'utf8')); if (k && k.sk && k.pub) { RELAY_SK = Uint8Array.from(Buffer.from(k.sk, 'hex')); RELAY_PUB = k.pub; } } catch {}
 if (!RELAY_SK || !RELAY_PUB) { RELAY_SK = generateSecretKey(); RELAY_PUB = getPublicKey(RELAY_SK); try { writeFileSync(RELAY_KEY_FILE, JSON.stringify({ sk: Buffer.from(RELAY_SK).toString('hex'), pub: RELAY_PUB }), { mode: 0o600 }); } catch {} }
+// DATA-DIR GUARD: a fresh folder gets its .trinity-data-dir stamp once its key exists. A pinned folder reaches a
+// mint only if it was completely empty at start-up (checkDataDirIdentity refuses any other pinned folder without a key).
+if (!existsSync(DATA_DIR_STAMP) && relayKeyPubOnDisk() === RELAY_PUB) writeDataDirStamp(RELAY_PUB);
 // a relay-signed NIP-98 (kind-27235) proof bound to url+method+church — how this relay authenticates to a peer's /sync.
 function relayProof(url, method, cp) { return 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', url], ['method', method], ['church', cp]], content: '' }, RELAY_SK))).toString('base64'); }
 // this relay's OWN claim (control panel → claim a memorable name in a directory): kind-27235 signed by RELAY_SK,
@@ -7185,6 +7317,218 @@ function publicFeed(req, res, route) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
+// ── RELAY STORAGE LOCATION — the panel API (relay storage plan step 3) ─────────────────────────────────────────────
+// GET /storage, POST /storage/move, POST /storage/remove-old. ALL HIDDEN unless the launcher sets
+// TRINITY_STORAGE_MODE=suite|server: with it unset (every box today, a git checkout, the release host) the three
+// routes do not exist — they fall through to the static handler exactly as before, and nothing below ever runs.
+//
+// The gateway NEVER moves or deletes anything. It shows what a move would do, and on request writes a request file
+// into its own data folder for the launcher (Suite: the Rust shell, step 5; server: the root helper, step 6), which
+// re-checks everything itself — the request is a wish, not an authority (plan §2, R2).
+//   * POST /storage/move  — admin token; on the Suite ALSO a genuinely local request (owner §8a: never over the
+//     tunnel, even with the token). Re-checks eligibility with the mover's own checks, writes .move-request, then
+//     shuts the relay down CLEANLY (store.close() folds the WAL) and exits 0 so the launcher can do the move.
+//   * POST /storage/remove-old — the same gates; names ONLY a folder the journal recorded (the old copy, or a
+//     leftover). Writes .remove-old-request. Removes nothing.
+// The journal (move state) lives OUTSIDE the data folder (plan §2), in the JSON file the launcher names with
+// TRINITY_STORAGE_STATE (Suite: storage.json; server: move-state.json), field `move`. Read only, never written here.
+const STORAGE_MODE = (m => (m === 'suite' || m === 'server') ? m : '')(String(process.env.TRINITY_STORAGE_MODE || '').trim().toLowerCase());
+const STORAGE_STATE_FILE = String(process.env.TRINITY_STORAGE_STATE || '').trim();
+const STORAGE_MOVE_REQUEST = join(DATA_DIR, '.move-request');
+const STORAGE_REMOVE_REQUEST = join(DATA_DIR, '.remove-old-request');
+const STORAGE_REMIND_DAYS = 7;                       // owner §8a: remind about a kept old copy after 7 days
+const STORAGE_SPACE_MARGIN = 512 * 1024 * 1024;     // the mover's own margin (relay-move.mjs SPACE_MARGIN)
+const STORAGE_SERVER_FS = new Set(['ext4', 'xfs', 'btrfs', 'zfs', 'f2fs']);   // plan §3 "Linux server"
+// filesystems that are a real drive (for listing a mounted-but-not-in-fstab drive on a server, greyed)
+const STORAGE_DRIVE_FS = new Set([...STORAGE_SERVER_FS, 'ext2', 'ext3', 'exfat', 'vfat', 'ntfs', 'ntfs3', 'fuseblk', 'hfsplus', 'apfs']);
+// A request that crossed a proxy or a tunnel. cloudflared delivers on a LOOPBACK socket, so the socket alone proves
+// nothing; the Cloudflare edge always adds X-Forwarded-For / CF-Connecting-IP / CF-Ray, which a client cannot strip.
+// A strict superset of the /local-token test (x-forwarded-for + forwarded), plus the same loopback Host check.
+const STORAGE_PROXY_HEADERS = ['x-forwarded-for', 'forwarded', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-server',
+  'x-real-ip', 'x-original-forwarded-for', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'cf-ipcountry', 'cdn-loop', 'true-client-ip',
+  'via', 'tailscale-user-login', 'tailscale-user-name', 'tailscale-funnel-request'];
+function storageRequestIsLocal(req) {
+  const ra = (req.socket && req.socket.remoteAddress) || '';
+  const loopbackSock = ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
+  const proxied = STORAGE_PROXY_HEADERS.some(h => req.headers[h] != null);
+  const host = String(req.headers['host'] || '').toLowerCase();
+  const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0];
+  const loopbackHost = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  return loopbackSock && !proxied && loopbackHost;
+}
+function storageReadJournal() {
+  if (!STORAGE_STATE_FILE) return { j: null, err: 'storage-state-unknown' };
+  if (!existsSync(STORAGE_STATE_FILE)) return { j: null, err: null };            // never moved: no journal yet
+  try { const o = JSON.parse(readFileSync(STORAGE_STATE_FILE, 'utf8')); return { j: (o && o.move && typeof o.move === 'object') ? o.move : null, err: null }; }
+  catch { return { j: null, err: 'storage-state-unreadable' }; }
+}
+// Mount table: async (never blocks the event loop — audit C C8 / D), cached briefly; a move asks for a fresh one.
+let _storageMountsP = null, _storageMountsAt = 0;
+function storageMounts(fresh) {
+  if (fresh || !_storageMountsP || Date.now() - _storageMountsAt > 30000) { _storageMountsAt = Date.now(); _storageMountsP = systemMountsAsync(); }
+  return _storageMountsP;
+}
+// Size of the data folder, async and cached (blobs can be GBs). Also notes any symlink: the mover refuses those.
+let _storageSizeP = null, _storageSizeAt = 0;
+function storageDataSize(fresh) {
+  if (fresh || !_storageSizeP || Date.now() - _storageSizeAt > 60000) {
+    _storageSizeAt = Date.now();
+    _storageSizeP = (async () => {
+      let bytes = 0, files = 0, symlink = false; const stack = [DATA_DIR];
+      while (stack.length) {
+        const d = stack.pop(); let ents; try { ents = await readdirP(d, { withFileTypes: true }); } catch { continue; }
+        for (const e of ents) {
+          const p = join(d, e.name);
+          if (e.isSymbolicLink()) { symlink = true; continue; }
+          if (e.isDirectory()) stack.push(p);
+          else if (e.isFile()) { try { bytes += (await lstatP(p)).size; files++; } catch {} }
+        }
+      }
+      return { bytes, files, symlink };
+    })();
+  }
+  return _storageSizeP;
+}
+function storageInside(a, b) { const r = relative(b, a); return r === '' || (!!r && !r.startsWith('..') && !isAbsolute(r)); }
+// The places a steward may pick (plan §3 per OS, owner §8a: a drive, never a typed path). Each becomes
+// <place>/trinityone-relay.
+async function storageCandidates(mounts) {
+  const pf = process.platform, out = [];
+  const add = (path, label, kind) => { if (path && !out.some(c => samePath(c.path, path, pf))) out.push({ path, label, kind }); };
+  const dirsIn = async d => { try { return (await readdirP(d, { withFileTypes: true })).filter(e => e.isDirectory() || e.isSymbolicLink()).map(e => ({ p: join(d, e.name), link: e.isSymbolicLink() })); } catch { return []; } };
+  if (STORAGE_MODE === 'server') {
+    // only persistent (fstab) mounts, so systemd can mount the drive before the relay at boot (RequiresMountsFor=)
+    let fstab = ''; try { fstab = await readFileP('/etc/fstab', 'utf8'); } catch {}
+    for (const line of fstab.split('\n')) {
+      const f = line.replace(/#.*/, '').trim().split(/\s+/); if (f.length < 3) continue;
+      const mp = f[1].replace(/\\040/g, ' ');
+      if (!mp.startsWith('/') || mp === '/' || f[2] === 'swap') continue;
+      add(mp, basename(mp), 'fstab');
+    }
+    // a real drive that is mounted but NOT in fstab is listed too, greyed, so the steward learns why it cannot be
+    // picked (plan §3: "add it to /etc/fstab first"; owner §8b took the mockup's answer). Never one a system path.
+    for (const m of mounts || []) {
+      if (!STORAGE_DRIVE_FS.has(String(m.fsType || '').toLowerCase()) || !m.mountpoint || m.mountpoint === '/') continue;
+      if (classifyTarget({ path: join(m.mountpoint, STORAGE_LEAF), fsType: m.fsType, mode: 'server', platform: pf }).refuse.includes('system-folder')) continue;
+      add(m.mountpoint, basename(m.mountpoint), 'not-fstab');
+    }
+    return out;
+  }
+  if (pf === 'win32') { for (const m of mounts || []) add(m.mountpoint, m.mountpoint.replace(/\\$/, ''), 'drive'); return out; }
+  add(homedir(), 'Home folder', 'home');
+  if (pf === 'darwin') { for (const e of await dirsIn('/Volumes')) if (!e.link) add(e.p, basename(e.p), 'volume'); }   // the boot volume's alias is a symlink
+  else {
+    const u = String(process.env.USER || process.env.LOGNAME || '').replace(/[\\/]/g, '');
+    // only a real mountpoint (audit B L-2): a directory left behind after an unmount would otherwise put the relay on
+    // the root disk under a future mount point — the R1 trap
+    if (u) for (const d of ['/media/' + u, '/run/media/' + u]) for (const e of await dirsIn(d)) if ((mounts || []).some(m => m.mountpoint === e.p)) add(e.p, basename(e.p), 'removable');
+    for (const e of await dirsIn('/mnt')) if ((mounts || []).some(m => m.mountpoint === e.p)) add(e.p, basename(e.p), 'mount');
+  }
+  return out;
+}
+// One place, judged as the mover judges it: symlinks, realpath, mount, classifyTarget (relay-move.mjs).
+async function storageJudge(c, ctx) {
+  const pf = process.platform;
+  const d = { mountpoint: c.path, label: c.label, kind: c.kind, target: join(c.path, STORAGE_LEAF), fsType: null, freeBytes: null, needBytes: null, sameDrive: false, eligible: false, refuse: [], warn: [] };
+  const done = () => { d.refuse = [...new Set(d.refuse)]; d.warn = [...new Set(d.warn)]; d.eligible = d.refuse.length === 0; return d; };
+  // a network mount is refused from the mount table ALONE: never lstat/statfs it (a dead share can hang a call)
+  const pre = mountFor(c.path, ctx.mounts, pf);
+  const preCls = classifyTarget({ path: d.target, fsType: pre && pre.fsType, mountOptions: pre && pre.options, mode: STORAGE_MODE, platform: pf });
+  if (preCls.refuse.includes('network')) { d.fsType = (pre && pre.fsType) || null; d.refuse.push('network'); return done(); }
+  if (pathHasSymlink(c.path, pf)) { d.refuse.push('path-has-symlink'); return done(); }
+  let real; try { real = await realpathP(c.path); } catch { d.refuse.push('drive-missing'); return done(); }
+  d.target = join(real, STORAGE_LEAF);
+  const m = mountFor(real, ctx.mounts, pf);
+  d.fsType = (m && m.fsType) || null;
+  if (STORAGE_MODE === 'server') {
+    if (c.kind === 'not-fstab') d.refuse.push('not-in-fstab');
+    if (!m || !samePath(m.mountpoint, real, pf)) d.refuse.push('not-mounted');
+    else if (!STORAGE_SERVER_FS.has(String(m.fsType || '').toLowerCase())) d.refuse.push('filesystem-not-supported');
+  }
+  d.sameDrive = !!(m && ctx.curMount && samePath(m.mountpoint, ctx.curMount.mountpoint, pf));
+  if (ctx.dataReal && samePath(d.target, ctx.dataReal, pf)) d.refuse.push('already-here');
+  else if (ctx.dataReal && (storageInside(d.target, ctx.dataReal) || storageInside(ctx.dataReal, d.target))) d.refuse.push('target-overlaps-source');
+  try {
+    const st = await lstatP(d.target);
+    if (st.isSymbolicLink() || !st.isDirectory()) d.refuse.push('target-not-empty');
+    else if ((await readdirP(d.target)).length && !isTombstoneOnly(d.target)) d.refuse.push('target-not-empty');
+  } catch {}
+  try { const s = await statfsP(real); d.freeBytes = Number(s.bavail) * Number(s.bsize); } catch {}
+  // a same-drive move is a rename (owner §8a) and needs no space; anything else is a full copy
+  if (!d.sameDrive) d.needBytes = Math.ceil(ctx.sizeBytes * 1.1) + STORAGE_SPACE_MARGIN;
+  const cls = classifyTarget({ path: d.target, fsType: d.fsType, mountOptions: m && m.options, free: d.freeBytes == null ? undefined : d.freeBytes,
+    need: d.needBytes == null ? undefined : d.needBytes, mode: STORAGE_MODE, codeDir: ROOT, platform: pf });
+  d.refuse.push(...cls.refuse); d.warn.push(...cls.warn);
+  if (pf === 'linux' && m && !d.warn.includes('removable') && await blockDeviceIsUsbOrRemovable(m.source)) d.warn.push('removable');   // audit B L-6
+  return done();
+}
+// Everything the card needs. `fresh` re-reads the mount table and size (a move decides on current facts).
+async function storageReport(fresh) {
+  const pf = process.platform;
+  const { j, err } = storageReadJournal();
+  const [mounts, size] = await Promise.all([storageMounts(fresh), storageDataSize(fresh)]);
+  let dataReal = null; try { dataReal = await realpathP(DATA_DIR); } catch {}
+  const curMount = dataReal ? mountFor(dataReal, mounts || [], pf) : null;
+  let curFree = null; try { const s = await statfsP(DATA_DIR); curFree = Number(s.bavail) * Number(s.bsize); } catch {}
+  // reasons the FOLDER cannot be moved right now, whatever drive is picked (audit A #11, #14; audit B)
+  const refuse = [];
+  if (err) refuse.push(err);
+  if (j && MOVE_ACTIVE.has(j.state)) refuse.push('move-in-progress');
+  if (j && j.state === 'awaiting-confirm') refuse.push('old-copy-awaiting-removal');
+  if (existsSync(join(DATA_DIR, '.restore-pending'))) refuse.push('restore-pending');
+  // A request is live only if THIS run of the relay wrote it (it stops right after writing). One older than this
+  // process, with no move under way, is a leftover the launcher never consumed (audit B M-1): it is reported as
+  // stale and not treated as "under way". The mover consumes the request as its first act, so this is a backstop.
+  if (existsSync(STORAGE_MOVE_REQUEST) && !storageRequestIsStale(j)) refuse.push('move-already-requested');
+  if (await relayLockHeld(DATA_DIR)) refuse.push('relay-running');   // ANOTHER live relay process on this folder (our own lock is ignored)
+  if (size.symlink) refuse.push('source-has-symlink');
+  if (!mounts) refuse.push('drives-unknown');
+  const ctx = { mounts: mounts || [], dataReal, curMount, sizeBytes: size.bytes };
+  const drives = [];
+  for (const c of await storageCandidates(mounts || [])) drives.push(await storageJudge(c, ctx));
+  const old = j && j.state === 'awaiting-confirm' && j.oldCopy && j.oldCopy.path ? j.oldCopy : null;
+  const ageDays = old && old.since ? Math.floor((Date.now() - Date.parse(old.since)) / 86400000) : null;
+  const req = f => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return existsSync(f) ? {} : null; } };
+  return {
+    ok: true, mode: STORAGE_MODE,
+    current: { path: DATA_DIR, realPath: dataReal, drive: curMount ? { mountpoint: curMount.mountpoint, fsType: curMount.fsType } : null, sizeBytes: size.bytes, files: size.files, freeBytes: curFree },
+    move: j ? { state: j.state, mode: j.mode || null, from: j.from || null, to: j.to || null, code: j.code || null, detail: j.detail || null, note: j.note || null,
+      startedAt: j.startedAt || null, switchedAt: j.switchedAt || null, checkedAt: j.checkedAt || null, endedAt: j.endedAt || null,
+      totalBytes: j.totalBytes ?? null, copiedBytes: j.copiedBytes ?? null, counts: j.counts || null } : null,
+    oldCopy: old ? { path: old.path, since: old.since || null, exists: existsSync(old.path), ageDays, remind: ageDays !== null && ageDays >= STORAGE_REMIND_DAYS,
+      sizeBytes: j.totalBytes ?? null, mountpoint: (mountFor(old.path, mounts || [], pf) || {}).mountpoint || null } : null,
+    // set-aside copies and rename tombstones the mover recorded (audit B N8); an entry the remover marked removedAt
+    // is gone for good and not offered again (audit C C3 — the remover, step 5/6, must set it)
+    leftovers: (j && Array.isArray(j.leftovers) ? j.leftovers : []).filter(l => l && l.path && !l.removedAt)
+      .map(l => ({ path: l.path, kind: l.kind || null, since: l.since || null, exists: existsSync(l.path) })),
+    requests: { move: (m => m ? { ...m, stale: storageRequestIsStale(j) } : m)(req(STORAGE_MOVE_REQUEST)), removeOld: req(STORAGE_REMOVE_REQUEST) },
+    refuse, drives,
+  };
+}
+const STORAGE_STARTED_AT = Date.now();
+function storageRequestIsStale(j) {
+  if (j && MOVE_ACTIVE.has(j.state)) return false;
+  let at = NaN; try { at = Date.parse(JSON.parse(readFileSync(STORAGE_MOVE_REQUEST, 'utf8')).requestedAt); } catch {}
+  if (!Number.isFinite(at)) { try { at = statSync(STORAGE_MOVE_REQUEST).mtimeMs; } catch { return false; } }
+  return at < STORAGE_STARTED_AT;
+}
+function storageWriteRequest(file, obj) {
+  const tmp = file + '.tmp-' + process.pid;
+  const fd = openSync(tmp, 'w', 0o600);
+  try { writeFileSync(fd, JSON.stringify(obj) + '\n'); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(tmp, file);
+  try { const dfd = openSync(DATA_DIR, 'r'); try { fsyncSync(dfd); } finally { closeSync(dfd); } } catch {}   // Windows cannot open a directory
+}
+// The relay stops itself for the move the way SIGTERM stops it (store.close() checkpoints the WAL, the lock note
+// goes), but exits 0: the launcher reads .move-request and moves the data while nothing has the folder open.
+function storageStopForMove() {
+  if (_shuttingDown) return; _shuttingDown = true;
+  console.log('  stopping for a data move (.move-request written); the launcher moves the data and starts the relay again');
+  try { store.close(); } catch (e) {}
+  releaseDataDirLock();
+  process.exit(0);
+}
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
   // relay status (for the Relay app control dashboard)
@@ -8190,6 +8534,66 @@ function serveStatic(req, res) {
     }
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
+  // RELAY STORAGE LOCATION (plan step 3; helpers + the full contract above serveStatic). Not a route at all unless
+  // TRINITY_STORAGE_MODE is set: an unset box falls through to the static handler exactly as before.
+  if (STORAGE_MODE && (route === '/storage' || route === '/storage/move' || route === '/storage/remove-old')) {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // same-origin panel: NO Access-Control-Allow-Origin
+    const send = (code, obj) => { res.writeHead(code, H); res.end(JSON.stringify(obj)); };
+    // N-3 (audit B, left as is): on an opted-in box a non-admin gets 401 here, where an unset box answers like a
+    // missing path — that reveals only that the mode is on.
+    if (!adminOK(req)) { send(401, { error: 'unauthorized' }); return; }
+    const local = storageRequestIsLocal(req);
+    if (route === '/storage') {
+      if (req.method !== 'GET') { send(405, { error: 'method' }); return; }
+      storageReport(false).then(r => send(200, { ...r, local, canChange: STORAGE_MODE === 'server' || local }),
+        e => send(500, { error: String((e && e.message) || e) }));
+      return;
+    }
+    if (req.method !== 'POST') { send(405, { error: 'method' }); return; }
+    // owner §8a: on the Suite a move (or removing a copy) is started ONLY on the relay's own computer — never over the
+    // tunnel, even with the admin token
+    if (STORAGE_MODE === 'suite' && !local) { send(403, { error: 'local-only', message: 'Change this on the relay\'s own computer.' }); return; }
+    let body = ''; req.on('data', c => { body += c; if (body.length > 4000) req.destroy(); });
+    req.on('end', () => {
+      let b; try { b = JSON.parse(body || '{}'); } catch { send(400, { error: 'bad request' }); return; }
+      (async () => {
+        const r = await storageReport(true);
+        if (route === '/storage/move') {
+          const drive = typeof b.drive === 'string' ? b.drive : '';
+          const d = r.drives.find(x => x.mountpoint === drive);           // only a place THIS list offered — never a typed path
+          if (!d) { send(400, { error: 'drive-not-offered' }); return; }
+          if (r.refuse.length) { send(409, { error: 'refused', refuse: r.refuse }); return; }
+          if (!d.eligible) { send(409, { error: 'refused', refuse: d.refuse }); return; }
+          // owner §8b: a drive with no file permissions (exFAT/FAT), and any REMOVABLE drive (USB wear: it writes all
+          // day and can fail without warning), needs the steward's explicit acknowledgement — the panel's one tick box
+          // sends both; a request without it is refused here too, not only greyed in the page
+          const acked = Array.isArray(b.acknowledge) ? b.acknowledge : [];
+          const missing = ['no-permissions', 'removable'].filter(w => d.warn.includes(w) && !acked.includes(w));
+          if (missing.length) { send(409, { error: 'refused', refuse: missing.map(w => w + '-not-acknowledged') }); return; }
+          const pub = relayKeyPubOnDisk();
+          if (!pub) { send(409, { error: 'refused', refuse: ['source-has-no-key'] }); return; }
+          let events = null; try { events = store.count(); } catch {}
+          storageWriteRequest(STORAGE_MOVE_REQUEST, { drive: d.mountpoint, target: d.target, from: DATA_DIR, relayPub: pub, events, sizeBytes: r.current.sizeBytes,
+            sameDrive: d.sameDrive, warn: d.warn, mode: STORAGE_MODE, requestedAt: new Date().toISOString() });
+          res.once('finish', () => setTimeout(storageStopForMove, 50));
+          send(200, { ok: true, stopping: true, drive: d.mountpoint, target: d.target, sameDrive: d.sameDrive, warn: d.warn });
+          return;
+        }
+        // remove-old: ONLY the recorded old copy or a recorded leftover, never the folder in use
+        const path = typeof b.path === 'string' ? b.path : '';
+        const kind = r.oldCopy && r.oldCopy.path === path ? 'old-copy' : (r.leftovers.find(l => l.path === path) ? 'leftover' : '');
+        if (!kind) { send(400, { error: 'not-recorded' }); return; }
+        // never the live folder, nor anything that holds it or is inside it, compared after resolving symlinks
+        // (audit B L-4). The step-5/6 remover must re-check the same thing itself: it is the boundary, not this.
+        let real = path; try { real = await realpathP(path); } catch {}
+        const live = [DATA_DIR, r.current.realPath].filter(Boolean);
+        if (live.some(l => [path, real].some(p => samePath(p, l) || storageInside(p, l) || storageInside(l, p)))) { send(409, { error: 'refused', refuse: ['current-folder'] }); return; }
+        storageWriteRequest(STORAGE_REMOVE_REQUEST, { path, kind, relayPub: relayKeyPubOnDisk(), mode: STORAGE_MODE, requestedAt: new Date().toISOString() });
+        send(200, { ok: true, requested: true, path, kind });
+      })().catch(e => { try { send(500, { error: String((e && e.message) || e) }); } catch {} });
+    });
+    return;
+  }
   // relay feature toggles (what this box serves besides the relay) — token-gated, same pattern as /config
   if (route === '/settings') {
     const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' };
@@ -8353,7 +8757,11 @@ function serveStatic(req, res) {
     try {
       child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
         '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log',
-        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '.'],
+        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '--exclude=./.relay-lock',
+        // requests to the launcher (storage step 3): a backup restored elsewhere must never carry a pending move/removal
+        '--exclude=./.move-request', '--exclude=./.remove-old-request', '--exclude=./.move-request.tmp-[0-9]*', '--exclude=./.remove-old-request.tmp-[0-9]*',
+        // the names the guard writes (tmp-<pid>); a tar glob cannot say digits-only, so this is the closest match
+        '--exclude=./relay-key.json.tmp-[0-9]*', '--exclude=./.trinity-data-dir.tmp-[0-9]*', '.'],
         { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"tar not available on this box"}'); return; }
     res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + fname + '"', ...SEC_HEADERS });
@@ -9044,6 +9452,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     if (_shuttingDown) return; _shuttingDown = true;
     try { store.close(); } catch (e) {}
+    releaseDataDirLock();
     try { process.removeAllListeners(sig); } catch (e) {}
     try { process.kill(process.pid, sig); } catch (e) { process.exit(0); }
   });
