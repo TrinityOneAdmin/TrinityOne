@@ -104,8 +104,16 @@ async function startChrome(base) {
   };
   // open the panel on Settings (where the Updates card lives), first-run wizard dismissed
   await send('Page.navigate', { url: base + '/relay-app/control.html' }); await sleep(600);
-  await evalIn(`localStorage.setItem('to_relay_setup_seen','1'); sessionStorage.setItem('to_relay_setup_skipped','1'); localStorage.setItem('trinityone.relay.tab','set')`);
+  await evalIn(`localStorage.setItem('to_relay_setup_seen','1'); sessionStorage.setItem('to_relay_setup_skipped','1'); localStorage.setItem('trinityone.relay.tab','set'); window.__oldDocument = true`);
   await send('Page.navigate', { url: base + '/relay-app/control.html' });
+  // Fixes audit LOW-4 (the flake): wait for the SECOND document to finish loading and to have its Settings panel, or a
+  // later check can read the old document, or a null element in the half-parsed new one, on a busy machine.
+  let ready = false;
+  for (let i = 0; i < 150 && !ready; i++) {
+    await sleep(100);
+    try { ready = await evalIn(`!window.__oldDocument && document.readyState === 'complete' && !!document.getElementById('panel-set')`); } catch { ready = false; }
+  }
+  assert.ok(ready, 'the panel never finished loading');
   return { evalIn, stop };
 }
 const waitFor = async (c, expr, want, ms = 15000) => { const t0 = Date.now(); let v; while (Date.now() - t0 < ms) { v = await c.evalIn(expr); if (want(v)) return v; await sleep(300); } return v; };

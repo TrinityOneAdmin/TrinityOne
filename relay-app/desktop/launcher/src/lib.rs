@@ -105,6 +105,26 @@ pub trait Host: Sync {
     fn sleep_ms(&self, ms: u64) {
         std::thread::sleep(Duration::from_millis(ms));
     }
+    /// A value that changes whenever the running relay shows it is working (the Suite: the time of its last line of
+    /// output). Only compared for change. Default: never changes, so only the step count decides.
+    fn activity(&self) -> u64 {
+        0
+    }
+    /// Was the relay just adopted put in place by a code update applied moments ago (at this start, or by the last
+    /// tick)? Asked once per adoption. Default: never.
+    fn fresh_update(&self) -> bool {
+        false
+    }
+    /// That fresh update failed the identity proof: roll it back. Replaced = the relay now running instead (proven
+    /// next); Stopped = none could be started; None = nothing was done.
+    fn reject_update(&self, _data_dir: &Path, _why: &str) -> Tick {
+        Tick::None
+    }
+    /// Did the relay just adopted carry out a restore the HOST saw staged and handed to its boot (the Suite: step 4c of
+    /// an apply, where the restore was staged after the launcher looked)? Asked once per adoption. Default: no.
+    fn restore_handed_to_boot(&self) -> bool {
+        false
+    }
     /// The host's OWN crash recovery, run before ANY relay is started on `data_dir` — after the mover's recovery has
     /// decided the folder, before the step-8 begin-check counts it (the Suite: auto-update repairs a data restore a
     /// crash interrupted). Err((title, reason)) = start nothing; the splash says why.
@@ -137,9 +157,18 @@ pub struct Config {
     /// how long a launcher waits for a running mover that makes NO PROGRESS (its journal state / copiedBytes unchanged)
     /// before it says the move looks stuck. Progress resets the clock: a long copy is never "stuck" (audit N1, M-1)
     pub mover_wait_ms: u64,
-    /// after a MOVE, how many 250 ms steps the relay on the new folder gets to open its port before the check is
-    /// treated as failed and rolled back (audit N6). A normal start has no such bound.
+    /// after a MOVE, how many 250 ms steps the relay on the new folder may go WITHOUT PROGRESS (no new output, see
+    /// Host::activity) before the check is treated as failed and rolled back (audit N6). Any output resets the count:
+    /// a slow but working first start on a slow drive is never rolled back (full audit M-1, "progress, never the
+    /// clock"); a silent hang still is. A normal start has no such bound.
     pub check_steps: u32,
+    /// after a MOVE, the backstop for a relay that keeps printing but never opens its port (fixes audit LOW-1): this
+    /// many 250 ms steps with no MEANINGFUL progress. Before the relay listens, the only meaningful progress there is
+    /// is the port opening (its /status cannot answer before that), and that ends the wait — so this counts every step
+    /// since the spawn. Generous (the app: 60 min, twelve times the quiet bound), so a slow drive replaying a big store
+    /// while printing is still given its time, but a flood of error lines from a failing drive cannot hold
+    /// "Checking…" for ever.
+    pub check_ceiling_steps: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -307,12 +336,160 @@ pub fn compare_identity(proven: Option<&str>, recorded: Option<&str>) -> Identit
     }
 }
 fn prove(host: &dyn Host, cfg: &Config) -> Option<String> {
-    let p = mover(host, cfg, &["prove"], &["--port".into(), cfg.port.to_string()])?;
+    match prove_once(host, cfg) {
+        Proof::Key(k) => Some(k),
+        _ => None,
+    }
+}
+
+/// One identity proof, sorted by what it is evidence of (full-audit fixes M-1).
+#[derive(Debug, PartialEq)]
+pub enum Proof {
+    /// the relay signed our nonce with this key
+    Key(String),
+    /// the relay ANSWERED and its answer is wrong: no /relay-identity, a bad signature, the wrong nonce or address,
+    /// a stale proof. Evidence about the code that answered.
+    Definite(String),
+    /// nothing was learned: no answer (a stalled event loop, a timeout) or mover output that could not be read.
+    /// Never evidence that the code is bad.
+    Inconclusive(String),
+}
+/// Pure: how a `relay-move.mjs prove` answer is read. `None` = the mover's output could not be read.
+pub fn read_proof(v: Option<&Value>) -> Proof {
+    let Some(p) = v else { return Proof::Inconclusive("mover-output-unreadable".into()) };
     if p.get("ok").and_then(|b| b.as_bool()) == Some(true) {
-        s_of(&p, "relayPub").map(|s| s.to_string())
-    } else {
-        host.log(&format!("identity proof failed: {}", s_of(&p, "code").unwrap_or("?")));
-        None
+        if let Some(k) = s_of(p, "relayPub").filter(|s| !s.is_empty()) {
+            return Proof::Key(k.to_string());
+        }
+        return Proof::Inconclusive("no-key-in-answer".into());
+    }
+    let code = s_of(p, "code").unwrap_or("?").to_string();
+    // Note (fixes audit L-d, left as is on purpose): relay-move.mjs proveIdentity reports a 200 whose body is not JSON
+    // (for example an update serving HTML on /relay-identity) as `unreachable`, because the parse throws into its
+    // catch-all. That is read here as inconclusive, so such an update is never treated as evidence — it only leaves the
+    // "couldn't prove" note. Pre-existing mover behaviour; changing it is a mover change, not this one.
+    let definite = code.starts_with("no-proof-")
+        || matches!(code.as_str(), "bad-proof" | "bad-signature" | "wrong-nonce" | "stale-proof" | "bad-address" | "wrong-address");
+    if definite { Proof::Definite(code) } else { Proof::Inconclusive(code) }
+}
+fn prove_once(host: &dyn Host, cfg: &Config) -> Proof {
+    let p = mover(host, cfg, &["prove"], &["--port".into(), cfg.port.to_string()]);
+    let r = read_proof(p.as_ref());
+    if !matches!(r, Proof::Key(_)) {
+        host.log(&format!("identity proof failed: {r:?}"));
+    }
+    r
+}
+
+/// The staging folder a restore leaves for the relay's next boot (gateway.mjs applyPendingRestore consumes it).
+pub const RESTORE_PENDING: &str = ".restore-pending";
+
+/// What the data folder looked like just BEFORE a relay booted: its key file, and whether a restore was staged.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BootSnapshot {
+    pub key: Option<String>,
+    pub restore_pending: bool,
+}
+pub fn boot_snapshot(dir: &Path) -> BootSnapshot {
+    BootSnapshot { key: key_pub_of(dir), restore_pending: dir.join(RESTORE_PENDING).exists() }
+}
+/// A restore was carried out by this boot: one was staged before it, and the staging is gone after it.
+pub fn restore_consumed(before: &BootSnapshot, dir: &Path) -> bool {
+    before.restore_pending && !dir.join(RESTORE_PENDING).exists()
+}
+
+/// Pure: did the relay a fresh update put in place fail the identity check? `before` = the folder's key just before
+/// its boot, `after` = the key file after it, `restored` = a staged restore was consumed by this boot. Only evidence
+/// counts (fixes audits H-1 (2), M-1, M-A):
+///   • it signs with a key that is not the folder's AFTER the boot;
+///   • or, when no restore was carried out, a key that is not the folder's BEFORE the boot — the update's own boot
+///     changed the key (gateway.mjs re-mints a key file its reader cannot parse). The update apply never runs while a
+///     restore is staged (attempt_apply), so outside a restore nothing may change the key during an update's boot;
+///   • or a definite wrong answer.
+/// An inconclusive proof, or no key on disk to compare with, is not evidence.
+pub fn fresh_update_failed(proof: &Proof, before: Option<&str>, after: Option<&str>, restored: bool) -> Option<&'static str> {
+    match proof {
+        Proof::Key(k) => {
+            if after.map(|a| a != k).unwrap_or(false) {
+                Some("the update started a relay that signs with a key that is not the one in its data folder")
+            } else if !restored && before.map(|b| b != k).unwrap_or(false) {
+                Some("the update started a relay that changed this relay's key")
+            } else {
+                None
+            }
+        }
+        Proof::Definite(_) if after.is_some() => Some("the update started a relay that answers the identity proof wrongly"),
+        _ => None,
+    }
+}
+
+/// H-1 (3), narrowed by M-B. The relay proved `proven`, a key other than the recorded one, it IS the one in its own
+/// folder, and THIS boot carried out a staged restore (`restored`): the restore gave this relay that key. If
+/// storage.json records a key (relayPub, a moved box), adopt the new one there. Anything else — above all a complete
+/// FOREIGN folder reached through a changed drive letter, which also proves its own key — is not adopted: the warning
+/// stays on every start (rule 10). Only relayPub is written.
+fn adopt_restored_key(host: &dyn Host, cfg: &Config, dir: &Path, proven: &str, restored: bool) {
+    if !restored || key_pub_of(dir).as_deref() != Some(proven) {
+        return;
+    }
+    let st = read_state(&cfg.config_file);
+    if st.get("relayPub").and_then(|p| p.as_str()).map(|p| !p.is_empty() && p != proven).unwrap_or(false) {
+        update_state(&cfg.config_file, |o| {
+            o.insert("relayPub".into(), json!(proven));
+        });
+        host.log(&format!("the relay's own folder holds key {proven} (a restore); storage.json relayPub now records it"));
+    }
+}
+
+/// A definite proof failure must repeat this many times in a row before it counts.
+const PROOF_DEFINITE_TRIES: u32 = 3;
+/// Inconclusive proofs are retried while the relay shows progress; this many in a row WITHOUT progress ends it.
+const PROOF_QUIET_TRIES: u32 = 10;
+/// The overall cap (fixes audit L-a): a relay that keeps printing but whose proof stays inconclusive gets this many
+/// tries at most. Printing is not meaningful progress for a relay that already listens; a proof would be. The result
+/// is still inconclusive: the panel opens with a note, nothing is rolled back.
+const PROOF_MAX_TRIES: u32 = 60;
+
+/// The proof for a relay a FRESH UPDATE put in place, where a wrong answer means rolling the update back. Retried,
+/// bounded by progress, never the clock: an inconclusive answer is tried again, and keeps being tried while the relay
+/// prints (Host::activity); a definite failure must repeat. Returns the last answer, and stops early on a key.
+fn prove_fresh(host: &dyn Host, cfg: &Config, relay: &dyn RelayHandle) -> Proof {
+    let (mut definite, mut quiet, mut last_act, mut tries) = (0u32, 0u32, host.activity(), 0u32);
+    loop {
+        let r = prove_once(host, cfg);
+        tries += 1;
+        match &r {
+            Proof::Key(_) => return r,
+            Proof::Definite(_) => {
+                definite += 1;
+                if definite >= PROOF_DEFINITE_TRIES {
+                    return r;
+                }
+            }
+            Proof::Inconclusive(_) => {
+                definite = 0;
+                let a = host.activity();
+                if a != last_act {
+                    last_act = a;
+                    quiet = 0;
+                } else {
+                    quiet += 1;
+                }
+                if quiet >= PROOF_QUIET_TRIES {
+                    return r;
+                }
+            }
+        }
+        // the cap comes AFTER the answer was read (fixes audit NIT-2): a key, or a third definite failure, on the last
+        // try still counts
+        if tries >= PROOF_MAX_TRIES {
+            // never three definite failures in a row, never a key: not evidence either way
+            return Proof::Inconclusive(format!("no-conclusive-proof-after-{tries}-tries"));
+        }
+        if relay.exit().is_some() || host.quitting() {
+            return r;
+        }
+        host.sleep_ms(1000);
     }
 }
 
@@ -422,7 +599,9 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
         // 4. start the relay. Expected identity is read BEFORE it runs: the pointer's record, else the folder's key.
         let st = read_state(&cfg.config_file);
         let pointer_names_dir = st.get("dataDir").and_then(|d| d.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-        let recorded = s_of(&st, "relayPub").map(|s| s.to_string()).or_else(|| key_pub_of(&dir));
+        let mut recorded = s_of(&st, "relayPub").map(|s| s.to_string()).or_else(|| key_pub_of(&dir));
+        // the folder just before the relay (or the relays an update puts in place) boots: its key, and a staged restore
+        let mut pre_boot = boot_snapshot(&dir);
         let env = RelayEnv { data_dir: dir.clone(), pinned: should_pin(&dir, pointer_names_dir), storage_state: cfg.config_file.clone(), checking: check };
         if !check && !ic_none(&ic) {
             host.log("recovery reports the folder's key differs from the pointer's record; the proof below decides what the steward is told");
@@ -445,6 +624,8 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
             // 5. wait for the port, or for the relay to exit. A relay that is merely SLOW is never killed or abandoned.
             let mut up = false;
             let (mut steps, mut told) = (0u32, false);
+            // the post-move bound counts steps WITHOUT PROGRESS; any output from the relay starts it again
+            let (mut quiet, mut last_activity) = (0u32, host.activity());
             loop {
                 if relay.exit().is_some() {
                     break;
@@ -458,9 +639,16 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                     break;
                 }
                 steps += 1;
-                // N6: right after a MOVE a relay that never opens its port is a failed check, not a slow start
-                if check && steps >= cfg.check_steps {
-                    host.log("the relay on the new folder never opened its port; the check failed, rolling back");
+                quiet += 1;
+                let a = host.activity();
+                if a != last_activity {
+                    last_activity = a;
+                    quiet = 0;
+                }
+                // N6: right after a MOVE a relay that never opens its port AND makes no progress is a failed check, not a
+                // slow start. Progress, not the clock (full audit M-1).
+                if check && (quiet >= cfg.check_steps || steps >= cfg.check_ceiling_steps) {
+                    host.log("the relay on the new folder never opened its port and made no progress; the check failed, rolling back");
                     relay.kill();
                     wait_exit(host, relay.as_ref());
                     if !roll_back(host, cfg, &mut rollbacks) {
@@ -491,7 +679,15 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
             }
             // 6. PROVE WHO ANSWERED, on every start (rule 10) — and on every relay the host put in its place. The port
             //    being open proves nothing: it may be another program, or another relay.
-            let proven = prove(host, cfg);
+            //    A relay a code update has JUST put in place is proven with retries (prove_fresh), because a wrong answer
+            //    for it means rolling the update back; every other start keeps the single proof.
+            let fresh = host.fresh_update();
+            let fresh_proof = if fresh { Some(prove_fresh(host, cfg, relay.as_ref())) } else { None };
+            let proven = match &fresh_proof {
+                Some(Proof::Key(k)) => Some(k.clone()),
+                Some(_) => None,
+                None => prove(host, cfg),
+            };
             if check {
                 let vr = mover(host, cfg, &["verify-restart"], &["--port".into(), cfg.port.to_string(), "--data-dir".into(), dir.to_string_lossy().into_owned()]);
                 let ok = vr.as_ref().and_then(|v| v.get("ok")).and_then(|b| b.as_bool()) == Some(true);
@@ -511,12 +707,58 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                 // the move's check is over: a relay the host puts in its place later is proven, but is not a move's check
                 check = false;
             }
+            // OWNER DECISION (a), as corrected by the fixes audit (H-1, M-1): a relay that a code UPDATE has just put in
+            // place is judged by what the UPDATE could have changed — the key it signs with against the key file in its
+            // data folder AFTER its boot. A restore changes both together (the restored key file, and the relay signing
+            // with it), so it is never taken for a failed update; code that signs with a key other than the one on disk,
+            // or answers the proof wrongly every time, is. An inconclusive proof (no answer, unreadable mover output) is
+            // not evidence and never rolls an update back. The panel is not opened for a failed update; the host rolls it
+            // back and records a bad release, and the relay it starts instead is adopted and proven here like any other.
+            //    (fixes audit M-A) …and against the key the folder held BEFORE the boot, unless this boot carried out a
+            //    staged restore: an update whose own boot rewrites the key file is a failed update too.
+            // Did this boot carry out a staged restore? Seen by the launcher (staged before, gone after), or reported by
+            // the host when the restore was staged and carried out inside its own tick (attempt_apply step 4c).
+            // (fixes audit of 457541b0, L-1) …AND the key file actually changed across that boot. The gateway removes the
+            // staging also when it REFUSES a restore, when one fails part-way, and after a backup that carries no key — so
+            // "staged before, gone after" (or the host's "handed to the boot") alone is not proof. Nothing is lost: a
+            // restore of this relay's own backup leaves the key as it was, and there is then nothing to adopt or excuse.
+            // Both signals are read on every adoption (`|`, not `||`), so the host's flag can never go stale (NIT-1).
+            let handed = restore_consumed(&pre_boot, &dir) | host.restore_handed_to_boot();
+            let restored = handed && pre_boot.key != key_pub_of(&dir);
+            if let Some(fp) = &fresh_proof {
+                let on_disk = key_pub_of(&dir);
+                let failed = fresh_update_failed(fp, pre_boot.key.as_deref(), on_disk.as_deref(), restored);
+                if let Some(why) = failed {
+                    host.log(&format!("FAILED UPDATE: {why} (proof {fp:?}, key before {:?}, after {on_disk:?}, restored {restored}); rolling it back", pre_boot.key));
+                    // the relay the rollback starts boots on the folder as it is now
+                    pre_boot = boot_snapshot(&dir);
+                    match host.reject_update(&dir, why) {
+                        Tick::Replaced(r) => {
+                            relay = r;
+                            continue 'adopt;
+                        }
+                        Tick::Stopped { title, reason } => {
+                            // L-2: whatever still runs is not left serving behind a refusal
+                            relay.kill();
+                            record_refusal(cfg, "start", "host-stopped", Some(&reason));
+                            host.progress(&Progress::Refused { title, reason: reason.clone() });
+                            return RunEnd::Refused(reason);
+                        }
+                        // the host could not roll it back: say so, as on any start, below
+                        _ => {}
+                    }
+                }
+            }
             match compare_identity(proven.as_deref(), recorded.as_deref()) {
                 Identity::Same => set_identity_note(cfg, None),
                 Identity::NothingRecorded { .. } => {}
                 Identity::Changed { expected, proven } => {
                     host.log(&format!("IDENTITY CHANGED: expected {expected}, the relay proves {proven}"));
                     set_identity_note(cfg, Some(json!({ "expectedPub": expected, "provenPub": proven, "at": now_iso() })));
+                    // H-1 (3), only after a restore THIS boot carried out (M-B): that key is now this relay's. A moved box
+                    // records its key in storage.json (relayPub, written by the mover); adopt the new one there, so later
+                    // starts are judged against it. A foreign folder (no restore) keeps the warning on every start.
+                    adopt_restored_key(host, cfg, &dir, &proven, restored);
                     host.progress(&Progress::Notice("This relay's identity is not the one it had before. If you restored another relay's backup, that is expected.".into()));
                 }
                 Identity::Unproven { expected } => {
@@ -538,15 +780,23 @@ pub fn run(host: &dyn Host, cfg: &Config) -> RunEnd {
                     process_remove_old(host, cfg, &dir);
                 }
                 tick = tick.wrapping_add(1);
+                // the folder as it is before anything the tick may start boots on it (fixes audit M-A / M-B)
+                let snap = boot_snapshot(&dir);
                 match host.tick(&dir) {
                     Tick::None => {}
                     Tick::Replaced(r) => {
                         host.log("the host restarted the relay (a code update); proving who answers before the panel is shown again");
                         relay = r;
+                        // NIT (fixes audit): the expected key is read again for the relay that replaced it — a key adopted
+                        // earlier in this session (relayPub) counts, so its warning does not come back after the update
+                        recorded = s_of(&read_state(&cfg.config_file), "relayPub").map(|s| s.to_string()).or_else(|| snap.key.clone());
+                        pre_boot = snap;
                         continue 'adopt;
                     }
                     Tick::MoveRequested => break Exit::Code(0),
                     Tick::Stopped { title, reason } => {
+                        // L-2: whatever still runs is not left serving behind a refusal
+                        relay.kill();
                         host.log(&format!("the host stopped the relay and will not start one: {reason}"));
                         record_refusal(cfg, "start", "host-stopped", Some(&reason));
                         host.progress(&Progress::Refused { title, reason: reason.clone() });
@@ -1180,7 +1430,7 @@ mod tests {
 
     // ── the flow, with a scripted mover ─────────────────────────────────────────────────────────────────
     struct FakeRelay {
-        exit: Mutex<Option<Exit>>,
+        exit: std::sync::Arc<Mutex<Option<Exit>>>,
         err: String,
     }
     impl RelayHandle for FakeRelay {
@@ -1209,10 +1459,27 @@ mod tests {
         before: Mutex<Option<(String, String)>>,
         checking: Mutex<Vec<bool>>,
         idle_ticks: Mutex<u32>,
+        // M-1: a relay that prints while it starts (activity moves on every port poll)
+        chatty: Mutex<bool>,
+        activity: Mutex<u64>,
+        // owner decision (a): fresh_update answers, one per adoption
+        fresh: Mutex<Vec<bool>>,
+        // L-2: reject_update answers Stopped; every relay handle given out, to see which were killed
+        reject_stops: Mutex<bool>,
+        handles: Mutex<Vec<std::sync::Arc<Mutex<Option<Exit>>>>>,
+        // M-A / M-B: the relay's boot writes this key into its folder, consuming a staged restore if there is one
+        on_spawn_key: Mutex<Option<String>>,
+        // L-3: the relay a tick puts in place writes this key into the folder
+        tick_rekey: Mutex<Option<String>>,
     }
     impl Fake {
         fn new(answers: Vec<(&'static str, Value)>, relays: Vec<(Option<Exit>, &str)>) -> Fake {
-            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]), idle_ticks: Mutex::new(0) }
+            Fake { calls: Mutex::new(vec![]), answers: Mutex::new(answers), spawns: Mutex::new(vec![]), relays: Mutex::new(relays.into_iter().map(|(e, s)| (e, s.to_string())).collect()), port_after: Mutex::new(0), bump: Mutex::new(None), bump_key: Mutex::new("copiedBytes"), progresses: Mutex::new(vec![]), ticks: Mutex::new(vec![]), blocked: Mutex::new(None), before: Mutex::new(None), checking: Mutex::new(vec![]), idle_ticks: Mutex::new(0), chatty: Mutex::new(false), activity: Mutex::new(0), fresh: Mutex::new(vec![]), reject_stops: Mutex::new(false), handles: Mutex::new(vec![]), on_spawn_key: Mutex::new(None), tick_rekey: Mutex::new(None) }
+        }
+        fn track(&self, e: Option<Exit>) -> std::sync::Arc<Mutex<Option<Exit>>> {
+            let a = std::sync::Arc::new(Mutex::new(e));
+            self.handles.lock().unwrap().push(a.clone());
+            a
         }
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
@@ -1234,8 +1501,12 @@ mod tests {
             self.calls.lock().unwrap().push("SPAWN".into());
             self.spawns.lock().unwrap().push((env.data_dir.clone(), env.pinned));
             self.checking.lock().unwrap().push(env.checking);
+            if let Some(k) = self.on_spawn_key.lock().unwrap().clone() {
+                fs::write(env.data_dir.join("relay-key.json"), json!({"sk": "s", "pub": k}).to_string()).unwrap();
+                let _ = fs::remove_dir_all(env.data_dir.join(RESTORE_PENDING));
+            }
             let (e, s) = self.relays.lock().unwrap().remove(0);
-            Ok(Box::new(FakeRelay { exit: Mutex::new(e), err: s }))
+            Ok(Box::new(FakeRelay { exit: self.track(e), err: s }))
         }
         fn progress(&self, p: &Progress) {
             self.progresses.lock().unwrap().push(format!("{:?}", p));
@@ -1252,7 +1523,8 @@ mod tests {
             let replaced = c.iter().filter(|x| *x == "TICK:replace").count();
             // (a launcher that never reopens the panel would otherwise tick for ever: give up after many idle ticks so
             // the test fails on its assertions instead of hanging)
-            (opened > replaced || *self.idle_ticks.lock().unwrap() > 200) && self.ticks.lock().unwrap().is_empty()
+            // (and a hang guard: a broken launcher that loops for ever ends the test, which then fails on its assertions)
+            c.len() > 5000 || ((opened > replaced || *self.idle_ticks.lock().unwrap() > 200) && self.ticks.lock().unwrap().is_empty())
         }
         fn before_start(&self, _d: &Path) -> Result<(), (String, String)> {
             self.calls.lock().unwrap().push("BEFORE_START".into());
@@ -1270,14 +1542,37 @@ mod tests {
             let what = t.remove(0);
             self.calls.lock().unwrap().push(format!("TICK:{what}"));
             match what {
-                "replace" => Tick::Replaced(Box::new(FakeRelay { exit: Mutex::new(None), err: String::new() })),
+                "replace" => {
+                    // the relay the tick puts in place boots: it may rewrite the folder's key (an update that re-keys)
+                    if let Some(k) = self.tick_rekey.lock().unwrap().clone() {
+                        fs::write(_d.join("relay-key.json"), json!({"sk": "s", "pub": k}).to_string()).unwrap();
+                    }
+                    Tick::Replaced(Box::new(FakeRelay { exit: self.track(None), err: String::new() }))
+                }
                 _ => Tick::None,
             }
         }
         fn move_blocked(&self, _d: &Path) -> Option<String> {
             self.blocked.lock().unwrap().clone()
         }
+        fn activity(&self) -> u64 {
+            *self.activity.lock().unwrap()
+        }
+        fn fresh_update(&self) -> bool {
+            let mut f = self.fresh.lock().unwrap();
+            if f.is_empty() { false } else { f.remove(0) }
+        }
+        fn reject_update(&self, _d: &Path, _why: &str) -> Tick {
+            self.calls.lock().unwrap().push("REJECT".into());
+            if *self.reject_stops.lock().unwrap() {
+                return Tick::Stopped { title: "t".into(), reason: "the bad relay did not stop".into() };
+            }
+            Tick::Replaced(Box::new(FakeRelay { exit: self.track(None), err: String::new() }))
+        }
         fn port_open(&self, _p: u16) -> bool {
+            if *self.chatty.lock().unwrap() {
+                *self.activity.lock().unwrap() += 1;
+            }
             let mut n = self.port_after.lock().unwrap();
             if *n > 0 {
                 *n -= 1;
@@ -1286,6 +1581,10 @@ mod tests {
             true
         }
         fn sleep_ms(&self, _ms: u64) {
+            // a chatty relay prints between any two looks
+            if *self.chatty.lock().unwrap() {
+                *self.activity.lock().unwrap() += 1;
+            }
             // a mover that is making progress: its journal's copiedBytes grows each second
             if let Some((f, n)) = self.bump.lock().unwrap().as_mut() {
                 *n += 1;
@@ -1301,7 +1600,7 @@ mod tests {
         }
     }
     fn cfg_in(b: &Path) -> Config {
-        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3, log_path: b.join("relay-launch.log"), mover_wait_ms: 600_000, check_steps: 2 }
+        Config { config_file: b.join("cfg").join("storage.json"), default_data: b.join("data"), port: 18787, up_steps: 3, log_path: b.join("relay-launch.log"), mover_wait_ms: 600_000, check_steps: 2, check_ceiling_steps: 100 }
     }
     fn first(calls: &[String], what: &str) -> usize {
         calls.iter().position(|c| c == what).unwrap_or_else(|| panic!("{what} never happened: {calls:?}"))
@@ -1717,5 +2016,336 @@ mod tests {
         assert_eq!(st["launcher"]["lastRefusal"]["kind"], "move");
         assert_eq!(st["launcher"]["lastRefusal"]["code"], "suite-update-applying", "the card must be told why");
         assert_eq!(f.spawns.lock().unwrap().len(), 2, "the relay must be started again on the same folder");
+    }
+
+    // ── full audit M-1: the post-move bound counts steps WITHOUT PROGRESS, never the clock ───────────────────
+    #[test]
+    fn after_a_move_a_slow_but_printing_relay_is_never_rolled_back_and_a_silent_one_is() {
+        for chatty in [true, false] {
+            let b = tmp(if chatty { "m1chatty" } else { "m1silent" });
+            let cfg = cfg_in(&b); // check_steps: 2
+            let newdir = b.join("T7").join("trinityone-relay");
+            let olddir = b.join("data");
+            fs::create_dir_all(&newdir).unwrap();
+            fs::create_dir_all(&olddir).unwrap();
+            write_state(&cfg.config_file, &json!({"dataDir": newdir.to_string_lossy(), "relayPub": "aa", "move": {"state":"switched"}})).unwrap();
+            let f = Fake::new(
+                vec![
+                    ("recover", json!({"dataDir": newdir.to_string_lossy(), "action": "check"})),
+                    ("begin-check", json!({"ok": true, "bad": []})),
+                    ("prove", json!({"ok": true, "relayPub": "aa"})),
+                    ("verify-restart", json!({"ok": true, "bad": []})),
+                    ("check-passed", json!({"ok": true})),
+                    ("rollback", json!({"ok": true})),
+                    ("recover", json!({"dataDir": olddir.to_string_lossy(), "action": "none"})),
+                    ("prove", json!({"ok": true, "relayPub": "aa"})),
+                ],
+                vec![(None, ""), (None, "")],
+            );
+            // the port stays shut for 20 polls — ten times the bound
+            *f.port_after.lock().unwrap() = 20;
+            *f.chatty.lock().unwrap() = chatty;
+            let _ = run(&f, &cfg);
+            let c = f.calls();
+            if chatty {
+                assert!(!c.contains(&"rollback".to_string()), "a relay that kept printing was rolled back: {c:?}");
+                assert!(c.contains(&"check-passed".to_string()), "{c:?}");
+                assert_eq!(f.spawns.lock().unwrap().len(), 1);
+            } else {
+                assert!(c.contains(&"rollback".to_string()), "a silent relay after a move must still be rolled back: {c:?}");
+                assert!(!c.contains(&"check-passed".to_string()), "{c:?}");
+            }
+        }
+    }
+
+    // ── owner decision (a): a fresh UPDATE whose relay fails the identity proof is a failed update ─────────────
+    #[test]
+    fn a_relay_a_fresh_update_put_in_place_that_fails_the_proof_is_rolled_back_but_a_normal_start_is_only_told() {
+        // (1) a normal start with a different key: record and tell, open the panel, no rollback
+        let b = tmp("idnormal");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(&data).unwrap();
+        write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+        let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "RESTORED"}))], vec![(None, "")]);
+        let _ = run(&f, &cfg);
+        let c = f.calls();
+        assert!(!c.contains(&"REJECT".to_string()) && c.contains(&"OPENED".to_string()), "a restore's new key on a normal start must not roll anything back: {c:?}");
+        assert_eq!(read_state(&cfg.config_file)["launcher"]["identityChanged"]["provenPub"], "RESTORED");
+        // (2) the same, but the relay is one an update just put in place, with "aa" in its key file: it signs with
+        //     another key; or it answers the proof wrongly three times in a row
+        let bad404 = json!({"ok": false, "code": "no-proof-404"});
+        for (bads, tag) in [(vec![json!({"ok": true, "relayPub": "STRANGER"})], "idfresh1"), (vec![bad404.clone(), bad404.clone(), bad404], "idfresh2")] {
+            let n = bads.len();
+            let f = fresh_fake(tag, "aa", bads);
+            let c = f.calls();
+            let reject = c.iter().position(|x| x == "REJECT").unwrap_or_else(|| panic!("{tag}: a failed update was not rolled back: {c:?}"));
+            assert!(c.iter().position(|x| x == "OPENED").map(|o| o > reject).unwrap_or(false), "{tag}: the panel was opened for the failed update's relay: {c:?}");
+            assert_eq!(c.iter().filter(|x| *x == "OPENED").count(), 1, "{tag}: {c:?}");
+            assert_eq!(c.iter().filter(|x| *x == "prove").count(), n + 1, "{tag}: the relay after the rollback must be proven too: {c:?}");
+        }
+    }
+
+    // A fake run where the relay just adopted was put in place by a fresh update: `disk` is the key file in its data
+    // folder, `proofs` the answers to `prove` (then "aa" for any relay after a rollback).
+    fn fresh_fake(tag: &str, disk: &str, proofs: Vec<Value>) -> Fake {
+        let b = tmp(tag);
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": disk}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+        let mut answers: Vec<(&'static str, Value)> = vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"}))];
+        for p in proofs {
+            answers.push(("prove", p));
+        }
+        answers.push(("prove", json!({"ok": true, "relayPub": "aa"})));
+        let f = Fake::new(answers, vec![(None, "")]);
+        *f.fresh.lock().unwrap() = vec![true];
+        let _ = run(&f, &cfg);
+        f
+    }
+
+    // Fixes audit M-1: an inconclusive proof (no answer; mover output that cannot be read) is not evidence that the
+    // update is bad. It is retried; one that keeps being inconclusive leaves a note, never a rollback; a transient one
+    // that then proves the right key is simply fine. A definite failure must repeat before it counts.
+    #[test]
+    fn a_fresh_update_is_never_rolled_back_on_an_inconclusive_or_one_off_proof_failure() {
+        let unreachable = json!({"ok": false, "code": "unreachable"});
+        let unreadable = json!("GARBAGE"); // printed as a non-JSON line: mover() reads it as no answer
+        let many = |v: &Value| (0..PROOF_QUIET_TRIES).map(|_| v.clone()).collect::<Vec<_>>();
+        for (tag, proofs) in [("m1unreach", many(&unreachable)), ("m1garbage", many(&unreadable))] {
+            let f = fresh_fake(tag, "aa", proofs);
+            let c = f.calls();
+            assert!(!c.contains(&"REJECT".to_string()), "{tag}: an inconclusive proof rolled a good update back: {c:?}");
+            assert!(c.contains(&"OPENED".to_string()), "{tag}: {c:?}");
+            assert_eq!(c.iter().filter(|x| *x == "prove").count(), PROOF_QUIET_TRIES as usize, "{tag}: the proof must be retried: {c:?}");
+        }
+        for (tag, proofs) in [
+            ("m1transient", vec![unreachable.clone(), unreadable.clone(), json!({"ok": true, "relayPub": "aa"})]),
+            ("m1oneoff404", vec![json!({"ok": false, "code": "no-proof-404"}), json!({"ok": true, "relayPub": "aa"})]),
+        ] {
+            let f = fresh_fake(tag, "aa", proofs);
+            let c = f.calls();
+            assert!(!c.contains(&"REJECT".to_string()), "{tag}: a one-off proof failure rolled a good update back: {c:?}");
+            assert_eq!(c.iter().filter(|x| x.as_str() == "OPENED").count(), 1, "{tag}: {c:?}");
+        }
+        // pure reading of the answers
+        assert_eq!(read_proof(None), Proof::Inconclusive("mover-output-unreadable".into()));
+        assert_eq!(read_proof(Some(&unreachable)), Proof::Inconclusive("unreachable".into()));
+        for d in ["no-proof-404", "bad-signature", "wrong-nonce", "stale-proof", "wrong-address", "bad-proof", "bad-address"] {
+            assert_eq!(read_proof(Some(&json!({"ok": false, "code": d}))), Proof::Definite(d.into()));
+        }
+        assert_eq!(fresh_update_failed(&Proof::Inconclusive("x".into()), Some("aa"), Some("aa"), false), None);
+        assert_eq!(fresh_update_failed(&Proof::Definite("no-proof-404".into()), Some("aa"), None, false), None, "nothing on disk to judge by");
+        let k = |s: &str| Proof::Key(s.into());
+        assert_eq!(fresh_update_failed(&k("aa"), Some("aa"), Some("aa"), false), None);
+        assert!(fresh_update_failed(&k("K3"), Some("aa"), Some("K3"), false).is_some(), "the update's boot re-keyed the folder");
+        assert_eq!(fresh_update_failed(&k("K2"), Some("aa"), Some("K2"), true), None, "a restore this boot carried out");
+        assert!(fresh_update_failed(&k("X"), Some("aa"), Some("K2"), true).is_some(), "signs with neither");
+    }
+
+    // Fixes audit L-a: a relay that keeps printing but whose proof stays inconclusive gets at most PROOF_MAX_TRIES
+    // tries; then the panel opens with a note, and nothing is rolled back.
+    #[test]
+    fn a_fresh_updates_inconclusive_proof_is_capped_and_opens_the_panel_with_a_note() {
+        let b = tmp("lacap");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "aa"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+        let mut answers: Vec<(&'static str, Value)> = vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"}))];
+        for _ in 0..(PROOF_MAX_TRIES + 20) {
+            answers.push(("prove", json!({"ok": false, "code": "unreachable"})));
+        }
+        let f = Fake::new(answers, vec![(None, "")]);
+        *f.fresh.lock().unwrap() = vec![true];
+        *f.chatty.lock().unwrap() = true; // it prints between every two tries: the quiet bound never ends it
+        let _ = run(&f, &cfg);
+        let c = f.calls();
+        assert_eq!(c.iter().filter(|x| *x == "prove").count(), PROOF_MAX_TRIES as usize, "{c:?}");
+        assert!(!c.contains(&"REJECT".to_string()) && c.contains(&"OPENED".to_string()), "{c:?}");
+        assert!(read_state(&cfg.config_file)["launcher"]["identityChanged"]["provenPub"].is_null(), "the panel must say it could not be proven");
+    }
+
+    // Fixes audit M-A: an update whose own boot rewrites the key file and signs with the new key is a FAILED update
+    // (gateway.mjs re-mints a key it cannot parse); the same key change carried out by a staged restore is not.
+    #[test]
+    fn an_update_that_rekeys_the_folder_is_rejected_but_a_restore_the_boot_carried_out_is_not() {
+        for (tag, staged, want_reject) in [("marekey", false, true), ("marestore", true, false)] {
+            let b = tmp(tag);
+            let cfg = cfg_in(&b);
+            let data = b.join("data");
+            fs::create_dir_all(&data).unwrap();
+            fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "aa"}).to_string()).unwrap();
+            if staged {
+                fs::create_dir_all(data.join(RESTORE_PENDING)).unwrap();
+            }
+            write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+            let f = Fake::new(
+                vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "K3"})), ("prove", json!({"ok": true, "relayPub": "K3"}))],
+                vec![(None, "")],
+            );
+            *f.fresh.lock().unwrap() = vec![true];
+            *f.on_spawn_key.lock().unwrap() = Some("K3".into()); // the boot writes K3 (and consumes a staged restore)
+            let _ = run(&f, &cfg);
+            let c = f.calls();
+            assert_eq!(c.contains(&"REJECT".to_string()), want_reject, "{tag}: {c:?}");
+            // NIT-3: a positive outcome too — the panel opened (exactly once: on the relay that stayed)
+            assert_eq!(c.iter().filter(|x| x.as_str() == "OPENED").count(), 1, "{tag}: {c:?}");
+        }
+    }
+
+    // Fixes audit H-1 (3) as narrowed by M-B: storage.json relayPub adopts the folder's key ONLY after a restore this
+    // boot carried out. A foreign folder (a changed drive letter) that proves its own key keeps the warning on EVERY
+    // start and never becomes "ours"; a proof the folder does not hold is never adopted either.
+    #[test]
+    fn a_restored_key_is_adopted_only_after_a_restore_and_a_foreign_folder_warns_on_every_start() {
+        // (1) a restore staged and carried out by this boot: adopted
+        let b = tmp("mbrestore");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(data.join(RESTORE_PENDING)).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "MINE"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"dataDir": data.to_string_lossy(), "relayPub": "MINE", "move": {"state": "done"}})).unwrap();
+        let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "RESTORED"}))], vec![(None, "")]);
+        *f.on_spawn_key.lock().unwrap() = Some("RESTORED".into());
+        let _ = run(&f, &cfg);
+        let st = read_state(&cfg.config_file);
+        assert_eq!(st["relayPub"], "RESTORED");
+        assert_eq!(st["launcher"]["identityChanged"]["provenPub"], "RESTORED", "the change must still be told");
+        assert_eq!(st["move"]["state"], "done", "nothing else in storage.json may change");
+        // (2) a FOREIGN folder (no restore), two starts: never adopted, warned both times
+        let b = tmp("mbforeign");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "FOREIGN"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"dataDir": data.to_string_lossy(), "relayPub": "MINE", "move": {"state": "done"}})).unwrap();
+        for start in 0..2 {
+            let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "FOREIGN"}))], vec![(None, "")]);
+            let _ = run(&f, &cfg);
+            let st = read_state(&cfg.config_file);
+            assert_eq!(st["relayPub"], "MINE", "start {start}: a foreign folder's key was adopted");
+            assert_eq!(st["launcher"]["identityChanged"]["provenPub"], "FOREIGN", "start {start}: the warning was cleared");
+        }
+        // (3) a restore, but the relay proves a key its folder does not hold: never adopted
+        let b = tmp("mbstranger");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(data.join(RESTORE_PENDING)).unwrap();
+        write_state(&cfg.config_file, &json!({"dataDir": data.to_string_lossy(), "relayPub": "MINE"})).unwrap();
+        let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "STRANGER"}))], vec![(None, "")]);
+        *f.on_spawn_key.lock().unwrap() = Some("RESTORED".into());
+        let _ = run(&f, &cfg);
+        assert_eq!(read_state(&cfg.config_file)["relayPub"], "MINE");
+        // (4) fixes audit of 457541b0, L-1: a foreign folder with a staged restore the boot REFUSED (the gateway removes the
+        //     staging anyway; the key is unchanged): not a restore — never adopted, and the warning stays, two starts
+        let b = tmp("l1refused");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(data.join(RESTORE_PENDING)).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "FOREIGN"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"dataDir": data.to_string_lossy(), "relayPub": "MINE"})).unwrap();
+        for start in 0..2 {
+            let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "FOREIGN"}))], vec![(None, "")]);
+            *f.on_spawn_key.lock().unwrap() = Some("FOREIGN".into()); // the boot consumes the staging, the key stays
+            let _ = run(&f, &cfg);
+            let st = read_state(&cfg.config_file);
+            assert!(!data.join(RESTORE_PENDING).exists());
+            assert_eq!(st["relayPub"], "MINE", "start {start}: a refused restore made a foreign folder's key ours");
+            assert_eq!(st["launcher"]["identityChanged"]["provenPub"], "FOREIGN", "start {start}: the warning was cleared");
+        }
+    }
+
+    // Fixes audit of 457541b0, L-2 (restored): an update on a box whose recorded key differs from its folder's key (a
+    // foreign folder — since M-B its normal state) is judged by the FOLDER's key, not the recorded one: the relay a fresh
+    // update put in place that proves the folder's unchanged key is not a failed update.
+    #[test]
+    fn a_fresh_update_whose_key_file_and_proof_changed_together_is_not_rejected() {
+        let f = fresh_fake("h1together", "RESTORED", vec![json!({"ok": true, "relayPub": "RESTORED"})]);
+        let c = f.calls();
+        assert!(!c.contains(&"REJECT".to_string()), "an update was judged against the recorded key, not the folder's: {c:?}");
+        assert_eq!(c.iter().filter(|x| x.as_str() == "OPENED").count(), 1, "{c:?}");
+    }
+
+    // Fixes audit of 457541b0, L-3: each relay a TICK puts in place is judged against the folder as it was just before
+    // THAT boot. After a restore carried out on the first start, a later update in the same session that re-keys the
+    // folder must still be REJECTED — the first start's "restore staged" must not excuse it.
+    #[test]
+    fn after_a_restore_on_the_first_start_a_later_update_that_rekeys_is_still_rejected() {
+        let b = tmp("l3snap");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(data.join(RESTORE_PENDING)).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "aa"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+        let f = Fake::new(
+            vec![
+                ("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})),
+                ("prove", json!({"ok": true, "relayPub": "K2"})), // first start: the restore gave it K2
+                ("prove", json!({"ok": true, "relayPub": "K3"})), // the updated relay re-keyed the folder to K3
+                ("prove", json!({"ok": true, "relayPub": "K2"})), // after the rollback
+            ],
+            vec![(None, "")],
+        );
+        *f.on_spawn_key.lock().unwrap() = Some("K2".into());
+        *f.ticks.lock().unwrap() = vec!["replace"];
+        *f.tick_rekey.lock().unwrap() = Some("K3".into());
+        *f.fresh.lock().unwrap() = vec![false, true];
+        let _ = run(&f, &cfg);
+        let c = f.calls();
+        assert!(c.contains(&"REJECT".to_string()), "a re-keying update was excused by the first start's restore: {c:?}");
+    }
+
+    // Fixes audit LOW-1: after a move, a relay that keeps printing but never opens its port is rolled back once the
+    // generous ceiling (steps without the port opening) is reached; below the ceiling the printing keeps it alive.
+    #[test]
+    fn after_a_move_a_relay_that_prints_for_ever_without_opening_its_port_hits_the_ceiling() {
+        let b = tmp("ceiling");
+        let mut cfg = cfg_in(&b);
+        cfg.check_ceiling_steps = 10;
+        let newdir = b.join("T7").join("trinityone-relay");
+        let olddir = b.join("data");
+        fs::create_dir_all(&newdir).unwrap();
+        fs::create_dir_all(&olddir).unwrap();
+        write_state(&cfg.config_file, &json!({"dataDir": newdir.to_string_lossy(), "relayPub": "aa", "move": {"state":"switched"}})).unwrap();
+        let f = Fake::new(
+            vec![
+                ("recover", json!({"dataDir": newdir.to_string_lossy(), "action": "check"})),
+                ("begin-check", json!({"ok": true, "bad": []})),
+                ("rollback", json!({"ok": true})),
+                ("recover", json!({"dataDir": olddir.to_string_lossy(), "action": "none"})),
+                ("prove", json!({"ok": true, "relayPub": "aa"})),
+            ],
+            vec![(None, ""), (None, "")],
+        );
+        *f.port_after.lock().unwrap() = 11; // shut for longer than the ceiling, printing all the time
+        *f.chatty.lock().unwrap() = true;
+        let _ = run(&f, &cfg);
+        let c = f.calls();
+        assert!(c.contains(&"rollback".to_string()), "a relay that only printed was given the new folder for ever: {c:?}");
+        assert!(!c.contains(&"verify-restart".to_string()) && !c.contains(&"check-passed".to_string()), "the ceiling must end the wait before the port opens: {c:?}");
+    }
+
+    // Fixes audit LOW-2: when the host's rollback of a failed update ends in Stopped, the launcher kills the relay it
+    // holds before it returns, so nothing keeps serving behind the refusal.
+    #[test]
+    fn a_rollback_that_stops_kills_the_failed_relay_before_returning() {
+        let b = tmp("l2kill");
+        let cfg = cfg_in(&b);
+        let data = b.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("relay-key.json"), json!({"sk": "s", "pub": "aa"}).to_string()).unwrap();
+        write_state(&cfg.config_file, &json!({"relayPub": "aa"})).unwrap();
+        let f = Fake::new(vec![("recover", json!({"dataDir": data.to_string_lossy(), "action": "none"})), ("prove", json!({"ok": true, "relayPub": "STRANGER"}))], vec![(None, "")]);
+        *f.fresh.lock().unwrap() = vec![true];
+        *f.reject_stops.lock().unwrap() = true;
+        let end = run(&f, &cfg);
+        assert!(matches!(end, RunEnd::Refused(_)), "{end:?}");
+        let h = f.handles.lock().unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(*h[0].lock().unwrap(), Some(Exit::Other), "the failed update's relay was left running behind the refusal");
     }
 }

@@ -16,7 +16,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, accessSync, renameSync, constants } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, accessSync, renameSync, symlinkSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -67,6 +67,9 @@ appendFileSync(env.TEST_STARTS_LOG, JSON.stringify({ dir: env.TRINITY_DATA_DIR, 
 if (env.TEST_EXIT_CODE) process.exit(Number(env.TEST_EXIT_CODE));
 if (env.TEST_HANG_DIR && env.TEST_HANG_DIR === env.TRINITY_DATA_DIR) { setInterval(() => {}, 1000); await new Promise(() => {}); }   // a relay that stays alive and never opens its port
 if (env.TEST_SLOW_START_MS) await new Promise(r => setTimeout(r, Number(env.TEST_SLOW_START_MS)));
+if (env.TEST_CHATTY_DIR && env.TEST_CHATTY_DIR === env.TRINITY_DATA_DIR) {   // a slow first start that keeps printing (a big store replaying)
+  const t0 = Date.now(); while (Date.now() - t0 < Number(env.TEST_CHATTY_MS)) { console.log('  replaying history… ' + (Date.now() - t0)); await new Promise(r => setTimeout(r, 150)); }
+}
 if (env.TEST_NO_PROOF) {   // a relay that serves its panel but cannot answer /relay-identity
   const http = await import('node:http'); const { syncBuiltinESMExports } = await import('node:module');
   const orig = http.default.createServer;
@@ -587,6 +590,44 @@ test('N6: after a move, a relay that hangs without opening its port is rolled ba
     assert.equal(starts[0].dir, newdir); assert.equal(starts.at(-1).dir, fx.data, 'after the hang the relay must run on the OLD folder');
     assert.equal(stateOf(fx).move.state, 'rolled-back');
     assert.equal((await proven(l)).relayPub, fx.pub); assert.equal(await events(l, fx.data), 6);
+  } finally { await l.stop(); }
+});
+
+test('storage fixes audit L-1: on a foreign folder a REFUSED restore (the real gateway removes its staging anyway) is not taken for a restore — the key is not adopted and the warning stays, start after start', { skip, timeout: 200000 }, async () => {
+  const fx = fixture({ events: 3 });
+  const mine = 'cd'.repeat(32);   // the key storage.json recorded; the folder holds and proves fx.pub (a foreign folder)
+  mkdirSync(join(fx.base, 'cfg'), { recursive: true }); writeFileSync(fx.state, JSON.stringify({ relayPub: mine }));
+  for (let start = 0; start < 2; start++) {
+    if (start === 0) {
+      // a restore the real gateway REFUSES (a symlink in the backup): it removes .restore-pending and changes nothing
+      const st = join(fx.data, '.restore-pending'); mkdirSync(st);
+      writeFileSync(join(st, 'church.json'), '{}'); symlinkSync('/etc/hostname', join(st, 'link'));
+    }
+    const l = await startLauncher(fx);
+    try {
+      assert.equal(await l.waitFor(/^SIM opened /), true, l.log);
+      assert.equal(existsSync(join(fx.data, '.restore-pending')), false, 'fixture: the gateway did not consume the staging');
+      const s = stateOf(fx);
+      assert.equal(s.relayPub, mine, 'start ' + start + ': a refused restore made a foreign folder\'s key "ours"');
+      assert.ok(s.launcher && s.launcher.identityChanged && s.launcher.identityChanged.provenPub === fx.pub, 'start ' + start + ': the warning was cleared: ' + JSON.stringify(s.launcher));
+      assert.equal((await proven(l)).relayPub, fx.pub, 'the relay still proves its own key (nothing was restored)');
+    } finally { await l.stop(); }
+  }
+});
+
+test('full audit M-1: after a move, a relay that is slow to open its port but keeps printing is NEVER rolled back (progress, not the clock)', { skip, timeout: 120000 }, async () => {
+  const fx = fixture({ events: 6 });
+  const newdir = await realCopyMove(fx, fx.home);
+  // the post-move bound is 8 steps (2 s) without progress; this relay takes 6 s but prints all the while
+  const l = await startLauncher(fx, { env: { TEST_CHATTY_DIR: newdir, TEST_CHATTY_MS: '6000' }, extra: ['--check-steps', '8'] });
+  try {
+    assert.equal(await l.waitFor(/^SIM opened /, 1, 90000), true, 'the relay never opened. Log:\n' + l.log + JSON.stringify(stateOf(fx).move));
+    const starts = startsOf(fx);
+    assert.equal(starts.length, 1, 'the relay was restarted: ' + JSON.stringify(starts));
+    assert.equal(starts[0].dir, newdir);
+    assert.notEqual(stateOf(fx).move.state, 'rolled-back', 'a working relay was rolled back on the clock');
+    assert.ok(l.lines.some(x => x === 'SIM opened ' + newdir), l.lines.join('|'));
+    assert.equal((await proven(l)).relayPub, fx.pub); assert.equal(await events(l, newdir), 6);
   } finally { await l.stop(); }
 });
 

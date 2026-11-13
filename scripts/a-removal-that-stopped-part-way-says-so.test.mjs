@@ -57,3 +57,27 @@ test('the helper writes remove-delete-failed when its delete stops part-way (wha
     assert.equal(JSON.parse(readFileSync(state, 'utf8')).move.refusal.code, 'remove-delete-failed');
   } finally { rmSync(w, { recursive: true, force: true }); }
 });
+
+// Full audit L-8 / question (d): the three refusals the Suite's code update adds (GET /storage `refuse`, and a move the
+// launcher refused, storage.json launcher.lastRefusal) each get their own sentence on the card — run through the REAL
+// stReason and stLauncherNote, never the "can't be used (code)" fallback that would show the raw code.
+test('a move that must wait for the Suite\'s code update says why, in words, wherever the card shows it', () => {
+  const body = ['stReason', 'stLauncherNote'].map(lift).join('\n');
+  const c = new Function('esc', 'stGB', 'ST_BAD_SVG', body + '\nreturn { stReason, stLauncherNote };')(esc, () => '1 GB', '');
+  const fallback = c.stReason('no-such-code');
+  assert.match(fallback, /no-such-code/, 'fixture: the fallback names the raw code');
+  const want = {
+    'suite-update-applying': /installing an update/i,
+    'suite-data-held-aside': /needs attention after an update.*restart this computer/i,
+    'suite-update-due': /about to be installed.*few minutes/i,
+  };
+  for (const [code, re] of Object.entries(want)) {
+    const s = c.stReason(code);
+    assert.doesNotMatch(s, new RegExp(code), code + ' falls back to the raw code: ' + s);
+    assert.match(s, re, code + ': ' + s);
+    // the same code recorded by the launcher's own refusal (move_blocked) reaches the card through stLauncherNote
+    const html = c.stLauncherNote({ launcher: { lastRefusal: { kind: 'move', code } } });
+    assert.ok(html.includes('The move was refused') && html.includes(esc(s)), code + ' on the launcher note: ' + html);
+  }
+  assert.doesNotMatch(c.stReason('suite-update-due'), /hour/i, 'the update block lasts minutes, not hours (full audit L-8)');
+});
