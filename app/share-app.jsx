@@ -1,10 +1,15 @@
-// share-app.jsx — "pass it on": hand the TrinityOne app (and optionally a Bible in the right language)
-// to someone nearby with no relay, link, or internet on THEIR side. The app shares its own APK — and a
-// Bible the sender picks — through the OS share sheet (Quick Share / Bluetooth / Files). The recipient
-// installs the APK, then imports the Bible (Library → Import), and reads Scripture fully offline.
+// share-app.jsx — "pass it on": hand the TrinityOne app to someone nearby with no relay, link, or internet on
+// THEIR side. The app shares its own APK through the OS share sheet (Quick Share / Bluetooth / Signal / Files).
+// A Bible or commentary is shared SEPARATELY, one file at a time, from Library → Installed (InstalledBrowser in
+// screens-library.jsx); the recipient installs the APK, then imports the module with Library → Import.
 //
-// v1 is pure JS (CapacitorHttp fetch + Filesystem + @capacitor/share, all already used). Bible bytes come
-// from the engine's own cache (window.Bible.exportModule); the import side persists via Bible's file input.
+// EVERY SHARE IS ONE FILE. The app and a Bible used to go out together as one two-file share
+// (ACTION_SEND_MULTIPLE, typed */*). Signal's multi-file path keeps only images and videos, so it was left with
+// nothing and closed its share screen without a word — the member picked Signal and nothing was sent. A single
+// file goes as ACTION_SEND with its own type, which Signal (and every other target) accepts whatever the type.
+//
+// v1 is pure JS (CapacitorHttp fetch + Filesystem + @capacitor/share, all already used). Module bytes come from
+// the engine's own cache (window.Bible.exportModule); the import side persists via Bible's file input.
 
 const SHAREAPP_APK_URL = 'https://app.trinityone.church/trinityone.apk';   // canonical member APK
 const SHAREAPP_APK_FILE = 'TrinityOne.apk';
@@ -16,8 +21,80 @@ function shareAppToBase64(u8) {
   return btoa(s);
 }
 
-// Share the APK (cache-once) + optionally a chosen Bible module, files-only, via the OS share sheet.
-async function shareTrinityOneApp(ctx, onStatus, bibleUrl) {
+// SHARE EXACTLY ONE FILE. Returns 'shared' | 'dismissed' | 'failed'.
+//   opts: { bytes | uri, filename, mime, title, dialogTitle }
+// Native: `bytes` are written to CACHE (the dir the app's FileProvider exposes) to get a uri; then ONE file goes
+// to the share sheet — never text or url alongside it (passing text makes Quick Share / Bluetooth send only the
+// text). Backing out of the sheet is not a failure: the plugin rejects "Share canceled" and that is 'dismissed',
+// with no toast. Anything else that fails says so.
+// Web / PWA: navigator.share with one File where the browser can, otherwise a download.
+async function shareOneFile(opts, ctx) {
+  const o = opts || {};
+  const Cap = window.Capacitor, P = Cap && Cap.Plugins;
+  const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
+  const toast = (m) => { try { ctx && ctx.toast && ctx.toast(m); } catch (e) {} };
+  const name = o.title || o.filename || 'this file';
+
+  if (!native) {
+    if (!o.bytes) { toast('Couldn’t share ' + name); return 'failed'; }
+    try {
+      const file = new File([o.bytes], o.filename, { type: o.mime || 'application/octet-stream' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: name }); return 'shared'; }
+        catch (e) { if (e && e.name === 'AbortError') return 'dismissed'; }
+      }
+    } catch (e) {}
+    try {
+      const href = URL.createObjectURL(new Blob([o.bytes], { type: o.mime || 'application/octet-stream' }));
+      const a = document.createElement('a'); a.href = href; a.download = o.filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(href); } catch (e) {} }, 60000);
+      toast('Downloading ' + o.filename + ' — share the file from your device');
+      return 'shared';
+    } catch (e) { toast('Couldn’t share ' + name); return 'failed'; }
+  }
+
+  if (!(P && P.Share && P.Filesystem)) { toast('Sharing isn’t available on this device'); return 'failed'; }
+  let uri = o.uri || null;
+  if (!uri) {
+    try {
+      const w = await P.Filesystem.writeFile({ path: o.filename, data: shareAppToBase64(o.bytes), directory: 'CACHE' });
+      uri = w && w.uri;
+    } catch (e) { uri = null; }
+    if (!uri) { toast('Couldn’t get ' + name + ' ready to share — is the phone full?'); return 'failed'; }
+  }
+  try {
+    await P.Share.share({ title: name, files: [uri], dialogTitle: o.dialogTitle || ('Share ' + name) });
+    return 'shared';
+  } catch (e) {
+    const msg = String((e && (e.message || e.errorMessage)) || e || '');
+    if (/share cancel+ed/i.test(msg)) return 'dismissed';
+    toast('Couldn’t share ' + name + (msg ? ' — ' + msg : ''));
+    return 'failed';
+  }
+}
+window.shareOneFile = shareOneFile;
+
+// WHICH INSTALLED MODULES ARE OFFERED A SHARE: ONLY WHAT THE RECIPIENT CAN IMPORT. An allowlist — anything not
+// named here is false. The recipient's import is the engine's loadModuleBytes (via Library → Import), which takes
+// a MySword SQLite DB, a zip of one or of USFM books, a USFM file, or a cross-reference JSON.
+//   · a catalogue Bible or commentary (.zip / .mybible / .cmt.mybible.zip) — imports on every pilot build;
+//   · a record under imported/ — it exists only because the same import accepted that very file once
+//     (ensureInput records it after loadModuleBytes returned). Bibles, commentaries and dictionaries only.
+// NOT offered: JSON dictionaries / word definitions / original-language data (the import refuses them), cross-
+// references (only builds from 2026-11-03 import them — owner: not in v1), devotionals (no module bytes), and a
+// record with no or an unknown category.
+function isShareableModule(r) {
+  if (!r || typeof r.url !== 'string' || !r.url) return false;
+  const cat = r.category;
+  if (r.url.indexOf('imported/') === 0) return cat === 'bibles' || cat === 'commentaries' || cat === 'dictionaries';
+  if (/\.json$/i.test(r.url)) return false;
+  return cat === 'bibles' || cat === 'commentaries';
+}
+window.isShareableModule = isShareableModule;
+
+// Share the APK (cache-once), alone, via the OS share sheet.
+async function shareTrinityOneApp(ctx, onStatus) {
   const Cap = window.Capacitor, P = Cap && Cap.Plugins;
   const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
   const say = (m) => { try { onStatus && onStatus(m); } catch (e) {} };
@@ -30,10 +107,9 @@ async function shareTrinityOneApp(ctx, onStatus, bibleUrl) {
   }
   if (!(P && P.Share && P.Filesystem)) { ctx && ctx.toast && ctx.toast('Sharing isn’t available on this device'); return { ok: false }; }
 
+  // the APK — cache-once in CACHE (the dir the app's FileProvider exposes), then re-share offline
+  let apkUri = null;
   try {
-    const files = [];
-    // 1) the APK — cache-once in CACHE (the dir the app's FileProvider exposes), then re-share offline
-    let apkUri = null;
     try { const st = await P.Filesystem.stat({ path: SHAREAPP_APK_FILE, directory: 'CACHE' }); if (st && st.size > 1000000) apkUri = st.uri; } catch (e) {}
     if (!apkUri) {
       say('Preparing the app…');
@@ -44,44 +120,28 @@ async function shareTrinityOneApp(ctx, onStatus, bibleUrl) {
       const w = await P.Filesystem.writeFile({ path: SHAREAPP_APK_FILE, data: shareAppToBase64(u8), directory: 'CACHE' });
       apkUri = w.uri;
     }
-    files.push(apkUri);
-
-    // 2) optionally a Bible the sender chose — so the recipient reads in their language, offline
-    if (bibleUrl && window.Bible && window.Bible.exportModule) {
-      say('Adding the Bible…');
-      try {
-        const ex = await window.Bible.exportModule(bibleUrl);
-        if (ex && ex.bytes && ex.bytes.length) {
-          const wb = await P.Filesystem.writeFile({ path: ex.filename, data: shareAppToBase64(ex.bytes), directory: 'CACHE' });
-          files.push(wb.uri);
-        }
-      } catch (e) { /* couldn't export the Bible — still share the app */ }
-    }
-
-    say('');
-    // FILES ONLY — passing text/url alongside makes Quick Share / Bluetooth send only the text, dropping the files.
-    await P.Share.share({ title: 'TrinityOne', files, dialogTitle: 'Share the TrinityOne app' });
-    return { ok: true, where: 'shared' };
   } catch (e) {
     say('');
     ctx && ctx.toast && ctx.toast('Couldn’t prepare the share — connect to the internet once, then try again');
     return { ok: false, error: String((e && e.message) || e) };
   }
+  say('');
+  const r = await shareOneFile({ uri: apkUri, filename: SHAREAPP_APK_FILE, mime: 'application/vnd.android.package-archive',
+    title: 'TrinityOne', dialogTitle: 'Share the TrinityOne app' }, ctx);
+  return { ok: r !== 'failed', where: r };
 }
 window.shareTrinityOneApp = shareTrinityOneApp;
 
 function ShareAppSheet({ open, onClose, ctx }) {
   const [busy, setBusy] = React.useState(false);
   const [status, setStatus] = React.useState('');
-  const [bibleUrl, setBibleUrl] = React.useState('');
   const native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  // the sender's installed Bibles — so they can include the right language (never forced to English)
-  const bibles = React.useMemo(() => {
-    try { const m = (window.Bible && window.Bible.installedMap && window.Bible.installedMap()) || {}; return Object.values(m).filter(x => x && (x.category === 'bibles' || x.kind === 'bible')); } catch (e) { return []; }
+  // is there anything on this phone that can be passed on separately? (the pointer to Library → Installed)
+  const hasModule = React.useMemo(() => {
+    try { const m = (window.Bible && window.Bible.installedMap && window.Bible.installedMap()) || {}; return Object.values(m).some(isShareableModule); } catch (e) { return false; }
   }, [open]);
-  const go = async () => { if (busy) return; setBusy(true); try { await shareTrinityOneApp(ctx, setStatus, bibleUrl); } finally { setBusy(false); setStatus(''); } };
-  const lbl = { display: 'block', fontSize: 11.5, fontWeight: 800, letterSpacing: '.5px', color: 'var(--ink-3)', margin: '0 2px 7px' };
-  const sel = { width: '100%', height: 48, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
+  const go = async () => { if (busy) return; setBusy(true); try { await shareTrinityOneApp(ctx, setStatus); } finally { setBusy(false); setStatus(''); } };
+  const toLibrary = () => { onClose && onClose(); ctx && ctx.openStore && ctx.openStore('installed', 'bibles'); };
   return (
     <BottomSheet open={open} onClose={onClose} maxHeight="82%" z={60}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -91,22 +151,18 @@ function ShareAppSheet({ open, onClose, ctx }) {
       <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink-2)', margin: '4px 0 16px', textWrap: 'pretty' }}>
         Pass TrinityOne to someone next to you — over <b>Quick Share</b> or <b>Bluetooth</b>. No link, no app store, no internet on their phone.</p>
 
-      {native && bibles.length ? (
-        <div style={{ marginBottom: 16 }}>
-          <label style={lbl}>SEND A BIBLE TOO — SO THEY CAN READ OFFLINE</label>
-          <select value={bibleUrl} onChange={e => setBibleUrl(e.target.value)} style={sel}>
-            <option value="">Just the app — no Bible</option>
-            {bibles.map(b => <option key={b.url} value={b.url}>{b.name || b.abbr}</option>)}
-          </select>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>Pick the language they read — they’ll get Scripture without ever needing the internet.</div>
+      {native && hasModule ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>Want them to have a Bible too? Send it separately from your Library.</div>
+          <button onClick={toLibrary} style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay)', borderRadius: 11, padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Choose a Bible</button>
         </div>
       ) : null}
 
       <div style={{ display: 'flex', gap: 11, padding: '12px 14px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 16, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-        <Icon name="shield" size={18} color="var(--sage)" /><div>They may need to allow “install from unknown sources” the first time, then open <b>Library → Import</b> to add the Bible — both normal for an app passed hand to hand.</div>
+        <Icon name="shield" size={18} color="var(--sage)" /><div>They may need to allow “install from unknown sources” the first time — normal for an app passed hand to hand. A Bible you send them separately goes in with <b>Library → Import</b>.</div>
       </div>
       <button onClick={go} disabled={busy} style={{ width: '100%', padding: 15, borderRadius: 15, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: busy ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: busy ? 0.75 : 1 }}>
-        <Icon name="share" size={17} color="#fff" /> {busy ? (status || 'Preparing…') : (bibleUrl ? 'Share app + Bible' : 'Share the app')}</button>
+        <Icon name="share" size={17} color="#fff" /> {busy ? (status || 'Preparing…') : 'Share the app'}</button>
       <p style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', marginTop: 10, lineHeight: 1.45 }}>The first share downloads the app to your phone once; after that it works offline.</p>
     </BottomSheet>
   );

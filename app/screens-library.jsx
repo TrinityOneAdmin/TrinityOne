@@ -950,6 +950,7 @@ function StoreRow({ item, catIcon, ctx }) {
 
 // "Installed" tier — everything downloaded onto this device, removable (except the active Bible)
 function InstalledBrowser({ ctx, category, force }) {
+  const [sharing, setSharing] = React.useState(null);   // url of the row whose Share is being prepared
   const map = window.Bible.installedMap();
   const active = window.Bible.activeVersion;
   // IS THIS ROW THE BIBLE BEING READ? Not "does it share a name with it". Names are unique within a
@@ -983,6 +984,23 @@ function InstalledBrowser({ ctx, category, force }) {
     else ctx.toast(`Couldn't remove ${r.name}`);
   };
 
+  // SHARE ONE MODULE, AS ONE FILE (share-app.jsx's shareOneFile). Offered only on a row isShareableModule allows
+  // — what a recipient's Library → Import can take. The bytes are the engine's own cached copy; if they are not
+  // there, say so and share nothing. Backing out of the share sheet is not an error and shows nothing.
+  const canShareRow = (r) => typeof window.isShareableModule === 'function' && window.isShareableModule(r);
+  const share = async (r) => {
+    if (sharing) return;
+    setSharing(r.url);
+    try {
+      let ex = null;
+      try { ex = await window.Bible.exportModule(r.url); } catch (e) { ex = null; }
+      if (!ex || !ex.bytes || !ex.bytes.length) { ctx.toast(`Couldn't share ${r.name} — it isn't saved on this phone`); return; }
+      await window.shareOneFile({ bytes: ex.bytes, filename: ex.filename,
+        mime: /\.zip$/i.test(ex.filename) ? 'application/zip' : 'application/octet-stream',
+        title: r.name, dialogTitle: 'Share ' + r.name }, ctx);
+    } finally { setSharing(null); }
+  };
+
   if (!rows.length) return (
     <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-3)' }}>
       <div style={{ width: 52, height: 52, borderRadius: 15, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="library" size={24} /></div>
@@ -1012,12 +1030,24 @@ function InstalledBrowser({ ctx, category, force }) {
                 {[CAT_LABEL[r.category] || 'Module', r.abbr, isActive ? 'Active' : null].filter(Boolean).join('  ·  ')}
               </div>
             </div>
-            <button onClick={() => remove(r)} disabled={isActive} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5,
-              border: '1px solid var(--line)', background: 'var(--surface)', color: isActive ? 'var(--ink-3)' : 'var(--danger, #c0392b)',
-              borderRadius: 11, padding: '7px 11px', cursor: isActive ? 'default' : 'pointer', opacity: isActive ? 0.5 : 1,
-              fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
-              <Icon name="trash" size={14} stroke={2.2} /> Remove
-            </button>
+            {/* Share sits ABOVE Remove, not beside it: side by side, at 360px the name was left 69px and
+                "Septuagint" spilled under the buttons (measured — installed-row-share-fits-a-phone.test.mjs). */}
+            <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+              {canShareRow(r) ? (
+                <button onClick={() => share(r)} disabled={sharing === r.url} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                  border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--clay)',
+                  borderRadius: 11, padding: '7px 11px', cursor: sharing === r.url ? 'default' : 'pointer', opacity: sharing === r.url ? 0.6 : 1,
+                  fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
+                  <Icon name="share" size={14} stroke={2.2} /> {sharing === r.url ? 'Preparing…' : 'Share'}
+                </button>
+              ) : null}
+              <button onClick={() => remove(r)} disabled={isActive} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                border: '1px solid var(--line)', background: 'var(--surface)', color: isActive ? 'var(--ink-3)' : 'var(--danger, #c0392b)',
+                borderRadius: 11, padding: '7px 11px', cursor: isActive ? 'default' : 'pointer', opacity: isActive ? 0.5 : 1,
+                fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>
+                <Icon name="trash" size={14} stroke={2.2} /> Remove
+              </button>
+            </div>
           </div>
         );
       })}
