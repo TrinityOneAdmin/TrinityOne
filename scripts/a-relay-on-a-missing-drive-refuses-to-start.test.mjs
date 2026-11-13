@@ -247,3 +247,53 @@ test('a running relay marks its folder, and the mover refuses it even when told 
     assert.equal(res.code, 'relay-running');
   } finally { if (r.code === undefined) { r.p.kill('SIGKILL'); await r.exited; } rmSync(base, { recursive: true, force: true }); }
 });
+
+// Audit B N5: a first pinned boot killed part-way must not leave a folder with files but no key (refused for ever).
+// A preload records, in order, every file the REAL gateway writes into the data folder: the key must come first.
+test('PINNED + empty folder: the relay identity is the FIRST thing written, before the lock, admin token or database', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'trin-r1-order-'));
+  const dir = join(base, 'data'); mkdirSync(dir);
+  const log = join(base, 'writes.log');
+  const pre = join(base, 'record-writes.mjs');
+  writeFileSync(pre, `
+    import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+    const DIR = ${JSON.stringify(dir)}, LOG = ${JSON.stringify(log)}, append = fs.appendFileSync;
+    for (const name of ['writeFileSync', 'openSync', 'renameSync']) {
+      const orig = fs[name];
+      fs[name] = function (p, ...rest) { const f = String(p); if (f.startsWith(DIR)) append(LOG, name + ' ' + f.slice(DIR.length + 1) + '\\n'); return orig.call(this, p, ...rest); };
+    }
+    syncBuiltinESMExports();`);
+  try {
+    const { status } = await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1', NODE_OPTIONS: '--import ' + pre });
+    const writes = readFileSync(log, 'utf8').trim().split('\n');
+    const first = writes.findIndex(w => / relay-key\.json/.test(w));
+    assert.ok(first >= 0, 'fixture: no key write was recorded. ' + writes.join(' | '));
+    const before = writes.slice(0, first);
+    assert.deepEqual(before, [], 'files were written into a fresh pinned folder before its key — a kill there leaves it refused for ever: ' + before.join(' | '));
+    assert.equal(status.relayPub, readJson(join(dir, 'relay-key.json')).pub);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test('PINNED + a folder holding only a half-written key temp file (first boot killed mid-write): starts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-tmpkey-'));
+  try {
+    writeFileSync(join(dir, 'relay-key.json.tmp-4242'), '{"sk":"ab');
+    await expectBoot(dir, { TRINITY_DATA_DIR_PINNED: '1' });
+    assert.ok(readJson(join(dir, 'relay-key.json')).pub);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Audit B N6: systemctl stop sends SIGTERM; the lock must not outlive the relay.
+test('a relay stopped with SIGTERM removes its .relay-lock', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trin-r1-sigterm-'));
+  await requireFreePort(PORT, 'a-relay-on-a-missing-drive-refuses-to-start.test.mjs');
+  const r = start(dir, {});
+  try {
+    let up = false;
+    for (let i = 0; i < 200 && r.code === undefined; i++) { try { if ((await fetch(BASE + '/status')).ok) { up = true; break; } } catch {} await sleep(150); }
+    assert.ok(up, r.log);
+    assert.ok(existsSync(join(dir, '.relay-lock')));
+    r.p.kill('SIGTERM'); await r.exited;
+    assert.equal(existsSync(join(dir, '.relay-lock')), false, 'the lock outlived a SIGTERM stop (systemctl stop)');
+  } finally { if (r.code === undefined) { r.p.kill('SIGKILL'); await r.exited; } rmSync(dir, { recursive: true, force: true }); }
+});

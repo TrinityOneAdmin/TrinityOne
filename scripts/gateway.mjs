@@ -103,13 +103,25 @@ refuseIfMovedOut();
 // A COMPLETELY EMPTY folder is a fresh one: a launcher that pins on the very first run (and has just created the
 // folder) must be able to start. R1 stays closed: an unplugged drive cannot produce an existing <mount>/<leaf>,
 // and a folder with ANY file in it but no key is still refused. Measured before anything below writes into it.
-let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).length === 0; } catch {}
+// Leftover temp files from a first boot killed while writing the key or stamp (below) do not count.
+let DATA_DIR_WAS_EMPTY = false; try { DATA_DIR_WAS_EMPTY = readdirSync(DATA_DIR).every(n => /^(relay-key\.json|\.trinity-data-dir)\.tmp-\d+$/.test(n)); } catch {}
 // Called again after a staged restore is applied (below), when relay-key.json may have changed.
 function checkDataDirIdentity() {
   refuseIfMovedOut();
   const keyPub = relayKeyPubOnDisk(), stampPub = stampPubOnDisk(), hasStamp = existsSync(DATA_DIR_STAMP);
   if (DATA_DIR_PINNED) {
-    if (!keyPub && DATA_DIR_WAS_EMPTY) { console.log('  data folder is new and empty: creating this relay\'s identity (pinned)'); return; }
+    if (!keyPub && DATA_DIR_WAS_EMPTY) {
+      // Audit B N5: the identity is the FIRST thing written into a fresh pinned folder — before .relay-lock,
+      // admin.json or the database — so a first boot killed part-way never leaves a folder that has files but no
+      // key (which every later pinned boot would refuse). Written to a temp name and renamed, so it is whole or absent.
+      console.log('  data folder is new and empty: creating this relay\'s identity (pinned)');
+      const sk = generateSecretKey(), pub = getPublicKey(sk);
+      const kf = join(DATA_DIR, 'relay-key.json'), tmp = kf + '.tmp-' + process.pid;
+      try { writeFileSync(tmp, JSON.stringify({ sk: Buffer.from(sk).toString('hex'), pub }), { mode: 0o600 }); renameSync(tmp, kf); }
+      catch (e) { try { rmSync(tmp, { force: true }); } catch {} refuseDataDir('could not write the relay identity into the new data folder: ' + ((e && e.code) || e), 'Check the drive is writable, then start the relay again.'); }
+      writeDataDirStamp(pub);
+      return;
+    }
     if (!keyPub) refuseDataDir('the data folder has no usable relay identity key (relay-key.json).',
       'This is not the relay\'s data folder, or it is incomplete. Point the relay at the folder that holds its data.');
     if (hasStamp && stampPub !== keyPub) refuseDataDir('the data folder belongs to a different relay (its .trinity-data-dir names ' + (stampPub || 'nothing readable') + ', its key is ' + keyPub + ').',
@@ -168,7 +180,8 @@ checkDataDirIdentity();
 // normal — a dead pid means free. Excluded from backups and from a move's copy.
 const DATA_DIR_LOCK = join(DATA_DIR, '.relay-lock');
 try { writeFileSync(DATA_DIR_LOCK, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n'); } catch {}
-process.on('exit', () => { try { const l = JSON.parse(readFileSync(DATA_DIR_LOCK, 'utf8')); if (l && l.pid === process.pid) unlinkSync(DATA_DIR_LOCK); } catch {} });
+function releaseDataDirLock() { try { const l = JSON.parse(readFileSync(DATA_DIR_LOCK, 'utf8')); if (l && l.pid === process.pid) unlinkSync(DATA_DIR_LOCK); } catch {} }
+process.on('exit', releaseDataDirLock);   // a normal exit; the SIGTERM/SIGINT handler below calls it too (it re-raises, so 'exit' never fires)
 const PORT = Number(process.argv[2] || process.env.PORT || 8090);
 const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');                 // legacy JSON store (migrated from, once)
 // SHA-256 of the release signing certificate (android/app/keystore.properties -> release.keystore, alias
@@ -8763,6 +8776,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     if (_shuttingDown) return; _shuttingDown = true;
     try { store.close(); } catch (e) {}
+    releaseDataDirLock();
     try { process.removeAllListeners(sig); } catch (e) {}
     try { process.kill(process.pid, sig); } catch (e) { process.exit(0); }
   });
