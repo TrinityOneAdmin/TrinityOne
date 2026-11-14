@@ -92,6 +92,9 @@ if [[ $DO_APK == 1 ]]; then
   #     run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"
   # GO-LIVE 2026-10-28 (owner): release-signed + non-debuggable with the stable key, so pilot users install the
   # real build and every later update installs cleanly over the last (debug->release can't update in place).
+  # The member manifest must be in its MEMBER form: a Console build that was killed hard (no trap) leaves the
+  # "Open with TrinityOne" filter stripped out of it, and this build would ship without it. Refuse, don't guess.
+  run "bash scripts/manifest-member-only.sh check"
   run "( cd android && ./gradlew assembleRelease -q )"
   run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"
   # in-app update check: refresh the manifest the member app reads on open (apk-latest.json, served

@@ -253,6 +253,44 @@ test('S11 — A FETCH THAT FAILS says "couldn\'t read that file" and does nothin
   assert.equal(sh2[1].result.reason, 'too-big'); assert.equal(st.reads || 0, 0, 'bytes were read from a stream that declared itself too big');
 });
 
+// ═══════════ AUDIT 2026-11-14 (67c49830): L1 marker expiry, N2 own FileProvider, N3 wider hash ═══════════
+
+test('S18 — L1: THE HANDLED MARKER EXPIRES: a file declined or failed this morning can be opened again from a cold start tonight', () => {
+  const url = 'content://media/external/file/321';
+  const a = incoming(); const first = [];
+  assert.equal(a.mod.handleIncomingFile(url, true, s => first.push(s)), 'shown');
+  const stored = JSON.parse(a.store.get('trinityone.handledFiles'));
+  assert.ok(stored.length === 1 && typeof stored[0].t === 'number');
+  // five minutes later (a relaunch from Recents): still swallowed
+  const soon = incoming(); soon.store.set('trinityone.handledFiles', JSON.stringify([{ ...stored[0], t: Date.now() - 5 * 60 * 1000 }]));
+  assert.equal(soon.mod.handleIncomingFile(url, true, () => {}), 'handled', 'a replay within minutes reopened the sheet');
+  // a day later: the marker has lapsed, so a file the member really did open again is shown
+  const later = incoming(); later.store.set('trinityone.handledFiles', JSON.stringify([{ ...stored[0], t: Date.now() - 24 * 3600 * 1000 }]));
+  const shown = [];
+  assert.equal(later.mod.handleIncomingFile(url, true, s => shown.push(s)), 'shown', 'an old marker still hides the file');
+  assert.equal(shown.length, 1);
+});
+
+test('S19 — N2: A CONTENT URL AIMED AT TRINITYONE\'S OWN FILEPROVIDER is ignored; other apps\' content URLs are not', () => {
+  const i = incoming(); const shown = [];
+  for (const own of ['content://com.trinityone.app.fileprovider/cache/TrinityOne.apk', 'content://com.trinityone.steward.fileprovider/x', 'content://COM.TRINITYONE.APP.FILEPROVIDER/x'])
+    assert.equal(i.mod.handleIncomingFile(own, false, s => shown.push(s)), 'ignored', own + ' was offered for install');
+  assert.deepEqual(shown, []);
+  for (const other of ['content://org.thoughtcrime.securesms.provider/attachment/1', 'content://com.android.providers.downloads.documents/document/12'])
+    assert.equal(i.mod.handleIncomingFile(other, false, s => shown.push(s)), 'shown');
+});
+
+test('S20 — N3: TWO URLS THAT COLLIDE UNDER THE OLD 32-BIT HASH are told apart by the marker', () => {
+  const djb2 = (u) => { let x = 5381; for (let k = 0; k < u.length; k++) x = ((x << 5) + x + u.charCodeAt(k)) | 0; return x; };
+  const seen = new Map(); let pair = null;
+  let rng = 123456789; const next = () => { rng ^= rng << 13; rng ^= rng >>> 17; rng ^= rng << 5; return rng >>> 0; };
+  for (let n = 0; n < 400000 && !pair; n++) { let t = ''; for (let k = 0; k < 10; k++) t += String.fromCharCode(97 + (next() % 26)); const u = 'content://m/' + t; const h = djb2(u); if (seen.has(h) && seen.get(h) !== u) pair = [seen.get(h), u]; else seen.set(h, u); }
+  assert.ok(pair, 'no djb2 collision found in 400k URLs');
+  const i = incoming(); const shown = [];
+  assert.equal(i.mod.handleIncomingFile(pair[0], true, s => shown.push(s)), 'shown');
+  assert.equal(i.mod.handleIncomingFile(pair[1], true, s => shown.push(s)), 'shown', 'a different file was taken for the one already handled');
+});
+
 // ════════════════════════════════ D. the REAL App: mount, listener, picker → sheet ══════════════════════════════
 
 const NPUB = 'npub1' + '0'.repeat(58);

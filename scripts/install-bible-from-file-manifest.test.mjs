@@ -128,3 +128,59 @@ test('M3 — manifest-member-only.sh on its own: strip removes only the marked b
   const bad = spawnSync('bash', [join(ROOT, 'scripts/manifest-member-only.sh'), 'nonsense'], { encoding: 'utf8' });
   assert.notEqual(bad.status, 0, 'an unknown mode was accepted');
 });
+
+// ═══════════ AUDIT 2026-11-14 (67c49830): L3 a hard kill between strip and restore, L8 octet-stream documented ═══════════
+
+function killedBuild() {
+  const original = manifest();
+  const T = mkdtempSync(join(tmpdir(), 'trin-m4-')); dirs.push(T);
+  const m = join(T, 'AndroidManifest.xml');
+  writeFileSync(m, original);
+  const sh = (mode) => spawnSync('bash', [join(ROOT, 'scripts/manifest-member-only.sh'), mode, m], { encoding: 'utf8' });
+  return { original, m, sh, bak: m + '.member-bak', read: () => readFileSync(m, 'utf8') };
+}
+
+test('M4 — L3: AFTER A HARD KILL (no trap ran) the next run puts the known-good copy back first, and the next restore is exact', () => {
+  const k = killedBuild();
+  assert.equal(k.sh('strip').status, 0);
+  assert.ok(existsSync(k.bak), 'fixture: strip made no backup');
+  assert.doesNotMatch(k.read(), /scheme="content"/);
+  // ...SIGKILL: no restore ran. The manifest is stripped and the backup sits beside it. Next Console build:
+  assert.equal(k.sh('strip').status, 0, 'the next strip refused to run after a crash');
+  assert.equal(readFileSync(k.bak, 'utf8'), k.original, 'the backup is no longer the member manifest (it backed up the stripped file)');
+  assert.equal(k.sh('restore').status, 0);
+  assert.equal(k.read(), k.original, 'after a crash and a re-run the member manifest did not come back');
+  // and a release that follows a kill with NO Console build re-run is stopped, not shipped without the filter
+  const k2 = killedBuild(); k2.sh('strip');
+  const chk = k2.sh('check');
+  assert.notEqual(chk.status, 0, 'check passed on a stripped manifest with a stale backup');
+  assert.equal(killedBuild().sh('check').status, 0, 'check failed on an intact member manifest');
+});
+
+test('M5 — L3: A MANIFEST EDITED AFTER THE KILL is never overwritten by the stale backup', () => {
+  // (a) the member manifest was restored by hand and edited (it HAS its block), the old backup is stale
+  const a = killedBuild(); a.sh('strip');
+  const edited = a.original.replace('</manifest>', '    <!-- edited by hand after the kill -->\n</manifest>');
+  writeFileSync(a.m, edited);
+  assert.equal(a.sh('strip').status, 0);
+  assert.match(a.read(), /scheme="content"|<manifest/);   // stripped working copy
+  assert.equal(a.sh('restore').status, 0);
+  assert.equal(a.read(), edited, 'the stale backup was moved over a newer manifest: the edit is lost');
+  // (b) the STRIPPED file was edited after the kill: refuse, and lose neither copy
+  const b = killedBuild(); b.sh('strip');
+  const stripped = b.read();
+  const touched = stripped.replace('</manifest>', '    <!-- edited the stripped file -->\n</manifest>');
+  writeFileSync(b.m, touched);
+  const r = b.sh('strip');
+  assert.notEqual(r.status, 0, 'strip ran over a hand-edited stripped manifest');
+  assert.equal(b.read(), touched, 'the edit was overwritten');
+  assert.equal(readFileSync(b.bak, 'utf8'), b.original, 'the backup was lost');
+});
+
+test('M6 — L8: the octet-stream filter is documented in the manifest as deliberate, with the device-check instruction', () => {
+  const xml = manifest();
+  const block = xml.slice(xml.indexOf('BEGIN install-from-file'), xml.indexOf('END install-from-file'));
+  assert.match(block, /application\/octet-stream IS ACCEPTED ON PURPOSE/);
+  assert.match(block, /record the MIME\s+type each sender really uses/);
+  assert.equal([...block.matchAll(/android:mimeType="application\/octet-stream"/g)].length, 1);
+});

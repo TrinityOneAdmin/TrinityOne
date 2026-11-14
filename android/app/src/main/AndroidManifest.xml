@@ -45,10 +45,15 @@
             <!--
               "Open with TrinityOne" for a Bible someone sent: tap the file in Signal / Files / Quick Share and
               choose TrinityOne. content: only (that is all Android hands another app's file as), and only the
-              types a Bible or a MySword module travels as; Signal and Quick Share often send a .mybible as
-              octet-stream, so that one is listed too and TrinityOne will be offered for other files as well.
-              That is safe: nothing is read until the member taps Install (app/install-bible.jsx), and an
-              unusable file just says so.
+              types a Bible or a MySword module travels as.
+
+              application/octet-stream IS ACCEPTED ON PURPOSE, and it is the broad one: Signal and Quick Share
+              often send a .mybible (a type Android has no name for) as octet-stream, so without it the commonest
+              Bible file would never offer TrinityOne. The price is that TrinityOne is also offered for other
+              unnamed files. That is safe: nothing is read until the member taps Install
+              (app/install-bible.jsx), and an unusable file just says so. At the device check, record the MIME
+              type each sender really uses (Signal, Quick Share, Bluetooth, Files) and narrow this if one of
+              them proves unnecessary.
 
               THIS BLOCK IS MEMBER-ONLY. The Console APK builds from this same manifest and has no Library and
               no listener, so scripts/build-steward-apk.sh strips it (scripts/manifest-member-only.sh) and puts it

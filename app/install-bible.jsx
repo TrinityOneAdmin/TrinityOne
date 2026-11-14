@@ -23,7 +23,7 @@
 // from inside a stranger's file, and index.html has no CSP, so sanitizeHtml is the only barrier anywhere.
 //
 // Globals this file adds (app/*.jsx share ONE scope — a repeat of any of these in another file blanks the APK):
-// IFS_MAX_BYTES, ifsIsContentUrl, ifsHash, ifsWasHandled, ifsMarkHandled, ifsReadContent, ifsRunInstall,
+// IFS_MAX_BYTES, IFS_HANDLED_TTL_MS, ifsIsContentUrl, ifsHash, ifsWasHandled, ifsMarkHandled, ifsReadContent, ifsRunInstall,
 // handleIncomingFile, ifsKindWord, InstallFromFileSheet.
 
 const IFS_MAX_BYTES = 50 * 1024 * 1024;               // the same 50 MB the engine refuses above
@@ -31,14 +31,22 @@ const IFS_HANDLED_KEY = 'trinityone.handledFiles';   // localStorage, NOT sessio
 
 // Android hands us a content:// URI. Nothing else is ours: file:, http(s):, javascript: and the rest are ignored,
 // and this never reaches autoLoad's ?module= fetch path (engine.js) — that reads location.search, not an intent.
+// Not our OWN FileProvider either (com.trinityone.app.fileprovider / com.trinityone.steward.fileprovider): that URI
+// would have our own WebView read the app's own cache into the installer (audit N2). Nothing could leave the phone
+// and a tap is still needed, but there is no reason to offer it.
 function ifsIsContentUrl(url) {
-  return typeof url === 'string' && /^content:\/\//i.test(url);
+  return typeof url === 'string' && /^content:\/\//i.test(url) && !/^content:\/\/com\.trinityone\.[a-z0-9_]+\.fileprovider(\/|$)/i.test(url);
 }
 
+// 64 bits (two independent 32-bit hashes), not 32: a collision would have swallowed a different file's confirm step.
 function ifsHash(url) {
-  let x = 5381;
-  for (let i = 0; i < url.length; i++) x = ((x << 5) + x + url.charCodeAt(i)) | 0;
-  return String(x);
+  let a = 5381, b = 0x811c9dc5;
+  for (let i = 0; i < url.length; i++) {
+    const c = url.charCodeAt(i);
+    a = ((a << 5) + a + c) | 0;
+    b = Math.imul(b ^ c, 0x01000193);
+  }
+  return (a >>> 0).toString(36) + '.' + (b >>> 0).toString(36);
 }
 
 // "ALREADY HANDLED" LIVES IN localStorage. Android re-delivers the old intent when the app is relaunched from
@@ -47,7 +55,11 @@ function ifsHash(url) {
 function ifsHandled() {
   try { const v = JSON.parse(localStorage.getItem(IFS_HANDLED_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
 }
-function ifsWasHandled(h) { return ifsHandled().some(r => r && r.h === h); }
+// A marker LAPSES. Android re-delivers the old intent on a relaunch from Recents, which is minutes, so a marker
+// younger than this swallows the replay; but one that lived for ever hid a file the member had declined (or that
+// failed) and then really opened again from a cold start (audit L1).
+const IFS_HANDLED_TTL_MS = 15 * 60 * 1000;
+function ifsWasHandled(h) { return ifsHandled().some(r => r && r.h === h && typeof r.t === 'number' && Date.now() - r.t < IFS_HANDLED_TTL_MS); }
 function ifsMarkHandled(h) {
   try { localStorage.setItem(IFS_HANDLED_KEY, JSON.stringify([...ifsHandled().filter(r => r && r.h !== h), { h, t: Date.now() }].slice(-8))); } catch (e) {}
 }

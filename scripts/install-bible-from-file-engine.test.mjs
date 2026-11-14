@@ -84,7 +84,7 @@ test('E3 — RAW CAP: 50 MB + 1 is refused as too-big and fflate is never asked 
   const p = await readyPhone({ unzipCalls: calls });
   const big = new Uint8Array(50 * 1024 * 1024 + 1); big.set([0x50, 0x4b, 0x03, 0x04]);
   assert.deepEqual(await p.Bible.installFromBytes(big, 'huge.zip'), { ok: false, reason: 'too-big' });
-  assert.deepEqual(calls, [], 'unzipSync was called on a file over the raw cap');
+  assert.deepEqual([...calls], [], 'unzipSync was called on a file over the raw cap');
 });
 
 test('E4 — INFLATE CAP: a small zip whose central directory claims > 128 MB is refused by the header-only pass, with nothing inflated', async () => {
@@ -96,7 +96,7 @@ test('E4 — INFLATE CAP: a small zip whose central directory claims > 128 MB is
   assert.ok(cd > 0, 'no central directory header found in the fixture');
   dv.setUint32(cd + 24, 200 * 1024 * 1024, true);   // declared uncompressed size
   assert.deepEqual(await p.Bible.installFromBytes(z, 'bomb.zip'), { ok: false, reason: 'too-big' });
-  assert.deepEqual(calls, ['filter'], 'something other than the header-only pass opened the zip: ' + calls);
+  assert.deepEqual([...calls], ['filter'], 'something other than the header-only pass opened the zip: ' + calls);
 });
 
 test('E5 — ENTRY CAP: a zip of 2,001 tiny entries is refused before anything is inflated', async () => {
@@ -105,7 +105,7 @@ test('E5 — ENTRY CAP: a zip of 2,001 tiny entries is refused before anything i
   const files = {}; for (let i = 0; i < 2001; i++) files['f' + i + '.txt'] = new Uint8Array([49]);
   const z = realFflate.zipSync(files, { level: 0 });
   assert.deepEqual(await p.Bible.installFromBytes(z, 'many.zip'), { ok: false, reason: 'unusable' });
-  assert.deepEqual(calls, ['filter']);
+  assert.deepEqual([...calls], ['filter']);
   // and exactly 2,000 passes this guard (then fails later as "not a module", never as a cap)
   const f2 = {}; for (let i = 0; i < 2000; i++) f2['f' + i + '.txt'] = new Uint8Array([49]);
   const calls2 = []; const p2 = await readyPhone({ unzipCalls: calls2 });
@@ -200,7 +200,7 @@ test('E11 — (e) THE REAL BSB BYTES TAKE THE CATALOGUE\'S NAME, and on a phone 
   assert.equal(r.name, 'Berean Standard Bible');
   assert.equal(r.abbr, 'BSB');
   assert.equal(r.renamed, false);
-  assert.match(Object.keys(p.installed())[0], KEY);
+  assert.deepEqual(Object.keys(p.installed()), ['modules/engbsb.zip'], 'pinned bytes are filed as the catalogue module (audit L2)');
 
   // a phone that got BSB the catalogue way: the file is the same bytes
   const q = await readyPhone({ serveBsb: true });
@@ -213,13 +213,13 @@ test('E11 — (e) THE REAL BSB BYTES TAKE THE CATALOGUE\'S NAME, and on a phone 
   assert.equal(q.Bible.versions().length, 1, 'BSB and BSB2');
 });
 
-test('E12 — (f) A USFM BIBLE IS NAMED FROM ITS OWN FILE: the \\id text, else the file name, else \\toc1, else \\h; a book\'s own title or front matter is not a Bible\'s name', async () => {
+test('E12 — (f) A USFM BIBLE IS NAMED FROM ITS OWN FILE: an \\id text that holds up, else the file name, else "USFM Bible"; \\toc1 and \\h are book titles (audit M3 retired them as fallbacks)', async () => {
   const names = async (zip, hint = '') => { const p = await readyPhone(); const r = await p.Bible.installFromBytes(zip, hint); assert.equal(r.ok, true, JSON.stringify(r)); return r.name; };
   assert.equal(await names(usfmZip('GEN - Berean Study Guide', 'v', '\\h Genesis\n\\toc1 The First Book\n')), 'Berean Study Guide', '\\id text is the Bible\'s name');
   assert.equal(await names(usfmZip('GEN Genesis', 'v', '\\h Genesis\n'), 'eng-kjv.zip'), 'eng-kjv', 'a \\id that just repeats the book title (as the shipped KJV does) was taken as the Bible\'s name');
   assert.equal(await names(usfmZip('GEN Genesis', 'v')), 'USFM Bible', 'nothing to go on: the plain fallback');
-  assert.equal(await names(usfmZip('GEN', 'v', '\\h Genesis\n\\toc1 The First Book of Moses\n')), 'The First Book of Moses', '\\toc1 is the fallback');
-  assert.equal(await names(usfmZip('GEN', 'v', '\\h Genesis\n')), 'Genesis', '\\h is the last fallback');
+  assert.equal(await names(usfmZip('GEN', 'v', '\\h Genesis\n\\toc1 The First Book of Moses\n')), 'USFM Bible', '\\toc1 is a book title, not a Bible name');
+  assert.equal(await names(usfmZip('GEN', 'v', '\\h Genesis\n')), 'USFM Bible', '\\h is a book title, not a Bible name');
   assert.equal(await names(usfmZip('GEN', 'v'), 'Grace Chapel NT.zip'), 'Grace Chapel NT', 'the picker\'s file name beats a book title');
   const front = realFflate.zipSync({ '00-FRT.usfm': enc('\\id FRT Preface to a Translation\n\\h Preface\n'), '02-GEN.usfm': enc(usfmBook('GEN - The Real Name', 'v')) });
   assert.equal(await names(front), 'The Real Name', 'front matter was taken as the Bible\'s name');

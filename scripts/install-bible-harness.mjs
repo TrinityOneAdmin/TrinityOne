@@ -24,14 +24,14 @@ function fakeIndexedDB(state) {
     transaction(name, mode) {
       const m = stores.get(name) || stores.set(name, new Map()).get(name);
       const tx = { oncomplete: null, onabort: null, onerror: null, error: null };
-      const commit = () => setTimeout(() => {
+      const commit = (ms = 0) => setTimeout(() => {
         if (state.quotaFull && mode === 'readwrite') { tx.error = new Error('QuotaExceededError'); if (tx.onabort) tx.onabort(); }
         else if (tx.oncomplete) tx.oncomplete();
-      }, 0);
+      }, ms);
       const store = {
         transaction: tx,
         get: (k) => { const r = settle(req(), m.has(k) ? m.get(k) : undefined); commit(); return r; },
-        put: (v, k) => { if (!state.quotaFull) { m.set(k, v); state.puts.push(k); } const r = settle(req(), k); commit(); return r; },
+        put: (v, k) => { if (!state.quotaFull) { m.set(k, v); state.puts.push(k); } const r = settle(req(), k); commit((state.putDelay && state.putDelay[k]) || 0); return r; },
         delete: (k) => { m.delete(k); const r = settle(req(), undefined); commit(); return r; },
         getAllKeys: () => { const r = settle(req(), [...m.keys()]); commit(); return r; },
       };
@@ -49,8 +49,18 @@ export const cached = (state, key) => ((state.stores.get('modules') || new Map()
 // ── the phone: the REAL engine.js ────────────────────────────────────────────────────────────────────────────
 // `readyState: 'loading'` holds boot (autoLoad) back until `boot()` is called, exactly as a page that has not yet
 // fired DOMContentLoaded does; that is what lets a test start an install DURING boot.
-export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, readyState = 'loading', unzipCalls = null } = {}) {
-  const win = { addEventListener() {}, location: { search: '' } };
+export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, hosted = {}, readyState = 'loading', unzipCalls = null } = {}) {
+  const onlineCbs = [];
+  const win = { addEventListener(t, fn) { if (t === 'online') onlineCbs.push(fn); }, location: { search: '' } };
+  const net = { serveBsb };
+  const sqlStats = { opened: 0, closed: 0 };
+  const sqlJs = async (o) => {
+    const SQL = await initSqlJs(o);
+    const D = SQL.Database;
+    return { Database: class extends D {
+      constructor(bytes) { super(bytes); sqlStats.opened++; }
+      close() { sqlStats.closed++; return super.close(); } } };
+  };
   const bootCbs = [];
   const fakeInput = { listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; }, click() {}, style: {} };
   const document = {
@@ -58,13 +68,15 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
     addEventListener(t, fn) { if (t === 'DOMContentLoaded') bootCbs.push(fn); },
     createElement: () => fakeInput, body: { appendChild() {} },
   };
-  const fflate = unzipCalls ? { ...realFflate, unzipSync: (u8, o) => { unzipCalls.push(o && o.filter ? 'filter' : 'full'); return realFflate.unzipSync(u8, o); } } : realFflate;
+  const fflate = unzipCalls ? { ...realFflate, unzipSync: (u8, o) => { unzipCalls.push(o && o.filter ? 'filter' : 'full'); if (o && o.filter) { const f = o.filter; o = { ...o, filter: (i) => { unzipCalls.entryCount = (unzipCalls.entryCount || 0) + 1; return f(i); } }; } return realFflate.unzipSync(u8, o); } } : realFflate;
   const fetched = [];
   const fetch = async (url) => {
     fetched.push(String(url));
     if (String(url) === 'catalog.json') { if (catalogDelay) await sleep(catalogDelay); }
     if (String(url) === 'catalog.json') return { ok: true, json: async () => JSON.parse(readFileSync(ROOT + 'catalog.json', 'utf8')) };
-    if (serveBsb && String(url).endsWith('modules/engbsb.zip')) {
+    if (String(url) === 'ebible-catalog.json') return { ok: true, json: async () => JSON.parse(readFileSync(ROOT + 'ebible-catalog.json', 'utf8')) };
+    if (hosted[String(url)]) { const b = hosted[String(url)]; return { ok: true, status: 200, headers: { get: () => String(b.length) }, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.length) }; }
+    if (net.serveBsb && String(url).endsWith('modules/engbsb.zip')) {
       if (bsbDelay) await sleep(bsbDelay);
       const b = readFileSync(ROOT + 'modules/engbsb.zip');
       return { ok: true, status: 200, headers: { get: () => String(b.length) }, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.length) };
@@ -74,7 +86,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
   const c = {
     window: win, document, location: { search: '' }, navigator: undefined,
     console: { error() {}, warn() {}, log() {} }, TextDecoder, TextEncoder, URLSearchParams, URL,
-    setTimeout, clearTimeout, Promise, Uint8Array, fflate, initSqlJs, crypto: webcrypto,
+    setTimeout, clearTimeout, Promise, Uint8Array, fflate, initSqlJs: sqlJs, crypto: webcrypto,
     indexedDB: fakeIndexedDB(state), localStorage: lsOf(state), fetch, DOMException,
   };
   win.window = win; win.localStorage = c.localStorage;
@@ -87,7 +99,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, cat
   Bible.installFromBytes = async (...a) => JSON.parse(JSON.stringify(await rawInstall.apply(Bible, a)));
   Bible.onFileInstall = ((raw) => (fn) => raw((ev) => fn(JSON.parse(JSON.stringify(ev)))))(Bible.onFileInstall);
   const boot = async () => { bootCbs.splice(0).forEach(fn => fn()); await sleep(20); };
-  return { Bible, win, state, boot, fakeInput, fetched, installed: () => records(state) };
+  return { Bible, win, state, boot, fakeInput, fetched, net, sqlStats, goOnline: async () => { onlineCbs.slice().forEach(fn => fn()); await sleep(5); }, installed: () => records(state) };
 }
 // a phone that has finished booting with nothing installed (the default BSB cannot download: no network)
 export async function readyPhone(opts) { const p = phone(opts); await p.boot(); p.Bible._error = null; return p; }   // boot's own failed default download is not the subject

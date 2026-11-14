@@ -516,8 +516,12 @@ window.safeImgUrl = function (v) {
     const sdb = new SQL.Database(dbBytes);
     const q = (sql, params) => { const st = sdb.prepare(sql); if(params) st.bind(params); const o = []; while(st.step()) o.push(st.getAsObject()); st.free(); return o; };
     const tables = q("SELECT name FROM sqlite_master WHERE type='table'").map(r => r.name);
-    return { q, tables, has: t => tables.some(x => x.toLowerCase() === t.toLowerCase()) };
+    return { q, tables, has: t => tables.some(x => x.toLowerCase() === t.toLowerCase()), close: () => { try{ sdb.close(); }catch(e){} } };
   }
+  // A SQL IDENTIFIER, quoted. Table and column names inside a module come from a file somebody else made, and
+  // buildDictFromDb/buildCommentaryFromDb used to paste them into SQL bare: a column NAMED like a recursive
+  // query ran that query (audit 2026-11-14 H2). Quoted, a hostile name is only a name.
+  const qid = (n) => '"' + String(n).replace(/"/g, '""') + '"';
   // A module's own Details row. `license` is the ATTRIBUTION NOTICE THE MODULE CARRIES ITSELF, not a
   // catalogue label: an openly-licensed resource (CC BY-SA and friends) obliges us to credit the author and
   // name the licence wherever its words are shown, and a notice that lives only in catalog.json covers only
@@ -555,12 +559,13 @@ window.safeImgUrl = function (v) {
   }
   // MySword dictionary/lexicon → { TOPIC: {gloss, short} }
   function buildDictFromDb(db){
+    const qid = (n) => '"' + String(n).replace(/"/g, '""') + '"';   // identifiers come from the file: quote, never paste
     const t = db.tables.find(x => /dictionary/i.test(x)); if(!t) return null;
-    const cols = db.q("PRAGMA table_info(" + t + ")").map(c => c.name.toLowerCase());
+    const cols = db.q("PRAGMA table_info(" + qid(t) + ")").map(c => c.name.toLowerCase());
     const topicCol = cols.includes("topic") ? "topic" : (cols.includes("word") ? "word" : cols[0]);
     const defCol = cols.includes("definition") ? "definition" : (cols.includes("data") ? "data" : cols[1] || cols[0]);
     const entries = {};
-    db.q("SELECT " + topicCol + " AS topic, " + defCol + " AS def FROM " + t).forEach(r => {
+    db.q("SELECT " + qid(topicCol) + " AS topic, " + qid(defCol) + " AS def FROM " + qid(t)).forEach(r => {
       const id = String(r.topic || "").trim().toUpperCase(); if(!id) return;
       const g = stripTags(String(r.def || ""));
       entries[id] = { gloss: g, short: g.slice(0, 64) };
@@ -569,15 +574,16 @@ window.safeImgUrl = function (v) {
   }
   // MySword commentary (.cmt.mybible): a Commentary table keyed by book/chapter (+ verse range)
   function buildCommentaryFromDb(db, fb){
+    const qid = (n) => '"' + String(n).replace(/"/g, '""') + '"';   // identifiers come from the file: quote, never paste
     const t = db.tables.find(x => /commentary/i.test(x)); if(!t) return null;
-    const cols = db.q("PRAGMA table_info(" + t + ")").map(c => c.name);
+    const cols = db.q("PRAGMA table_info(" + qid(t) + ")").map(c => c.name);
     const find = (...names) => cols.find(c => names.some(n => c.toLowerCase() === n));
     const bookCol = find("book", "booknumber"), chapCol = find("chapter", "chapternumber", "chapterbegin", "fromchapter");
     const fromV = find("fromverse", "versebegin", "verse", "versenumber"), toV = find("toverse", "verseend");
     const dataCol = find("comments", "data", "text", "commentary", "definition");
     if(!bookCol || !chapCol || !dataCol) return null;
     const det = detailsOf(db, fb);
-    const sel = "SELECT " + [bookCol + " AS b", chapCol + " AS c", (fromV ? fromV : "0") + " AS fv", (toV ? toV : (fromV || "0")) + " AS tv", dataCol + " AS d"].join(", ") + " FROM " + t + " WHERE " + bookCol + "=? AND " + chapCol + "=? ORDER BY fv";
+    const sel = "SELECT " + [qid(bookCol) + " AS b", qid(chapCol) + " AS c", (fromV ? qid(fromV) : "0") + " AS fv", (toV ? qid(toV) : (fromV ? qid(fromV) : "0")) + " AS tv", qid(dataCol) + " AS d"].join(", ") + " FROM " + qid(t) + " WHERE " + qid(bookCol) + "=? AND " + qid(chapCol) + "=? ORDER BY fv";
     return {
       abbr: det.abbr, name: det.name, kind: "comment", license: det.license,
       getComment: (b, c) => { try { return db.q(sel, [b, c]).map(r => ({ v: r.fv, vTo: r.tv, html: parseVerse(String(r.d || "")) })).filter(x => x.html.trim()); } catch(e){ return []; } }
@@ -933,7 +939,7 @@ window.safeImgUrl = function (v) {
     // copy is replaced rather than merely refused, and a phone that is offline keeps reading (the fetch
     // throws and the caller reports it, exactly as it does for a first install with no signal).
     if(cached && await cachedCopyIsCurrent(url, cached, meta && meta.sha256))
-      return loadModuleBytes(cached, url.split("/").pop(), meta);
+      return withReg(() => loadModuleBytes(cached, url.split("/").pop(), meta));
     const res = await fetchAsset(url);
     // SECURITY-AUDIT-2026-06-24 L4: size cap (matches the JSON branch in installModule). The
     // ceiling is well above any real module: BSB ≈ 3 MB, the KJV+S MySword ≈ 9 MB. A compromised
@@ -943,8 +949,9 @@ window.safeImgUrl = function (v) {
     const u8 = new Uint8Array(await res.arrayBuffer());
     if (u8.byteLength > 50 * 1024 * 1024) throw new Error("module too large (" + u8.byteLength + " bytes — refusing)");
     await verifyIntegrity(url, u8, meta && meta.sha256);   // M3: verify before we cache/parse
-    await cachePut(url, u8);
-    return loadModuleBytes(u8, url.split("/").pop(), meta);
+    // saved and registered under the registration lock, so a file install that is checking names cannot run
+    // between the two and then be replaced by this module when it registers
+    return withReg(async () => { await cachePut(url, u8); return loadModuleBytes(u8, url.split("/").pop(), meta); });
   }
 
   // generic cached asset fetch -> raw bytes (same IndexedDB cache + ASSET_BASE host as Bible modules).
@@ -1256,42 +1263,74 @@ window.safeImgUrl = function (v) {
     t = t.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/\.{2,}/g, ".").replace(/^[._-]+/, "").slice(0, 40).replace(/[._-]+$/, "");
     return t || "module";
   }
-  const _cleanTitle = (s) => String(s == null ? "" : s).replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  // NFKC, and no format characters (zero-width, bidi overrides, U+2060...): a name that LOOKS like another name
+  // must not be stored as a different one (audit M2).
+  const _cleanTitle = (s) => String(s == null ? "" : s).normalize("NFKC").replace(/\p{Cf}/gu, "").replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  // The key two names are COMPARED on: NFKC/NFKD, no marks, no format characters, case-folded, lookalike Cyrillic
+  // and Greek letters folded to Latin, everything that is not a letter or digit dropped. "King James Vers\u0456on",
+  // "Berean Standard Bible\u2060" and "BSB-2" all collide with the names they imitate.
+  const _CONFUSABLE = { "\u0430": "a", "\u0432": "b", "\u0435": "e", "\u0451": "e", "\u0456": "i", "\u0458": "j", "\u043a": "k", "\u043c": "m", "\u043d": "h",
+    "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0442": "t", "\u0443": "y", "\u0445": "x", "\u0455": "s", "\u0501": "d", "\u051b": "q", "\u051d": "w", "\u04bb": "h", "\u04cf": "l",
+    "\u03b1": "a", "\u03b2": "b", "\u03b5": "e", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v", "\u03bf": "o", "\u03c1": "p", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x", "\u03b6": "z", "\u03b7": "n" };
+  const _nameKey = (s) => String(s == null ? "" : s).normalize("NFKD").replace(/\p{M}/gu, "").normalize("NFKC").replace(/\p{Cf}/gu, "").toLowerCase()
+    .replace(/[\u0370-\u03ff\u0400-\u052f]/g, (ch) => _CONFUSABLE[ch] || ch).replace(/[^\p{L}\p{N}]+/gu, "");
   const _deriveAbbr = (name) => {
     const w = String(name).split(/[^A-Za-z0-9]+/).filter(Boolean);
     return (w.length > 1 ? w.map(x => x[0]).join("").toUpperCase().slice(0, 8) : String(name).replace(/[^A-Za-z0-9]/g, "")).slice(0, 12) || "USFM";
   };
   // A USFM Bible's own name, from the file itself. The \id line carries it after the book code (`\id GEN -
-  // Berean Study Bible`) ONLY SOMETIMES: in the shipped KJV the same position holds the BOOK's title
-  // (`\id GEN Genesis`), and \toc1 and \h are always book titles. So an \id text that merely repeats the
-  // book's own title is not taken, front-matter files (FRT, INT...) are skipped, and the order is \id text,
-  // then the file name the picker gave us, then \toc1, then \h, then "USFM Bible". Never throws.
+  // Berean Study Bible`) ONLY SOMETIMES: in the shipped KJV it holds each BOOK's title (`\id 1SA The First Book
+  // of Samuel`), and \toc1 and \h are always book titles. So: an \id text counts only when it is the SAME in at
+  // least two books (or the zip has just one book) and is not the book's own title; failing that, the file name
+  // the picker gave us; failing that "USFM Bible" - never a book title (audit M3: the KJV installed as "The First
+  // Book of Samuel"). Front-matter files (FRT, INT...) are skipped.
   function _usfmName(files, fileName){
     const dec = new TextDecoder("utf-8"), lc = (x) => String(x || "").toLowerCase();
-    let idT = null, tocT = null, hT = null;
+    const seen = {}; let books = 0;
     for(const nm of Object.keys(files).filter(n => !n.startsWith("__MACOSX") && /\.(usfm|sfm)$/i.test(n)).sort()){
       const head = dec.decode(files[nm].subarray(0, 4096));
       const code = (head.match(/^\\id[ \t]+(\S+)/m) || [])[1];
       if(!code || !USFM_BOOK[code.toUpperCase()]) continue;
+      books++;
       let m;
       const h = (m = head.match(/^\\h[ \t]+([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
       const t1 = (m = head.match(/^\\toc1[ \t]+([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
       const t2 = (m = head.match(/^\\toc2[ \t]+([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
       const id = (m = head.match(/^\\id[ \t]+\S+[ \t]*(?:[-\u2013\u2014:][ \t]*)?([^\r\n]*)$/m)) ? _cleanTitle(m[1]) : "";
-      if(!idT && id && ![h, t1, t2, bookName(USFM_BOOK[code.toUpperCase()])].map(lc).includes(lc(id))) idT = id;
-      if(!tocT && t1) tocT = t1;
-      if(!hT && h) hT = h;
+      if(id && ![h, t1, t2, bookName(USFM_BOOK[code.toUpperCase()])].map(lc).includes(lc(id))) seen[id] = (seen[id] || 0) + 1;
     }
+    let idT = null, best = 0;
+    for(const t of Object.keys(seen)) if(seen[t] > best){ best = seen[t]; idT = t; }
+    if(idT && !(best >= 2 || books === 1)) idT = null;
     const fromFile = _cleanTitle(String(fileName || "").replace(/\.(zip|usfm|sfm)$/i, ""));
-    return idT || fromFile || tocT || hT || "USFM Bible";
+    return idT || fromFile || "USFM Bible";
   }
-  async function _sqliteHasViewOrTrigger(dbBytes){
+  // Anything in a SQLite file that makes a plain SELECT do work the engine did not ask for. Refused outright:
+  //   · a VIEW or TRIGGER (a recursive view in Details froze a desktop for 13.6 s from 8 KB);
+  //   · a VIRTUAL table (FTS and the like; they cannot run arbitrary SQL, but nothing here needs one);
+  //   · a GENERATED column (computed on every SELECT, e.g. length(hex(zeroblob(N))) in Details or Bible.Scripture);
+  //   · a table or column whose NAME is not plain (letters, digits, underscore, space): names go into SQL, and
+  //     the builders quote them now, but a module whose names are code is not a MySword module.
+  // The database is CLOSED again before this returns (sql.js keeps a closed-over copy of the file in memory until
+  // it is, and an 8 MB Bible leaked 8.5 MB per attempt).
+  const _PLAIN_NAME = /^[A-Za-z0-9_ ]+$/;
+  async function _sqliteUnsafe(dbBytes){
     const SQL = await initSqlJs({ locateFile: f => SQLJS_BASE + f });
     const sdb = new SQL.Database(dbBytes);
+    const q = (sql) => { const st = sdb.prepare(sql); const o = []; while(st.step()) o.push(st.getAsObject()); st.free(); return o; };
     try{
-      const st = sdb.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type IN ('view','trigger')");
-      st.step(); const n = st.getAsObject().n; st.free();
-      return n > 0;
+      for(const r of q("SELECT type, name, sql FROM sqlite_master")){
+        if(r.type === "view" || r.type === "trigger") return true;
+        if(r.type === "table"){
+          if(/^\s*CREATE\s+VIRTUAL\b/i.test(String(r.sql || ""))) return true;
+          if(!_PLAIN_NAME.test(String(r.name))) return true;
+          if(/^sqlite_/i.test(String(r.name))) continue;
+          for(const c of q("PRAGMA table_xinfo(" + qid(r.name) + ")")){
+            if(!_PLAIN_NAME.test(String(c.name)) || c.hidden === 2 || c.hidden === 3) return true;
+          }
+        }
+      }
+      return false;
     } finally { try{ sdb.close(); }catch(e){} }
   }
   // What loadModuleBytes WOULD make of these bytes, without registering anything: its kind, the name and
@@ -1299,21 +1338,23 @@ window.safeImgUrl = function (v) {
   // own branches; anything it would refuse returns null (and loadModuleBytes would throw on it too).
   async function _peekDb(dbBytes, fb){
     const db = await openDb(dbBytes);
-    if(db.has("Bible")){ const d = detailsOf(db, fb); return { kind: "bible", abbr: d.abbr, name: d.name }; }
-    const cmt = buildCommentaryFromDb(db, fb);
-    if(cmt) return { kind: "comment", abbr: cmt.abbr, name: cmt.name };
-    if(db.tables.find(x => /dictionary/i.test(x))){
-      const d = db.has("Details") ? detailsOf(db, "") : null;
-      const abbr = (d && d.abbr && d.abbr !== "Bible") ? d.abbr : "Dict";
-      return { kind: "dict", abbr, name: (d && d.name && d.name !== "Module") ? d.name : abbr };
-    }
-    return null;
+    try{
+      if(db.has("Bible")){ const d = detailsOf(db, fb); return { kind: "bible", abbr: d.abbr, name: d.name }; }
+      const cmt = buildCommentaryFromDb(db, fb);
+      if(cmt) return { kind: "comment", abbr: cmt.abbr, name: cmt.name };
+      if(db.tables.find(x => /dictionary/i.test(x))){
+        const d = db.has("Details") ? detailsOf(db, "") : null;
+        const abbr = (d && d.abbr && d.abbr !== "Bible") ? d.abbr : "Dict";
+        return { kind: "dict", abbr, name: (d && d.name && d.name !== "Module") ? d.name : abbr };
+      }
+      return null;
+    } finally { db.close(); }   // the peek only READS the names; the module itself is opened (and kept) by loadModuleBytes
   }
   const _DBEXT = { bible: ".bbl.mybible", comment: ".cmt.mybible", dict: ".dct.mybible" };
   async function _peekModule(u8, hint){
     const fb = String(hint || "");
     if(isSqlite(u8)){
-      if(await _sqliteHasViewOrTrigger(u8)) return { unsafe: true };
+      if(await _sqliteUnsafe(u8)) return { unsafe: true };
       const p = await _peekDb(u8, fb);
       return p && { ...p, ext: _DBEXT[p.kind] };
     }
@@ -1325,7 +1366,7 @@ window.safeImgUrl = function (v) {
       const names = Object.keys(files);
       const dbNames = names.filter(n => DB_NAME_RE.test(n));
       const sqliteNames = dbNames.length ? dbNames.filter(n => isSqlite(files[n])) : names.filter(n => isSqlite(files[n]));
-      for(const n of sqliteNames) if(await _sqliteHasViewOrTrigger(files[n])) return { unsafe: true };
+      for(const n of sqliteNames) if(await _sqliteUnsafe(files[n])) return { unsafe: true };
       const dbName = names.find(n => DB_NAME_RE.test(n)) || names.find(n => isSqlite(files[n]));
       if(dbName){ const p = await _peekDb(files[dbName], fb); return p && { ...p, ext: _DBEXT[p.kind] + ".zip" }; }
       const name = _usfmName(files, fb);
@@ -1347,23 +1388,26 @@ window.safeImgUrl = function (v) {
   }
   const _CAT_OF_KIND = { bible: "bibles", comment: "commentaries", dict: "dictionaries", crossref: "crossrefs" };
   // Is this name or abbreviation already held — by a LOADED module of the same kind (the stores that REPLACE
-  // on a clash), or by a CATALOGUE entry we publish (a file must not borrow a trusted Bible's name even
-  // before that Bible is installed)? Case-insensitive.
+  // on a clash), or by a CATALOGUE or eBible-mirror entry we publish (a file must not borrow a trusted Bible's name
+  // even before that Bible is installed)? Compared on _nameKey, so an invisible character or a lookalike letter
+  // does not make a different name.
   function _taken(kind, abbr, name, reserved){
-    const lc = (s) => String(s == null ? "" : s).toLowerCase();
-    const same = (o) => o && lc(o.name) === lc(name);
+    const K = _nameKey, ka = K(abbr), kn = K(name);
+    const coll = kind === "bible" ? modules : kind === "comment" ? commentaries : kind === "crossref" ? crossrefs : null;
     let held = false;
-    if(kind === "bible") held = !!modules[abbr] || Object.values(modules).some(same);
-    else if(kind === "comment") held = !!commentaries[abbr] || Object.values(commentaries).some(same);
-    else if(kind === "dict") held = hasDict(abbr);
-    else if(kind === "crossref") held = abbr === CROSSREF_ALL || Object.prototype.hasOwnProperty.call(crossrefs, abbr) || Object.values(crossrefs).some(same);
-    return held || reserved.has(lc(abbr)) || reserved.has(lc(name));
+    if(coll){
+      for(const a of Object.keys(coll)){ if(K(a) === ka || K(coll[a].name) === kn) { held = true; break; } }
+      if(kind === "crossref" && abbr === CROSSREF_ALL) held = true;
+    } else if(kind === "dict") held = hasDict(abbr) || dicts.some(d => K(d.abbr) === ka);
+    return held || reserved.has(ka) || reserved.has(kn);
   }
   async function _reservedNames(kind){
     const out = new Set(), cat = _CAT_OF_KIND[kind];
-    const add = (it) => { if(it && catOf(it) === cat){ if(it.name) out.add(String(it.name).toLowerCase()); if(it.abbr) out.add(String(it.abbr).toLowerCase()); } };
+    const add = (it) => { if(it && catOf(it) === cat){ if(it.name) out.add(_nameKey(it.name)); if(it.abbr) out.add(_nameKey(it.abbr)); } };
     add(DEFAULT_MODULE); add(DEFAULT_LEXICON);
     try{ const c = await getCatalog(); for(const g of (c && c.categories) || []) for(const it of (g.items || [])) if(it && it.kind !== "import") add(it); }catch(e){}
+    // the 1,290 eBible translations the Library offers by name: a file must not wear one either
+    if(kind === "bible"){ try{ const m = await getMirror(); for(const it of (m && m.items) || []) add({ ...it, category: "bibles" }); }catch(e){} }
     return out;
   }
   async function _pinnedEntry(h){
@@ -1380,72 +1424,125 @@ window.safeImgUrl = function (v) {
     notify();
   }
   const _fail = (reason) => ({ ok: false, reason });
+  // The pre-pass for a zip (audit H1, M1). Returns null if it is within bounds, else the refusal reason.
+  //  1. a header-only walk of the central directory that THROWS the moment the entry count or the declared
+  //     inflated total passes its cap, so a zip64 header claiming billions of entries is never walked;
+  //  2. every entry is then really decoded, with a STREAMING inflater, in 8 KB pushes (a deflate stream cannot
+  //     expand more than ~1000:1, so each push is bounded work), and the decode STOPS the moment an entry yields
+  //     more than the central directory declared for it, or the running total passes the cap. fflate does not do
+  //     this itself: it keeps decoding past the end of the buffer it sized from the declared size, so a zip that
+  //     declares 12 KB and inflates to gigabytes cost seconds on every install AND every boot.
+  function _zipRefusal(u8){
+    const declared = Object.create(null); let n = 0, total = 0;
+    const stop = (why) => { const e = new Error(why); e._cap = why; throw e; };
+    try{
+      fflate.unzipSync(u8, { filter: (f) => {
+        n++; total += f.originalSize || 0;
+        if(n > INSTALL_MAX_ENTRIES) stop("unusable");
+        if(total > INSTALL_MAX_INFLATED) stop("too-big");
+        declared[f.name] = Math.max(declared[f.name] || 0, f.originalSize || 0);
+        return false;
+      } });
+    }catch(e){ return e && e._cap ? e._cap : "unusable"; }
+    let verdict = null, actual = 0;
+    try{
+      const uz = new fflate.Unzip();
+      uz.register(fflate.UnzipInflate); uz.register(fflate.UnzipPassThrough);
+      uz.onfile = (f) => {
+        if(verdict) return;
+        let got = 0;
+        const lim = declared[f.name];
+        f.ondata = (err, chunk) => {
+          if(verdict) return;
+          if(err){ verdict = "unusable"; return; }
+          got += chunk.length; actual += chunk.length;
+          if(lim === undefined || got > lim){ verdict = "unusable"; try{ f.terminate(); }catch(e){} return; }
+          if(actual > INSTALL_MAX_INFLATED){ verdict = "too-big"; try{ f.terminate(); }catch(e){} }
+        };
+        f.start();
+      };
+      const STEP = 8192;
+      for(let i = 0; i < u8.length && !verdict; i += STEP) uz.push(u8.subarray(i, Math.min(i + STEP, u8.length)), i + STEP >= u8.length);
+    }catch(e){ return verdict || "unusable"; }
+    return verdict;
+  }
+  let _installDepth = 0;      // installs in flight: the reconnect retry of autoLoad must not start a second default install under one
+  // Registration is one at a time across file installs AND hosted ones (fetchAndCacheModule): the name check and
+  // the registration it protects must not be interleaved with another module claiming the same name.
+  let _regTail = Promise.resolve();
+  function withReg(fn){ const run = _regTail.then(fn, fn); _regTail = run.then(() => {}, () => {}); return run; }
   async function _installOne(u8, hint){
     try{
       try{ await _bootDone; }catch(e){}
       if(!u8 || !u8.length) return _fail("unusable");
       if(u8.length > INSTALL_MAX_RAW) return _fail("too-big");
       hint = typeof hint === "string" ? hint : "";
-      if(isZip(u8)){
-        let total = 0, n = 0;
-        try{ fflate.unzipSync(u8, { filter: (f) => { n++; total += (f.originalSize || 0); return false; } }); }catch(e){ return _fail("unusable"); }
-        if(total > INSTALL_MAX_INFLATED) return _fail("too-big");
-        if(n > INSTALL_MAX_ENTRIES) return _fail("unusable");
-      }
-      let peek = null;
-      try{ peek = await _peekModule(u8, hint); }catch(e){ console.warn("install: not readable as a module", e); return _fail("unusable"); }
-      if(!peek || peek.unsafe) return _fail("unusable");
 
+      // BYTES FIRST. Identical bytes (or the pinned catalogue copy of them) are "already here" BEFORE anything is
+      // parsed, so a re-delivered file costs a hash and nothing else.
       const h = await sha256hex(u8), h12 = h.slice(0, 12);
-      // already here? — the same bytes under a key we wrote, or the pinned catalogue copy of them
       const inst = getInstalled();
       const heldKey = async (url) => { if(!url || !inst[url]) return null; const b = await cacheGet(url); return b ? url : null; };
       let dupKey = null;
       for(const k of Object.keys(inst)) if(k.indexOf("imported/" + h12 + "/") === 0 && await heldKey(k)){ dupKey = k; break; }
       const pinned = await _pinnedEntry(h);
       if(!dupKey && pinned) dupKey = await heldKey(pinned.url);
-      if(dupKey){ const r = inst[dupKey]; return { ok: true, already: true, kind: r.kind || peek.kind, abbr: r.abbr, name: r.name || r.abbr }; }
+      if(dupKey){ const r = inst[dupKey]; return { ok: true, already: true, kind: r.kind || (r.category === "commentaries" ? "comment" : r.category === "dictionaries" ? "dict" : r.category === "crossrefs" ? "crossref" : "bible"), abbr: r.abbr, name: r.name || r.abbr }; }
       // a record whose bytes are gone is stale: drop it so this install can stand in its place
       for(const k of Object.keys(inst)) if(k.indexOf("imported/" + h12 + "/") === 0){ const m = getInstalled(); delete m[k]; setInstalled(m); }
 
+      if(isZip(u8)){ const why = _zipRefusal(u8); if(why) return _fail(why); }
+      let peek = null;
+      try{ peek = await _peekModule(u8, hint); }catch(e){ console.warn("install: not readable as a module", e); return _fail("unusable"); }
+      if(!peek || peek.unsafe) return _fail("unusable");
+
       // names: a pinned copy takes its catalogue entry's; everything else may never take a held name
       let abbr = pinned ? pinned.abbr : peek.abbr, name = pinned ? pinned.name : peek.name;
-      abbr = String(abbr || "").slice(0, 12) || "Module"; name = _cleanTitle(name) || abbr;
+      abbr = _cleanTitle(abbr).slice(0, 12) || "Module"; name = _cleanTitle(name) || abbr;
+      // an object-prototype name would rewrite the store's prototype (modules["__proto__"] = ...)
+      if(/^(__proto__|constructor|prototype)$/i.test(abbr) || /^(__proto__|constructor|prototype)$/i.test(name)) return _fail("unusable");
       const reserved = pinned ? new Set() : await _reservedNames(peek.kind);
-      let renamed = false;
-      if(_taken(peek.kind, abbr, name, reserved)){
-        renamed = true;
-        const a0 = abbr, n0 = name;
-        abbr = a0 + "-F"; name = n0 + FROM_FILE;
-        for(let i = 2; _taken(peek.kind, abbr, name, reserved) && i < 1000; i++){ abbr = a0 + "-F" + i; name = n0 + " (from a file " + i + ")"; }
-      }
-      // A cross-reference file names itself INSIDE the json, and loadCrossrefsJSON trusts that over any meta,
-      // so a renamed one is rewritten (and the REWRITTEN bytes are what is saved, so a restart agrees).
-      let bytes = u8;
-      if(peek.kind === "crossref" && (renamed || abbr !== peek.abbr)){
-        const p = peek.parsed; p.meta = { ...p.meta, abbr, name };
-        bytes = new TextEncoder().encode(JSON.stringify(p));
-      }
       const cat = _CAT_OF_KIND[peek.kind];
-      let r;
-      try{ r = await loadModuleBytes(bytes, hint, { abbr, name, category: cat }); }
-      catch(e){ console.warn("install: loadModuleBytes refused the file", e); return _fail("unusable"); }
-      if(!r || !r.abbr) return _fail("unusable");
-      const shown = (r.kind === "bible" && modules[r.abbr] && modules[r.abbr].name) || (r.kind === "comment" && commentaries[r.abbr] && commentaries[r.abbr].name)
-        || (r.kind === "crossref" && crossrefs[r.abbr] && crossrefs[r.abbr].name) || name;
-      const key = "imported/" + h12 + "/" + _cleanFileName(hint || shown) + peek.ext;
-      // SAVE FIRST. Only then does a record exist.
-      try{ await cachePut(key, bytes); }
-      catch(e){ console.warn("install: cachePut failed (full phone?)", e); _undoLoaded(r.kind, r.abbr); return _fail("no-space"); }
-      recordInstalled({ url: key, id: r.abbr, abbr: r.abbr, name: shown, kind: r.kind, category: cat });
-      if(!isInstalled(key)){ await cacheDelete(key); _undoLoaded(r.kind, r.abbr); return _fail("no-space"); }
-      noteLoadedFrom(key, r.abbr, cat);
-      notify();
-      return { ok: true, kind: r.kind, abbr: r.abbr, name: shown, renamed };
+      return await withReg(async () => {
+        let renamed = false;
+        if(_taken(peek.kind, abbr, name, reserved)){
+          renamed = true;
+          const a0 = abbr, n0 = name;
+          abbr = a0 + "-F"; name = n0 + FROM_FILE;
+          for(let i = 2; _taken(peek.kind, abbr, name, reserved) && i < 1000; i++){ abbr = a0 + "-F" + i; name = n0 + " (from a file " + i + ")"; }
+        }
+        // A cross-reference file names itself INSIDE the json, and loadCrossrefsJSON trusts that over any meta,
+        // so a renamed one is rewritten (and the REWRITTEN bytes are what is saved, so a restart agrees).
+        let bytes = u8;
+        if(peek.kind === "crossref" && (renamed || abbr !== peek.abbr)){
+          const p = peek.parsed; p.meta = { ...p.meta, abbr, name };
+          bytes = new TextEncoder().encode(JSON.stringify(p));
+        }
+        let r;
+        try{ r = await loadModuleBytes(bytes, hint, { abbr, name, category: cat }); }
+        catch(e){ console.warn("install: loadModuleBytes refused the file", e); return _fail("unusable"); }
+        if(!r || !r.abbr) return _fail("unusable");
+        const shown = (r.kind === "bible" && modules[r.abbr] && modules[r.abbr].name) || (r.kind === "comment" && commentaries[r.abbr] && commentaries[r.abbr].name)
+          || (r.kind === "crossref" && crossrefs[r.abbr] && crossrefs[r.abbr].name) || name;
+        // Bytes that ARE a catalogue module (pinned) are filed as that catalogue module, so the Library shows it
+        // Installed and can never offer "Get" for a second copy (audit L2). Anything else goes under imported/.
+        const asCatalogue = !!(pinned && !renamed && pinned.url && catOf(pinned) === cat);
+        const key = asCatalogue ? pinned.url : "imported/" + h12 + "/" + _cleanFileName(hint || shown) + peek.ext;
+        // SAVE FIRST. Only then does a record exist.
+        try{ await cachePut(key, bytes); }
+        catch(e){ console.warn("install: cachePut failed (full phone?)", e); _undoLoaded(r.kind, r.abbr); return _fail("no-space"); }
+        recordInstalled(asCatalogue
+          ? { url: key, id: pinned.id, abbr: r.abbr, name: shown, kind: r.kind, format: pinned.format, category: cat }
+          : { url: key, id: r.abbr, abbr: r.abbr, name: shown, kind: r.kind, category: cat });
+        if(!isInstalled(key)){ await cacheDelete(key); _undoLoaded(r.kind, r.abbr); return _fail("no-space"); }
+        noteLoadedFrom(key, r.abbr, cat);
+        notify();
+        return { ok: true, kind: r.kind, abbr: r.abbr, name: shown, renamed };
+      });
     }catch(e){ console.error(e); return _fail("failed"); }
   }
   function installFromBytes(u8, hint){
-    const run = () => _installOne(u8, hint);
+    const run = async () => { _installDepth++; try{ return await _installOne(u8, hint); } finally { _installDepth--; } };
     const p = _installChain.then(run, run);
     _installChain = p.then(() => {}, () => {});
     return p;
@@ -1799,6 +1896,8 @@ window.safeImgUrl = function (v) {
   // modules download on first run; if that first launch was offline, retry the moment we're back
   // online so the app self-heals into a readable state without a manual reload.
   if(typeof window !== "undefined") window.addEventListener("online", () => {
-    if(order.length === 0 && !loadingFlag){ window.Bible._error = null; autoLoad(); }
+    // not while a file install is in flight (it would race the default install into two copies of one Bible), and
+    // installFromBytes waits on the re-run exactly as on the first boot
+    if(order.length === 0 && !loadingFlag && _installDepth === 0){ window.Bible._error = null; _bootDone = autoLoad().then(() => {}, () => {}); }
   });
 })();
