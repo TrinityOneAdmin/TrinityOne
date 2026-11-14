@@ -46,8 +46,12 @@ test('the launcher offers two doors, and neither re-points the data', () => {
 // compiled Rust, not an unbundled app/*.jsx, so dead code cannot leave a matching string behind for free.
 test('the desktop Suite opens the chooser on FIRST launch, not the console', () => {
   const src = MAIN.replace(/(^|[^:])\/\/[^\n]*/gm, '$1');   // strip comments: this file explains the old behaviour above
-  const at = src.indexOf('let url');
-  assert.notEqual(at, -1, 'the launch URL is no longer built with `let url` — re-anchor this test');
+  // Anchor on the LAUNCH URL, not the first `let url`: auto-update added an unrelated `let url` (in
+  // prepare_restart, reading a JSON body) ahead of it. The anchor must match exactly once.
+  const ANCHOR = /let url = format!\("http:\/\/127\.0\.0\.1:\{PORT\}\/relay-app\//g;
+  const hits = [...src.matchAll(ANCHOR)];
+  assert.equal(hits.length, 1, 'the launch-URL anchor must match exactly once (found ' + hits.length + ') — re-anchor this test');
+  const at = hits[0].index;
   const decl = src.slice(at, src.indexOf(';', at));
   assert.match(decl, /home\.html/, 'first launch does not open the launcher');
   assert.equal(/steward\.html/.test(decl), false,

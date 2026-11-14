@@ -33,6 +33,28 @@ function stripLiterals(src) {
     const c = src[i];
     if (c === '/' && src[i + 1] === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
     if (c === '/' && src[i + 1] === '*') { i += 2; while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++; i += 2; continue; }
+    // REGEX LITERALS. A regex such as /["']/ holds an unbalanced quote, which the string branch below would
+    // read as an unterminated string and swallow the rest of the file (the pacer's regex in steward.src.js did
+    // exactly that). A `/` starts a regex when the last code token cannot end an expression.
+    if (c === '/') {
+      const prev = out.replace(/\s+$/, '');
+      const last = prev[prev.length - 1];
+      const kw = /(?:^|[^\w$.])(?:return|typeof|case|in|of|delete|void|throw|new|else|do)$/.test(prev);
+      if (!prev || '(,=:[!&|?{};+-*%<>~^'.includes(last) || kw) {
+        let j = i + 1, inClass = false;
+        while (j < src.length && src[j] !== '\n') {
+          if (src[j] === '\\') { j += 2; continue; }
+          if (src[j] === '[') inClass = true;
+          else if (src[j] === ']') inClass = false;
+          else if (src[j] === '/' && !inClass) break;
+          j++;
+        }
+        if (src[j] === '/') {
+          j++; while (/[a-z]/i.test(src[j] || '')) j++;
+          out += '/ /'; i = j; continue;
+        }
+      }
+    }
     if (c === '"' || c === "'" || c === '`') {
       const q = c; i++;
       while (i < src.length && src[i] !== q) { if (src[i] === '\\') i++; i++; }
@@ -78,4 +100,20 @@ test('the scan actually bites (sabotage check)', () => {
   assert.deepEqual(freeConstants('const MEMBER_D = "x";\n' + sabotaged), []);
   // and is not fooled by the name appearing only inside a string
   assert.deepEqual(freeConstants('const s = "MEMBER_D";'), []);
+});
+
+test('a quote inside a regex literal does not blind the scan to what follows (the pacer regex)', () => {
+  // an odd number of `"` inside a regex — before the fix this opened a "string" that ate the real code
+  const src = 'var a = /^["a]+$/.test(x);\nfunction f(d){ return d.startsWith(MEMBER_D); }';
+  assert.deepEqual(freeConstants(src), ['MEMBER_D'], 'an undeclared name after a regex literal must still be reported');
+  assert.deepEqual(freeConstants('var a = /^["a]+$/.test(x); const MEMBER_D = 1; f(MEMBER_D);'), []);
+  // division is not a regex
+  assert.deepEqual(freeConstants('var q = a / b; var r = c / MEMBER_D;'), ['MEMBER_D']);
+});
+
+test('control: an undeclared name injected into the real steward bundle is reported', () => {
+  const src = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  assert.deepEqual(freeConstants(src), [], 'precondition: the shipped bundle is clean');
+  assert.deepEqual(freeConstants(src + '\n;function __injected(){ return INJECTED_UNDECLARED_NAME + 1; }'),
+    ['INJECTED_UNDECLARED_NAME']);
 });

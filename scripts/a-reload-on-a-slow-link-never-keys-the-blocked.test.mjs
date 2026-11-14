@@ -73,6 +73,9 @@ const SLOW = (aPub) => `(() => { if (window.__slowHooked) return; window.__slowH
     return os.call(this, d); };
   const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
   Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return desc.get.call(this); }, set(fn) {
+    // WRAP EACH SOCKET ONCE. The app's own socket pacer assigns onmessage again with its wrapper; wrapping that
+    // too would delay every frame twice (the 2nd wrap reaches the pacer, not the app).
+    if (this.__slowWrapped) { desc.set.call(this, fn); return; } if (fn) this.__slowWrapped = 1;
     const w = fn ? (ev) => { try { const d = ev.data; if (typeof d === 'string' && (d.startsWith('["EVENT"') || d.startsWith('["EOSE"'))) { const a = JSON.parse(d); if (window.__slowSubs && window.__slowSubs.has(a[1])) { window.__delayedN = (window.__delayedN || 0) + 1; setTimeout(() => fn(ev), ${DELAY}); return; } } } catch (x) {} return fn(ev); } : fn;
     desc.set.call(this, w); } });
 })();`;

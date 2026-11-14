@@ -42,8 +42,10 @@ const ONE = 'wss://ours.example/relay', TWO = 'wss://other-a.example/relay', THR
 const REFUSAL = 'blocked: not a member or not permitted for this group';
 
 // ── A. the engine ─────────────────────────────────────────────────────────────────────────────────────────
-function engine(accepting) {
+function engine(accepting, opts) {
   const raised = [];
+  const behave = (opts && opts.behave) || ((u) => (accepting.includes(u) ? 'ok' : REFUSAL));
+  const pubLatest = new Map();
   const body = [
     stmt(BUNDLE, 'var _lastSpread = ', '_lastSpread'),
     fnBody(BUNDLE, 'function _noteSpread', '_noteSpread'),
@@ -54,8 +56,9 @@ function engine(accepting) {
   // below passing over nothing at all.
   assert.match(body, /Promise\.allSettled\(pool\.publish\(targets, evt\)/,
     'vendor/steward.js: _publishToRelays is no longer the writer — re-anchor rather than widening');
-  assert.match(body, /return accepted === targets\.length \? evt : false;/,
-    'vendor/steward.js: ALL-MUST-ACCEPT IS GONE. That is the rule this whole file exists beside, not a detail.');
+  // The all-must-accept rule is NOT asserted by matching its return line (it was wrapped as `_fin(…)` and a
+  // text match broke on a refactor that changed nothing). It is asserted by RUNNING the lifted function in
+  // the tests below: one relay of three accepting must return false.
 
   const targets = [ONE, TWO, THREE];
   const scope = {
@@ -64,9 +67,14 @@ function engine(accepting) {
     CustomEvent: class { constructor(t, o) { this.type = t; this.detail = (o || {}).detail; } },
     pool: {
       relays: new Map(),
-      publish: (urls) => urls.map(u => (accepting.includes(u)
-        ? Promise.resolve('ok') : Promise.reject(new Error(REFUSAL)))),
+      publish: (urls, evt) => urls.map(u => {
+        const a = behave(u, evt);
+        return a === 'ok' ? Promise.resolve('ok') : Promise.reject(new Error(a));
+      }),
     },
+    _pubLatest: pubLatest,
+    // the retry back-off is 1.1s/2.2s/4.4s; collapse it so the rate-limit row runs in milliseconds
+    setTimeout: (f) => globalThis.setTimeout(f, 0),
     _waitForRegistration: async () => {},
     _connectedRelays: () => targets.slice(),
     relays: () => targets.slice(),
@@ -82,7 +90,7 @@ function engine(accepting) {
         throw new ReferenceError('the lifted _publishToRelays needs `' + String(k) + '` — add a stub');
       },
     }));
-  return { ...api, raised };
+  return { ...api, raised, pubLatest };
 }
 const EVT = { kind: 30078, tags: [['d', 'trinityone/group:musicians'], ['t', 'trinityone']], content: '{}' };
 
@@ -101,6 +109,45 @@ test('ONE relay of three accepting is STILL a failure — the rule is untouched'
     'A PARTIAL WRITE WAS REPORTED AS SUCCESS. A group rule that reached one relay of three is enforced on ' +
     'one of three, and every member’s app fans its messages to all of them. This is the rule the whole ' +
     'all-must-accept path exists for, and nothing about telling the steward a better sentence may relax it.');
+});
+
+test('ALL relays accepting returns the event; a partial write returns false (behaviour, lifted)', async () => {
+  const all = await engine([ONE, TWO, THREE])._publishToRelays(EVT);
+  assert.equal(all, EVT);
+  for (const part of [[ONE], [ONE, TWO], [THREE]]) {
+    assert.equal(await engine(part)._publishToRelays(EVT), false,
+      'ALL-MUST-ACCEPT IS GONE: ' + part.length + ' of 3 relays accepting was reported as success');
+  }
+});
+
+test('a relay that is ALWAYS rate-limited fails the write after the retries', async () => {
+  let calls = 0;
+  const e = engine(null, { behave: (u) => { if (u === TWO) { calls++; return 'rate-limited: slow down'; } return 'ok'; } });
+  const r = await e._publishToRelays(EVT);
+  assert.equal(r, false, 'a relay that never stopped rate-limiting was reported as having taken the write');
+  assert.equal(calls, 4, 'expected the first attempt plus 3 retries against the rate-limiting relay');
+  assert.deepEqual(e._spreadOf('trinityone/group:musicians').missed, [TWO]);
+});
+
+// "Newer copy wins": while an older write of the same document is being retried, a NEWER write of that address
+// supersedes it. The older call then reports whatever the newer one achieved.
+async function supersede(newerAccepting) {
+  const OLD = { ...EVT, id: 'old', pubkey: 'p'.repeat(64) }, NEW = { ...EVT, id: 'new', pubkey: 'p'.repeat(64) };
+  const e = engine(null, { behave: (u, evt) => evt.id === 'old' ? 'rate-limited: slow down'
+    : (newerAccepting.includes(u) ? 'ok' : REFUSAL) });
+  const pOld = e._publishToRelays(OLD);
+  const pNew = e._publishToRelays(NEW);   // sets _pubLatest synchronously, before the old call's first await resumes
+  return { old: await pOld, neu: await pNew, OLD, NEW };
+}
+test('newer copy landed on EVERY relay: the superseded older call succeeds', async () => {
+  const x = await supersede([ONE, TWO, THREE]);
+  assert.equal(x.neu, x.NEW, 'control: the newer write itself must succeed');
+  assert.equal(x.old, x.OLD, 'the older write was superseded by a copy that reached every relay, so it is satisfied');
+});
+test('newer copy landed only PARTLY: BOTH calls return false', async () => {
+  const x = await supersede([ONE]);
+  assert.equal(x.neu, false, 'control: a partial newer write is a failure');
+  assert.equal(x.old, false, 'the older call borrowed success from a newer copy that did not reach every relay');
 });
 
 test('…and the console can now tell WHICH relays took it', async () => {
