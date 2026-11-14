@@ -29194,7 +29194,7 @@ zoo`.split("\n");
           const s = oneRelay(u, filters, {
             onevent: handlers.onevent,
             onanswer(genuine, why) {
-              if (closed || subs.get(u) !== s) return;
+              if (closed || churchPub !== me || subs.get(u) !== s) return;
               cb([...stewardedChurches.keys()]);
               if (!(broad && !genuine && why === "timer" && relayUp(u))) {
                 answered.add(u);

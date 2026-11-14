@@ -197,3 +197,27 @@ test('RECORDED: restore, then Back and unlock — opens as the own key first, an
   h.api.subscribe.call(h.Steward, () => {});
   assert.deepEqual(got, [B], 'the discovery did not return the helper to church B from its cache and the remembered church');
 });
+
+// A late NAME lookup in the old closure (resolveName's kind-0 handler) must not rename a church or rewrite the cache.
+// Its own guard, tested alone: the roster handler's guard (above) does not cover it. The church is put into the Map by
+// hand AFTER the restore so that only the guard — not an empty Map — stops the rename.
+test('a late name lookup for the OLD key, arriving after a restore, does not rename a church or write the old key\'s cache', async () => {
+  const LATE = 'dd'.repeat(32);
+  const h = build({ relays: ['wss://r'] });
+  h.api.subscribe.call(h.Steward, () => {});
+  await new Promise(r => setTimeout(r, 0));
+  const disc = h.subs.find(x => x.filters && x.filters[0] && (x.filters[0].kinds || []).includes(30078));
+  assert.ok(disc, 'CONTROL: the discovery subscription never opened');
+  disc.handlers.onevent({ tags: [['d', 'trinityone/stewards:' + LATE], ['t', 'trinityone']], content: JSON.stringify({ pubkeys: [OWN_A] }), created_at: 100 });
+  const nameSub = h.subs.find(x => x.filters && x.filters[0] && (x.filters[0].kinds || []).includes(0) && (x.filters[0].authors || []).includes(LATE));
+  assert.ok(nameSub, 'CONTROL: no name lookup was opened for the church the roster named');
+  nameSub.handlers.onevent({ content: JSON.stringify({ name: 'First Name' }) });
+  assert.equal(h.stubs.stewardedChurches.get(LATE).name, 'First Name', 'CONTROL: a name lookup did not rename the church while the key was current');
+  h.Steward.restoreKey(WORDS_C);
+  h.stubs.stewardedChurches.set(LATE, { name: 'Church' });
+  const cacheKey = 'trinityone.steward.stewarded.' + OWN_A;
+  const before = h.store.get(cacheKey);
+  nameSub.handlers.onevent({ content: JSON.stringify({ name: 'Late Name' }) });
+  assert.equal(h.stubs.stewardedChurches.get(LATE).name, 'Church', 'a late name lookup for the OLD key renamed a church after the restore');
+  assert.equal(h.store.get(cacheKey), before, 'a late name lookup for the OLD key rewrote the old key\'s per-key cache');
+});

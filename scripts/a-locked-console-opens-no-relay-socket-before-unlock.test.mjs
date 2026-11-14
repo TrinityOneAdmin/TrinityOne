@@ -198,7 +198,8 @@ test('replacing the key reopens the subscription for the NEW key, never the old 
   await waitFor(`window.__revokeSubs.size > 0`, 30000, 'CONTROL: the discovery is open before the restore');
   const words = generateSeedWords();
   // The identity is read in the SAME synchronous turn as the restore: the stewarded-churches discovery later re-reads
-  // B's roster, finds C is not on it and evicts B on its own, so a later read sees a healed Map. The window before
+  // B's roster, finds C is not on it and evicts B on its own, so a later read sees a healed Map — but that healing
+  // comes WITH a false full-screen "You've been removed from Church B" (the removal assertions below pin it). The window before
   // that is the one every render and every write in between lives in (and, on a slow or unreachable relay, it is
   // not a window at all).
   const rr = JSON.parse(await evalIn(`(() => { window.Steward.restoreKey(${JSON.stringify(words)});
@@ -227,7 +228,7 @@ test('replacing the key reopens the subscription for the NEW key, never the old 
     assert.ok(!o.ids.some(i => i.p === B.pub), `${when}: the old key's church B is still listed`);
     assert.ok(o.ids.some(i => i.k === 'church' && i.p === churchC), `${when}: the restored church's own row is missing from the switcher`);
     assert.equal(o.active, churchC, `${when}: the active church is not the restored one`);
-    assert.equal(o.acting || '', '', `${when}: the console still acts for the OLD key's church`);
+    // (no `acting` check here: this fixture's console never acts as B, so it would pass on the old code too; test 5 and the lifted tests cover acting)
   }
   // THE SYMPTOM A PERSON SAW on the old code: the old key's socket is still logged in, so B's roster (which does not name C)
   // comes back, B is evicted as a REMOVAL, and a full-screen "You've been removed from Church B" appears over the console.
@@ -281,6 +282,13 @@ test('Settings -> Church key -> Restore from a recovery phrase: a console that h
   assert.ok(!/been removed|removed you as a helper/i.test(o.text), 'a "removed from a church" screen is showing after the restore — on the old code this is what covers the dashboard');
   assert.deepEqual(o.removed, [], 'a removal notice was written for church B after the restore: ' + JSON.stringify(o.removed));
   await waitFor(dashboard, 90000, 'the dashboard as the restored church');
+  // READ AGAIN now the dashboard is up: the snapshot above may predate the render, and the on-screen text check is the point.
+  await sleep(1500);
+  const o2 = JSON.parse(await evalIn(`JSON.stringify({ ids: window.Steward.identities().map(i => ({ k: i.kind, p: i.pub })), text: document.body.innerText, removed: window.Steward.removedNotices() })`));
+  assert.ok(!/Church B/.test(o2.text), 'the words "Church B" are on screen after the dashboard appeared, after restoring another church');
+  assert.ok(!/been removed|removed you as a helper/i.test(o2.text), 'a removal screen is on the dashboard after the restore');
+  assert.deepEqual(o2.removed, [], 'a removal notice exists once the dashboard is up');
+  assert.ok(!o2.ids.some(i => i.p === B.pub), 'church B is listed once the dashboard is up');
   assert.equal(o.own, churchD, 'the console\'s own church is not the restored one');
   assert.equal(o.acting, '', 'the console still acts for church B after restoring another church');
   assert.equal(o.active, churchD, 'the active church is not the restored one');

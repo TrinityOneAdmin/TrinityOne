@@ -15735,7 +15735,7 @@ window.Steward = {
         const s = oneRelay(u, filters, {
           onevent: handlers.onevent,
           onanswer(genuine, why) {
-            if (closed || subs.get(u) !== s) return;
+            if (closed || churchPub !== me || subs.get(u) !== s) return;   // a late answer in the OLD key's closure must not replace the new key's _stewardedBroad
             cb([...stewardedChurches.keys()]);
             // every end counts here (an EOSE, a CLOSED, the library's timer): the question is only "has this relay said
             // all it is going to say for now", so a dead relay cannot hold a genuine removal back for ever
