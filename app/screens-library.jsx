@@ -993,7 +993,7 @@ function InstalledBrowser({ ctx, category, force }) {
   };
 
   // SHARE ONE MODULE, AS ONE FILE (share-app.jsx's shareOneFile). Offered only on a row isShareableModule allows
-  // — what a recipient's Library → Import can take. The bytes are the engine's own cached copy; if they are not
+  // — what a recipient's Library → Install a Bible from a file can take. The bytes are the engine's own cached copy; if they are not
   // there, say so and share nothing. Backing out of the share sheet is not an error and shows nothing.
   const canShareRow = (r) => typeof window.isShareableModule === 'function' && window.isShareableModule(r);
   // A SHARE THAT NEVER SETTLES MUST NOT LOCK EVERY ROW. If Android recreates the activity while the member is in
@@ -1164,6 +1164,21 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Download once — stays on your device</div>
           </div>
         </div>
+        {/* INSTALL A BIBLE FROM A FILE: always here, every category. The member got a file over Signal, Quick Share,
+            Bluetooth or a cable and has to be able to find where it goes. Bible.pickFile opens the browser's picker;
+            the answer comes back on the install sheet (app/install-bible.jsx). */}
+        <button onClick={() => window.Bible.pickFile()} style={{
+          display: 'flex', alignItems: 'center', gap: 12, width: 'calc(100% - 36px)', boxSizing: 'border-box', margin: '2px 18px 12px',
+          padding: '12px 14px', borderRadius: 16, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', textAlign: 'left' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clay)' }}>
+            <Icon name="plus" size={21} stroke={1.8} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--ink)' }}>Install a Bible from a file</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4, marginTop: 2 }}>Got one over Signal, Quick Share, Bluetooth or a USB cable? Add it here.</div>
+          </div>
+        </button>
         {/* segmented: Featured / All bibles (full eBible mirror, bibles only) / Installed */}
         <div style={{ display: 'flex', gap: 4, padding: 4, margin: '0 18px', borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
           {[['featured', 'Featured'], ...(showLang ? [['language', 'All bibles']] : []), ['installed', 'Installed']].map(([id, label]) => {
@@ -1184,12 +1199,17 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
         {view === 'featured' ? (
           !cat ? <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spinner size={26} /></div>
-          : (cat.categories || []).filter(c => !category || c.id === category || (category === 'commentaries' && c.id === 'crossrefs')).map(c => {
+          // THE DEVOTIONAL IMPORT ROW IS HIDDEN HERE, not edited out of catalog.json (older apps read that file too):
+          // the engine cannot read a .dvn.mybible, so the row could only ever fail. Its section goes with it when
+          // that was its only row. The cross-reference import row stays.
+          : (cat.categories || []).filter(c => !category || c.id === category || (category === 'commentaries' && c.id === 'crossrefs'))
+            .map(c => ({ c, items: (c.items || []).filter(it => !(it && it.kind === 'import' && it.accept === 'devotional')) }))
+            .filter(g => g.items.length || !(g.c.items || []).length).map(({ c, items }) => {
             const ic = (CAT_STYLE[c.id] || CAT_STYLE.bibles).icon;
             return (
               <div key={c.id} style={{ marginBottom: 22 }}>
                 <SectionLabel>{c.name}</SectionLabel>
-                <div>{(c.items || []).map(item => <StoreRow key={item.id} item={item} catIcon={ic} ctx={ctx} />)}</div>
+                <div>{items.map(item => <StoreRow key={item.id} item={item} catIcon={ic} ctx={ctx} />)}</div>
               </div>
             );
           })
