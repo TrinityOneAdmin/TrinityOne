@@ -713,7 +713,13 @@
       out.push((suite.lastOutcome === 'rolledback' ? 'The last update was rolled back' : 'The downloaded update would not start') +
         (suite.lastReason ? ' (' + suite.lastReason + ')' : '') +
         // while an Attention line shows, do not invite turning updates back on (audit a1cc6eff L4)
-        (suite.autoOff && !suite.enabled ? (attention ? ', so automatic updates were turned off.' : ', so automatic updates were turned off. Turn them on to try the next release.') : ''));
+        (suite.autoOff && !suite.enabled ? (attention ? ', so automatic updates were turned off.'
+          : suite.lastOutcome === 'rolledback' && suite.running === 'update'
+            // Still on the PREVIOUS download until the app is closed; the failed release is quarantined for good.
+            ? ', so automatic updates were turned off and that release will be skipped. Fully close and reopen the app to go back to the version it came with. Turn updates on only if you want to try the next release.'
+            : suite.lastOutcome === 'rolledback'
+              ? ', so automatic updates were turned off and that release will be skipped. Turn them on to try the next release.'
+              : ', so automatic updates were turned off. Turn them on to try the next release.') : ''));
     } else if (suite.lastOutcome === 'stuck') {
       out.push('The last update went wrong and could not be stopped' + (suite.lastReason ? ' (' + suite.lastReason + ')' : ''));
     } else if (suite.lastOutcome === 'not-applied') {
