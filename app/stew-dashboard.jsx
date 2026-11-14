@@ -5680,17 +5680,21 @@ function DashRelaysCard() {
   // "Check again" only RE-READS (the relay's answer changes only after its own next copy round). It never calls
   // /sync-now (admin-gated, runs every church) and never touches the sync switch.
   const [recheck, setRecheck] = React.useState(0);
-  const [rechecking, setRechecking] = React.useState(false);
+  // WHICH relays are still being read, by normalised address. Per relay, so one relay that never answers (no cutoff is
+  // invented) cannot keep "Check again" waiting on every row: the button is never disabled, it only reads "Checking…"
+  // beside a relay whose own answer is still outstanding, and a click while that is so simply starts a fresh read.
+  const [pendingUrls, setPendingUrls] = React.useState([]);
+  const normUrl = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
   React.useEffect(() => {
     let ok = true;
     const got = new Map();
     // Rows paint as each relay's answer lands (relaySyncStates reads them all at once, with no time cutoff), so one
     // black-holed relay never holds the others back. A re-read keeps the old rows until each is replaced.
-    const onEach = (e) => { if (!ok || !e) return; got.set(String(e.url || ''), e); setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
+    const onEach = (e) => { if (!ok || !e) return; setPendingUrls((p) => p.filter(x => x !== normUrl(e.url))); got.set(String(e.url || ''), e); setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
     (async () => {
-      setRechecking(true);
+      setPendingUrls(status.map(r => normUrl(r && r.url)));
       try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates(onEach) : null; if (ok && m) setSyncStates(m); } catch {}
-      if (ok) setRechecking(false);
+      if (ok) setPendingUrls([]);
     })();
     return () => { ok = false; };
   }, [status.length, recheck]);
@@ -5723,7 +5727,9 @@ function DashRelaysCard() {
     syncing: { head: 'Copying the latest messages from your other relay.', body: 'This is normal after a relay has been switched off.', todo: '', tail: '' },
     unreached: { head: 'We could not reach your other relay on the last copy round, so we are not saying “Synced”.', body: '', todo: '', tail: '' },
   };
-  const SYNC_STATUS_WORD = { synced: 'Synced ✓', syncing: 'Catching up…', attention: 'Needs attention', clock: 'Check the clock', island: 'Not syncing', unreached: 'Not checked yet' };
+  const SYNC_STATUS_WORD = { synced: 'Synced ✓', syncing: 'Catching up…', attention: 'Needs attention', clock: 'Check the clock', island: 'Not syncing', unreached: 'Couldn’t reach your other relay last time' };
+  // The "add a second relay" advice is said ONCE for the whole card, under the first Not-syncing row, not under every row and again in the detail.
+  const firstIslandUrl = (() => { for (const r of status) { const e = r.status === 'on' ? syncByUrl.get(normUrl(r.url)) : null; if (e && e.state === 'island') return normUrl(r.url); } return ''; })();
   const syncExplain = (e, withActions) => {
     const c = e && SYNC_COPY[e.state]; if (!c) return null;
     return (
@@ -5733,7 +5739,7 @@ function DashRelaysCard() {
         {c.tail ? <div style={{ color: 'var(--ink-3)' }}>{c.tail}</div> : null}
         {withActions && (e.state === 'attention' || e.state === 'clock' || e.state === 'unreached') ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <button onClick={() => setRecheck(n => n + 1)} disabled={rechecking} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 11px', fontSize: 12, fontWeight: 700, cursor: rechecking ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Check again</button>
+            <button onClick={() => setRecheck(n => n + 1)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>{pendingUrls.includes(normUrl(e.url)) ? 'Checking…' : 'Check again'}</button>
             <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{lastChecked(e)}. “Check again” only re-reads; it does not start a copy.</span>
           </div>
         ) : null}
@@ -5994,9 +6000,9 @@ function DashRelaysCard() {
                   {dropping.includes(r.url) ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Removing…</span> : null}
                   {!self && r.url !== own && !dropping.includes(r.url) && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
-                {relaySync && relaySync.state && SYNC_COPY[relaySync.state] && relaySync.state !== 'unreached' ? <div style={{ flexBasis: '100%', paddingTop: 8, borderTop: '1px solid var(--line)' }}>{syncExplain(relaySync, true)}</div> : null}
+                {relaySync && relaySync.state && SYNC_COPY[relaySync.state] && relaySync.state !== 'unreached' && (relaySync.state !== 'island' || normUrl(r.url) === firstIslandUrl) ? <div style={{ flexBasis: '100%', paddingTop: 8, borderTop: '1px solid var(--line)' }}>{syncExplain(relaySync, true)}</div> : null}
                 {relaySync && relaySync.state === 'unreached' ? <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <button onClick={() => setRecheck(n => n + 1)} disabled={rechecking} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '3px 10px', fontSize: 12, fontWeight: 700, cursor: rechecking ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Check again</button>
+                  <button onClick={() => setRecheck(n => n + 1)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '3px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>{pendingUrls.includes(normUrl(relaySync.url)) ? 'Checking…' : 'Check again'}</button>
                   <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{lastChecked(relaySync)}. “Check again” only re-reads; it does not start a copy.</span>
                 </div> : null}
                 {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
@@ -6038,7 +6044,7 @@ function DashRelaysCard() {
                     <span style={{ color: 'var(--ink-3)' }}>Relay last checked</span><span>{e.at ? lastChecked(e).replace('relay last checked ', '') : 'never'}</span>
                     <span style={{ color: 'var(--ink-3)' }}>Syncing switched on</span><span>{backup && backup.syncOn === true ? 'Yes' : backup && backup.syncOn === false ? 'No' : 'Checking…'}</span>
                   </div>
-                  {e.state === 'synced' ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Your relays hold the same history. Nothing to do.</div> : syncExplain(e, true)}
+                  {e.state === 'synced' ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Your relays hold the same history. Nothing to do.</div> : e.state === 'island' ? null : syncExplain(e, true)}
                 </div>
               ))}
             </div>

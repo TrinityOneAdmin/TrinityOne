@@ -251,6 +251,31 @@ test('"Not syncing" links to the existing Add a relay page and to nothing else',
   let opened = null;
   const c = await card({ blocks: { [boxOf(X)]: block({ peers: 0, state: 'none', at: 0 }) }, relays: [X], openPage: (k) => { opened = k; } });
   const links = find(detail(c.tree, 'island'), n => n && n.props && n.props.role === 'button' && textOf(n) === 'Add a relay');
-  assert.ok(links.length >= 1, 'the row and the Settings detail each carry the link');
-  for (const l of links) { opened = null; l.props.onClick(); assert.equal(opened, 'add-relay', 'it must open the existing Add a relay page and nothing else'); }
+  assert.equal(links.length, 1, 'the add-a-relay advice is said ONCE, not under the row and again in the Settings detail');
+  opened = null; links[0].props.onClick(); assert.equal(opened, 'add-relay', 'it must open the existing Add a relay page and nothing else');
+  assert.equal(find(c.tree, n => n && n.props && n.props['data-sync-detail'] === 'island').length, 1, 'one explanation in the whole card');
+});
+
+test('two Not-syncing relays still say the add-a-relay advice only once', async () => {
+  const c = await card({ blocks: { [boxOf(X)]: block({ peers: 0, state: 'none', at: 0 }), [boxOf(Y)]: block({ peers: 0, state: 'none', at: 0 }) } });
+  assert.equal(chipOf(c.tree, 'island').length, 2, 'both rows still carry their chip');
+  assert.equal(find(c.tree, n => n && n.props && n.props['data-sync-detail'] === 'island').length, 1);
+});
+
+test('the Settings detail names an unreached relay the same way its row does, never "Not checked yet"', async () => {
+  const c = await card({ blocks: { [boxOf(X)]: block({ state: 'unreached' }) }, relays: [X] });
+  const sec = textOf(find(c.tree, n => n && n.props && n.props['data-sync-section'] === 'detail')[0]);
+  assert.match(sec, /Status Couldn’t reach your other relay last time/);
+  assert.doesNotMatch(sec, /Not checked yet/);
+});
+
+test('CHECK AGAIN IS NEVER HELD UP BY A RELAY THAT DOES NOT ANSWER: with X black-holed, Y\'s button is usable and re-reads', async () => {
+  const c = await card({ hole: [boxOf(X)], blocks: { [boxOf(Y)]: block({ state: 'refused', reason: 'trust', refusedPasses: 2 }) } });
+  const btns = () => find(c.draw(), n => n && n.type === 'button' && /^(Check again|Checking…)$/.test(textOf(n)));
+  const mine = btns();
+  assert.ok(mine.length >= 1, 'Y is refused so it has a Check again button');
+  for (const b of mine) { assert.ok(!b.props.disabled, 'the button must never be disabled while another relay is still outstanding'); assert.equal(textOf(b), 'Check again', 'Y has answered, so its button must not say Checking…'); }
+  const before = c.log.length;
+  mine[0].props.onClick(); c.draw(); await c.settle();
+  assert.ok(c.log.length > before, 'clicking it must start a fresh read even though X never answered');
 });

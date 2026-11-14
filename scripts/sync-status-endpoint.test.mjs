@@ -143,3 +143,44 @@ test('5 CLOCK vs TRUST: a refusal whose 401 body names the time window records "
     assert.equal(c.church.state, 'refused', who + ' ' + JSON.stringify(c)); assert.equal(c.church.reason, 'time', who);
   }
 });
+
+// ---- the two bookkeeping claims the commit made: the reset rule, and pruning to CHURCH_PUBS ----------------------
+test('6 RESET RULE: any pass that is not refused drops refusedPasses to 0 (an unreached pass in between breaks "in a row")', async () => {
+  const R = H.key();
+  const s2 = await H.startRelay({ name: 'rS', churches: [R.pub] });
+  const p2 = await H.startRelay({ name: 'rP', churches: [R.pub] });
+  const dead = { relayPub: 'cd'.repeat(32), base: 'http://127.0.0.1:1' };
+  let t = nowS() - 100;
+  await H.publishAll(s2, [H.relaysDoc(R, [s2, p2], t++)]); await H.publishAll(p2, [H.relaysDoc(R, [p2], t++)]);   // p2 refuses s2
+  const get = async () => (await ask(s2, R.pub, { sk: R.sk })).json.church;
+  await H.syncNow(s2).catch(() => {});
+  let c = await get(); assert.equal(c.state, 'refused'); assert.equal(c.refusedPasses, 1);
+  await H.publishAll(s2, [H.relaysDoc(R, [s2, dead], t++)]);   // the only partner is now unreachable
+  await H.syncNow(s2).catch(() => {});
+  c = await get(); assert.equal(c.state, 'unreached'); assert.equal(c.refusedPasses, 0, 'a non-refused pass resets the count');
+  await H.publishAll(s2, [H.relaysDoc(R, [s2, p2], t++)]);     // back to a partner that refuses
+  await H.syncNow(s2).catch(() => {});
+  c = await get(); assert.equal(c.state, 'refused'); assert.equal(c.refusedPasses, 1, 'refused, unreached, refused is NOT two in a row');
+});
+
+test('7 PRUNING: a church removed from CHURCH_PUBS loses its per-church record at the next pass; re-added it starts clean', async () => {
+  const Q = H.key(), K = H.key();
+  const s3 = await H.startRelay({ name: 'qS', churches: [Q.pub, K.pub] });
+  const p3 = await H.startRelay({ name: 'qP', churches: [Q.pub, K.pub] });
+  const t = nowS() - 100;
+  await H.publishAll(s3, [H.relaysDoc(Q, [s3, p3], t), H.relaysDoc(K, [s3, p3], t)]); await H.publishAll(p3, [H.relaysDoc(Q, [s3, p3], t), H.relaysDoc(K, [s3, p3], t)]);
+  await H.syncNow(s3).catch(() => {});
+  assert.equal((await ask(s3, Q.pub, { sk: Q.sk })).json.church.state, 'reached', 'premise: Q has a recorded pass');
+  const cfg = (body) => fetch(s3.base + '/config', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s3.adminToken }, body: JSON.stringify(body) });
+  const { npubEncode } = await import('nostr-tools/nip19');
+  assert.equal((await cfg({ removeChurch: { npub: npubEncode(Q.pub), confirm: true } })).status, 200);
+  assert.equal((await ask(s3, Q.pub, { sk: Q.sk })).status, 401, 'a de-provisioned church gets the identical not-answered reply');
+  await H.syncNow(s3).catch(() => {});   // the pass that prunes
+  assert.equal((await cfg({ addChurch: { npub: npubEncode(Q.pub) } })).status, 200);
+  await H.sleep(800);                    // the re-hydrate that rebuilds its partner list is coalesced
+  const q = await ask(s3, Q.pub, { sk: Q.sk });
+  assert.equal(q.status, 200);
+  assert.equal(q.json.church.state, 'pending', 'the old record survived the removal: ' + JSON.stringify(q.json.church));
+  assert.equal(q.json.church.at, 0);
+  assert.equal((await ask(s3, K.pub, { sk: K.sk })).json.church.state, 'reached', 'the church that stayed keeps its record');
+});
