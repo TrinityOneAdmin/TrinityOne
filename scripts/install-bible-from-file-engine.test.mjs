@@ -285,17 +285,26 @@ test('E15 — SAVE ORDER: when the bytes cannot be saved the answer is no-space,
   assert.equal(p.Bible.commentaryList().length, 0, 'an unsaved commentary stayed in memory');
 });
 
-test('E16 — BOOT RACE: a file opened while the boot restore is still running waits for it — one Bible, one record, never BSB and BSB2', async () => {
-  const p = phone({ serveBsb: true, bsbDelay: 150 });                       // boot has NOT started: the page is still "loading"
-  const pending = p.Bible.installFromBytes(file('modules/engbsb.zip'), '');
-  await sleep(30);
-  assert.equal(p.Bible.versions().length, 0, 'the install ran before boot finished');
-  await p.boot();                                            // autoLoad now downloads the default BSB (slowly)
-  const r = await pending;
+test('E16 — BOOT RACE: a file opened WHILE the boot restore is still downloading the default waits for it — one Bible, one record, never BSB and BSB2', async () => {
+  const p = phone({ serveBsb: true, bsbDelay: 250 });
+  await p.boot();                                            // autoLoad has started and is mid-download of the default BSB
+  assert.equal(p.Bible.versions().length, 0, 'fixture: the default Bible should still be downloading');
+  const r = await p.Bible.installFromBytes(file('modules/engbsb.zip'), '');
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.already, true, 'the received BSB was installed on top of the one boot was already installing');
   assert.equal(p.Bible.versions().length, 1, JSON.stringify(p.Bible.versions()));
   assert.deepEqual(Object.keys(p.installed()), ['modules/engbsb.zip'], 'two records for one Bible: ' + Object.keys(p.installed()));
+});
+
+test('E16b — a file asked for BEFORE boot has even started also waits for it', async () => {
+  const p = phone({ serveBsb: true, bsbDelay: 100 });       // the page is still "loading"
+  const pending = p.Bible.installFromBytes(file('modules/engbsb.zip'), '');
+  await sleep(30);
+  assert.equal(p.Bible.versions().length, 0, 'the install ran before boot finished');
+  await p.boot();
+  const r = await pending;
+  assert.equal(r.ok && r.already, true, JSON.stringify(r));
+  assert.deepEqual(Object.keys(p.installed()), ['modules/engbsb.zip']);
 });
 
 // ════════════════════════════════ 6. the picker feeds the same door ════════════════════════════════════════════
