@@ -1266,13 +1266,13 @@ window.safeImgUrl = function (v) {
   // NFKC, and no format characters (zero-width, bidi overrides, U+2060...): a name that LOOKS like another name
   // must not be stored as a different one (audit M2).
   const _cleanTitle = (s) => String(s == null ? "" : s).normalize("NFKC").replace(/\p{Cf}/gu, "").replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-  // The key two names are COMPARED on: NFKC/NFKD, no marks, no format characters, case-folded, lookalike Cyrillic
+  // The key two names are COMPARED on: NFKC/NFKD, no marks, case-folded (format characters go with every other non-letter at the end), lookalike Cyrillic
   // and Greek letters folded to Latin, everything that is not a letter or digit dropped. "King James Vers\u0456on",
   // "Berean Standard Bible\u2060" and "BSB-2" all collide with the names they imitate.
   const _CONFUSABLE = { "\u0430": "a", "\u0432": "b", "\u0435": "e", "\u0451": "e", "\u0456": "i", "\u0458": "j", "\u043a": "k", "\u043c": "m", "\u043d": "h",
     "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0442": "t", "\u0443": "y", "\u0445": "x", "\u0455": "s", "\u0501": "d", "\u051b": "q", "\u051d": "w", "\u04bb": "h", "\u04cf": "l",
     "\u03b1": "a", "\u03b2": "b", "\u03b5": "e", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v", "\u03bf": "o", "\u03c1": "p", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x", "\u03b6": "z", "\u03b7": "n" };
-  const _nameKey = (s) => String(s == null ? "" : s).normalize("NFKD").replace(/\p{M}/gu, "").normalize("NFKC").replace(/\p{Cf}/gu, "").toLowerCase()
+  const _nameKey = (s) => String(s == null ? "" : s).normalize("NFKD").replace(/\p{M}/gu, "").normalize("NFKC").toLowerCase()
     .replace(/[\u0370-\u03ff\u0400-\u052f]/g, (ch) => _CONFUSABLE[ch] || ch).replace(/[^\p{L}\p{N}]+/gu, "");
   const _deriveAbbr = (name) => {
     const w = String(name).split(/[^A-Za-z0-9]+/).filter(Boolean);
