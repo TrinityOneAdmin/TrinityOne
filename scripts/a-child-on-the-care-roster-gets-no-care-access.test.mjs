@@ -512,8 +512,8 @@ test('(seal c) Steward.removeKey (shipped) deletes every church’s device copy 
   // clearance record, _finBookClear = sealed finance seed, _seedSweep = preload warming) — no-op stubs here, as
   // this test only asserts the children lists are gone and nothing unrelated is touched; those caches have no
   // keys in this store and their own clears are tested elsewhere.
-  const removeKey = new Function(...DEVICE_NAMES, 'KEY_LS', 'window', 'encBlobRemove', 'sk', 'pub', 'currentMnemonic', '_stay', '_sgClearClear', '_finBookClear', '_seedSweep',
-    deviceHelpers() + '\nreturn function ' + body + ';')(...deviceVals(store, church.sk), 'trinityone.steward.key', win, () => Promise.resolve(true), church.sk, cp, 'x', { clear: () => Promise.resolve() }, () => {}, () => {}, () => {});
+  const removeKey = new Function(...DEVICE_NAMES, 'KEY_LS', 'window', 'encBlobRemove', 'sk', 'pub', 'currentMnemonic', '_stay', '_sgClearClear', '_finBookClear', '_seedSweep', '_forgetStewardedScope',
+    deviceHelpers() + '\nreturn function ' + body + ';')(...deviceVals(store, church.sk), 'trinityone.steward.key', win, () => Promise.resolve(true), church.sk, cp, 'x', { clear: () => Promise.resolve() }, () => {}, () => {}, () => {}, () => {});
   removeKey();
   assert.deepEqual([...store.keys()].filter(k => k.startsWith('trinityone.steward.minorslast.')), [], 'a children list survived removing the key');
   assert.equal(store.get('trinityone.steward.unrelated'), 'keep', 'CONTROL: removeKey deleted something it should not');
@@ -571,6 +571,7 @@ test('(drop a) restoreKey -> _resetChurchScopedState (shipped) deletes every chu
   dev.set(cp, [CH.pub]); dev.set('b'.repeat(64), [KID2.pub]);
   store.set('trinityone.steward.unrelated', 'keep');
   scope._resetChurchScopedState = liftIn(scope, 'function _resetChurchScopedState() {', '_resetChurchScopedState');
+  scope._forgetStewardedScope = () => {};   // the helper-scope clear: not this test's question
   const restoreKey = liftIn(scope, 'restoreKey(mnemonic) {', 'Steward.restoreKey', true);
   restoreKey(Array(12).fill('abandon').join(' '));
   assert.deepEqual(copies(store), [], 'a children list survived restoring a different church key');

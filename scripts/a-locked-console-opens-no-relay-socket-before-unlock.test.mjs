@@ -20,7 +20,9 @@
 //      is given the church name key (the envelope names them).
 //   2. Locking closes the stewarded-churches subscription (no REQ carrying our stewardrevoke filter stays open), and
 //      unlocking reopens it.
-//   3. Replacing the key (a restore of another church) reopens it for the NEW key, never the old one.
+//   3. Replacing the key (a restore of another church) reopens it for the NEW key, never the old one — and the console
+//      then ACTS as the new church: it does not keep the old key's helper identity (restore-identity fix 2026-11-14).
+//   4. The same, driven through the real Settings screen (Church key -> Restore from a recovery phrase).
 // Skips itself when chromium is unavailable.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,7 +43,7 @@ const MEMBER_D = 'trinityone/member:', NAMEKEY_D = 'trinityone/namekey:', CAREKE
 const REVOKE_D = 'trinityone/stewardrevoke:';
 const LOCKED_HOLD_MS = 8000;
 
-let relay, chr, ws, prof, evalIn, churchA = '', relayUrl = '';
+let relay, chr, ws, prof, evalIn, churchA = '', wordsA = '', relayUrl = '';
 const B = H.key();
 const errors = [];
 
@@ -121,6 +123,7 @@ before(async () => {
   await waitFor(`!!document.querySelector('input[aria-label="Church name"]')`, 90000, 'the wizard name step');
   churchA = await evalIn(`window.Steward && window.Steward.churchPub || ''`);
   const npubA = await evalIn(`window.Steward.npub || ''`);
+  wordsA = await evalIn(`window.Steward.exportMnemonic() || ''`);   // so a later test can put this console back as church A
   assert.equal(await evalIn(typeInto('input[aria-label="Church name"]', 'Church Locked At Boot')), 'ok');
   await sleep(300);
   await press('/^Continue$/');
@@ -194,8 +197,14 @@ test('replacing the key reopens the subscription for the NEW key, never the old 
   await waitFor(dashboard, 30000, 'the dashboard');
   await waitFor(`window.__revokeSubs.size > 0`, 30000, 'CONTROL: the discovery is open before the restore');
   const words = generateSeedWords();
-  const r = await evalIn(`(() => { const r = window.Steward.restoreKey(${JSON.stringify(words)}); return window.Steward.churchPub; })()`);
-  const churchC = String(r || '');
+  // The identity is read in the SAME synchronous turn as the restore: the stewarded-churches discovery later re-reads
+  // B's roster, finds C is not on it and evicts B on its own, so a later read sees a healed Map. The window before
+  // that is the one every render and every write in between lives in (and, on a slow or unreachable relay, it is
+  // not a window at all).
+  const rr = JSON.parse(await evalIn(`(() => { window.Steward.restoreKey(${JSON.stringify(words)});
+    return JSON.stringify({ own: window.Steward.churchPub, ids: window.Steward.identities().map(i => ({ k: i.kind, p: i.pub })),
+      acting: window.Steward.actingChurch, active: window.Steward.activePub }); })()`));
+  const churchC = String(rr.own || '');
   assert.ok(churchC && churchC !== churchA, 'CONTROL: the restore did not change the key');
   await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 60000, 'the forced-PIN screen after the restore');
   assert.equal(await evalIn(typePh('At least 8', PIN)), 'ok');
@@ -206,4 +215,65 @@ test('replacing the key reopens the subscription for the NEW key, never the old 
   await sleep(2000);
   const open = await openRevokes();
   assert.ok(!open.includes(REVOKE_D + churchA), 'a stewarded-churches subscription for the OLD key is still open after the key was replaced: ' + JSON.stringify(open));
+  // THE IDENTITY, not just the subscription (restore-identity fix 2026-11-14). Church A is rostered as a steward of B,
+  // so before the restore this console's stewarded-churches Map holds B. Straight after restoring C it must act as C,
+  // list C's own row, and not list B at all — and it must still be so once the discovery has settled.
+  const settled = JSON.parse(await evalIn(`JSON.stringify({ ids: window.Steward.identities().map(i => ({ k: i.kind, p: i.pub })),
+    acting: window.Steward.actingChurch, active: window.Steward.activePub, own: window.Steward.churchPub })`));
+  for (const [when, o] of [['straight after the restore', rr], ['after the discovery settled', settled]]) {
+    assert.equal(o.own, churchC, `CONTROL (${when}): the console's own church is not the restored one`);
+    assert.equal(o.acting, '', `${when}: the console still acts for the OLD key's church`);
+    assert.equal(o.active, churchC, `${when}: the active church is not the restored one`);
+    assert.ok(o.ids.some(i => i.k === 'church' && i.p === churchC), `${when}: the restored church's own row is missing from the switcher`);
+    assert.ok(!o.ids.some(i => i.p === B.pub), `${when}: the old key's church B is still listed`);
+  }
+});
+
+// POINT OF USE (restore-identity fix 2026-11-14): the REAL Settings screen, not restoreKey() called from the page.
+// Deleting the restoreKey call from doRestore leaves the key unchanged (the CONTROL below fails); deleting the engine's
+// _forgetStewardedScope() from restoreKey leaves church B in the Map (the identity assertions fail).
+test('Settings -> Church key -> Restore from a recovery phrase: a console that helps run church B becomes the restored church, not B', { skip: SKIP, timeout: 300000 }, async () => {
+  // Setup: put this console back as church A (rostered as a steward of B) through the engine, and wait until it knows B.
+  assert.ok(wordsA, 'CONTROL: the words of church A were not captured');
+  const back = await evalIn(`(() => { window.Steward.restoreKey(${JSON.stringify(wordsA)}); return window.Steward.churchPub; })()`);
+  assert.equal(back, churchA, 'CONTROL: could not put the console back as church A');
+  await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 60000, 'the forced-PIN screen after putting church A back');
+  assert.equal(await evalIn(typePh('At least 8', PIN)), 'ok');
+  assert.equal(await evalIn(typePh('Type it again', PIN)), 'ok');
+  await press('/Set PIN/i');
+  await waitFor(`!window.Steward.needsPin`, 60000, 'the PIN for church A');
+  await waitFor(dashboard, 90000, 'the dashboard as church A');
+  await waitFor(`window.Steward.identities().some(i => i.kind === 'steward' && i.pub === ${JSON.stringify(B.pub)})`, 90000, 'CONTROL: the console to know it helps run church B');
+  // Drive the real screen. confirm() is the "this replaces the church on this device" prompt — accept it.
+  const wordsD = generateSeedWords();
+  await evalIn(`(window.confirm = () => true, 'ok')`);
+  await press('/^Settings$/', 'the Settings button');
+  // the Master key group is collapsed on a fresh console: open it, then the page
+  await waitFor(`[...document.querySelectorAll('button')].some(x => /Master key/.test((x.textContent||'')))`, 30000, 'the Master key group');
+  await press('/Master key/', 'Master key');
+  await waitFor(`[...document.querySelectorAll('button')].some(x => /Church key/.test((x.textContent||'')))`, 30000, 'the Church key section');
+  await press('/Church key/', 'Church key');
+  await waitFor(`[...document.querySelectorAll('button')].some(x => /Restore from a recovery phrase/.test((x.textContent||'')))`, 30000, 'the Restore from a recovery phrase button');
+  await press('/Restore from a recovery phrase/', 'Restore from a recovery phrase');
+  await waitFor(`!!document.querySelector('textarea[placeholder^="word one"]')`, 30000, 'the phrase box');
+  assert.equal(await evalIn(`(() => { const t=document.querySelector('textarea[placeholder^="word one"]'); const set=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; set.call(t, ${JSON.stringify(wordsD)}); t.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`), 'ok');
+  await sleep(300);
+  await press('/Restore church/', 'Restore church');
+  await waitFor(`window.Steward.churchPub !== ${JSON.stringify(churchA)}`, 30000, 'CONTROL: pressing Restore church changed the console\'s key (the screen calls restoreKey)');
+  const churchD = await evalIn(`window.Steward.churchPub`);
+  await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 60000, 'the forced-PIN screen after the restore');
+  assert.equal(await evalIn(typePh('At least 8', PIN)), 'ok');
+  assert.equal(await evalIn(typePh('Type it again', PIN)), 'ok');
+  await press('/Set PIN/i');
+  await waitFor(`!window.Steward.needsPin`, 60000, 'the PIN for the restored church');
+  await waitFor(dashboard, 90000, 'the dashboard as the restored church');
+  await sleep(2000);
+  const o = JSON.parse(await evalIn(`JSON.stringify({ ids: window.Steward.identities().map(i => ({ k: i.kind, p: i.pub })),
+    acting: window.Steward.actingChurch, active: window.Steward.activePub, own: window.Steward.churchPub, text: document.body.innerText })`));
+  assert.equal(o.own, churchD, 'the console\'s own church is not the restored one');
+  assert.equal(o.acting, '', 'the console still acts for church B after restoring another church');
+  assert.equal(o.active, churchD, 'the active church is not the restored one');
+  assert.ok(o.ids.some(i => i.k === 'church' && i.p === churchD), 'the restored church has no row in the switcher');
+  assert.ok(!o.ids.some(i => i.p === B.pub), 'church B is still listed after restoring another church');
+  assert.ok(!/Church B/.test(o.text), 'the words "Church B" are still on screen after restoring another church');
 });
