@@ -41,9 +41,19 @@ const PUBKEY_PATH = join(tmpdir(), 'trin-suite-stage-pub-' + process.pid + '.pem
 // A REAL Suite-shaped bundle (gzipped tar with version.txt, release-origin, scripts/gateway.mjs), because the
 // verifier now reads the SIGNED identity out of it (audit be258b42 HIGH 2). A 4 KiB random pad keeps it over the
 // 512-byte floor. `files` overrides let a test build a server-shaped (no release-origin) bundle.
+// Stand-in gateway carrying the step-1 data-folder guard statements the verifier now requires (audit L-6).
+const STEP1_GATEWAY = [
+  "const DATA_DIR = process.env.TRINITY_DATA_DIR;",
+  "const DATA_DIR_PINNED = /^(1|true)$/i.test(process.env.TRINITY_DATA_DIR_PINNED || '');",
+  "const DATA_DIR_MOVED = join(DATA_DIR, 'MOVED-TO');",
+  "function refuseDataDir() { process.exit(DATA_DIR_REFUSED); }",
+  "if (!existsSync(DATA_DIR)) { if (DATA_DIR_PINNED) refuseDataDir('missing'); }",
+  "if (existsSync(DATA_DIR_MOVED)) refuseDataDir('moved');",
+  "",
+].join('\n');
 function suiteTgz(sha, date, files = {}) {
   const st = mkdtempSync(join(tmpdir(), 'trin-suite-tgz-'));
-  const all = { 'version.txt': sha + '\n' + date + '\n', 'release-origin': 'https://example.invalid\n', 'scripts/gateway.mjs': '// ' + sha + '\n', 'pad.bin': randomBytes(4096), ...files };
+  const all = { 'version.txt': sha + '\n' + date + '\n', 'release-origin': 'https://example.invalid\n', 'scripts/gateway.mjs': STEP1_GATEWAY + '// ' + sha + '\n', 'pad.bin': randomBytes(4096), ...files };
   for (const [rel, body] of Object.entries(all)) { if (body == null) continue; mkdirSync(dirname(join(st, rel)), { recursive: true }); writeFileSync(join(st, rel), body); }
   const out = st + '.tgz';
   const r = spawnSync('tar', ['-czf', out, '-C', st, '.']);

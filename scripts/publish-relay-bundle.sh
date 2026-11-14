@@ -131,6 +131,10 @@ openssl pkeyutl -sign -inkey "$KEY" -rawin -in "$TMP/suite-js-bundle.tgz" -out "
 if ! openssl pkeyutl -verify -pubin -inkey "$PUB" -rawin -in "$TMP/suite-js-bundle.tgz" -sigfile "$TMP/suite-js-bundle.sig" >/dev/null 2>&1; then
   die "the Suite JS bundle signature does not verify against relay-app/release-pubkey.pem as of $TAG — the key on this box is not the release key the fleet trusts, so nothing was uploaded"
 fi
+# The Suite runs any newer signed bundle and trusts its gateway.mjs to carry the relay-storage step-1 data-folder
+# guard (audit L-6). The SAME verifier the Suite runs refuses a bundle without it; fail here, before upload.
+SUITE_IDENT="$(node "$DIR/scripts/verify-suite-bundle.mjs" "$TMP/suite-js-bundle.tgz" "$TMP/suite-js-bundle.sig" "$PUB" 2>&1)" \
+  || die "the Suite JS bundle was refused by the Suite's own verifier, so nothing was uploaded: $SUITE_IDENT"
 SUITE_SHA256="$(sha256sum "$TMP/suite-js-bundle.tgz" | cut -c1-64)"
 ok "suite-js-bundle.tgz $(du -h "$TMP/suite-js-bundle.tgz" | cut -f1) · sha256 ${SUITE_SHA256:0:12}… · signed, and the signature verifies against the committed public key"
 

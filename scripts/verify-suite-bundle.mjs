@@ -21,6 +21,12 @@
 // by build-relay-payload.sh — the server bundle never has it; without it the override boots PACKAGED=false) and
 // scripts/gateway.mjs. Anything else is refused (exit 7) even though its signature is good.
 //
+// STEP-1 PROTECTION (audit L-6). The Suite runs ANY newer signed bundle, and trusts that bundle's gateway.mjs to
+// carry the data-folder guard from relay storage step 1: refuse to start on a missing / moved-out folder rather
+// than mint a NEW relay identity there (rule 10). A bundle built from older code lacks it, so it is refused
+// (exit 7) even though its signature is good. The markers are searched in the gateway source with comments
+// STRIPPED, so a comment that merely names them does not pass; they are the guard's own statements.
+//
 // WHY THIS IS IN NODE (not Rust, not openssl): the Rust app shell holds no crypto and has no portable openssl
 // (not reliably present on Windows/macOS), so it shells out to THIS script with the bundled node. It reuses the
 // crypto path production already trusts for the release manifest (crypto.verify(null, …) — raw Ed25519). ONE
@@ -80,6 +86,44 @@ function readTarFiles(tar, wanted) {
   return out;
 }
 
+// Remove // and /* */ comments from JS source, leaving strings, template literals and regex literals intact.
+// Good enough for a marker search on our own gateway.mjs (a mis-parse can only HIDE a marker -> refuse, never
+// invent one). Exported for the test.
+export function stripJsComments(src) {
+  let out = '', i = 0, last = '';   // last = last significant char emitted (decides whether '/' starts a regex)
+  const n = src.length;
+  while (i < n) {
+    const c = src[i], d = src[i + 1];
+    if (c === '/' && d === '/') { while (i < n && src[i] !== '\n') i++; continue; }
+    if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2); i = e < 0 ? n : e + 2; out += ' '; continue; }
+    if (c === '\'' || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < n && src[j] !== c) { if (src[j] === '\\') j++; j++; }
+      out += src.slice(i, j + 1); i = j + 1; last = c; continue;
+    }
+    if (c === '/' && (last === '' || '(,=:[!&|?{};'.includes(last))) {
+      let j = i + 1, cls = false;
+      while (j < n && src[j] !== '\n' && (cls || src[j] !== '/')) { if (src[j] === '\\') j++; else if (src[j] === '[') cls = true; else if (src[j] === ']') cls = false; j++; }
+      out += src.slice(i, j + 1); i = j + 1; last = '/'; continue;
+    }
+    out += c; if (!/\s/.test(c)) last = c; i++;
+  }
+  return out;
+}
+
+// The statements that ARE step 1. Each would disappear if the guard were removed; none is satisfiable by a comment.
+const STEP1_MARKERS = [
+  ['the TRINITY_DATA_DIR_PINNED switch', /process\.env\.TRINITY_DATA_DIR_PINNED\b/],
+  ['the MOVED-TO tombstone path', /join\(\s*DATA_DIR\s*,\s*'MOVED-TO'\s*\)/],
+  ['the MOVED-TO refusal', /existsSync\(\s*DATA_DIR_MOVED\s*\)/],
+  ['the missing-folder refusal when pinned', /if\s*\(\s*DATA_DIR_PINNED\s*\)\s*refuseDataDir\(/],
+  ['the refusal exit', /process\.exit\(\s*DATA_DIR_REFUSED\s*\)/],
+];
+export function missingStep1(gatewayBytes) {
+  const code = stripJsComments(Buffer.from(gatewayBytes).toString('utf8'));
+  return STEP1_MARKERS.filter(([, re]) => !re.test(code)).map(([what]) => what);
+}
+
 // The signed build identity of a verified tarball (already-read bytes). Throws with a reason if absent/malformed.
 export function bundleIdentity(tgzBytes) {
   let tar;
@@ -88,6 +132,8 @@ export function bundleIdentity(tgzBytes) {
   if (!files.has('release-origin')) throw new Error('not a Suite JS bundle (no release-origin at its root)');
   if (!files.has('scripts/gateway.mjs')) throw new Error('not a Suite JS bundle (no scripts/gateway.mjs)');
   if (!files.has('version.txt')) throw new Error('no version.txt in the bundle');
+  const lacking = missingStep1(files.get('scripts/gateway.mjs'));
+  if (lacking.length) throw new Error('its scripts/gateway.mjs lacks the data-folder protection (relay storage step 1: ' + lacking.join('; ') + ') — running it could mint a new relay identity in a missing folder');
   const [l1, l2] = files.get('version.txt').toString('utf8').split('\n');
   const sha = (l1 || '').trim(), date = (l2 || '').trim();
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('version.txt line 1 is not a git sha');
