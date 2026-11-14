@@ -253,7 +253,7 @@
 <div id="root">
   <!-- Static boot state, replaced by React on mount. The console transpiles ~2 MB of JSX in-browser, which is
        seconds of flat grey on a phone with no indication anything is happening. -->
-  <!-- Pure static HTML+CSS — paints instantly, before React/Babel (loaded by the <script> tags below) run.
+  <!-- Pure static HTML+CSS — paints instantly, before React/Babel (loaded by the script tags below) run.
        NO JavaScript, NO network calls, NO new font loads (Sora comes from vendor/fonts/fonts.css, already
        linked in <head>). The only motion is CSS @keyframes declared in the <style> block above
        (lumenScale = entrance, lumenFade = staggered text rise, trinitySpin = the continuous "working" ring),
