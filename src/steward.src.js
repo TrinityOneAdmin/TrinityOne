@@ -3760,6 +3760,17 @@ const stewardedChurches = new Map();   // cp(hex) -> { name } — churches whose
 // { me, done: Map(url -> unix s the broad read finished there), part: Map(url -> newest created_at a cut-off broad read
 // got to, to resume from) } — null after a lock.
 let _stewardedBroad = null;
+// THE CONSOLE'S OWN CHURCH IS ABOUT TO CHANGE: forget which churches the OLD key helped run, and that we were acting
+// for one. Without this a console that helped church B and then restored church C kept B in the Map and in
+// actingChurch, so identities() hid C's own row and every write was signed and stamped as B and refused.
+// Called ONLY where the key is replaced or removed (restoreKey, createKey, createKeyQuiet, removeKey) and NEVER
+// from setKey: a lock/unlock re-enters through setKey (_enterUnlocked) and must come back to the church the helper
+// was acting for. _stewardedBroad needs no clear (every reader checks .me); ACTIVE_ID_KEY is left alone on purpose.
+function _forgetStewardedScope() {
+  stewardedChurches.clear();
+  actingChurch = '';
+  try { window.Steward.actingChurch = ''; } catch (e) {}
+}
 // finalize a CHURCH-CONTENT event, stamping ['church',<cp>] when delegated so the relay accepts our key.
 // Signs with the active key `sk` (our own key in delegated mode; the church/network key otherwise).
 // WHO MAY SPEAK FOR THIS CHURCH, as this console sees it. The member app has _churchVoice for exactly this
@@ -8176,7 +8187,7 @@ window.Steward = {
     // memory only until setPin() persists the encrypted form. needsPin forces the UI to gate the
     // console behind a forced PIN-setup modal — there is NO state in which a freshly-created
     // church key sits as plaintext on disk.
-    const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
+    const m = generateSeedWords(); _forgetStewardedScope(); setKey(m); _setNeedsPin(true);
     _armRegGate();   // this church does not exist on any relay yet — hold its founding writes (R5-5)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
     return { npub: window.Steward.npub };
@@ -8185,7 +8196,7 @@ window.Steward = {
   // identity's "become a steward" code before the caller continues into the console (which fires it then).
   createKeyQuiet() {
     // Same posture as createKey: memory only, no plaintext on disk.
-    const m = generateSeedWords(); setKey(m); _setNeedsPin(true);
+    const m = generateSeedWords(); _forgetStewardedScope(); setKey(m); _setNeedsPin(true);
     // A DURABLE MARK THAT THIS DEVICE MINTED THIS KEY AS A BARE HELPER KEY (audit of 496b8b21, MEDIUM 1). It is the only
     // thing that lets acknowledgeRemoval() discard a key: _ownKeyBlank() alone also describes a real church restored on
     // a device that has not yet read its name, so "looks blank" is never enough. A key minted before this mark existed
@@ -8573,7 +8584,9 @@ window.Steward = {
     // overwrites the old ciphertext anyway (S6's at-rest concern is still met), and setPin() removes KEY_LS
     // itself. An ABANDONED restore now leaves the previous key intact and openable, which is the safe
     // outcome — the steward keeps the church they had instead of losing both.
+    _forgetStewardedScope();   // validation has passed: this replaces the console's own church, so B's helper scope must not follow it to C
     setKey(m);
+    try { window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch: '' } })); } catch (e) {}
     // A KEY LOADED FROM WORDS IS NEVER A DISPOSABLE HELPER KEY (audit of 15dc0960 NIT 3; of 29a23952 NIT 1): a helper mark
     // left on this device for the same key — words taken from a helper key and made a church elsewhere — must not let a
     // removal notice discard it. Here, not in adoptChurch, so EVERY restore path is covered: the welcome screen's restore
@@ -8925,6 +8938,7 @@ window.Steward = {
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     _stay.clear();                  // …and so is a stay-open record that would open it
+    _forgetStewardedScope();        // no key left: no church it helped run, and nothing it was acting for
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
@@ -15574,7 +15588,7 @@ window.Steward = {
     const resolveName = (cp) => {
       if (closed || nameSubs.has(cp) || !dialled.length) return;
       nameSubs.set(cp, pool.subscribeMany(dialled, [{ kinds: [0], authors: [cp] }], {
-        onevent(e) { try { const nm = (JSON.parse(e.content).name) || ''; if (nm && stewardedChurches.has(cp) && (stewardedChurches.get(cp).name !== nm)) { stewardedChurches.set(cp, { name: nm }); save(); cb([...stewardedChurches.keys()]); } } catch {} },
+        onevent(e) { try { if (churchPub !== me) return; const nm = (JSON.parse(e.content).name) || ''; if (nm && stewardedChurches.has(cp) && (stewardedChurches.get(cp).name !== nm)) { stewardedChurches.set(cp, { name: nm }); save(); cb([...stewardedChurches.keys()]); } } catch {} },
         oneose() {},
       }));
     };
@@ -15619,6 +15633,9 @@ window.Steward = {
       const record = () => { if (!_stewardedBroad || _stewardedBroad.me !== me) _stewardedBroad = { me, done: new Map(), part: new Map() }; return _stewardedBroad; };
       const handlers = {
         onevent(e) {
+          // A LATE EVENT FOR A KEY THIS CONSOLE NO LONGER HOLDS (restore-identity fix): this closure is for `me`; once the
+          // key has been replaced, a roster that lists the OLD key must not put its church back in the Map the restore just emptied.
+          if (churchPub !== me) return;
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           // A DEDICATED REVOCATION NOTICE the removed helper can still read (2026-11-05, helper-delegation). The
           // roster that would tell us we were dropped is no longer served to us once we are off it, so a ghost church
@@ -15718,7 +15735,7 @@ window.Steward = {
         const s = oneRelay(u, filters, {
           onevent: handlers.onevent,
           onanswer(genuine, why) {
-            if (closed || subs.get(u) !== s) return;
+            if (closed || churchPub !== me || subs.get(u) !== s) return;   // a late answer in the OLD key's closure must not replace the new key's _stewardedBroad
             cb([...stewardedChurches.keys()]);
             // every end counts here (an EOSE, a CLOSED, the library's timer): the question is only "has this relay said
             // all it is going to say for now", so a dead relay cannot hold a genuine removal back for ever

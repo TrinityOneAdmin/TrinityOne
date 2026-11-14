@@ -40,7 +40,7 @@ function engine(storeInit = {}) {
     generateSeedWords: () => 'fine flash wait silly next awkward charge front scout build damage river',
     _loadBoxHosts: () => { store['trinityone.steward.boxhosts.' + 'ab'.repeat(32)] = '0'; },   // what the real one leaves behind on a Suite box
     _refreshBoxHostsUs: () => {}, _gate: { refresh() {} }, relaysRaw: () => [],
-    _armRegGate: () => {}, _openRegGate: () => { calls.openRegGate++; }, _resetChurchScopedState: () => { calls.reset++; },
+    _armRegGate: () => {}, _openRegGate: () => { calls.openRegGate++; }, _resetChurchScopedState: () => { calls.reset++; }, _forgetStewardedScope: () => {},
     _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
     pool: { relays: new Map([['ws://relay.test/', {}]]), close: (urls) => { closed.push(...urls); } },
     needsPin: false,
@@ -144,7 +144,7 @@ function engineWithRealGate(regGateMs) {
     npubEncode: () => 'npub1unsaved',
     generateSeedWords: () => 'fine flash wait silly next awkward charge front scout build damage river',
     _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {}, _gate: { refresh() {}, admit: () => [] }, relaysRaw: () => [],
-    _resetChurchScopedState: () => {},
+    _resetChurchScopedState: () => {}, _forgetStewardedScope: () => {},   // the helper-scope clear: not this file's question
     _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
     pool: { relays: new Map(), close: () => {} },
     needsPin: false, actingChurch: false,

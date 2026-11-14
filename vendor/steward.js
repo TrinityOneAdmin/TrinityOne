@@ -18277,6 +18277,14 @@ zoo`.split("\n");
   var actingChurch = "";
   var stewardedChurches = /* @__PURE__ */ new Map();
   var _stewardedBroad = null;
+  function _forgetStewardedScope() {
+    stewardedChurches.clear();
+    actingChurch = "";
+    try {
+      window.Steward.actingChurch = "";
+    } catch (e) {
+    }
+  }
   function _consoleDisplay(rec) {
     if (!_careRosterKnown) return true;
     const by = String(rec && rec._by || "");
@@ -21463,6 +21471,7 @@ zoo`.split("\n");
     },
     createKey() {
       const m = generateSeedWords();
+      _forgetStewardedScope();
       setKey(m);
       _setNeedsPin(true);
       _armRegGate();
@@ -21473,6 +21482,7 @@ zoo`.split("\n");
     // identity's "become a steward" code before the caller continues into the console (which fires it then).
     createKeyQuiet() {
       const m = generateSeedWords();
+      _forgetStewardedScope();
       setKey(m);
       _setNeedsPin(true);
       try {
@@ -21813,7 +21823,12 @@ zoo`.split("\n");
       const m = (mnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
       if (m.split(" ").length < 12) throw new Error("Enter the full 12-word recovery phrase.");
       if (!validateMnemonic(m, wordlist)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase \u2014 check the spelling of each word.");
+      _forgetStewardedScope();
       setKey(m);
+      try {
+        window.dispatchEvent(new CustomEvent("steward-identity", { detail: { pub, actingChurch: "" } }));
+      } catch (e) {
+      }
       try {
         if (churchPub) localStorage.removeItem(HELPERKEY_LS + churchPub);
       } catch (e) {
@@ -22309,6 +22324,7 @@ zoo`.split("\n");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
       _stay.clear();
+      _forgetStewardedScope();
       sk = null;
       pub = null;
       currentMnemonic = null;
@@ -29030,6 +29046,7 @@ zoo`.split("\n");
         nameSubs.set(cp, pool.subscribeMany(dialled, [{ kinds: [0], authors: [cp] }], {
           onevent(e) {
             try {
+              if (churchPub !== me) return;
               const nm = JSON.parse(e.content).name || "";
               if (nm && stewardedChurches.has(cp) && stewardedChurches.get(cp).name !== nm) {
                 stewardedChurches.set(cp, { name: nm });
@@ -29091,6 +29108,7 @@ zoo`.split("\n");
         };
         const handlers = {
           onevent(e) {
+            if (churchPub !== me) return;
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (d.startsWith(STEWARDREVOKE_D)) {
               const rcp = e.pubkey;
@@ -29176,7 +29194,7 @@ zoo`.split("\n");
           const s = oneRelay(u, filters, {
             onevent: handlers.onevent,
             onanswer(genuine, why) {
-              if (closed || subs.get(u) !== s) return;
+              if (closed || churchPub !== me || subs.get(u) !== s) return;
               cb([...stewardedChurches.keys()]);
               if (!(broad && !genuine && why === "timer" && relayUp(u))) {
                 answered.add(u);
