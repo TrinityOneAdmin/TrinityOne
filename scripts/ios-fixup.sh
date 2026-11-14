@@ -16,6 +16,12 @@
 #      exactly what Capacitor 7 generates out of the box.
 #   3. The two Info.plist usage strings the app needs (camera QR join, Photos
 #      backup export) — documented in docs/ops/IOS-BUILD.md; `cap add` won't create them.
+#   4. ITSAppUsesNonExemptEncryption = NO in Info.plist. The app uses only standard,
+#      exempt encryption (HTTPS/TLS, AES-GCM, the NIP-44 chat crypto) — no non-exempt
+#      encryption — so declaring it here makes every build answer App Store Connect's
+#      export-compliance question itself, instead of TestFlight asking (and blocking the
+#      build as "Missing Compliance") on every single upload. Matches the answer set on
+#      the first published builds (usesNonExemptEncryption=false).
 #
 # When TrinityOne moves to Capacitor 7+, revisit: 1 and 2 are likely built in, and
 # this script should be trimmed to just the usage strings (or removed).
@@ -65,11 +71,14 @@ print(f"  Podfile: platform {dt} + pod-target override set")
 PY
 
 # ── 2. Info.plist: usage strings + UIScene manifest (delete-then-add = idempotent) ──
-for k in NSCameraUsageDescription NSPhotoLibraryAddUsageDescription UIApplicationSceneManifest; do
+for k in NSCameraUsageDescription NSPhotoLibraryAddUsageDescription ITSAppUsesNonExemptEncryption UIApplicationSceneManifest; do
   "$PB" -c "Delete :$k" "$PL" 2>/dev/null || true
 done
 "$PB" -c "Add :NSCameraUsageDescription string 'TrinityOne uses the camera to scan a QR code so you can join your church.'" "$PL"
 "$PB" -c "Add :NSPhotoLibraryAddUsageDescription string 'TrinityOne saves your encrypted backup file to Photos when you choose to export it.'" "$PL"
+# Export-compliance: the app uses only standard, exempt encryption, so declare it here
+# and ASC never prompts (TestFlight otherwise flags every build "Missing Compliance").
+"$PB" -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PL"
 SM=":UIApplicationSceneManifest"
 CFG="$SM:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0"
 "$PB" -c "Add $SM dict" "$PL"
@@ -80,7 +89,7 @@ CFG="$SM:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0"
 "$PB" -c "Add $CFG:UISceneConfigurationName string 'Default Configuration'" "$PL"
 "$PB" -c "Add $CFG:UISceneDelegateClassName string '\$(PRODUCT_MODULE_NAME).SceneDelegate'" "$PL"
 plutil -lint "$PL" >/dev/null
-echo "  Info.plist: usage strings + UIScene manifest set"
+echo "  Info.plist: usage strings + export-compliance + UIScene manifest set"
 
 # ── 3. AppDelegate.swift: append the SceneDelegate (idempotent) ──────────────
 if grep -q "class SceneDelegate" "$APPDELEGATE"; then
