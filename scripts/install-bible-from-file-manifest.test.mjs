@@ -184,3 +184,11 @@ test('M6 — L8: the octet-stream filter is documented in the manifest as delibe
   assert.match(block, /record the MIME\s+type each sender really uses/);
   assert.equal([...block.matchAll(/android:mimeType="application\/octet-stream"/g)].length, 1);
 });
+
+test('M7 — L3: release.sh refuses to build the member APK from a stripped manifest (it runs `check` before gradle)', () => {
+  const rel = readFileSync(join(ROOT, 'scripts/release.sh'), 'utf8');
+  const at = rel.indexOf('bash scripts/manifest-member-only.sh check');
+  const build = rel.indexOf('./gradlew assembleRelease -q )"\n  run "cp android/app/build/outputs/apk/release/app-release.apk trinityone.apk"');
+  assert.ok(at > 0, 'release.sh never checks the member manifest');
+  assert.ok(build > at, 'the manifest check comes after the member build');
+});
