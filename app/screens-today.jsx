@@ -2552,11 +2552,46 @@ function TodayScreen({ ctx }) {
   const servNew = servingNewCount(ctx, ctx.servingSeenTs);
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
 
+  // THE HEADER CHEVRON (2026-11-14, PLAN-today-header-narrow option F). A church with an AUDIO FEED has a fourth
+  // header control (Listen) and the row then needs 330px; on a phone narrower than 366px it did not fit and the
+  // moon ran off the edge. Below 330px of ROW width (a CSS container query in index.html, never a device list)
+  // Listen and the dark-mode moon fold behind ONE chevron that opens a full-width row of two big buttons under
+  // the header. Search and the bell (with its unread dot) NEVER fold. A church with no feed keeps its three
+  // controls and gets no chevron: they already fit at 320. Everything here is gated on `hdrFold`.
+  //   state   : always starts CLOSED (deliberately not persisted, unlike CareSection).
+  //   close   : outside tap (TrinityReplyKit.tapOffHandler, selector [data-hdr-more] = the chevron AND the
+  //             panel, so a press ON the chevron is not "outside" and the chevron can close it), Escape, a pick,
+  //             and the row widening past the fold width (rotation) so a hidden panel cannot reappear later.
+  const hdrFold = !!(ctx.church && ctx.church.audioFeed);
+  const [hdrMore, setHdrMore] = React.useState(false);
+  const hdrFocus = (sel) => { try { const el = document.querySelector(sel); if (el && el.focus) el.focus(); } catch (e) {} };
+  React.useEffect(() => {
+    if (!hdrMore) return undefined;
+    const off = TrinityReplyKit.tapOffHandler('[data-hdr-more]', () => setHdrMore(false));
+    const onKey = (e) => { if (e && e.key === 'Escape') { setHdrMore(false); hdrFocus('[data-hdr-more="chevron"]'); } };
+    const onResize = () => {
+      try { const w = document.querySelector('.trn-hdr-wrap'); if (w && w.getBoundingClientRect().width >= 330) setHdrMore(false); } catch (e) {}
+    };
+    document.addEventListener('pointerdown', off, true);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onResize);
+    hdrFocus('[data-hdr-item="listen"]');
+    return () => {
+      document.removeEventListener('pointerdown', off, true);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [hdrMore]);
+
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       <SafetyBanner ctx={ctx} />
       <RecoveryNudge ctx={ctx} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
+      {/* WRAPPER = a plain full-width block, nothing else. `container-type:inline-size` (index.html) gives it layout
+          containment and a stacking context, and it would collapse to 0 wide if it were inline or a shrink-wrapped
+          flex item. The margin that used to sit on the row sits here so the open panel stays inside the gap. */}
+      <div className="trn-hdr-wrap" style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', animation: 'trinityFade .5s ease both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 16 }}>
           <svg viewBox="0 0 100 100" aria-label="TrinityOne" style={{ width: 28, height: 28, flexShrink: 0 }}>
             <path d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" fill="none" stroke="var(--ink)" strokeWidth="7" strokeLinecap="round" />
@@ -2575,7 +2610,7 @@ function TodayScreen({ ctx }) {
             return (
               <React.Fragment>
                 <button onClick={ctx.openSearch} aria-label="Search" style={hdrBtn}><Icon name="search" size={19} /></button>
-                {ctx.church && ctx.church.audioFeed ? <button onClick={ctx.openListen} aria-label="Listen" style={hdrBtn}><Icon name="headphones" size={19} /></button> : null}
+                {hdrFold ? <button onClick={ctx.openListen} aria-label="Listen" className="trn-hdr-inline" style={hdrBtn}><Icon name="headphones" size={19} /></button> : null}
                 <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
                   <Icon name="bell" size={19} />
                   {unread ? <span style={{ position: 'absolute', top: 9, right: 10, width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', border: '1.5px solid var(--surface)' }} /> : null}
@@ -2583,11 +2618,19 @@ function TodayScreen({ ctx }) {
               </React.Fragment>
             );
           })()}
-          <button onClick={ctx.toggleDark} aria-label={ctx.dark ? 'Switch to light mode' : 'Switch to dark mode'} style={{
+          <button onClick={ctx.toggleDark} aria-label={ctx.dark ? 'Switch to light mode' : 'Switch to dark mode'} className={hdrFold ? 'trn-hdr-inline' : undefined} style={{
             width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
             background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}><Icon name={ctx.dark ? 'sun' : 'moon'} size={19} /></button>
+          {hdrFold ? (
+            <button onClick={() => setHdrMore(o => !o)} aria-label="More" aria-expanded={hdrMore} aria-controls={hdrMore ? 'hdr-more-panel' : undefined}
+              className="trn-hdr-chev" data-hdr-more="chevron" style={{
+              width: 44, height: 44, borderRadius: 14, border: hdrMore ? '1px solid var(--clay)' : '1px solid var(--line)',
+              background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}><Icon name={hdrMore ? 'chevU' : 'chevD'} size={19} /></button>
+          ) : null}
           {/* NO READING-STREAK PILL. The flame + count sat here until 2026-10-09 and the owner asked for
               it off: they never asked for it in the first place, and it was the fourth control in a row
               that cannot wrap and cannot shrink. Measured on the owner's Oppo (CPH2477, 360 CSS px) the
@@ -2601,6 +2644,24 @@ function TodayScreen({ ctx }) {
               state and removing only the UI is the smaller change, and leaves the count there for
               whatever surface the owner does ask for. */}
         </div>
+      </div>
+      {/* THE OPEN PANEL sits OUTSIDE the header row on purpose: the row's text must stay exactly "TrinityOne" and
+          its height one line (todays-header-fits-the-phone.test.mjs). Two full-width 48px buttons, so the
+          thumb has a big target at the top of the screen. Shown only below the fold width (index.html). */}
+      {hdrFold && hdrMore ? (
+        <div id="hdr-more-panel" className="trn-hdr-panel" data-hdr-more="panel" style={{ gap: 8, marginTop: 12 }}>
+          <button onClick={() => { setHdrMore(false); ctx.openListen(); }} data-hdr-item="listen" style={{
+            flex: 1, minHeight: 48, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)',
+            cursor: 'pointer', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            font: 'inherit', fontWeight: 700, fontSize: 14.5,
+          }}><Icon name="headphones" size={19} />Listen</button>
+          <button onClick={() => { ctx.toggleDark(); setHdrMore(false); hdrFocus('[data-hdr-more="chevron"]'); }} data-hdr-item="mode" style={{
+            flex: 1, minHeight: 48, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)',
+            cursor: 'pointer', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            font: 'inherit', fontWeight: 700, fontSize: 14.5,
+          }}><Icon name={ctx.dark ? 'sun' : 'moon'} size={19} />{ctx.dark ? 'Light' : 'Dark'}</button>
+        </div>
+      ) : null}
       </div>
 
       {/* MY OWN CHILDREN AT TODAY'S SESSION, FIRST AMONG THE CARDS — a pickup code is needed at a door, now,

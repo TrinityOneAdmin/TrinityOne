@@ -98,7 +98,8 @@ import { loadScreen, miniReact, find } from './render-jsx-screen.mjs';
 import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
-const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
+// TRIN_CHROME lets a box without a launchable snap chromium point at another binary (e.g. a headless shell).
+const CHROME = [process.env.TRIN_CHROME, '/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].filter(Boolean).find(p => existsSync(p));
 const CDP = 9354;   // 9350-9352 belong to app-boots / restore-routes / restore-storm
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -130,6 +131,7 @@ function serialize(node) {
     const attrs = [`data-tid="${tid}"`];
     let inner = null;
     for (const [k, v] of Object.entries(n.props || {})) {
+      if (k.startsWith('aria-') && typeof v === 'boolean') { attrs.push(`${k}="${v}"`); continue; }
       if (k === 'children' || k === 'key' || k === 'ref' || v == null || v === false || typeof v === 'function') continue;
       if (k === 'style') { const s = css(v); if (s) attrs.push(`style="${esc(s)}"`); continue; }
       if (k === 'dangerouslySetInnerHTML') { inner = v.__html; continue; }
@@ -142,20 +144,33 @@ function serialize(node) {
   return { html: out.join(''), nodes };
 }
 
-// ── the real screen ───────────────────────────────────────────────────────────────────────────────────────
+// ── the real screen ──────────────────────────────────────────────────────────────────────────────
 // Everything TodayScreen takes from OUTSIDE its own file. A name it needs that is not here is a
 // ReferenceError at the point of use — deliberately, because a silently-stubbed global is how a test ends up
 // asserting about something that is not the code. Icon and ChurchBadge are the REAL ones (they set the
 // widths this test is about); the stubs are furniture that renders below the header.
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
-function todayPage({ width, audioFeed, churchName, date = new Date('2026-09-30T09:00:00Z') }) {
+// THE LIVE SCREEN, with its state and its effects, in the miniature React (LAYER A, behaviour).
+// What it adds over the old one-shot render, and why:
+//   · `docL` / `winL` CAPTURE every document / window listener the screen registers, instead of the old no-op
+//     stub, so a test can call the pointerdown / keydown / resize handler the screen really installed.
+//     miniReact never runs an effect's cleanup, so a listener from a closed session stays in the list; a test
+//     calls `mark()` before it opens and reads only what was registered after.
+//   · `querySelector` hands back a recorder for the header's own focus targets and a sized stand-in for the
+//     container wrapper (`S.wrapWidth`), because there is no layout in this layer — LAYER B (Chromium) is where
+//     widths are real.
+//   · `calls` counts the two shared handlers the header drives (openListen has ONE reader, this header; toggleDark
+//     has two: this header and the reading screen).
+function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date = new Date('2026-09-30T09:00:00Z'), width = 390 }) {
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const { ChurchBadge } = loadScreen('app/screens-church.jsx', ['ChurchBadge'],
     { React, window: {}, safeCssColor: (c, d) => d, safeImgUrl: () => '' });
+  const docL = [], winL = [], focused = [];
+  const S = { wrapWidth: width - 36 };
   const win = {
-    addEventListener() {}, removeEventListener() {}, innerWidth: width,
+    addEventListener(type, fn, cap) { winL.push({ type, fn, cap: !!cap }); }, removeEventListener() {}, innerWidth: width,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] },
     ChurchBadge,
@@ -164,9 +179,17 @@ function todayPage({ width, audioFeed, churchName, date = new Date('2026-09-30T0
     Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1,
       activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) },
   };
+  const doc = {
+    addEventListener(type, fn, cap) { docL.push({ type, fn, cap: !!cap }); }, removeEventListener() {},
+    querySelector(sel) {
+      if (sel === '.trn-hdr-wrap') return { getBoundingClientRect: () => ({ width: S.wrapWidth }) };
+      if (String(sel).startsWith('[data-hdr')) return { focus() { focused.push(sel); } };
+      return null;
+    },
+  };
   const globals = {
     React, window: win, localStorage: win.localStorage,
-    document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+    document: doc,
     navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
     setTimeout, clearTimeout, setInterval, clearInterval, console,
     Icon, ChurchBadge,
@@ -184,15 +207,84 @@ function todayPage({ width, audioFeed, churchName, date = new Date('2026-09-30T0
     fetch: async () => ({ ok: false, json: async () => ({}) }),
   };
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
+  const calls = { openListen: 0, toggleDark: 0 };
   const ctx = {
     // `audioFeed` is what puts the LISTEN button in the header — the fourth control, and the state any future
     // addition to this row collides with first.
     church: { name: churchName, initials: 'SB', npub: 'np1', audioFeed: audioFeed ? 'https://example.invalid/feed.xml' : null },
-    openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false,
-    toast() {}, netUnread: 0, openServing() {}, openListen() {},
+    openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, dark: false,
+    toggleDark() { calls.toggleDark++; }, openListen() { calls.openListen++; },
+    toast() {}, netUnread: 0, openServing() {},
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
   };
-  const tree = draw(TodayScreen, { ctx });
+  const M = { ctx, calls, docL, winL, focused, S, tree: null,
+    redraw() { M.tree = draw(TodayScreen, { ctx }); return M.tree; },
+    mark() { docL.length = 0; winL.length = 0; focused.length = 0; },
+    last(list, type) { const l = list.filter(x => x.type === type); return l[l.length - 1] || null; },
+    chevron() { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-more'] === 'chevron')[0] || null; },
+    panel() { return find(M.tree, n => n.props && n.props['data-hdr-more'] === 'panel')[0] || null; },
+    item(which) { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-item'] === which)[0] || null; },
+  };
+  M.redraw();
+  return M;
+}
+
+// The selector test a real browser does for `target.closest(sel)`, run against the miniReact tree: walk from
+// the target up through its ancestors and match `[attr]` / `[attr="v"]` against the props the screen set.
+// Only that selector shape is supported, and anything else throws, so the helper cannot quietly say "no match".
+function closestIn(tree, target) {
+  const path = [];
+  (function dfs(n, trail) {
+    if (!n || typeof n !== 'object' || path.length) return;
+    if (Array.isArray(n)) { n.forEach(c => dfs(c, trail)); return; }
+    const t = trail.concat([n]);
+    if (n === target) { path.push(...t); return; }
+    (n.kids || []).forEach(c => dfs(c, t));
+  })(tree, []);
+  return sel => {
+    const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(sel);
+    if (!m) throw new Error('closestIn only understands [attr] and [attr="v"], got ' + sel);
+    for (let i = path.length - 1; i >= 0; i--) {
+      const p = path[i].props || {};
+      if (m[1] in p && p[m[1]] != null && p[m[1]] !== false && (m[2] === undefined || String(p[m[1]]) === m[2])) return path[i];
+    }
+    return null;
+  };
+}
+const press = (M, node) => ({ target: { closest: closestIn(M.tree, node) } });   // a pointerdown event on `node`
+
+// THE CSS A PAGE IS DRESSED IN. With `fallback`, the container-query path is switched OFF the only way a test
+// can: the wrapper loses `container-type`, the @container block goes, and the `@supports not (container-type…)`
+// guard is rewritten so the media-query fallback applies in a browser that DOES support containers. Every
+// anchor must occur exactly once or this throws at load (a rename in index.html must not silently turn the
+// "fallback" pages into container pages).
+function pageCss(fallback) {
+  let c = [...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n');
+  if (!fallback) return c;
+  const once = (needle) => { assert.equal(c.split(needle).length - 1, 1, 'index.html no longer has exactly one: ' + needle); };
+  once('.trn-hdr-wrap { container-type: inline-size; }');
+  once('@supports not (container-type: inline-size) {');
+  const qs = [...c.matchAll(/@container[^{]*\{/g)];
+  assert.equal(qs.length, 1, 'index.html no longer has exactly one @container fold block');
+  const at = qs[0].index;
+  // cut the @container block by brace matching
+  let depth = 0, end = -1;
+  for (let k = c.indexOf('{', at); k < c.length; k++) { if (c[k] === '{') depth++; else if (c[k] === '}' && --depth === 0) { end = k + 1; break; } }
+  assert.ok(end > at);
+  c = c.slice(0, at) + c.slice(end);
+  c = c.replace('.trn-hdr-wrap { container-type: inline-size; }', '.trn-hdr-wrap { }');
+  c = c.replace('@supports not (container-type: inline-size) {', '@supports (display: block) {');
+  return c;
+}
+
+// LAYER B's page: the screen (optionally OPENED through its own chevron, in layer A's live harness), serialised
+// and dressed in index.html's own CSS.
+function todayPage({ width, audioFeed, churchName, open = false, fallback = false, zoom = 0 }) {
+  const M = mountToday({ audioFeed, churchName, width });
+  // A missing chevron / onClick must NOT throw at module load (that turns the whole file red with no name): the
+  // page is serialised still closed and the named tests below say what is missing.
+  if (open) { const ch = M.chevron(); if (ch && typeof ch.props.onClick === 'function') { ch.props.onClick(); M.redraw(); } }
+  const tree = M.tree;
   const { html, nodes } = serialize(tree);
   // ── ANCHORED ON WHAT IS ACTUALLY IN THE HEADER, found by the props the screen put on it, never by text.
   // The LOGO carries `aria-label="TrinityOne"` and is the only node in the file that does; from it the row
@@ -203,6 +295,7 @@ function todayPage({ width, audioFeed, churchName, date = new Date('2026-09-30T0
   const logoTid = nodes.findIndex(n => n.type === 'svg' && String((n.props || {})['aria-label'] || '') === 'TrinityOne');
   const brandTid = parentOf(logoTid);                 // the logo + wordmark block, the row's left-hand child
   const rowTid = parentOf(brandTid);                  // the header row itself
+  const wrapTid = parentOf(rowTid);                   // the container wrapper around the row (and the open panel)
   const kidsOf = tid => (tid < 0 ? [] : (nodes[tid].kids || []).filter(k => k && k.props));
   // the wordmark: the brand block's element child that is not the logo
   const wordTid = nodes.findIndex((n, i) => i !== logoTid && kidsOf(brandTid).includes(n));
@@ -212,11 +305,14 @@ function todayPage({ width, audioFeed, churchName, date = new Date('2026-09-30T0
   // here. It is asserted ABSENT instead, by the only test in this file that can see it: the header row's
   // text. See "the Today header carries no text but the wordmark" below — the pill's digit was row text, so
   // that one assertion catches the pill coming back AND the date/greeting coming back.
-  return { logoTid, brandTid, wordTid, rowTid, controlsTid, nodes, html:
+  // TEXT ZOOM (Android "Font size"): the wordmark is px text and the WebView text zoom scales it; chromium here
+  // has no such setting, so it is emulated as a scaled font-size on the wordmark only (the one text in the row).
+  const zoomCss = zoom ? `[data-tid="${wordTid}"]{font-size:${(16 * zoom).toFixed(1)}px !important}` : '';
+  return { logoTid, brandTid, wordTid, rowTid, wrapTid, controlsTid, nodes, M, html:
 `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="/vendor/fonts/fonts.css">
-<style>${[...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')}
-html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;overflow:hidden}</style>
+<style>${pageCss(fallback)}
+html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;overflow:hidden}${zoomCss}</style>
 <div id="app">${html}</div>` };
 }
 
@@ -266,35 +362,25 @@ after(() => { try { ws && ws.close(); } catch {} try { chr && chr.kill('SIGKILL'
 const CHURCH = 'St Bartholomew-the-Great';   // the church NAME no longer appears in the header (ec443e4) but
                                              // TodayScreen still needs a church, and the cards below use it
 const CASES = [];
-for (const width of [320, 360, 390, 800]) for (const audioFeed of [false, true]) CASES.push({ width, audioFeed, churchName: CHURCH });
+// CLOSED header, every width that matters. 365 and 366 are the EDGE: the row needs 330px and a viewport has
+// 18px of padding a side, so 365 gives a 329px row (folds) and 366 gives exactly 330 (fits, does not fold).
+for (const width of [320, 360, 365, 366, 390, 800]) for (const audioFeed of [false, true]) CASES.push({ width, audioFeed, churchName: CHURCH });
+// OPEN panel, serialised AFTER the chevron's own onClick ran in the live harness (layer A) — 390 is the "opened,
+// then the phone widened" case: the CSS must hide the panel and the chevron again.
+for (const width of [320, 360, 365, 390]) CASES.push({ width, audioFeed: true, churchName: CHURCH, open: true });
+// MEDIA-QUERY FALLBACK, with the container-query path switched off (see pageCss). Chromium here supports
+// container queries, so without these cases the fallback would never run. The Oppo is on the container path
+// too: THE DEVICE CHECK CANNOT PROVE THE FALLBACK.
+for (const width of [320, 365, 366]) CASES.push({ width, audioFeed: true, churchName: CHURCH, fallback: true });
+for (const width of [365, 366]) CASES.push({ width, audioFeed: true, churchName: CHURCH, fallback: true, open: true });
+// TEXT ZOOM 130%: the wordmark scaled the way Android's "Font size" setting scales it. Measured, not wished.
+for (const width of [320, 360]) CASES.push({ width, audioFeed: true, churchName: CHURCH, zoom: 1.3 });
 const PAGES = CASES.map(c => todayPage(c));
-
-// ── A KNOWN OPEN DEFECT THAT IS NOT THIS BRANCH'S, AND IS NOT BEING HIDDEN ────────────────────────────────
-// Removing the streak pill frees ~56px and the three-control header now fits every width above with room to
-// spare (measured 2026-10-09: the control group ends at x=302 of 320, x=342 of 360). A church with an AUDIO
-// FEED gets a fourth control — the Listen button, app/screens-today.jsx:2329 — and that header STILL runs off
-// the edge:
-//
-//     brand block (logo + wordmark + its 16px margin)   w=146
-//     four controls (4x40 + 3x8 gap)                    w=184   ->  330 in a 284px row
-//     control group ends at                             x=364   ->  44px past 320px, 4px past 360px
-//
-// This is OLDER than the streak-pill removal and WORSE before it (five items in that row, not four), so it is
-// not a regression of this change and fixing it is not in this branch's scope: the row cannot wrap, nothing in
-// it may shrink, and the ways out — shrink the wordmark to an ellipsis, let the row wrap, or drop a control —
-// are all owner decisions about branding the owner has already given an instruction on. REPORTED, not acted
-// on.
-//
-// The two cases it bites are marked `todo` rather than deleted or tuned away. A `todo` test in node:test still
-// RUNS and still reports, so the defect is visible in this file's output every time it is run, it does not
-// fail the suite over something this branch did not break, and it goes green by itself the day the header is
-// fixed. Every other case here is a hard assertion. The 390px and 800px audio-feed cases are NOT marked, and
-// they pass — so the Listen button is measured, not excused.
-const KNOWN_LISTEN_OVERFLOW = c => c.audioFeed && c.width <= 360;
-const LISTEN_TODO = 'KNOWN OPEN DEFECT, not this branch: a church with an audio feed gets a 4th header ' +
-  'control (Listen) and the control group ends at x=364 — 44px past a 320px viewport, 4px past a 360px one. ' +
-  'Pre-dates the streak-pill removal (it was worse with 5 items in the row) and needs an owner decision on ' +
-  'how the branding gives way. See the note above this line.';
+const caseLabel = c => `${c.width}px viewport (listen button: ${c.audioFeed ? 'yes' : 'no'}${c.open ? ', panel OPEN' : ''}${c.fallback ? ', MEDIA-QUERY FALLBACK' : ''}${c.zoom ? ', text zoom ' + Math.round(c.zoom * 100) + '%' : ''})`;
+// What the layout must show: folded when the row would be < 330px, i.e. a viewport under 366.
+const foldsAt = c => c.audioFeed && c.width < 366;
+const wantVisible = c => (c.audioFeed ? (foldsAt(c) ? 3 : 4) : 3);   // search + bell + (chevron | listen + moon)
+const GENERIC = [...CASES.entries()].filter(([, c]) => !c.zoom);
 
 const MEASURED = new Map();
 const overlaps = (a, b) => !!(a && b && a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom);
@@ -311,7 +397,7 @@ async function rects(i) {
       return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height),
                right: Math.round(b.right), bottom: Math.round(b.bottom) }; };
     const ROW = el(${P.rowTid}), BRAND = el(${P.brandTid}), LOGO = el(${P.logoTid}),
-          WORD = el(${P.wordTid}), CONTROLS = el(${P.controlsTid});
+          WORD = el(${P.wordTid}), CONTROLS = el(${P.controlsTid}), WRAP = el(${P.wrapTid});
     // EVERY WORD DRAWN IN THE HEADER ROW, and how many lines each one is drawn on. A range over one word
     // reports one client rect per line, so a count above 1 IS a mid-word break; no source text is involved.
     // This walks the row's own text nodes, so it sees the wordmark ("Trinity" + "One" are two text nodes in
@@ -335,7 +421,18 @@ async function rects(i) {
       wordClip: WORD ? { full: Math.ceil(WORD.scrollWidth), inner: Math.ceil(WORD.clientWidth), oneLineH: oneLineH(WORD) } : null,
       buttons: [...document.querySelectorAll('[data-tid="${P.controlsTid}"] > button')]
         .map(e => { const b = e.getBoundingClientRect(); return { label: e.getAttribute('aria-label') || e.getAttribute('title') || '',
-          x: Math.round(b.x), right: Math.round(b.right), w: Math.round(b.width) }; }) }); })()`;
+          x: Math.round(b.x), right: Math.round(b.right), w: Math.round(b.width), h: Math.round(b.height),
+          vis: b.width > 0 && b.height > 0, display: getComputedStyle(e).display }; }),
+      wrap: box(WRAP), wrapCT: WRAP ? getComputedStyle(WRAP).containerType : null,
+      chev: (() => { const e = document.querySelector('[data-hdr-more="chevron"]'); if (!e) return null; const b = e.getBoundingClientRect();
+        return { w: Math.round(b.width), h: Math.round(b.height), x: Math.round(b.x), right: Math.round(b.right), vis: b.width > 0,
+          expanded: e.getAttribute('aria-expanded'), parentIsControls: e.parentElement === CONTROLS }; })(),
+      panel: (() => { const e = document.querySelector('[data-hdr-more="panel"]'); if (!e) return null;
+        return { box: box(e), outsideRow: !ROW.contains(e), display: getComputedStyle(e).display,
+          btns: [...e.querySelectorAll(':scope > button')].map(x => { const b = x.getBoundingClientRect();
+            return { text: x.textContent.trim(), x: Math.round(b.x), y: Math.round(b.y), right: Math.round(b.right), bottom: Math.round(b.bottom),
+              w: Math.round(b.width), h: Math.round(b.height), vis: b.width > 0 && b.height > 0 }; }) }; })(),
+      vh: document.documentElement.clientHeight }); })()`;
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   const thrown = r.result && r.result.exceptionDetails;
   assert.ok(!thrown, 'the measuring probe threw: ' + JSON.stringify(thrown || {}).slice(0, 300));
@@ -354,7 +451,7 @@ async function measure(i) {
 // output. One named test, so the failure says which anchor went.
 test('the Today header is still shaped the way this test anchors it', () => {
   for (const [i, c] of CASES.entries()) {
-    const P = PAGES[i], at = `at ${c.width}px (listen button: ${c.audioFeed ? 'yes' : 'no'})`;
+    const P = PAGES[i], at = `at ${caseLabel(c)}`;
     assert.ok(P.logoTid >= 0,
       `THE TRINITYONE LOGO IS GONE from the Today header ${at} — the owner asked for the logo and the ` +
       'wordmark, and every rectangle this file reads is reached from that svg. If it moved rather than went, ' +
@@ -365,14 +462,15 @@ test('the Today header is still shaped the way this test anchors it', () => {
       `THE TRINITYONE WORDMARK IS GONE from the Today header ${at} — the brand block holds only the logo now`);
     assert.ok(P.controlsTid >= 0,
       `the header row has no control group beside the brand block ${at} — re-anchor this test`);
+    assert.ok(P.wrapTid >= 0, `the header row is not inside the container wrapper ${at} — re-anchor this test`);
   }
 });
 
-for (const [i, c] of CASES.entries()) {
-  const label = `${c.width}px viewport (listen button: ${c.audioFeed ? 'yes' : 'no'})`;
+for (const [i, c] of GENERIC) {
+  const label = caseLabel(c);
 
   test(`the whole header row fits a ${label}`,
-    { skip: !CHROME ? 'no chromium' : false, todo: KNOWN_LISTEN_OVERFLOW(c) ? LISTEN_TODO : false, timeout: 60000 }, async () => {
+    { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
     const m = await measure(i);
     assert.equal(m.vw, c.width, 'the page did not lay out at the width under test');
 
@@ -402,18 +500,21 @@ for (const [i, c] of CASES.entries()) {
 
     // Not just the group: no header control may leave the viewport, be squeezed to nothing, or sit on top of
     // another. Three controls is the base case and four is a church with an audio feed.
-    const wantBtns = c.audioFeed ? 4 : 3;
-    assert.equal(m.buttons.length, wantBtns,
-      `the header should carry ${wantBtns} controls at ${m.vw}px (listen: ${c.audioFeed ? 'yes' : 'no'}) but ` +
-      `${m.buttons.length} rendered: ${JSON.stringify(m.buttons.map(b => b.label))}`);
-    for (const b of m.buttons) {
+    // VISIBLE controls only (a folded control is display:none, width 0, and must not read as "squeezed").
+    // search + bell always; a church with a feed adds Listen + moon, or, below 366px, the chevron instead.
+    const vis = m.buttons.filter(b => b.vis);
+    const wantBtns = wantVisible(c);
+    assert.equal(vis.length, wantBtns,
+      `the header should show ${wantBtns} controls at ${m.vw}px (listen: ${c.audioFeed ? 'yes' : 'no'}) but ` +
+      `${vis.length} are visible: ${JSON.stringify(vis.map(b => b.label))}`);
+    for (const b of vis) {
       assert.ok(b.x >= 0 && b.right <= m.vw,
         `header control "${b.label}" is outside the ${m.vw}px viewport (x=${b.x} right=${b.right})`);
       assert.ok(b.w > 20, `header control "${b.label}" has been squeezed to ${b.w}px wide`);
     }
-    for (let k = 1; k < m.buttons.length; k++) {
-      assert.ok(m.buttons[k].x >= m.buttons[k - 1].right,
-        `header controls "${m.buttons[k - 1].label}" and "${m.buttons[k].label}" overlap at ${m.vw}px`);
+    for (let k = 1; k < vis.length; k++) {
+      assert.ok(vis[k].x >= vis[k - 1].right,
+        `header controls "${vis[k - 1].label}" and "${vis[k].label}" overlap at ${m.vw}px`);
     }
 
     // THE BRAND AND THE CONTROLS ARE NOT DRAWN ON TOP OF EACH OTHER. This is the assertion the September
@@ -497,3 +598,241 @@ for (const [i, c] of CASES.entries()) {
       `row starts at ${m.row.x}`);
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ROUND 4, 2026-11-14: THE CHEVRON (PLAN-today-header-narrow option F, AUDIT-PLAN-today-header-chevron).
+// A church with an audio feed has FOUR header controls and the row needs 330px; the owner's Oppo is 360 CSS px
+// (324px of row), so the moon ran 4px off the edge and at 320 Listen did too. This used to be a `todo` here
+// (KNOWN_LISTEN_OVERFLOW) — two todo rows, now two PASSING tests: at < 366px Listen and the moon fold behind a
+// 44px chevron that opens a full-width row of two buttons under the header; search and the bell never fold.
+//
+// TWO LAYERS, because the audit (HIGH 1) showed one cannot do both jobs. serialize() drops every function prop and
+// writes static HTML, so a browser page built from it has no handlers, no state, no effects and no Escape key.
+//   A. BEHAVIOUR, in the miniature React (no browser): the chevron's REAL onClick, the REAL document listeners the
+//      screen registers (captured, not stubbed away), the REAL panel buttons. Deleting the chevron wiring from the
+//      screen fails these; the engine alone cannot satisfy them (CLAUDE.md rule 1).
+//   B. LAYOUT, in Chromium (the cases above): the serialised CLOSED and OPEN trees laid out with index.html's own
+//      CSS at 320/360/365/366/390/800, on the container path AND on the media-query fallback.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ── LAYER B: layout ──────────────────────────────────────────────────────────────────────────────────────
+for (const [i, c] of GENERIC) {
+  const label = caseLabel(c);
+  test(`the header folds Listen and the moon behind ONE chevron exactly when it must — ${label}`,
+    { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+    const m = await measure(i);
+    assert.equal(m.vw, c.width, 'the page did not lay out at the width under test');
+    // WHICH CSS PATH RAN. A "fallback" page that still had container-type would prove nothing about the fallback.
+    assert.equal(m.wrapCT, c.fallback ? 'normal' : 'inline-size',
+      `the container wrapper has container-type "${m.wrapCT}" in a ${c.fallback ? 'FALLBACK' : 'container-query'} page`);
+    assert.ok(m.wrap && m.wrap.w === m.vw - 36, `the container wrapper is ${m.wrap && m.wrap.w}px, want a full-width block of ${m.vw - 36}`);
+
+    const by = l => m.buttons.filter(b => b.label === l);
+    // THE HIDDEN CONTROLS MUST STILL EXIST (audit: counting only the visible ones is satisfied by deleting Listen).
+    assert.equal(m.buttons.length, c.audioFeed ? 5 : 3,
+      `the control group should hold ${c.audioFeed ? '5 buttons (search, listen, bell, moon, chevron)' : '3 buttons'} in the tree ` +
+      `at ${m.vw}px, found ${JSON.stringify(m.buttons.map(b => b.label))}`);
+    assert.equal(by('Search').length, 1); assert.equal(by('Notifications').length, 1);
+    assert.ok(by('Search')[0].vis && by('Notifications')[0].vis, `search and the bell must NEVER fold (${m.vw}px)`);
+    assert.equal(by('Listen').length, c.audioFeed ? 1 : 0, 'Listen must be in the tree exactly when the church has a feed');
+    assert.equal(m.buttons.filter(b => /Switch to (dark|light) mode/.test(b.label)).length, 1, 'the moon must always be in the tree');
+    const moon = m.buttons.find(b => /Switch to (dark|light) mode/.test(b.label));
+
+    if (!c.audioFeed) {
+      // A CHURCH WITHOUT A FEED KEEPS ITS MOON AND GETS NO CHEVRON, AT EVERY WIDTH.
+      assert.ok(moon.vis, `the moon must stay visible for a church with no audio feed at ${m.vw}px`);
+      assert.equal(m.chev, null, 'a church with no audio feed must not get a chevron');
+      assert.equal(m.panel, null, 'a church with no audio feed must not get a panel');
+      return;
+    }
+    const folded = foldsAt(c);
+    assert.ok(m.chev, 'a church with an audio feed has a chevron in the tree');
+    assert.ok(m.chev.parentIsControls, 'the chevron must be a DIRECT child of the control group (the count anchors on it)');
+    assert.equal(m.chev.vis, folded, `the chevron must be ${folded ? 'visible' : 'hidden'} at ${m.vw}px (fold below 366)`);
+    assert.equal(by('Listen')[0].vis, !folded, `Listen must be ${folded ? 'folded away' : 'inline'} at ${m.vw}px`);
+    assert.equal(moon.vis, !folded, `the moon must be ${folded ? 'folded away' : 'inline'} at ${m.vw}px`);
+    if (folded) {
+      assert.equal(m.chev.w, 44, `the chevron is ${m.chev.w}px wide, want 44`);
+      assert.equal(m.chev.h, 44, `the chevron is ${m.chev.h}px tall, want 44`);
+    }
+    assert.equal(m.chev.expanded, c.open ? 'true' : 'false', 'aria-expanded must say what the panel is doing');
+  });
+
+  if (c.audioFeed && c.open) {
+    test(`the OPEN panel is two big buttons, outside the row, on the screen — ${label}`,
+      { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+      const m = await measure(i);
+      assert.ok(m.panel, 'the chevron was opened but no panel is in the tree');
+      assert.ok(m.panel.outsideRow, 'the panel must sit OUTSIDE the header row (the row text and height are asserted)');
+      assert.equal(m.panel.btns.length, 2);
+      if (!foldsAt(c)) {
+        // opened, then the phone widened (rotation): CSS hides the panel; the state is closed by the resize handler (layer A)
+        assert.equal(m.panel.display, 'none', `a panel left open must be hidden at ${m.vw}px`);
+        assert.ok(m.panel.btns.every(b => !b.vis), 'no panel button may be visible when the row is wide');
+        return;
+      }
+      assert.equal(m.panel.display, 'flex');
+      for (const b of m.panel.btns) {
+        assert.ok(b.vis, `panel button "${b.text}" is not visible at ${m.vw}px`);
+        assert.ok(b.h >= 44, `panel button "${b.text}" is ${b.h}px tall, want >= 44`);
+        assert.ok(b.w >= 44, `panel button "${b.text}" is ${b.w}px wide, want >= 44`);
+        assert.ok(b.x >= 0 && b.right <= m.vw && b.y >= 0 && b.bottom <= m.vh,
+          `panel button "${b.text}" is outside the ${m.vw}x${m.vh} viewport (x=${b.x}..${b.right}, y=${b.y}..${b.bottom})`);
+        assert.ok(b.y >= m.row.bottom, `panel button "${b.text}" is not under the header row`);
+      }
+      assert.deepEqual(m.panel.btns.map(b => b.text), ['Listen', 'Dark']);
+      assert.ok(m.panel.btns[0].right <= m.panel.btns[1].x, 'the two panel buttons overlap');
+      assert.ok(m.panel.box.w >= m.vw - 36 - 1, `the panel is ${m.panel.box.w}px wide, want the full ${m.vw - 36}`);
+    });
+  }
+}
+
+// ── TEXT ZOOM 130%, RECORDED HONESTLY (audit MEDIUM; the decision taken: say plainly it can still overflow) ──
+// The wordmark is px text, so Android's "Font size" setting grows the brand beyond its 146px and the fold width
+// (330px of row) is only right at normal size. Measured here with the wordmark at 130%.
+for (const [i, c] of CASES.entries()) {
+  if (!c.zoom) continue;
+  test(`KNOWN LIMIT, recorded: at 130% text size the header ${c.width === 360 ? 'still fits' : 'overflows'} at ${c.width}px`,
+    { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+    const m = await measure(i);
+    assert.equal(m.vw, c.width);
+    // the structure is still right at zoom: folded, chevron visible, the hidden controls still in the tree
+    assert.equal(m.buttons.length, 5);
+    assert.ok(m.chev.vis, 'the chevron is shown at this width whatever the text size');
+    const past = m.controls.right - m.vw;
+    console.log(`# text zoom 130% at ${c.width}px: brand ${span(m.brand)} controls ${span(m.controls)} -> ${past}px past the edge`);
+    if (c.width === 360) assert.ok(past <= 0, `at 360px and 130% text the control group ends ${past}px past the edge`);
+    else assert.ok(past > 0, `ZOOM LIMIT HAS MOVED: at 320px and 130% text the controls now fit (${past}); update the note and the comment in index.html`);
+  });
+}
+
+// ── LAYER A: behaviour, through the screen's own onClick / effects / document listeners ──────────────────────
+const open = M => { M.mark(); M.chevron().props.onClick(); M.redraw(); };
+
+test('A. the chevron opens the panel, says so in aria-expanded, and the panel is what the chevron controls', () => {
+  const M = mountToday({ audioFeed: true });
+  assert.ok(M.chevron(), 'a church with a feed has a chevron');
+  assert.equal(M.chevron().props['aria-expanded'], false, 'starts CLOSED');
+  assert.equal(M.chevron().props['aria-label'], 'More');
+  assert.equal(M.panel(), null, 'no panel while closed');
+  assert.equal(M.chevron().props['aria-controls'], undefined, 'no aria-controls to a panel that is not in the tree');
+  open(M);
+  assert.equal(M.chevron().props['aria-expanded'], true);
+  assert.ok(M.panel(), 'the panel is in the tree once opened');
+  assert.equal(M.chevron().props['aria-controls'], M.panel().props.id);
+  assert.ok(M.item('listen') && M.item('mode'), 'the panel carries Listen and the dark-mode button');
+  assert.equal(M.item('listen').type, 'button');
+  // pressing the chevron again closes it (it is a toggle, not a one-way door)
+  M.chevron().props.onClick(); M.redraw();
+  assert.equal(M.chevron().props['aria-expanded'], false);
+  assert.equal(M.panel(), null);
+});
+
+test('A. opening registers a capture pointerdown, an Escape key listener and a resize listener, and focuses the first button', () => {
+  const M = mountToday({ audioFeed: true });
+  assert.equal(M.docL.length, 0, 'a CLOSED header registers no document listener');
+  open(M);
+  const pd = M.last(M.docL, 'pointerdown'), kd = M.last(M.docL, 'keydown'), rs = M.last(M.winL, 'resize');
+  assert.ok(pd && pd.cap, 'pointerdown must be registered in the CAPTURE phase, as every other pop-over in the app does');
+  assert.ok(kd, 'an Escape (keydown) listener is registered');
+  assert.ok(rs, 'a window resize listener is registered');
+  assert.ok(M.focused.includes('[data-hdr-item="listen"]'), 'focus moves to the first panel button when the row opens');
+});
+
+test('A. the panel Listen button calls openListen EXACTLY ONCE and closes the row', () => {
+  const M = mountToday({ audioFeed: true });
+  assert.equal(M.calls.openListen, 0);
+  open(M);
+  M.item('listen').props.onClick(); M.redraw();
+  assert.equal(M.calls.openListen, 1, 'openListen must be called exactly once by the panel Listen button');
+  assert.equal(M.panel(), null, 'picking Listen closes the row');
+  assert.equal(M.chevron().props['aria-expanded'], false);
+  assert.equal(M.calls.toggleDark, 0, 'Listen must not touch the theme');
+});
+
+test('A. the panel moon calls toggleDark exactly once, closes the row, and hands focus back to the chevron', () => {
+  const M = mountToday({ audioFeed: true });
+  open(M);
+  M.item('mode').props.onClick(); M.redraw();
+  assert.equal(M.calls.toggleDark, 1);
+  assert.equal(M.calls.openListen, 0, 'the moon must not open Listen');
+  assert.equal(M.panel(), null);
+  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'), 'the picked button is gone, so focus must return to the chevron');
+});
+
+test('A. Escape closes the row and returns focus to the chevron; other keys do not', () => {
+  const M = mountToday({ audioFeed: true });
+  open(M);
+  const kd = M.last(M.docL, 'keydown').fn;
+  kd({ key: 'a' }); M.redraw();
+  assert.ok(M.panel(), 'a letter key must not close the row');
+  M.focused.length = 0;
+  kd({ key: 'Escape' }); M.redraw();
+  assert.equal(M.panel(), null, 'Escape closes the row');
+  assert.equal(M.chevron().props['aria-expanded'], false);
+  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'), 'Escape returns focus to the chevron');
+  assert.equal(M.calls.openListen, 0, 'Escape must not pick anything');
+});
+
+test('A. a press OUTSIDE the header closes the row; a press on a card below is outside', () => {
+  const M = mountToday({ audioFeed: true });
+  open(M);
+  const off = M.last(M.docL, 'pointerdown').fn;
+  const bell = find(M.tree, n => n.type === 'button' && n.props['aria-label'] === 'Notifications')[0];
+  assert.ok(bell, 'anchor: the bell is in the tree');
+  off(press(M, bell)); M.redraw();
+  assert.equal(M.panel(), null, 'a pointerdown outside the chevron and the panel closes the row');
+  assert.equal(M.calls.openListen + M.calls.toggleDark, 0, 'closing by a tap off must not pick anything');
+});
+
+test('A. a press ON the chevron or ON the panel is NOT "outside" (so the chevron can close the row it opened)', () => {
+  // THE TRAP (audit HIGH 3): tapOffHandler ignores presses inside its selector. If the chevron does not carry the
+  // selector, pointerdown closes the row and the click that follows reopens it — the chevron could never close it.
+  // The press is resolved through the REAL props the screen put on the chevron and the panel, by .closest().
+  const M = mountToday({ audioFeed: true });
+  open(M);
+  const off = M.last(M.docL, 'pointerdown').fn;
+  off(press(M, M.chevron())); M.redraw();
+  assert.ok(M.panel(), 'a pointerdown ON THE CHEVRON must not close the row (the click then toggles it shut)');
+  off(press(M, M.item('listen'))); M.redraw();
+  assert.ok(M.panel(), 'a pointerdown on a panel button must not close the row (its own click runs the action)');
+  off(press(M, M.panel())); M.redraw();
+  assert.ok(M.panel(), 'a pointerdown on the panel itself must not close the row');
+  // and the whole press-then-click cycle on the chevron ends CLOSED, not re-opened
+  off(press(M, M.chevron())); M.chevron().props.onClick(); M.redraw();
+  assert.equal(M.panel(), null, 'press + click on the chevron must leave the row closed');
+  // one shared attribute, on both
+  assert.ok('data-hdr-more' in M.chevron().props);
+  open(M);
+  assert.ok('data-hdr-more' in M.panel().props, 'the panel carries the same attribute as the chevron');
+});
+
+test('A. when the row WIDENS past the fold width the open row closes (rotation), and not before', () => {
+  const M = mountToday({ audioFeed: true, width: 360 });
+  open(M);
+  const rs = M.last(M.winL, 'resize').fn;
+  M.S.wrapWidth = 329; rs(); M.redraw();
+  assert.ok(M.panel(), 'a row still under 330px keeps the panel open');
+  M.S.wrapWidth = 330; rs(); M.redraw();
+  assert.equal(M.panel(), null, 'at 330px the controls all fit inline, so the panel is closed rather than left to reappear later');
+});
+
+test('A. NO audio feed: no chevron, no panel, no fold class on the moon, nothing registered', () => {
+  const M = mountToday({ audioFeed: false });
+  assert.equal(M.chevron(), null, 'a church with no feed must not get a chevron');
+  assert.equal(M.panel(), null);
+  const moon = find(M.tree, n => n.type === 'button' && /Switch to (dark|light) mode/.test(String(n.props['aria-label'])))[0];
+  assert.ok(moon, 'the moon is there');
+  assert.equal(moon.props.className, undefined, 'the moon of a feedless church must carry NO fold class (it would vanish at narrow widths)');
+  assert.equal(find(M.tree, n => n.props && n.props.className === 'trn-hdr-inline').length, 0, 'nothing folds without a feed');
+  assert.equal(M.docL.length, 0);
+});
+
+test('A. WITH a feed, Listen and the moon carry the fold class and the chevron + panel carry their own', () => {
+  const M = mountToday({ audioFeed: true });
+  const inline = find(M.tree, n => n.type === 'button' && n.props.className === 'trn-hdr-inline');
+  assert.deepEqual(inline.map(n => n.props['aria-label']).sort(), ['Listen', 'Switch to dark mode'].sort());
+  assert.equal(M.chevron().props.className, 'trn-hdr-chev');
+  open(M);
+  assert.equal(M.panel().props.className, 'trn-hdr-panel');
+});
