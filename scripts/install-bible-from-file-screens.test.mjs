@@ -200,10 +200,11 @@ test('S8 — RELAUNCH FROM RECENTS: the same launch URL re-delivered after a rel
   assert.equal(b.mod.handleIncomingFile(url, false, s => shown2.push(s)), 'shown', 'a live tap on the same file was swallowed');
 });
 
+// 'forever' is 80 MB here (80 reads of 1 MB), so a reader with no cap ends instead of eating the box
 function streamOf(chunks, { forever = false, state = {} } = {}) {
   let i = 0;
   return { ok: true, status: 200, headers: { get: () => null }, body: { getReader: () => ({
-    read: async () => { state.reads = (state.reads || 0) + 1; if (!forever && i >= chunks.length) return { done: true }; return { done: false, value: forever ? new Uint8Array(1024 * 1024) : chunks[i++] }; },
+    read: async () => { state.reads = (state.reads || 0) + 1; if (forever ? state.reads > 80 : i >= chunks.length) return { done: true }; return { done: false, value: forever ? new Uint8Array(1024 * 1024) : chunks[i++] }; },
     cancel: async () => { state.cancelled = true; } }) } };
 }
 

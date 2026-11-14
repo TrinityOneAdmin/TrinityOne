@@ -340,3 +340,14 @@ test('E18 — installs run one at a time: two files at once both land, neither l
   assert.equal(p.Bible.versions().length, 2);
   assert.equal(Object.keys(p.installed()).length, 2);
 });
+
+test('E18b — two DIFFERENT files claiming ONE name, installed at the same moment: the second still sees the first and is renamed, not replacing it', async () => {
+  const p = await readyPhone();
+  const [a, b] = await Promise.all([
+    p.Bible.installFromBytes(await bibleDb('SAM', 'Same Name Bible', 'FIRST text'), 'one.bbl.mybible'),
+    p.Bible.installFromBytes(await bibleDb('SAM', 'Same Name Bible', 'SECOND text'), 'two.bbl.mybible')]);
+  assert.equal(a.ok && b.ok, true, JSON.stringify([a, b]));
+  assert.equal(p.Bible.versions().length, 2, 'one of two simultaneous installs replaced the other');
+  const texts = p.Bible.versions().map(v => p.Bible.getVerses(1, 1, v.abbr)[0].text).sort();
+  assert.deepEqual(JSON.parse(JSON.stringify(texts)), ['FIRST text', 'SECOND text']);
+});
