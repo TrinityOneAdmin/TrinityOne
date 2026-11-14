@@ -24,7 +24,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody, stripComments } from './test-slice.mjs';
+import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const SRC = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -63,11 +63,45 @@ test('…and none of them has quietly kept the single-accept path', () => {
   }
 });
 
-test('a partial write is a FAILURE, not a success', () => {
+// Lift the REAL writer out of the shipped bundle and run it against a pool where only some relays accept.
+function liftPublish(accepting) {
+  const body = [
+    stmt(BUNDLE, 'var _lastSpread = ', '_lastSpread'),
+    fnBody(BUNDLE, 'function _noteSpread', '_noteSpread'),
+    fnBody(BUNDLE, 'async function _publishToRelays', '_publishToRelays'),
+  ].join('\n');
+  const targets = ['wss://a.example/r', 'wss://b.example/r', 'wss://c.example/r'];
+  const scope = {
+    console, setTimeout: (f) => globalThis.setTimeout(f, 0),
+    window: { dispatchEvent: () => {} },
+    CustomEvent: class { constructor(t, o) { this.type = t; this.detail = (o || {}).detail; } },
+    pool: { relays: new Map(), publish: (urls) => urls.map(u => accepting.includes(u)
+      ? Promise.resolve('ok') : Promise.reject(new Error('blocked: not permitted'))) },
+    _pubLatest: new Map(), _waitForRegistration: async () => {},
+    _connectedRelays: () => targets.slice(), relays: () => targets.slice(), relaysRaw: () => targets.slice(),
+    NO_NETWORK_RELAY: 'no relay',
+  };
+  const fn = new Function('scope', `with (scope) { ${body}\n return _publishToRelays; }`)(new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the lifted _publishToRelays needs `' + String(k) + '` — add a stub'); },
+  }));
+  return { fn, targets };
+}
+const EVT = { id: 'e1', pubkey: 'p'.repeat(64), kind: 30078, tags: [['d', 'trinityone/minors:abc']], content: '{}' };
+
+test('a partial write is a FAILURE, not a success', async () => {
+  // BEHAVIOUR, not text: a refactor that wraps the return line must not break this, and a rule that was
+  // actually relaxed must.
+  const all = liftPublish(['wss://a.example/r', 'wss://b.example/r', 'wss://c.example/r']);
+  assert.equal(await all.fn(EVT), EVT, 'control: every relay accepting must return the event');
+  for (const part of [['wss://a.example/r'], ['wss://a.example/r', 'wss://b.example/r']]) {
+    const p = liftPublish(part);
+    assert.equal(await p.fn(EVT), false,
+      'all-must-accept is the whole point: a steward told "marked as a child" must not have had that record ' +
+      'reach only some of their relays');
+  }
   const fn = stripComments(fnBody(SRC, 'async function _publishToRelays(evt, urls) {'));
-  assert.match(fn, /return accepted === targets\.length \? evt : false;/,
-    'all-must-accept is the whole point: a steward told "marked as a child" must not have had that record ' +
-    'reach only some of their relays');
   // …and it must not target relays nobody can reach, or every write reports a false alarm.
   assert.match(fn, /const live = _connectedRelays\(\);/,
     'target CONNECTED relays, not merely configured ones — CANONICAL_RELAYS ships a tailnet address most ' +
