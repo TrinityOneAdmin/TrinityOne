@@ -5666,6 +5666,9 @@ function useRelayBackupState() {
 //    touches once or never (add, auto-find, connect by name, copy history, keep in sync, run your own box)
 //    is its own page now; SETTINGS_GROUPS in DashSettings is the list of where each of them went.
 function DashRelaysCard() {
+  // The one optional prop (the parent's page switcher, for the Add a relay link). Read off `arguments`, NOT a destructured
+  // parameter, so the signature `function DashRelaysCard()` that fourteen screen tests slice on stays exactly as it was.
+  const onOpenPage = arguments[0] && arguments[0].onOpenPage;
   const { status, backup } = useRelayBackupState();
   // PER-RELAY SYNC INDICATOR (plan §3, work item A — the visible half). Each relay's PUBLIC /status.sync
   // block, classified by window.Steward.relaySyncState into "Synced" / "Catching up…" / "Not syncing". It is
@@ -5674,16 +5677,69 @@ function DashRelaysCard() {
   // without the engine method (and an older bundle) simply show no chip rather than throwing. Re-read when
   // the relay set changes.
   const [syncStates, setSyncStates] = React.useState(null);
+  // "Check again" only RE-READS (the relay's answer changes only after its own next copy round). It never calls
+  // /sync-now (admin-gated, runs every church) and never touches the sync switch.
+  const [recheck, setRecheck] = React.useState(0);
+  const [rechecking, setRechecking] = React.useState(false);
   React.useEffect(() => {
     let ok = true;
-    (async () => { try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates() : null; if (ok) setSyncStates(m); } catch {} })();
+    const got = new Map();
+    // Rows paint as each relay's answer lands (relaySyncStates reads them all at once, with no time cutoff), so one
+    // black-holed relay never holds the others back. A re-read keeps the old rows until each is replaced.
+    const onEach = (e) => { if (!ok || !e) return; got.set(String(e.url || ''), e); setSyncStates((prev) => { const m = new Map((prev || []).map(x => [String(x.url || ''), x])); for (const [k, v] of got) m.set(k, v); return Array.from(m.values()); }); };
+    (async () => {
+      setRechecking(true);
+      try { const m = window.Steward.relaySyncStates ? await window.Steward.relaySyncStates(onEach) : null; if (ok && m) setSyncStates(m); } catch {}
+      if (ok) setRechecking(false);
+    })();
     return () => { ok = false; };
-  }, [status.length]);
+  }, [status.length, recheck]);
   const syncByUrl = React.useMemo(() => {
     const m = new Map();
     for (const s of (syncStates || [])) m.set(String(s.url || '').trim().toLowerCase().replace(/\/+$/, ''), s);
     return m;
   }, [syncStates]);
+  // WORDING for the failed-sync states (owner-approved, MOCKUPS-sync-failure-display-2026-11-14). Plain text only; every
+  // apostrophe is the curly one on purpose (see the note at the Remove confirmation below). It never names the partner
+  // relay, never suggests editing a list or a key, and never suggests adding or removing a relay as the cure for a refusal.
+  const delegatedConsole = !!(window.Steward && window.Steward.isDelegated && window.Steward.isDelegated());
+  const lastChecked = (e) => {
+    const at = e && Number(e.at) || 0;
+    if (!at) return 'relay last checked: not yet';
+    const min = Math.max(0, Math.floor((Date.now() / 1000 - at) / 60));
+    return 'relay last checked ' + (min < 1 ? 'less than a minute' : min + ' min') + ' ago';
+  };
+  const lastGood = (e) => {
+    const at = e && Number(e.lastReachedAt) || 0;
+    if (e && e.state === 'syncing') return 'Now';
+    if (!at) return 'Never reached';
+    const min = Math.max(0, Math.floor((Date.now() / 1000 - at) / 60));
+    return min < 1 ? 'Less than a minute ago' : min + ' min ago';
+  };
+  const SYNC_COPY = {
+    attention: { head: 'Another of your relays is turning this one away.', body: 'Your messages are safe on every relay that’s answering. This usually means your church’s list of relays that copy each other is out of date, often after a relay was reinstalled.', todo: delegatedConsole ? 'ask the person who holds the church key to open Settings → Relays → Keep relays in sync and save it again.' : 'when all your relays show Answering, open Settings → Relays → Keep relays in sync and save it again.', tail: 'This row updates after the next copy round.' },
+    clock: { head: 'A clock looks wrong, so your relays are turning each other away.', body: 'Nothing is lost.', todo: 'on the computer running this relay, or your other one, switch on “Set time automatically” (Settings → Date & time). This row clears after the next copy round.', tail: '' },
+    island: { head: 'This relay isn’t copying to another one.', body: 'Either you have only one relay, or syncing is switched off.', todo: 'add a second relay your church runs, then switch on “Keep relays in sync”.', tail: '', link: true },
+    syncing: { head: 'Copying the latest messages from your other relay.', body: 'This is normal after a relay has been switched off.', todo: '', tail: '' },
+    unreached: { head: 'We could not reach your other relay on the last copy round, so we are not saying “Synced”.', body: '', todo: '', tail: '' },
+  };
+  const SYNC_STATUS_WORD = { synced: 'Synced ✓', syncing: 'Catching up…', attention: 'Needs attention', clock: 'Check the clock', island: 'Not syncing', unreached: 'Not checked yet' };
+  const syncExplain = (e, withActions) => {
+    const c = e && SYNC_COPY[e.state]; if (!c) return null;
+    return (
+      <div data-sync-detail={e.state} style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+        <div><b style={{ color: 'var(--ink)' }}>{c.head}</b>{c.body ? ' ' + c.body : ''}</div>
+        {c.todo ? <div><b style={{ color: 'var(--ink)' }}>What to do:</b> {c.todo}{c.link && onOpenPage ? <React.Fragment>{' '}<span role="button" tabIndex={0} onClick={() => onOpenPage('add-relay')} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>Add a relay</span></React.Fragment> : null}</div> : null}
+        {c.tail ? <div style={{ color: 'var(--ink-3)' }}>{c.tail}</div> : null}
+        {withActions && (e.state === 'attention' || e.state === 'clock' || e.state === 'unreached') ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => setRecheck(n => n + 1)} disabled={rechecking} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 11px', fontSize: 12, fontWeight: 700, cursor: rechecking ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Check again</button>
+            <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{lastChecked(e)}. “Check again” only re-reads; it does not start a copy.</span>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
   // THE CONSOLE'S CLOCK, measured against the relays that store what it writes. Stage 1 of
   // reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md: measured and SHOWN, corrected nowhere. It belongs on
   // this card because the relays are the thing it is measured against and the thing a wrong clock breaks.
@@ -5931,11 +5987,18 @@ function DashRelaysCard() {
                       peers, "Catching up…" / "Not syncing" when it is behind or has no peer to pull from.
                       Advisory and display-only — classified by window.Steward.relaySyncState from the box's own
                       unauthenticated /status.sync; it admits nothing and changes no relay list. */}
-                  {relaySync && relaySync.label ? <span data-sync={relaySync.state} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: relaySync.state === 'synced' ? 'var(--sage-ink)' : 'var(--ink-3)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)' }} /> {relaySync.state === 'synced' ? 'Synced ✓' : relaySync.label}</span> : null}
+                  {relaySync && relaySync.label ? (relaySync.state === 'unreached'
+                    ? <span data-sync="unreached" style={{ fontSize: 12, color: 'var(--ink-3)' }}>{relaySync.label}</span>
+                    : <span data-sync={relaySync.state} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: relaySync.state === 'synced' ? 'var(--sage-ink)' : (relaySync.state === 'attention' || relaySync.state === 'clock') ? 'var(--clay-ink)' : 'var(--ink-3)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: relaySync.state === 'synced' ? 'var(--sage)' : 'var(--clay)' }} /> {relaySync.state === 'synced' ? 'Synced ✓' : relaySync.label}</span>) : null}
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
                   {dropping.includes(r.url) ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Removing…</span> : null}
                   {!self && r.url !== own && !dropping.includes(r.url) && !(window.Steward && window.Steward.canRemoveRelay && !window.Steward.canRemoveRelay(r.url)) ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
+                {relaySync && relaySync.state && SYNC_COPY[relaySync.state] && relaySync.state !== 'unreached' ? <div style={{ flexBasis: '100%', paddingTop: 8, borderTop: '1px solid var(--line)' }}>{syncExplain(relaySync, true)}</div> : null}
+                {relaySync && relaySync.state === 'unreached' ? <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button onClick={() => setRecheck(n => n + 1)} disabled={rechecking} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '3px 10px', fontSize: 12, fontWeight: 700, cursor: rechecking ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Check again</button>
+                  <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{lastChecked(relaySync)}. “Check again” only re-reads; it does not start a copy.</span>
+                </div> : null}
                 {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
                     the name goes too, and that — not the address on screen — is what would bring it back. */}
                 {confirmDrop === r.url ? (
@@ -5957,6 +6020,30 @@ function DashRelaysCard() {
           })}
           {(dropping.length || dropNote) ? <div role="status" style={{ fontSize: 12, color: dropping.length ? 'var(--ink-3)' : 'var(--clay-ink)', marginTop: 8, lineHeight: 1.45 }}>{dropping.length ? 'Removing ' + dropping.join(', ') + '…' : dropNote}</div> : null}
         </div>
+        {/* OPTION C, THE DETAIL BEHIND THE ROW CHIP: one block per relay that gave a per-church reading, with the
+            full explanation and the last-good time. Only relays that answered the signed /sync-status appear (an older
+            relay gives nothing here, as it gives nothing on the row). Same data as the rows; it reads and decides nothing. */}
+        {(() => {
+          const rows = status.map(r => { const e = r.status === 'on' ? syncByUrl.get(String(r.url || '').trim().toLowerCase().replace(/\/+$/, '')) : null; return e && e.church && SYNC_STATUS_WORD[e.state] ? { r, e } : null; }).filter(Boolean);
+          if (!rows.length) return null;
+          return (
+            <div data-sync-section="detail" style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontWeight: 800, fontSize: 13, color: 'var(--ink)' }}>Sync</div>
+              {rows.map(({ r, e }) => (
+                <div key={r.url} style={{ padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere' }}>{rowName(r) || r.url}</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 14, rowGap: 3, fontSize: 12.5, color: 'var(--ink-2)' }}>
+                    <span style={{ color: 'var(--ink-3)' }}>Status</span><span data-sync-status={e.state} style={{ fontWeight: 700 }}>{SYNC_STATUS_WORD[e.state]}</span>
+                    <span style={{ color: 'var(--ink-3)' }}>Last good copy</span><span>{lastGood(e)}</span>
+                    <span style={{ color: 'var(--ink-3)' }}>Relay last checked</span><span>{e.at ? lastChecked(e).replace('relay last checked ', '') : 'never'}</span>
+                    <span style={{ color: 'var(--ink-3)' }}>Syncing switched on</span><span>{backup && backup.syncOn === true ? 'Yes' : backup && backup.syncOn === false ? 'No' : 'Checking…'}</span>
+                  </div>
+                  {e.state === 'synced' ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Your relays hold the same history. Nothing to do.</div> : syncExplain(e, true)}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
         {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
             `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct
             one. The seconds are printed as a number on purpose — "in step" is a judgement, the figure is the
@@ -14196,7 +14283,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {open === 'tags' ? <DashChatTagsPanel church={church} /> : null}
       {open === 'voice' ? <Panel title="Your name as a steward"><VoiceSetup onDelegated={() => setPage('delegated')} /></Panel> : null}
 
-      {open === 'relays' ? <DashRelaysCard /> : null}
+      {open === 'relays' ? <DashRelaysCard onOpenPage={setPage} /> : null}
       {open === 'add-relay' ? <DashAddRelayCard /> : null}
       {open === 'history' ? <DashRelayHistoryCard /> : null}
       {open === 'ownbox' ? <DashRunRelayCard /> : null}

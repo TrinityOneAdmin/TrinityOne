@@ -21646,31 +21646,80 @@ zoo`.split("\n");
     // "Synced" into a borrowed "Catching up…"). With the branch gone a box-wide failure falls through to the final
     // `unknown` and the chip shows nothing rather than a borrowed red; the per-church signals that remain (running,
     // peers, a clean dated pass) still classify this church's own state honestly. DISPLAY ONLY — admits nothing.
-    relaySyncState(sync) {
+    //
+    // PER-CHURCH BLOCK (2026-11-14). `church` is the answer from the SIGNED GET /sync-status?church=<hex>:
+    // { peers, state: 'none'|'pending'|'reached'|'unreached'|'refused', reason: 'trust'|'time'|'', at, lastReachedAt,
+    // running, refusedPasses }. When it is present it is read INSTEAD of the box-wide block (a church with no partners
+    // reads "Not syncing" even while other churches on the same box synced), and:
+    //   · refused for 2+ passes in a row → "Needs attention" (reason 'time' → "Check the clock"); it OUTRANKS running,
+    //     so a church being refused is never softened to "Catching up…". One refused pass shows nothing red.
+    //   · running                         → "Catching up…"
+    //   · peers 0                         → "Not syncing"
+    //   · reached                         → "Synced" — and ONLY a reached pass says that
+    //   · unreached                       → a quiet "Couldn't reach your other relay last time", never "Synced"
+    //   · anything else (pending, one refused pass, a shape we do not know) → nothing.
+    // Counted in passes by the relay; no minutes appear here. Still advisory and display-only: it admits nothing.
+    relaySyncState(sync, church) {
+      if (church && typeof church === "object" && typeof church.state === "string") {
+        const base = { at: Number(church.at) || 0, lastReachedAt: Number(church.lastReachedAt) || 0, refusedPasses: Number(church.refusedPasses) || 0, reason: church.reason === "time" ? "time" : church.reason ? "trust" : "" };
+        if (church.state === "refused" && base.refusedPasses >= 2) return base.reason === "time" ? { state: "clock", label: "Check the clock", ...base } : { state: "attention", label: "Needs attention", ...base };
+        if (church.running) return { state: "syncing", label: "Catching up\u2026", ...base };
+        if (!(Number(church.peers) > 0)) return { state: "island", label: "Not syncing", ...base };
+        if (church.state === "reached" && base.at > 0) return { state: "synced", label: "Synced", ...base };
+        if (church.state === "unreached" && base.at > 0) return { state: "unreached", label: "Couldn\u2019t reach your other relay last time", ...base };
+        return { state: "unknown", label: "", ...base };
+      }
       if (!sync || typeof sync !== "object") return { state: "unknown", label: "" };
       if (sync.running) return { state: "syncing", label: "Catching up\u2026" };
       if (!(Number(sync.peers) > 0)) return { state: "island", label: "Not syncing" };
       if (sync.ok === true && Number(sync.at) > 0) return { state: "synced", label: "Synced" };
       return { state: "unknown", label: "" };
     },
-    // Fetch each relay's PUBLIC /status.sync and classify it (relaySyncState). Returns [{ url, sync, state,
-    // label }] for the Relays list. Read-only: a GET to /status per relay, the SAME endpoint relayIdentities
-    // already reads for `online`; nothing here changes the relay list or admits anything. relays() (the gated
-    // publish list) is the right source — these are the addresses the console actually uses.
-    async relaySyncStates() {
-      const out = [];
-      for (const u of relays()) {
+    // Fetch each relay's sync state and classify it (relaySyncState). Returns [{ url, sync, church, state, label, ... }]
+    // for the Relays list. Read-only: a GET /status per relay (the SAME endpoint relayIdentities already reads) and, unless an
+    // owned NETWORK is the active identity, ONE signed GET /sync-status?church=<active church> per relay, signed by this
+    // console's own key (the church key, or a helper's own key naming the church it helps). relays() (the gated publish
+    // list) is the source: nothing here changes the relay list or admits anything.
+    //   · ALL RELAYS AT ONCE, NO WALL-CLOCK CUTOFF: a black-holed box must not stall every other row (the 2026-11-11
+    //     shape), and small pipes get no invented timeout. `onEach(entry)` is called as each relay's answer lands, so a
+    //     screen can paint rows as they arrive; the returned array is in relay order once all have settled.
+    //   · A NETWORK identity sends no per-church read (its key is not a church) and shows today's chip.
+    //   · A 404, HTML or unparseable answer (an older relay) is "no church block": today's box-wide classification.
+    async relaySyncStates(onEach) {
+      const net = _viewingNetwork();
+      const one = async (u) => {
         let base = String(u).replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
         base = base.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
-        let s = null;
+        const readStatus = async () => {
+          try {
+            const s = await (await fetch(base + "/status", { cache: "no-store" })).json();
+            return s && s.sync ? s.sync : null;
+          } catch {
+            return null;
+          }
+        };
+        const readChurch = async () => {
+          if (net || !sk || !pub) return null;
+          try {
+            const url = base + "/sync-status?church=" + encodeURIComponent(pub);
+            const r = await fetch(url, { cache: "no-store", headers: { Authorization: _nip98(url) } });
+            if (!r.ok) return null;
+            const j = await r.json();
+            return j && j.church && typeof j.church === "object" && typeof j.church.state === "string" ? j.church : null;
+          } catch {
+            return null;
+          }
+        };
+        const [sync, church] = await Promise.all([readStatus(), readChurch()]);
+        const entry = { url: u, sync, church, ...window.Steward.relaySyncState(sync, church) };
         try {
-          s = await (await fetch(base + "/status", { cache: "no-store" })).json();
+          if (typeof onEach === "function") onEach(entry);
         } catch {
         }
-        const sync = s && s.sync ? s.sync : null;
-        out.push({ url: u, sync, ...window.Steward.relaySyncState(sync) });
-      }
-      return out;
+        return entry;
+      };
+      const settled = await Promise.allSettled(relays().map(one));
+      return settled.filter((x) => x.status === "fulfilled").map((x) => x.value);
     },
     // D2: make redundancy automatic. If the church already runs >=2 separate relay boxes and sync isn't already on,
     // switch it on — so a church that has taken the step of adding a real second relay gets live cross-relay backup

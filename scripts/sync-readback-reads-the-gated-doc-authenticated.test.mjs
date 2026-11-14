@@ -95,7 +95,7 @@ test('a doc signed by SOMEONE ELSE is not trusted (author re-check)', async () =
 
 // ── PER-RELAY SYNC INDICATOR classifier (plan §3). Pure; drives the Relays-list chip. ───────────────────────
 function relaySyncState() {
-  const body = lift('relaySyncState(sync) {');
+  const body = lift('relaySyncState(sync, church) {');
   return new Function('Number', 'return (function ' + body + ')')(Number);
 }
 

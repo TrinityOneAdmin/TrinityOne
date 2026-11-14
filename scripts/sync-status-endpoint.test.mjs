@@ -13,6 +13,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import * as H from './relay-network-harness.mjs';
+import { liftSteward } from './sync-status-lift.mjs';
 
 const SHIM = join(import.meta.dirname, 'stress4-clock-shim.cjs');
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -66,6 +67,15 @@ test('1 NO BLEED: same partner, church A reached, church B refused (trust); box-
   await H.syncNow(S).catch(() => {});
   assert.equal((await ask(S, B.pub, { sk: B.sk })).json.church.refusedPasses, 2, 'a second consecutive refused pass counts 2');
   assert.equal((await ask(S, A.pub, { sk: A.sk })).json.church.state, 'reached');
+  // THROUGH THE SHIPPED BUNDLE, against the REAL gateway: the console's own relaySyncStates signs with the bundle's _nip98 and
+  // classifies the answer with the bundle's relaySyncState. Same partner box P for both churches.
+  const through = async (c) => (await liftSteward({ sk: c.sk, pub: c.pub, relays: () => [S.wsUrl, P.wsUrl], fetch }).Steward.relaySyncStates());
+  const viaA = await through(A), viaB = await through(B);
+  const sOf = (rows, relay) => rows.find(r => r.url === relay.wsUrl);
+  assert.equal(sOf(viaA, S).state, 'synced', 'church A, same partner: must read Synced, not B\'s refusal');
+  assert.equal(sOf(viaA, S).label, 'Synced');
+  assert.equal(sOf(viaB, S).state, 'attention', 'church B was refused twice in a row: ' + JSON.stringify(sOf(viaB, S)));
+  assert.equal(sOf(viaB, S).label, 'Needs attention');
   // the church re-saves its list so P trusts S for B: the FIRST good pass clears it
   await H.publishAll(P, [H.relaysDoc(B, [S, P], nowS() - 5)]);
   await H.syncNow(S).catch(() => {});
