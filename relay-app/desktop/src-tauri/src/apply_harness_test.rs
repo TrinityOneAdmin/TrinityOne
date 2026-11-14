@@ -157,6 +157,11 @@ fn must(cmd: &mut Command, what: &str) {
 // ITS OWN version.txt (the real gateway reports BUILD.sha, read the same way), plus a human "label" the tests use
 // to tell trees apart. A `lie` gateway reports a version that is NOT its version.txt — the "wrong code answering"
 // health failure.
+// The real verifier (scripts/verify-suite-bundle.mjs) refuses a bundle whose gateway.mjs lacks the relay-storage
+// step-1 data-folder guard (audit L-6). Every fixture gateway therefore carries these statements, in a function
+// that is never called, so the fixtures stay bootable and the verifier is still the REAL one.
+const STEP1_STUB: &str = "function __step1() { const DATA_DIR = ''; const DATA_DIR_PINNED = process.env.TRINITY_DATA_DIR_PINNED; const DATA_DIR_MOVED = join(DATA_DIR, 'MOVED-TO'); if (DATA_DIR_PINNED) refuseDataDir('x'); if (existsSync(DATA_DIR_MOVED)) refuseDataDir('y'); process.exit(DATA_DIR_REFUSED); }\n";
+
 fn gateway_src(label: &str, lie: bool) -> String {
     gateway_src_ex(label, lie, "")
 }
@@ -168,6 +173,7 @@ fn gateway_src_ex(label: &str, lie: bool, prelude: &str) -> String {
     format!(
         "import http from 'node:http';\n\
          import {{readFileSync, appendFileSync, writeFileSync}} from 'node:fs';\n\
+         {step1}\
          const PORT = Number(process.argv[2]);\n\
          const LABEL = {l:?};\n\
          let V = ''; try {{ V = readFileSync('version.txt','utf8').split('\\n')[0].trim(); }} catch {{}}\n\
@@ -187,6 +193,7 @@ fn gateway_src_ex(label: &str, lie: bool, prelude: &str) -> String {
            }}\n\
            res.writeHead(404); res.end('no');\n\
          }}).listen(PORT,'127.0.0.1');\n",
+        step1 = STEP1_STUB,
         l = label,
         lie = if lie { "true" } else { "false" },
         prelude = prelude
@@ -835,7 +842,7 @@ fn scenario_o_damaged_active_is_repaired_or_falls_back() {
     let st_dir = tmp.join("st");
     std::fs::create_dir_all(&st_dir).unwrap();
     must(Command::new("tar").arg("-xzf").arg(tmp.join("bundle.tgz")).arg("-C").arg(&st_dir), "untar");
-    write(&st_dir.join("scripts").join("gateway.mjs"), "process.exit(3);\n");
+    write(&st_dir.join("scripts").join("gateway.mjs"), &format!("{STEP1_STUB}process.exit(3);\n"));
     must(Command::new("tar").arg("-czf").arg(tmp.join("bundle.tgz")).arg("-C").arg(&st_dir).arg("."), "retar");
     must(Command::new(&fx2.node).arg(fx2.tools.join("signer.mjs")).arg(tmp.join("bundle.tgz")).arg(tmp.join("bundle.sig")).arg(&fx2.priv_key), "resign");
     let active = fx2.suite_dir.join("active");
