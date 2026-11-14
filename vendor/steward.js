@@ -29046,6 +29046,7 @@ zoo`.split("\n");
         nameSubs.set(cp, pool.subscribeMany(dialled, [{ kinds: [0], authors: [cp] }], {
           onevent(e) {
             try {
+              if (churchPub !== me) return;
               const nm = JSON.parse(e.content).name || "";
               if (nm && stewardedChurches.has(cp) && stewardedChurches.get(cp).name !== nm) {
                 stewardedChurches.set(cp, { name: nm });
@@ -29107,6 +29108,7 @@ zoo`.split("\n");
         };
         const handlers = {
           onevent(e) {
+            if (churchPub !== me) return;
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (d.startsWith(STEWARDREVOKE_D)) {
               const rcp = e.pubkey;

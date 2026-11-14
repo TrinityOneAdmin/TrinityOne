@@ -15588,7 +15588,7 @@ window.Steward = {
     const resolveName = (cp) => {
       if (closed || nameSubs.has(cp) || !dialled.length) return;
       nameSubs.set(cp, pool.subscribeMany(dialled, [{ kinds: [0], authors: [cp] }], {
-        onevent(e) { try { const nm = (JSON.parse(e.content).name) || ''; if (nm && stewardedChurches.has(cp) && (stewardedChurches.get(cp).name !== nm)) { stewardedChurches.set(cp, { name: nm }); save(); cb([...stewardedChurches.keys()]); } } catch {} },
+        onevent(e) { try { if (churchPub !== me) return; const nm = (JSON.parse(e.content).name) || ''; if (nm && stewardedChurches.has(cp) && (stewardedChurches.get(cp).name !== nm)) { stewardedChurches.set(cp, { name: nm }); save(); cb([...stewardedChurches.keys()]); } } catch {} },
         oneose() {},
       }));
     };
@@ -15633,6 +15633,9 @@ window.Steward = {
       const record = () => { if (!_stewardedBroad || _stewardedBroad.me !== me) _stewardedBroad = { me, done: new Map(), part: new Map() }; return _stewardedBroad; };
       const handlers = {
         onevent(e) {
+          // A LATE EVENT FOR A KEY THIS CONSOLE NO LONGER HOLDS (restore-identity fix): this closure is for `me`; once the
+          // key has been replaced, a roster that lists the OLD key must not put its church back in the Map the restore just emptied.
+          if (churchPub !== me) return;
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           // A DEDICATED REVOCATION NOTICE the removed helper can still read (2026-11-05, helper-delegation). The
           // roster that would tell us we were dropped is no longer served to us once we are off it, so a ghost church

@@ -39,7 +39,8 @@ function proxyOf(stubs) {
 }
 
 // A console that is helping church B: own key blank, Map = {B}, acting as B.
-function build({ acting = true } = {}) {
+function build({ acting = true, relays = [] } = {}) {
+  const subs = [];
   const store = new Map();
   const events = [];
   const stewardedChurches = new Map([[B, { name: 'Church B' }]]);
@@ -55,8 +56,8 @@ function build({ acting = true } = {}) {
     validateMnemonic: () => true, wordlist: [], generateSeedWords: () => WORDS_C,
     npubEncode: (p) => 'npub_' + p, toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     _migrateNetKeysToSealed: noop, _blockedLastSet: () => [], _localBlocked: [], _localBlockedAt: 0,
-    _loadBoxHosts: noop, _refreshBoxHostsUs: noop, _gate: { refresh: () => Promise.resolve([]), admit: () => [] },
-    relaysRaw: () => [], adoptNetDocAddresses: () => null, _ownOrigin: () => '',
+    _loadBoxHosts: noop, _refreshBoxHostsUs: noop, _gate: { refresh: () => Promise.resolve(relays.slice()), admit: () => relays.slice() },
+    relaysRaw: () => relays.slice(), adoptNetDocAddresses: () => null, _ownOrigin: () => '',
     _resetChurchScopedState: noop, _stay: { clear: noop }, _setNeedsPin: noop, _armRegGate: noop,
     becomeStewardPayload: noop,
     encBlobRemove: () => true, _minorsLastClear: noop, _sgClearClear: noop, _finBookClear: noop, _seedSweep: noop,
@@ -64,7 +65,7 @@ function build({ acting = true } = {}) {
     CAP_KEYS: {}, _capState: {}, _keyReadEpoch: 0, _careKeyVer: 0, _mediaKeyVer: 0, netKeys: () => [],
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k), key: () => null, length: 0 },
     lsGet: (k) => (store.has(k) ? store.get(k) : null), lsSet: (k, v) => store.set(k, v),
-    pool: { subscribeMany: () => ({ close() {} }) },
+    pool: { subscribeMany: (urls, filters, handlers) => { subs.push({ urls, filters, handlers }); return { close() {} }; } },
     CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
     window: { Steward, addEventListener() {}, removeEventListener() {}, dispatchEvent: (e) => { events.push(e); return true; } },
   };
@@ -92,7 +93,7 @@ function build({ acting = true } = {}) {
   for (const k of ['restoreKey', 'createKey', 'createKeyQuiet', 'removeKey', 'adoptChurch', 'identities']) Steward[k] = (...a) => api[k].apply(Steward, a);
   Steward.setActiveIdentity = (...a) => api.setActiveIdentity.apply(Steward, a);
   Steward.becomeStewardPayload = () => 'payload';
-  return { stubs, store, events, Steward, api };
+  return { stubs, store, events, Steward, api, subs };
 }
 
 const picked = (h) => { const got = []; const real = h.Steward.setActiveIdentity; h.Steward.setActiveIdentity = (p, o) => { got.push(p); return real(p, o); }; return got; };
@@ -157,4 +158,42 @@ test('NEGATIVE GUARD: lock then unlock returns the helper to church B (the clear
   h.stubs._enterUnlocked(OWN_A + '-seed');   // setKey (real) then the return to the acting church
   assert.equal(h.stubs.stewardedChurches.has(B), true, 'unlocking forgot church B');
   assert.equal(h.stubs.actingChurch, B, 'a helper was dropped into its own empty church by a lock and unlock');
+});
+
+// L3 (audit of 02eb001a): a LATE roster event for the OLD key must not put church B back. The discovery subscription for
+// the old key is only closed when React's effect cleans up (a render later); _forgetStewardedScope cannot close it, so the
+// handlers themselves ignore any event once the key they were opened for is gone.
+test('a late roster event for the OLD key, arriving after a restore, does not put church B back', async () => {
+  const LATE = 'dd'.repeat(32);
+  const roster = (cp) => ({ tags: [['d', 'trinityone/stewards:' + cp], ['t', 'trinityone']], content: JSON.stringify({ pubkeys: [OWN_A] }), created_at: 100 });
+  const h = build({ relays: ['wss://r'] });
+  h.api.subscribe.call(h.Steward, () => {});
+  await new Promise(r => setTimeout(r, 0));
+  const sub = h.subs.find(x => x.filters && x.filters[0] && (x.filters[0].kinds || []).includes(30078));
+  assert.ok(sub, 'CONTROL: the discovery subscription never opened');
+  sub.handlers.onevent(roster(LATE));
+  assert.equal(h.stubs.stewardedChurches.has(LATE), true, 'CONTROL: a roster that lists this console did not add its church while the key was current');
+  h.Steward.restoreKey(WORDS_C);
+  assert.equal(h.stubs.stewardedChurches.size, 0, 'CONTROL: the restore did not empty the Map');
+  sub.handlers.onevent(roster(B));   // the old key's roster arrives late
+  assert.equal(h.stubs.stewardedChurches.size, 0, 'a late event for the OLD key put a church back into the Map after the restore');
+});
+
+// L1 (audit of 02eb001a) — RECORDED BEHAVIOUR, not an endorsement. After a restore, "Keep my current church" (Back at the PIN
+// screen) and an unlock re-enter as the helper's OWN key with an empty scope; the console goes back to church B only when the
+// discovery re-subscribes and reads the helper's per-key cache plus the remembered ACTIVE_ID_KEY. Before the fix the Map
+// survived the restore, so this was instant. Not a one-line fix (the Map would have to be saved and restored across the
+// restore), so it is pinned here instead.
+test('RECORDED: restore, then Back and unlock — opens as the own key first, and returns to church B when the discovery re-subscribes', () => {
+  const h = build();
+  h.store.set('trinityone.steward.stewarded.' + OWN_A, JSON.stringify([{ cp: B, name: 'Church B' }]));   // what the helper's own cache holds
+  h.store.set('trinityone.steward.active', B);                                                          // ACTIVE_ID_KEY is deliberately left alone
+  h.Steward.restoreKey(WORDS_C);
+  h.stubs._enterUnlocked('old seed words');   // Back, then unlock: the old key is back
+  assert.equal(h.stubs.churchPub, OWN_A, 'CONTROL: the old key is not back');
+  assert.equal(h.stubs.actingChurch, '', 'the console unlocked straight into B — the recorded behaviour has changed (good, but update this test)');
+  assert.equal(h.stubs.stewardedChurches.size, 0, 'the Map survived the restore — the recorded behaviour has changed');
+  const got = picked(h);
+  h.api.subscribe.call(h.Steward, () => {});
+  assert.deepEqual(got, [B], 'the discovery did not return the helper to church B from its cache and the remembered church');
 });

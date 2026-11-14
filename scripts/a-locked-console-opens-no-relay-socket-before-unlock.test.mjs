@@ -212,26 +212,34 @@ test('replacing the key reopens the subscription for the NEW key, never the old 
   await press('/Set PIN/i');
   await waitFor(`!window.Steward.needsPin`, 60000, 'the PIN to be set for the restored key');
   await waitFor(`[...window.__revokeSubs.values()].includes(${JSON.stringify(REVOKE_D + churchC)})`, 60000, 'the discovery to reopen for the NEW key');
-  await sleep(2000);
+  await sleep(6000);   // long enough for the old key's roster read to come back and (on the OLD code) evict B with a removal notice
   const open = await openRevokes();
   assert.ok(!open.includes(REVOKE_D + churchA), 'a stewarded-churches subscription for the OLD key is still open after the key was replaced: ' + JSON.stringify(open));
   // THE IDENTITY, not just the subscription (restore-identity fix 2026-11-14). Church A is rostered as a steward of B,
   // so before the restore this console's stewarded-churches Map holds B. Straight after restoring C it must act as C,
   // list C's own row, and not list B at all — and it must still be so once the discovery has settled.
   const settled = JSON.parse(await evalIn(`JSON.stringify({ ids: window.Steward.identities().map(i => ({ k: i.kind, p: i.pub })),
-    acting: window.Steward.actingChurch, active: window.Steward.activePub, own: window.Steward.churchPub })`));
+    acting: window.Steward.actingChurch, active: window.Steward.activePub, own: window.Steward.churchPub,
+    removed: window.Steward.removedNotices(), text: document.body.innerText })`));
+  // The first assertion on the OLD code is the meaningful one: church B listed (and C's own row hidden) straight after the restore.
   for (const [when, o] of [['straight after the restore', rr], ['after the discovery settled', settled]]) {
     assert.equal(o.own, churchC, `CONTROL (${when}): the console's own church is not the restored one`);
-    assert.equal(o.acting, '', `${when}: the console still acts for the OLD key's church`);
-    assert.equal(o.active, churchC, `${when}: the active church is not the restored one`);
-    assert.ok(o.ids.some(i => i.k === 'church' && i.p === churchC), `${when}: the restored church's own row is missing from the switcher`);
     assert.ok(!o.ids.some(i => i.p === B.pub), `${when}: the old key's church B is still listed`);
+    assert.ok(o.ids.some(i => i.k === 'church' && i.p === churchC), `${when}: the restored church's own row is missing from the switcher`);
+    assert.equal(o.active, churchC, `${when}: the active church is not the restored one`);
+    assert.equal(o.acting || '', '', `${when}: the console still acts for the OLD key's church`);
   }
+  // THE SYMPTOM A PERSON SAW on the old code: the old key's socket is still logged in, so B's roster (which does not name C)
+  // comes back, B is evicted as a REMOVAL, and a full-screen "You've been removed from Church B" appears over the console.
+  assert.deepEqual(settled.removed, [], 'a removal notice was written for church B after a restore — the console told the person they had been removed: ' + JSON.stringify(settled.removed));
+  assert.ok(!/been removed|removed you as a helper/i.test(settled.text), 'a "removed from a church" screen is showing after a restore');
 });
 
 // POINT OF USE (restore-identity fix 2026-11-14): the REAL Settings screen, not restoreKey() called from the page.
-// Deleting the restoreKey call from doRestore leaves the key unchanged (the CONTROL below fails); deleting the engine's
-// _forgetStewardedScope() from restoreKey leaves church B in the Map (the identity assertions fail).
+// Deleting the restoreKey call from doRestore leaves the key unchanged (the CONTROL below fails). Deleting the engine's
+// _forgetStewardedScope() from restoreKey leaves church B in the Map; the old key's socket then brings B's roster back,
+// B is evicted as a removal, and a full-screen "You've been removed from Church B" covers the dashboard — so on the old
+// code this test fails at the removal-screen assertion (and, were that skipped, would time out waiting for the dashboard).
 test('Settings -> Church key -> Restore from a recovery phrase: a console that helps run church B becomes the restored church, not B', { skip: SKIP, timeout: 300000 }, async () => {
   // Setup: put this console back as church A (rostered as a steward of B) through the engine, and wait until it knows B.
   assert.ok(wordsA, 'CONTROL: the words of church A were not captured');
@@ -266,14 +274,45 @@ test('Settings -> Church key -> Restore from a recovery phrase: a console that h
   assert.equal(await evalIn(typePh('Type it again', PIN)), 'ok');
   await press('/Set PIN/i');
   await waitFor(`!window.Steward.needsPin`, 60000, 'the PIN for the restored church');
-  await waitFor(dashboard, 90000, 'the dashboard as the restored church');
-  await sleep(2000);
+  await sleep(6000);
   const o = JSON.parse(await evalIn(`JSON.stringify({ ids: window.Steward.identities().map(i => ({ k: i.kind, p: i.pub })),
-    acting: window.Steward.actingChurch, active: window.Steward.activePub, own: window.Steward.churchPub, text: document.body.innerText })`));
+    acting: window.Steward.actingChurch, active: window.Steward.activePub, own: window.Steward.churchPub, text: document.body.innerText,
+    removed: window.Steward.removedNotices() })`));
+  assert.ok(!/been removed|removed you as a helper/i.test(o.text), 'a "removed from a church" screen is showing after the restore — on the old code this is what covers the dashboard');
+  assert.deepEqual(o.removed, [], 'a removal notice was written for church B after the restore: ' + JSON.stringify(o.removed));
+  await waitFor(dashboard, 90000, 'the dashboard as the restored church');
   assert.equal(o.own, churchD, 'the console\'s own church is not the restored one');
   assert.equal(o.acting, '', 'the console still acts for church B after restoring another church');
   assert.equal(o.active, churchD, 'the active church is not the restored one');
   assert.ok(o.ids.some(i => i.k === 'church' && i.p === churchD), 'the restored church has no row in the switcher');
   assert.ok(!o.ids.some(i => i.p === B.pub), 'church B is still listed after restoring another church');
   assert.ok(!/Church B/.test(o.text), 'the words "Church B" are still on screen after restoring another church');
+});
+
+// L2 (audit of 02eb001a) — POINT OF USE for the other half of the rule: a helper acting in church B who does a REAL lock and
+// a REAL unlock (the PIN screen) is still acting in B. The clear must never move into setKey. Read at the moment unlock
+// finishes (the `steward-key` event _enterUnlocked fires), because the discovery later re-lands the console in B from the
+// remembered church and would hide a clear in setKey if read late.
+test('a helper acting in church B who locks and unlocks through the PIN screen is still acting in church B', { skip: SKIP, timeout: 300000 }, async () => {
+  assert.ok(wordsA, 'CONTROL: the words of church A were not captured');
+  assert.equal(await evalIn(`(() => { window.Steward.restoreKey(${JSON.stringify(wordsA)}); return window.Steward.churchPub; })()`), churchA, 'CONTROL: could not put the console back as church A');
+  await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 60000, 'the forced-PIN screen');
+  assert.equal(await evalIn(typePh('At least 8', PIN)), 'ok');
+  assert.equal(await evalIn(typePh('Type it again', PIN)), 'ok');
+  await press('/Set PIN/i');
+  await waitFor(`!window.Steward.needsPin`, 60000, 'the PIN for church A');
+  await waitFor(dashboard, 90000, 'the dashboard as church A');
+  await waitFor(`window.Steward.identities().some(i => i.kind === 'steward' && i.pub === ${JSON.stringify(B.pub)})`, 90000, 'CONTROL: the console to know it helps run church B');
+  assert.equal(await evalIn(`window.Steward.setActiveIdentity(${JSON.stringify(B.pub)})`), true, 'CONTROL: could not switch to church B');
+  assert.equal(await evalIn(`window.Steward.actingChurch`), B.pub, 'CONTROL: the console is not acting in church B before the lock');
+  await evalIn(`(window.__atUnlock = null, window.addEventListener('steward-key', () => { if (window.Steward.hasKey && !window.Steward.locked) window.__atUnlock = { acting: window.Steward.actingChurch, active: window.Steward.activePub, stewarded: window.Steward.identities().some(i => i.kind === 'steward') }; }), 'ok')`);
+  await evalIn(`(window.Steward.lock(), 'ok')`);
+  await waitFor(pinScreen, 30000, 'the PIN screen after locking');
+  assert.equal(await evalIn(typePh('Your PIN or passphrase', PIN)), 'ok');
+  await press('/^Unlock/');
+  await waitFor(`!!window.__atUnlock`, 60000, 'the unlock to finish');
+  const at = await evalIn(`window.__atUnlock`);
+  assert.equal(at.acting, B.pub, 'the helper was dropped out of church B at the moment of unlocking: ' + JSON.stringify(at));
+  await waitFor(dashboard, 90000, 'the dashboard after unlocking');
+  assert.equal(await evalIn(`window.Steward.actingChurch`), B.pub, 'the helper is not acting in church B after the unlock');
 });
