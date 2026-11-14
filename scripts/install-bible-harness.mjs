@@ -49,7 +49,7 @@ export const cached = (state, key) => ((state.stores.get('modules') || new Map()
 // ── the phone: the REAL engine.js ────────────────────────────────────────────────────────────────────────────
 // `readyState: 'loading'` holds boot (autoLoad) back until `boot()` is called, exactly as a page that has not yet
 // fired DOMContentLoaded does; that is what lets a test start an install DURING boot.
-export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, readyState = 'loading', unzipCalls = null } = {}) {
+export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, catalogDelay = 0, readyState = 'loading', unzipCalls = null } = {}) {
   const win = { addEventListener() {}, location: { search: '' } };
   const bootCbs = [];
   const fakeInput = { listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; }, click() {}, style: {} };
@@ -62,6 +62,7 @@ export function phone({ state = newStores(), serveBsb = false, bsbDelay = 0, rea
   const fetched = [];
   const fetch = async (url) => {
     fetched.push(String(url));
+    if (String(url) === 'catalog.json') { if (catalogDelay) await sleep(catalogDelay); }
     if (String(url) === 'catalog.json') return { ok: true, json: async () => JSON.parse(readFileSync(ROOT + 'catalog.json', 'utf8')) };
     if (serveBsb && String(url).endsWith('modules/engbsb.zip')) {
       if (bsbDelay) await sleep(bsbDelay);

@@ -342,7 +342,8 @@ test('E18 — installs run one at a time: two files at once both land, neither l
 });
 
 test('E18b — two DIFFERENT files claiming ONE name, installed at the same moment: the second still sees the first and is renamed, not replacing it', async () => {
-  const p = await readyPhone();
+  // a slow catalogue read parks both installs at the same step, so only the one-at-a-time chain keeps the second from checking names before the first has registered
+  const p = await readyPhone({ catalogDelay: 120 });
   const [a, b] = await Promise.all([
     p.Bible.installFromBytes(await bibleDb('SAM', 'Same Name Bible', 'FIRST text'), 'one.bbl.mybible'),
     p.Bible.installFromBytes(await bibleDb('SAM', 'Same Name Bible', 'SECOND text'), 'two.bbl.mybible')]);
