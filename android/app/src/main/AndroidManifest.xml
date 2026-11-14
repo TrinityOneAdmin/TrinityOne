@@ -41,6 +41,31 @@
                 <data android:scheme="https" android:host="app.trinityone.church" android:pathPrefix="/join" />
             </intent-filter>
 
+            <!-- BEGIN install-from-file (member only) -->
+            <!--
+              "Open with TrinityOne" for a Bible someone sent: tap the file in Signal / Files / Quick Share and
+              choose TrinityOne. content: only (that is all Android hands another app's file as), and only the
+              types a Bible or a MySword module travels as; Signal and Quick Share often send a .mybible as
+              octet-stream, so that one is listed too and TrinityOne will be offered for other files as well.
+              That is safe: nothing is read until the member taps Install (app/install-bible.jsx), and an
+              unusable file just says so.
+
+              THIS BLOCK IS MEMBER-ONLY. The Console APK builds from this same manifest and has no Library and
+              no listener, so scripts/build-steward-apk.sh strips it (scripts/manifest-member-only.sh) and puts it
+              back on exit. Keep the markers on their own lines.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/x-sqlite3" />
+                <data android:mimeType="application/vnd.sqlite3" />
+            </intent-filter>
+            <!-- END install-from-file -->
+
         </activity>
 
         <provider
