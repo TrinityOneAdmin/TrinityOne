@@ -63,3 +63,11 @@ test('R5-1d — ONLINE the refusal is permanent, as before: a stranger\'s refuse
   assert.equal(recOf(st, key).quarantined, true);
   assert.deepEqual(JSON.parse(JSON.stringify(p.Bible.takeQuarantineNotices())), ['Legacy Link']);
 });
+
+test('R5-1e — EITHER list being unreadable is enough to skip (not quarantine): only the catalogue down, only the eBible mirror down', async () => {
+  for (const down of ['catalog', 'mirror']) {
+    const st = seed(AKJV, file(AKJV).slice(0, 8192));
+    const p = phone({ state: st, catalogDown: down }); await p.boot(); await sleep(150);
+    assert.ok(!recOf(st, AKJV).quarantined, `${down} down: a published Bible was branded unsafe`);
+  }
+});
