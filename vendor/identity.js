@@ -12052,7 +12052,7 @@ zoo`.split("\n"));
       return null;
     }
   }
-  function widgetForgetChurch() {
+  function widgetClearChurch() {
     const W = _widgetPlugin();
     if (W && W.clearPrompt) {
       try {
@@ -12061,10 +12061,16 @@ zoo`.split("\n"));
       } catch (e) {
       }
     }
+  }
+  function widgetSignalForgot() {
     try {
       window.dispatchEvent(new CustomEvent("trinity-widget-forgot-church"));
     } catch (e) {
     }
+  }
+  function widgetForgetChurch() {
+    widgetClearChurch();
+    widgetSignalForgot();
   }
   function widgetOffForNewAccount() {
     try {
@@ -12086,15 +12092,22 @@ zoo`.split("\n"));
   }
   async function rememberClear() {
     try {
-      widgetForgetChurch();
+      widgetClearChurch();
     } catch (e) {
     }
-    if (!isNative()) return;
     try {
-      const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
-      await SecureStorage.remove(REMEMBER_KEY);
-    } catch (e) {
-      console.warn("[identity] remember clear failed", e);
+      if (!isNative()) return;
+      try {
+        const { SecureStorage } = await Promise.resolve().then(() => (init_esm(), esm_exports));
+        await SecureStorage.remove(REMEMBER_KEY);
+      } catch (e) {
+        console.warn("[identity] remember clear failed", e);
+      }
+    } finally {
+      try {
+        widgetSignalForgot();
+      } catch (e) {
+      }
     }
   }
   function _recoveryReference() {

@@ -48,12 +48,17 @@ function plugin() {
 }
 
 // The SHIPPED identity pieces, over a fake phone with a remembered record and the widget plugin present.
-function shippedIdentity(W) {
+function shippedIdentity(W, { deferRemove = false } = {}) {
   const secure = new Map([['trinityone.nostr.remember', JSON.stringify({ m: 'seed words', until: Math.floor(Date.now() / 1000) + 20 * 86400 })]]);
   const local = new Map([['trinityone.widget', '1']]);
-  const SS = { get: async k => (secure.has(k) ? secure.get(k) : null), set: async (k, v) => secure.set(k, v), remove: async k => secure.delete(k) };
+  let release = null;
+  const SS = { get: async k => (secure.has(k) ? secure.get(k) : null), set: async (k, v) => secure.set(k, v),
+    // deferRemove: the secure store answers LATE (it does on a phone whose screen is asleep) — the delete completes
+    // only when the test calls release().
+    remove: (k) => deferRemove ? new Promise(r => { release = () => { secure.delete(k); r(); }; }) : Promise.resolve(secure.delete(k)) };
   const events = [];
-  const fns = [liftOnce('function _widgetPlugin('), liftOnce('function widgetForgetChurch('), liftOnce('function widgetOffForNewAccount('),
+  const fns = [liftOnce('function _widgetPlugin('), liftOnce('function widgetClearChurch('), liftOnce('function widgetSignalForgot('),
+    liftOnce('function widgetForgetChurch('), liftOnce('function widgetOffForNewAccount('),
     liftOnce('async function rememberRead('), liftOnce('async function rememberClear(')].join('\n');
   const methods = [liftOnce('async forgetDevice() {'), liftOnce('async rememberedUntil() {')].join(',\n');
   const src = (fns + '\nconst api = {\n' + methods + '\n};')
@@ -66,8 +71,8 @@ function shippedIdentity(W) {
     window: { Capacitor: { Plugins: { TrinityWidget: W } }, dispatchEvent: e => events.push(e.type) },
     CustomEvent: class { constructor(t) { this.type = t; } },
   };
-  const out = new Function(...Object.keys(scope), src + '\nreturn { api, widgetOffForNewAccount };')(...Object.values(scope));
-  return { ...out, secure, local, events };
+  const out = new Function(...Object.keys(scope), src + '\nreturn { api, widgetOffForNewAccount, rememberClear };')(...Object.values(scope));
+  return { ...out, secure, local, events, release: () => release && release() };
 }
 
 test('F1 POINT OF USE: "Ask for my PIN again" on the security sheet clears the widget\'s church settings', async () => {
@@ -100,7 +105,7 @@ test('F1 POINT OF USE: "Ask for my PIN again" on the security sheet clears the w
 
 test('F1: every path that ends a remembered state goes through rememberClear — and it clears the widget', () => {
   const body = liftOnce('async function rememberClear(');
-  assert.match(body, /widgetForgetChurch\(\)/, 'rememberClear no longer clears the widget\'s church settings');
+  assert.match(body, /widgetClearChurch\(\)/, 'rememberClear no longer clears the widget\'s church settings');
   // the shipped callers (the bundle, not app/*.jsx — rule 3 does not apply to dead-code-eliminated vendor code)
   for (const m of ['async setPin(', 'async forgetDevice() {', 'async regenerate() {', 'async importMnemonic(']) {
     assert.match(liftOnce(m), /rememberClear\(\)/, m + ' no longer reaches rememberClear');
@@ -202,4 +207,21 @@ test('R2: a DIFFERENT person\'s words — or words that cannot be checked — DO
     await t.run();
     assert.ok(t.calls.includes('widgetOff'), `whoseMnemonic -> ${String(answer)}: the previous person's widget opt-in carried over`);
   }
+});
+
+test('S1: Today is told the church settings are gone only AFTER the remember record is really deleted', async () => {
+  // Today's re-run on that signal reads rememberedUntil(). Told before the (slow) secure-store delete has finished, it
+  // would read the OLD record, decide "remember me" still holds, and write the church straight back (F1 undone).
+  const { calls, W } = plugin();
+  const idn = shippedIdentity(W, { deferRemove: true });
+  const done = idn.rememberClear();
+  await settle();
+  assert.ok(calls.includes('clearPrompt'), 're-anchor: the widget was not cleared at once');
+  assert.equal(idn.secure.has('trinityone.nostr.remember'), true, 're-anchor: the deferred delete already completed');
+  assert.equal(idn.events.includes('trinity-widget-forgot-church'), false,
+    'Today was told to re-run while the remember record still exists — it can read the stale record and re-write the church');
+  idn.release();
+  await done; await settle();
+  assert.equal(idn.secure.has('trinityone.nostr.remember'), false);
+  assert.ok(idn.events.includes('trinity-widget-forgot-church'), 'Today is never told, once the record is gone');
 });

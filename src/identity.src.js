@@ -179,13 +179,19 @@ async function rememberWrite(m, until) {
 function _widgetPlugin() {
   try { const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TrinityWidget; return W || null; } catch (e) { return null; }
 }
-function widgetForgetChurch() {
+function widgetClearChurch() {
   const W = _widgetPlugin();
   if (W && W.clearPrompt) { try { Promise.resolve(W.clearPrompt()).catch(() => {}); } catch (e) {} }
-  // Today keeps an hourly probe throttle; tell it the settings are gone so it writes them again when allowed
-  // (audit re-check R3).
+}
+// Today keeps an hourly probe throttle; this tells it the settings are gone so it writes them again WHEN ALLOWED
+// (audit re-check R3). Today's re-run reads rememberedUntil(), so from rememberClear() this must fire only AFTER the
+// remember record is really deleted — fired earlier, Today could read the old record and write the church back
+// (audit re-check of 3ece67c6, S1).
+function widgetSignalForgot() {
   try { window.dispatchEvent(new CustomEvent('trinity-widget-forgot-church')); } catch (e) {}
 }
+// For the app's church-change hook (app/app.jsx): nothing to wait for there.
+function widgetForgetChurch() { widgetClearChurch(); widgetSignalForgot(); }
 // A NEW ACCOUNT ON THIS PHONE — a DIFFERENT PERSON (regenerate, or importMnemonic of words that are not this phone's
 // account: a handover to a young person, a reseat, another person's transfer) — does not inherit the previous
 // person's opt-in: the widget is switched OFF and its data cleared (audit F4). The SAME adult coming back in with
@@ -197,10 +203,14 @@ function widgetOffForNewAccount() {
   try { window.dispatchEvent(new CustomEvent('trinity-widget-changed', { detail: false })); } catch (e) {}
 }
 async function rememberClear() {
-  try { widgetForgetChurch(); } catch (e) {}
-  if (!isNative()) return;
-  try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(REMEMBER_KEY); }
-  catch (e) { console.warn('[identity] remember clear failed', e); }
+  try { widgetClearChurch(); } catch (e) {}   // at once: nothing should poll the church a moment longer than needed
+  try {
+    if (!isNative()) return;
+    try { const { SecureStorage } = await import('@aparajita/capacitor-secure-storage'); await SecureStorage.remove(REMEMBER_KEY); }
+    catch (e) { console.warn('[identity] remember clear failed', e); }
+  } finally {
+    try { widgetSignalForgot(); } catch (e) {}   // only once the record is gone (S1) — see widgetSignalForgot
+  }
 }
 // WHOSE encrypted blob is on this device? Written by setPin. Absent on a device whose PIN predates this, and
 // on the two recovery paths that rebuild the marker without knowing the account — callers must read that as

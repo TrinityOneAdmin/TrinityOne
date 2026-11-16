@@ -99,13 +99,17 @@ public class PromptFetchJob extends JobService {
      * can neither refuse a redirect nor see which address really answered. Here: https only, no redirects, 8 s
      * timeouts, 64 KB cap, and only { ts, ref, schedule } survives (sanitise).
      */
+    static final long PROBE_DEADLINE_MS = 15000L;   // the WHOLE pass, all bases — a slow-drip server cannot hold the thread
+
     static Probe probe(String npub, JSONArray bases) {
         Probe p = new Probe();
+        long deadline = System.currentTimeMillis() + PROBE_DEADLINE_MS;
         for (int i = 0; i < bases.length(); i++) {
             String base = bases.optString(i, "");
             if (!base.startsWith("https://")) continue;   // never cleartext
+            if (System.currentTimeMillis() >= deadline) { p.sawFail = true; break; }   // out of time: not proof of anything
             int[] code = new int[] { 0 };
-            JSONObject got = get(base + "/public/" + npub + "/verse-prompt.json", code);
+            JSONObject got = get(base + "/public/" + npub + "/verse-prompt.json", code, deadline);
             if (code[0] == 404) p.saw404 = true;
             else if (code[0] != 200 || got == null) p.sawFail = true;
             if (got != null) { p.saw200 = true; if (p.best == null || got.optLong("ts", 0) > p.best.optLong("ts", 0)) p.best = got; }
@@ -114,11 +118,12 @@ public class PromptFetchJob extends JobService {
     }
 
     /** GET → the validated public copy, or null. code[0] = the HTTP status (0 on a network failure). */
-    static JSONObject get(String url, int[] code) {
+    static JSONObject get(String url, int[] code, long deadline) {
         HttpURLConnection h = null;
         try {
+            int left = (int) Math.max(1L, Math.min(8000L, deadline - System.currentTimeMillis()));
             h = (HttpURLConnection) new URL(url).openConnection();
-            h.setConnectTimeout(8000); h.setReadTimeout(8000);
+            h.setConnectTimeout(left); h.setReadTimeout(left);
             h.setInstanceFollowRedirects(false);
             h.setRequestProperty("Accept", "application/json");
             code[0] = h.getResponseCode();
@@ -126,7 +131,12 @@ public class PromptFetchJob extends JobService {
             InputStream in = h.getInputStream();
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
             byte[] b = new byte[4096]; int n, total = 0;
-            while ((n = in.read(b)) > 0) { total += n; if (total > 65536) return null; buf.write(b, 0, n); }
+            // A read timeout resets on every byte, so a server dripping one byte at a time could hold this for ever;
+            // the overall deadline stops that (re-audit of 3ece67c6, NIT).
+            while ((n = in.read(b)) > 0) {
+                total += n; if (total > 65536) return null; buf.write(b, 0, n);
+                if (System.currentTimeMillis() > deadline) return null;
+            }
             return sanitise(new JSONObject(buf.toString("UTF-8")));
         } catch (Throwable t) {
             return null;
