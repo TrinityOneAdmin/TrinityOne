@@ -63,7 +63,7 @@ test('R1b — two central-directory records on ONE local header (overlap), and a
 // ── R2: lookalike names ────────────────────────────────────────────────────────────────────────────────────────
 test('R2 — LOOKALIKES of "King James Version" are labelled: Armenian o, Latin small-cap E, script g, dotless i, Cyrillic s, a soft hyphen; a plain unrelated name is not', async () => {
   const p = await readyPhone();
-  const cases = [['KJ1', 'King James Versiօn'], ['KJ2', 'King James Verѕion'], ['KJ3', 'King James Vᴇrsion'], ['KJ4', 'Kinɡ James Version'], ['KJ5', 'King James Version­'], ['KJ6', 'Kıng James Version']];
+  const cases = [['KJ1', 'King James Versiօn'], ['KJ2', 'King James Verѕion'], ['KJ3', 'King James Vᴇrsion'], ['KJ4', 'Kinɡ James Version'], ['KJ5', 'King James Version­'], ['KJ6', 'Kıng James Version'], ['KJ7', 'Kíng Jámes Vérsion']];   // the last differs only by accents
   for (const [a, n] of cases) {
     const r = await p.Bible.installFromBytes(await bibleDb(a, n, 'x ' + a), '');
     assert.equal(r.renamed, true, `${JSON.stringify(n)} wore the catalogue's name with no label: ${JSON.stringify(r)}`);
@@ -133,6 +133,11 @@ test('L-e — BOOT: a stored file under imported/ that holds a view, a trigger o
     assert.deepEqual(JSON.parse(JSON.stringify(p.Bible.takeQuarantineNotices())), ['Old Import'], `${what}: the member was not told`);
     assert.deepEqual(JSON.parse(JSON.stringify(p.Bible.takeQuarantineNotices())), [], `${what}: the member is told again and again`);
     assert.ok(state.stores.get('modules').has(key), 'the bytes were deleted behind the member\'s back (they are removed from Library > Installed)');
+    // the NEXT boot does not load it, does not open it, and does not tell the member again
+    const again = phone({ state }); await again.boot(); await sleep(60);
+    assert.equal(again.Bible.versions().length, 0, `${what}: a quarantined file was loaded at the next boot`);
+    assert.equal(again.sqlStats.opened, 0, `${what}: the next boot opened it again`);
+    assert.deepEqual(JSON.parse(JSON.stringify(again.Bible.takeQuarantineNotices())), []);
   }
 });
 

@@ -1524,18 +1524,15 @@ window.safeImgUrl = function (v) {
     if(!cd || cd.length !== walked.length) return "unusable";
     for(let i = 0; i < cd.length; i++) if(cd[i].method !== walked[i][0] || cd[i].csize !== walked[i][1] || cd[i].usize !== walked[i][2]) return "unusable";
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-    let actual = 0;
     for(const en of cd){
       if(en.lho + 30 > u8.length || dv.getUint32(en.lho, true) !== 0x04034b50) return "unusable";
       const start = en.lho + 30 + dv.getUint16(en.lho + 26, true) + dv.getUint16(en.lho + 28, true);
       if(start + en.csize > u8.length) return "unusable";
       const data = u8.subarray(start, start + en.csize);
-      let got;
-      if(en.method === 0){ if(en.csize !== en.usize) return "unusable"; got = en.usize; }
-      else if(en.method === 8){ got = _boundedInflate(data, en.usize); if(got < 0) return "unusable"; }
+      // each entry may yield at most what it declared, and the declared sum was capped above, so the decoded total is too
+      if(en.method === 0){ if(en.csize !== en.usize) return "unusable"; }
+      else if(en.method === 8){ if(_boundedInflate(data, en.usize) < 0) return "unusable"; }
       else return "unusable";
-      actual += got;
-      if(actual > INSTALL_MAX_INFLATED) return "too-big";
     }
     return null;
   }
