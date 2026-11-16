@@ -27,7 +27,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 let chr = null, ws = null, dir = null;
 after(() => { try { ws && ws.close(); } catch {} try { chr && chr.kill('SIGKILL'); } catch {} try { dir && rmSync(dir, { recursive: true, force: true }); } catch {} });
 
-test('shareCardPng makes a real 1080x1350 PNG in every style, with the verse painted on it and the church accent used',
+test('shareCardPng makes a real 1080-wide PNG (1350 tall; taller for a long passage) in every style, with the verse painted on it and the church accent used',
   { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
     const js = compileScreen('app/share-app.jsx');
     const style = [...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n');
@@ -79,7 +79,9 @@ test('shareCardPng makes a real 1080x1350 PNG in every style, with the verse pai
       const o = out[id];
       assert.deepEqual(o.sig, [137, 80, 78, 71, 13, 10, 26, 10], `${id}: not a PNG`);
       assert.equal(o.w, 1080, `${id}: width ${o.w}`);
-      assert.equal(o.h, 1350, `${id}: height ${o.h}`);
+      // a long passage makes the card taller (shareCardLayout: up to 1080 x 1920) instead of cutting it short
+      if (id === 'long') assert.ok(o.h > 1350 && o.h <= 1920, `long: height ${o.h} — a long passage should grow the card, up to 1920`);
+      else assert.equal(o.h, 1350, `${id}: height ${o.h}`);
       assert.ok(o.ink > 300, `${id}: almost nothing is painted on the card (${o.ink} ink samples) — the verse is not drawn`);
     }
     // the words themselves are painted: far more ink than the same card with no words (measured 6549 vs 1142, ~5.7x)

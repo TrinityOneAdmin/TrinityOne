@@ -263,9 +263,8 @@ window.ShareAppSheet = ShareAppSheet;
 // (the /v page's og:image), not the card. Now the card is drawn on a canvas and the PNG is shared as ONE file
 // through shareOneFile, with the verse words beside it (owner: image + words, NO link — the link is what
 // brings the website preview back; accepted that Quick Share / Bluetooth may then drop the image).
-// Fixed 1080 x 1350 (4:5) whatever the phone's width. Text that is too long steps the font down from 64px to
-// 36px and, past that, ends in an ellipsis (fitting long passages properly is the next fix).
-const SHARECARD_W = 1080, SHARECARD_H = 1350;
+// 1080 wide whatever the phone's width; 1350 tall (4:5), growing to 1920 (9:16) for long text — see
+// shareCardLayout. The on-screen preview IS this picture.
 const SHARECARD_SPARKLE = ['M12 3.5c.7 4 1.8 5.1 5.8 5.8-4 .7-5.1 1.8-5.8 5.8-.7-4-1.8-5.1-5.8-5.8 4-.7 5.1-1.8 5.8-5.8Z',
   'M18.5 14.5c.3 1.7.8 2.2 2.5 2.5-1.7.3-2.2.8-2.5 2.5-.3-1.7-.8-2.2-2.5-2.5 1.7-.3 2.2-.8 2.5-2.5Z'];
 
@@ -288,39 +287,101 @@ function shareCardColor(cx, value, fallback, probe) {
   return fallback;
 }
 
-// Words into lines no wider than `max`, measured by the canvas at its current font. A single word wider than
-// the line is broken by characters.
-function shareCardWrap(cx, text, max) {
+// Words into lines no wider than `max`, measured with `measure(text)`. A single word wider than the line is
+// broken by characters.
+function shareCardWrap(measure, text, max) {
   const lines = []; let line = '';
   for (const word of String(text).split(/\s+/).filter(Boolean)) {
     const tryLine = line ? line + ' ' + word : word;
-    if (cx.measureText(tryLine).width <= max) { line = tryLine; continue; }
+    if (measure(tryLine) <= max) { line = tryLine; continue; }
     if (line) lines.push(line);
-    if (cx.measureText(word).width <= max) { line = word; continue; }
+    if (measure(word) <= max) { line = word; continue; }
     line = '';
-    for (const ch of word) { if (cx.measureText(line + ch).width > max && line) { lines.push(line); line = ch; } else line += ch; }
+    for (const ch of word) { if (measure(line + ch) > max && line) { lines.push(line); line = ch; } else line += ch; }
   }
   if (line) lines.push(line);
   return lines;
+}
+
+// Keep the first `n` lines, the last ending in an ellipsis that still fits the width.
+function shareCardClip(measure, lines, n, max) {
+  if (lines.length <= n) return lines;
+  const out = lines.slice(0, Math.max(1, n));
+  let last = out[out.length - 1];
+  while (last && measure(last + '…') > max) last = last.slice(0, -1);
+  out[out.length - 1] = last.replace(/\s+$/, '') + '…';
+  return out;
+}
+
+// WHERE EVERYTHING GOES — pure, so a test can run it with any `measure(text, font)`.
+// The card is 1080 wide. In order, until it fits:
+//   1. the words' font steps down from 64px to 36px on a 1080 x 1350 (4:5) card;
+//   2. the card grows taller in steps, up to 1080 x 1920 (9:16), trying every size again at each height;
+//   3. only then is text cut, ending in an ellipsis, and `truncated` is true — the full words still go beside
+//      the picture. With thoughts, they keep at least about a third of the room, and at least two lines.
+// Thoughts (`comment`) sit under the reference in the UI font, at about 0.62 of the words' size (30px at least).
+const SHARECARD_GEOM = { W: 1080, PAD: 104, MARK: 84, GAP1: 56, GAP2: 60, REF: 44, GAP3: 72, FOOT: 60,
+  HEIGHTS: [1350, 1440, 1536, 1632, 1728, 1824, 1920], VLH: 1.4, CLH: 1.45 };
+function shareCardFontSpec(size, cSize) {
+  return { verse: '500 ' + size + 'px Newsreader, Georgia, serif', comment: '400 ' + cSize + 'px Sora, system-ui, sans-serif' };
+}
+function shareCardLayout(measure, quote, comment) {
+  const G = SHARECARD_GEOM, max = G.W - 2 * G.PAD;
+  const hasC = !!(comment && String(comment).trim());
+  const cSizeFor = (size) => Math.max(30, Math.round(size * 0.62));
+  const fixed = G.MARK + G.GAP1 + G.GAP2 + G.REF + (hasC ? G.GAP3 : 0);
+  const wrapAt = (size) => {
+    const f = shareCardFontSpec(size, cSizeFor(size));
+    return { f, lines: shareCardWrap(t => measure(t, f.verse), quote, max),
+      cLines: hasC ? shareCardWrap(t => measure(t, f.comment), comment, max) : [] };
+  };
+  const need = (size, w) => fixed + w.lines.length * size * G.VLH + w.cLines.length * cSizeFor(size) * G.CLH;
+  const memo = {};
+  for (const H of G.HEIGHTS) {
+    const room = H - 2 * G.PAD - G.FOOT;
+    for (let size = 64; size >= 36; size -= 4) {
+      const w = memo[size] || (memo[size] = wrapAt(size));
+      if (need(size, w) <= room) return { W: G.W, H, size, cSize: cSizeFor(size), fonts: w.f, lines: w.lines, cLines: w.cLines, truncated: false };
+    }
+  }
+  // nothing fits at 1080 x 1920, 36px: cut
+  const H = G.HEIGHTS[G.HEIGHTS.length - 1], size = 36, cSize = cSizeFor(size), w = memo[size] || wrapAt(size);
+  const room = H - 2 * G.PAD - G.FOOT - fixed, vlh = size * G.VLH, clh = cSize * G.CLH;
+  let cN = w.cLines.length, vN = w.lines.length;
+  if (hasC) {
+    const cMin = Math.min(cN, Math.max(2, Math.floor(room * 0.34 / clh)));
+    if (vN * vlh + cN * clh > room) {
+      vN = Math.min(vN, Math.floor((room - cMin * clh) / vlh));
+      cN = Math.min(cN, Math.floor((room - vN * vlh) / clh));
+    }
+  } else vN = Math.floor(room / vlh);
+  return { W: G.W, H, size, cSize, fonts: w.f,
+    lines: shareCardClip(t => measure(t, w.f.verse), w.lines, vN, max),
+    cLines: hasC ? shareCardClip(t => measure(t, w.f.comment), w.cLines, cN, max) : [], truncated: true };
 }
 
 // Wait (briefly) for the card's fonts, so the canvas does not draw in the fallback serif.
 async function shareCardFonts() {
   try {
     const f = document.fonts; if (!f || !f.load) return;
-    const all = Promise.all(['500 64px Newsreader', '700 32px Sora'].map(x => Promise.resolve(f.load(x)).catch(() => null)));
+    const all = Promise.all(['500 64px Newsreader', '700 32px Sora', '400 32px Sora'].map(x => Promise.resolve(f.load(x)).catch(() => null)));
     await Promise.race([all, new Promise(r => setTimeout(r, 2500))]);
   } catch (e) {}
 }
 
-// Draw the card for `verse` in style `st` (a CARD_STYLES entry) and return its PNG bytes. Throws if the canvas
-// cannot produce one.
-async function shareCardPng(verse, st, probe) {
+// Draw the card for `verse` in style `st` (a CARD_STYLES entry). Returns { bytes (PNG), layout }. Throws if the
+// canvas cannot produce one. `comment`: the member's thoughts, drawn under the reference ('' for none).
+async function shareCardRender(verse, st, probe, comment) {
   await shareCardFonts();
-  const W = SHARECARD_W, H = SHARECARD_H, PAD = 104;
-  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const G = SHARECARD_GEOM;
+  const quote = '“' + String(verse.text || '').trim() + '”';
+  const ref = String(verse.ref || '').trim() + ' · ' + (verse.version || 'WEB');
+  const cv = document.createElement('canvas');
   const cx = cv.getContext('2d');
   if (!cx) throw new Error('no 2d canvas');
+  const L = shareCardLayout((t, f) => { cx.font = f; return cx.measureText(t).width; }, quote, String(comment || '').trim());
+  const W = L.W, H = L.H, PAD = G.PAD;
+  cv.width = W; cv.height = H;
   const k = st.cv;
   const col = (pair) => shareCardColor(cx, pair[0], pair[1], probe);
   const fg = col(k.fg), mark = col(k.mark), refCol = col(k.ref);
@@ -343,45 +404,35 @@ async function shareCardPng(verse, st, probe) {
   };
   sparkle(W - 360, -64, 420, fg, k.border ? 0.06 : 0.14, 1.3);
 
-  // the words: the largest size from 64px down to 36px whose lines fit, else 36px ending in an ellipsis
-  const quote = '\u201C' + String(verse.text || '').trim() + '\u201D';
-  const ref = String(verse.ref || '').trim() + ' \u00B7 ' + (verse.version || 'WEB');
-  const MARK = 84, GAP1 = 56, GAP2 = 60, REF = 44;
-  const room = H - 2 * PAD - MARK - GAP1 - GAP2 - REF - 60;
-  let size = 64, lines = [];
-  for (; size >= 36; size -= 4) {
-    cx.font = '500 ' + size + 'px Newsreader, Georgia, serif';
-    lines = shareCardWrap(cx, quote, W - 2 * PAD);
-    if (lines.length * size * 1.4 <= room) break;
-  }
-  if (size < 36) {
-    size = 36; cx.font = '500 36px Newsreader, Georgia, serif';
-    lines = shareCardWrap(cx, quote, W - 2 * PAD);
-    const fit = Math.max(1, Math.floor(room / (size * 1.4)));
-    if (lines.length > fit) {
-      lines = lines.slice(0, fit);
-      let last = lines[fit - 1];
-      while (last && cx.measureText(last + '\u2026').width > W - 2 * PAD) last = last.slice(0, -1);
-      lines[fit - 1] = last.replace(/\s+$/, '') + '\u2026';
-    }
-  }
-  const lh = size * 1.4;
-  const block = MARK + GAP1 + lines.length * lh + GAP2 + REF;
-  let y = Math.max(PAD, (H - block) / 2);
-  sparkle(PAD, y, MARK, mark, 1, 1.8);
-  y += MARK + GAP1;
+  const vlh = L.size * G.VLH, clh = L.cSize * G.CLH;
+  const block = G.MARK + G.GAP1 + L.lines.length * vlh + G.GAP2 + G.REF + (L.cLines.length ? G.GAP3 + L.cLines.length * clh : 0);
+  let y = Math.max(PAD, Math.min((H - block) / 2, H - PAD - G.FOOT - block));
+  sparkle(PAD, y, G.MARK, mark, 1, 1.8);
+  y += G.MARK + G.GAP1;
   cx.fillStyle = fg; cx.textBaseline = 'top'; cx.textAlign = 'left';
-  for (const ln of lines) { cx.fillText(ln, PAD, y + (lh - size) / 2); y += lh; }
-  y += GAP2;
+  cx.font = L.fonts.verse;
+  for (const ln of L.lines) { cx.fillText(ln, PAD, y + (vlh - L.size) / 2); y += vlh; }
+  y += G.GAP2;
   cx.font = '700 44px Sora, system-ui, sans-serif'; cx.fillStyle = refCol;
   cx.globalAlpha = k.border ? 1 : 0.9; cx.fillText(ref, PAD, y); cx.globalAlpha = 1;
+  y += G.REF;
+  if (L.cLines.length) {
+    // the thoughts: a short rule, then the UI font — the member's words, set apart from Scripture's
+    cx.fillStyle = refCol; cx.globalAlpha = 0.45; cx.fillRect(PAD, y + G.GAP3 / 2 - 2, 96, 4); cx.globalAlpha = 1;
+    y += G.GAP3;
+    cx.font = L.fonts.comment; cx.fillStyle = fg; cx.globalAlpha = 0.88;
+    for (const ln of L.cLines) { cx.fillText(ln, PAD, y + (clh - L.cSize) / 2); y += clh; }
+    cx.globalAlpha = 1;
+  }
   cx.font = '700 34px Sora, system-ui, sans-serif'; cx.fillStyle = fg; cx.globalAlpha = 0.5; cx.textAlign = 'right';
-  cx.fillText('TRINITYONE', W - 70, H - 70 - 34); cx.globalAlpha = 1;
+  cx.fillText('TRINITYONE', W - 70, H - 70 - 34); cx.globalAlpha = 1; cx.textAlign = 'left';
 
   const blob = await new Promise((res) => { try { cv.toBlob(res, 'image/png'); } catch (e) { res(null); } });
   if (!blob) throw new Error('the canvas made no PNG');
-  return new Uint8Array(await blob.arrayBuffer());
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), layout: L };
 }
+// The PNG bytes alone (the card with no thoughts).
+async function shareCardPng(verse, st, probe) { return (await shareCardRender(verse, st, probe, '')).bytes; }
 
 // THE SHARE BUTTON: the card as a PNG plus the verse words (verseShareText, app/app.jsx — words and reference,
 // no link). If the picture cannot be made, the words alone go, still with no link, and the member is told.
@@ -421,7 +472,7 @@ const CARD_STYLES = [
 function ShareCard({ verse, open, onClose, ctx }) {
   const [style, setStyle] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
-  const [png, setPng] = React.useState(null);   // { key, bytes } drawn ahead of the tap
+  const [png, setPng] = React.useState(null);   // { key, bytes, url, truncated } drawn ahead of the tap; or { key, failed }
   const cardRef = React.useRef(null);
   const busyRef = React.useRef(false);          // a ref, not `busy`: two taps before a redraw both see busy=false
   const openRef = React.useRef(open);
@@ -432,16 +483,22 @@ function ShareCard({ verse, open, onClose, ctx }) {
   React.useEffect(() => {
     if (!pngKey) return;
     let live = true;
-    Promise.resolve().then(() => shareCardPng(verse, CARD_STYLES[style], cardRef.current))
-      .then((bytes) => { if (live) setPng({ key: pngKey, bytes }); }, () => {});
+    Promise.resolve().then(() => shareCardRender(verse, CARD_STYLES[style], cardRef.current, ''))
+      .then((r) => {
+        if (!live) return;
+        let url = null;
+        try { url = URL.createObjectURL(new Blob([r.bytes], { type: 'image/png' })); } catch (e) {}
+        setPng((prev) => { try { prev && prev.url && URL.revokeObjectURL(prev.url); } catch (e) {} return { key: pngKey, bytes: r.bytes, url, truncated: r.layout.truncated }; });
+      }, (e) => { try { console.warn('shareCardRender: ' + ((e && e.message) || e)); } catch (e2) {} if (live) setPng({ key: pngKey, failed: true }); });
     return () => { live = false; };
   }, [pngKey]);
   if (!verse) return null;
   const s = CARD_STYLES[style];
+  const ready = !!(png && png.key === pngKey);
   const share = async () => {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true);
-    try { await shareCardShare(verse, s, cardRef.current, ctx, { ready: png && png.key === pngKey ? png.bytes : null, stillOpen: () => openRef.current }); }
+    try { await shareCardShare(verse, s, cardRef.current, ctx, { ready: ready && png.bytes ? png.bytes : null, stillOpen: () => openRef.current }); }
     finally { busyRef.current = false; setBusy(false); }
   };
   return (
@@ -453,27 +510,27 @@ function ShareCard({ verse, open, onClose, ctx }) {
           {/* Both share buttons send the card as a picture plus the verse words, and no link (shareCardShare). */}
           <IconBtn name="share" title="Share this verse" onClick={share} />
         </div>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 26px' }}>
-          <div ref={cardRef} style={{
-            width: '100%', aspectRatio: '4/5', borderRadius: 26, background: s.bg, color: s.fg,
-            border: s.bordered ? '1px solid var(--line)' : 'none', boxShadow: 'var(--shadow-lg)',
-            display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 30, position: 'relative', overflow: 'hidden',
-            transition: 'background .3s',
-          }}>
-            <div style={{ position: 'absolute', right: -20, top: -20, opacity: s.bordered ? .06 : .14 }}>
-              <Icon name="sparkle" size={130} stroke={1.3} color={s.fg} /></div>
-            <Icon name="sparkle" size={26} stroke={1.8} color={s.id === 'clay' ? '#fff' : 'var(--clay)'} />
-            <p style={{ fontFamily: s.serif ? 'var(--font-read)' : 'var(--font-ui)', fontSize: 25, lineHeight: 1.4,
-              fontWeight: 500, margin: '18px 0 20px', textWrap: 'pretty' }}>“{verse.text}”</p>
-            <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 14, letterSpacing: '.5px',
-              color: s.bordered ? 'var(--clay)' : s.fg, opacity: s.bordered ? 1 : .9 }}>{verse.ref} · {verse.version || 'WEB'}</div>
-            <div style={{ position: 'absolute', bottom: 16, right: 22, fontSize: 11, fontWeight: 700, letterSpacing: '1px', opacity: .5 }}>TRINITYONE</div>
-          </div>
+        {/* THE PREVIEW IS THE PICTURE THAT WILL BE SHARED (2026-11-16): the PNG, scaled to fit whatever room the phone
+            has (object-fit contain), so a 320px phone and a 9:16 card both show the whole card. The hidden <div> is
+            where the card's colours are read (shareCardColor), inside the app's church-coloured root. */}
+        <div ref={cardRef} aria-hidden="true" style={{ display: 'none' }} />
+        <div style={{ flex: 1, minHeight: 0, position: 'relative', margin: '8px 26px' }}>
+          {ready && png.url ? (
+            <img src={png.url} alt={'Card: ' + (verse.ref || '')} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
+              objectFit: 'contain', filter: 'drop-shadow(0 6px 18px rgba(0,0,0,.18))' }} />
+          ) : (
+            <div aria-label={'Card for ' + (verse.ref || '')} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--ink-3)', fontSize: 14, fontFamily: 'var(--font-ui)', textAlign: 'center', padding: 20 }}>
+              {ready && png.failed ? 'Couldn\u2019t draw the card \u2014 Share sends the words' : 'Drawing the card\u2026'}</div>
+          )}
         </div>
+        {ready && png.truncated ? (
+          <div style={{ padding: '0 26px', fontSize: 12.5, color: 'var(--ink-3)', textAlign: 'center' }}>{'The card shows the start \u2014 all the words go with it.'}</div>
+        ) : null}
         <div style={{ padding: '4px 26px 8px' }}>
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 18 }}>
             {CARD_STYLES.map((c, i) => (
-              <button key={c.id} onClick={() => setStyle(i)} style={{
+              <button key={c.id} aria-label={'Card style ' + (i + 1)} onClick={() => setStyle(i)} style={{
                 width: 46, height: 46, borderRadius: 14, background: c.bg, cursor: 'pointer',
                 border: style === i ? '2.5px solid var(--clay)' : '1px solid var(--line)', flexShrink: 0,
               }} />
