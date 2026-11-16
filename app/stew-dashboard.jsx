@@ -2363,6 +2363,13 @@ function StewDashboard({ initial = 'overview' }) {
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action on that page (e.g. open the Set-PIN dialog)
   const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
+  // DEEP-LINK A RESOURCES VIEW, the same one-shot shape as openSettings. The Overview's "Verse prompt is live"
+  // card asks for 'verse'; a plain visit to Resources passes nothing and still opens on Reading plans.
+  const [resourcesView, setResourcesView] = React.useState(null);
+  const openResources = (view = null) => { setResourcesView(view); setTab('resources'); };
+  // A request that was never consumed (Resources padlocked, or snapped back to Overview) must not ambush the
+  // next plain visit to Resources, so it is dropped as soon as the console is on any other tab.
+  React.useEffect(() => { if (tab !== 'resources' && resourcesView) setResourcesView(null); }, [tab]);
   // PICKING "SETTINGS" WHILE ALREADY IN SETTINGS GOES BACK TO ITS INDEX. On a phone the list and a page are
   // never on screen together, and picking the section again from ☰ (or the avatar) is how a steward asks for
   // the list — it used to do nothing, because setTab('settings') on 'settings' is a no-op to React, so the
@@ -2371,7 +2378,11 @@ function StewDashboard({ initial = 'overview' }) {
   // and the first page in a browser. A remount rather than a prop on purpose: a revealed recovery phrase is
   // hidden again by it, which is the right side to fall on for "I pressed Settings".
   const [settingsEpoch, setSettingsEpoch] = React.useState(0);
-  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') setSettingsEpoch(n => n + 1); setTab(k); };
+  // `settingsRepick` tells the remounted DashSettings it was re-picked (so it opens at the top of the console),
+  // as opposed to arrived at from another section (which must not move the console). Owner, 2026-11-16.
+  const [settingsRepick, setSettingsRepick] = React.useState(false);
+  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') { setSettingsEpoch(n => n + 1); setSettingsRepick(true); } setTab(k); };
+  React.useEffect(() => { if (tab !== 'settings' && settingsRepick) setSettingsRepick(false); }, [tab]);
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
@@ -2561,19 +2572,19 @@ function StewDashboard({ initial = 'overview' }) {
     <React.Fragment>
       <ConsoleWarm careOn={_careWarmOn} scheduleOn={_scheduleWarmOn} />
       {brief ? <DelegateBrief onClose={closeBrief} churchName={church.name || 'this church'} /> : null}
-      {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onNewPost={() => setPosting(true)} />}
+      {tab === 'overview' && <DashOverview onTab={setTab} onSettings={openSettings} onResources={openResources} onNewPost={() => setPosting(true)} />}
       {tab === 'giving' && <DashGiving />}
       {tab === 'groups' && (stewCapState('content').allowed ? <DashGroups /> : <StewCapBlocked cap='content' />)}
       {tab === 'rota' && (stewCapState('content').allowed ? <DashRota onNewTeam={() => setAddingTeam(true)} /> : <StewCapBlocked cap='content' />)}
       {tab === 'calendar' && (stewCapState('content').allowed ? <DashCalendar /> : <StewCapBlocked cap='content' />)}
       {tab === 'rooms' && (stewCapState('content').allowed ? <DashRooms /> : <StewCapBlocked cap='content' />)}
-      {tab === 'resources' && (stewCapState('content').allowed ? <DashResources /> : <StewCapBlocked cap='content' />)}
+      {tab === 'resources' && (stewCapState('content').allowed ? <DashResources initialView={resourcesView} onViewConsumed={() => setResourcesView(null)} /> : <StewCapBlocked cap='content' />)}
       {tab === 'members' && (stewCapState('members').allowed ? <DashMembers dmConvos={dmConvos} /> : <StewCapBlocked cap='members' />)}
       {tab === 'checkin' && (stewCapState('safeguarding').allowed ? <DashCheckin /> : <StewCapBlocked cap='safeguarding' />)}
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
       {tab === 'meals' && (stewCapState('care').allowed ? <DashMeals /> : <StewCapBlocked cap='care' />)}
-      {tab === 'settings' && <DashSettings key={settingsEpoch} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
+      {tab === 'settings' && <DashSettings key={settingsEpoch} repicked={settingsRepick} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
   // "New post" and "New team" both write content, so both need the `content` capability — and both sat in the
@@ -2682,7 +2693,7 @@ function StewDashboard({ initial = 'overview' }) {
             {nav.map(n => {
               const on = n.key === tab;
               return (
-                <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => setTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
+                <button key={n.key} title={NAV_TIPS[n.key]} onClick={() => pickTab(n.key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' }}>
                   <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
                   {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
                 </button>
@@ -3753,7 +3764,7 @@ function groupLiveSub(g, memberCount, rosters) {
   if (g.visibility === 'invite') return n(Array.isArray(g.members) ? g.members.length : 0) + ' · invite-only';
   return n(memberCount || 0);   // open group: every church member can join
 }
-function DashOverview({ onTab, onNewPost, onSettings }) {
+function DashOverview({ onTab, onNewPost, onSettings, onResources }) {
   const goSettings = onSettings || ((s) => onTab('settings'));   // deep-links a settings PAGE when available (SETTINGS_GROUPS)
   const groups = window.useStewardGroups();   // real chat groups (the focus)
   const members = window.useStewardMembers(); // real members (joined and/or active)
@@ -3949,7 +3960,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   var _ovHasSchedule = _ovVp && Array.isArray(_ovVp.schedule) && _ovVp.schedule.length > 0;
   var _ovAllFuture = _ovHasSchedule && _ovVp.schedule.every(function(s) { return s.at > Math.floor(Date.now() / 1000); });
   var verseBanner = (_ovVp && _ovVp.ref) ? (
-    <button onClick={function() { onTab('resources'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
+    <button onClick={function() { onResources('verse'); }} style={{ animation: 'lumenFade .45s ease both', display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: _ovAllFuture ? 'var(--clay)' : 'var(--sage)', color: _ovAllFuture ? 'var(--on-clay)' : 'var(--on-sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={_ovAllFuture ? 'clock' : 'book'} size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: _ovAllFuture ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{_ovAllFuture ? 'Verse prompt scheduled' : 'Verse prompt is live'}</div>
@@ -7784,8 +7795,11 @@ function BulkUploadModal({ kind, onClose }) {
   );
 }
 
-function DashResources() {
-  const [view, setView] = React.useState('plans');   // plans | devotionals
+const RESOURCES_VIEWS = ['plans', 'devotionals', 'media', 'verse'];
+function DashResources({ initialView, onViewConsumed } = {}) {
+  // initialView is a one-shot deep link (StewDashboard.openResources); anything unknown falls back to Reading plans.
+  const [view, setView] = React.useState(RESOURCES_VIEWS.includes(initialView) ? initialView : 'plans');   // plans | devotionals | media | verse
+  React.useEffect(() => { if (initialView && onViewConsumed) onViewConsumed(); }, []);   // clear the one-shot request, as DashSettings does
   const [bulk, setBulk] = React.useState(false);
   const seg = { display: 'inline-flex', gap: 4, padding: 4, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' };
   const TAB_TIPS = { plans: 'Reading plans members can follow day by day', devotionals: 'Short devotionals you schedule for members to read', media: 'Sermon recordings and notes for members', verse: 'Set the verse members are prompted with' };
@@ -13988,7 +14002,7 @@ function settingsPageFor(wanted, visible, pages) {
   return (seen && seen.length) ? seen[0].k : (pages.length ? pages[0].k : null);
 }
 
-function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed }) {
+function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed, repicked }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;   // re-render when the active identity changes
   const delegated = !!(window.Steward.isDelegated && window.Steward.isDelegated());   // acting as a steward of a church we don't own
   const church = window.useStewardChurch();   // real church name + npub
@@ -14015,6 +14029,31 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const [page, setPage] = React.useState(() => settingsPageFor(initialSection, groups, pages));
   const open = pages.some(p => p.k === page) ? page : (narrow ? null : (pages.length ? pages[0].k : null));
   const cur = pages.find(p => p.k === open) || null;
+  // A NEW SETTINGS PAGE OPENS AT ITS TOP. The console scrolls in its <main>, which outlives every page here, so
+  // picking another page after scrolling down one left the new page scrolled to wherever the old one was, with
+  // its top out of sight (owner, 2026-11-16, desktop). Owner decisions, 2026-11-16:
+  //   - switching page, or opening a page from the list, goes to the top (on a desktop the list beside it
+  //     scrolls up too; accepted);
+  //   - re-picking Settings while in Settings (StewDashboard remounts this with `repicked`) goes to the top;
+  //   - arriving at Settings from another section, or by a deep link, does NOT move the console;
+  //   - on a phone, "All settings" goes back to the list WHERE THE STEWARD LEFT IT, not to its top.
+  const shellRef = React.useRef(null);
+  const pageMounted = React.useRef(false);
+  const listScroll = React.useRef(null);   // the phone list's scroll offset when a page was opened from it
+  const settingsScroller = () => { const el = shellRef.current; return el && el.closest ? el.closest('main') : null; };
+  const openPage = (k) => {
+    if (!open) { const sc = settingsScroller(); listScroll.current = sc ? sc.scrollTop : null; }
+    setPage(k);
+  };
+  React.useEffect(() => {
+    const first = !pageMounted.current;
+    pageMounted.current = true;
+    if (first && !repicked) return;
+    const sc = settingsScroller();
+    if (!sc) return;
+    if (!first && open === null && listScroll.current != null) { sc.scrollTop = listScroll.current; listScroll.current = null; }
+    else sc.scrollTop = 0;
+  }, [open]);
   // COLLAPSIBLE GROUPS. Read once, on mount, so a second console tab cannot fight this one for the value.
   // THE DEFAULT IS SHUT. Owner, 2026-09-22, from a screenshot of the Suite's window: "Can we have the settings
   // groups minimized like this on default?" A steward who has never chosen (nothing stored) starts with every
@@ -14181,7 +14220,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {picFile ? <ImageCropModal file={picFile} outW={256} outH={256} round title="Position your picture" onSave={savePicture} onClose={() => setPicFile(null)} /> : null}
       {editingWeb ? <WebAddressModal church={church} onClose={() => setEditingWeb(false)} /> : null}
       {pinAction ? <PinModal action={pinAction} onClose={(ok) => { const wasRemove = pinAction === 'remove'; setPinAction(null); if (ok) setHasPin(!wasRemove); }} /> : null}
-      <div className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
+      <div ref={shellRef} className={'set-shell' + (narrow ? ' set-shell--one' : '')}>
       {/* THE LIST. On a phone it is the whole first screen; in a browser it is the left-hand column, always
           on screen beside the page. Sixteen pages is a lot to scan and most stewards live in one or two
           groups, so each GROUP is a disclosure — owner, 2026-09-09, "that will help tidy it up".
@@ -14220,7 +14259,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
                     {/* WHICH PAGE IS OPEN IS NOT SAID IN COLOUR ALONE — the same rule the tab strip's filled
                         dot existed for. aria-current says it to a screen reader, and the heavier weight says
                         it to anyone who cannot separate clay from ink. */}
-                    <button ref={el => { navRefs.current[i] = el; }} onClick={() => setPage(p.k)} onKeyDown={e => onNavKey(e, i)}
+                    <button ref={el => { navRefs.current[i] = el; }} onClick={() => openPage(p.k)} onKeyDown={e => onNavKey(e, i)}
                       aria-current={sel ? 'page' : undefined} className={'set-item' + (sel ? ' set-item--on' : '')}>
                       <span className="set-item-n">{p.n}</span>
                       <span className="set-item-d">{p.d}</span>
