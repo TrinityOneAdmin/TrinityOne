@@ -25,13 +25,14 @@
 // NOT MEASURED BY THIS FILE: a real handset. The parent/owner must look at it on a device before merge.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, extname, normalize } from 'node:path';
 import { WebSocket } from 'ws';
 import { loadScreen, miniReact, find, reads } from './render-jsx-screen.mjs';
+import { fnBody } from './test-slice.mjs';
 import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -78,13 +79,13 @@ const RESERVE_NOW = 121, RESERVE_OLD = 156;
 
 // THE LIVE COMMUNITY SCREEN in the miniature React (layer A) — and the tree layer B serialises. `docL` captures every
 // document listener the header registers; `focused` records what the screen asked to focus.
-function mountChat({ width, banner, hideName = false, dmUnread = true, name = LONG }) {
+function mountChat({ width, banner, hideName = false, dmUnread = true, name = LONG, networks = false }) {
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const safeImgUrl = u => (typeof u === 'string' && u.startsWith('data:image/') ? u : '');
   // ui.jsx on a window the test can reach: its useBackLayer + window.trinityGoBack ARE the app's hardware-Back stack
-  const uiWin = {};
-  const { IconBtn, useBackLayer } = loadScreen('app/ui.jsx', ['IconBtn', 'useBackLayer'], { React, window: uiWin, Icon, document: { addEventListener() {}, removeEventListener() {} } });
+  const uiWin = {}, uiDocL = [];
+  const { IconBtn, useBackLayer } = loadScreen('app/ui.jsx', ['IconBtn', 'useBackLayer'], { React, window: uiWin, Icon, document: { addEventListener(type, fn) { uiDocL.push({ type, fn }); }, removeEventListener() {} } });
   const { UserAvatar } = loadScreen('app/identity-avatar.jsx', ['UserAvatar'], { React, window: {}, safeImgUrl });
   const { ChurchBadge, ChurchPill } = loadScreen('app/screens-church.jsx', ['ChurchBadge', 'ChurchPill'],
     { React, window: {}, Icon, safeCssColor: (c, d) => d, safeImgUrl });
@@ -121,11 +122,13 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
     joinState: { loaded: true, isPending: false, removed: false, offline: false, unknown: false },
     myLeaderGroups: [], churchEvents: [], myPubkey: 'mehex', safeguard: { isMinor: false, clearanceKnown: true },
     openPeople() {}, openDM() {}, openDMInbox() { calls.openDMInbox++; }, openGroup() {}, openProfile() { calls.openProfile++; }, openChurchSwitcher() {},
-    dmUnread,
+    dmUnread, churchNetworks: networks ? [{ networkPub: 'netpub1', npub: 'npub1net', name: 'The Fellowship' }] : undefined,
   };
   const M = { ctx, calls, docL, focused, tree: null, ChurchPill,
     redraw() { M.tree = draw(ChatScreen, { ctx }); return M.tree; },
     back: () => uiWin.trinityGoBack(), backLayers: () => uiWin.__trinityBackStack.length,
+    // a key press as ui.jsx's ONE global keydown handler sees it (it sends Escape to trinityGoBack); anything else is ignored
+    key(k) { const l = uiDocL.find(x => x.type === 'keydown'); assert.ok(l, 'ui.jsx registered no global keydown handler'); l.fn({ key: k, preventDefault() {} }); },
     mark() { docL.length = 0; focused.length = 0; },
     last(type) { const l = docL.filter(x => x.type === type); return l[l.length - 1] || null; },
     chevron() { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-more'] === 'chevron')[0] || null; },
@@ -162,15 +165,42 @@ const press = (M, node) => ({ target: { closest: closestIn(M.tree, node) } });
 const openMenu = M => { M.mark(); M.chevron().props.onClick(); M.redraw(); };
 
 function communityPage(c) {
+  if (c.preview) return { html: `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body{margin:0;padding:0} #app{width:100%}</style><div id="app">${serialize(PREVIEW_TREE)}</div>` };
   const M = mountChat(c);
   if (c.open) { const ch = M.chevron(); if (ch && typeof ch.props.onClick === 'function') { ch.props.onClick(); M.redraw(); } }
   const html = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/vendor/fonts/fonts.css">
 <style>${[...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')}
-html,body{margin:0;padding:0} #app{position:relative;width:100%;box-sizing:border-box;padding:0 18px;overflow:hidden}</style>
-<div id="app" class="trinity">${serialize(M.tree)}</div>`;
+html,body{margin:0;padding:0} #app{position:relative;width:100%;box-sizing:border-box;padding:${(c.inset || 0) + 5}px 18px 0;overflow:hidden}</style>
+<div id="app" class="trinity">${serialize(M.tree).replace(/env\(safe-area-inset-top, 0px\)/g, (c.inset || 0) + 'px')}</div>`;
+  // ScreenScroll's top padding is calc(inset + 5px) and the banner pulls itself up by exactly that, so the page pads by it too;
+  // `inset` stands in for env(safe-area-inset-top): 0 on most Androids, 47px on an iPhone with a notch, 59px with a Dynamic Island.
   return { html, tree: M.tree, M };
 }
+
+// THE CONSOLE BRANDING PREVIEW (app/stew-dashboard.jsx, DashBrandingPanel) is "the church header the way members' phones draw
+// it", so it carries the same 150px cap. The REAL panel is sliced, compiled and rendered; its preview node is laid out here.
+async function previewTree() {
+  const src = fnBody(readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8'), 'function DashBrandingPanel(', 'DashBrandingPanel') + '\nexport { DashBrandingPanel };\n';
+  const tmp = join(tmpdir(), 'cprev-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
+  let js;
+  try { writeFileSync(tmp, src); js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' }); }
+  finally { rmSync(tmp, { force: true }); }
+  const { React, draw } = miniReact();
+  const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
+  const globals = { React, window: { Steward: { publishProfile: async () => true } }, setTimeout, clearTimeout,
+    Panel: p => React.createElement('div', {}, p && p.children), ImageCropModal: Stub('ImageCropModal'), SkBadge: Stub('SkBadge'), SkToggle: Stub('SkToggle'),
+    Icon: p => React.createElement('span', {}, 'ICON') };
+  const key = '__cprev_' + Math.random().toString(36).slice(2);
+  globalThis[key] = globals;
+  const preamble = Object.keys(globals).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
+  const mod = await import('data:text/javascript;base64,' + Buffer.from(preamble + '\n' + js).toString('base64'));
+  const tree = draw(mod.DashBrandingPanel, { church: { name: LONG, banner: GIF } });
+  const node = find(tree, n => n.props && n.props['data-brand-preview'] === 'banner')[0];
+  assert.ok(node, 'the console branding panel draws no banner preview');
+  return node;
+}
+const PREVIEW_TREE = await previewTree();
 
 let chr = null, srv = null, ws = null, send = null, dir = null;
 const CASES = [];
@@ -181,9 +211,18 @@ for (const width of [320, 360, 390, 760]) for (const banner of [false, true]) CA
 // a church that has hidden its name: the banner draws the badge and NO name (features.hideChurchName, banner only)
 for (const width of [320, 360]) CASES.push({ width, banner: true, hideName: true });
 CASES.push({ width: 320, banner: true, open: true, hideName: true });
+// THE MENU OVER A BANNER, ON A PHONE WITH A TOP SAFE-AREA INSET (iPhone notch 47px, Dynamic Island 59px) and for a church that
+// belongs to a network (its chip row sits right under the banner and the gap is 12px, not 20). The banner block's fade-in
+// animation traps the menu's z-index inside it, so the card below painted over the menu: at 59px / 390 a tap on Search or
+// Profile opened "What's happening". Every item is hit-tested at its TOP, CENTRE and BOTTOM edge.
+CASES.push({ width: 320, banner: true, open: true, inset: 47 }, { width: 390, banner: true, open: true, inset: 47 },
+  { width: 390, banner: true, open: true, inset: 59 }, { width: 360, banner: true, open: true, inset: 59 },
+  { width: 320, banner: true, open: true, networks: true }, { width: 320, banner: true, open: true, networks: true, inset: 47 });
+// the console preview at a wide container and a narrow one
+CASES.push({ width: 760, preview: true }, { width: 320, preview: true });
 const PAGES = CASES.map(c => communityPage(c));
 if (process.env.DUMP_PAGES) PAGES.forEach((p, k) => writeFileSync(process.env.DUMP_PAGES + '/c' + k + '.html', p.html));
-const caseLabel = c => `${c.width}px, ${c.banner ? 'banner church' : 'compact-pill church'}${c.open ? ', menu OPEN' : ''}${c.hideName ? ', name hidden' : ''}`;
+const caseLabel = c => `${c.width}px, ${c.preview ? 'CONSOLE PREVIEW' : c.banner ? 'banner church' : 'compact-pill church'}${c.open ? ', menu OPEN' : ''}${c.hideName ? ', name hidden' : ''}${c.inset ? ', top inset ' + c.inset + 'px' : ''}${c.networks ? ', church in a network' : ''}`;
 
 before(async () => {
   if (!CHROME) return;
@@ -224,6 +263,8 @@ async function rects(i) {
     const box = e => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height), right: Math.round(b.right), bottom: Math.round(b.bottom) }; };
     const q = s => document.querySelector(s);
     const hit = e => { if (!e) return false; const r = e.getBoundingClientRect(); const t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!t && (t === e || e.contains(t)); };
+    // the item's TOP, CENTRE and BOTTOM edge (2-3px inside): a card drawn over only the lower edge of the menu fails the last one
+    const hitEdges = e => { if (!e) return false; const r = e.getBoundingClientRect(); return [r.y + 2, r.y + r.height / 2, r.bottom - 3].every(y => { const t = document.elementFromPoint(r.x + r.width / 2, y); return !!t && (t === e || e.contains(t)); }); };
     const bar = q('[data-top-bar]');
     const dm = q('[title^="Direct messages"]'), chev = q('[data-hdr-more="chevron"]');
     const sel = bar ? bar.querySelector('[data-church-pill]') : null;
@@ -239,7 +280,7 @@ async function rects(i) {
       reach: { dm: hit(dm), chev: hit(chev) }, expanded: chev && chev.getAttribute('aria-expanded'),
       name: nameEl ? { clipped: nameEl.scrollWidth > nameEl.clientWidth, h: Math.round(nameEl.getBoundingClientRect().height) } : null,
       panel: panelEl ? { box: box(panelEl), bg: getComputedStyle(panelEl).backgroundColor,
-        btns: [...panelEl.querySelectorAll(':scope > button')].map(b => ({ id: b.getAttribute('data-hdr-item'), aria: b.getAttribute('aria-label'), text: (b.lastElementChild ? b.lastElementChild.textContent : b.textContent).trim(), ...box(b), hit: hit(b) })) } : null }); })()`;
+        btns: [...panelEl.querySelectorAll(':scope > button')].map(b => ({ id: b.getAttribute('data-hdr-item'), aria: b.getAttribute('aria-label'), text: (b.lastElementChild ? b.lastElementChild.textContent : b.textContent).trim(), ...box(b), hit: hit(b), hitEdges: hitEdges(b) })) } : null }); })()`;
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   assert.ok(!(r.result && r.result.exceptionDetails), 'probe threw: ' + JSON.stringify(r.result && r.result.exceptionDetails || {}).slice(0, 300));
   return JSON.parse(r.result.result.value);
@@ -249,6 +290,7 @@ async function measure(i) { if (!MEASURED.has(i)) MEASURED.set(i, await rects(i)
 
 // ── LAYER B: layout ──────────────────────────────────────────────────────────────────────────────────────────
 for (const [i, c] of CASES.entries()) {
+  if (c.preview) continue;
   const label = caseLabel(c);
   test(`Community top bar: Messages + ONE chevron, name roomy and on one line — ${label}`, { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
     const m = await measure(i);
@@ -297,7 +339,7 @@ for (const [i, c] of CASES.entries()) {
         assert.equal(m.nameWrapKids, 1, 'the badge alone is drawn');
       } else {
         assert.ok(m.nameBox, 'church name not found');
-        assert.ok(m.nameBox.y < m.banner.y + m.banner.h / 2, `the church name should sit in the top half of the banner (name y ${m.nameBox.y}, banner ${m.banner.y}..${m.banner.bottom})`);
+        assert.ok(m.nameBox.y < m.banner.y + (c.inset || 0) + m.banner.h / 2, `the church name should sit in the top half of the banner, below the status bar's ${c.inset || 0}px inset (name y ${m.nameBox.y}, banner ${m.banner.y}..${m.banner.bottom})`);
         const nameMid = m.nameBox.y + m.nameBox.h / 2, iconMid = m.dm.y + m.dm.h / 2;
         assert.ok(Math.abs(nameMid - iconMid) <= 20, `controls should be in line with the name (name mid ${nameMid}, control mid ${iconMid})`);
         assert.ok(m.nameBox.right <= m.dm.x, `the church name (ends ${m.nameBox.right}) runs under Messages (starts ${m.dm.x})`);
@@ -318,6 +360,7 @@ for (const [i, c] of CASES.entries()) {
         assert.ok(b.h >= 44 && b.w >= 44, `menu item "${b.text}" is ${b.w}x${b.h}, want >= 44`);
         assert.ok(b.x >= 0 && b.right <= m.vw && b.y >= 0 && b.bottom <= m.vh, `menu item "${b.text}" is outside the ${m.vw}x${m.vh} viewport (${b.x}..${b.right}, ${b.y}..${b.bottom})`);
         assert.ok(b.hit, `HIT TEST: the element at the centre of "${b.text}" is not that item — something covers it`);
+        assert.ok(b.hitEdges, `HIT TEST: at the TOP, CENTRE or BOTTOM edge of "${b.text}" (y ${b.y}..${b.bottom}) the element hit is not that item — a card is painted over the menu`);
       }
       assert.ok(m.panel.btns[0].right <= m.panel.btns[1].x, 'the two menu items overlap');
       if (c.banner) {
@@ -326,7 +369,8 @@ for (const [i, c] of CASES.entries()) {
         assert.ok(gap >= 0 && gap <= 12, `the menu starts ${gap}px below the chevron, want 0..12 (directly under it)`);
         assert.ok(m.panel.box.x <= m.chev.x + 1 && m.panel.box.right >= m.chev.right - 1, `the menu (${m.panel.box.x}..${m.panel.box.right}) does not sit under the chevron (${m.chev.x}..${m.chev.right})`);
         assert.ok(!/rgba\(0, 0, 0, 0\)|transparent/.test(m.panel.bg), `the menu over the banner has no solid surface (background ${m.panel.bg})`);
-        assert.ok(m.panel.box.y < m.banner.bottom, 'the menu overlays the banner, it does not start below it');
+        // with no inset the menu sits over the banner; with a notch inset the controls are lower, so the menu may start just below a short banner
+        if (!c.inset) assert.ok(m.panel.box.y < m.banner.bottom, 'the menu overlays the banner, it does not start below it');
       } else {
         assert.ok(m.panel.box.y >= m.bar.bottom, 'in the compact bar the menu sits under the row');
         assert.ok(m.panel.box.w >= m.vw - 36 - 1, `the menu is ${m.panel.box.w}px wide, want the full ${m.vw - 36}`);
@@ -411,17 +455,29 @@ test('A. the Profile item calls openProfile EXACTLY ONCE, closes the menu, shows
   assert.equal(M.calls.openDMInbox, 0);
 });
 
-test('A. Escape closes the menu and returns focus to the chevron; other keys do not', () => {
+test('A. Escape (through ui.jsx\'s global handler and the back stack) closes the menu ONCE and returns focus to the chevron; other keys do not', () => {
   const M = mountChat({ width: 360, banner: false });
   openMenu(M);
   assert.ok(M.last('pointerdown') && M.last('pointerdown').cap, 'a CAPTURE pointerdown listener is registered');
-  const kd = M.last('keydown').fn;
-  kd({ key: 'x' }); M.redraw();
+  assert.equal(M.docL.filter(l => l.type === 'keydown').length, 0, 'no keydown listener of its own: it would close the menu a second time');
+  M.key('x'); M.redraw();
   assert.ok(M.panel());
   M.focused.length = 0;
-  kd({ key: 'Escape' }); M.redraw();
+  M.key('Escape'); M.redraw();
   assert.equal(M.panel(), null);
-  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'));
+  assert.deepEqual(M.focused, ['[data-hdr-more="chevron"]'], 'Escape returns focus to the chevron exactly once');
+});
+
+test('A. hardware Back and a tap off ALSO return focus to the chevron', () => {
+  const M = mountChat({ width: 360, banner: true });
+  openMenu(M); M.focused.length = 0;
+  assert.equal(M.back(), true); M.redraw();
+  assert.equal(M.panel(), null);
+  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'), 'Back left focus on a button that no longer exists');
+  openMenu(M); M.focused.length = 0;
+  M.last('pointerdown').fn(press(M, M.dm())); M.redraw();
+  assert.equal(M.panel(), null);
+  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'), 'a tap off left focus on a button that no longer exists');
 });
 
 test('A. a press outside closes the menu; a press ON the chevron or the panel does not (and chevron press + click leaves it closed)', () => {
@@ -465,3 +521,17 @@ test('A. Android hardware Back closes the open menu through the app\'s back stac
     assert.equal(M.calls.openProfile + M.calls.openDMInbox, 0, 'Back must not pick anything');
   }
 });
+
+// ── the console preview carries the phones' 150px cap ────────────────────────────────────────────────────────────
+for (const [i, c] of CASES.entries()) {
+  if (!c.preview) continue;
+  test(`the console branding preview is capped at 150px tall like the phone banner — ${caseLabel(c)}`, { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+    await send('Emulation.setDeviceMetricsOverride', { width: c.width, height: 800, deviceScaleFactor: 1, mobile: true });
+    await send('Page.navigate', { url: `http://127.0.0.1:${srv.address().port}/page${i}.html` });
+    await sleep(300);
+    const r = await send('Runtime.evaluate', { expression: `(() => { const e = document.querySelector('[data-brand-preview="banner"]'); if (!e) return null; const b = e.getBoundingClientRect(); return JSON.stringify({ w: Math.round(b.width), h: Math.round(b.height) }); })()`, returnByValue: true });
+    const m = JSON.parse(r.result.result.value);
+    assert.equal(m.w, c.width, 'the preview is the full container width');
+    assert.ok(Math.abs(m.h - Math.min(150, Math.round(c.width / 3))) <= 1, `the preview is ${m.h}px tall at ${c.width}px wide, want ${Math.min(150, Math.round(c.width / 3))} (3:1, capped at 150)`);
+  });
+}

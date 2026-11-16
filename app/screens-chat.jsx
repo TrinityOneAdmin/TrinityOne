@@ -536,7 +536,12 @@ function ChatScreen({ ctx }) {
         const topMb = (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20);
         const hasBanner = !!(ctx.church && ctx.church.banner);
         return hasBanner ? (
-          <div data-top-bar="banner" style={{ position: 'relative', marginBottom: topMb, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both' }}>
+          <div data-top-bar="banner" style={{ position: 'relative', marginBottom: topMb, marginTop: 'calc((env(safe-area-inset-top, 0px) + 5px) * -1)', marginLeft: -18, marginRight: -18, animation: 'trinityFade .5s ease both',
+            // WHILE THE MENU IS OPEN the banner block is raised above the cards below it. This block's fade-in `animation`
+            // makes it a stacking context, so the menu's own zIndex is trapped INSIDE it and a later sibling card paints
+            // over the menu's lower edge (at a 59px notch inset, over the centres of Search and Profile: a tap opened
+            // "What's happening"). 7 is above anything the list draws.
+            zIndex: hm.open ? 7 : undefined }}>
             {/* 121 = 14 edge + Messages 44 + 9 gap + chevron 44 + 10 air (the ChurchPill default 156 stays for any other caller) */}
             <ChurchPill ctx={ctx} reserveRight={121} />
             {/* DMs + the chevron FLOAT OVER the banner, in line with the church name at its top (ChurchPill reserves their width) */}

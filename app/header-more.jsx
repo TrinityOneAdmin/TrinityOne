@@ -22,33 +22,29 @@
 // and the click that follows reopens it). The panel is rendered only while open, and nothing is hidden by CSS.
 function useHeaderMore() {
   const [open, setOpen] = React.useState(false);
-  // The Escape listener is only registered while open, but a listener can outlive its render by one tick, so it
-  // reads the CURRENT state from a ref and does nothing once the panel is shut (e.g. after Listen was picked
-  // and its overlay owns Escape).
+  // `dismiss` is the ONE way the menu is closed from outside it (Escape, hardware Back, a tap off): shut it and hand
+  // focus back to the chevron, so a keyboard / switch user is not left on a button that no longer exists. It reads
+  // the CURRENT state from a ref and does nothing once the menu is shut, because a handler can outlive its render by
+  // one tick (e.g. after Listen was picked and its overlay owns Back and Escape).
   const openRef = React.useRef(false);
   openRef.current = open;
   const focusSel = (sel) => { try { const el = document.querySelector(sel); if (el && el.focus) el.focus(); } catch (e) {} };
+  const dismiss = () => { if (!openRef.current) return; setOpen(false); focusSel('[data-hdr-more="chevron"]'); };
   React.useEffect(() => {
     if (!open) return undefined;
-    const off = TrinityReplyKit.tapOffHandler('[data-hdr-more]', () => setOpen(false));
-    const onKey = (e) => {
-      if (e && e.key === 'Escape' && openRef.current) { setOpen(false); focusSel('[data-hdr-more="chevron"]'); }
-    };
+    const off = TrinityReplyKit.tapOffHandler('[data-hdr-more]', dismiss);
     document.addEventListener('pointerdown', off, true);
-    document.addEventListener('keydown', onKey);
     focusSel('[data-hdr-item]');   // first item in DOM order
-    return () => {
-      document.removeEventListener('pointerdown', off, true);
-      document.removeEventListener('keydown', onKey);
-    };
+    return () => document.removeEventListener('pointerdown', off, true);
   }, [open]);
-  // ANDROID HARDWARE BACK closes the menu instead of leaving the tab. The app's one mechanism for this is
-  // useBackLayer (app/ui.jsx): an open layer registers its close handler on window.__trinityBackStack and
-  // app.jsx's popstate handler calls window.trinityGoBack(), which closes the topmost one before it considers
-  // tab navigation. Same hook the sheets, overlays and the Read-screen popover use. `typeof` because this file
-  // is also loaded by test harnesses that do not inject ui.jsx; in the app the name is always defined, so the
-  // hook order never changes within one environment.
-  if (typeof useBackLayer === 'function') useBackLayer(open, () => setOpen(false));
+  // HARDWARE BACK *AND* ESCAPE both close the menu through the app's one back stack, so each runs `dismiss` ONCE.
+  // The mechanism is useBackLayer (app/ui.jsx): an open layer registers its close handler on window.__trinityBackStack;
+  // app.jsx's popstate handler calls window.trinityGoBack(), which closes the topmost one before it considers tab
+  // navigation, and ui.jsx's own global keydown handler sends Escape to the same trinityGoBack. Same hook the sheets,
+  // overlays and the Read-screen popover use. This file used to add an Escape listener of its own, which made Escape
+  // close the menu twice. `typeof` because other test harnesses load this file without ui.jsx; in the app the name
+  // is always defined, so the hook order never changes within one environment.
+  if (typeof useBackLayer === 'function') useBackLayer(open, dismiss);
   return {
     open,
     toggle: () => setOpen(o => !o),

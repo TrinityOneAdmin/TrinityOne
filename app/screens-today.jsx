@@ -2576,14 +2576,15 @@ function TodayScreen({ ctx }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {(() => {
-            const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
+            // 44px, the same target as the chevron beside it (it was 40)
+            const hdrBtn = { width: 44, height: 44, borderRadius: 14, border: '1px solid var(--line)',
               background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' };
             const unread = (D.NOTIFICATIONS || []).some(n => n.unread) || (ctx.netUnread > 0);
             return (
               <button onClick={ctx.openNotifications} aria-label="Notifications" style={hdrBtn}>
                 <Icon name="bell" size={19} />
-                {unread ? <span style={{ position: 'absolute', top: 9, right: 10, width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', border: '1.5px solid var(--surface)' }} /> : null}
+                {unread ? <span style={{ position: 'absolute', top: 11, right: 12, width: 7, height: 7, borderRadius: 999, background: 'var(--clay)', border: '1.5px solid var(--surface)' }} /> : null}
               </button>
             );
           })()}

@@ -205,8 +205,8 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
   };
   // THE APP'S REAL BACK STACK: ui.jsx's own useBackLayer + window.trinityGoBack, on a window the test can reach. The
   // header menu registers on it so Android's hardware Back closes the menu (see app/header-more.jsx).
-  const uiWin = {};
-  const { useBackLayer } = loadScreen('app/ui.jsx', ['useBackLayer'], { React, window: uiWin, Icon, document: { addEventListener() {}, removeEventListener() {} } });
+  const uiWin = {}, uiDocL = [];
+  const { useBackLayer } = loadScreen('app/ui.jsx', ['useBackLayer'], { React, window: uiWin, Icon, document: { addEventListener(type, fn) { uiDocL.push({ type, fn }); }, removeEventListener() {} } });
   globals.useBackLayer = useBackLayer;
   const { TodayScreen } = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
   const calls = { openListen: 0, toggleDark: 0, openSearch: 0 };
@@ -222,6 +222,8 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
   const M = { ctx, calls, docL, winL, focused, tree: null,
     redraw() { M.tree = draw(TodayScreen, { ctx }); return M.tree; },
     back: () => uiWin.trinityGoBack(), backLayers: () => uiWin.__trinityBackStack.length,
+    // a key press as ui.jsx's ONE global keydown handler sees it (it sends Escape to trinityGoBack); anything else is ignored
+    key(k) { const l = uiDocL.find(x => x.type === 'keydown'); assert.ok(l, 'ui.jsx registered no global keydown handler'); l.fn({ key: k, preventDefault() {} }); },
     mark() { docL.length = 0; winL.length = 0; focused.length = 0; },
     last(list, type) { const l = list.filter(x => x.type === type); return l[l.length - 1] || null; },
     chevron() { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-more'] === 'chevron')[0] || null; },
@@ -606,6 +608,7 @@ for (const [i, c] of GENERIC) {
     assert.equal(m.vw, c.width, 'the page did not lay out at the width under test');
     assert.equal(m.buttons.length, 2, `the control group holds ${JSON.stringify(m.buttons.map(b => b.label))}, want the bell and the chevron only`);
     assert.ok(m.buttons.every(b => b.vis), 'both row controls are visible at every width');
+    assert.ok(m.buttons.every(b => b.w === 44 && b.h === 44), `the row controls must be 44x44 (bell and chevron), got ${JSON.stringify(m.buttons.map(b => [b.label, b.w, b.h]))}`);
     assert.ok(m.chev, 'every church has the chevron');
     assert.ok(m.chev.parentIsControls, 'the chevron must be a DIRECT child of the control group');
     assert.equal(m.chev.w, 44, `the chevron is ${m.chev.w}px wide, want 44`);
@@ -697,13 +700,13 @@ test('A. the menu items are Search, Listen (only with an audio feed) and Dark, i
   assert.deepEqual(find(none.panel(), n => n.type === 'button').map(n => n.props['data-hdr-item']), ['search', 'mode'], 'no feed = no Listen item');
 });
 
-test('A. opening registers a capture pointerdown and an Escape key listener, no resize listener, and focuses the first item', () => {
+test('A. opening registers a capture pointerdown and focuses the first item; it adds NO key listener of its own (Escape rides the back stack)', () => {
   const M = mountToday({ audioFeed: true });
   assert.equal(M.docL.length, 0, 'a CLOSED header registers no document listener');
   open(M);
-  const pd = M.last(M.docL, 'pointerdown'), kd = M.last(M.docL, 'keydown');
+  const pd = M.last(M.docL, 'pointerdown');
   assert.ok(pd && pd.cap, 'pointerdown must be registered in the CAPTURE phase, as every other pop-over in the app does');
-  assert.ok(kd, 'an Escape (keydown) listener is registered');
+  assert.equal(M.docL.filter(l => l.type === 'keydown').length, 0, 'a keydown listener of its own would close the menu a SECOND time on Escape (ui.jsx\'s global handler already does)');
   assert.equal(M.winL.filter(l => l.type === 'resize').length, 0, 'the old 330px resize-close is gone: nothing here depends on a width');
   assert.ok(M.focused.includes('[data-hdr-item]'), 'focus moves to the first menu item when it opens');
 });
@@ -720,7 +723,6 @@ test('A. the Search item calls openSearch EXACTLY ONCE and closes the menu', () 
 test('A. the Listen item calls openListen EXACTLY ONCE and closes the menu; Escape afterwards does not touch focus', () => {
   const M = mountToday({ audioFeed: true });
   open(M);
-  const kd = M.last(M.docL, 'keydown').fn;
   M.item('listen').props.onClick(); M.redraw();
   assert.equal(M.calls.openListen, 1, 'openListen must be called exactly once by the Listen item');
   assert.equal(M.panel(), null, 'picking Listen closes the menu');
@@ -728,7 +730,7 @@ test('A. the Listen item calls openListen EXACTLY ONCE and closes the menu; Esca
   // THE LISTEN OVERLAY NOW OWNS ESCAPE. The listener a real browser would already have removed (miniReact never runs
   // cleanups, so it is still here) must do nothing: not re-close, not pull focus back to the chevron.
   M.focused.length = 0;
-  kd({ key: 'Escape' }); M.redraw();
+  M.key('Escape'); M.redraw();
   assert.equal(M.focused.length, 0, 'Escape with the Listen overlay open must not move focus to the chevron behind it');
   assert.equal(M.calls.openListen, 1);
 });
@@ -755,18 +757,34 @@ test('A. the Dark item reads "Dark" and is named "Switch to dark mode"; in dark 
   assert.equal(iconOf(dark).props.name, 'sun', 'and a sun while dark');
 });
 
-test('A. Escape closes the menu and returns focus to the chevron; other keys do not', () => {
+test('A. Escape (through ui.jsx\'s global handler and the back stack) closes the menu ONCE and returns focus to the chevron; other keys do not', () => {
   const M = mountToday({ audioFeed: true });
   open(M);
-  const kd = M.last(M.docL, 'keydown').fn;
-  kd({ key: 'a' }); M.redraw();
+  M.key('a'); M.redraw();
   assert.ok(M.panel(), 'a letter key must not close the menu');
   M.focused.length = 0;
-  kd({ key: 'Escape' }); M.redraw();
+  M.key('Escape'); M.redraw();
   assert.equal(M.panel(), null, 'Escape closes the menu');
   assert.equal(M.chevron().props['aria-expanded'], false);
-  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'), 'Escape returns focus to the chevron');
+  assert.deepEqual(M.focused, ['[data-hdr-more="chevron"]'], 'Escape returns focus to the chevron EXACTLY ONCE (it used to be closed twice: a listener of its own plus the back stack)');
   assert.equal(M.calls.openListen + M.calls.openSearch + M.calls.toggleDark, 0, 'Escape must not pick anything');
+});
+
+test('A. hardware Back and a tap off ALSO return focus to the chevron, like Escape (and a closed menu moves nothing)', () => {
+  const back = mountToday({ audioFeed: true });
+  open(back); back.focused.length = 0;
+  assert.equal(back.back(), true); back.redraw();
+  assert.equal(back.panel(), null);
+  assert.ok(back.focused.includes('[data-hdr-more="chevron"]'), 'Back left focus on a button that no longer exists');
+  back.focused.length = 0;
+  back.back(); back.redraw();
+  assert.equal(back.focused.length, 0, 'a second Back, with the menu already shut, must not pull focus anywhere');
+  const tap = mountToday({ audioFeed: true });
+  open(tap); tap.focused.length = 0;
+  const bell = find(tap.tree, n => n.type === 'button' && n.props['aria-label'] === 'Notifications')[0];
+  tap.last(tap.docL, 'pointerdown').fn(press(tap, bell)); tap.redraw();
+  assert.equal(tap.panel(), null);
+  assert.ok(tap.focused.includes('[data-hdr-more="chevron"]'), 'a tap off left focus on a button that no longer exists');
 });
 
 test('A. a press OUTSIDE the header closes the menu', () => {
