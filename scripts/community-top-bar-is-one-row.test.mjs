@@ -89,7 +89,7 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
   const { UserAvatar } = loadScreen('app/identity-avatar.jsx', ['UserAvatar'], { React, window: {}, safeImgUrl });
   const { ChurchBadge, ChurchPill } = loadScreen('app/screens-church.jsx', ['ChurchBadge', 'ChurchPill'],
     { React, window: {}, Icon, safeCssColor: (c, d) => d, safeImgUrl });
-  const docL = [], focused = [];
+  const docL = [], focused = [], focusCalls = [], scroll = { y: 0 };
   const win = {
     Fellowship: { myPubkey: 'mehex', relays: [], subscribeChurchGroups: (_n, cb) => { cb([]); return () => {}; },
       subscribeChurchCategories: (_n, cb) => { cb([]); return () => {}; }, subscribeGroups: () => () => {},
@@ -102,7 +102,7 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
   const doc = {
     createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} },
     addEventListener(type, fn, cap) { docL.push({ type, fn, cap: !!cap }); }, removeEventListener() {},
-    querySelector(sel) { return String(sel).startsWith('[data-') ? { focus() { focused.push(sel); } } : null; },
+    querySelector(sel) { return String(sel).startsWith('[data-') ? { focus(opts) { focused.push(sel); focusCalls.push({ sel, opts }); if (!(opts && opts.preventScroll)) scroll.y = 0; } } : null; },   // a bare focus() scrolls the page to the top (modelled; proved in todays-header-fits-the-phone)
   };
   const { ChatScreen } = loadScreen('app/screens-chat.jsx', ['ChatScreen'], {
     React, window: win, document: doc,
@@ -124,12 +124,12 @@ function mountChat({ width, banner, hideName = false, dmUnread = true, name = LO
     openPeople() {}, openDM() {}, openDMInbox() { calls.openDMInbox++; }, openGroup() {}, openProfile() { calls.openProfile++; }, openChurchSwitcher() {},
     dmUnread, churchNetworks: networks ? [{ networkPub: 'netpub1', npub: 'npub1net', name: 'The Fellowship' }] : undefined,
   };
-  const M = { ctx, calls, docL, focused, tree: null, ChurchPill,
+  const M = { ctx, calls, docL, focused, focusCalls, scroll, tree: null, ChurchPill,
     redraw() { M.tree = draw(ChatScreen, { ctx }); return M.tree; },
     back: () => uiWin.trinityGoBack(), backLayers: () => uiWin.__trinityBackStack.length,
     // a key press as ui.jsx's ONE global keydown handler sees it (it sends Escape to trinityGoBack); anything else is ignored
     key(k) { const l = uiDocL.find(x => x.type === 'keydown'); assert.ok(l, 'ui.jsx registered no global keydown handler'); l.fn({ key: k, preventDefault() {} }); },
-    mark() { docL.length = 0; focused.length = 0; },
+    mark() { docL.length = 0; focused.length = 0; focusCalls.length = 0; },
     last(type) { const l = docL.filter(x => x.type === type); return l[l.length - 1] || null; },
     chevron() { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-more'] === 'chevron')[0] || null; },
     panel() { return find(M.tree, n => n.props && n.props['data-hdr-more'] === 'panel')[0] || null; },
@@ -161,7 +161,7 @@ function closestIn(tree, target) {
     return null;
   };
 }
-const press = (M, node) => ({ target: { closest: closestIn(M.tree, node) } });
+const press = (M, node) => { const e = { target: { closest: closestIn(M.tree, node) }, swallowed: [], preventDefault() { e.swallowed.push('preventDefault'); }, stopPropagation() { e.swallowed.push('stopPropagation'); } }; return e; };
 const openMenu = M => { M.mark(); M.chevron().props.onClick(); M.redraw(); };
 
 function communityPage(c) {
@@ -468,16 +468,30 @@ test('A. Escape (through ui.jsx\'s global handler and the back stack) closes the
   assert.deepEqual(M.focused, ['[data-hdr-more="chevron"]'], 'Escape returns focus to the chevron exactly once');
 });
 
-test('A. hardware Back and a tap off ALSO return focus to the chevron', () => {
-  const M = mountChat({ width: 360, banner: true });
-  openMenu(M); M.focused.length = 0;
-  assert.equal(M.back(), true); M.redraw();
-  assert.equal(M.panel(), null);
-  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'), 'Back left focus on a button that no longer exists');
-  openMenu(M); M.focused.length = 0;
-  M.last('pointerdown').fn(press(M, M.dm())); M.redraw();
-  assert.equal(M.panel(), null);
-  assert.ok(M.focused.includes('[data-hdr-more="chevron"]'), 'a tap off left focus on a button that no longer exists');
+test('A. hardware Back and Escape return focus to the chevron WITHOUT scrolling the page', () => {
+  for (const how of ['back', 'escape']) {
+    const M = mountChat({ width: 360, banner: true });
+    openMenu(M); M.scroll.y = 1000; M.focusCalls.length = 0;
+    if (how === 'back') assert.equal(M.back(), true); else M.key('Escape');
+    M.redraw();
+    assert.equal(M.panel(), null, how);
+    assert.deepEqual(M.focusCalls.map(c => c.sel), ['[data-hdr-more="chevron"]'], `${how} must return focus to the chevron exactly once`);
+    assert.equal(M.focusCalls[0].opts && M.focusCalls[0].opts.preventScroll, true, `${how}: focus() must pass preventScroll`);
+    assert.equal(M.scroll.y, 1000, `${how} scrolled the page`);
+  }
+});
+
+test('A. a TAP OFF a card, on a page scrolled down, closes the menu, moves NO focus, leaves the scroll alone and does not swallow the press', () => {
+  for (const banner of [false, true]) {
+    const M = mountChat({ width: 360, banner });
+    openMenu(M); M.scroll.y = 1000; M.focusCalls.length = 0;
+    const e = press(M, M.dm());
+    M.last('pointerdown').fn(e); M.redraw();
+    assert.equal(M.panel(), null, 'a tap off closes the menu');
+    assert.equal(M.focusCalls.length, 0, 'a tap off must not call focus() at all (the page scrolled and the click missed its card)');
+    assert.equal(M.scroll.y, 1000);
+    assert.deepEqual(e.swallowed, [], 'the handler must not swallow the press');
+  }
 });
 
 test('A. a press outside closes the menu; a press ON the chevron or the panel does not (and chevron press + click leaves it closed)', () => {

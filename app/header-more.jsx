@@ -22,17 +22,21 @@
 // and the click that follows reopens it). The panel is rendered only while open, and nothing is hidden by CSS.
 function useHeaderMore() {
   const [open, setOpen] = React.useState(false);
-  // `dismiss` is the ONE way the menu is closed from outside it (Escape, hardware Back, a tap off): shut it and hand
-  // focus back to the chevron, so a keyboard / switch user is not left on a button that no longer exists. It reads
-  // the CURRENT state from a ref and does nothing once the menu is shut, because a handler can outlive its render by
-  // one tick (e.g. after Listen was picked and its overlay owns Back and Escape).
+  // The close handlers read the CURRENT state from a ref and do nothing once the menu is shut, because a handler can
+  // outlive its render by one tick (e.g. after Listen was picked and its overlay owns Back and Escape).
   const openRef = React.useRef(false);
   openRef.current = open;
-  const focusSel = (sel) => { try { const el = document.querySelector(sel); if (el && el.focus) el.focus(); } catch (e) {} };
+  // preventScroll ALWAYS: a bare focus() scrolls the focused element into view, and the chevron lives at the top of the
+  // page, so a page scrolled down would jump back to the top.
+  const focusSel = (sel) => { try { const el = document.querySelector(sel); if (el && el.focus) el.focus({ preventScroll: true }); } catch (e) {} };
+  // Escape and hardware Back: shut it and hand focus back to the chevron.
   const dismiss = () => { if (!openRef.current) return; setOpen(false); focusSel('[data-hdr-more="chevron"]'); };
+  // A TAP OFF closes the menu and moves NOTHING: the press is aimed at something else (a card), and a focus() call made
+  // during the pointerdown scrolled a scrolled page back to the top, so the click that followed missed its card.
+  const tapOff = () => { if (!openRef.current) return; setOpen(false); };
   React.useEffect(() => {
     if (!open) return undefined;
-    const off = TrinityReplyKit.tapOffHandler('[data-hdr-more]', dismiss);
+    const off = TrinityReplyKit.tapOffHandler('[data-hdr-more]', tapOff);
     document.addEventListener('pointerdown', off, true);
     focusSel('[data-hdr-item]');   // first item in DOM order
     return () => document.removeEventListener('pointerdown', off, true);

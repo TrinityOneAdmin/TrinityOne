@@ -166,7 +166,7 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const { ChurchBadge } = loadScreen('app/screens-church.jsx', ['ChurchBadge'],
     { React, window: {}, safeCssColor: (c, d) => d, safeImgUrl: () => '' });
-  const docL = [], winL = [], focused = [];
+  const docL = [], winL = [], focused = [], focusCalls = [], scroll = { y: 0 };
   const win = {
     addEventListener(type, fn, cap) { winL.push({ type, fn, cap: !!cap }); }, removeEventListener() {}, innerWidth: width,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
@@ -180,7 +180,9 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
   const doc = {
     addEventListener(type, fn, cap) { docL.push({ type, fn, cap: !!cap }); }, removeEventListener() {},
     querySelector(sel) {
-      if (String(sel).startsWith('[data-hdr')) return { focus() { focused.push(sel); } };
+      // MODEL OF THE BROWSER: a focus() without preventScroll scrolls the focused element into view; the chevron is at
+      // the top of the page, so the page jumps to scrollY 0. (The premise is proved against real chromium further down.)
+      if (String(sel).startsWith('[data-hdr')) return { focus(opts) { focused.push(sel); focusCalls.push({ sel, opts }); if (!(opts && opts.preventScroll)) scroll.y = 0; } };
       return null;
     },
   };
@@ -219,12 +221,12 @@ function mountToday({ audioFeed, churchName = 'St Bartholomew-the-Great', date =
     toast() {}, netUnread: 0, openServing() {},
     planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {},
   };
-  const M = { ctx, calls, docL, winL, focused, tree: null,
+  const M = { ctx, calls, docL, winL, focused, focusCalls, scroll, tree: null,
     redraw() { M.tree = draw(TodayScreen, { ctx }); return M.tree; },
     back: () => uiWin.trinityGoBack(), backLayers: () => uiWin.__trinityBackStack.length,
     // a key press as ui.jsx's ONE global keydown handler sees it (it sends Escape to trinityGoBack); anything else is ignored
     key(k) { const l = uiDocL.find(x => x.type === 'keydown'); assert.ok(l, 'ui.jsx registered no global keydown handler'); l.fn({ key: k, preventDefault() {} }); },
-    mark() { docL.length = 0; winL.length = 0; focused.length = 0; },
+    mark() { docL.length = 0; winL.length = 0; focused.length = 0; focusCalls.length = 0; },
     last(list, type) { const l = list.filter(x => x.type === type); return l[l.length - 1] || null; },
     chevron() { return find(M.tree, n => n.type === 'button' && n.props && n.props['data-hdr-more'] === 'chevron')[0] || null; },
     panel() { return find(M.tree, n => n.props && n.props['data-hdr-more'] === 'panel')[0] || null; },
@@ -256,7 +258,7 @@ function closestIn(tree, target) {
     return null;
   };
 }
-const press = (M, node) => ({ target: { closest: closestIn(M.tree, node) } });   // a pointerdown event on `node`
+const press = (M, node) => { const e = { target: { closest: closestIn(M.tree, node) }, swallowed: [], preventDefault() { e.swallowed.push('preventDefault'); }, stopPropagation() { e.swallowed.push('stopPropagation'); } }; return e; };   // a pointerdown event on `node`
 
 // THE CSS A PAGE IS DRESSED IN: index.html's own <style> blocks, untouched. The 2026-11-14 build added 23 lines of
 // fold CSS there (.trn-hdr-*, a container query and a media fallback); the 2026-11-16 design deletes all of it
@@ -770,21 +772,40 @@ test('A. Escape (through ui.jsx\'s global handler and the back stack) closes the
   assert.equal(M.calls.openListen + M.calls.openSearch + M.calls.toggleDark, 0, 'Escape must not pick anything');
 });
 
-test('A. hardware Back and a tap off ALSO return focus to the chevron, like Escape (and a closed menu moves nothing)', () => {
+test('A. hardware Back returns focus to the chevron, like Escape, WITHOUT scrolling the page (and a closed menu moves nothing)', () => {
   const back = mountToday({ audioFeed: true });
-  open(back); back.focused.length = 0;
+  open(back); back.focusCalls.length = 0; back.scroll.y = 1000;
   assert.equal(back.back(), true); back.redraw();
   assert.equal(back.panel(), null);
-  assert.ok(back.focused.includes('[data-hdr-more="chevron"]'), 'Back left focus on a button that no longer exists');
-  back.focused.length = 0;
+  assert.deepEqual(back.focusCalls.map(c => c.sel), ['[data-hdr-more="chevron"]'], 'Back left focus on a button that no longer exists');
+  assert.equal(back.focusCalls[0].opts && back.focusCalls[0].opts.preventScroll, true, 'focus() must pass preventScroll, or a scrolled page jumps to the top');
+  assert.equal(back.scroll.y, 1000, 'Back scrolled the page');
+  back.focusCalls.length = 0;
   back.back(); back.redraw();
-  assert.equal(back.focused.length, 0, 'a second Back, with the menu already shut, must not pull focus anywhere');
-  const tap = mountToday({ audioFeed: true });
-  open(tap); tap.focused.length = 0;
-  const bell = find(tap.tree, n => n.type === 'button' && n.props['aria-label'] === 'Notifications')[0];
-  tap.last(tap.docL, 'pointerdown').fn(press(tap, bell)); tap.redraw();
-  assert.equal(tap.panel(), null);
-  assert.ok(tap.focused.includes('[data-hdr-more="chevron"]'), 'a tap off left focus on a button that no longer exists');
+  assert.equal(back.focusCalls.length, 0, 'a second Back, with the menu already shut, must not pull focus anywhere');
+});
+
+test('A. Escape returns focus with preventScroll too: a scrolled page stays where it is', () => {
+  const M = mountToday({ audioFeed: true });
+  open(M); M.scroll.y = 1000; M.focusCalls.length = 0;
+  M.key('Escape'); M.redraw();
+  assert.equal(M.focusCalls.length, 1);
+  assert.equal(M.focusCalls[0].opts && M.focusCalls[0].opts.preventScroll, true);
+  assert.equal(M.scroll.y, 1000, 'Escape scrolled the page to the chevron');
+});
+
+test('A. a TAP OFF a card, on a page scrolled down, closes the menu, moves NO focus, leaves the scroll alone and does not swallow the press', () => {
+  // THE BUG (re-audit of 8748f400): the tap-off handler refocused the chevron DURING the pointerdown; focus() scrolled the
+  // page back to the top, so the click that followed missed the card under the finger. A tap off now moves nothing.
+  const M = mountToday({ audioFeed: true });
+  open(M); M.scroll.y = 1000; M.focusCalls.length = 0;
+  const card = find(M.tree, n => n.type === 'button' && n.props['aria-label'] === 'Notifications')[0];
+  const e = press(M, card);
+  M.last(M.docL, 'pointerdown').fn(e); M.redraw();
+  assert.equal(M.panel(), null, 'a tap off closes the menu');
+  assert.equal(M.focusCalls.length, 0, 'a tap off must not call focus() at all');
+  assert.equal(M.scroll.y, 1000, 'the page scrolled while the press was in flight, so the click would miss the card');
+  assert.deepEqual(e.swallowed, [], 'the handler must not preventDefault / stopPropagation: the card has to receive the click');
 });
 
 test('A. a press OUTSIDE the header closes the menu', () => {
@@ -837,4 +858,17 @@ test('A. Android hardware Back closes the open menu through the app\'s back stac
   assert.equal(M.panel(), null, 'Back closes the menu');
   assert.equal(M.chevron().props['aria-expanded'], false);
   assert.equal(M.calls.openListen + M.calls.openSearch + M.calls.toggleDark, 0, 'Back must not pick anything');
+});
+
+test('PREMISE, in real chromium: focus() scrolls a page back to the focused element, focus({ preventScroll: true }) does not', { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+  // The model in layer A rests on this one browser fact. A tall page, a button at the top, scrolled down 1000px.
+  const html = '<!doctype html><meta name="viewport" content="width=device-width"><button id="b" style="position:absolute;top:0">top</button><div style="height:3000px"></div>';
+  await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 700, deviceScaleFactor: 1, mobile: true });
+  await send('Page.navigate', { url: 'data:text/html;base64,' + Buffer.from(html).toString('base64') });
+  await sleep(300);
+  const r = await send('Runtime.evaluate', { returnByValue: true, expression: `(() => { const b = document.getElementById('b'); window.scrollTo(0, 1000); const a = scrollY; b.focus({ preventScroll: true }); const keep = scrollY; b.blur(); window.scrollTo(0, 1000); b.focus(); return JSON.stringify({ a, keep, jumped: scrollY }); })()` });
+  const m = JSON.parse(r.result.result.value);
+  assert.equal(m.a, 1000, 'the page scrolled to 1000');
+  assert.equal(m.keep, 1000, 'focus({ preventScroll: true }) must leave the page where it is');
+  assert.equal(m.jumped, 0, 'a bare focus() scrolls the page to the focused element: the bug this guards against');
 });
